@@ -20,10 +20,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from lakehouse.events.bus import BusSettings
 from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.events.signature_doors import SignatureDoorSettings
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import StoreTimeouts, lance_storage_options
-from lakehouse.storage_options import StorageOptions
-from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import StoreTimeouts, lance_storage_options
+from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
 
 
 if TYPE_CHECKING:
@@ -36,7 +36,7 @@ class MaintenanceStore(StoreIdentitySettings):
 
     # --- S3 access to the Lance lakehouse bucket ----------------------------------------------------
     s3_endpoint: str = Field(default="http://localhost:9000", alias="MAINTENANCE_S3_ENDPOINT")
-    #: How long one call of maintenance's to the store may take (`lakehouse.objectfs.StoreTimeouts`): every open,
+    #: How long one call of maintenance's to the store may take (`lakehouse.storage.objectfs.StoreTimeouts`): every open,
     #: listing, manifest read and delete a pass or a check makes, under its own session and under a vend alike. Without
     #: them Lance runs on object_store's defaults, on which one open against a store that never answers outlasted 300 s
     #: (`StoreTimeouts`), so a stalled store held a replica up to the end its pass bound sets. Maintenance moves no rows,

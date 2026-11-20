@@ -25,7 +25,7 @@ from typing import Final
 from catalog.services import dataplane, table_claims
 from lakehouse import auto_cleanup
 from lakehouse.listing_floor import FLOOR_KEY
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

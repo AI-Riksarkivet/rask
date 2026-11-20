@@ -27,7 +27,7 @@ from throwaway_rustfs import ThrowawayStore, admin, s3_client
 from catalog.api.v1.endpoints.warehouses import _run_scope_probe
 from catalog.core.vending import ReclaimScope, SessionTier, TableRecords, VendedSession, build_session_policy, split_s3_location
 from catalog.services.vend_probe import summarize_probe
-from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.storage.credential import S3KeyPair
 
 
 pytestmark = pytest.mark.rustfs_provisioning

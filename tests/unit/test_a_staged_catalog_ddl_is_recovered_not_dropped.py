@@ -30,7 +30,6 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError, Tran
 from pydantic import SecretStr
 
 from catalog.core.lineage_emit import INSERT, build_write_event
-from lakehouse import store_session
 from lakehouse.events import outbox, outbox_metrics
 from lakehouse.events.bus import BusUnavailableError
 from lakehouse.events.cloud_events import lineage_envelope
@@ -42,8 +41,9 @@ from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import store_session
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.options import StorageOptions
 from lineage.api import fga_deps, relay
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing

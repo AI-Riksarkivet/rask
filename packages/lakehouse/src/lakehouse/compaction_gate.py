@@ -26,8 +26,8 @@ from lakehouse.features import (
     gather_compaction_bases,
     manifest_feature_flags,
 )
-from lakehouse.objectfs import dataset_root_probe
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.objectfs import dataset_root_probe
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

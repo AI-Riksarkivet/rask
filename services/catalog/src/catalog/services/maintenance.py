@@ -29,7 +29,7 @@ from lakehouse.features import FragmentCarrier, ManifestCarrier, describe_gc_uns
 
 
 if TYPE_CHECKING:
-    from lakehouse.storage_options import StorageOptions
+    from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

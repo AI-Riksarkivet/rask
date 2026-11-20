@@ -40,8 +40,8 @@ from catalog.core.vending import TableRecords, Tier, VendedSession
 from catalog.services import table_claims
 from lakehouse import location_claims
 from lakehouse.governed.machine_identity import ServicePrincipal
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.options import StorageOptions
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 

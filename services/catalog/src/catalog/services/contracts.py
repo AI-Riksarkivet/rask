@@ -46,8 +46,8 @@ from catalog.services import primary_keys
 from lakehouse import control_prefixes
 from lakehouse.outage import store_refusal
 from lakehouse.record_store import delete_record, put_record, read_record, record_key
-from lakehouse.records import RecordExistsError, RecordMissingError, create_json, mutate_json
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError, create_json, mutate_json
+from lakehouse.storage.options import StorageOptions
 
 
 #: The ODCS keys that state a check on data or on time. The catalog runs neither, so a document carrying one is refused.

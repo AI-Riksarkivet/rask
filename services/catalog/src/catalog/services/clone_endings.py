@@ -65,10 +65,11 @@ from pydantic import BaseModel, Field
 from catalog.core.config import CatalogStore
 from catalog.services import clone_ending_records, table_claims
 from catalog.services.clone_ending_records import CloneEnding, EndingIntent
-from lakehouse import base_registry, clone_sources, location_claims, objectfs, records
+from lakehouse import base_registry, clone_sources, location_claims
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.base_registry import BaseRegistry
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records, objectfs
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -84,7 +85,14 @@ _STILL_ENDING: Final = (
 )
 
 #: What the store and the records raise when a read or a write could not be made.
-_UNREAD: Final = (OSError, ClientError, ValueError, base_registry.UnreadableBaseRecordError, records.RecordChangedError, records.RecordExistsError)
+_UNREAD: Final = (
+    OSError,
+    ClientError,
+    ValueError,
+    base_registry.UnreadableBaseRecordError,
+    conditional_records.RecordChangedError,
+    conditional_records.RecordExistsError,
+)
 
 
 class FinishOutcome(BaseModel):

@@ -51,7 +51,7 @@ from lakehouse.features import CREATE_FORMAT, table_file_format
 from lakehouse.lance_session import open_dataset
 from lakehouse.naming import PLATFORM_PREFIX
 from lakehouse.outage import reads_as_store_outage
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lakehouse.transactions import read_transaction
 
 

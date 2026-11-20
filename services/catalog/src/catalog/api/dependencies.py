@@ -35,7 +35,7 @@ from lakehouse.governed import fga
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.outage import store_refusal
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lakehouse.trash import TrashKind, TrashRecord
 
 

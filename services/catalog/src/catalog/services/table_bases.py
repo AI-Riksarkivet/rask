@@ -42,15 +42,16 @@ from catalog.core.namespace import registered_dataset_facts
 from catalog.core.run_context import RunInput
 from catalog.core.vending import IAM_POLICY_SYNTAX
 from catalog.services import clone_ending_records, native, table_inputs
-from lakehouse import base_registry, clone_sources, control_prefixes, location_claims, records
+from lakehouse import base_registry, clone_sources, control_prefixes, location_claims
 from lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
 from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryFencedError
 from lakehouse.lance_session import open_dataset
-from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import store_refusal
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -741,7 +742,7 @@ def _file_registration(verdict: RegistrationVerdict, *, clone_uuid: str, context
     )
     try:
         return clone_ending_records.file(claims, intent, filing=UUID(clone_uuid).hex)
-    except (OSError, ValueError, records.RecordExistsError) as exc:
+    except (OSError, ValueError, conditional_records.RecordExistsError) as exc:
         log.error(
             "clone_ending_unfiled",
             extra={"table": context.holder, "location": verdict.location, "door": clone_ending_records.REGISTRATION, "error": str(exc)[:300]},

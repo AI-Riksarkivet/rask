@@ -22,7 +22,7 @@ from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
 from catalog.core.vending import VendedSession
-from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.storage.credential import S3KeyPair
 
 
 _VEND = VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)

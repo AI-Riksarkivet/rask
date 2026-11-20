@@ -77,7 +77,7 @@ from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.protection import ProtectionRecord
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lakehouse.trash import TrashRecord
 
 

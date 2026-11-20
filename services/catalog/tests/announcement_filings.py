@@ -8,7 +8,7 @@ import pyarrow.fs as pafs
 
 from catalog.core.config import get_settings
 from catalog.services import announcement_intents
-from lakehouse.objectfs import fs_and_base
+from lakehouse.storage.objectfs import fs_and_base
 
 
 def age_filings() -> None:

@@ -136,7 +136,6 @@ from lakehouse import (
     file_identities,
     location_claims,
     manifest_names,
-    stored_objects,
     trash,
 )
 from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
@@ -150,8 +149,9 @@ from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import reads_as_store_outage
-from lakehouse.storage import split_s3_uri
-from lakehouse.storage_options import StorageOptions, object_client, on_s3, s3_filesystem
+from lakehouse.storage import stored_objects
+from lakehouse.storage.options import StorageOptions, object_client, on_s3, s3_filesystem
+from lakehouse.storage.uri import split_s3_uri
 from lakehouse.transactions import read_transaction
 from lakehouse.trash import TrashRecord
 
@@ -1965,7 +1965,7 @@ def discard_detached_manifest(location: str, so: StorageOptions, version: int) -
 def delete_table_object(location: str, so: StorageOptions, relative: str) -> None:
     """Delete ``<location>/<relative>``, writing nothing else.
 
-    It deletes by key through :func:`lakehouse.stored_objects.delete_objects`, which records the delete ([[LH-232]]):
+    It deletes by key through :func:`lakehouse.storage.stored_objects.delete_objects`, which records the delete ([[LH-232]]):
     pyarrow's ``S3FileSystem.delete_file`` PUTs the parent's directory marker after the delete, which left a
     ``_versions/`` object beside the table's manifests (measured on moto). A delete that fails leaves an inert object,
     never a wrong table, so it is logged rather than raised.

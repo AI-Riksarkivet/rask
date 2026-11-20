@@ -56,7 +56,7 @@ from pydantic import BaseModel, Field
 from lakehouse import lance_session
 from lakehouse.features import unsupported_features, unsupported_features_from_open_error
 from lakehouse.lancekit.versions import committed_at
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import shared_lance_session
 
 

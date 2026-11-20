@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 from lakehouse import control_prefixes
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.record_store import list_records, read_record
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

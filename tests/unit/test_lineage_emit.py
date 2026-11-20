@@ -38,7 +38,7 @@ from catalog.core.run_context import RunContext
 from lakehouse.events.bus import BusUnavailableError
 from lakehouse.events.lineage_events import LANCE_FACET, DatasetUuids
 from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lineage.models import RunEvent
 from tests.bus_double import BusDouble
 from tests.unit.no_store_session import no_store_session

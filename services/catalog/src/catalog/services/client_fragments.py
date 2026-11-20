@@ -39,7 +39,7 @@ from catalog.core import blobs, encoding
 from lakehouse import base_registry
 from lakehouse.base_refs import normalise, store_of
 from lakehouse.features import describe_foreign_data_file_versions
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 if TYPE_CHECKING:

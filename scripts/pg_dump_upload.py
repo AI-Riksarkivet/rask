@@ -9,10 +9,10 @@ irreplaceable database up nowhere, and says so once, in an event nobody reads. T
 image, against any S3 store.
 
 Every verb such a CLI offers here is plain S3: `cp` is `put_object`, `ls` + `rm` are the retention
-walk that `storage.prune_timestamped_prefixes` owns for both backup lanes.
+walk that `lakehouse.storage.s3.prune_timestamped_prefixes` owns for both backup lanes.
 
 THE RUN HOLDS NO KEY ([[XC-084]]): it signs with one session its pod's ServiceAccount token is exchanged for
-(`lakehouse.store_session.job_client`), under the policy the store binds to that account.
+(`lakehouse.storage.store_session.job_client`), under the policy the store binds to that account.
 
     RASK_S3_ENDPOINT_URL=… RASK_S3_WEB_IDENTITY_TOKEN_FILE=… RASK_S3_STS_ENDPOINT=… RASK_S3_ASSUME_ROLE_ARN=… \\
         uv run python scripts/pg_dump_upload.py /dump s3://bucket/_backups/pg --keep 7
@@ -52,8 +52,9 @@ def main(argv: list[str]) -> int:
 
     from pydantic import ValidationError
 
-    from lakehouse.storage import prune_timestamped_prefixes, split_s3_uri
-    from lakehouse.store_session import JobStoreIdentity, job_client
+    from lakehouse.storage.s3 import prune_timestamped_prefixes
+    from lakehouse.storage.store_session import JobStoreIdentity, job_client
+    from lakehouse.storage.uri import split_s3_uri
 
     try:
         client = job_client(JobStoreIdentity(), session_name="backup-pg")

@@ -30,7 +30,7 @@ import pyarrow as pa
 import pytest
 
 from catalog.services.erasure import ErasureReport, ref_heads, verify
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 _SUBJECT = "alice"

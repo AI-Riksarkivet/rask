@@ -17,7 +17,7 @@ from pathlib import Path
 import pytest
 
 from lakehouse.maintenance_policies import MalformedPolicyError, get_policy
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
 

@@ -71,3 +71,9 @@ def prune_timestamped_prefixes(client: S3Client, *, bucket: str, base: str, keep
             with s3_errors(bucket=bucket, key=key):
                 client.delete_object(Bucket=bucket, Key=key)
     return kept, pruned
+
+
+__all__ = [
+    "iter_keys",
+    "prune_timestamped_prefixes",
+]

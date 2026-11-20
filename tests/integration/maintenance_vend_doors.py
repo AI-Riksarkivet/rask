@@ -23,7 +23,7 @@ import respx
 from fastapi.testclient import TestClient
 
 from lakehouse import trash
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lakehouse.trash import TrashKind
 
 

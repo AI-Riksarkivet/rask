@@ -19,7 +19,7 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 
 from lakehouse.events import outbox, outbox_metrics
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 type Series = dict[str, dict[str, float]]

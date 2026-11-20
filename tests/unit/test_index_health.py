@@ -18,7 +18,7 @@ import pytest
 from pydantic import SecretStr
 
 from lakehouse.maintenance_due import IndexDue
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.due import DueQuestion, refresh_due
 from maintenance.services.index_health import due_indices

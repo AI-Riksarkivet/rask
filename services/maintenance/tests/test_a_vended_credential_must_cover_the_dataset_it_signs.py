@@ -33,8 +33,8 @@ import pytest
 import respx
 from pydantic import SecretStr
 
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 

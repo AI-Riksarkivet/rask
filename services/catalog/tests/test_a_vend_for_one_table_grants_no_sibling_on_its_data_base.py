@@ -36,8 +36,8 @@ from pydantic import SecretStr
 from catalog.core.config import get_settings
 from lakehouse import location_claims
 from lakehouse.features import manifest_base_path_refs
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.store_session import IssuedSession
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.store_session import IssuedSession
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}

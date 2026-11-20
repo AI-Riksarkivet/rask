@@ -43,11 +43,12 @@ from catalog.schemas import LabelDefinitionRequest, LabelledObjectsResponse, Obj
 from catalog.services import object_labels, table_claims, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.object_labels import Attachment, LabelDefinition, LabelScope
-from lakehouse import records, trash
+from lakehouse import trash
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import ControlAction
 from lakehouse.governed import fga
 from lakehouse.naming import CONTROL_ID_RE
+from lakehouse.storage import conditional_records
 
 
 log = logging.getLogger(__name__)
@@ -141,7 +142,7 @@ async def _set(
     base = Attachment(kind=kind, uuid=uuid, id=canonical, project=project, location=location, labels={}, set_by=_actor(token))
     try:
         await run_in_threadpool(object_labels.attach, settings.registry_root, so, base, defined=defined, value=value)
-    except records.RecordChangedError as exc:
+    except conditional_records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"the labels of {canonical} kept changing; set the label again") from exc
     if await _uuid_now(ns, settings, kind, segments) != uuid:
         await run_in_threadpool(object_labels.forget, settings.registry_root, so, kind, uuid)
@@ -167,7 +168,7 @@ async def _remove(
         removed = await run_in_threadpool(
             object_labels.detach, settings.registry_root, settings.storage_options(), kind, uuid, name=body.name, actor=_actor(token)
         )
-    except records.RecordChangedError as exc:
+    except conditional_records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"the labels of {canonical} kept changing; remove the label again") from exc
     if removed:
         await emit_control(
@@ -319,7 +320,7 @@ async def define_label(
     )
     try:
         defined, changed = await run_in_threadpool(object_labels.define, settings.registry_root, settings.storage_options(), asked)
-    except records.RecordChangedError as exc:
+    except conditional_records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"label {asked.name!r} kept changing; define it again") from exc
     if not changed:
         return defined

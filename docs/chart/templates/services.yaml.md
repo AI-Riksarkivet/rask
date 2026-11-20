@@ -72,7 +72,7 @@ runtime one is indistinguishable from a caller inventing a bucket.
 THE CATALOG'S STORE IDENTITY IS ITS SERVICEACCOUNT ([[XC-083]], ADR 0170). The pod projects a token for
 `objectStore.identity.audience` (the volume `lance.identityTokens` renders), and the catalog exchanges it through STS
 `AssumeRoleWithWebIdentity` for every session it signs with: its own IO's, renewed at half life, and each vend's
-(`lakehouse.store_session`). It holds no key pair, in its environment or in the store, so nothing it reads outlives a
+(`lakehouse.storage.store_session`). It holds no key pair, in its environment or in the store, so nothing it reads outlives a
 session. The helper renders the four variables every store-reaching pod gets (`_helpers.tpl.md`
 `lance.objectStoreSessionEnv`): the token file, the STS endpoint, the role `objectStore.identity.roleArns.catalog` and
 the session length.
@@ -279,7 +279,7 @@ that one key with get and put and nothing else beside its outbox (`ClaimItsOwnTi
 
 LINEAGE'S STORE IDENTITY IS ITS SERVICEACCOUNT ([[XC-084]], ADR 0170). The pod projects a token for
 `objectStore.identity.audience` beside its `rask-catalog` one, and lineage exchanges it through STS
-`AssumeRoleWithWebIdentity` for the sessions its outbox drain signs with (`lakehouse.store_session`). It holds no key
+`AssumeRoleWithWebIdentity` for the sessions its outbox drain signs with (`lakehouse.storage.store_session`). It holds no key
 pair. The session's reach is its canned policy, `<release>-sa-lineage` in the ConfigMap
 `<release>-object-store-identities` (`lance.objectStorePolicy`): list, get and delete under `_lineage_outbox/`, get and
 put on its relay timer's claim record `_timers/lineage-relay.json`, and nothing else, so a compromised lineage pod can

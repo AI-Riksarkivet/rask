@@ -12,7 +12,7 @@ per table on the control root, keyed by the table's uuid (ADR 0173 §8), listing
 share it, since what the fence closes is a ref written while a reclaim runs, never two reclaims or two ref writes; a
 holder of the other kind refuses the take (:class:`HistoryFencedError`), and the caller answers 409 or leaves its
 reclaim for the next tick. The store picks the
-winner: a take is a create-if-absent or a replace under the ETag it read (:mod:`lakehouse.records`), as a
+winner: a take is a create-if-absent or a replace under the ETag it read (:mod:`lakehouse.storage.conditional_records`), as a
 location claim's is.
 
 A BRANCH CREATE HOLDS IT ALONE ([[LH-413]]). Lance joins a branch name onto ``tree/`` verbatim and keeps each ref in its own
@@ -30,7 +30,7 @@ renewals that fail in a row leave a third inside the hold. A holder that crashed
 ``history_fence_lost`` or ``history_fence_outlived`` at ERROR. A renewal is written under the credential the take was,
 so a holder whose credential expires (a maintenance vend lasts 900 s) can renew no further, and the deletes it signs
 with that credential stop with it. Every hold is stamped and judged on the store's own clock
-(:attr:`lakehouse.records.StoreRead.at`, the ``Date`` of the read before each write), never a pod's, so a holder's lapse
+(:attr:`lakehouse.storage.conditional_records.StoreRead.at`, the ``Date`` of the read before each write), never a pod's, so a holder's lapse
 does not depend on two pods' clocks agreeing.
 
 Every method is BLOCKING IO; callers threadpool it.
@@ -49,9 +49,10 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import control_prefixes, records
+from lakehouse import control_prefixes
 from lakehouse.record_store import record_key
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -144,7 +145,7 @@ class TableHistory(BaseModel):
             botocore.exceptions.ClientError: The store refused a read or a write.
         """
         for _ in range(_ATTEMPTS):
-            read = records.read_json_at(self.control_root, self.storage_options, self.key)
+            read = conditional_records.read_json_at(self.control_root, self.storage_options, self.key)
             now = read.at
             holders = _live(read.stored.record if read.stored else None, now)
             if other := next((holder for holder in holders if _excludes(holder.work, work)), None):
@@ -155,10 +156,10 @@ class TableHistory(BaseModel):
             fence = HistoryFence(uuid=self.table_uuid, holders=[*holders, mine]).model_dump(mode="json")
             try:
                 if read.stored is None:
-                    records.create_json(self.control_root, self.storage_options, self.key, fence)
+                    conditional_records.create_json(self.control_root, self.storage_options, self.key, fence)
                 else:
-                    records.replace_json(self.control_root, self.storage_options, self.key, fence, etag=read.stored.etag)
-            except (records.RecordExistsError, records.RecordChangedError):
+                    conditional_records.replace_json(self.control_root, self.storage_options, self.key, fence, etag=read.stored.etag)
+            except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
                 continue
             return mine.token
         raise HistoryFencedError(f"{_ATTEMPTS} attempts to hold this table's history for a {work} each lost to another writer; retry")
@@ -167,7 +168,7 @@ class TableHistory(BaseModel):
         """End the hold ``token`` names. Never raises: a hold this cannot end lapses after :data:`HOLD`."""
         try:
             for _ in range(_ATTEMPTS):
-                read = records.read_json_at(self.control_root, self.storage_options, self.key)
+                read = conditional_records.read_json_at(self.control_root, self.storage_options, self.key)
                 now = read.at
                 if read.stored is None:
                     return
@@ -180,8 +181,8 @@ class TableHistory(BaseModel):
                     log.error("history_fence_outlived", extra={"table_uuid": self.table_uuid, "work": mine.work, "held_since": mine.taken_at.isoformat()})
                 kept = fence.model_copy(update={"holders": [holder for holder in fence.holders if holder.token != token and holder.expires_at > now]})
                 try:
-                    records.replace_json(self.control_root, self.storage_options, self.key, kept.model_dump(mode="json"), etag=read.stored.etag)
-                except records.RecordChangedError:
+                    conditional_records.replace_json(self.control_root, self.storage_options, self.key, kept.model_dump(mode="json"), etag=read.stored.etag)
+                except conditional_records.RecordChangedError:
                     continue
                 return
             log.warning("history_fence_not_released", extra={"table_uuid": self.table_uuid, "reason": "every attempt lost to another writer"})
@@ -197,10 +198,10 @@ class TableHistory(BaseModel):
 
         Raises:
             botocore.exceptions.ClientError: The store refused a read or a write.
-            records.RecordChangedError: Every attempt lost to another writer of the fence.
+            conditional_records.RecordChangedError: Every attempt lost to another writer of the fence.
         """
         for _ in range(_ATTEMPTS):
-            read = records.read_json_at(self.control_root, self.storage_options, self.key)
+            read = conditional_records.read_json_at(self.control_root, self.storage_options, self.key)
             now = read.at
             if read.stored is None:
                 return False
@@ -212,11 +213,11 @@ class TableHistory(BaseModel):
             others = [holder for holder in live if holder.token != token]
             renewed = fence.model_copy(update={"holders": [*others, mine.model_copy(update={"expires_at": now + HOLD})]})
             try:
-                records.replace_json(self.control_root, self.storage_options, self.key, renewed.model_dump(mode="json"), etag=read.stored.etag)
-            except records.RecordChangedError:
+                conditional_records.replace_json(self.control_root, self.storage_options, self.key, renewed.model_dump(mode="json"), etag=read.stored.etag)
+            except conditional_records.RecordChangedError:
                 continue
             return True
-        raise records.RecordChangedError(f"{_ATTEMPTS} attempts to renew a hold of this table's history each lost to another writer")
+        raise conditional_records.RecordChangedError(f"{_ATTEMPTS} attempts to renew a hold of this table's history each lost to another writer")
 
     def _keep(self, token: str, stopped: threading.Event) -> None:
         """Renew the take ``token`` names every third of :data:`HOLD` until ``stopped`` is set. Never raises: a renewal that

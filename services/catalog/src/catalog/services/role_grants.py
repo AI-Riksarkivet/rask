@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from openfga_sdk.client import OpenFgaClient
 
     from catalog.schemas import RoleRecord
-    from lakehouse.storage_options import StorageOptions
+    from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -50,7 +50,7 @@ async def end_role(
 
     Raises:
         ConcurrentModificationError: Ending it would leave a project nobody administers; nothing was changed.
-        lakehouse.records.RecordChangedError: Its record changed under both of the ending's reads.
+        lakehouse.storage.conditional_records.RecordChangedError: Its record changed under both of the ending's reads.
     """
     if client is None:
         await run_in_threadpool(roles.end_role_record, control_root, storage_options, role)

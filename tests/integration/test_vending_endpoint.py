@@ -21,7 +21,7 @@ from pydantic import SecretStr
 from catalog.api.dependencies import get_vendor
 from catalog.core.config import get_settings
 from catalog.core.vending import TableRecords, Tier, VendedSession
-from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.storage.credential import S3KeyPair
 
 
 def test_mode_b_returns_server_mediated(client: TestClient, claim_described: Callable[[str], str]) -> None:

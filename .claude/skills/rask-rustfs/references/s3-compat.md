@@ -6,20 +6,20 @@ not run), **open** (neither).
 
 | Operation | Who uses it in rask | Status | Evidence |
 |---|---|---|---|
-| PutObject `If-None-Match: *` → 412, one winner under contention | Lance commit (put-if-not-exists, `lance_docs/lance/format/table/transaction.md` § Commit Protocol), registry create (`packages/lakehouse/src/lakehouse/records.py:95-111`), the catalog's warehouse validate probe (`services/catalog/src/catalog/api/v1/endpoints/warehouses.py:1289-1291`) | measured (16×20 race) + gated | `implemented_tests.txt:355-363`; lock re-check `rustfs@1.0.3:crates/ecstore/src/set_disk/ops/object.rs:4715-4728` |
-| PutObject `If-Match: <etag>` | registry read-modify-write (`records.py:235-256`) | measured + gated | `rustfs@1.0.3:crates/ecstore/src/set_disk/core/io_primitives.rs:6425-6431` |
+| PutObject `If-None-Match: *` → 412, one winner under contention | Lance commit (put-if-not-exists, `lance_docs/lance/format/table/transaction.md` § Commit Protocol), registry create (`packages/lakehouse/src/lakehouse/storage/conditional_records.py`, `create_json`), the catalog's warehouse validate probe (`services/catalog/src/catalog/api/v1/endpoints/warehouses.py:1289-1291`) | measured (16×20 race) + gated | `implemented_tests.txt:355-363`; lock re-check `rustfs@1.0.3:crates/ecstore/src/set_disk/ops/object.rs:4715-4728` |
+| PutObject `If-Match: <etag>` | registry read-modify-write (`storage/conditional_records.py`, `replace_json`) | measured + gated | `rustfs@1.0.3:crates/ecstore/src/set_disk/core/io_primitives.rs:6425-6431` |
 | CompleteMultipartUpload conditional | Lance large commit | gated + source | `implemented_tests.txt:470-472`; `rustfs@1.0.3:crates/ecstore/src/set_disk/ops/multipart.rs:2702-2742` |
 | Multipart from pyarrow 25 (`STREAMING-UNSIGNED-PAYLOAD-TRAILER`) | a service's own pyarrow writes on its own session, such as the outbox (`packages/lakehouse/src/lakehouse/events/outbox.py`) | measured on 1.0.1 and 1.0.3; refused by alpha.60 | `.dagger/storage.go`; audit § Measured |
 | HeadBucket (pyarrow's bucket check before a write) | no rask path through a vended credential | measured: refused to a prefix-scoped session | `rustfs@1.0.3:rustfs/src/storage/access.rs:2955-2960` |
 | Multipart from Lance's object_store | Lance data files | measured (create + append) | audit § Measured |
 | Ranged GET | Lance reads | measured implicitly (reads after append); multi-page offsets not isolated | audit § Measured |
 | ListObjectsV2 prefix/delimiter | Lance listing, maintenance's table pass and orphan scan | measured (prefix-scoped list) + gated | `implemented_tests.txt` |
-| DeleteObjects (≤1,000 keys) | warehouse purge (`services/catalog/src/catalog/services/warehouses.py:698-699`), maintenance's purge, version expiry and base reclaim (`lakehouse.stored_objects.delete_objects`) | gated; purge not measured | limit `rustfs@1.0.3:rustfs/src/app/object/delete.rs:471-474` |
+| DeleteObjects (≤1,000 keys) | warehouse purge (`services/catalog/src/catalog/services/warehouses.py:698-699`), maintenance's purge, version expiry and base reclaim (`lakehouse.storage.stored_objects.delete_objects`) | gated; purge not measured | limit `rustfs@1.0.3:rustfs/src/app/object/delete.rs:471-474` |
 | CreateBucket / DeleteBucket | warehouse lifecycle | open (purge path not traced) | `rustfs@1.0.3:crates/ecstore/src/store/bucket.rs:36-86` |
 | STS AssumeRole + session token on every call | no rask caller (ADR 0170) | measured | `rustfs@1.0.3:rustfs/src/admin/handlers/sts.rs:212-333` |
 | AssumeRoleWithWebIdentity for a ServiceAccount token, the canned policy its `sub` names, an inline session policy | the catalog's own IO and every vend (`vending.mode: web_identity`, ADR 0170) | measured on 1.0.3 (stand-in issuer, `scripts/rustfs_web_identity_measure.py`) | `sts.rs:399-441`; `rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298` |
 | HEAD of a missing key under a prefix-scoped policy | Lance probes | open: `test_head_object_404_with_policy_prefix` is unimplemented (403 possible where AWS answers 404) | `rustfs@1.0.3:scripts/s3-tests/unimplemented_tests.txt` |
-| Conditional DeleteObject (`If-Match`) | none found in `records.py` | excluded from the gate | `rustfs@1.0.3:scripts/s3-tests/excluded_tests.txt:138-156` |
+| Conditional DeleteObject (`If-Match`) | none found in `storage/conditional_records.py` | excluded from the gate | `rustfs@1.0.3:scripts/s3-tests/excluded_tests.txt:138-156` |
 | CopyObject with destination conditions | none | source: parsed and checked; atomicity under contention not traced | `rustfs@1.0.3:rustfs/src/storage/options.rs:476-495` |
 
 ## Limits
@@ -40,12 +40,12 @@ not run), **open** (neither).
 
 - Path-style unless `RUSTFS_SERVER_DOMAINS` is set (`rustfs@1.0.3:rustfs/src/config/cli.rs:1535-1548`). rask: Lance
   `virtual_hosted_style_request=false`, boto3 `addressing_style=path`, pyarrow's path-style default for an
-  `endpoint_override` (`packages/lakehouse/src/lakehouse/objectfs.py:37,45`; `records.py:63`). The
+  `endpoint_override` (`packages/lakehouse/src/lakehouse/storage/objectfs.py`, `lance_storage_options`; `storage/client.py`, `s3_client`). The
   objectfs docstring's "RustFS rejects virtual-hosted" is true only while no server domain is set.
 - Region defaults to `us-east-1` (`rustfs@1.0.3:crates/config/src/constants/app.rs:289-292`). Enforcement of the
   signing region lives in the `s3s` dependency and is not traced; "RustFS ignores region" on the integration pages is
   unverified.
-- `allow_http` is derived from the endpoint scheme in rask (`objectfs.py:49-62`): plain HTTP in dev, TLS in production.
+- `allow_http` is derived from the endpoint scheme in rask (`storage/endpoint_scheme.py`, `allow_http_for`): plain HTTP in dev, TLS in production.
 
 ## Not used by rask, and not to be relied on
 

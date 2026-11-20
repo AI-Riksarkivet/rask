@@ -22,11 +22,11 @@ from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE, require_data
 from lakehouse.events.signature_doors import SignatureDoorSettings
 from lakehouse.governed.principal import PrincipalKey
 from lakehouse.governed.settings import GovernedAuthSettings
-from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_options
-from lakehouse.storage_options import StorageOptions, on_s3
-from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_options
+from lakehouse.storage.options import StorageOptions, on_s3
+from lakehouse.storage.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
 
 
 if TYPE_CHECKING:
@@ -134,7 +134,7 @@ class CatalogReadBounds(BaseSettings):
 
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", extra="ignore")
 
-    #: Object-store call bounds, in TWO PLANES (`lakehouse.objectfs.StoreTimeouts` holds the
+    #: Object-store call bounds, in TWO PLANES (`lakehouse.storage.objectfs.StoreTimeouts` holds the
     #: measurements). object_store's request timeout covers the WHOLE request, body included, so one
     #: budget cannot serve both a manifest read and a 5 MiB upload part.
     #:
@@ -682,7 +682,7 @@ class Settings(
         The two refusals every lakehouse service shares are `require_one_store_identity`'s. A web-identity vend
         exchanges the catalog's own token, so it needs one. With no token, the lifespan refuses a half pair, a pair
         nobody acknowledged, and any pair where the chart named a secret store
-        (`lakehouse.store_session.require_env_pair`).
+        (`lakehouse.storage.store_session.require_env_pair`).
         """
         if self.vending_mode == "web_identity" and self.s3_web_identity_token_file is None:
             raise ValueError("LANCE_VENDING_MODE=web_identity exchanges the catalog's own token: set LANCE_S3_WEB_IDENTITY_TOKEN_FILE")

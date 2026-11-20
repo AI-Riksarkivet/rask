@@ -19,7 +19,7 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoi
 from lakehouse.events import control_emit, outbox_metrics
 from lakehouse.events.control_emit import BusControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests.bus_double import BusDouble
 from tests.unit.no_store_session import no_store_session
 

@@ -1,7 +1,12 @@
 # lakehouse.storage
 
-The lakehouse library's seam over S3-compatible stores (`packages/lakehouse/src/lakehouse/storage`): the boto3 S3 client factory, the STS client, key listing with
-timestamped-prefix retention, S3 URI parsing, and the `StorageError` family every S3 call answers in.
+How a lakehouse process reaches its object store and holds its session there (`packages/lakehouse/src/lakehouse/storage`,
+ADR 0224): the boto3 S3 client factory (`client`), the STS client (`sts`), key listing with timestamped-prefix retention
+(`s3`), S3 URI parsing (`uri`), the `StorageError` family every S3 call answers in (`errors`), the key pair a process signs
+with (`credential`), its storage options and the pyarrow filesystem they build (`options`, `endpoint_scheme`, `objectfs`),
+the session its ServiceAccount token is exchanged for (`store_session`), objects listed and deleted by key
+(`stored_objects`), and the JSON records the store arbitrates with `If-None-Match` and `If-Match` (`conditional_records`).
+The package re-exports nothing: an importer names the module that defines what it uses.
 
 **Protocol-agnostic on purpose.** Nothing here knows one workload's source format or where a workload reads its bytes
 from: a workload's sources and sinks live in that workload, outside the lakehouse.

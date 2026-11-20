@@ -27,7 +27,7 @@ from pydantic import SecretStr
 
 from catalog.services import warehouses as wh_svc
 from lakehouse.governed import fga as fga_module
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
 from maintenance.services.purge import report_is_clean

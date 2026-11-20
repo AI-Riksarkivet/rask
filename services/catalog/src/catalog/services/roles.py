@@ -30,10 +30,10 @@ from pydantic import ValidationError
 
 from catalog.schemas import RoleRecord
 from lakehouse import control_prefixes
-from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
-from lakehouse.records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ def create_role_record(control_root: str, storage_options: StorageOptions, recor
     """Write ``record`` iff no standing role of its project holds its name.
 
     Raises:
-        lakehouse.records.RecordExistsError: A standing role holds the name, or another create took it first.
+        lakehouse.storage.conditional_records.RecordExistsError: A standing role holds the name, or another create took it first.
     """
     key, body = _key(record.project, record.name), StoredRole(**record.model_dump()).model_dump(mode="json")
     try:
@@ -154,7 +154,7 @@ def end_role_record(control_root: str, storage_options: StorageOptions, record: 
     ended) refuses the stamp, and the ending reads again and judges what it finds, so it never ends a role it did not read.
 
     Raises:
-        lakehouse.records.RecordChangedError: The record changed under both reads.
+        lakehouse.storage.conditional_records.RecordChangedError: The record changed under both reads.
     """
     key = _key(record.project, record.name)
     for _ in range(END_READS):

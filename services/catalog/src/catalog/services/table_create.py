@@ -71,7 +71,7 @@ from catalog.services import dataplane, native, provenance_namespace, table_base
 from lakehouse import base_registry
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

@@ -18,7 +18,7 @@ from lance_namespace import InternalError
 
 from catalog.services import warehouses
 from lakehouse import trash
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 def _trash(control: str, canonical_id: str, location: str = "", *, kind: trash.TrashKind = "table") -> None:

@@ -44,7 +44,7 @@ from store_identity import store_options
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.problem import PROBLEM_JSON
-from lakehouse.storage_options import s3_filesystem
+from lakehouse.storage.options import s3_filesystem
 
 
 S3 = os.environ.get("LANCE_E2E_S3", "")

@@ -31,7 +31,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from byo_scenario import ScenarioRun, Tenant
 
-from lakehouse.storage_options import ENDPOINT
+from lakehouse.storage.options import ENDPOINT
 
 
 pytestmark = [pytest.mark.e2e, pytest.mark.byo_pipeline, pytest.mark.phase1, pytest.mark.skipif(not scenario.LIVE, reason=scenario.REQUIRES)]

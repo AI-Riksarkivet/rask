@@ -81,9 +81,9 @@ from lakehouse.data_directories import delete_directories, directories_to_end, d
 from lakehouse.events.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from lakehouse.events.control_events import ControlAction, ControlObjectType, ControlUuids
 from lakehouse.lance_session import open_dataset
-from lakehouse.objectfs import fs_and_base
-from lakehouse.storage_options import StorageOptions, on_s3
-from lakehouse.stored_objects import StoredObject, delete_objects, list_under
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions, on_s3
+from lakehouse.storage.stored_objects import StoredObject, delete_objects, list_under
 from lakehouse.table_paths import objects_at, spellings
 from lakehouse.trash import TrashRecord
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore, shared_lance_session

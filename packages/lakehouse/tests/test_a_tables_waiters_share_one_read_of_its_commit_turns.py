@@ -27,10 +27,11 @@ from typing import Any
 import pytest
 from pydantic import SecretStr
 
-from lakehouse import commit_turns, records
+from lakehouse import commit_turns
 from lakehouse.commit_turns import TableTurns, Writer
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.options import StorageOptions
 
 
 TABLE_UUID = "33333333-3333-4333-8333-333333333333"
@@ -59,16 +60,16 @@ def test_waiters_reading_as_one_identity_share_one_slow_read_while_another_table
     once per identity, and every waiter is answered."""
     identities = [_turns(tmp_path, "AKIDALICE"), _turns(tmp_path, "AKIDBOB")]
     other = _turns(tmp_path, "AKIDALICE", OTHER_TABLE_UUID)
-    read = records.read_json_at
+    read = conditional_records.read_json_at
     signers: list[str] = []
 
-    def _slow(root_uri: str, storage_options: StorageOptions, key: str) -> records.StoreRead:
+    def _slow(root_uri: str, storage_options: StorageOptions, key: str) -> conditional_records.StoreRead:
         if key == identities[0].key:
             signers.append(storage_options.key_pair.access_key_id if storage_options.key_pair is not None else "")
             time.sleep(SLOW_READ_SECONDS)
         return read(root_uri, storage_options, key)
 
-    monkeypatch.setattr(records, "read_json_at", _slow)
+    monkeypatch.setattr(conditional_records, "read_json_at", _slow)
     stop = threading.Event()
 
     def _commit_elsewhere() -> None:
@@ -102,17 +103,17 @@ def test_a_read_in_flight_across_the_processs_own_hand_leaves_its_waiters_no_vie
     process's next waiter still finds the turn held, rather than passing its wait on the answer from before the hand."""
     monkeypatch.setattr(commit_turns, "_SHARED_READ_SECONDS", HELD_FOR_THE_TEST_SECONDS)
     turns = _turns(tmp_path, "AKIDCATALOG")
-    read = records.read_json_at
+    read = conditional_records.read_json_at
     in_flight, handed = threading.Event(), threading.Event()
 
-    def _held_in_flight(root_uri: str, storage_options: StorageOptions, key: str) -> records.StoreRead:
+    def _held_in_flight(root_uri: str, storage_options: StorageOptions, key: str) -> conditional_records.StoreRead:
         found = read(root_uri, storage_options, key)
         if threading.current_thread().name == "waiter":
             in_flight.set()
             handed.wait(timeout=10)
         return found
 
-    monkeypatch.setattr(records, "read_json_at", _held_in_flight)
+    monkeypatch.setattr(conditional_records, "read_json_at", _held_in_flight)
     waiter = threading.Thread(target=turns.poll, args=(None,), name="waiter")
     waiter.start()
     assert in_flight.wait(timeout=10), "the waiter's read never started"
@@ -150,7 +151,7 @@ def test_a_doors_take_beaten_to_the_record_by_another_replica_waits_out_that_tur
     if beaten_to == "replace_json":
         here.release(here.take(None))
     assert here.poll(None) is False
-    create, replace = records.create_json, records.replace_json
+    create, replace = conditional_records.create_json, conditional_records.replace_json
     beaten = threading.Event()
     theirs: list[str] = []
     released: list[threading.Timer] = []
@@ -170,8 +171,8 @@ def test_a_doors_take_beaten_to_the_record_by_another_replica_waits_out_that_tur
         _beaten("replace_json")
         replace(root_uri, storage_options, key, record, etag=etag)
 
-    monkeypatch.setattr(records, "create_json", _create)
-    monkeypatch.setattr(records, "replace_json", _replace)
+    monkeypatch.setattr(conditional_records, "create_json", _create)
+    monkeypatch.setattr(conditional_records, "replace_json", _replace)
     began = time.monotonic()
     try:
         ours = here.take(None)

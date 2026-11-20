@@ -32,9 +32,9 @@ from catalog.core.vending import EncryptionAtRest, VendFacts, WebIdentityVendor
 from catalog.services import table_claims
 from lakehouse import location_claims
 from lakehouse.context import DiagnosticFormatter
-from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.ns_errors import install_problem_handlers
-from lakehouse.store_session import IssuedSession, WebIdentity
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.store_session import IssuedSession, WebIdentity
 
 
 log = logging.getLogger(__name__)

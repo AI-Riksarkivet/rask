@@ -22,7 +22,7 @@ from lance_namespace import LanceNamespace, ListNamespacesRequest, ListNamespace
 from catalog.api.pagination import MAX_LIST_LIMIT
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 from tests.unit.named_resolver import NamedResolver
 

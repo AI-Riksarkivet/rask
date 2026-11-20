@@ -34,10 +34,10 @@ from pydantic import SecretStr
 
 from catalog.core import blobs
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import lance_storage_options
-from lakehouse.storage import S3Client
-from lakehouse.store_session import IssuedSession, WebIdentity
+from lakehouse.storage.client import S3Client
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.store_session import IssuedSession, WebIdentity
 
 
 _INVALID_INPUT = 13

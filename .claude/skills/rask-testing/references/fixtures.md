@@ -25,7 +25,7 @@ Every service builds `app` at module import. Pick the fixture by how settings re
 1. `monkeypatch.setenv` every variable the service needs to build and boot. For the catalog that
    includes both S3 keys, even on the `dir` backend: with no projected token
    (`LANCE_S3_WEB_IDENTITY_TOKEN_FILE`), the lifespan refuses to boot without both halves of the pair
-   (`lakehouse.store_session.require_env_pair`, shared by catalog, lineage and maintenance). A service
+   (`lakehouse.storage.store_session.require_env_pair`, shared by catalog, lineage and maintenance). A service
    given a projected token signs with sessions exchanged at STS (`*_S3_STS_ENDPOINT`), and a key pair
    beside it is refused. A service that reads a secret (its signing key, a signer's published keys, its
    bus credential) logs in to its secret store itself: request the root conftest's `secret_store`
@@ -36,7 +36,7 @@ Every service builds `app` at module import. Pick the fixture by how settings re
    a secret held that nothing read, unless the test takes `respx_allows_unused_routes`). No test writes
    the store's address or its answer's shape itself. A service's START under `secret_store` logs in to it
    first (`secret_store_session`), and a process under it is handed no key pair, acknowledged or
-   not, as a pod is (`lakehouse.store_session.key_pair_in_force`): a test whose code signs an
+   not, as a pod is (`lakehouse.storage.store_session.key_pair_in_force`): a test whose code signs an
    object-store request, or only builds its storage options, projects the service's token and holds its
    session (`store_session.SESSIONS.hold`, as
    `tests/integration/test_a_store_credential_is_in_clear_only_at_the_call_that_signs.py` does) or

@@ -26,8 +26,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.services import warehouses
-from lakehouse.storage import s3_client
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.client import s3_client
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
 

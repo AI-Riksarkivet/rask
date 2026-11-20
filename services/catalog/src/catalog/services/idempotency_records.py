@@ -14,7 +14,7 @@ would break conformance on 54 routed operations. A caller that sends one gets co
 does not is exactly where it was, which is why this module is a seam a door OPTS INTO rather than
 middleware.
 
-STORE-ARBITRATED, NOT READ-THEN-WRITE. A first claim is `records.create_json`, a conditional put whose winner the
+STORE-ARBITRATED, NOT READ-THEN-WRITE. A first claim is `conditional_records.create_json`, a conditional put whose winner the
 STORE picks, and the takeover of an abandoned claim is a replace under the ETag of the read that judged it abandoned
 ([[LH-576]]): of two retries arriving after the lease, one takes the key and the other's write is refused, re-reads,
 and finds the key held. Nothing here holds a lock and nothing here is in-memory, so it works across replicas.
@@ -40,8 +40,9 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
-from lakehouse import control_prefixes, records, stored_objects
-from lakehouse.storage_options import StorageOptions
+from lakehouse import control_prefixes
+from lakehouse.storage import conditional_records, stored_objects
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -181,7 +182,7 @@ def _record_key(scope: str, key: str) -> str:
     return f"{PREFIX}/{scope}/{key}.json"
 
 
-def _stored(found: records.Stored, key: str) -> _Claimed | _Answered | _Reclaiming:
+def _stored(found: conditional_records.Stored, key: str) -> _Claimed | _Answered | _Reclaiming:
     try:
         return _STORED.validate_python(found.record)
     except ValidationError as exc:
@@ -223,17 +224,17 @@ def claim(
         KeyReusedError: The key is bound to another door or another object.
         InFlightError: Another attempt holds the key, or a reclaim is removing it.
         KeyRecordUnreadableError: The key's record cannot be read as one.
-        records.RecordChangedError: The record kept changing across every round.
+        conditional_records.RecordChangedError: The record kept changing across every round.
     """
     record_key = _record_key(scope, key)
     for _ in range(_ROUNDS):
-        found = records.read_json_at(root_uri, storage_options, record_key)
+        found = conditional_records.read_json_at(root_uri, storage_options, record_key)
         stored = found.stored
         claimed = _Claimed(state="in_flight", binding=binding, attempt=attempt, claimed_at=found.at).model_dump(mode="json")
         if stored is None:
             try:
-                records.create_json(root_uri, storage_options, record_key, claimed)
-            except records.RecordExistsError:
+                conditional_records.create_json(root_uri, storage_options, record_key, claimed)
+            except conditional_records.RecordExistsError:
                 continue
             return None
         current = _stored(stored, key)
@@ -247,12 +248,12 @@ def claim(
         if current.state == "in_flight" and found.at - current.claimed_at < lease:
             raise InFlightError(f"idempotency key {key!r} is held by an attempt that has not finished")
         try:
-            records.replace_json(root_uri, storage_options, record_key, claimed, etag=stored.etag)
-        except records.RecordChangedError:
+            conditional_records.replace_json(root_uri, storage_options, record_key, claimed, etag=stored.etag)
+        except conditional_records.RecordChangedError:
             continue
         # A released key was given back before its attempt wrote anything; a lapsed one may have written.
         return TakenOver(since=current.claimed_at) if current.state == "in_flight" else None
-    raise records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
+    raise conditional_records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
 
 
 def release(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, attempt: str) -> None:
@@ -265,15 +266,17 @@ def release(root_uri: str, storage_options: StorageOptions, *, scope: str, key: 
     is released.
     """
     record_key = _record_key(scope, key)
-    stored = records.read_json_at(root_uri, storage_options, record_key).stored
+    stored = conditional_records.read_json_at(root_uri, storage_options, record_key).stored
     if stored is None:
         return
     current = _stored(stored, key)
     if not isinstance(current, _Claimed) or current.state != "in_flight" or current.attempt != attempt:
         return
     try:
-        records.replace_json(root_uri, storage_options, record_key, current.model_copy(update={"state": "released"}).model_dump(mode="json"), etag=stored.etag)
-    except records.RecordChangedError:
+        conditional_records.replace_json(
+            root_uri, storage_options, record_key, current.model_copy(update={"state": "released"}).model_dump(mode="json"), etag=stored.etag
+        )
+    except conditional_records.RecordChangedError:
         return
 
 
@@ -286,11 +289,11 @@ def record_outcome(root_uri: str, storage_options: StorageOptions, *, scope: str
 
     Raises:
         KeyRecordUnreadableError: The key's record cannot be read as one.
-        records.RecordChangedError: The record kept changing across every round.
+        conditional_records.RecordChangedError: The record kept changing across every round.
     """
     record_key = _record_key(scope, key)
     for _ in range(_ROUNDS):
-        stored = records.read_json_at(root_uri, storage_options, record_key).stored
+        stored = conditional_records.read_json_at(root_uri, storage_options, record_key).stored
         if stored is None:
             log.error("idempotency_outcome_unrecorded", extra={"key": key, "status": status, "reason": "the key's record is gone"})
             return
@@ -300,11 +303,11 @@ def record_outcome(root_uri: str, storage_options: StorageOptions, *, scope: str
             return
         answered = _Answered(state="done", binding=current.binding, status=status, body=body).model_dump(mode="json")
         try:
-            records.replace_json(root_uri, storage_options, record_key, answered, etag=stored.etag)
-        except records.RecordChangedError:
+            conditional_records.replace_json(root_uri, storage_options, record_key, answered, etag=stored.etag)
+        except conditional_records.RecordChangedError:
             continue
         return
-    raise records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
+    raise conditional_records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
 
 
 def reclaim(root_uri: str, storage_options: StorageOptions, *, lifetime: timedelta, limit: int) -> Reclaimed:
@@ -353,7 +356,7 @@ def _reclaim_listed(root_uri: str, storage_options: StorageOptions, path: str, *
         log.warning("idempotency_record_unreadable", extra={"path": path, "reason": "its name is no key's"})
         return "unreadable"
     try:
-        found = records.read_json_at(root_uri, storage_options, record_key)
+        found = conditional_records.read_json_at(root_uri, storage_options, record_key)
     except ValueError:
         log.warning("idempotency_record_unreadable", extra={"path": path, "reason": "its bytes are no JSON"})
         return "unreadable"
@@ -362,8 +365,8 @@ def _reclaim_listed(root_uri: str, storage_options: StorageOptions, path: str, *
         return "kept"
     mark = _Reclaiming(state="reclaiming", at=found.at).model_dump(mode="json")
     try:
-        records.replace_json(root_uri, storage_options, record_key, mark, etag=stored.etag)
-    except records.RecordChangedError:
+        conditional_records.replace_json(root_uri, storage_options, record_key, mark, etag=stored.etag)
+    except conditional_records.RecordChangedError:
         return "kept"
     stored_objects.delete_object(root_uri, storage_options, record_key)
     return "reclaimed"

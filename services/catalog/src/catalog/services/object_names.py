@@ -32,8 +32,8 @@ from lakehouse.governed import fga
 from lakehouse.lance_session import open_dataset
 from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import uuid_of
-from lakehouse.objectfs import fs_and_base
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

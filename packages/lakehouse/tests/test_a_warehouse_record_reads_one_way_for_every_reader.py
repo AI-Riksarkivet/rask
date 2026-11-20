@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from lakehouse import warehouse_records
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 def _filed(root: Path, name: str, record: object) -> None:

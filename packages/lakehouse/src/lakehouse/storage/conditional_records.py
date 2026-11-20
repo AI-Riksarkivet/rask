@@ -11,7 +11,7 @@ on a read that can go stale between the check and the write.
 
 Two branches, one contract:
 
-- ``s3://`` roots: ``put_object(..., IfNoneMatch="*")`` on a ``lakehouse.storage.s3_client`` — the store rejects
+- ``s3://`` roots: ``put_object(..., IfNoneMatch="*")`` on a ``lakehouse.storage.client.s3_client`` — the store rejects
   the second create with 412 ``PreconditionFailed``. pyarrow's ``S3FileSystem`` cannot express a
   conditional PUT, which is why this write (alone among the registry IO) goes through an S3 client.
 - local roots (dev/tests): ``open(path, "xb")`` — ``O_CREAT|O_EXCL``, the OS arbitrates. Same
@@ -48,7 +48,7 @@ from typing import Any
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.storage_options import StorageOptions, object_client, on_s3
+from lakehouse.storage.options import StorageOptions, object_client, on_s3
 
 
 log = logging.getLogger(__name__)
@@ -344,3 +344,19 @@ def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, reco
             fh.flush()
         finally:
             fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+__all__ = [
+    "RecordChangedError",
+    "RecordExistsError",
+    "RecordMissingError",
+    "StoreRead",
+    "Stored",
+    "create_json",
+    "exchange_json",
+    "mutate_json",
+    "read_json",
+    "read_json_at",
+    "replace_json",
+    "store_clock",
+]

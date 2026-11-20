@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from credentials import Credential, credential
 
-from lakehouse.storage import sts_client
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.sts import sts_client
 
 
 #: The role the token is exchanged for: AWS assumes it, a store that grants the policy the token's subject names (RustFS)

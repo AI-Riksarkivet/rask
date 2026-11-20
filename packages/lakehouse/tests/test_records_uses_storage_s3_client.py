@@ -1,4 +1,4 @@
-"""The registry's conditional-write client is `storage.s3_client`, never a hand-rolled boto3 one.
+"""The registry's conditional-write client is `storage.client.s3_client`, never a hand-rolled boto3 one.
 
 `lakehouse.storage` is the estate's canonical S3 seam: path-style addressing, s3v4 signing, adaptive
 retries, connect/read timeouts and the endpoint/CA/insecure env resolution live there ONCE. A raw
@@ -19,8 +19,8 @@ from typing import Any
 
 import pytest
 
-from lakehouse import records
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 class _RecordingClient:
@@ -44,7 +44,7 @@ class _RecordingClient:
 
 @pytest.fixture
 def seam(monkeypatch: pytest.MonkeyPatch) -> tuple[_RecordingClient, list[tuple[Any, dict[str, Any]]]]:
-    """Replace `storage.s3_client` itself, so the assertion is on the SEAM the registry must use."""
+    """Replace `storage.client.s3_client` itself, so the assertion is on the SEAM the registry must use."""
     built: list[tuple[Any, dict[str, Any]]] = []
     client = _RecordingClient()
 
@@ -52,9 +52,9 @@ def seam(monkeypatch: pytest.MonkeyPatch) -> tuple[_RecordingClient, list[tuple[
         built.append((endpoint, kwargs))
         return client
 
-    import lakehouse.storage as storage
+    import lakehouse.storage.client as storage_client
 
-    monkeypatch.setattr(storage, "s3_client", fake_s3_client)
+    monkeypatch.setattr(storage_client, "s3_client", fake_s3_client)
     return client, built
 
 
@@ -72,9 +72,9 @@ _SO = StorageOptions.from_flat(
 def test_create_json_builds_its_client_through_the_storage_seam(seam: tuple[_RecordingClient, list[tuple[Any, dict[str, Any]]]]) -> None:
     client, built = seam
 
-    records.create_json("s3://ctrl/prefix", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
+    conditional_records.create_json("s3://ctrl/prefix", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
 
-    assert built, "create_json did not build its client via storage.s3_client"
+    assert built, "create_json did not build its client via storage.client.s3_client"
     endpoint, kwargs = built[0]
     assert endpoint == "http://rf:9000"
     assert kwargs == {"access_key": "ak", "secret_key": "sk", "session_token": "tok", "region": "eu-north-1"}
@@ -84,9 +84,9 @@ def test_create_json_builds_its_client_through_the_storage_seam(seam: tuple[_Rec
 def test_mutate_json_builds_its_client_through_the_storage_seam(seam: tuple[_RecordingClient, list[tuple[Any, dict[str, Any]]]]) -> None:
     client, built = seam
 
-    records.mutate_json("s3://ctrl/prefix", _SO, "_warehouses/wh-a.json", lambda r: {**r, "status": "deactivated"}, attempts=1)
+    conditional_records.mutate_json("s3://ctrl/prefix", _SO, "_warehouses/wh-a.json", lambda r: {**r, "status": "deactivated"}, attempts=1)
 
-    assert built, "mutate_json did not build its client via storage.s3_client"
+    assert built, "mutate_json did not build its client via storage.client.s3_client"
     assert all(kwargs["region"] == "eu-north-1" and kwargs["session_token"] == "tok" for _endpoint, kwargs in built)
     assert client.calls[-1][1]["IfMatch"] == "abc123"
 
@@ -96,7 +96,7 @@ def test_a_storage_options_without_a_region_still_reaches_the_seam(seam: tuple[_
     handed it explicitly rather than left to resolve `AWS_REGION`, which is a different value."""
     _client, built = seam
 
-    records.create_json("s3://ctrl", StorageOptions(options={"endpoint": "http://rf:9000"}), "_projects/acme.json", {"id": "acme"})
+    conditional_records.create_json("s3://ctrl", StorageOptions(options={"endpoint": "http://rf:9000"}), "_projects/acme.json", {"id": "acme"})
 
     assert built[0][1]["region"] == "us-east-1"
     assert built[0][1]["session_token"] is None

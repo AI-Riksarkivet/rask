@@ -29,8 +29,8 @@ from lakehouse.governed.principal import PrincipalKey
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.naming import CONTROL_ID_PATTERN, CONTROL_ID_RE
 from lakehouse.record_store import delete_record, list_records
-from lakehouse.records import RecordExistsError, create_json
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordExistsError, create_json
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

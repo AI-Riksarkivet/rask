@@ -120,12 +120,13 @@ from pydantic import BaseModel, Field
 
 from catalog.core.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
 from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
-from lakehouse import branch_layout, clone_sources, stored_objects
+from lakehouse import branch_layout, clone_sources
 from lakehouse.base_refs import normalise
 from lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
-from lakehouse.objectfs import fs_and_base
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import stored_objects
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions
 from lakehouse.transactions import read_transaction
 
 

@@ -2,7 +2,7 @@
 
 Every open, listing, manifest read and delete maintenance makes carries `MaintenanceSettings.store_timeouts`, so a store
 that has stopped answering fails the pass, which is tried again later, rather than holding a worker replica for as long
-as its pass bound allows. Measured on pylance 12.0.0 with object_store's defaults (`lakehouse.objectfs.StoreTimeouts`):
+as its pass bound allows. Measured on pylance 12.0.0 with object_store's defaults (`lakehouse.storage.objectfs.StoreTimeouts`):
 one open against a store that accepts and never answers outlasted a 300 s harness. Lance honours the request bound only
 under the key `timeout` and ignores `request_timeout` without a word, so the claim is how long the open takes, not
 which keys the options hold.

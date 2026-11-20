@@ -32,7 +32,7 @@ from botocore.config import Config
 from lance.optimize import Compaction
 from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
 
-from lakehouse.storage_options import ENDPOINT
+from lakehouse.storage.options import ENDPOINT
 
 
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")

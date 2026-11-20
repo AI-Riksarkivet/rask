@@ -19,7 +19,7 @@ from lance_namespace import CreateNamespaceRequest, connect
 from moto.server import ThreadedMotoServer
 
 from catalog.core.identifiers import with_minted_uuid
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 from tests.integration import store_requests
 

@@ -1,6 +1,6 @@
 """The committed-file identity reads keep every store connection they open, so a sweep reconnects for none of them.
 
-`lakehouse.stored_objects.identities` asks the store about sixteen objects at once through one client, and a client
+`lakehouse.storage.stored_objects.identities` asks the store about sixteen objects at once through one client, and a client
 returns each connection to its pool when its request ends; a connection the pool has no room for is closed, and the
 next batch connects again. Measured on the dev estate 2026-11-08 (helm revision 24): urllib3 logged `Connection pool is
 full, discarding connection: rask-rustfs. Connection pool size: 10` on every sweep tick. The store here answers each
@@ -18,9 +18,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from pydantic import SecretStr
 
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.storage_options import StorageOptions
-from lakehouse.stored_objects import identities
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.stored_objects import identities
 
 
 class _SlowStore(BaseHTTPRequestHandler):

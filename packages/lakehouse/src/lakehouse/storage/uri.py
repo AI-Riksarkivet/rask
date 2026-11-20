@@ -6,3 +6,8 @@ def split_s3_uri(uri: str) -> tuple[str, str]:
     rest = uri.removeprefix("s3://")
     bucket, _, uri_prefix = rest.partition("/")
     return bucket, uri_prefix
+
+
+__all__ = [
+    "split_s3_uri",
+]

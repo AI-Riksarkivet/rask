@@ -25,7 +25,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.project_records import ProjectRecord
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lakehouse.warehouse_records import WarehouseRecord
 
 

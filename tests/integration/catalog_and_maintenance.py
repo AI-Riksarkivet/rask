@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings as catalog_settings
 from catalog.core.lineage_emit import BusEmitter
-from lakehouse.storage import S3Client
+from lakehouse.storage.client import S3Client
 from lakehouse.supervision import Supervisor
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.runtime import standing

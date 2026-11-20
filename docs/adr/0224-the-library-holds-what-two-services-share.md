@@ -223,3 +223,68 @@ importers of its own (production files, measured by the names each uses):
 
 The split moves every `banned-api` entry in `pyproject.toml` that names `lakehouse.governed.fga.*` with the name it
 bans, and every `monkeypatch` target on `fga`, in the same commit.
+
+## The store group (2026-11-20)
+
+The fourth group by job is the store, `lakehouse.storage`: how a lakehouse process reaches its object store and holds
+its session there. The subpackage already held the clients, listing, URI parsing and the error family, so the name
+stays and the stragglers move in. Measured with `ast` on `af6e9b907` (module-level, function-local, `TYPE_CHECKING` and
+relative imports; 112 modules, 230 edges), a module joined when its job is reaching the store and the group's edges to the rest
+run one way: the group imports four modules of the rest (`base_refs`, `supervision`, `governed.machine_identity`,
+`governed.secrets`), none of which reaches the group again, and 21 modules of the rest import the group.
+
+| Module | In the group as |
+| --- | --- |
+| `lakehouse.storage_options` | `lakehouse.storage.options` |
+| `lakehouse.endpoint_scheme` | `lakehouse.storage.endpoint_scheme` |
+| `lakehouse.objectfs` | `lakehouse.storage.objectfs` |
+| `lakehouse.store_session` | `lakehouse.storage.store_session` |
+| `lakehouse.stored_objects` | `lakehouse.storage.stored_objects` |
+| `lakehouse.records` | `lakehouse.storage.conditional_records` |
+| `lakehouse.governed.store_credential` | `lakehouse.storage.credential` |
+
+`storage_options` would read `storage.storage_options`, so it takes `options`. `records` takes the name of what it
+holds, the JSON records the store arbitrates with `If-None-Match` and `If-Match`, so it is not read as the catalog's
+records, which are a later group. `store_session` keeps its name, since a bare `session` is a common local name in its
+importers. `store_credential` holds the key pair a store credential is carried as and the 503 raised while none is held;
+its only importers in the library were `options`, `objectfs` and `store_session`, so its job is the store's.
+
+**The facade.** `storage/__init__.py` re-exported 13 names from its five modules. 46 import statements (42
+`from lakehouse.storage import`, 4 `import lakehouse.storage as storage`, which tests patched through) and 11 dotted
+references in prose, patch targets and the `boto3` ban message named it; each now names the defining module, and the
+`__init__` is a docstring. That keeps `endpoint_scheme` light as its own docstring requires: a settings module importing
+it loads neither boto3 nor pyarrow. `options.object_client` imports `lakehouse.storage.client` at call time, so the tests
+that replace the S3 client patch `lakehouse.storage.client.s3_client`, where it is looked up. Every module of the group
+declares `__all__`; `log` is left out of each.
+
+Left out:
+
+- `record_store`: the hashed-key layout under every control-root registry (its key bytes are the registries'
+  persistence contract); it imports the group and the group does not import it, so it waits for the records group.
+- `base_refs`: the rule for comparing a manifest's and the catalog's spellings of a location, a table concern;
+  `objectfs` imports it.
+- `lance_session`, `table_paths`, `data_directories`, `file_identities`: Lance tables and their layout.
+- `health`: the readiness probe, whose store dependency builds on the group.
+
+**The loop.** ADR 0224's auth plane section recorded `governed.signing_key` -> `health` -> `objectfs` ->
+`governed.store_credential`. With the key pair in the store the chain ends in the group, and `governed` is imported from
+the store by `store_session` alone. The auth plane and the rest still import each other through the probe on one chain:
+`governed.signing_key` -> `health` -> `events.bus` (under `TYPE_CHECKING`, the bus dependency's type) ->
+`governed.projected_token`. It is cut by the probe's `Dependency` type living in a module that imports neither the bus
+nor the store, so that `signing_key` imports no probe that reaches them; that is the probe's group, not this one.
+
+`.importlinter`'s `the-store-imports-only-its-named-dependencies-in-the-library` (a `forbidden` contract from
+`lakehouse.storage` to `lakehouse.*`) holds it: the group imports nothing else in the library, directly or through
+another module, beyond the four named imports `ignore_imports` lists. It was kept before it was written; a planted
+`import lakehouse.record_store` in `lakehouse.storage.uri` broke it. The auth plane's contract names
+`lakehouse.storage.store_session` as its one importer in the store, since `options` and `objectfs` import nothing of
+it.
+
+`objectfs` imports `base_refs` at module level: the function-local import's stated reason, that `base_refs` imports
+`objectfs`, does not hold (`base_refs` imports only the standard library).
+
+A module's logger is named by its path, so three record names follow the group: `lakehouse.store_session`,
+`lakehouse.records` and `lakehouse.stored_objects` are `lakehouse.storage.store_session`,
+`lakehouse.storage.conditional_records` and `lakehouse.storage.stored_objects`. No alert rule, dashboard, collector
+route or test names them. The file audit logger `lakehouse.file_audit` is named by hand and keeps its name. No module
+of the group has a tracer.

@@ -30,7 +30,7 @@ from catalog.services.dataplane import create_table, insert_into_table
 from catalog.services.table_claims import DoorTable
 from lakehouse import base_registry
 from lakehouse.location_claims import ClaimStore
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 
 

@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 
 if TYPE_CHECKING:
-    from lakehouse.storage import S3Client
+    from lakehouse.storage.client import S3Client
 
 
 #: Bounded, and the bound is stated: a store that has not answered in two minutes is not slow, it is
@@ -80,7 +80,7 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv[1:])
 
     # Imported here so `--help` and the argument errors above do not pay for boto3.
-    from lakehouse.storage import s3_client
+    from lakehouse.storage.client import s3_client
 
     client = s3_client()
     _await_store(client)

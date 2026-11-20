@@ -69,7 +69,7 @@ from catalog.services.warehouses import ensure_catalog_row
 from lakehouse import location_claims
 from lakehouse.base_refs import normalise
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.storage_options import s3_filesystem
+from lakehouse.storage.options import s3_filesystem
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import orphans
 from maintenance.services.orphans import OrphanFile
@@ -121,7 +121,7 @@ def _wipe(client: Any, bucket: str) -> None:
 @pytest.fixture(scope="module")
 def s3(rustfs_store: ThrowawayStore) -> Any:
     """A client on the throwaway store, via lakehouse.storage — never raw boto3 (repo rule)."""
-    from lakehouse.storage import s3_client
+    from lakehouse.storage.client import s3_client
 
     client = s3_client(rustfs_store.endpoint, access_key=rustfs_store.root_access_key, secret_key=rustfs_store.root_secret())
     skip_unless_live(rustfs_store.endpoint, what="the S3 store", probe=lambda _url, _timeout: client.list_buckets())

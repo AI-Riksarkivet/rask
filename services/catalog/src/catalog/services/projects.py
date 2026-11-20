@@ -24,13 +24,13 @@ from lance_namespace import InternalError
 
 from catalog.services.control_records import ProtectionChange, read_json, with_manager, with_protection
 from lakehouse import control_prefixes
-from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.project_records import ProjectRecord, UnreadableProjectRecordError
 from lakehouse.project_records import read as read_project_record
 from lakehouse.record_store import delete_record
-from lakehouse.records import RecordMissingError, create_json, mutate_json
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordMissingError, create_json, mutate_json
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -145,7 +145,7 @@ def set_project_manager(control_root: str, storage_options: StorageOptions, proj
 def create_project_record(control_root: str, storage_options: StorageOptions, record: ProjectRecord) -> None:
     """Mint ``_projects/<id>.json`` iff absent — the STORE arbitrates (F1).
 
-    Raises :class:`lakehouse.records.RecordExistsError` on a lost race; the caller
+    Raises :class:`lakehouse.storage.conditional_records.RecordExistsError` on a lost race; the caller
     re-reads and converges on the winner's identity fields (``created_at``/``created_by``), exactly
     like the sequential idempotent re-POST path.
     """

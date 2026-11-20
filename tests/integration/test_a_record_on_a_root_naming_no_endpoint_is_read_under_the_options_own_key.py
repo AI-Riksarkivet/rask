@@ -21,8 +21,8 @@ import pytest
 from pydantic import SecretStr
 
 from lakehouse import record_store
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.storage_options import REGION, StorageOptions
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.options import REGION, StorageOptions
 from tests.integration import store_requests
 
 
@@ -68,7 +68,7 @@ def test_a_record_read_on_a_root_naming_no_endpoint_signs_with_the_options_key_p
 def test_a_record_write_on_a_root_naming_no_endpoint_addresses_aws_and_no_endpoint_the_environment_names(monkeypatch: pytest.MonkeyPatch) -> None:
     """The client every record write goes through addresses the region's own endpoint, as the read does: an endpoint the
     pod's environment names, the deployment's own store or any other, would take the options' key pair and the record."""
-    from lakehouse.storage_options import object_client
+    from lakehouse.storage.options import object_client
 
     for name in ("AWS_ENDPOINT_URL", "AWS_ENDPOINT_URL_S3", "RASK_S3_ENDPOINT_URL"):
         monkeypatch.setenv(name, "http://ambient.example:9000")

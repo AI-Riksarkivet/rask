@@ -18,7 +18,7 @@ from catalog.services.cast_size import bytes_after_cast
 from catalog.services.dataplane import coerce_insert_arrow, create_table
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.location_claims import ClaimStore
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 
 

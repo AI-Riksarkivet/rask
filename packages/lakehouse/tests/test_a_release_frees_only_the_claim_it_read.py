@@ -22,9 +22,10 @@ from pathlib import Path
 
 import pytest
 
-from lakehouse import location_claims, records
+from lakehouse import location_claims
 from lakehouse.location_claims import ClaimStore, LocationClaim, LocationHeldError
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 LOCATION = "s3://lance-catalog/aa11bb22_ns$x"
@@ -40,17 +41,17 @@ def _resolves(_claim: LocationClaim) -> bool:
 def test_a_release_leaves_the_claim_a_hand_over_wrote_after_its_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = ClaimStore(control_root=str(tmp_path))
     location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves)
-    read = records.read_json_at
+    read = conditional_records.read_json_at
     handed_over: list[str] = []
 
-    def _read_then_hand_over(root_uri: str, storage_options: StorageOptions, key: str) -> records.StoreRead:
+    def _read_then_hand_over(root_uri: str, storage_options: StorageOptions, key: str) -> conditional_records.StoreRead:
         found = read(root_uri, storage_options, key)
         if not handed_over:
             handed_over.append(key)
             location_claims.take(store, LOCATION, "ns$y", ["ns", "y"], previous="ns$x", is_gone=_resolves)
         return found
 
-    monkeypatch.setattr(records, "read_json_at", _read_then_hand_over)
+    monkeypatch.setattr(conditional_records, "read_json_at", _read_then_hand_over)
 
     released = location_claims.release(store, LOCATION, "ns$x")
 

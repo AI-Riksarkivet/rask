@@ -43,8 +43,8 @@ from lakehouse import features
 from lakehouse.base_refs import decoded_path, store_of
 from lakehouse.base_registry import RecordedBase
 from lakehouse.data_directories import directory_uri
-from lakehouse.storage_options import StorageOptions
-from lakehouse.stored_objects import StoredObject, delete_objects, list_under
+from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.stored_objects import StoredObject, delete_objects, list_under
 
 
 log = logging.getLogger(__name__)

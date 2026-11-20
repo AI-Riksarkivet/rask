@@ -22,11 +22,12 @@ from announcement_filings import age_filings
 
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
-from lakehouse import maintenance_policies, records
+from lakehouse import maintenance_policies
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
 from lakehouse.naming import CONTROL_ID_RE
-from lakehouse.objectfs import fs_and_base
+from lakehouse.storage import conditional_records
+from lakehouse.storage.objectfs import fs_and_base
 from tests import seeding
 
 
@@ -195,7 +196,7 @@ def test_a_delete_that_failed_after_its_revoke_is_finished_by_its_retry(
         if record.name == AUDIT_LOGGER and record.__dict__.get("audit.resource") == "estate:rask"
     }
     assert asked_on_the_estate == ESTATE_ASKED[finisher]
-    assert (records.read_json(settings.registry_root, settings.storage_options(), f"_projects/{PROJECT}.json") is None) is finished
+    assert (conditional_records.read_json(settings.registry_root, settings.storage_options(), f"_projects/{PROJECT}.json") is None) is finished
     deleted = [(event.object_id, event.actor) for event in announced.events if event.action == "project_deleted"]
     assert deleted == ([(f"project:{PROJECT}", estate.person(finisher))] if finished else [])
     # The failed attempt's filing is finished once its door is gone: each change it filed is told under the id the retry

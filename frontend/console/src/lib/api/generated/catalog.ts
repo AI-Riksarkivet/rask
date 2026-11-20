@@ -494,7 +494,7 @@ export interface paths {
          *     key) as well as by its name ([[LH-553]]): a location a table holds is that table, and its grants decide whether the
          *     producer may record it, while one no table holds is the outside world. The fact is structural, like ``governed``'s,
          *     so it answers to the same role. A claim that cannot be read (the store's error, a record that is no claim, a root the
-         *     conditional read does not serve: `lakehouse.records`) is 503, never "holds none", which would exempt it. The
+         *     conditional read does not serve: `lakehouse.storage.conditional_records`) is 503, never "holds none", which would exempt it. The
          *     claims are the answer because the ``dir`` backend keeps no location exclusive (``lance_docs/ns_catalog/catalog/dir``
          *     § Manifest Table Commits) and the claim store picks one holder (`lakehouse.location_claims`).
          */

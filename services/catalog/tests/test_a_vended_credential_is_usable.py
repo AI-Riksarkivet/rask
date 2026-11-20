@@ -36,8 +36,8 @@ from typing import Any
 from pydantic import SecretStr
 
 from catalog.core.vending import WebIdentityVendor
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.store_session import IssuedSession, WebIdentity
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.store_session import IssuedSession, WebIdentity
 
 
 def _fake_exchange(*_: Any, **__: Any) -> IssuedSession:

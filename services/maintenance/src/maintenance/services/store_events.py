@@ -37,7 +37,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lakehouse import location_claims, table_layout
-from lakehouse.governed.store_credential import StoreCredentialUnavailableError
+from lakehouse.storage.credential import StoreCredentialUnavailableError
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.naming import claim_store, claimed_location
 from maintenance.services.queue import Task, TaskQueue

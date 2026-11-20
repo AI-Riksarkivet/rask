@@ -66,7 +66,7 @@ from lakehouse.governed import fga
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.naming import is_safe_project
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

@@ -92,8 +92,8 @@ from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.project_records import ProjectRecord
-from lakehouse.records import RecordExistsError, RecordMissingError
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError
+from lakehouse.storage.options import StorageOptions
 from lakehouse.warehouse_records import WarehouseRecord, WarehouseStatus
 
 

@@ -23,7 +23,7 @@ from pydantic import SecretStr
 from catalog.api.v1.endpoints import warehouses as endpoint
 from catalog.core.vending import ReclaimScope, TableRecords, VendedSession
 from catalog.services.vend_probe import CAS_CHECK, SCOPE_CHECK, ProbeCheck
-from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.storage.credential import S3KeyPair
 from lakehouse.warehouse_records import WarehouseRecord
 
 

@@ -28,7 +28,7 @@ from lance_namespace import InternalError
 
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
 

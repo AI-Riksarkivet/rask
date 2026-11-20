@@ -38,8 +38,8 @@ from catalog.api.dependencies import SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.services import idempotency_records
 from lakehouse.ns_errors import status_for
-from lakehouse.records import RecordChangedError
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordChangedError
+from lakehouse.storage.options import StorageOptions
 
 
 #: The header: a UUID, in any case, because the key becomes part of an object key and a UUID is a segment no spelling

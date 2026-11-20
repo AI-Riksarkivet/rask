@@ -6,7 +6,7 @@ commit.
 
 | Package | Language | Imported by | Docs |
 |---|---|---|---|
-| `packages/lakehouse` | Python | catalog, lineage and maintenance, and no client: the lakehouse's one library (the app factory, the auth plane, the naming and guards, the data plane, the events, the lineage emission and signing). `lakehouse.storage` is its S3 client, STS and URI seam | [Storage](storage.md) · [API reference](../reference/storage.md) |
+| `packages/lakehouse` | Python | catalog, lineage and maintenance, and no client: the lakehouse's one library (the app factory, the auth plane, the naming and guards, the data plane, the events, the lineage emission and signing). `lakehouse.storage` is how a process reaches its object store and holds its session there | [Storage](storage.md) · [API reference](../reference/storage.md) |
 
 ## Conventions
 

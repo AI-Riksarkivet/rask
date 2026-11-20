@@ -40,8 +40,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from lakehouse import control_prefixes
 from lakehouse.naming import PLATFORM_PREFIX
 from lakehouse.record_store import delete_record, get_record, list_records, record_key
-from lakehouse.records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -185,7 +185,7 @@ def define(control_root: str, storage_options: StorageOptions, asked: LabelDefin
 
     Raises:
         InvalidInputError: The evolution would leave an attached label invalid (:func:`_evolved`).
-        lakehouse.records.RecordChangedError: The definition kept changing under the evolution.
+        lakehouse.storage.conditional_records.RecordChangedError: The definition kept changing under the evolution.
     """
     key = _definition_key(asked.project, asked.name)
     # A definition deleted between the refused create and the evolution is created on the next round.
@@ -327,7 +327,7 @@ def attach(
     ``base`` names the object (its kind, uuid, name, project and a table's location), as the door resolved it now.
 
     Raises:
-        lakehouse.records.RecordChangedError: The record kept changing under the write.
+        lakehouse.storage.conditional_records.RecordChangedError: The record kept changing under the write.
     """
     key = _attachment_key(base.kind, base.uuid)
 

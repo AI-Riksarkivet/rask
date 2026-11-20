@@ -68,7 +68,7 @@ from pydantic import BaseModel
 from lakehouse.lance_session import open_dataset
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.listing_floor import FLOOR_KEY
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import shared_lance_session
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, raise_floor
 from maintenance.services.orphans import OrphanFile, listed_at_or_below

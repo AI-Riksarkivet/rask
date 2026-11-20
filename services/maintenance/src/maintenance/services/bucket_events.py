@@ -26,8 +26,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, Field
 
 from lakehouse import warehouse_records
-from lakehouse.governed.store_credential import StoreCredentialUnavailableError
-from lakehouse.storage_options import object_client
+from lakehouse.storage.credential import StoreCredentialUnavailableError
+from lakehouse.storage.options import object_client
 from maintenance.core.config import MaintenanceStore
 from maintenance.core.metrics import record_store_event_bucket_checked
 

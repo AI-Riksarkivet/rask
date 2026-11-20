@@ -32,7 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from lakehouse import control_prefixes
 from lakehouse.record_store import delete_record, put_record, read_record, record_key
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 #: Where the records live on the control root, one per object under ``record_key(PREFIX, kind, uuid)``.

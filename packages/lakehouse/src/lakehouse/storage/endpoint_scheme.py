@@ -1,11 +1,12 @@
 """The scheme of an object-store endpoint: one case-insensitive rule, for Lance and pyarrow alike.
 
-`lakehouse.storage_options.s3_filesystem`, the lakehouse's Lance storage options and the catalog's
+`lakehouse.storage.options.s3_filesystem`, the lakehouse's Lance storage options and the catalog's
 `namespace_properties` apply it, and so does every caller that builds through them; an options dict or
 `S3FileSystem` assembled by hand bypasses it.
 
 Its own module, importing only the stdlib, because config modules apply it (the catalog's among them) and
-none of them loads pyarrow; `storage_options` does, and importing it from a settings module would.
+none of them loads pyarrow; `options` does, and importing it from a settings module would. The package's `__init__`
+re-exports nothing for the same reason, so importing this module loads no sibling.
 """
 
 from __future__ import annotations
@@ -26,3 +27,9 @@ def endpoint_scheme(endpoint: str) -> str:
 def allow_http_for(endpoint: str) -> str:
     """The ``allow_http`` storage option ``endpoint`` warrants: ``"true"`` exactly when its scheme is ``http``."""
     return "true" if endpoint_scheme(endpoint) == "http" else "false"
+
+
+__all__ = [
+    "allow_http_for",
+    "endpoint_scheme",
+]

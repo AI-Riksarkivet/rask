@@ -40,11 +40,11 @@ from pydantic import BaseModel, SecretStr
 from catalog.services.warehouses import ensure_catalog_row
 from lakehouse import location_claims, maintenance_policies, record_store, trash
 from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.governed.store_credential import S3KeyPair, StoreCredentialUnavailableError
 from lakehouse.listing_floor import FLOOR_KEY
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.objectfs import lance_storage_options
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.credential import S3KeyPair, StoreCredentialUnavailableError
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.options import StorageOptions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter

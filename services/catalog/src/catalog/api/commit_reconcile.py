@@ -48,7 +48,7 @@ from lakehouse.context import continuing
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

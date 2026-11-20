@@ -60,11 +60,12 @@ from catalog.core.identifiers import parse_identifier
 from catalog.services import erasure_obligations, native, table_claims, table_inputs
 from catalog.services.erasure import OPEN_OUTCOMES, SurfaceResult, derived_key, derived_surface
 from catalog.services.erasure_obligations import ErasureObligation
-from lakehouse import derived_tables, location_claims, objectfs
+from lakehouse import derived_tables, location_claims
 from lakehouse.base_refs import key_uri, store_of
 from lakehouse.lance_session import fresh_session, open_dataset
 from lakehouse.lancekit.filters import in_lists
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import objectfs
+from lakehouse.storage.options import StorageOptions
 
 
 _FOLLOWED: Final = "an erasure obligation recorded on it follows this one, and judges it with a predicate of its own"

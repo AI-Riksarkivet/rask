@@ -27,7 +27,7 @@ from fastapi.testclient import TestClient
 from catalog.schemas import RoleRecord
 from catalog.services import roles, subject_tuples, warehouses
 from lakehouse.governed import fga
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
 

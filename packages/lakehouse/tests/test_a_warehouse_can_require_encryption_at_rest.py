@@ -29,10 +29,10 @@ from pathlib import Path
 import pytest
 from pydantic import SecretStr
 
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import lance_storage_options
-from lakehouse.storage_options import StorageOptions
-from lakehouse.store_session import IssuedSession, WebIdentity
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.store_session import IssuedSession, WebIdentity
 
 
 def _opts(*, server_side_encryption: str, sse_kms_key_id: str | None = None, sse_bucket_key_enabled: bool | None = None) -> StorageOptions:

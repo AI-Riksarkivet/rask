@@ -17,7 +17,7 @@ from fastapi import FastAPI, Request
 from catalog.api.dependencies import ObjectUuids, get_control_emitter
 from catalog.core.config import Settings
 from lakehouse.events.control_emit import ControlEmitter
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 def _utc_now() -> datetime:

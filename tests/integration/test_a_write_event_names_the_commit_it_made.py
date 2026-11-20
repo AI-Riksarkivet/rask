@@ -40,8 +40,8 @@ from lance_namespace import connect
 
 from catalog.core.lineage_emit import make_emitter
 from catalog.services import dataplane
-from lakehouse.events.control_emit import CatalogControlEvent
-from lakehouse.storage_options import StorageOptions
+from lakehouse.events.control_events import CatalogControlEvent
+from lakehouse.storage.options import StorageOptions
 from lineage.models import parse_event
 from lineage.services.provenance import edges_of
 from tests.bus_double import BusDouble

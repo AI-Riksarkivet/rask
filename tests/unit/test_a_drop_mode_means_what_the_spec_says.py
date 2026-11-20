@@ -43,7 +43,7 @@ from catalog.core.config import Settings
 from catalog.core.modes import DropMode
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 

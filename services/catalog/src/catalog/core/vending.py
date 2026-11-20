@@ -42,18 +42,19 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import open_location
-from lakehouse import file_identities, history_fences, store_session
+from lakehouse import file_identities, history_fences
 from lakehouse.base_refs import decoded_path, location_within, names_a_location, normalise
 from lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
 from lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
 from lakehouse.features import CREATE_FORMAT, BasePathRef, TableFileFormat, manifest_base_path_refs, table_file_format
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError
-from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import PLATFORM_PREFIX
-from lakehouse.objectfs import lance_storage_options
 from lakehouse.outage import reads_as_store_outage, store_refusal
-from lakehouse.storage_options import StorageOptions
-from lakehouse.store_session import IssuedSession, WebIdentity
+from lakehouse.storage import store_session
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.store_session import IssuedSession, WebIdentity
 from lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, WRITER_PUT_GLOBS
 
 
@@ -677,7 +678,7 @@ def dataset_facts(location: str, storage_options: StorageOptions, *, branch: str
             not be read. Answering "no bases" here would vend without judging them, which the base judge exists to refuse.
         InternalError: The table holds a committed version that does not open.
     """
-    from lakehouse.objectfs import same_store_uri
+    from lakehouse.storage.objectfs import same_store_uri
 
     ds = _open_vended_ref(location, storage_options, branch=branch)
     if ds is None:
@@ -1140,7 +1141,7 @@ class WebIdentityVendor:
     its own exchange, never the catalog's own session, so what a client holds is scoped to the table it was vended
     for, and its name (:func:`role_session_name`) says who it was vended for.
 
-    ``exchange`` is :func:`lakehouse.store_session.exchange` and is injectable for tests.
+    ``exchange`` is :func:`lakehouse.storage.store_session.exchange` and is injectable for tests.
     """
 
     def __init__(

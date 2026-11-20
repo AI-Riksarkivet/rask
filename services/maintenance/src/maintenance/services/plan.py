@@ -14,8 +14,8 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel
 
 from lakehouse import maintenance_policies
-from lakehouse.governed.store_credential import StoreCredentialUnavailableError
 from lakehouse.maintenance_policies import PolicyRecord
+from lakehouse.storage.credential import StoreCredentialUnavailableError
 from maintenance.core.config import MaintenanceStore
 from maintenance.services.due import DueQuestion
 from maintenance.services.expiry import ExpiryPolicy

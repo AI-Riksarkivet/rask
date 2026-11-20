@@ -28,7 +28,7 @@ from store_identity import store_options
 from topology import create_namespace
 
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.storage_options import s3_filesystem
+from lakehouse.storage.options import s3_filesystem
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")

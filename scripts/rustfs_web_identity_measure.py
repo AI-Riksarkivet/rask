@@ -44,7 +44,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse.storage import S3Client
+from lakehouse.storage.client import S3Client
 
 
 ISSUER = "https://kubernetes.default.svc.cluster.local"

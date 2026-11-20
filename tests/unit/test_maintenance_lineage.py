@@ -22,7 +22,7 @@ import pytest
 
 from lakehouse.events.bus import BusUnavailableError
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lineage.models import RunEvent
 from maintenance.core.lineage_emit import (
     EXPIRE_VERSIONS,

@@ -42,9 +42,9 @@ from pydantic import SecretStr
 
 from lakehouse import base_registry, maintenance_policies, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import dataset_root_probe, lance_storage_options
-from lakehouse.storage import S3Client
+from lakehouse.storage.client import S3Client
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import dataset_root_probe, lance_storage_options
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import objects_held, purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport

@@ -10,8 +10,8 @@ import sys
 import lance
 from pydantic import SecretStr
 
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import lance_storage_options
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
 
 
 def main() -> None:

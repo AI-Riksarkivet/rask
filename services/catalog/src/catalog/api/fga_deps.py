@@ -73,7 +73,7 @@ from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.outage import store_refusal
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lakehouse.trash import TrashKind, TrashRecord
 
 

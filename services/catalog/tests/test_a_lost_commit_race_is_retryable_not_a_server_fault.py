@@ -48,7 +48,7 @@ from catalog.services.dataplane import (
 from catalog.services.table_claims import DoorTable
 from lakehouse import base_registry, commit_records, file_identities
 from lakehouse.location_claims import ClaimStore
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
 
 

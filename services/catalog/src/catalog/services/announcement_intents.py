@@ -36,10 +36,11 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import control_prefixes, location_claims, records, stored_objects
+from lakehouse import control_prefixes, location_claims
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records, stored_objects
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -229,7 +230,9 @@ def file(control_root: str, storage_options: StorageOptions, *, door: str, targe
         OSError: The store refused the write or did not answer; the door has changed nothing yet.
     """
     key = f"{_directory(target)}/{uuid4().hex}.json"
-    records.create_json(control_root, storage_options, key, Intent(door=door, target=target, announcements=list(announcements)).model_dump(mode="json"))
+    conditional_records.create_json(
+        control_root, storage_options, key, Intent(door=door, target=target, announcements=list(announcements)).model_dump(mode="json")
+    )
     return key
 
 
@@ -257,7 +260,7 @@ def standing(control_root: str, storage_options: StorageOptions, *, target: str 
     for listed, match in named[:limit]:
         key = f"{PREFIX}/{match.group(1)}/{match.group(2)}.json"
         try:
-            read = records.read_json(control_root, storage_options, key)
+            read = conditional_records.read_json(control_root, storage_options, key)
             intent = None if read is None else Intent.model_validate(read[0])
         except ValueError as exc:  # bytes that are no JSON, or JSON that is no filing (pydantic's ValidationError is one)
             log.error("announcement_intent_unreadable", extra={"key": key, "error": str(exc)[:300]})

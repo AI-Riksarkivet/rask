@@ -8,7 +8,7 @@ actually returns, and a hand-rolled `ClientError` would let a wrong code set pas
 import pytest
 from moto import mock_aws
 
-from lakehouse.storage import BucketNotFoundError, StorageError, s3_errors
+from lakehouse.storage.errors import BucketNotFoundError, StorageError, s3_errors
 
 
 def _client():

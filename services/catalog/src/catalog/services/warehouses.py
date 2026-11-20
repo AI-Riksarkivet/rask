@@ -38,11 +38,11 @@ from catalog.services.control_records import (
 )
 from lakehouse import control_prefixes, trash
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
-from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.record_store import delete_record
-from lakehouse.records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
-from lakehouse.storage_options import DEFAULT_REGION, StorageOptions, object_client
+from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import DEFAULT_REGION, StorageOptions, object_client
 from lakehouse.trash import TrashRecord
 from lakehouse.warehouse_records import DeleteMode, UnreadableWarehouseRecordError, WarehouseRecord
 from lakehouse.warehouse_records import read as read_warehouse_record
@@ -278,7 +278,7 @@ def upsert_warehouse(
 def create_warehouse_record(control_root: str, storage_options: StorageOptions, record: WarehouseRecord) -> None:
     """Mint ``_warehouses/<id>.json`` iff absent — the STORE arbitrates (F1).
 
-    Raises :class:`lakehouse.records.RecordExistsError` on a lost race. The caller
+    Raises :class:`lakehouse.storage.conditional_records.RecordExistsError` on a lost race. The caller
     re-reads and re-applies its guards against the WINNER's record (the cross-project takeover
     guard's read may predate the rival's write; this refusal is what closes that window).
     """

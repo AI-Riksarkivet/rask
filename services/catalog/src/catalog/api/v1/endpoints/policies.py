@@ -48,12 +48,12 @@ from catalog.schemas import PolicyDeleteResponse, PolicyKind, PolicyRequest, Pol
 from catalog.services import projects as project_registry
 from catalog.services import table_claims, warehouses
 from lakehouse import maintenance_policies as policies
-from lakehouse import records
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.location_claims import ClaimStore
 from lakehouse.maintenance_policies import PolicyRecord
 from lakehouse.naming import CONTROL_ID_RE
+from lakehouse.storage import conditional_records
 
 
 log = logging.getLogger(__name__)
@@ -119,7 +119,7 @@ async def _set(settings: CatalogStore, kind: PolicyKind, key: str, compose: Call
     """
     try:
         return await run_in_threadpool(policies.set_policy, settings.registry_root, settings.storage_options(), kind, key, compose)
-    except records.RecordChangedError as exc:
+    except conditional_records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"the {kind} policy kept changing while it was set; set it again") from exc
     except policies.MalformedPolicyError as exc:
         raise InternalError(f"{exc}; delete the policy, then set it") from exc

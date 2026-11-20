@@ -154,8 +154,8 @@ The purge announces each reclamation on the catalog's control topic, on the work
 MAINTENANCE'S STORE IDENTITY IS ITS SERVICEACCOUNT ([[XC-084]], ADR 0170). The pod projects a token for
 `objectStore.identity.audience` beside its `rask-catalog` one (the `lance.identityTokens` mount below), and maintenance
 exchanges it through STS `AssumeRoleWithWebIdentity` for the sessions its own reads and records sign with
-(`lakehouse.store_session`). It holds no key pair: the chart renders none and no acknowledgement of one, without which a
-service with no token refuses to boot (`lakehouse.store_session.require_env_pair`), and a pair beside the token is
+(`lakehouse.storage.store_session`). It holds no key pair: the chart renders none and no acknowledgement of one, without which a
+service with no token refuses to boot (`lakehouse.storage.store_session.require_env_pair`), and a pair beside the token is
 refused (`require_one_store_identity`).
 
 THE SESSION READS HISTORY, NEVER DATA, AND WRITES ONLY ITS OWN RECORDS ([[LH-575]]). Its canned policy

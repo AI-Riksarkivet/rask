@@ -70,7 +70,7 @@ SIGNER_DROP_SECONDS = 360.0
 #: `lakehouse.events.bus` sets 10 attempts at the server, 2 s apart, each connect bounded at 2 s.
 RECONNECT_WINDOW_SECONDS = 40.0
 #: How many times Lance issues a failed listing per dataset open, whatever `client_max_retries` says (measured on
-#: pylance 12.0.0, `lakehouse.objectfs.StoreTimeouts`).
+#: pylance 12.0.0, `lakehouse.storage.objectfs.StoreTimeouts`).
 LISTINGS_PER_OPEN = 6
 
 

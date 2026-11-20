@@ -58,7 +58,7 @@ ends within its own bound.
 
 ONE SESSION PER PROCESS, OPENED AND CLOSED BY THE SERVICE THAT RUNS IT. Every reader in a process shares one login
 (`read_secret`), so a pod holds one store token. The session is this module's state, as the object-store sessions are
-`lakehouse.store_session`'s: its readers include settings validation, the signing key's and the commit ids' holders and
+`lakehouse.storage.store_session`'s: its readers include settings validation, the signing key's and the commit ids' holders and
 the maintenance worker, none of which has an app to carry it. The service's lifespan opens it and closes it
 (`secret_store_session`).
 

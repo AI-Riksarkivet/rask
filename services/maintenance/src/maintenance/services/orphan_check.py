@@ -38,9 +38,10 @@ from typing import Final
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel
 
-from lakehouse import location_claims, objectfs, trash
-from lakehouse.governed.store_credential import StoreCredentialUnavailableError
-from lakehouse.objectfs import fs_and_base
+from lakehouse import location_claims, trash
+from lakehouse.storage import objectfs
+from lakehouse.storage.credential import StoreCredentialUnavailableError
+from lakehouse.storage.objectfs import fs_and_base
 from maintenance.core.config import MaintenanceSettings, MaintenanceStore
 from maintenance.core.metrics import OrphanCheckOutcome, record_orphan_check
 from maintenance.services.floor import FloorRaise, raise_listing_floor

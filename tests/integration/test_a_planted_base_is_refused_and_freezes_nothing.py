@@ -50,20 +50,21 @@ from fastapi.testclient import TestClient
 from lance_namespace import InvalidInputError, InvalidTableStateError, LanceNamespace, TableNotFoundError
 from pydantic import SecretStr
 
-import lakehouse.storage as storage
+import lakehouse.storage.client as storage_client
 from catalog.core.config import get_settings
 from catalog.services import clone_ending_records, dataplane, native, table_bases
 from catalog.services import clone_endings as clone_endings_door
-from lakehouse import base_registry, clone_sources, location_claims, records, trash
+from lakehouse import base_registry, clone_sources, location_claims, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.base_refs import normalise
 from lakehouse.features import manifest_base_path_refs
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
-from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.objectfs import lance_storage_options
-from lakehouse.storage import S3Client
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.client import S3Client
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import clone_endings as clone_endings_audit
 from maintenance.services import purge, table_pass
@@ -320,8 +321,8 @@ def test_the_vend_and_read_doors_refuse_the_planting_table(estate: _Estate, plan
     _refused(estate.client.post("/v1/table/lance_catalog$db$marked/query", json=_QUERY), _INVALID_TABLE_STATE)
 
     # A store failing under the record the judge must read: a typed, retryable 503, and the pass stops as a failure.
-    real_client = storage.s3_client
-    monkeypatch.setattr(storage, "s3_client", lambda *args, **kwargs: _ThrottledRecords(real_client(*args, **kwargs)))
+    real_client = storage_client.s3_client
+    monkeypatch.setattr(storage_client, "s3_client", lambda *args, **kwargs: _ThrottledRecords(real_client(*args, **kwargs)))
     unjudged = catalog.post("/management/v1/table/lance_catalog$db$attacker/credentials")
     assert unjudged.status_code == 503 and unjudged.json()["title"] == "ServiceUnavailableError", unjudged.text
     stopped = _maintained_through(catalog, estate, tmp_path / "rask-catalog-token")
@@ -509,8 +510,8 @@ class _ThrottledTagPages:
 def test_a_drop_whose_tags_the_store_cannot_list_destroys_nothing(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
     """A drop destroying a table's bytes first asks the store which registered clones read them; a store that does not
     answer that listing is an outage, answered 503 code 17 with the table and its bytes standing."""
-    real_client = storage.s3_client
-    monkeypatch.setattr(storage, "s3_client", lambda *args, **kwargs: _ThrottledTagListings(real_client(*args, **kwargs)))
+    real_client = storage_client.s3_client
+    monkeypatch.setattr(storage_client, "s3_client", lambda *args, **kwargs: _ThrottledTagListings(real_client(*args, **kwargs)))
 
     refused = estate.client.post("/v1/table/lance_catalog$db$victim/drop", params={"purge": "true"}, json={})
 
@@ -947,7 +948,7 @@ def _marked_by_another_finish(estate: _Estate, _monkeypatch: pytest.MonkeyPatch)
     assert found is not None
     filed_earlier = found.ending.model_copy(update={"filed_at": found.at - timedelta(hours=1)})
     key = f"{clone_ending_records.PREFIX}/{digest}/{filing}.json"
-    records.replace_json(estate.root, estate.key, key, filed_earlier.model_dump(mode="json"), etag=found.etag)
+    conditional_records.replace_json(estate.root, estate.key, key, filed_earlier.model_dump(mode="json"), etag=found.etag)
     again = clone_ending_records.read(_claims(estate), digest, filing)
     assert again is not None
     clone_ending_records.mark(_claims(estate), again, token=uuid.uuid4().hex)

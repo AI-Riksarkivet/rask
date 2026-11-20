@@ -5,7 +5,7 @@ store here is a moto server enforcing IAM: it resolves a session's access key th
 sent without its token names no identity and is refused `InvalidAccessKeyId`, as RustFS refuses it, and so is a session
 the store no longer holds, as RustFS refuses an expired one. Its signature check is off, as
 `services/catalog/tests/conftest.py::two_stores` explains, and the token exchange is answered unsigned, as AWS answers
-it. The session is exchanged at moto's STS through `lakehouse.store_session`, as the deployed service's is.
+it. The session is exchanged at moto's STS through `lakehouse.storage.store_session`, as the deployed service's is.
 
 * The drift report lists the store's buckets, as its route asks, with no bucket client: `orphan_buckets` reads every
   bucket the store holds, and the trash purge runs only on a report that checked every category, so a listing the store
@@ -34,10 +34,11 @@ from moto.server import ThreadedMotoServer
 from moto.sts.models import sts_backends
 from pydantic import BaseModel, SecretStr
 
-from lakehouse import location_claims, store_session
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import lance_storage_options
-from lakehouse.store_session import SessionCache, start_store_session
+from lakehouse import location_claims
+from lakehouse.storage import store_session
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.store_session import SessionCache, start_store_session
 from lakehouse.supervision import Supervisor
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.queue import Task, TaskQueue

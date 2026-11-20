@@ -9,7 +9,7 @@ lets one such write land, which is how Lance itself picks one writer of a versio
 (`lance_docs/lance/format/table/transaction.md` § Storage Primitives), and the replica whose write landed runs the work.
 
 A window is named by when it began, on the STORE's clock: the read that finds the claim also carries the store's time
-(`lakehouse.records.read_json_at`), so no two pods' clocks are compared, and a period changed in git is due at its own
+(`lakehouse.storage.conditional_records.read_json_at`), so no two pods' clocks are compared, and a period changed in git is due at its own
 next boundary whatever length the claimed window had.
 
 Work that raises is logged and counted, and runs again at the next window: every timer's work is level-triggered, so a
@@ -31,8 +31,9 @@ from typing import Final
 from opentelemetry import metrics
 from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 
-from lakehouse import control_prefixes, records
-from lakehouse.storage_options import StorageOptions
+from lakehouse import control_prefixes
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -225,7 +226,7 @@ class Timer:
         options = self._storage_options()
         key = claim_key(self.name)
         try:
-            read = records.read_json_at(self._root, options, key)
+            read = conditional_records.read_json_at(self._root, options, key)
             denied = None
         except Exception as exc:
             answered_at = _denied_at(exc)
@@ -234,7 +235,7 @@ class Timer:
             # A STORE MAY ANSWER A MISSING KEY AS DENIED to an identity that may read the key and not list its bucket
             # (S3 answers 403 where a lister is answered 404), and a timer's identity is granted its one key. So a
             # denied read is taken as no claim, and the create below is the store's own answer to whether one exists.
-            read, denied = records.StoreRead(stored=None, at=answered_at), exc
+            read, denied = conditional_records.StoreRead(stored=None, at=answered_at), exc
         window = datetime.fromtimestamp((read.at.timestamp() // self._period) * self._period, UTC)
         until_next = (window + timedelta(seconds=self._period) - read.at).total_seconds()
         held = None if read.stored is None else self._claim_in(read.stored.record)
@@ -248,10 +249,10 @@ class Timer:
         claim = _Claim(timer=self.name, window=window, claimed_at=read.at, by=self._holder).model_dump(mode="json")
         try:
             if read.stored is None:
-                records.create_json(self._root, options, key, claim)
+                conditional_records.create_json(self._root, options, key, claim)
             else:
-                records.replace_json(self._root, options, key, claim, etag=read.stored.etag)
-        except (records.RecordExistsError, records.RecordChangedError):
+                conditional_records.replace_json(self._root, options, key, claim, etag=read.stored.etag)
+        except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
             if denied is not None:
                 # The record exists and this identity may not read it: a fault to say, never another replica's window.
                 raise denied from None
@@ -269,7 +270,7 @@ def _denied_at(exc: Exception) -> datetime | None:
     status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
     if status != 403 and str(exc.response.get("Error", {}).get("Code", "")) != "AccessDenied":
         return None
-    return records.store_clock(exc.response)
+    return conditional_records.store_clock(exc.response)
 
 
 __all__ = ["PREFIX", "RETRY_SECONDS", "Outcome", "Timer", "Turn", "Work", "claim_key"]

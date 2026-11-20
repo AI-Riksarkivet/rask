@@ -26,7 +26,7 @@ from pydantic import BaseModel, Field
 
 from lakehouse.events import outbox, outbox_metrics
 from lakehouse.events.bus import Bus
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lakehouse.supervision import Supervisor
 from lakehouse.timers import Timer
 from lineage.api.fga_deps import enforce_bus_authz

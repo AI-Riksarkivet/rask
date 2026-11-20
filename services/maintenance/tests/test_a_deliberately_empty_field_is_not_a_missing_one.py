@@ -32,7 +32,7 @@ from pathlib import Path
 
 import pytest
 
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from maintenance.services.reconcile import _list_json_records
 
 

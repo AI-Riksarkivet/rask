@@ -5,7 +5,7 @@
 contention — the same silent-ignore hazard ``test_object_store_cas_e2e.py`` exists for (a store
 that ignores the header accepts both PUTs and the tenant-isolation guards are back to
 last-writer-wins, invisibly). Mirrors that suite's tier-2 shape through the REGISTRY seam:
-barrier-gated threads race ``records.create_json`` on one key; exactly one must win per round.
+barrier-gated threads race ``conditional_records.create_json`` on one key; exactly one must win per round.
 
 Run: the e2e-stack lane runs it on every push; elsewhere port-forward the store + set ``LANCE_E2E_S3_*`` (same env
 as its sibling). Writes under ``__cas_stress/`` — maintenance's discovery skips ``__`` prefixes, so this never collides
@@ -22,8 +22,8 @@ import pytest
 from liveness import skip_unless_live
 from store_identity import store_options
 
-from lakehouse import records
-from lakehouse.storage_options import StorageOptions, object_client
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions, object_client
 
 
 ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
@@ -50,9 +50,9 @@ def live_root(so: StorageOptions) -> str:
 
 def test_registry_create_is_write_once_live(live_root: str, so: StorageOptions) -> None:
     key = f"{PREFIX}/{uuid.uuid4().hex}.json"
-    records.create_json(live_root, so, key, {"id": "first"})
-    with pytest.raises(records.RecordExistsError):
-        records.create_json(live_root, so, key, {"id": "second"})
+    conditional_records.create_json(live_root, so, key, {"id": "first"})
+    with pytest.raises(conditional_records.RecordExistsError):
+        conditional_records.create_json(live_root, so, key, {"id": "second"})
 
 
 def test_registry_create_contended_exactly_one_winner(live_root: str, so: StorageOptions) -> None:
@@ -74,9 +74,9 @@ def test_registry_create_contended_exactly_one_winner(live_root: str, so: Storag
         ) -> None:
             barrier.wait()
             try:
-                records.create_json(live_root, so, key, {"winner": worker})
+                conditional_records.create_json(live_root, so, key, {"winner": worker})
                 result = "won"
-            except records.RecordExistsError:
+            except conditional_records.RecordExistsError:
                 result = "lost"
             with lock:
                 outcomes.append(result)

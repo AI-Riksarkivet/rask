@@ -36,7 +36,7 @@ from pydantic import BaseModel
 from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.storage_options import ENDPOINT
+from lakehouse.storage.options import ENDPOINT
 
 
 S3 = os.environ.get("LANCE_E2E_S3", "")

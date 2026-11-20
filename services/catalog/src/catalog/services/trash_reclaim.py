@@ -44,7 +44,7 @@ from lakehouse.base_registry import BaseRegistry
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.data_directories import directories_to_end, directory_uri
 from lakehouse.location_claims import LocationClaim
-from lakehouse.stored_objects import list_under
+from lakehouse.storage.stored_objects import list_under
 from lakehouse.table_paths import objects_at
 from lakehouse.trash import TrashKind, TrashRecord, UnreadableTrashRecordError
 

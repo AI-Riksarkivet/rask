@@ -1,6 +1,6 @@
 """#3-A — warehouse registry, runtime bucket provisioning, and the admin FGA gate (unit).
 
-The registry round-trips against a LOCAL filesystem root (``lakehouse.objectfs.fs_and_base`` falls back to
+The registry round-trips against a LOCAL filesystem root (``lakehouse.storage.objectfs.fs_and_base`` falls back to
 the local FS for a non-``s3://`` uri), so no object storage is needed here. Provisioning is boto3,
 mocked. The gate is driven through the real ``require_can_create_warehouse`` resolver.
 """
@@ -32,9 +32,9 @@ from lakehouse.governed import fga as fga_module
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import lance_storage_options
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 from tests.integration.store_requests import counted
 

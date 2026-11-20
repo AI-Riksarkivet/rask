@@ -60,7 +60,7 @@ from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.governed.signing_key import signing_key_name
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests.bus_double import BusDouble, session_holding
 from tests.secret_store_double import SecretStoreDouble
 from tests.traces import trace_id_of

@@ -48,7 +48,7 @@ from lakehouse.events.openlineage import (
 )
 from lakehouse.events.signing import CanonError, SigningKey, attach_signature
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

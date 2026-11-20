@@ -32,7 +32,7 @@ from catalog.services.dataplane import create_table, read_arrow_body
 from lakehouse import base_registry, clone_sources
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.ns_errors import install_problem_handlers
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.

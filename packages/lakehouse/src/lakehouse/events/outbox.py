@@ -35,9 +35,9 @@ from lakehouse.events import outbox_metrics
 from lakehouse.events.bus import Bus, publish_event  # noqa: TID251 — the outbox is a registered publish site
 from lakehouse.events.cloud_events import CloudEvent
 from lakehouse.events.outbox_metrics import OutboxLane
-from lakehouse.objectfs import fs_and_base
-from lakehouse.storage import split_s3_uri
-from lakehouse.storage_options import StorageOptions, object_client, on_s3
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions, object_client, on_s3
+from lakehouse.storage.uri import split_s3_uri
 
 
 log = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
     """
     if on_s3(outbox_uri):
         bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
-        # The stage's own client (:func:`~lakehouse.storage_options.object_client`): a delete signed with less than the whole key pair falls back
+        # The stage's own client (:func:`~lakehouse.storage.options.object_client`): a delete signed with less than the whole key pair falls back
         # to boto3's default chain, and the lineage pod carries no ambient `AWS_*` (measured 2026-09-10), so that would be
         # a delete with no credential at all; pinned in `test_the_outbox_drain_needs_no_write_permission.py`.
         client = object_client(storage_options)

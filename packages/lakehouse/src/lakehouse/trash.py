@@ -39,10 +39,10 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from lakehouse import control_prefixes, location_claims, object_records
 from lakehouse.base_registry import BaseRegistry, forget_base_record
-from lakehouse.objectfs import fs_and_base
 from lakehouse.record_store import delete_record, list_records, put_record, read_record, record_key
-from lakehouse.records import RecordChangedError, RecordMissingError, mutate_json
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordChangedError, RecordMissingError, mutate_json
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -290,7 +290,7 @@ RELEASE_SETTLE: Final = timedelta(minutes=15)
 def mark_released(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table", now: datetime | None = None) -> bool:
     """Stamp the record of the ``kind`` object ``uuid`` names as released, once its grants are revoked.
 
-    Conditional (:func:`records.mutate_json`), so a concurrent :func:`note_refusal` survives and ``expires_at`` never
+    Conditional (:func:`conditional_records.mutate_json`), so a concurrent :func:`note_refusal` survives and ``expires_at`` never
     moves. ``False`` when the record is gone, a purge or an undrop having cleared it since it was read.
 
     Raises:
@@ -410,7 +410,7 @@ def note_refusal(
 
     THE COST IS DELIBERATE AND IS THE REASON THIS IS CONDITIONAL. It makes the trash record MUTABLE —
     everything else about it is stamped once at drop time — and gives the purge a WRITE per refused
-    record per tick where it previously only read. So it goes through :func:`records.mutate_json`
+    record per tick where it previously only read. So it goes through :func:`conditional_records.mutate_json`
     rather than a plain overwrite, for exactly the reason the warehouse registry does: a read-modify-
     write with no precondition silently reverts whatever a concurrent writer put in the fields it
     merely carried forward, and ``expires_at`` is the field that must never move.

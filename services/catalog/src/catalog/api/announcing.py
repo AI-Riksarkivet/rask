@@ -41,13 +41,13 @@ from catalog.services.announcement_intents import (
     TupleGone,
     TupleHeld,
 )
-from lakehouse import records
 from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
 from lakehouse.outage import store_refusal
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -203,9 +203,9 @@ class Announcer:
                 names_it = await self._resolver.namespace_uuid(evidence.segments) == evidence.uuid
                 return names_it if evidence.held else not names_it
             case RecordGone(key=key):
-                return await self._absent(lambda root, so: records.read_json(root, so, key))
+                return await self._absent(lambda root, so: conditional_records.read_json(root, so, key))
             case RecordHeld(key=key):
-                return not await self._absent(lambda root, so: records.read_json(root, so, key))
+                return not await self._absent(lambda root, so: conditional_records.read_json(root, so, key))
             case RoleEnded(project=project, role=role):
                 return await self._absent(lambda root, so: roles.find_role(root, so, project, role))
 

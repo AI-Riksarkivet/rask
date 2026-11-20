@@ -47,7 +47,7 @@ from catalog.services import projects as project_registry
 from lakehouse.events.control_emit import emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.records import RecordExistsError
+from lakehouse.storage.conditional_records import RecordExistsError
 
 
 if TYPE_CHECKING:

@@ -6,7 +6,7 @@ what makes it dangerous: nothing would catch its removal and nothing announces i
 forgets the key silently pairs a scoped secret with the root key id; one that configures neither runs
 the whole sweep as tenant root.
 
-The secret half fails closed at the worker's start (`lakehouse.store_session.require_env_pair`: "MAINTENANCE_S3_SECRET_ACCESS_KEY is
+The secret half fails closed at the worker's start (`lakehouse.storage.store_session.require_env_pair`: "MAINTENANCE_S3_SECRET_ACCESS_KEY is
 required"), and so does the key half: a credential is a PAIR — half a pair was measured giving
 `SignatureDoesNotMatch` on every operation, which is the *better* outcome here.
 The worse one is a complete, working, root-privileged pair nobody chose.

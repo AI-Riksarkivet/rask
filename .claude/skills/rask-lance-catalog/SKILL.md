@@ -113,7 +113,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   record ([[LH-458]], ADR 0172): a hand-over landing between its read and its write survives, and `holder` and
   `take` read a released claim as a free location. A holder that no
   longer resolves to its location is taken over only after `LEASE` (15 min), timed on the object store's clock: every
-  stamp and every lease is judged by the `Date` of the store's answer (`records.StoreRead.at`, ADR 0179), never a pod's
+  stamp and every lease is judged by the `Date` of the store's answer (`conditional_records.StoreRead.at`, ADR 0179), never a pod's
   (`tests/integration/test_a_lease_is_timed_on_the_stores_clock.py`). Pinned by
   `tests/integration/test_concurrent_renames_leave_one_id_per_location.py` (with a drop, a recoverable drop and a
   deregister racing a rename, the rival landed after the door read its claim and as it acts) and
@@ -583,7 +583,7 @@ estate's admin and roles) and, live,
 | State | Store |
 | --- | --- |
 | table data + versions | Lance datasets on object storage (rustfs) |
-| project registry (`_projects/<id>.json`), warehouse registry (`_warehouses/<id>.json`, its bucket claims under `_warehouses/bucket-claims/`), the declared-grant ledger (`_declared_grants/`) | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `lakehouse.records.create_json`): project mint, warehouse mint and a declared grant's record are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes are CONDITIONAL too** as of 2026-08-15 — `warehouses.upsert_warehouse` / `set_warehouse_status` / `projects.upsert_project` go through `records.mutate_json` (read + ETag-guarded replace, bounded retry), so an idempotent re-POST can no longer silently revert a concurrent quarantine or protection change. No unconditional registry write exists in the catalog: a test that needs a record to stand writes it with `tests/seeding.py`. Protection and trash records are still plain overwrites and correctly so: they carry no read-modify-write, so there is no carried-forward field to lose. |
+| project registry (`_projects/<id>.json`), warehouse registry (`_warehouses/<id>.json`, its bucket claims under `_warehouses/bucket-claims/`), the declared-grant ledger (`_declared_grants/`) | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `lakehouse.storage.conditional_records.create_json`): project mint, warehouse mint and a declared grant's record are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes are CONDITIONAL too** as of 2026-08-15 — `warehouses.upsert_warehouse` / `set_warehouse_status` / `projects.upsert_project` go through `conditional_records.mutate_json` (read + ETag-guarded replace, bounded retry), so an idempotent re-POST can no longer silently revert a concurrent quarantine or protection change. No unconditional registry write exists in the catalog: a test that needs a record to stand writes it with `tests/seeding.py`. Protection and trash records are still plain overwrites and correctly so: they carry no read-modify-write, so there is no carried-forward field to lose. |
 | authz | OpenFGA on its chart-managed Postgres |
 | lineage | Lance tables in the catalog's provenance namespace (`services.lineage.provenanceNamespace`, default `lance_catalog$provenance`, a namespace of the estate's own warehouse, which the render and the catalog's settings both require): the commit feed `events`, the table-level edge list `edges`, outbox `refusals` and forwarder `cursors`. The catalog creates the namespace at boot (`catalog/services/provenance_namespace.py`), protects it, grants each `LANCE_PROVENANCE_WRITERS` subject `writer`, revokes a `writer` the settings no longer name from one of the release's own accounts (`LANCE_OWN_ACCOUNTS`, the chart's `lance.ownAccounts`, the list the declaration converge holds the estate's machine roles to), and leaves every other grant there to the doors: a bring-your-own compaction job's account is granted `reader` and `maintainer` at the namespace's access door, and no boot revokes it, nor a `writer` granted there to an account outside the release ([[LH-563]]). It writes its keep-last-N maintenance policy (`LANCE_PROVENANCE_RETAIN_VERSIONS`) and removes the one it wrote, while it stands as written, once none is declared, and announces no write under it but a compaction's, after which maintenance's write-event lane holds the table's pass, which expires it (ADR 0174, [[LH-529]]). Lineage writes through `merge_insert` and reads through `query` as its own principal; the graph is bring-your-own, fed by lineage's forwarder (ADR 0158) |
 
@@ -1004,7 +1004,7 @@ governing their data. The project-scoped surface is the console's project page, 
   `commit_stamped` before its finalize, and by the create door and an unkeyed `/insert`, which Lance commits itself,
   just after it lands, logging `committed_files_unrecorded` at ERROR and counting `catalog.committed_files.unrecorded`,
   which warns, when that write fails), and each pass of the table reads every recorded file again against one listing
-  of the table's root (`maintenance.services.committed_files`, `lakehouse.stored_objects.listed_identities`: a request per
+  of the table's root (`maintenance.services.committed_files`, `lakehouse.storage.stored_objects.listed_identities`: a request per
   thousand objects rather than a HEAD per file), reading only the records written since its last through maintenance's
   own copy (`file_identities.recorded_and_copied`, `_maintenance_files/<table uuid>.json`). The store's event of a write
   under the table (on `store.events`, which the store's operator configures per bucket, `objectStore.events`) holds
@@ -1020,7 +1020,7 @@ governing their data. The project-scoped surface is the console's project page, 
   token through STS `AssumeRoleWithWebIdentity` with that session policy, named for the verified caller
   (`vending.role_session_name`: the subject made readable, ending with a digest of it, so two callers never share a name), and a refused or unanswered exchange answers 503 code 17 (`vending.vend_or_refuse`).
   The catalog holds no store key: its own IO signs with an hour's session of the same token, renewed at half life
-  (`lakehouse.store_session`), so a running catalog never needs a restart for its credential.
+  (`lakehouse.storage.store_session`), so a running catalog never needs a restart for its credential.
   **The spec doors vend the highest tier FGA grants the caller** (ADR 0156 C3, `fga_deps.spec_vend_tier`):
   `DescribeTable` and `DeclareTable` vend unless the request sets `vend_credentials` false (unset, the spec lets the
   server decide), write on `can_write_data` (judged by the write judge) or on `can_read_data` with `can_maintain` (a
@@ -1402,7 +1402,7 @@ governing their data. The project-scoped surface is the console's project page, 
   stamp and vend check are every reader's own. A location the catalog recorded is a URL, read once as the key it decodes to. That covers:
   - the purge, which reclaims a trashed table under the key its record decodes to and the `.lance-reserved` marker
     pylance 13 writes under the spelling, both from `lakehouse.table_paths.spellings`, deleting by key
-    (`lakehouse.stored_objects.list_under`/`delete_objects`, no directory marker written) with `_versions/` last (measured over moto: `…$r%C3%A4…/.lance-reserved`
+    (`lakehouse.storage.stored_objects.list_under`/`delete_objects`, no directory marker written) with `_versions/` last (measured over moto: `…$r%C3%A4…/.lance-reserved`
     beside data at `…$räksmörgås/`);
   - the reconciler's trash set and the location the vend door answers (`credentials`); a table's policy is found by
     its uuid and its namespaces' uuids (`maintenance_policies.resolve_policy`, [[LH-523]]), never by a path;

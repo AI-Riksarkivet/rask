@@ -145,7 +145,7 @@ def test_a_staged_event_a_grant_would_admit_is_parked_by_the_relay_and_replayed_
     copy retired, and recorded once after the grant is written, however often the relay ticks or the admin replays."""
     from lakehouse.events import outbox
     from lakehouse.events.cloud_events import lineage_envelope
-    from lakehouse.storage_options import StorageOptions
+    from lakehouse.storage.options import StorageOptions
 
     outbox_uri = f"file://{tmp_path}/outbox"
     monkeypatch.setenv("LINEAGE_OUTBOX_URI", outbox_uri)

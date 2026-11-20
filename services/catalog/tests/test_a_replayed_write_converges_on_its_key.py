@@ -31,8 +31,8 @@ from pathlib import Path
 import pytest
 
 from catalog.services.idempotency_records import PREFIX, InFlightError, KeyBinding, Replay, TakenOver, claim, reclaim, record_outcome, release
-from lakehouse import records
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 SO = StorageOptions()
@@ -44,10 +44,10 @@ LIFETIME = timedelta(days=1)
 
 def _claimed_a_day_ago(root: str, monkeypatch: pytest.MonkeyPatch, *, attempt: str) -> None:
     """``attempt`` claimed the key a day ago on the store's clock, and never finished."""
-    read = records.read_json_at
-    monkeypatch.setattr(records, "read_json_at", lambda *args: read(*args).model_copy(update={"at": datetime.now(UTC) - LIFETIME}))
+    read = conditional_records.read_json_at
+    monkeypatch.setattr(conditional_records, "read_json_at", lambda *args: read(*args).model_copy(update={"at": datetime.now(UTC) - LIFETIME}))
     claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt=attempt)
-    monkeypatch.setattr(records, "read_json_at", read)
+    monkeypatch.setattr(conditional_records, "read_json_at", read)
 
 
 class TestTheFirstAttemptOwnsTheKey:
@@ -63,17 +63,17 @@ class TestAnAttemptStillRunningIsNotAReplay:
         and the other, whose write follows a read the first one's takeover outdated, finds the key held."""
         root = str(tmp_path)
         _claimed_a_day_ago(root, monkeypatch, attempt="crashed")
-        read = records.read_json_at
+        read = conditional_records.read_json_at
         rival: list[object] = []
 
-        def _read_then_take_over(root_uri: str, storage_options: StorageOptions, key: str) -> records.StoreRead:
+        def _read_then_take_over(root_uri: str, storage_options: StorageOptions, key: str) -> conditional_records.StoreRead:
             found = read(root_uri, storage_options, key)
             if not rival:
                 rival.append("taking over")
                 rival[0] = claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="rival")
             return found
 
-        monkeypatch.setattr(records, "read_json_at", _read_then_take_over)
+        monkeypatch.setattr(conditional_records, "read_json_at", _read_then_take_over)
 
         with pytest.raises(InFlightError):
             claim(root, SO, scope=SCOPE, key=KEY, binding=CREATE, attempt="late")
@@ -113,10 +113,10 @@ class TestARecordOutlivesItsLifetimeByNoReclaim:
         record = Path(root, PREFIX, SCOPE, f"{KEY}.json")
         a_day_ago = (datetime.now(UTC) - LIFETIME - timedelta(minutes=1)).timestamp()
         os.utime(record, (a_day_ago, a_day_ago))
-        read = records.read_json_at
+        read = conditional_records.read_json_at
         taken: list[object] = []
 
-        def _read_then_take_over(root_uri: str, storage_options: StorageOptions, key: str) -> records.StoreRead:
+        def _read_then_take_over(root_uri: str, storage_options: StorageOptions, key: str) -> conditional_records.StoreRead:
             found = read(root_uri, storage_options, key)
             if not taken:
                 taken.append("taking over")
@@ -124,7 +124,7 @@ class TestARecordOutlivesItsLifetimeByNoReclaim:
             return found
 
         with pytest.MonkeyPatch.context() as patched:
-            patched.setattr(records, "read_json_at", _read_then_take_over)
+            patched.setattr(conditional_records, "read_json_at", _read_then_take_over)
             reclaimed = reclaim(root, SO, lifetime=LIFETIME, limit=10)
 
         assert (reclaimed.reclaimed, reclaimed.kept, taken) == (0, 1, [None])

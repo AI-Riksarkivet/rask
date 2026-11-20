@@ -17,7 +17,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 type S3Client = Any
 
 #: The most requests one client has in flight at once, and so the connections its pool keeps: the widest fan-out that
-#: shares a client, `lakehouse.stored_objects.identities`. botocore's default pool keeps ten, so sixteen reads closed six
+#: shares a client, `lakehouse.storage.stored_objects.identities`. botocore's default pool keeps ten, so sixteen reads closed six
 #: connections and opened them again on the next batch (measured on the dev estate 2026-11-08: urllib3's `Connection
 #: pool is full, discarding connection` on every sweep tick).
 MAX_POOL_CONNECTIONS: Final = 16
@@ -161,3 +161,14 @@ def _client(
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         kwargs["verify"] = False
     return boto3.client("s3", **kwargs)
+
+
+__all__ = [
+    "MAX_POOL_CONNECTIONS",
+    "AwsRegionSettings",
+    "S3Client",
+    "S3EnvSettings",
+    "aws_s3_client",
+    "configured_endpoint",
+    "s3_client",
+]

@@ -1,7 +1,7 @@
 """The storage options a service signs with, and the S3 filesystem they build: the lakehouse's one credential guard.
 
 One home for the two places a store credential becomes something that signs. :class:`StorageOptions` carries a flat
-lance-style ``storage_options`` map with its credential lifted into a :class:`~lakehouse.governed.store_credential.S3KeyPair`
+lance-style ``storage_options`` map with its credential lifted into a :class:`~lakehouse.storage.credential.S3KeyPair`
 whose secret and session token are ``SecretStr`` ([[LH-543]]), so a repr, a log line or an error that echoes the options
 carries neither, and a map naming half a credential, or one field under two spellings that disagree, is refused rather
 than read as no credential. :func:`s3_filesystem` builds the pyarrow ``S3FileSystem`` from them with every half of the
@@ -19,12 +19,12 @@ from urllib.parse import urlsplit
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, model_validator
 
-from lakehouse.endpoint_scheme import allow_http_for, endpoint_scheme
-from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.endpoint_scheme import allow_http_for, endpoint_scheme
 
 
 if TYPE_CHECKING:
-    from lakehouse.storage import S3Client
+    from lakehouse.storage.client import S3Client
 
 
 #: The two spellings of each credential field. :meth:`StorageOptions.in_clear` emits the ``aws_``-prefixed form (it says
@@ -283,15 +283,15 @@ def on_s3(location: str) -> bool:
 def object_client(storage_options: StorageOptions) -> S3Client:
     """The storage seam's S3 client for these options, signed by their whole key pair, at their endpoint and region.
 
-    ``lakehouse.storage.s3_client`` owns, in one place, what a hand-rolled client forfeits: path-style addressing (RustFS
-    refuses virtual-hosted signing with 403 ``SignatureDoesNotMatch``), s3v4, adaptive retries, and connect and read
+    ``lakehouse.storage.client.s3_client`` owns, in one place, what a hand-rolled client forfeits: path-style addressing
+    (RustFS refuses virtual-hosted signing with 403 ``SignatureDoesNotMatch``), s3v4, adaptive retries, and connect and read
     timeouts, which matter on the synchronous path of every registry write, where botocore's default waits forever. The
     region is the options' own or :data:`DEFAULT_REGION`, never the ambient ``AWS_REGION``. The session token is forwarded
     whenever the options carry one: a vended credential without it is not a weaker credential but an invalid one, and boto3
-    would fall back to whatever ambient chain it finds, broader rights than the vend scoped. ``lakehouse.storage`` is imported at
-    call time so a test replaces the seam rather than this wrapper, and a local root needs no S3 stack at all.
+    would fall back to whatever ambient chain it finds, broader rights than the vend scoped. ``lakehouse.storage.client`` is
+    imported at call time so a test replaces the seam rather than this wrapper, and a local root needs no S3 stack at all.
     """
-    from lakehouse.storage import aws_s3_client, s3_client
+    from lakehouse.storage.client import aws_s3_client, s3_client
 
     access_key, secret_key, session_token = storage_options.credential_in_clear()
     region = storage_options.region or DEFAULT_REGION
@@ -330,3 +330,18 @@ def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: boo
         region=storage_options.region or DEFAULT_REGION,
         allow_bucket_creation=allow_bucket_creation,
     )
+
+
+__all__ = [
+    "CREDENTIAL_KEYS",
+    "DEFAULT_REGION",
+    "ENDPOINT",
+    "REGION",
+    "S3_ENDPOINT",
+    "S3_EXPRESS",
+    "VIRTUAL_HOSTED",
+    "StorageOptions",
+    "object_client",
+    "on_s3",
+    "s3_filesystem",
+]

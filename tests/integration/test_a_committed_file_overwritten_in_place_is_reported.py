@@ -47,10 +47,10 @@ from pydantic import SecretStr
 
 from lakehouse import file_identities, maintenance_policies
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.objectfs import lance_storage_options
-from lakehouse.storage import S3Client
+from lakehouse.storage.client import S3Client
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials, table_pass
 from maintenance.services.expiry import DatasetResult

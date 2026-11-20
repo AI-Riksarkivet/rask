@@ -5,11 +5,11 @@ plain overwrites, so every guard in front of them was check-then-act: two concur
 warehouse id under different projects both read "absent" and the last writer won — on exactly the
 tenant-isolation guards (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" CAT-CORE-05, same defect class). The store
 demonstrably honors put-if-not-exists (`tests/e2e-py/test_object_store_cas_e2e.py` proves
-``If-None-Match: *`` against RustFS), so the fix is to USE it: ``lakehouse.records``
+``If-None-Match: *`` against RustFS), so the fix is to USE it: ``lakehouse.storage.conditional_records``
 is the one conditional-create seam, and the id-minting doors go through it.
 
 Local-FS branch is exercised directly (``open(..., "xb")`` exclusivity — the same arbitration, by
-the OS); the S3 branch is driven through a fake client at the ``storage.s3_client`` seam, pinning the ``IfNoneMatch`` parameter
+the OS); the S3 branch is driven through a fake client at the ``storage.client.s3_client`` seam, pinning the ``IfNoneMatch`` parameter
 and the 412 → ``RecordExistsError`` mapping, mirroring how ``test_vending.py`` pins the STS call.
 The live contended-writer proof against RustFS lives in ``tests/e2e-py/test_registry_cas_e2e.py``
 (env-gated, ``cas`` marker) — this file is the always-running half.
@@ -23,10 +23,10 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
-import lakehouse.storage as storage
+import lakehouse.storage.client as storage_client
 from catalog.services import warehouses
-from lakehouse import records
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 from lakehouse.warehouse_records import WarehouseRecord
 
 
@@ -41,9 +41,9 @@ def _root(tmp_path: Any) -> str:
 
 def test_create_json_local_bare_path_root(tmp_path: Any) -> None:
     # control_root may be a bare local path (no file:// scheme) in dev — same exclusivity.
-    records.create_json(str(tmp_path), StorageOptions(), "_projects/acme.json", {"id": "acme"})
-    with pytest.raises(records.RecordExistsError):
-        records.create_json(str(tmp_path), StorageOptions(), "_projects/acme.json", {"id": "acme"})
+    conditional_records.create_json(str(tmp_path), StorageOptions(), "_projects/acme.json", {"id": "acme"})
+    with pytest.raises(conditional_records.RecordExistsError):
+        conditional_records.create_json(str(tmp_path), StorageOptions(), "_projects/acme.json", {"id": "acme"})
 
 
 # --------------------------------------------------------------------------- #
@@ -79,9 +79,9 @@ def _client_error(code: str, status: int) -> ClientError:
 def test_create_json_s3_412_maps_to_record_exists(monkeypatch: pytest.MonkeyPatch) -> None:
     client = MagicMock()
     client.put_object.side_effect = _client_error("PreconditionFailed", 412)
-    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
-    with pytest.raises(records.RecordExistsError):
-        records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
+    monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
+    with pytest.raises(conditional_records.RecordExistsError):
+        conditional_records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
 
 
 def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -89,9 +89,9 @@ def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.Monkey
     # must surface as itself — laundering it into "already exists" would hide a real failure.
     client = MagicMock()
     client.put_object.side_effect = _client_error("AccessDenied", 403)
-    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
+    monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(ClientError):
-        records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
+        conditional_records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
 
 
 # --------------------------------------------------------------------------- #
@@ -104,7 +104,7 @@ def test_create_warehouse_record_second_mint_refused(tmp_path: Any) -> None:
     warehouses.create_warehouse_record(
         root, so, WarehouseRecord.model_validate({"id": "wh-a", "bucket": "b", "root_uri": "s3://b", "project": "acme", "created_at": "t"})
     )
-    with pytest.raises(records.RecordExistsError):
+    with pytest.raises(conditional_records.RecordExistsError):
         warehouses.create_warehouse_record(
             root, so, WarehouseRecord.model_validate({"id": "wh-a", "bucket": "b2", "root_uri": "s3://b2", "project": "evil", "created_at": "t"})
         )

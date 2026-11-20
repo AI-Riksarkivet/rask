@@ -27,8 +27,8 @@ and nothing is held against the identity of its writer, which a pipeline's worke
 
 ONE RECORD PER TABLE on the control root, keyed by the table's uuid (ADR 0173 §8), listing the turns held now, at most one
 per ref. The store picks the winner: a take is a create-if-absent or a replace under the ETag it read
-(:mod:`lakehouse.records`), as a history fence's is. A TURN LAPSES at the hold its take named, timed on the
-store's clock (:attr:`lakehouse.records.StoreRead.at`), so a holder that crashed, or a writer that never
+(:mod:`lakehouse.storage.conditional_records`), as a history fence's is. A TURN LAPSES at the hold its take named, timed on the
+store's clock (:attr:`lakehouse.storage.conditional_records.StoreRead.at`), so a holder that crashed, or a writer that never
 retried, stalls the ref's writers for at most that long; and a waiter waits :data:`HOLD` at most in all, however many
 commits take the turn one after another, then races as it would with no turn.
 
@@ -57,9 +57,10 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import control_prefixes, records
+from lakehouse import control_prefixes
 from lakehouse.record_store import record_key
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -294,8 +295,8 @@ class TableTurns(BaseModel):
             signer=options.key_pair.access_key_id if options.key_pair is not None else None,
         )
 
-    def _read(self) -> tuple[records.StoreRead, list[Turn]]:
-        read = records.read_json_at(self.control_root, self.storage_options, self.key)
+    def _read(self) -> tuple[conditional_records.StoreRead, list[Turn]]:
+        read = conditional_records.read_json_at(self.control_root, self.storage_options, self.key)
         return read, _kept(read.stored.record if read.stored else None, read.at)
 
     def _live_turns(self) -> list[Turn]:
@@ -398,10 +399,10 @@ class TableTurns(BaseModel):
             held = CommitTurns(uuid=self.table_uuid, turns=[*turns, mine]).model_dump(mode="json")
             try:
                 if read.stored is None:
-                    records.create_json(self.control_root, self.storage_options, self.key, held)
+                    conditional_records.create_json(self.control_root, self.storage_options, self.key, held)
                 else:
-                    records.replace_json(self.control_root, self.storage_options, self.key, held, etag=read.stored.etag)
-            except (records.RecordExistsError, records.RecordChangedError):
+                    conditional_records.replace_json(self.control_root, self.storage_options, self.key, held, etag=read.stored.etag)
+            except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
                 continue
             _SHARED_READS.forget(self._shared)
             return token
@@ -439,8 +440,8 @@ class TableTurns(BaseModel):
                     return
                 kept = CommitTurns(uuid=self.table_uuid, turns=[turn for turn in turns if turn.token != token]).model_dump(mode="json")
                 try:
-                    records.replace_json(self.control_root, self.storage_options, self.key, kept, etag=read.stored.etag)
-                except records.RecordChangedError:
+                    conditional_records.replace_json(self.control_root, self.storage_options, self.key, kept, etag=read.stored.etag)
+                except conditional_records.RecordChangedError:
                     continue
                 _SHARED_READS.forget(self._shared)
                 return

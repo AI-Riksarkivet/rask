@@ -36,11 +36,11 @@ from catalog.core.store_endpoint import require_estate_store
 from lakehouse import auto_cleanup
 from lakehouse.clone_sources import CloneReference, clone_reference
 from lakehouse.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
-from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.lance_session import open_dataset
 from lakehouse.lancekit.absence import reads_as_absent
 from lakehouse.outage import reads_as_store_outage
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.options import StorageOptions
 
 
 if TYPE_CHECKING:

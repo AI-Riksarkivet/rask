@@ -14,9 +14,10 @@ from pathlib import Path
 
 import pytest
 
-from lakehouse import history_fences, records
+from lakehouse import history_fences
 from lakehouse.history_fences import HistoryFence, HistoryWork, TableHistory
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 @pytest.mark.parametrize(
@@ -36,6 +37,6 @@ def test_a_take_joins_a_hold_of_its_own_kind_or_replaces_a_lapsed_one(
 
     history.take(then)
 
-    fence = records.read_json(history.control_root, StorageOptions(), history.key)
+    fence = conditional_records.read_json(history.control_root, StorageOptions(), history.key)
     assert fence is not None
     assert [holder.work for holder in HistoryFence.model_validate(fence[0]).holders] == held_by

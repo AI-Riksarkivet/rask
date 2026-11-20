@@ -30,8 +30,8 @@ from pydantic import SecretStr
 from throwaway_rustfs import ThrowawayStore, admin, s3_client
 
 from catalog.core.vending import build_session_policy
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import lance_storage_options
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
 
 
 pytestmark = pytest.mark.rustfs_provisioning

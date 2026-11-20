@@ -221,7 +221,7 @@ def secret_store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
     """Configure this test's process for a secret store, as the chart's env configures a pod, and answer that store for
     the length of the test. The projected token the process logs in with is `_projected_identity_tokens`'s.
 
-    A process under it is handed no key pair, as a pod is (`lakehouse.store_session.key_pair_in_force`): a test whose
+    A process under it is handed no key pair, as a pod is (`lakehouse.storage.store_session.key_pair_in_force`): a test whose
     code signs an object-store request here projects the service's token and holds or exchanges its session.
 
     STRICT, as a bare `@respx.mock` is: a secret the test had the store hold and nothing read fails the test, unless it

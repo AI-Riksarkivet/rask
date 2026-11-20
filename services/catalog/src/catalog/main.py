@@ -53,7 +53,7 @@ from lakehouse.lance_metrics import instrument_lance_if_available
 from lakehouse.obs import configure_app_logging
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.factory import build_service_app
-from lakehouse.store_session import require_env_pair, start_store_session
+from lakehouse.storage.store_session import require_env_pair, start_store_session
 from lakehouse.supervision import Supervisor
 
 

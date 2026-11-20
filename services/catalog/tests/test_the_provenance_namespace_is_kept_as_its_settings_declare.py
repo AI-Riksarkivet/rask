@@ -29,7 +29,7 @@ from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
 from lakehouse import maintenance_policies
 from lakehouse.governed import fga
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
 

@@ -39,10 +39,10 @@ from throwaway_rustfs import ThrowawayStore, admin, s3_client
 
 from catalog.core.vending import ReclaimScope
 from lakehouse import trash
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import lance_storage_options
 from lakehouse.record_store import put_record, record_key
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.purge import purge_expired_trash
 from maintenance.services.reconcile import CATEGORIES, ReconcileReport

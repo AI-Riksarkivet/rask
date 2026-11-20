@@ -36,7 +36,7 @@ from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import auto_cleanup, base_refs, base_registry, data_directories, location_claims, maintenance_policies, objectfs, trash, warehouse_records
+from lakehouse import auto_cleanup, base_refs, base_registry, data_directories, location_claims, maintenance_policies, trash, warehouse_records
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.features import flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
@@ -45,7 +45,8 @@ from lakehouse.history_fences import TableHistory
 from lakehouse.lance_session import affordable_cache_bytes, open_dataset
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.maintenance_due import delete_due
-from lakehouse.storage_options import StorageOptions, on_s3
+from lakehouse.storage import objectfs
+from lakehouse.storage.options import StorageOptions, on_s3
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
@@ -807,7 +808,7 @@ def _datasets_of(location: str, settings: MaintenanceStore) -> list[str] | None:
 
     A branch's directory is ``<table>/tree/<name>`` (`lance_docs/lance/format/table/branch_tag.md`). Refs that cannot be
     read leave the table alone, and the next pass reads them again. Whether a dataset stands is the store's answer, a
-    ``_versions/`` child (:func:`lakehouse.objectfs.is_lance_dataset_root`), asked only when the open failed.
+    ``_versions/`` child (:func:`lakehouse.storage.objectfs.is_lance_dataset_root`), asked only when the open failed.
 
     Raises:
         OSError: The open failed and the store could not say whether a dataset stands there, so nothing is decided.

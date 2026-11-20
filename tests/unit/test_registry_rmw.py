@@ -19,7 +19,7 @@ would pass on a machine that happens to schedule kindly, which for a race is the
 
 Local-FS is the branch exercised directly (`flock` + content-hash ETag — cooperating writers on one
 host, which is the whole scope of a local root); the S3 branch is driven through a fake client at the
-`storage.s3_client` seam, pinning the `IfMatch` parameter and the 412 → `RecordChangedError` mapping, mirroring
+`storage.client.s3_client` seam, pinning the `IfMatch` parameter and the 412 → `RecordChangedError` mapping, mirroring
 `test_registry_cas.py`'s treatment of the create branch.
 """
 
@@ -34,10 +34,10 @@ from unittest.mock import MagicMock
 import pytest
 from botocore.exceptions import ClientError
 
-import lakehouse.storage as storage
+import lakehouse.storage.client as storage_client
 from catalog.services import warehouses
-from lakehouse import records
-from lakehouse.storage_options import ENDPOINT, StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import ENDPOINT, StorageOptions
 
 
 def _root(tmp_path: Any) -> str:
@@ -73,7 +73,7 @@ def _client_error(code: str, status: int) -> ClientError:
 
 def _seed(tmp_path: Path, warehouse_id: str = "acme-wh", **fields: str) -> dict[str, str]:
     record = {"id": warehouse_id, "bucket": "b-acme", "root_uri": "s3://b-acme", "project": "acme", "status": "active", **fields}
-    records.create_json(_root(tmp_path), StorageOptions(), f"_warehouses/{warehouse_id}.json", record)
+    conditional_records.create_json(_root(tmp_path), StorageOptions(), f"_warehouses/{warehouse_id}.json", record)
     return record
 
 
@@ -96,10 +96,10 @@ def test_mutate_reapplies_against_the_winner_when_the_record_moves_mid_flight(tm
         seen.append(str(record.get("note", "")))
         if len(seen) == 1:
             # The interleave: a rival writes a DIFFERENT field, after our read, before our write.
-            records.mutate_json(_root(tmp_path), StorageOptions(), key, lambda r: {**r, "note": "quarantined by ops"})
+            conditional_records.mutate_json(_root(tmp_path), StorageOptions(), key, lambda r: {**r, "note": "quarantined by ops"})
         return {**record, "status": "deactivated"}
 
-    out = records.mutate_json(_root(tmp_path), StorageOptions(), key, mutate)
+    out = conditional_records.mutate_json(_root(tmp_path), StorageOptions(), key, mutate)
 
     assert len(seen) == 2, "the first attempt must LOSE and be retried against the winner's record"
     assert seen == ["", "quarantined by ops"], "the retry must re-read, not replay its own stale copy"
@@ -116,13 +116,13 @@ def test_mutate_gives_up_after_bounded_attempts(tmp_path: Path) -> None:
     def always_lose(record: dict[str, Any]) -> dict[str, Any]:
         rounds["n"] += 1
         # Rewrite the record on EVERY attempt, so this writer can never win.
-        records.create_json  # noqa: B018 — referenced for readers; the write below is the rival
+        conditional_records.create_json  # noqa: B018 — referenced for readers; the write below is the rival
         path = Path(str(tmp_path)) / key
         path.write_text(json.dumps({**record, "spin": rounds["n"]}))
         return {**record, "status": "deactivated"}
 
-    with pytest.raises(records.RecordChangedError):
-        records.mutate_json(_root(tmp_path), StorageOptions(), key, always_lose, attempts=3)
+    with pytest.raises(conditional_records.RecordChangedError):
+        conditional_records.mutate_json(_root(tmp_path), StorageOptions(), key, always_lose, attempts=3)
     assert rounds["n"] == 3
 
 
@@ -142,10 +142,10 @@ def test_s3_replace_sends_if_match_and_maps_412_to_a_lost_race(monkeypatch: pyte
         "LastModified": datetime(2026, 11, 12, tzinfo=UTC),
     }
     client.put_object.side_effect = _client_error("PreconditionFailed", 412)
-    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
+    monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
 
-    with pytest.raises(records.RecordChangedError):
-        records.mutate_json(
+    with pytest.raises(conditional_records.RecordChangedError):
+        conditional_records.mutate_json(
             "s3://ctl/root",
             StorageOptions(options={ENDPOINT: "http://store.test:9000"}),
             "_warehouses/w.json",
@@ -162,9 +162,9 @@ def test_s3_read_surfaces_a_non_404_error_instead_of_reporting_absent(monkeypatc
     404 and, one level up, into a create that overwrites a record it could not read."""
     client = MagicMock()
     client.get_object.side_effect = _client_error("AccessDenied", 403)
-    monkeypatch.setattr(storage, "s3_client", lambda *_a, **_kw: client)
+    monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(Exception, match="AccessDenied"):
-        records.read_json("s3://ctl/root", StorageOptions(options={ENDPOINT: "http://store.test:9000"}), "_warehouses/w.json")
+        conditional_records.read_json("s3://ctl/root", StorageOptions(options={ENDPOINT: "http://store.test:9000"}), "_warehouses/w.json")
 
 
 # --------------------------------------------------------------------------- #

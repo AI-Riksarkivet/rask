@@ -17,7 +17,7 @@ import pyarrow as pa
 import pytest
 
 from lakehouse import maintenance_policies as mp
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 from maintenance.services.plan import cadence_skip

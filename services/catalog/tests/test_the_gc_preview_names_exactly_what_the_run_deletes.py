@@ -46,7 +46,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.services.dataplane import create_table
 from lakehouse import base_registry
 from lakehouse.ns_errors import install_problem_handlers
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 lance = pytest.importorskip("lance")

@@ -111,7 +111,7 @@ from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import uuid_of
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.protection import ProtectionRecord
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

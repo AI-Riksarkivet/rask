@@ -26,7 +26,7 @@ import pytest
 from lance_namespace import NamespaceAlreadyExistsError
 
 from catalog.services import warehouses
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 @pytest.fixture

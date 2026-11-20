@@ -31,7 +31,7 @@ from catalog.core import blobs
 from catalog.services import table_claims
 from catalog.services.dataplane import create_table
 from lakehouse.location_claims import ClaimStore
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 def _declare_namespace(ns: LanceNamespace, name: str) -> None:

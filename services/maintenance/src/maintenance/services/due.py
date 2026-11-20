@@ -27,7 +27,7 @@ from lakehouse.compaction_gate import compaction_refusal
 from lakehouse.governed.fga import canonical_object_id
 from lakehouse.lance_session import open_dataset
 from lakehouse.maintenance_due import CompactionDue, DueRecord, IndexDue, delete_due, write_due
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceStore, shared_lance_session
 from maintenance.services.expiry import DueVerdict
 from maintenance.services.index_health import due_indices

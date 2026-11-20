@@ -21,8 +21,8 @@ import pytest
 
 from catalog.core.config import get_settings as catalog_settings
 from catalog.services.idempotency_records import PREFIX
-from lakehouse import records, stored_objects
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.storage import conditional_records, stored_objects
 from tests.integration.catalog_and_maintenance import TwoServices, catalog_and_maintenance, scanned
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 
@@ -47,13 +47,13 @@ def test_a_record_past_its_lifetime_is_gone_after_the_daily_scan(moto_url: str, 
         )
         assert created.status_code == 200, created.text
         assert len(_records(both)) == 1, "the keyed create must have left its record"
-        clock = records.store_clock
+        clock = conditional_records.store_clock
 
         def _two_days_on(response: Any) -> datetime:  # noqa: ANN401 — the store's response, passed on
             return clock(response) + timedelta(days=2)
 
         with catalog_doors(both.catalog), pytest.MonkeyPatch.context() as later:
-            later.setattr(records, "store_clock", _two_days_on)
+            later.setattr(conditional_records, "store_clock", _two_days_on)
             later.setattr(stored_objects, "store_clock", _two_days_on)
             scan = scanned(both.maintenance)
 

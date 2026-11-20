@@ -19,7 +19,7 @@ from lance_namespace import NamespaceNotFoundError
 from catalog.api.fga_deps import GovernedObject
 from lakehouse import base_registry, location_claims
 from lakehouse.location_claims import ClaimStore
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 def _governed(kind: str, segments: list[str]) -> GovernedObject:

@@ -2,7 +2,7 @@
 
 Every pod reads and writes the same claim and fence records, so a lease stamped with one pod's clock and judged against
 another's lapses early or late by exactly the skew between them. Each record is stamped and judged on the store's own
-``Date`` (`lakehouse.records.StoreRead.at`), so a pod whose clock runs an hour ahead still finds a claim
+``Date`` (`lakehouse.storage.conditional_records.StoreRead.at`), so a pod whose clock runs an hour ahead still finds a claim
 taken a moment ago inside its lease and a hold taken a moment ago live.
 
 Driven against a moto server, which answers every request with a ``Date`` header as an S3 store does; the second pod's
@@ -17,10 +17,11 @@ from datetime import datetime, timedelta, tzinfo
 import boto3
 import pytest
 
-from lakehouse import history_fences, location_claims, records
+from lakehouse import history_fences, location_claims
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.location_claims import ClaimStore, LocationClaim, LocationHeldError
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 BUCKET = "lh413-control"
@@ -80,7 +81,7 @@ def test_a_pod_an_hour_ahead_still_finds_a_fresh_lease_live(
 ) -> None:
     second_pod = arrange(store)
     # Every clock the second pod has, the records layer's included: only the store's `Date` is left to agree with the first.
-    for module in (location_claims, history_fences, records):
+    for module in (location_claims, history_fences, conditional_records):
         monkeypatch.setattr(module, "datetime", _AnHourAhead)
 
     with pytest.raises(refusal):

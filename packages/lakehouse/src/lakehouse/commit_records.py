@@ -29,9 +29,10 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
 
-from lakehouse import control_prefixes, records, stored_objects
+from lakehouse import control_prefixes
 from lakehouse.record_store import delete_record, get_record, put_record, read_record, record_key
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records, stored_objects
+from lakehouse.storage.options import StorageOptions
 
 
 AUTHORS_PREFIX: Final = control_prefixes.COMMIT_AUTHORS
@@ -105,8 +106,8 @@ def record_author(
     record = CommitAuthor(author=author, transaction_uuid=transaction_uuid, ref=ref, version=version, manifest=manifest)
     key = _author_key(table_uuid, transaction_uuid, version)
     try:
-        records.create_json(control_root, storage_options, key, record.model_dump())
-    except records.RecordExistsError:
+        conditional_records.create_json(control_root, storage_options, key, record.model_dump())
+    except conditional_records.RecordExistsError:
         recorded = _read(control_root, storage_options, key)
         if recorded is None or (recorded.author, recorded.ref) != (author, ref):
             raise AuthorRecordedError(f"transaction {transaction_uuid} of table {table_uuid} is recorded at version {version} for another commit") from None

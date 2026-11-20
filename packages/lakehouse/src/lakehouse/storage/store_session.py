@@ -36,13 +36,13 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, read_identity_token
 from lakehouse.governed.secrets import secret_store_configured
-from lakehouse.governed.store_credential import S3KeyPair, StoreCredentialUnavailableError
-from lakehouse.storage import configured_endpoint
-from lakehouse.storage_options import DEFAULT_REGION, ENDPOINT, REGION, StorageOptions, object_client
+from lakehouse.storage.client import configured_endpoint
+from lakehouse.storage.credential import S3KeyPair, StoreCredentialUnavailableError
+from lakehouse.storage.options import DEFAULT_REGION, ENDPOINT, REGION, StorageOptions, object_client
 
 
 if TYPE_CHECKING:
-    from lakehouse.storage import S3Client
+    from lakehouse.storage.client import S3Client
     from lakehouse.supervision import Supervisor
 
 
@@ -88,7 +88,7 @@ class IssuedSession(BaseModel):
 @cache
 def _sts(region: str, endpoint: str | None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
     """One unsigned STS client per endpoint; botocore clients are thread-safe, and building one costs a model load."""
-    from lakehouse.storage import sts_client
+    from lakehouse.storage.sts import sts_client
 
     return sts_client(region=region, endpoint=endpoint)
 
@@ -462,3 +462,27 @@ def job_client(identity: JobStoreIdentity, *, session_name: str) -> S3Client:
         raise RuntimeError(f"the object store exchanged no session for the token at {identity.web_identity_token_file}: {exc}") from exc
     own = configured_endpoint()
     return object_client(StorageOptions(key_pair=issued.key_pair, options={REGION: identity.region, **({ENDPOINT: own} if own else {})}))
+
+
+__all__ = [
+    "EXCHANGE_FAILURES",
+    "EXPIRY_MARGIN_SECONDS",
+    "SESSIONS",
+    "STATIC_KEY_ACKNOWLEDGEMENT",
+    "WAKE_SECONDS",
+    "IssuedSession",
+    "JobStoreIdentity",
+    "SessionCache",
+    "SessionSeconds",
+    "StoreIdentitySettings",
+    "StoreSession",
+    "WebIdentity",
+    "env_alias",
+    "exchange",
+    "held_session",
+    "job_client",
+    "key_pair_in_force",
+    "require_env_pair",
+    "require_one_store_identity",
+    "start_store_session",
+]

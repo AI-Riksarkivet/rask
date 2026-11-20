@@ -51,9 +51,9 @@ from lakehouse.base_refs import decoded_path, normalise
 from lakehouse.governed import fga
 from lakehouse.lance_session import open_dataset
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.objectfs import fs_and_base
 from lakehouse.project_records import ProjectRecord, UnreadableProjectRecordError
-from lakehouse.storage_options import StorageOptions, object_client, on_s3
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions, object_client, on_s3
 from lakehouse.trash import TrashKind, TrashRecord, UnreadableTrashRecordError
 from lakehouse.warehouse_records import UnreadableWarehouseRecordError, WarehouseRecord
 from maintenance.core import metrics
@@ -63,7 +63,7 @@ from maintenance.services.naming import TableIds
 
 
 if TYPE_CHECKING:
-    from lakehouse.storage import S3Client
+    from lakehouse.storage.client import S3Client
 
 
 log = logging.getLogger(__name__)

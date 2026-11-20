@@ -24,8 +24,8 @@ from pydantic import BaseModel, ConfigDict
 from lakehouse import location_claims
 from lakehouse.base_refs import key_uri
 from lakehouse.base_registry import BaseRecord, BaseRegistry, BaseRole, RecordedBase, read_base_record
-from lakehouse.storage_options import StorageOptions
-from lakehouse.stored_objects import delete_objects, list_under
+from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.stored_objects import delete_objects, list_under
 
 
 log = logging.getLogger(__name__)

@@ -48,7 +48,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lineage.services.provenance import ProvenanceStore
 from tests import seeding
 from tests.integration import store_requests

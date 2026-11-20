@@ -37,7 +37,7 @@ from lance_namespace import connect
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.core.config import get_settings
 from catalog.main import app
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 get_settings.cache_clear()
 ns = connect("dir", {"root": root})

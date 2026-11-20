@@ -113,10 +113,11 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import SpanKind
 from pydantic import BaseModel, SecretStr
 
-from lakehouse import location_claims, store_session
+from lakehouse import location_claims
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.events.lineage_events import LANCE_FACET, DatasetUuids, with_dataset_uuids
-from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.storage import store_session
+from lakehouse.storage.credential import S3KeyPair
 from lakehouse.supervision import EndProcess, end_process
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
@@ -443,7 +444,7 @@ def _replica_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bus: _Bus
             **{"task_heartbeat_seconds": _HEARTBEAT, "task_ack_wait_seconds": _ACK_WAIT, "task_max_deliver": _MAX_DELIVER},
         }
     )
-    # The session `lakehouse.store_session.start_store_session` holds, which the store-events reader signs with.
+    # The session `lakehouse.storage.store_session.start_store_session` holds, which the store-events reader signs with.
     sessions = store_session.SessionCache()
     monkeypatch.setattr(store_session, "SESSIONS", sessions)
     identity = settings.web_identity

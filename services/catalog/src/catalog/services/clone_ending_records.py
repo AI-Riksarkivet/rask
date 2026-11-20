@@ -32,10 +32,11 @@ from typing import Final
 
 from pydantic import BaseModel, Field
 
-from lakehouse import control_prefixes, records
+from lakehouse import control_prefixes
 from lakehouse.location_claims import ClaimStore, claim_digest
 from lakehouse.record_store import delete_record
-from lakehouse.stored_objects import list_under
+from lakehouse.storage import conditional_records
+from lakehouse.storage.stored_objects import list_under
 
 
 PREFIX: Final = control_prefixes.CLONE_ENDINGS
@@ -115,12 +116,12 @@ def file(store: ClaimStore, intent: EndingIntent, *, filing: str) -> CloneEnding
     """File ``intent`` for the request ``filing``, before its door removes anything.
 
     Raises:
-        records.RecordExistsError: The request filed an ending at the location already.
+        conditional_records.RecordExistsError: The request filed an ending at the location already.
         OSError: The store refused a read or the write.
     """
-    at = records.read_json_at(store.control_root, store.storage_options, _key(digest_of(intent.location), filing)).at
+    at = conditional_records.read_json_at(store.control_root, store.storage_options, _key(digest_of(intent.location), filing)).at
     ending = CloneEnding(**intent.model_dump(), filing=filing, filed_at=at)
-    records.create_json(store.control_root, store.storage_options, _key(ending.digest, filing), ending.model_dump(mode="json"))
+    conditional_records.create_json(store.control_root, store.storage_options, _key(ending.digest, filing), ending.model_dump(mode="json"))
     return ending
 
 
@@ -153,7 +154,7 @@ def read(store: ClaimStore, digest: str, filing: str) -> EndingRead | None:
     Raises:
         ValueError: The stored record is not an ending.
     """
-    found = records.read_json_at(store.control_root, store.storage_options, _key(digest, filing))
+    found = conditional_records.read_json_at(store.control_root, store.storage_options, _key(digest, filing))
     if found.stored is None:
         return None
     return EndingRead(ending=CloneEnding.model_validate(found.stored.record), etag=found.stored.etag, at=found.at)
@@ -176,6 +177,8 @@ def mark(store: ClaimStore, read_as: EndingRead, *, token: str) -> None:
     """
     marked = read_as.ending.model_copy(update={"finishing": EndingMark(token=token, at=read_as.at)})
     try:
-        records.replace_json(store.control_root, store.storage_options, _key(marked.digest, marked.filing), marked.model_dump(mode="json"), etag=read_as.etag)
-    except records.RecordChangedError:
+        conditional_records.replace_json(
+            store.control_root, store.storage_options, _key(marked.digest, marked.filing), marked.model_dump(mode="json"), etag=read_as.etag
+        )
+    except conditional_records.RecordChangedError:
         raise EndingChangedError(f"the ending {marked.digest}/{marked.filing} changed since it was read") from None

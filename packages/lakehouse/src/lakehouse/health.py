@@ -27,8 +27,8 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.objectfs import fs_and_base
 from lakehouse.schemas.health import Readiness, ReadinessStatus
+from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.supervision import Supervisor
 
 
@@ -36,7 +36,7 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from lakehouse.events.bus import Bus
-    from lakehouse.storage_options import StorageOptions
+    from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -173,4 +173,4 @@ class HealthWatch:
                 await dependency.close()
 
 
-__all__ = ["Dependency", "HealthWatch", "Verdict", "bus_dependency", "openfga_dependency"]
+__all__ = ["Dependency", "HealthWatch", "Verdict", "bus_dependency", "openfga_dependency", "store_dependency"]

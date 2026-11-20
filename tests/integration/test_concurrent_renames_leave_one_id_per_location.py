@@ -33,8 +33,9 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import ConcurrentModificationError, InvalidInputError, LanceNamespace, TableAlreadyExistsError
 
-from lakehouse import location_claims, records
-from lakehouse.storage_options import StorageOptions
+from lakehouse import location_claims
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -157,15 +158,15 @@ def test_a_door_racing_a_rename_acts_only_on_the_table_it_resolved(
         racing = _RivalBefore(real_ns, act, _rename_then_recreate)
         app.dependency_overrides[get_namespace] = lambda: racing
     else:
-        read, key = records.read_json_at, location_claims.claim_key(location)
+        read, key = conditional_records.read_json_at, location_claims.claim_key(location)
 
-        def _read_then_race(root_uri: str, storage_options: StorageOptions, at: str) -> records.StoreRead:
+        def _read_then_race(root_uri: str, storage_options: StorageOptions, at: str) -> conditional_records.StoreRead:
             found = read(root_uri, storage_options, at)
             if at == key:
                 _rename_then_recreate()
             return found
 
-        monkeypatch.setattr(records, "read_json_at", _read_then_race)
+        monkeypatch.setattr(conditional_records, "read_json_at", _read_then_race)
 
     answered = client.post(f"/v1/table/lance_catalog$ns1$src/{door}", json={})
 

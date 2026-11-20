@@ -50,7 +50,7 @@ from pydantic import BaseModel
 
 from catalog.core import manifest_bytes
 from catalog.services import dataplane, table_claims
-from lakehouse import commit_records, commit_turns, control_prefixes, manifest_wire, records
+from lakehouse import commit_records, commit_turns, control_prefixes, manifest_wire
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga as fga_module
@@ -59,8 +59,9 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.record_store import put_record, record_key
-from lakehouse.storage import S3Client
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.client import S3Client
+from lakehouse.storage.options import StorageOptions
 from tests.integration import store_requests
 
 
@@ -1585,14 +1586,14 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
             finished.append((time.monotonic(), None))
 
     reads: list[float] = []
-    read_json_at = records.read_json_at
+    read_json_at = conditional_records.read_json_at
 
-    def counted(root_uri: str, storage_options: StorageOptions, key: str) -> records.StoreRead:
+    def counted(root_uri: str, storage_options: StorageOptions, key: str) -> conditional_records.StoreRead:
         if key.startswith(commit_turns.PREFIX):
             reads.append(time.monotonic())
         return read_json_at(root_uri, storage_options, key)
 
-    monkeypatch.setattr(records, "read_json_at", counted)
+    monkeypatch.setattr(conditional_records, "read_json_at", counted)
     turns = _turns(stock, tmp_path)
     token = turns.take(None)
     held_from = time.monotonic()

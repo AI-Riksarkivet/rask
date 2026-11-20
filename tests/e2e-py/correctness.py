@@ -56,7 +56,7 @@ from lakehouse.context import is_traceparent
 from lakehouse.events import outbox
 from lakehouse.events.lineage_events import event_identity
 from lakehouse.naming import uuid_of
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM
 from lineage.services.provenance import PARKED_KEY_PREFIX, REFUSALS

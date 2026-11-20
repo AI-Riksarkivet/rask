@@ -11,7 +11,7 @@ import pytest
 
 from catalog.services import maintenance
 from lakehouse.manifest_wire import encode_varint
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 class _Index:

@@ -27,18 +27,19 @@ from typing import TYPE_CHECKING, Final
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse import location_claims, objectfs, stored_objects
+from lakehouse import location_claims
 from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.history_fences import HistoryWork, TableHistory
 from lakehouse.lance_session import fresh_session, open_dataset
+from lakehouse.storage import objectfs, stored_objects
 from lakehouse.transactions import read_transaction
 
 
 if TYPE_CHECKING:
     import lance
 
-    from lakehouse.storage_options import StorageOptions
+    from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

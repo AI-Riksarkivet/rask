@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 
 from catalog.core.config import Settings
-from lakehouse.governed.store_credential import StoreCredentialUnavailableError
+from lakehouse.storage.credential import StoreCredentialUnavailableError
 from lineage.core.config import LineageSettings
 from maintenance.core.config import MaintenanceSettings
 

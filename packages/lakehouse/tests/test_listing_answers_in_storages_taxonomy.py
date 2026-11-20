@@ -1,7 +1,7 @@
 """Storage's key listing answers in storage's OWN taxonomy (PS-02).
 
 `storage.errors` exists so that no caller of this package imports botocore: a missing bucket reaches the caller as
-:class:`storage.BucketNotFoundError`, not a raw `botocore.exceptions.ClientError` it cannot name.
+:class:`lakehouse.storage.errors.BucketNotFoundError`, not a raw `botocore.exceptions.ClientError` it cannot name.
 """
 
 from __future__ import annotations
@@ -9,7 +9,8 @@ from __future__ import annotations
 import pytest
 from moto import mock_aws
 
-from lakehouse.storage import BucketNotFoundError, iter_keys
+from lakehouse.storage.errors import BucketNotFoundError
+from lakehouse.storage.s3 import iter_keys
 
 
 @mock_aws

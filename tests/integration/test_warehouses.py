@@ -30,9 +30,9 @@ from lakehouse.governed import fga as fga_module
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.options import StorageOptions
 from lakehouse.warehouse_records import WarehouseRecord
 from tests import seeding
 
@@ -610,7 +610,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     # (`upsert_warehouse` → `mutate_json` → `read_json`), so counting `get_warehouse` calls stopped
     # measuring anything. Count where the work actually happens now; the property under test —
     # "the store, not the guard, refused" — is unchanged.
-    from lakehouse import records as rec
+    from lakehouse.storage import conditional_records as rec
 
     real_read_json = rec.read_json
     conditional_reads = {"n": 0}

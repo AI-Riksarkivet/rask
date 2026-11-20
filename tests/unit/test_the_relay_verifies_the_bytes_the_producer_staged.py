@@ -21,7 +21,7 @@ from typing import Any, cast
 
 from lakehouse.events import outbox
 from lakehouse.events.cloud_events import lineage_envelope
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lineage.api import relay
 from lineage.core.config import LineageSettings, Signing
 from lineage.services.signature import store_published_keys

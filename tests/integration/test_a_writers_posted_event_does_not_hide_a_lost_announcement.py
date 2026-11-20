@@ -19,7 +19,7 @@ import pytest
 
 from catalog.services.commit_reconcile import announced
 from lakehouse import commit_records
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lineage.services.provenance import FEED_SCHEMA
 
 

@@ -19,10 +19,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from lakehouse.events.bus_delivery import Lane
 from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.governed.settings import GovernedAuthSettings
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import lance_storage_options
-from lakehouse.storage_options import StorageOptions, on_s3
-from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.options import StorageOptions, on_s3
+from lakehouse.storage.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
 
 
 class Signing(BaseSettings):

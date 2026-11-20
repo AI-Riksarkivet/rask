@@ -40,10 +40,10 @@ from pydantic import SecretStr
 
 from lakehouse import location_claims
 from lakehouse.events.lineage_events import DatasetUuids, dataset_uuids
-from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.maintenance_due import DueRecord, write_due
-from lakehouse.objectfs import lance_storage_options
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.options import StorageOptions
 from lakehouse.supervision import Supervisor
 from maintenance.core.config import get_settings
 from maintenance.services.queue import Task, TaskQueue

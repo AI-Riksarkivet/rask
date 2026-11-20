@@ -43,7 +43,7 @@ from lakehouse import commit_records, commit_turns, file_identities, history_fen
 from lakehouse.base_refs import decoded_path
 from lakehouse.governed import fga
 from lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

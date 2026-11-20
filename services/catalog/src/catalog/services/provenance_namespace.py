@@ -110,7 +110,7 @@ def keep_declared_retention(settings: Settings, *, canonical: str, namespace_uui
     declared, the policy this step wrote is removed while it stands as written. Blocking.
 
     Raises:
-        lakehouse.records.RecordChangedError: The record changed under every round of the set.
+        lakehouse.storage.conditional_records.RecordChangedError: The record changed under every round of the set.
     """
     root, options = settings.registry_root, settings.storage_options()
     if (retain := settings.provenance_retain_versions) is not None:

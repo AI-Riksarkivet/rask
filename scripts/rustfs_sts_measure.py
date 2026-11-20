@@ -32,8 +32,8 @@ from botocore.exceptions import ClientError
 from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse.record_store import get_record, put_record
-from lakehouse.storage import S3Client
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.client import S3Client
+from lakehouse.storage.options import StorageOptions
 
 
 ENDPOINT = sys.argv[1]

@@ -57,7 +57,7 @@ from lakehouse.events.control_events import (
     ControlAction,
     ControlObjectType,
 )
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

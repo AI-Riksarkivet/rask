@@ -17,7 +17,7 @@ these digests, so :func:`record_key` reproduces the old composition exactly — 
 ``sha256("<kind>:<canonical_id>")``, under ``<prefix>/<kind>-<digest>.json``. Changing it orphans every
 stored record; ``tests/unit/test_lakehouse_kernel_drain.py`` pins the shape.
 
-**Not the conditional seam.** :mod:`lakehouse.records` arbitrates contended writes through
+**Not the conditional seam.** :mod:`lakehouse.storage.conditional_records` arbitrates contended writes through
 the STORE (put-if-not-exists, ETag-guarded RMW) on caller-supplied plain keys — reach for that where a
 lost race would corrupt a registry. This module is the UNCONDITIONAL hashed-key half the four
 per-object registries need: overwrite-is-idempotent set, absent-or-malformed-reads-as-None get, and a
@@ -35,10 +35,10 @@ from typing import Any
 
 import pyarrow.fs as pafs
 
-from lakehouse import stored_objects
-from lakehouse.objectfs import fs_and_base
-from lakehouse.storage import split_s3_uri
-from lakehouse.storage_options import StorageOptions, object_client, on_s3
+from lakehouse.storage import stored_objects
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions, object_client, on_s3
+from lakehouse.storage.uri import split_s3_uri
 
 
 log = logging.getLogger(__name__)

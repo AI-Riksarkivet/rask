@@ -10,7 +10,7 @@ on one dataset a destructive drop of either deletes the bytes the other still re
 THE STORE PICKS ONE HOLDER INSTEAD. A claim is one JSON record per location, keyed by the sha256 of the
 path the location decodes to (:func:`lakehouse.base_refs.decoded_path`, so the catalog's
 percent-encoded spelling and the decoded directory are one key), created put-if-not-exists and handed
-over under its ETag (:mod:`lakehouse.records`) — the ``claim_bucket`` precedent applied to a
+over under its ETag (:mod:`lakehouse.storage.conditional_records`) — the ``claim_bucket`` precedent applied to a
 table location. A catalog with a relational store answers the same question inside its create transaction (a
 location overlapping another table's is refused); this estate has none, so the object store's conditional write is
 the transaction.
@@ -20,7 +20,7 @@ every write to it is conditional on the record its writer judged: a release repl
 the same claim stamped ``released_at``, which :func:`holder` and :func:`take` read as a free location. A
 hand-over landing between a release's read and its write fails the release's replace, and the release,
 judging the claim it then reads, leaves the new holder's claim in place and answers that it released
-nothing. The two conditional writes :mod:`lakehouse.records` makes (create-if-absent and
+nothing. The two conditional writes :mod:`lakehouse.storage.conditional_records` makes (create-if-absent and
 replace-if-the-ETag-matches) are all the estate requires of its object store, and a conditional delete is
 not one of them; an unconditional delete removes whatever claim was written after the read. So nothing
 removes a released record, and a released location keeps one small one.
@@ -61,7 +61,7 @@ under the new name, or hands the claim back under its token. Pinned by
 ``tests/integration/test_concurrent_renames_leave_one_id_per_location.py``.
 
 A LEASE IS TIMED ON THE STORE'S CLOCK ([[LH-413]]). ``claimed_at``, a fence's ``at`` and ``released_at`` are stamped
-with the clock of the read each write follows (:attr:`lakehouse.records.StoreRead.at`, the store's
+with the clock of the read each write follows (:attr:`lakehouse.storage.conditional_records.StoreRead.at`, the store's
 ``Date``), and a lease is judged against the clock of the read that finds the claim, so a claim one pod wrote is aged by
 the same clock on every pod that reads it.
 
@@ -83,9 +83,10 @@ from datetime import datetime, timedelta
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import control_prefixes, record_store, records
+from lakehouse import control_prefixes, record_store
 from lakehouse.base_refs import decoded_path
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -188,7 +189,7 @@ def holder(store: ClaimStore, location: str) -> LocationClaim | None:
     Raises:
         ValueError: The stored record is not a claim (pydantic's ``ValidationError`` is one).
     """
-    found = records.read_json(store.control_root, store.storage_options, claim_key(location))
+    found = conditional_records.read_json(store.control_root, store.storage_options, claim_key(location))
     if found is None:
         return None
     claim = LocationClaim.model_validate(found[0])
@@ -230,7 +231,7 @@ def read(store: ClaimStore, location: str) -> ClaimRead | None:
     Raises:
         ValueError: The stored record is not a claim (pydantic's ``ValidationError`` is one).
     """
-    found = records.read_json_at(store.control_root, store.storage_options, claim_key(location))
+    found = conditional_records.read_json_at(store.control_root, store.storage_options, claim_key(location))
     if found.stored is None:
         return None
     return ClaimRead(claim=LocationClaim.model_validate(found.stored.record), etag=found.stored.etag)
@@ -239,7 +240,7 @@ def read(store: ClaimStore, location: str) -> ClaimRead | None:
 def store_now(store: ClaimStore, location: str) -> datetime:
     """The store's clock now, read off the location's key: what a write acting on an earlier read stamps and judges by,
     since that read can be as old as the request that made it."""
-    return records.read_json_at(store.control_root, store.storage_options, claim_key(location)).at
+    return conditional_records.read_json_at(store.control_root, store.storage_options, claim_key(location)).at
 
 
 def _taken(
@@ -319,17 +320,17 @@ def take(
     Raises:
         LocationFencedError: Another request is acting on the location's holder.
         LocationHeldError: Another table holds the location.
-        records.RecordChangedError: The claim kept changing under the hand-over.
+        conditional_records.RecordChangedError: The claim kept changing under the hand-over.
     """
     key = claim_key(location)
     # Read first, so even a create is stamped on the store's clock; each round re-judges the claim another taker wrote.
     for _ in range(_TAKE_ATTEMPTS):
-        found = records.read_json_at(store.control_root, store.storage_options, key)
+        found = conditional_records.read_json_at(store.control_root, store.storage_options, key)
         if found.stored is None:
             fresh = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), uuid=uuid, claimed_at=found.at, token=token)
             try:
-                records.create_json(store.control_root, store.storage_options, key, fresh.model_dump(mode="json"))
-            except records.RecordExistsError:
+                conditional_records.create_json(store.control_root, store.storage_options, key, fresh.model_dump(mode="json"))
+            except conditional_records.RecordExistsError:
                 continue
             return fresh
         current = LocationClaim.model_validate(found.stored.record)
@@ -337,11 +338,11 @@ def take(
         if held is current:
             return current
         try:
-            records.replace_json(store.control_root, store.storage_options, key, held.model_dump(mode="json"), etag=found.stored.etag)
-        except records.RecordChangedError:
+            conditional_records.replace_json(store.control_root, store.storage_options, key, held.model_dump(mode="json"), etag=found.stored.etag)
+        except conditional_records.RecordChangedError:
             continue
         return held
-    raise records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept changing across {_TAKE_ATTEMPTS} attempts")
+    raise conditional_records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept changing across {_TAKE_ATTEMPTS} attempts")
 
 
 def _write_over(store: ClaimStore, location: str, read_as: ClaimRead | None, claim: LocationClaim) -> None:
@@ -353,10 +354,10 @@ def _write_over(store: ClaimStore, location: str, read_as: ClaimRead | None, cla
     key, body = claim_key(location), claim.model_dump(mode="json")
     try:
         if read_as is None:
-            records.create_json(store.control_root, store.storage_options, key, body)
+            conditional_records.create_json(store.control_root, store.storage_options, key, body)
         else:
-            records.replace_json(store.control_root, store.storage_options, key, body, etag=read_as.etag)
-    except (records.RecordExistsError, records.RecordChangedError):
+            conditional_records.replace_json(store.control_root, store.storage_options, key, body, etag=read_as.etag)
+    except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
         raise ClaimChangedError(f"the claim on {decoded_path(location)!r} changed since it was read") from None
 
 
@@ -432,7 +433,7 @@ def lift_fence(store: ClaimStore, location: str, token: str) -> None:
     """Lift request ``token``'s fence from ``location``'s claim; a claim it no longer fences is left as it is.
 
     Raises:
-        records.RecordChangedError: The claim kept changing under the lift.
+        conditional_records.RecordChangedError: The claim kept changing under the lift.
     """
 
     def _lifted(raw: dict[str, object]) -> dict[str, object]:
@@ -442,8 +443,8 @@ def lift_fence(store: ClaimStore, location: str, token: str) -> None:
         return current.model_copy(update={"fence": None}).model_dump(mode="json")
 
     try:
-        records.mutate_json(store.control_root, store.storage_options, claim_key(location), _lifted)
-    except (records.RecordMissingError, _NotHeld):
+        conditional_records.mutate_json(store.control_root, store.storage_options, claim_key(location), _lifted)
+    except (conditional_records.RecordMissingError, _NotHeld):
         return
 
 
@@ -464,7 +465,7 @@ def release(store: ClaimStore, location: str, table: str, *, uuid: str | None = 
     its own, and a release by name alone, landing after that take, frees the new table's location while it stands.
 
     Raises:
-        records.RecordChangedError: The claim kept changing under the release.
+        conditional_records.RecordChangedError: The claim kept changing under the release.
     """
     return _release_where(store, location, lambda current: current.table == table and (uuid is None or current.uuid == uuid))
 
@@ -475,11 +476,11 @@ def _release_where(store: ClaimStore, location: str, owned: Callable[[LocationCl
     Re-judged on every round, as a take is: a claim written since the read is judged afresh.
 
     Raises:
-        records.RecordChangedError: The claim kept changing under the release.
+        conditional_records.RecordChangedError: The claim kept changing under the release.
     """
     key = claim_key(location)
     for _ in range(_TAKE_ATTEMPTS):
-        found = records.read_json_at(store.control_root, store.storage_options, key)
+        found = conditional_records.read_json_at(store.control_root, store.storage_options, key)
         if found.stored is None:
             return False
         current = LocationClaim.model_validate(found.stored.record)
@@ -487,11 +488,11 @@ def _release_where(store: ClaimStore, location: str, owned: Callable[[LocationCl
             return False
         released = current.model_copy(update={"released_at": found.at}).model_dump(mode="json")
         try:
-            records.replace_json(store.control_root, store.storage_options, key, released, etag=found.stored.etag)
-        except records.RecordChangedError:
+            conditional_records.replace_json(store.control_root, store.storage_options, key, released, etag=found.stored.etag)
+        except conditional_records.RecordChangedError:
             continue
         return True
-    raise records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept changing across {_TAKE_ATTEMPTS} attempts")
+    raise conditional_records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept changing across {_TAKE_ATTEMPTS} attempts")
 
 
 def directory_holder_stands(store: ClaimStore, claim: LocationClaim) -> bool:
@@ -535,11 +536,11 @@ def take_directory(store: ClaimStore, directory: str, claimant: DirectoryClaiman
     Raises:
         LocationHeldError: Another table holds the directory.
         ValueError: The stored record is not a claim.
-        records.RecordChangedError: The claim kept changing under the take.
+        conditional_records.RecordChangedError: The claim kept changing under the take.
     """
     key = claim_key(directory)
     for _ in range(_TAKE_ATTEMPTS):
-        found = records.read_json_at(store.control_root, store.storage_options, key)
+        found = conditional_records.read_json_at(store.control_root, store.storage_options, key)
         mine = LocationClaim(
             location=decoded_path(directory),
             table=claimant.table,
@@ -550,8 +551,8 @@ def take_directory(store: ClaimStore, directory: str, claimant: DirectoryClaiman
         )
         if found.stored is None:
             try:
-                records.create_json(store.control_root, store.storage_options, key, mine.model_dump(mode="json"))
-            except records.RecordExistsError:
+                conditional_records.create_json(store.control_root, store.storage_options, key, mine.model_dump(mode="json"))
+            except conditional_records.RecordExistsError:
                 continue
             return mine
         current = LocationClaim.model_validate(found.stored.record)
@@ -560,11 +561,11 @@ def take_directory(store: ClaimStore, directory: str, claimant: DirectoryClaiman
         if current.released_at is None and (current.within_lease(found.at) or directory_holder_stands(store, current)):
             raise LocationHeldError(current)
         try:
-            records.replace_json(store.control_root, store.storage_options, key, mine.model_dump(mode="json"), etag=found.stored.etag)
-        except records.RecordChangedError:
+            conditional_records.replace_json(store.control_root, store.storage_options, key, mine.model_dump(mode="json"), etag=found.stored.etag)
+        except conditional_records.RecordChangedError:
             continue
         return mine
-    raise records.RecordChangedError(f"the claim on {decoded_path(directory)!r} kept changing across {_TAKE_ATTEMPTS} attempts")
+    raise conditional_records.RecordChangedError(f"the claim on {decoded_path(directory)!r} kept changing across {_TAKE_ATTEMPTS} attempts")
 
 
 def release_directory(store: ClaimStore, directory: str, *, uuid: str | None) -> bool:
@@ -575,6 +576,6 @@ def release_directory(store: ClaimStore, directory: str, *, uuid: str | None) ->
     claim records none can hold ([[LH-534]]).
 
     Raises:
-        records.RecordChangedError: The claim kept changing under the release.
+        conditional_records.RecordChangedError: The claim kept changing under the release.
     """
     return _release_where(store, directory, lambda current: current.uuid == uuid)

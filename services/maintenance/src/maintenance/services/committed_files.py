@@ -5,7 +5,7 @@ vend may also delete one. Lance checks no file's content: measured on pylance 13
 file is served silently, while Lance requires a published payload to stay immutable while a protected snapshot references
 it (``lance_docs/lance/format/table/blob.md:254-257``). The catalog records every file a commit adds, with its ETag and
 size, before the version lands (``lakehouse.file_identities``), and each pass of the table reads them all again, off one
-listing of its root (:func:`lakehouse.stored_objects.listed_identities`): a request per thousand objects, not one per file.
+listing of its root (:func:`lakehouse.storage.stored_objects.listed_identities`): a request per thousand objects, not one per file.
 The store's own event of a write under the table holds that pass early (:mod:`maintenance.services.store_events`).
 
 A recorded file is named when the store holds it with another ETag or size, or no longer holds it while a retained
@@ -28,10 +28,11 @@ from collections.abc import Callable, Iterable
 import lance
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import file_identities, stored_objects
+from lakehouse import file_identities
 from lakehouse.base_refs import decoded_path
 from lakehouse.branch_layout import BRANCH_CONTAINER
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import stored_objects
+from lakehouse.storage.options import StorageOptions
 from lakehouse.transactions import read_transaction
 from maintenance.services import base_reclaim
 

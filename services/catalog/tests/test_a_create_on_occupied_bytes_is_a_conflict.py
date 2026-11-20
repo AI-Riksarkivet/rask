@@ -37,7 +37,7 @@ import pytest
 from lance_namespace import TableAlreadyExistsError
 
 from catalog.services import dataplane
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 def _arrow_table() -> pa.Table:

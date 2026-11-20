@@ -23,7 +23,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, DropNamespaceRequest, connect
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
 

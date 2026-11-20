@@ -21,7 +21,7 @@ from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse, La
 from moto.server import ThreadedMotoServer
 
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 @pytest.fixture(scope="module")

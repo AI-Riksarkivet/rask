@@ -30,8 +30,8 @@ import pytest
 from catalog.services import warehouses
 from catalog.services.control_records import ProtectionChange
 from lakehouse.project_records import ProjectRecord
-from lakehouse.records import RecordChangedError, RecordMissingError
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordChangedError, RecordMissingError
+from lakehouse.storage.options import StorageOptions
 from lakehouse.warehouse_records import WarehouseRecord
 from tests import seeding
 
@@ -67,7 +67,7 @@ def test_a_deactivate_that_lands_INSIDE_the_write_window_is_not_overwritten(cont
     deactivate therefore never fires, and the final status is `active` — red, for the right reason.
     """
     _seed(control_root)
-    from lakehouse import records as rec
+    from lakehouse.storage import conditional_records as rec
 
     real_replace = rec._replace_json
     fired = {"n": 0}
@@ -172,7 +172,7 @@ def test_a_protection_arm_that_lands_mid_recreate_is_not_reverted(control_root: 
     an unconditional write no window to lose.
     """
     from catalog.services import projects
-    from lakehouse import records as rec
+    from lakehouse.storage import conditional_records as rec
 
     _seed_project(control_root)
     real_replace = rec._replace_json

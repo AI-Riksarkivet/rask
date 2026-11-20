@@ -37,7 +37,7 @@ import lance_namespace
 import pytest
 
 from catalog.services import warehouses
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
 

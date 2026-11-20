@@ -37,7 +37,7 @@ from lakehouse.governed import fga as fga_module
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.storage.credential import S3KeyPair
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 

@@ -41,10 +41,11 @@ from typing import Any, Final, Literal, Self
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from lakehouse import control_prefixes, records, stored_objects, warehouse_records
+from lakehouse import control_prefixes, warehouse_records
 from lakehouse.record_store import delete_record, list_records, put_record, read_record, record_key
-from lakehouse.storage import split_s3_uri
-from lakehouse.storage_options import StorageOptions, on_s3
+from lakehouse.storage import conditional_records, stored_objects
+from lakehouse.storage.options import StorageOptions, on_s3
+from lakehouse.storage.uri import split_s3_uri
 
 
 log = logging.getLogger(__name__)
@@ -201,13 +202,13 @@ def set_policy(
 
     Raises:
         MalformedPolicyError: A JSON object is stored under ``key`` and cannot be read as a policy record.
-        records.RecordChangedError: Every round lost to another write.
+        conditional_records.RecordChangedError: Every round lost to another write.
         OSError: The store refused a read or the write.
     """
     full_key = record_key(PREFIX, kind, key)
     for _ in range(_SET_ATTEMPTS):
         try:
-            stored = records.read_json_at(control_root, storage_options, full_key).stored
+            stored = conditional_records.read_json_at(control_root, storage_options, full_key).stored
         except ValueError:
             record = compose(None)
             put_record(control_root, storage_options, full_key, record.stored())
@@ -215,14 +216,14 @@ def set_policy(
         try:
             if stored is None:
                 record = compose(None)
-                records.create_json(control_root, storage_options, full_key, record.stored())
+                conditional_records.create_json(control_root, storage_options, full_key, record.stored())
             else:
                 record = compose(read(stored.record, at=full_key))
-                records.replace_json(control_root, storage_options, full_key, record.stored(), etag=stored.etag)
-        except (records.RecordExistsError, records.RecordChangedError):
+                conditional_records.replace_json(control_root, storage_options, full_key, record.stored(), etag=stored.etag)
+        except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
             continue
         return record
-    raise records.RecordChangedError(f"the {kind} policy {key} kept changing across {_SET_ATTEMPTS} attempts")
+    raise conditional_records.RecordChangedError(f"the {kind} policy {key} kept changing across {_SET_ATTEMPTS} attempts")
 
 
 def get_policy(control_root: str, storage_options: StorageOptions, kind: PolicyKind, key: str) -> PolicyRecord | None:

@@ -28,7 +28,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
 

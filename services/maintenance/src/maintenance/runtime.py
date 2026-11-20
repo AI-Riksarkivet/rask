@@ -23,7 +23,7 @@ from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, mak
 from lakehouse.health import Dependency, HealthWatch, store_dependency
 from lakehouse.lance_metrics import instrument_lance_if_available
 from lakehouse.schemas.health import Readiness, ReadinessStatus
-from lakehouse.store_session import require_env_pair, start_store_session
+from lakehouse.storage.store_session import require_env_pair, start_store_session
 from lakehouse.supervision import Supervisor
 from maintenance.core.config import MaintenanceSettings, MaintenanceStore
 from maintenance.core.lineage_emit import MaintenanceEmitter, make_emitter

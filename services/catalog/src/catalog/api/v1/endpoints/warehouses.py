@@ -104,8 +104,9 @@ from lakehouse.governed import fga
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.ns_errors import PartiallyApplied, status_for
-from lakehouse.records import RecordExistsError, RecordMissingError
-from lakehouse.storage import s3_client, split_s3_uri
+from lakehouse.storage.client import s3_client
+from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError
+from lakehouse.storage.uri import split_s3_uri
 from lakehouse.trash import TrashRecord
 from lakehouse.warehouse_records import WarehouseRecord
 

@@ -35,12 +35,12 @@ from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
 from lakehouse import location_claims, maintenance_policies
-from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.objectfs import lance_storage_options
 from lakehouse.record_store import record_key
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.options import StorageOptions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import expiry, table_pass

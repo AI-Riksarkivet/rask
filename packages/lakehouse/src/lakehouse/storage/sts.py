@@ -11,7 +11,7 @@ instead of failing the vend.
 from typing import Any
 
 
-# Public alias for the boto3 STS client, mirroring `lakehouse.storage.S3Client`: boto3 ships no public stubs,
+# Public alias for the boto3 STS client, mirroring `lakehouse.storage.client.S3Client`: boto3 ships no public stubs,
 # so this resolves to `Any` at the type level and callers get a name without reaching into
 # `mypy_boto3_sts`.
 type STSClient = Any
@@ -45,3 +45,9 @@ def sts_client(*, region: str, endpoint: str | None = None) -> Any:  # noqa: ANN
         signature_version=UNSIGNED,
     )
     return boto3.client("sts", region_name=region, endpoint_url=endpoint, config=cfg)
+
+
+__all__ = [
+    "STSClient",
+    "sts_client",
+]

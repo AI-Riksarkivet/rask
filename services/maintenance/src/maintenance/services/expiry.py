@@ -31,8 +31,8 @@ from lakehouse.features import (
 )
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.lance_session import open_dataset
-from lakehouse.storage_options import StorageOptions
-from lakehouse.stored_objects import delete_objects, list_under_at, recording_removed_transactions
+from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.stored_objects import delete_objects, list_under_at, recording_removed_transactions
 from maintenance.core.config import shared_lance_session
 from maintenance.core.metrics import CatalogRefusal
 from maintenance.services import base_reclaim
@@ -323,7 +323,7 @@ class LostManifests(BaseModel):
     put_at: dict[str, datetime]
     #: The detached ones among them, which are kept :data:`DETACHED_MANIFEST_GRACE` at least.
     detached: frozenset[str] = frozenset()
-    #: The store's clock at the listing (:attr:`lakehouse.stored_objects.StoreListing.at`).
+    #: The store's clock at the listing (:attr:`lakehouse.storage.stored_objects.StoreListing.at`).
     at: datetime
 
     def _due(self, path: str, grace: timedelta) -> datetime:

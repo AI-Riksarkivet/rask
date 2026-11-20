@@ -42,9 +42,9 @@ from lance.dataset import Transaction
 from pydantic import SecretStr
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import lance_storage_options
-from lakehouse.storage import S3Client
+from lakehouse.storage.client import S3Client
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
 
 
 _INVALID_INPUT = 13

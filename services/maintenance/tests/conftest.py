@@ -16,7 +16,7 @@ from moto.server import ThreadedMotoServer
 from lakehouse import location_claims
 from lakehouse.base_refs import normalise
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass

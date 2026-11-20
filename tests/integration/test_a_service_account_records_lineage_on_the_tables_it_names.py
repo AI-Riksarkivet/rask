@@ -45,7 +45,7 @@ from lakehouse.events.openlineage import SYMLINKS_FACET_SCHEMA_URL, author_facet
 from lakehouse.governed import fga
 from lakehouse.governed.decider import MAX_OBJECTS_PER_QUESTION
 from lakehouse.naming import location_identifier
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event
 from tests.integration.store_requests import CountedStore, counted
 

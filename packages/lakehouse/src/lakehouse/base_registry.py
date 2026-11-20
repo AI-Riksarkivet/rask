@@ -35,11 +35,12 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from lakehouse import clone_sources, control_prefixes, location_claims, records
+from lakehouse import clone_sources, control_prefixes, location_claims
 from lakehouse.base_refs import decoded_path, key_uri, location_in_store, names_a_location, normalise, store_of
 from lakehouse.features import BasePathRef
 from lakehouse.record_store import delete_record, record_key
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -215,7 +216,7 @@ def read_base_record(registry: BaseRegistry, location: str) -> BaseRecord | None
             another location.
     """
     try:
-        found = records.read_json(registry.control_root, registry.storage_options, record_key_for(location))
+        found = conditional_records.read_json(registry.control_root, registry.storage_options, record_key_for(location))
     except ValueError as exc:  # a stored record that is not JSON
         raise UnreadableBaseRecordError(f"the base record for {normalise(location)!r} cannot be read: {exc}") from exc
     return None if found is None else _parsed(found[0], location)
@@ -253,19 +254,19 @@ def claim_bases(registry: BaseRegistry, location: str, entries: Sequence[Recorde
     still has a record — and otherwise adds the missing entries under the record's ETag. An entry
     already present (same :attr:`RecordedBase.identity`) costs no write.
 
-    The store arbitrates both writes (``records.create_json`` put-if-not-exists, ``records.mutate_json``
+    The store arbitrates both writes (``conditional_records.create_json`` put-if-not-exists, ``conditional_records.mutate_json``
     ETag-guarded), so two doors claiming one location converge instead of one overwriting the other.
 
     Raises:
         UnreadableBaseRecordError: The existing record cannot be read.
-        records.RecordChangedError: The record kept changing under the add.
+        conditional_records.RecordChangedError: The record kept changing under the add.
     """
     wanted = BaseRecord(location=location, entries=_distinct(entries))
     key = record_key_for(location)
     for _ in range(_CLAIM_ATTEMPTS):
         try:
-            records.create_json(registry.control_root, registry.storage_options, key, wanted.model_dump(mode="json"))
-        except records.RecordExistsError:
+            conditional_records.create_json(registry.control_root, registry.storage_options, key, wanted.model_dump(mode="json"))
+        except conditional_records.RecordExistsError:
             pass
         else:
             return BaseClaim(location=wanted.location, created=True, added=wanted.entries)
@@ -277,10 +278,10 @@ def claim_bases(registry: BaseRegistry, location: str, entries: Sequence[Recorde
             return BaseClaim(location=wanted.location, created=False)
         try:
             added = _add_missing(registry, key, wanted)
-        except records.RecordMissingError:
+        except conditional_records.RecordMissingError:
             continue
         return BaseClaim(location=wanted.location, created=False, added=added)
-    raise records.RecordChangedError(f"the base record for {wanted.location!r} kept appearing and disappearing across {_CLAIM_ATTEMPTS} attempts")
+    raise conditional_records.RecordChangedError(f"the base record for {wanted.location!r} kept appearing and disappearing across {_CLAIM_ATTEMPTS} attempts")
 
 
 #: The pin of an entry a record does not hold, which equals no entry's.
@@ -304,7 +305,7 @@ def _add_missing(registry: BaseRegistry, key: str, wanted: BaseRecord) -> list[R
         kept = [entry for entry in record.entries if entry.identity not in replaced]
         return BaseRecord(location=record.location, entries=[*kept, *added]).model_dump(mode="json")
 
-    records.mutate_json(registry.control_root, registry.storage_options, key, _add)
+    conditional_records.mutate_json(registry.control_root, registry.storage_options, key, _add)
     return added
 
 
@@ -328,8 +329,8 @@ def release_claim(registry: BaseRegistry, claim: BaseClaim) -> None:
         return BaseRecord(location=record.location, entries=[entry for entry in record.entries if entry.identity not in removed]).model_dump(mode="json")
 
     try:
-        records.mutate_json(registry.control_root, registry.storage_options, key, _remove)
-    except records.RecordMissingError:
+        conditional_records.mutate_json(registry.control_root, registry.storage_options, key, _remove)
+    except conditional_records.RecordMissingError:
         return
 
 

@@ -25,7 +25,7 @@ from catalog.api.v1.endpoints import data as door
 from catalog.core.config import Settings
 from catalog.services.dataplane import create_table
 from lakehouse.ns_errors import install_problem_handlers
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 _ROWS = 10

@@ -49,7 +49,7 @@ from catalog.core.lineage_emit import INSERT, build_write_event
 from lakehouse.events import outbox
 from lakehouse.events.signing import SigningKey, attach_signature
 from lakehouse.governed.signing_key import signing_key_secret
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
@@ -153,7 +153,7 @@ def _kill_producer_mid_flight(event_json: str, run_id: str) -> None:
         sys.path.insert(0, {os.path.join(os.getcwd(), "services")!r})
         from lakehouse.events import outbox
         from lakehouse.events.cloud_events import lineage_envelope
-        from lakehouse.storage_options import StorageOptions
+        from lakehouse.storage.options import StorageOptions
         so = StorageOptions.from_flat(json.loads(sys.stdin.readline()))
         event_json = {event_json!r}
         outbox.stage_envelope({OUTBOX_URI!r}, so, lineage_envelope(json.loads(event_json)))

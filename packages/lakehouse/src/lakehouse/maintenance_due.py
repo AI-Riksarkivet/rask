@@ -16,12 +16,13 @@ from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from lakehouse import control_prefixes, stored_objects
+from lakehouse import control_prefixes
 from lakehouse.record_store import delete_record, get_record, put_record, record_key
+from lakehouse.storage import stored_objects
 
 
 if TYPE_CHECKING:
-    from lakehouse.storage_options import StorageOptions
+    from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

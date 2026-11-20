@@ -17,7 +17,7 @@ def test_s3_client_retries_transient_errors_to_the_configured_attempts(monkeypat
     from botocore.compat import HTTPHeaders
     from botocore.exceptions import ClientError
 
-    from lakehouse.storage import s3_client
+    from lakehouse.storage.client import s3_client
 
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
@@ -48,11 +48,11 @@ def test_s3_client_retries_transient_errors_to_the_configured_attempts(monkeypat
 def test_s3_client_region_overrides_the_env_for_this_client_only(monkeypatch):
     """A per-store region must reach the client, or every backend is pinned to `AWS_REGION`.
 
-    The callers holding a region of their own (`lakehouse.records`, whose
+    The callers holding a region of their own (`lakehouse.storage.conditional_records`, whose
     `storage_options` carry one per warehouse) had no way to pass it through this seam, which is
     exactly what kept them on a hand-rolled `boto3.client`. Omitted still resolves from the env.
     """
-    from lakehouse.storage import s3_client
+    from lakehouse.storage.client import s3_client
 
     monkeypatch.setenv("AWS_REGION", "us-east-1")
 
@@ -64,7 +64,7 @@ def test_s3_client_forwards_a_session_token():
     """Vended temporary credentials are a TRIPLE, and dropping the token is not a visible failure:
     SigV4 signs happily with the key pair alone and the store answers 403 `InvalidAccessKeyId`, which
     reads as a credential problem rather than as a client that discarded a field it was handed."""
-    from lakehouse.storage import s3_client
+    from lakehouse.storage.client import s3_client
 
     client = s3_client("http://rf:9000", access_key="ak", secret_key="sk", session_token="tok")
 
@@ -78,7 +78,7 @@ def test_s3_client_refuses_a_session_token_without_its_key_pair():
     Refusing at the seam turns that into an exception at the one place that can still name it."""
     import pytest
 
-    from lakehouse.storage import s3_client
+    from lakehouse.storage.client import s3_client
 
     with pytest.raises(ValueError, match="session_token"):
         s3_client("http://rf:9000", session_token="tok")
@@ -89,7 +89,7 @@ def test_s3_client_refuses_a_session_token_without_its_key_pair():
     [pytest.param("http://rask", "http://rask", id="set"), pytest.param("", None, id="empty-is-unset")],
 )
 def test_configured_endpoint_reads_its_one_name_and_takes_empty_as_unset(monkeypatch: pytest.MonkeyPatch, value: str, expected: str | None) -> None:
-    from lakehouse.storage import configured_endpoint
+    from lakehouse.storage.client import configured_endpoint
 
     monkeypatch.setenv("RASK_S3_ENDPOINT_URL", value)
 

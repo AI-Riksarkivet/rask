@@ -4,7 +4,7 @@ A guard's refusal to judge evidence it cannot read shows only on evidence that i
 manifest that does not decode, a registry record that is not JSON. No credential a test holds writes either (a write vend
 Denies every final manifest, `catalog.core.vending.build_session_policy`; the registry is the catalog's alone), so the
 fault is written by a process in the catalog's own container, which exchanges the pod's projected ServiceAccount token
-for a session as the catalog's lifespan does (`lakehouse.store_session.start_store_session`). No root key is used.
+for a session as the catalog's lifespan does (`lakehouse.storage.store_session.start_store_session`). No root key is used.
 
 `planted` writes junk at one key, yields while the test asks the door, and in the same process puts back what was there
 (or removes the key it made) and reads it back equal: the window during which the fault stands is the test's request.
@@ -31,8 +31,8 @@ ANSWER_SECONDS = 60.0
 _IN_POD = """
 import asyncio, sys
 from catalog.core.config import get_settings
-from lakehouse.objectfs import fs_and_base
-from lakehouse.store_session import start_store_session
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.store_session import start_store_session
 from lakehouse.supervision import Supervisor
 
 JUNK = b"planted by tests/e2e-py/plant.py: not a manifest, not a record"

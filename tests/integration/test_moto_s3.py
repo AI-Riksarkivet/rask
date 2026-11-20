@@ -21,8 +21,8 @@ from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
 from lakehouse.base_refs import decoded_path, normalise
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.objectfs import lance_storage_options
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -528,7 +528,8 @@ def test_a_drop_whose_delete_fails_keeps_the_bytes_held_for_the_purge(moto_clien
     its location, the residue record stands, and it keeps the location's claim once the drop's fence lapses: no
     register adopts the bytes, and no undrop restores them."""
     from catalog.core.config import get_settings
-    from lakehouse import stored_objects, trash
+    from lakehouse import trash
+    from lakehouse.storage import stored_objects
 
     prefix = uuid.uuid4().hex[:8]
     namespace = f"lance_catalog$lh532r{prefix}"

@@ -26,8 +26,8 @@ from lance.dataset import DatasetBasePath
 
 from lakehouse import features
 from lakehouse.manifest_wire import ManifestWireError
-from lakehouse.objectfs import dataset_root_probe, same_store_uri
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.objectfs import dataset_root_probe, same_store_uri
+from lakehouse.storage.options import StorageOptions
 
 
 def _table(n: int = 20) -> pa.Table:

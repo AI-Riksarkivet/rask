@@ -27,7 +27,7 @@ from botocore.config import Config
 from botocore.exceptions import ClientError
 from scratch_tenant import CATALOG, DEX, Identity, Tenant, provisioned
 
-from lakehouse.storage_options import ENDPOINT
+from lakehouse.storage.options import ENDPOINT
 
 
 pytestmark = [

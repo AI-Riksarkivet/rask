@@ -24,7 +24,7 @@ its recreated parent (``a1b_child_branch_release.py``). The descendants' own com
 the grace period to copy them out (owner, 2026-10-10).
 
 **ONE CLAIM PER RELEASE ACROSS REPLICAS.** A tick that outlasts its window can overlap the next on another replica, so
-a tick claims a record by an ETag-guarded write (:func:`lakehouse.records.mutate_json`) carrying a lease; a replica that
+a tick claims a record by an ETag-guarded write (:func:`lakehouse.storage.conditional_records.mutate_json`) carrying a lease; a replica that
 loses the write, or finds the lease live, leaves the record alone.
 
 **THE PREDICATE IS NEVER STORED.** It names the subject, and a record on the control root would be one more
@@ -45,8 +45,8 @@ from catalog.services.erasure import Pin
 from lakehouse import control_prefixes
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.record_store import delete_record, list_records
-from lakehouse.records import RecordChangedError, RecordMissingError, create_json, mutate_json, read_json
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordChangedError, RecordMissingError, create_json, mutate_json, read_json
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

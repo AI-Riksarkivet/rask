@@ -2,7 +2,7 @@
 
 The warehouse registry and the project registry are the same shape: one JSON object per record, at a plain (unhashed)
 key under the control root, no DB. Reading one is about neither registry, so both import it from here. Every write is
-conditional (mint-iff-absent, ETag-guarded mutate) and lives in ``lakehouse.records``.
+conditional (mint-iff-absent, ETag-guarded mutate) and lives in ``lakehouse.storage.conditional_records``.
 
 All IO here is BLOCKING; callers threadpool it.
 """
@@ -15,9 +15,9 @@ import logging
 from lance_namespace import InternalError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from lakehouse.objectfs import fs_and_base
 from lakehouse.protection import is_protected
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

@@ -85,7 +85,7 @@ from lance_namespace_urllib3_client.exceptions import ApiException
 from pydantic import BaseModel, ConfigDict, Field
 from refusals import body_of, names_in, problem_code
 
-from lakehouse.storage_options import ENDPOINT
+from lakehouse.storage.options import ENDPOINT
 
 
 #: The spec the catalog serves: the doors this module drives, and the oracle for each one's request and answer.

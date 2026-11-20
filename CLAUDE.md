@@ -255,8 +255,8 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     services (`catalog`, `lineage`, `maintenance`) and by no client: what two or more of them share, organised by module (ADR 0224: code one service alone uses lives in that service, and the library is grouped by job one concern at a time). The
     lance app factory (`lakehouse.service_app.factory`) and what it installs: exceptions, the request's trace (ADR 0209), logging
     (`lakehouse.log_handler`), the probes and the drain, the body cap; the auth plane (`lakehouse.governed`); the naming and
-    the spec's error mapping (`naming`, `ns_errors`, `spec_routes`, `endpoint_scheme`); the input and credential guards
-    (`arrow_ipc`, `storage_options`); the catalog's records, registries and governance guards (protection, trash,
+    the spec's error mapping (`naming`, `ns_errors`, `spec_routes`); the input and credential guards
+    (`arrow_ipc`, `storage.options`); the catalog's records, registries and governance guards (protection, trash,
     history fences, retention); the table layout and feature checks; what every plane reads a Lance
     table by (`lakehouse.lancekit`: versions, filters, absence and the commit verdict); the events (`lakehouse.events`: `control_events`, `control_emit`, `signature_doors`, `lineage_events`,
     `cloud_events`, the CloudEvents envelope each event rides the bus in, `bus`, the one module
@@ -264,8 +264,10 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     the rule that settles a delivery by what its handling answers, the outbox seams (`outbox`), the OpenLineage builders in
     `openlineage`, the OpenLineage models in `openlineage_schemas`, and the Ed25519 signing and verifying seam in
     `signing`, `published_keys` and `door_verdict`; the address rule `governed.subjects` stays with the auth plane);
-    the store session; and the S3 client, STS and URI seam (`lakehouse.storage`: `s3_client`/`S3Client`,
-    `configured_endpoint`, `sts_client`, `iter_keys`, `split_s3_uri`, the `StorageError` family). A client reaches the
+    and the store (`lakehouse.storage`: the S3 and STS clients in `client` and `sts`, `iter_keys` in `s3`, `split_s3_uri`
+    in `uri`, the `StorageError` family in `errors`, the key pair in `credential`, `options`, `endpoint_scheme`, `objectfs`,
+    the store session in `store_session`, objects by key in `stored_objects`, and the writes the store arbitrates in
+    `conditional_records`). A client reaches the
     lakehouse through its doors and events, never by importing this package: the doors are `docs/*-openapi.json`, the
     events `docs/COMMIT-EVENTS.md`. The suite's process-global seams (the secret-read cache, the projected token files,
     strict respx) are autouse fixtures in the root `conftest.py`.

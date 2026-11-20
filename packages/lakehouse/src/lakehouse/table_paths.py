@@ -13,8 +13,8 @@ Every function that reads the store is BLOCKING IO; callers threadpool it.
 from __future__ import annotations
 
 from lakehouse.base_refs import decoded_path, normalise, store_of
-from lakehouse.storage_options import StorageOptions
-from lakehouse.stored_objects import StoredObject, list_under
+from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.stored_objects import StoredObject, list_under
 
 
 def spellings(location: str) -> tuple[str, str]:
@@ -29,7 +29,7 @@ def spellings(location: str) -> tuple[str, str]:
 def objects_at(location: str, storage_options: StorageOptions) -> list[StoredObject]:
     """Every object the table recorded at ``location`` holds, under both of its :func:`spellings`.
 
-    Listed by key and nothing else (:func:`lakehouse.stored_objects.list_under`), what a session scoped to the location
+    Listed by key and nothing else (:func:`lakehouse.storage.stored_objects.list_under`), what a session scoped to the location
     may ask.
     """
     found = {stored.path: stored for place in dict.fromkeys(spellings(location)) for stored in list_under(place, storage_options)}

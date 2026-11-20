@@ -25,7 +25,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, table_claims, warehouses
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AUDIT_LOGGER
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests import seeding
 from tests.integration.openfga_grants import Grants, act_as
 

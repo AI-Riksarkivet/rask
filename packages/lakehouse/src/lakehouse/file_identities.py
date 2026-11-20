@@ -32,11 +32,12 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from lakehouse import control_prefixes, stored_objects
-from lakehouse.objectfs import fs_and_base
+from lakehouse import control_prefixes
 from lakehouse.record_store import delete_record, put_record
-from lakehouse.records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import stored_objects
+from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -126,7 +127,7 @@ def recorded_and_copied(control_root: str, storage_options: StorageOptions, tabl
     rebuilt.
 
     THE COPY IS WRITTEN ONLY OVER THE COPY THIS CALL READ: under its ETag, or only where none stands when it read none
-    (:func:`lakehouse.records.replace_json`, :func:`lakehouse.records.create_json`), and a write whose condition lost
+    (:func:`lakehouse.storage.conditional_records.replace_json`, :func:`lakehouse.storage.conditional_records.create_json`), and a write whose condition lost
     writes nothing, the next pass reading the copy as it then stands. The table's end (:func:`end`) deletes the records
     and then the copy, so an end landing after this call's reads deleted the copy it read, and the copy is never put back
     for a table that is gone. A copy this call creates where none stood is checked once more against the records: once

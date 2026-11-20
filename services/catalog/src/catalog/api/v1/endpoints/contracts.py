@@ -27,10 +27,10 @@ from catalog.core.config import CatalogStore
 from catalog.schemas import ContractResponse
 from catalog.services import contracts
 from catalog.services.table_claims import DoorTable
-from lakehouse import records
 from lakehouse.events.control_emit import emit_control
 from lakehouse.governed import fga
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 
 
 management_router = APIRouter(prefix="/management/v1/table", tags=["contract"])
@@ -110,7 +110,7 @@ async def set_table_contract(
     replaced = await run_in_threadpool(_standing, settings, table)
     try:
         record = await run_in_threadpool(partial(contracts.keep, root, control_so, uuid, contract, document=document, actor=_actor(token)))
-    except (records.RecordChangedError, records.RecordMissingError) as exc:
+    except (conditional_records.RecordChangedError, conditional_records.RecordMissingError) as exc:
         raise ConcurrentModificationError(f"the contract of {fga.canonical_object_id(table.segments)} kept changing; set it again") from exc
     try:
         # Asked again now the record stands, so a commit that landed while the table was first read is seen: from the

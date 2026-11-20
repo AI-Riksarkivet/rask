@@ -22,10 +22,10 @@ from typing import Any, Final
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.objectfs import fs_and_base
-from lakehouse.records import store_clock
 from lakehouse.storage.client import MAX_POOL_CONNECTIONS, S3Client
-from lakehouse.storage_options import StorageOptions, object_client, on_s3
+from lakehouse.storage.conditional_records import store_clock
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions, object_client, on_s3
 
 
 #: The most keys one S3 DeleteObjects request takes.
@@ -90,7 +90,7 @@ class StoreListing(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     objects: list[StoredObject]
-    #: The store's clock when it answered the listing's first page (:func:`lakehouse.records.store_clock`), the local
+    #: The store's clock when it answered the listing's first page (:func:`lakehouse.storage.conditional_records.store_clock`), the local
     #: clock on a local root, read before the listing: an object's age is this, less the stamp the same store put on it.
     at: datetime
 
@@ -124,7 +124,7 @@ class ObjectIdentity(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     #: The store's ETag on S3, unquoted; on a local root the SHA-256 of the bytes, which means the same thing, "these
-    #: bytes", as a local record's ETag does in :mod:`lakehouse.records`.
+    #: bytes", as a local record's ETag does in :mod:`lakehouse.storage.conditional_records`.
     etag: str
     size: int
 
@@ -394,3 +394,20 @@ def _record_deleted(path: str) -> None:
         f'target="{FILE_AUDIT_LOGGER}" mode="delete" type="{kind}" path="{path}"',
         extra={"file_audit.mode": "delete", "file_audit.type": kind, "file_audit.path": path},
     )
+
+
+__all__ = [
+    "FILE_AUDIT_LOGGER",
+    "ObjectIdentity",
+    "StoreListing",
+    "StoredObject",
+    "delete_object",
+    "delete_objects",
+    "identities",
+    "iter_under",
+    "list_under",
+    "list_under_at",
+    "listed_identities",
+    "recording_removed_transactions",
+    "remove_object",
+]

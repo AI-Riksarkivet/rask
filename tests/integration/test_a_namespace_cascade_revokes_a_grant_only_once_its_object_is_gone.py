@@ -29,8 +29,8 @@ from catalog.api.dependencies import get_namespace
 from catalog.core.config import get_settings
 from lakehouse import location_claims, maintenance_policies
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.objectfs import fs_and_base
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.objectfs import fs_and_base
+from lakehouse.storage.options import StorageOptions
 from maintenance.services.purge import objects_held
 from tests.integration.openfga_grants import TupleStore, act_as
 

@@ -24,7 +24,7 @@ from catalog.api.dependencies import get_vendor
 from catalog.core.vending import TableRecords, Tier, VendedSession
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_FORMAT, AUDIT_LOGGER, AuditAction, AuditOutcome, configure_audit
-from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.storage.credential import S3KeyPair
 from tests.traces import trace_named, traceparent_named
 
 

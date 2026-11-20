@@ -9,7 +9,7 @@ options (endpoint/keys/region, path-style, scheme derived from the endpoint); an
 or bare local path — dev/tests) resolves via the local filesystem, so every consumer round-trips without
 object storage in unit tests.
 
-The options travel as :class:`~lakehouse.storage_options.StorageOptions`, whose key pair is ``SecretStr`` ([[LH-543]]),
+The options travel as :class:`~lakehouse.storage.options.StorageOptions`, whose key pair is ``SecretStr`` ([[LH-543]]),
 and become the flat map only at the call that signs with them, through that guard's own S3 filesystem builder.
 """
 
@@ -20,8 +20,9 @@ from typing import TYPE_CHECKING, Final
 import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
-from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.storage_options import REGION, VIRTUAL_HOSTED, StorageOptions, on_s3, s3_filesystem
+from lakehouse.base_refs import decoded_path
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.options import REGION, VIRTUAL_HOSTED, StorageOptions, on_s3, s3_filesystem
 
 
 if TYPE_CHECKING:
@@ -47,8 +48,8 @@ def lance_storage_options(
     EVERY KEY IS SPELLED AS LANCE READS THE ENVIRONMENT INTO IT (``aws_endpoint``, ``aws_region``,
     ``aws_virtual_hosted_style_request``), so an ambient ``AWS_ENDPOINT_URL``, ``AWS_REGION`` or
     ``AWS_VIRTUAL_HOSTED_STYLE_REQUEST`` cannot stand in for it ([[LH-238]]; the measurement is at
-    :data:`lakehouse.storage_options._OPTION_ALIASES`), and a named endpoint is also set as the S3 service's own
-    (:data:`lakehouse.storage_options.S3_ENDPOINT`), which ``AWS_ENDPOINT_URL_S3`` would otherwise fill and which outranks
+    :data:`lakehouse.storage.options._OPTION_ALIASES`), and a named endpoint is also set as the S3 service's own
+    (:data:`lakehouse.storage.options.S3_ENDPOINT`), which ``AWS_ENDPOINT_URL_S3`` would otherwise fill and which outranks
     it. An empty endpoint (AWS proper) names no endpoint at all: the client resolves the regional one, and an empty value
     would pin it to nothing.
 
@@ -60,14 +61,14 @@ def lance_storage_options(
     ``https://`` with ``allow_http=false`` proceeds to its TLS request. An ambient ``AWS_ALLOW_HTTP`` beats the key in
     every spelling (measured on pylance 13.0.0: 10 of 10 fresh processes sent plaintext over ``allow_http=false``, 8 of
     10 over ``aws_allow_http=false``), and settles nothing once the endpoint is pinned: the request goes to the endpoint
-    the options name, over the scheme that endpoint names. The rule is ``lakehouse.endpoint_scheme.allow_http_for``, which
+    the options name, over the scheme that endpoint names. The rule is ``lakehouse.storage.endpoint_scheme.allow_http_for``, which
     the catalog's ``namespace_properties`` calls too.
 
     The key pair's session token completes a VENDED credential. An STS credential is a triple and the token is the
     half that carries the scoping, so a builder that cannot express one forces every vended-credential
     caller to hand-roll the map — the drift above — or to sign as a different identity.
 
-    The credential keys are spelled ``aws_``-prefixed by :meth:`~lakehouse.storage_options.StorageOptions.in_clear`,
+    The credential keys are spelled ``aws_``-prefixed by :meth:`~lakehouse.storage.options.StorageOptions.in_clear`,
     which says why the bare spellings lose to the environment.
 
     Unknown keys are the hazard this builder stands between callers and: object_store silently IGNORES
@@ -168,7 +169,7 @@ def _encryption_options(algorithm: str | None, kms_key_id: str | None, bucket_ke
 def fs_and_base(root_uri: str, storage_options: StorageOptions) -> tuple[pafs.FileSystem, str]:
     """Resolve ``(filesystem, base_path)`` for ``root_uri`` (base has no scheme and no trailing slash).
 
-    A root on S3 (:func:`~lakehouse.storage_options.on_s3`) is reached signed by the options' key pair, at their endpoint
+    A root on S3 (:func:`~lakehouse.storage.options.on_s3`) is reached signed by the options' key pair, at their endpoint
     or, naming none, at AWS proper's regional one: pyarrow's ``FileSystem.from_uri`` would sign with the ambient credential
     chain and follow an ambient ``AWS_ENDPOINT_URL`` (measured on pyarrow 25.0.0), so a record written under the pair would
     be read under another identity ([[LH-572]]).
@@ -258,9 +259,18 @@ def _where_a_root_may_be(uri: str) -> list[str]:
     a dataset root at the decoded key (``…$räksmörgås``) and nothing at the spelled one ([[LH-319]]); pyarrow decodes a
     ``file://`` URI itself. A root found at either refuses compaction, so probing both never permits more.
     """
-    from lakehouse.base_refs import decoded_path  # base_refs imports this module
-
     if not on_s3(uri):
         return [uri]
     opened = f"s3://{decoded_path(uri)}"
     return [uri] if opened == uri.rstrip("/") else [uri, opened]
+
+
+__all__ = [
+    "SSE_KMS_ALGORITHMS",
+    "StoreTimeouts",
+    "dataset_root_probe",
+    "fs_and_base",
+    "is_lance_dataset_root",
+    "lance_storage_options",
+    "same_store_uri",
+]

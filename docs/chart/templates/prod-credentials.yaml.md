@@ -62,7 +62,7 @@ A PLATFORM ADDRESS THE CHART NAMES IS HTTPS ON A REAL DEPLOYMENT. Each hop is li
 - `objectStore.externalEndpoint`: the catalog's projected ServiceAccount token, exchanged at that STS for every session
   it holds and vends (ADR 0170), and each session's secret key in the answer.
 - `vending.endpoint`: every vended session's requests and the tables' bytes. The vend sets `allow_http=true` whenever
-  its endpoint's scheme is http (`lakehouse.endpoint_scheme.allow_http_for`), which turns off Lance's TLS-only default
+  its endpoint's scheme is http (`lakehouse.storage.endpoint_scheme.allow_http_for`), which turns off Lance's TLS-only default
   for that client (`lance_docs/lance/guide/object_store.md`: `allow_http`, default `False`).
 - `observability.export.endpoint`, read while `observability.enabled`: each exporting service's projected
   ServiceAccount token for `observability.identity.audience`, which it sends as a bearer on every export (ADR 0215).

@@ -40,7 +40,7 @@ from pydantic import BaseModel, Field
 
 from lakehouse import trash, warehouse_records
 from lakehouse.base_refs import location_within
-from lakehouse.storage_options import StorageOptions, on_s3
+from lakehouse.storage.options import StorageOptions, on_s3
 from lakehouse.trash import TrashRecord
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, release_trash

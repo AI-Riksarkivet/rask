@@ -44,7 +44,7 @@ from catalog.core.lineage_emit import INSERT, build_write_event
 from lakehouse.events import outbox
 from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.events.openlineage import run_id_for
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lineage.api import relay
 from lineage.core.config import LineageSettings
 

@@ -757,7 +757,7 @@ THE FOUR VARIABLES EVERY STORE-REACHING POD GETS, under its own prefix (`LANCE`,
 backup): `<PREFIX>_S3_WEB_IDENTITY_TOKEN_FILE` (its token for `objectStore.identity.audience`), `_STS_ENDPOINT` (the
 store's own, so boto3 never posts the token to the public AWS STS), `_ASSUME_ROLE_ARN`
 (`objectStore.identity.roleArns.<component>`, `required`; AWS assumes it, a store granting the policy the token's
-subject names ignores it) and `_SESSION_SECONDS` (`required`, since each reads it as a typed int). One include, so the services (`lakehouse.store_session`) and the
+subject names ignores it) and `_SESSION_SECONDS` (`required`, since each reads it as a typed int). One include, so the services (`lakehouse.storage.store_session`) and the
 backups (`JobStoreIdentity`, `job_client`) cannot read the identity under different names. Call: include
 "lance.objectStoreSessionEnv" (list $root <PREFIX> <component>).
 
@@ -1069,7 +1069,7 @@ too (`externalSecrets.kubernetesAuthPath`, `externalSecrets.kvMount`), and the p
 (`lance.storeTokenFile`). A service that is given the address logs in to the store before it serves and fails its start
 closed when the store never admits it, reads every secret under that login, and signs and keys its commit ids from what
 it reads there (`lakehouse.governed.secrets`). Its object-store identity is then its ServiceAccount token alone: its
-start refuses a key pair in its environment (`lakehouse.store_session.require_env_pair`), and nothing in the process
+start refuses a key pair in its environment (`lakehouse.storage.store_session.require_env_pair`), and nothing in the process
 signs with one (`key_pair_in_force`). Rendered for exactly the apps `lance.storeReads` lists, so a pod told a store
 always has a role there.
 

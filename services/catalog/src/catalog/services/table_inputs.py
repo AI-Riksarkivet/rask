@@ -17,7 +17,7 @@ old version metadata (``lance_docs/lance/guide/read_and_write.md`` § Cleanup ol
 
 **ONE RECORD PER WRITING TABLE** (``_table_inputs/table-<digest>.json``), created put-if-not-exists and changed only under
 the ETag it was read with, so two commits declaring at once lose neither's input. The time is the object store's clock at
-the read (``records.StoreRead.at``, ADR 0179). A record is not ended with its table, as the edge list is never pruned: a
+the read (``conditional_records.StoreRead.at``, ADR 0179). A record is not ended with its table, as the edge list is never pruned: a
 deregistered table's bytes may still hold the subject, and a gone one costs a verification one claim lookup.
 
 Every function is BLOCKING IO; callers threadpool it.
@@ -36,8 +36,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from catalog.core.run_context import RunInput
 from lakehouse import control_prefixes, derived_tables
 from lakehouse.record_store import list_records, record_key
-from lakehouse.records import RecordChangedError, RecordExistsError, create_json, read_json_at, replace_json
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, create_json, read_json_at, replace_json
+from lakehouse.storage.options import StorageOptions
 
 
 PREFIX: Final = control_prefixes.TABLE_INPUTS

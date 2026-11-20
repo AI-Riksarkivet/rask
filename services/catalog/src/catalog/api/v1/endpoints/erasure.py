@@ -54,8 +54,8 @@ from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.history_fences import TableHistory
 from lakehouse.lance_session import fresh_session, open_dataset
-from lakehouse.records import RecordExistsError
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.conditional_records import RecordExistsError
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

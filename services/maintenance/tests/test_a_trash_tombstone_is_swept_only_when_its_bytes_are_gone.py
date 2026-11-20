@@ -29,7 +29,7 @@ from uuid import uuid4
 
 from lakehouse import location_claims
 from lakehouse.base_registry import BaseOrigin, BaseRegistry, BaseRole, RecordedBase, claim_bases
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import tombstones
 from maintenance.services.purge import held_by

@@ -102,7 +102,7 @@ class FragmentCarrier(ManifestCarrier, Protocol):
 
 
 #: "Is a Lance dataset rooted at this path" — the object store's answer, injected. Bound in the fleet
-#: to :func:`lakehouse.objectfs.is_lance_dataset_root`.
+#: to :func:`lakehouse.storage.objectfs.is_lance_dataset_root`.
 type DatasetRootProbe = Callable[[str], bool]
 
 
@@ -566,7 +566,7 @@ def gather_compaction_bases(ds: FragmentCarrier, probe: DatasetRootProbe) -> Com
     """The evidence :func:`describe_compaction_unsupported_flags` weighs, gathered off one open dataset.
 
     ``probe`` answers "is a Lance dataset rooted at this path" — in the fleet,
-    :func:`lakehouse.objectfs.is_lance_dataset_root` bound to the caller's storage options.
+    :func:`lakehouse.storage.objectfs.is_lance_dataset_root` bound to the caller's storage options.
     It is injected rather than imported so this module stays free of the object-store layer (the
     catalog and the sweep both gate here and neither can import the other's plumbing), and so a test
     can drive the ambiguous branch without an unreachable endpoint.

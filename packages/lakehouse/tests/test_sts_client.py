@@ -11,7 +11,7 @@ from botocore import UNSIGNED
 
 def test_sts_client_carries_region_endpoint_and_timeouts_and_signs_nothing():
     """`AssumeRoleWithWebIdentity` is authenticated by the token in its body; the pod holds no key to sign with."""
-    from lakehouse.storage import sts_client
+    from lakehouse.storage.sts import sts_client
 
     client = sts_client(region="eu-north-1", endpoint="http://rustfs:9000")
 
@@ -24,6 +24,6 @@ def test_sts_client_carries_region_endpoint_and_timeouts_and_signs_nothing():
 
 def test_sts_client_defaults_to_the_aws_endpoint_when_none_is_given():
     """`endpoint=None` must mean "resolve normally", not "pass an empty endpoint"."""
-    from lakehouse.storage import sts_client
+    from lakehouse.storage.sts import sts_client
 
     assert sts_client(region="us-east-1").meta.endpoint_url == "https://sts.us-east-1.amazonaws.com"

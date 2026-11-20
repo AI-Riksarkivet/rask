@@ -28,7 +28,7 @@ from pydantic import SecretStr
 from catalog.api.dependencies import get_vendor
 from catalog.core.vending import VendedSession
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed.store_credential import S3KeyPair
+from lakehouse.storage.credential import S3KeyPair
 
 
 #: The Lance Namespace spec's PermissionDenied code (`spec.yaml`).

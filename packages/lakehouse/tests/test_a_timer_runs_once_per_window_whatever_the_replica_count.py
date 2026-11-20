@@ -2,7 +2,7 @@
 
 Each replica's loop claims the window on the control root with one conditional write, and the store lets one land. Two
 :class:`lakehouse.timers.Timer` on one root stand for two replicas of a service; the root is a local directory, where the
-conditional write is the operating system's (`lakehouse.records`). A test waits for a window exactly as long as the
+conditional write is the operating system's (`lakehouse.storage.conditional_records`). A test waits for a window exactly as long as the
 timer's own turn says the next one is away.
 """
 
@@ -20,8 +20,9 @@ from botocore.exceptions import ClientError
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 
-from lakehouse import records, timers
-from lakehouse.storage_options import StorageOptions
+from lakehouse import timers
+from lakehouse.storage import conditional_records
+from lakehouse.storage.options import StorageOptions
 from lakehouse.timers import Outcome, Timer, Turn, claim_key
 
 
@@ -99,13 +100,13 @@ def _forbidden(*_: object) -> NoReturn:
 @pytest.mark.asyncio
 async def test_a_store_that_answers_a_missing_claim_as_forbidden_still_takes_the_first_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ran: list[str] = []
-    monkeypatch.setattr(records, "read_json_at", _forbidden)
+    monkeypatch.setattr(conditional_records, "read_json_at", _forbidden)
 
     first = await _replica(tmp_path, ran, holder="pod-1", period=600).turn()
     second = await _replica(tmp_path, ran, holder="pod-2", period=600).turn()
 
     monkeypatch.undo()
-    stored = records.read_json(str(tmp_path), StorageOptions(), claim_key("relay"))
+    stored = conditional_records.read_json(str(tmp_path), StorageOptions(), claim_key("relay"))
     assert (first.outcome, second.outcome) == (Outcome.RAN, Outcome.UNREAD), "a claim that exists and cannot be read is a fault, never another replica's window"
     assert ran == ["pod-1"]
     assert stored is not None
@@ -120,11 +121,11 @@ async def test_a_claim_of_the_next_window_by_a_store_clock_a_little_ahead_is_lef
     period = 600
     following = datetime.fromtimestamp((datetime.now(UTC).timestamp() // period + 1) * period, UTC).isoformat()
     claim = {"timer": "relay", "window": following, "claimed_at": following, "by": "pod-2"}
-    records.create_json(str(tmp_path), StorageOptions(), claim_key("relay"), claim)
+    conditional_records.create_json(str(tmp_path), StorageOptions(), claim_key("relay"), claim)
 
     turn = await _replica(tmp_path, ran, holder="pod-1", period=period).turn()
 
-    stored = records.read_json(str(tmp_path), StorageOptions(), claim_key("relay"))
+    stored = conditional_records.read_json(str(tmp_path), StorageOptions(), claim_key("relay"))
     assert turn.outcome is Outcome.ELSEWHERE
     assert ran == []
     assert stored is not None
@@ -135,7 +136,12 @@ async def test_a_claim_of_the_next_window_by_a_store_clock_a_little_ahead_is_lef
 async def test_a_claim_dated_more_than_a_period_after_the_stores_own_time_is_claimed_over(tmp_path: Path) -> None:
     ran: list[str] = []
     ahead = (datetime.now(UTC) + timedelta(days=1)).isoformat()
-    records.create_json(str(tmp_path), StorageOptions(), claim_key("relay"), {"timer": "relay", "window": ahead, "claimed_at": ahead, "by": "a-clock-ahead"})
+    conditional_records.create_json(
+        str(tmp_path),
+        StorageOptions(),
+        claim_key("relay"),
+        {"timer": "relay", "window": ahead, "claimed_at": ahead, "by": "a-clock-ahead"},
+    )
 
     turn = await _replica(tmp_path, ran, holder="pod-1", period=600).turn()
 
@@ -162,7 +168,7 @@ async def test_a_held_timer_claims_nothing_and_runs_nothing(tmp_path: Path) -> N
 
     assert turn.outcome is Outcome.HELD
     assert ran == []
-    assert records.read_json(str(tmp_path), StorageOptions(), claim_key("relay")) is None
+    assert conditional_records.read_json(str(tmp_path), StorageOptions(), claim_key("relay")) is None
 
 
 @pytest.mark.asyncio
@@ -221,7 +227,7 @@ async def test_a_record_at_the_timers_key_that_is_no_claim_is_claimed_over(tmp_p
 
     first, second = await one.turn(), await two.turn()
 
-    stored = records.read_json(str(tmp_path), StorageOptions(), claim_key("relay"))
+    stored = conditional_records.read_json(str(tmp_path), StorageOptions(), claim_key("relay"))
     assert (first.outcome, second.outcome, ran) == (Outcome.RAN, Outcome.ELSEWHERE, ["pod-1"])
     assert stored is not None
     assert stored[0]["by"] == "pod-1"

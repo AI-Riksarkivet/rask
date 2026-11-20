@@ -31,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core import blobs
 from catalog.services.table_claims import DoorTable
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 # Streaming window for the blob serving path: each chunk is one ``read_range`` call against

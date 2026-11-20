@@ -12,7 +12,7 @@ from typing import Any
 from lakehouse import control_prefixes, maintenance_due, maintenance_policies, trash
 from lakehouse.maintenance_due import DueRecord
 from lakehouse.record_store import put_record, record_key
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from lakehouse.warehouse_records import WarehouseRecord
 
 

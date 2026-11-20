@@ -12,7 +12,7 @@ import pytest
 from lakehouse.context import continuing
 from lakehouse.events import outbox
 from lakehouse.events.cloud_events import TRACE_ATTRIBUTES, lineage_envelope
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 from tests.bus_double import BusDouble
 
 

@@ -25,7 +25,7 @@ from lakehouse.events.control_emit import emit_control
 from lakehouse.governed import fga
 from lakehouse.lance_session import fresh_session, open_dataset
 from lakehouse.location_claims import ClaimStore
-from lakehouse.storage_options import StorageOptions
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)

@@ -44,12 +44,12 @@ from lakehouse import base_registry, data_directories, location_claims, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.base_refs import normalise
 from lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
-from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.objectfs import lance_storage_options
-from lakehouse.storage import S3Client
-from lakehouse.storage_options import StorageOptions
-from lakehouse.stored_objects import FILE_AUDIT_LOGGER
+from lakehouse.storage.client import S3Client
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.stored_objects import FILE_AUDIT_LOGGER
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass
 from maintenance.services.due import TableIds
