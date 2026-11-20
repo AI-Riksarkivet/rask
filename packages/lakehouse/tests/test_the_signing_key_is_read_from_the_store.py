@@ -192,13 +192,19 @@ async def test_a_signer_heals_in_place_follows_a_re_minted_store_and_drops_an_un
 
 
 @pytest.mark.parametrize(
-    ("seed", "readiness"),
+    ("seed", "wired", "readiness"),
     [
-        pytest.param(_found("seed", "SEED-a"), 200, id="a-key-its-identity-lists"),
-        pytest.param(httpx.Response(500), 503, id="no-key"),
+        pytest.param(_found("seed", "SEED-a"), True, (200, "ready"), id="a-key-its-identity-lists"),
+        pytest.param(httpx.Response(500), True, (503, "unhealthy"), id="no-key"),
+        pytest.param(None, True, (200, "ready"), id="signing-off-by-setting"),
+        pytest.param(None, False, (503, "unhealthy"), id="no-holder-ever-published"),
     ],
 )
-def test_a_signer_reports_ready_only_while_it_holds_its_key(store: _Store, seed: httpx.Response | None, readiness: int) -> None:
+def test_a_signer_reports_ready_only_while_it_holds_its_key(
+    store: _Store, caplog: pytest.LogCaptureFixture, seed: httpx.Response | None, wired: bool, readiness: tuple[int, str]
+) -> None:
+    """A process whose lifespan never published a holder cannot say whether it could sign, so it is out of rotation and
+    says why once, however often it is probed; one that published ``None`` signs nothing by setting and is ready."""
     holder: SigningKeyHolder[_Key] | None = None
     if seed is not None:
         store.serve(seed, _found("keys", "PUB-a"))
@@ -207,9 +213,17 @@ def test_a_signer_reports_ready_only_while_it_holds_its_key(store: _Store, seed:
     app = FastAPI()
     app.include_router(make_probes_router(signing_ready_check()))
     mark_started(app)
-    attach_signing(app, holder)
+    if wired:
+        attach_signing(app, holder)
+    client = TestClient(app)
 
-    assert TestClient(app).get("/readyz").status_code == readiness
+    answers = {(answer.status_code, answer.json()["status"]) for answer in (client.get("/readyz") for _ in range(3))}
+    signing = client.get("/readyz").json().get("components", {}).get("signing")
+    missing = [getattr(record, "wire", None) for record in caplog.records if record.levelname == "ERROR" and record.getMessage() == "missing_wire"]
+
+    assert answers == {readiness}
+    if not wired:
+        assert (signing, missing) == ("the lifespan published no signing holder, not even signing off", ["signing"])
 
 
 @pytest.mark.parametrize(

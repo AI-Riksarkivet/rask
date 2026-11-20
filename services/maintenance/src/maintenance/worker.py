@@ -40,7 +40,7 @@ from time import monotonic
 import uvicorn
 from fastapi import FastAPI
 
-from lakehouse.governed.signing_key import signing_ready_check
+from lakehouse.governed.signing_key import attach_signing, signing_ready_check
 from lakehouse.process.lifecycle import mark_draining, mark_started
 from lakehouse.process.log_levels import configure_app_logging
 from lakehouse.process.supervision import FLUSH_SECONDS, Supervisor, flush_telemetry
@@ -165,6 +165,8 @@ async def _held(stop: asyncio.Event, started: asyncio.Event) -> None:
     window ages out is queued again by the first audit after it, whose backstop queues each table nothing holds. The
     flag is rendered into the pod from git, so the window ends with a rolled pod that takes the tasks.
     """
+    # A held worker emits nothing, so it signs nothing: declared, since readiness holds out one that declared no signing.
+    attach_signing(app, None)
     mark_started(app)
     started.set()
     log.info("maintenance_worker_held_for_read_only_window")

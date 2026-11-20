@@ -313,14 +313,36 @@ def make_signing_holder[KeyT: SigningKeyLike](
     return SigningKeyHolder(identity=identity, load_key=load_key, parse_published=parse_published)
 
 
+#: What `/readyz` names as the signing component of a process whose lifespan never published a holder.
+NEVER_WIRED_REASON: Final = "the lifespan published no signing holder, not even signing off"
+
+
+class SigningNotWiredError(RuntimeError):
+    """The process never published a signing holder (`attach_signing`), not even ``None``: a wiring fault, never "off"."""
+
+
 def attach_signing(app: FastAPI, holder: SigningStatus | None) -> None:
-    """Publish the holder on `app.state`, where the gate and the readiness check find it. None means no signing."""
+    """Publish the holder on `app.state`, where the gate and the readiness check find it. None means no signing.
+
+    Every path that marks its process started publishes it first, ``None`` included: what was never published is a
+    process that did not start the way it serves, which `signing_of` tells apart from one that signs nothing.
+    """
     setattr(app.state, SIGNING_STATE, holder)
 
 
 def signing_of(app: FastAPI) -> SigningStatus | None:
-    """The holder `attach_signing` published on ``app``, or None for a service that does not sign."""
-    holder: SigningStatus | None = getattr(app.state, SIGNING_STATE, None)
+    """The holder `attach_signing` published on ``app``, or None for a service that signs nothing by setting.
+
+    The rule the catalog's ``app_wire(..., none_is_off=True)`` applies to the same wire, held here because the library
+    imports no service: ``None`` is the off value the lifespan sets, and only a wire never set is the fault.
+
+    Raises:
+        SigningNotWiredError: Nothing was ever published, not even ``None``.
+    """
+    try:
+        holder: SigningStatus | None = getattr(app.state, SIGNING_STATE)
+    except AttributeError as exc:
+        raise SigningNotWiredError(NEVER_WIRED_REASON) from exc
     return holder
 
 
@@ -328,12 +350,22 @@ def signing_ready_check(inner: ReadyCheck | None = None) -> ReadyCheck:
     """A `/readyz` check that adds the signing key to whatever `inner` already reports.
 
     A signer that cannot sign is `unhealthy`, which the probe router serves as 503: the pod leaves its Service while
-    `/livez` stays 200, so it is waited on rather than restarted.
+    `/livez` stays 200, so it is waited on rather than restarted. So is a process that never published a holder: it
+    cannot say whether it could sign, and its signing gate would fault every write it admitted. That is logged once
+    per check, so a probe every few seconds does not repeat it.
     """
+    said = False
 
     async def check(request: Request) -> Readiness:
+        nonlocal said
         body = await inner(request) if inner is not None else Readiness(status=ReadinessStatus.ready)
-        holder = signing_of(request.app)
+        try:
+            holder = signing_of(request.app)
+        except SigningNotWiredError as exc:
+            if not said:
+                said = True
+                log.error("missing_wire", extra={"wire": SIGNING_STATE})
+            return body.model_copy(update={"status": ReadinessStatus.unhealthy, "components": {**body.components, "signing": str(exc)}})
         if holder is None or holder.ready:
             return body
         return body.model_copy(update={"status": ReadinessStatus.unhealthy, "components": {**body.components, "signing": holder.reason}})
@@ -345,11 +377,13 @@ __all__ = [
     "KEYS_FIELD",
     "KEY_READ_TIMEOUT_SECONDS",
     "MAX_REFRESH_SECONDS",
+    "NEVER_WIRED_REASON",
     "SEED_FIELD",
     "SIGNING_STATE",
     "SigningKeyHolder",
     "SigningKeyLike",
     "SigningKeyUnavailableError",
+    "SigningNotWiredError",
     "SigningStatus",
     "attach_signing",
     "make_signing_holder",

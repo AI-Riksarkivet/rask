@@ -28,6 +28,7 @@ import httpx
 import pytest
 from tests.secret_store_double import SecretStoreDouble
 
+from lakehouse.governed.signing_key import SIGNING_STATE
 from lakehouse.process.lifecycle import mark_draining, mark_started
 from maintenance import worker
 from maintenance.core.config import MaintenanceSettings, get_settings
@@ -60,9 +61,11 @@ def store_pair(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
 
 
-def test_the_workers_probes_follow_its_life_and_liveness_holds_through_the_drain() -> None:
+def test_the_workers_probes_follow_its_life_and_liveness_holds_through_the_drain(monkeypatch: pytest.MonkeyPatch) -> None:
     port = _free_port()
 
+    # No worker runs here, so the wire the worker's start publishes is set as one that signs nothing sets it.
+    monkeypatch.setattr(worker.app.state, SIGNING_STATE, None, raising=False)
     with worker.serving_probes(port):
         starting = _answers(port)
         mark_started(worker.app)
@@ -96,8 +99,14 @@ def test_a_worker_with_no_bus_to_take_tasks_from_does_not_start() -> None:
 def test_a_worker_in_a_read_only_window_takes_no_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, moto_url: str, secret_store: SecretStoreDouble) -> None:
     """It starts, answers ready and holds until it is stopped, dialling no bus: the bus here never answers, so a worker
     that reached for it would still be starting when stopped. Its settings are the deployed service's: a projected token
-    exchanged at moto's STS, and a secret store it never logs in to, since a worker that dials no bus reads no credential."""
+    exchanged at moto's STS, and a secret store it never logs in to, since a worker that dials no bus reads no credential.
+    Ready because it declares that it signs nothing: a process that declared no signing at all is held out of rotation."""
     dialled: list[str] = []
+    # `worker.app` is the process's one app: start from a worker no other test has declared a signer on.
+    monkeypatch.delattr(worker.app.state, SIGNING_STATE, raising=False)
+    port = _free_port()
+    # The kubelet's probe reaches the worker's own socket, which the store's double does not answer for.
+    secret_store.router.route(host="127.0.0.1").pass_through()
 
     async def _bus(url: str, credentials: str, *, name: str) -> TaskQueue:
         dialled.append(url)
@@ -110,12 +119,18 @@ def test_a_worker_in_a_read_only_window_takes_no_task(tmp_path: Path, monkeypatc
     monkeypatch.setenv("MAINTENANCE_S3_STS_ENDPOINT", moto_url)
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b", "nats_url": _BUS, "read_only": True})
 
-    async def _run() -> bool:
+    async def _run() -> tuple[bool, tuple[int, int, str]]:
         stop = asyncio.Event()
-        asyncio.get_running_loop().call_later(1.0, stop.set)
-        return await asyncio.wait_for(worker.run(settings, stop), timeout=20)
+        running = asyncio.create_task(asyncio.wait_for(worker.run(settings, stop), timeout=20))
+        await asyncio.sleep(0.5)
+        held = await asyncio.to_thread(_answers, port)
+        stop.set()
+        return await running, held
 
-    assert (asyncio.run(_run()), dialled, secret_store.login.call_count) == (True, [], 0)
+    with worker.serving_probes(port):
+        ran, held = asyncio.run(_run())
+
+    assert (ran, held, dialled, secret_store.login.call_count) == (True, (200, 200, "ready"), [], 0)
 
 
 async def _never_starts(_settings: MaintenanceSettings, _stop: asyncio.Event, _started: asyncio.Event) -> None:
@@ -185,11 +200,13 @@ def test_the_process_under_sigterm_keeps_its_probes_up_until_it_is_done_and_exit
             f"""
             import asyncio, os, pathlib, threading, time
             os.environ["MAINTENANCE_WORKER_PORT"] = "{port}"
+            from lakehouse.governed.signing_key import attach_signing
             from lakehouse.process.lifecycle import mark_draining, mark_started
             from maintenance import worker
 
             async def drains(settings, stop):
                 pathlib.Path({str(entered)!r}).touch()
+                attach_signing(worker.app, None)
                 mark_started(worker.app)
                 await stop.wait()
                 mark_draining(worker.app)
