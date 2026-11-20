@@ -24,7 +24,6 @@ from lance_namespace import (
     LanceNamespace,
     NamespaceAlreadyExistsError,
     NamespaceNotFoundError,
-    ServiceUnavailableError,
 )
 
 from catalog.core.identifiers import warehouse_of, with_minted_uuid
@@ -74,17 +73,18 @@ def _record(raw: object, *, path: str) -> WarehouseRecord:
 
     A singular read has no skip list to hand back, so a record nobody can parse refuses rather than reading as
     unregistered: for a warehouse's own doors an absent record is a 404, and for the router it is "no such warehouse"
-    ([[LH-593]]), which would answer every one of a tenant's names as not there. `ServiceUnavailableError`, so one
-    unreadable record answers the same way whichever door reached it.
+    ([[LH-593]]), which would answer every one of a tenant's names as not there. `InternalError` (code 18), as every
+    record that is there and cannot be read answers (`lakehouse.outage.store_refusal`): only a write to the record
+    clears it, so the caller is not told to try again.
 
     Raises:
-        ServiceUnavailableError: The record cannot be read as a warehouse's.
+        InternalError: The record cannot be read as a warehouse's.
     """
     try:
         return read_warehouse_record(raw, at=path)
     except UnreadableWarehouseRecordError as exc:
         log.warning("warehouse_record_malformed", extra={"path": path, "error": str(exc)})
-        raise ServiceUnavailableError(f"control record {path!r} could not be read as a warehouse's — refusing rather than treating it as absent") from exc
+        raise InternalError(f"control record {path!r} could not be read as a warehouse's — refusing rather than treating it as absent") from exc
 
 
 def grace_days_under(control_root: str, storage_options: StorageOptions, segments: list[str], *, estate: float) -> float:
@@ -445,7 +445,7 @@ def project_of(control_root: str, storage_options: StorageOptions, warehouse_id:
     ``None`` costs an event its watchers and never its author.
 
     Raises:
-        ServiceUnavailableError: The record is there and is not a warehouse's.
+        InternalError: The record is there and is not a warehouse's.
         ValueError: The record is there and is not JSON.
         OSError: The store failed the read.
     """
@@ -497,11 +497,7 @@ def delete_warehouse_record(control_root: str, storage_options: StorageOptions, 
     the two never share a default). A record-less bucket is reported by the reconciler, not silently
     forgotten. The warehouse's trash is ended by the delete door before this runs (:func:`trash_owned_by`).
     """
-    fs, base = fs_and_base(control_root, storage_options)
-    try:
-        fs.delete_file(f"{base}/{_warehouse_key(warehouse_id)}")
-    except FileNotFoundError:
-        return
+    delete_record(control_root, storage_options, _warehouse_key(warehouse_id))
 
 
 def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> list[TrashRecord]:

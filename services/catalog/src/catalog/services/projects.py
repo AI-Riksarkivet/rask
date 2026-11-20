@@ -20,7 +20,7 @@ import json
 import logging
 
 import pyarrow.fs as pafs
-from lance_namespace import ServiceUnavailableError
+from lance_namespace import InternalError
 
 from catalog.services.control_records import ProtectionChange, read_json, with_manager, with_protection
 from lakehouse import control_prefixes
@@ -28,6 +28,7 @@ from lakehouse.objectfs import fs_and_base
 from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.project_records import ProjectRecord, UnreadableProjectRecordError
 from lakehouse.project_records import read as read_project_record
+from lakehouse.record_store import delete_record
 from lakehouse.records import RecordMissingError, create_json, mutate_json
 from lakehouse.storage_options import StorageOptions
 
@@ -56,16 +57,17 @@ def _record(raw: object, *, path: str) -> ProjectRecord:
 
     A record nobody can parse refuses rather than reading as a missing tenant: `require_project_exists` gates warehouse
     creation on the answer and the project's delete acts on it, so "does not exist" is a verdict.
-    `ServiceUnavailableError`, so one unreadable record answers the same way whichever door reached it.
+    `InternalError` (code 18), as every record that is there and cannot be read answers
+    (`lakehouse.outage.store_refusal`): only a write to the record clears it, so the caller is not told to try again.
 
     Raises:
-        ServiceUnavailableError: The record cannot be read as a project's.
+        InternalError: The record cannot be read as a project's.
     """
     try:
         return read_project_record(raw, at=path)
     except UnreadableProjectRecordError as exc:
         log.warning("project_record_malformed", extra={"path": path, "error": str(exc)})
-        raise ServiceUnavailableError(f"control record {path!r} could not be read as a project's — refusing rather than treating it as absent") from exc
+        raise InternalError(f"control record {path!r} could not be read as a project's — refusing rather than treating it as absent") from exc
 
 
 def upsert_project(control_root: str, storage_options: StorageOptions, wanted: ProjectRecord) -> ProjectRecord:
@@ -196,11 +198,7 @@ def delete_project_record(control_root: str, storage_options: StorageOptions, pr
     """Remove the registry record. Idempotent — deleting an absent record is a no-op, so the
     partial-failure retry path (record removed, tuple revoke failed, caller retries) cannot fail on
     its second pass."""
-    fs, base = fs_and_base(control_root, storage_options)
-    try:
-        fs.delete_file(f"{base}/{_PROJECTS_PREFIX}/{project_id}.json")
-    except FileNotFoundError:
-        return
+    delete_record(control_root, storage_options, f"{_PROJECTS_PREFIX}/{project_id}.json")
 
 
 def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[list[ProjectRecord], list[str]]:

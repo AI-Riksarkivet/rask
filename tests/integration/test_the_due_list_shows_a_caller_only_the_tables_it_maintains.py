@@ -20,7 +20,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services import table_claims
 from lakehouse import location_claims, maintenance_due
-from lakehouse.maintenance_due import CompactionDue, DueRecord, write_due
+from lakehouse.maintenance_due import DUE_PREFIX, CompactionDue, DueRecord, write_due
 from lakehouse.storage_options import StorageOptions
 from tests.integration.openfga_grants import Grants, act_as
 
@@ -71,6 +71,9 @@ def test_a_caller_sees_only_the_due_tables_it_maintains(real_ns_client: TestClie
     location_claims.release(table_claims.claim_store(settings), gone.location, "acme$gone")
     write_due(settings.registry_root, settings.storage_options(), gone.model_copy(update={"table": "acme$mine"}))
     grants.grant("alice", ("can_maintain", f"table:{mine.uuid}"), ("can_maintain", f"table:{gone.uuid}"))
+    # One object under the prefix that is no record at all: it is left out, and the list is still answered to everyone.
+    (Path(settings.registry_root) / DUE_PREFIX / f"table-{uuid4()}.json").write_text("not json")
+    (Path(settings.registry_root) / DUE_PREFIX / f"table-{uuid4()}.json").write_bytes(b"\xff\xfe")
     act_as(client, "alice")
 
     listed = client.get("/management/v1/maintenance/due", headers=AUTH)

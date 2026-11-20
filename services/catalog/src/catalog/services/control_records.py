@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 
-from lance_namespace import ServiceUnavailableError
+from lance_namespace import InternalError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse.objectfs import fs_and_base
@@ -109,11 +109,12 @@ def validated_or_refuse(record: object, model: type[BucketClaimRecord], *, event
     """``record`` as a plain dict if it is a bucket claim, else REFUSE.
 
     A claim read by its key has no skip list to hand back: its only other answer is "unclaimed", and a bucket whose
-    claim nobody can parse would then be free for a second project to take. `ServiceUnavailableError`, so an
-    unreadable control record answers the same way whichever door reached it.
+    claim nobody can parse would then be free for a second project to take. `InternalError` (code 18), as every
+    record that is there and cannot be read answers (`lakehouse.outage.store_refusal`): only a write to the record
+    clears it, so the caller is not told to try again.
     """
     try:
         return model.model_validate(record).model_dump(mode="json", exclude_unset=True)
     except ValidationError as exc:
         log.warning(event, extra={"path": path, "error": exc.errors(include_url=False)})
-        raise ServiceUnavailableError(f"control record {path!r} could not be read as {model.__name__} — refusing rather than treating it as absent") from exc
+        raise InternalError(f"control record {path!r} could not be read as {model.__name__} — refusing rather than treating it as absent") from exc

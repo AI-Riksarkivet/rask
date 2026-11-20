@@ -80,7 +80,7 @@ def put_record(control_root: str, storage_options: StorageOptions, key: str, rec
 
 
 def get_record(control_root: str, storage_options: StorageOptions, key: str, *, event: str) -> dict[str, Any] | None:
-    """One record, or ``None`` when it is absent OR is not a JSON object.
+    """One record, or ``None`` when it is absent, is not JSON, or is not a JSON object.
 
     A malformed record reads as ABSENT rather than propagating: every caller of a registry treats
     ``None`` as "no record was set", and handing back a list or a string instead makes the fault surface
@@ -88,10 +88,14 @@ def get_record(control_root: str, storage_options: StorageOptions, key: str, *, 
     pyarrow and is deliberately left to propagate. A caller making a DESTRUCTIVE decision reads through
     :func:`read_record` instead, which raises on a record it cannot read.
     """
-    stored = _stored(control_root, storage_options, key)
+    try:
+        stored = _stored(control_root, storage_options, key)
+        loaded = None if stored is None else json.loads(stored)
+    except ValueError:
+        # Not text, or not JSON: `_stored` and the parse both say so as a `ValueError`. An outage is an `OSError`.
+        stored, loaded = "", None
     if stored is None:
         return None
-    loaded = json.loads(stored)
     if not isinstance(loaded, dict):
         log.warning(f"{event}_malformed", extra={"key": key})
         return None

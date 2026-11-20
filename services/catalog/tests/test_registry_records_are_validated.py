@@ -24,7 +24,7 @@ import json
 from pathlib import Path
 
 import pytest
-from lance_namespace import ServiceUnavailableError
+from lance_namespace import InternalError
 
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses as wh_svc
@@ -63,5 +63,5 @@ def test_a_project_record_that_is_none_refuses_its_own_read_and_is_never_answere
     warehouse create and the project's delete would both act on."""
     _write(tmp_path, "_projects", "acme", {"id": "acme", "deleting_by": ""})
 
-    with pytest.raises(ServiceUnavailableError, match="_projects/acme.json"):
+    with pytest.raises(InternalError, match="_projects/acme.json"):
         proj_svc.get_project(_root(tmp_path), StorageOptions(), "acme")

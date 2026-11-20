@@ -8,8 +8,10 @@ non-project-admin with 403.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from fnmatch import fnmatchcase
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
@@ -332,6 +334,24 @@ def test_create_warehouse_bucket_claimed_by_another_project_409(client: TestClie
     assert r.status_code == 409, r.text
     same = client.post("/management/v1/warehouses", json={"id": "wh-a2", "project": "acme", "bucket": "acme-wh"})
     assert same.status_code == 200, same.text
+
+
+def test_a_bucket_claim_nobody_can_read_refuses_the_create_as_a_fault_no_retry_clears(
+    client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The claim is there and is no claim: the bucket is not free, and only a write to the record changes that, so the
+    answer is the spec's Internal (18) and not the ServiceUnavailable (17) that asks a caller to try again."""
+    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    _mk_projects(client, "acme", "evil")
+    assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme", "bucket": "acme-wh"}).status_code == 200
+    (held,) = Path(tmp_path).glob("**/bucket-claims/acme-wh.json")
+    # A claim no warehouse record stands behind, as a create that ended between its claim and its record leaves one.
+    (held.parent / "orphan-wh.json").write_text(json.dumps({"bucket": "orphan-wh", "project": ["acme"]}))
+    faulted = TestClient(client.app, raise_server_exceptions=False)
+
+    refused = faulted.post("/management/v1/warehouses", json={"id": "wh-evil", "project": "evil", "bucket": "orphan-wh"})
+
+    assert (refused.status_code, refused.json()["code"]) == (500, 18), refused.text
 
 
 def test_create_warehouse_reserved_bucket_refused(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
