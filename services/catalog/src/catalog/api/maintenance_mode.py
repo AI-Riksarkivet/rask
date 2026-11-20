@@ -21,14 +21,16 @@ from collections.abc import Awaitable, Callable
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
 from fastapi.routing import iter_route_contexts
-from lance_namespace import ErrorCode
+from lance_namespace import ErrorCode, InternalError
 from starlette.routing import Match
 
+from catalog.api.dependencies import app_wire
 from catalog.api.read_actions import READ_ACTIONS, TABLE_VEND_ROUTE
 from catalog.api.route_path import route_path
 from catalog.core import vending
 from catalog.core.config import Settings
 from lakehouse.problems.envelope import problem_body
+from lakehouse.problems.ns_errors import problem_detail
 
 
 PROBLEM_JSON = "application/problem+json"
@@ -115,13 +117,29 @@ async def maintenance_middleware(
     request: Request,
     call_next: Callable[[Request], Awaitable[Response]],
 ) -> Response:
-    """Short-circuit mutating requests on every catalog mount with 503 when read-only is on."""
-    settings: Settings | None = getattr(request.app.state, "settings", None)
-    if settings is None or not settings.maintenance_read_only:
+    """Short-circuit mutating requests on every catalog mount with 503 when read-only is on.
+
+    The window is what the settings the lifespan wired say. A catalog wired none cannot say whether a window is open,
+    so each write is refused as the server fault it is (:func:`catalog.api.dependencies.app_wire`), never let through as
+    though the window were shut.
+    """
+    try:
+        read_only, fault = app_wire(request, "settings", Settings).maintenance_read_only, None
+    except InternalError as exc:
+        read_only, fault = True, exc
+    if not read_only:
         return await call_next(request)
     # The path routing matches, never `request.url.path`: that re-parses the decoded path as a URL, so a `?` in a name
     # would end the path there ([[LH-526]]).
     path = route_path(request.scope)
     if path.startswith(GATED_MOUNTS) and is_mutating(request):
-        return maintenance_response()
+        return fault_response(fault) if fault is not None else maintenance_response()
     return await call_next(request)
+
+
+def fault_response(fault: InternalError) -> JSONResponse:
+    """A request layer's answer to a server fault it found, as the app's own handler answers one a door raises: the
+    spec's InternalError as problem+json, its detail redacted (`lakehouse.problems.ns_errors.problem_detail`). Answered here, as
+    a refusal of this layer's own is, because an exception raised from a layer passes no handler of the app's."""
+    status, body = problem_detail(fault)
+    return JSONResponse(status_code=status, content=body, media_type=PROBLEM_JSON)

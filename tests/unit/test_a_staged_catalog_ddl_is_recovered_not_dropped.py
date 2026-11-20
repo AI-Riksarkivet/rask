@@ -87,6 +87,16 @@ class _Repo:
         """A park asks whether the feed holds the refused event's row first; this feed holds none."""
         return set()
 
+    async def recorded_event(self, key: str) -> dict[str, Any] | None:
+        """A refused event is the replay of a row only if the feed holds it; this feed holds none."""
+        del key
+        return None
+
+    async def run_author(self, run_id: str) -> str | None:
+        """This feed holds no run, so an event founds its own."""
+        del run_id
+        return None
+
 
 @pytest.fixture
 def catalog(event_signer: Any, secret_store: SecretStoreDouble, respx_allows_unused_routes: None) -> Any:  # noqa: ANN401 — the root conftest's `EventSigner`
@@ -212,7 +222,10 @@ def _without_signature(staged_json: str) -> dict[str, Any]:
 
 
 def _drain(settings: LineageSettings, repo: _Repo, publisher: BusDouble) -> relay.DrainOutcome:
-    return asyncio.run(relay._drain_outbox(_request().app, cast("Any", repo), settings, StorageOptions(), publisher))
+    app = _request().app
+    # The feed lineage's lifespan wires on its app, the one the relay hands the drain.
+    app.state.provenance = repo
+    return asyncio.run(relay._drain_outbox(app, cast("Any", repo), settings, StorageOptions(), publisher))
 
 
 def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:

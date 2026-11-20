@@ -49,6 +49,7 @@ from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ValidationError
 
+from catalog.api.dependencies import app_wire
 from catalog.api.ticks import Tick
 from catalog.core.config import CatalogControlBusSettings, Settings
 from lakehouse.events import outbox, outbox_metrics
@@ -103,11 +104,12 @@ class ControlRelayReport(BaseModel):
 def get_control_publisher(request: Request) -> Bus | None:
     """This process's connection to the bus, or ``None`` when the chart names it no bus.
 
-    Read off ``app.state``, where the lifespan keeps the one connection the process holds (`lakehouse.events.bus`).
-    ``None`` makes the tick a pure OBSERVATION — it still reports depth and age, so
-    a backlog accruing on a mis-wired deployment is visible instead of silently unmeasured.
+    Read off ``app.state``, where the lifespan keeps the one connection the process holds (`lakehouse.events.bus`), or
+    its ``None`` for a process named no bus. ``None`` makes the tick a pure OBSERVATION — it still reports depth and
+    age, so a backlog accruing on a deployment named no bus is visible instead of silently unmeasured. A catalog whose
+    lifespan set neither fails the tick (`app_wire`).
     """
-    return getattr(request.app.state, "bus", None)
+    return app_wire(request, "bus", Bus, none_is_off=True)
 
 
 def attach_published_keys(app: FastAPI) -> None:
@@ -133,8 +135,12 @@ async def get_staged_verifier(request: Request) -> StagedVerifier | None:
     only delegator, so a person actor verifies only under the delegation this catalog declares for the person it
     authenticated. Checked against the keys that identity publishes, read from the secret store under the catalog's own
     login. Whether the holder has resolved its own private key does not matter here, since the relay signs nothing.
+
+    ``None`` only for the ``None`` holder the lifespan wires a catalog that does not sign. A catalog wired no holder at
+    all fails the tick (`app_wire`), never delivers what is staged unverified: a staged object proves nothing about who
+    wrote it.
     """
-    holder: SigningKeyHolder[SigningKey] | None = getattr(request.app.state, SIGNING_STATE, None)
+    holder = app_wire(request, SIGNING_STATE, SigningKeyHolder[SigningKey], none_is_off=True)
     if holder is None:
         return None
     keys = published_keys(request.app)

@@ -19,20 +19,25 @@ whatever namespace it names.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
+from typing import cast
 
 from fastapi import Request, Response
 from fastapi.responses import JSONResponse
-from lance_namespace import ErrorCode
+from lance_namespace import ErrorCode, InternalError
 
-from catalog.api.maintenance_mode import GATED_MOUNTS, PROBLEM_JSON, is_mutating
+from catalog.api.dependencies import app_wire
+from catalog.api.maintenance_mode import GATED_MOUNTS, PROBLEM_JSON, fault_response, is_mutating
 from catalog.api.route_path import route_path
-from catalog.core.commit_ids import commit_ids_of
+from catalog.core.commit_ids import STATE as COMMIT_IDS_STATE
+from catalog.core.commit_ids import CommitIds
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services.provenance_namespace import is_provenance
 from lakehouse.governed import fga
-from lakehouse.governed.signing_key import signing_of
+from lakehouse.governed.signing_key import SIGNING_STATE, SigningStatus
 from lakehouse.problems.envelope import problem_body
+from lakehouse.process.probes import ReadyCheck
+from lakehouse.schemas.health import Readiness, ReadinessStatus
 
 
 #: The data doors that announce through the lineage emitter alone, so a write through one under the provenance namespace
@@ -42,11 +47,11 @@ _LINEAGE_ONLY_DATA_ACTIONS = frozenset({"insert", "merge_insert", "update", "del
 RETRY_AFTER_SECONDS = 15
 
 
-def announces(path: str, settings: Settings | None) -> bool:
+def announces(path: str, settings: Settings) -> bool:
     """Whether the write at ``path`` is one the catalog announces: every write but a lineage-only data write under the
-    provenance namespace. The parent is joined as the emitter joins it. Without the settings no write is exempt."""
+    provenance namespace. The parent is joined as the emitter joins it."""
     parts = path.strip("/").split("/")
-    if settings is None or len(parts) != 4 or parts[:2] != ["v1", "table"] or parts[3] not in _LINEAGE_ONLY_DATA_ACTIONS:
+    if len(parts) != 4 or parts[:2] != ["v1", "table"] or parts[3] not in _LINEAGE_ONLY_DATA_ACTIONS:
         return True
     segments = parse_identifier(parts[2])
     return not is_provenance(fga.canonical_object_id(segments[:-1]), settings)
@@ -69,15 +74,64 @@ def unsigned_response() -> JSONResponse:
     )
 
 
-async def signing_gate_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-    """Refuse a write the catalog would announce while it holds no signing key or no commit id key."""
-    holder = signing_of(request.app)
+def commit_ids_of(request: Request) -> CommitIds:
+    """The commit id key holder the lifespan wired (`catalog.main._build`): the key holder, or the empty key for a stack
+    with no secret store. Never the empty key for a catalog that wired none, whose run ids every producer could then
+    compute ([[LH-497]], [[XC-219]]).
+
+    Raises:
+        InternalError: The lifespan wired no holder.
+    """
+    # The holder is one of two classes (`CommitIds`), which no single `type` names; `app_wire` checks no kind anyway.
+    return cast("CommitIds", app_wire(request, COMMIT_IDS_STATE, object))
+
+
+def _unready(request: Request) -> bool:
+    """Whether this catalog holds no signing key, or no commit id key, now. A catalog that does not sign is wired the
+    ``None`` holder (`lakehouse.governed.signing_key.attach_signing`); one wired no holder at all faults.
+
+    Raises:
+        InternalError: The lifespan wired no signing holder or no commit id key holder.
+    """
+    holder = app_wire(request, SIGNING_STATE, SigningStatus, none_is_off=True)
     # An announcement also needs its commit's run id, derived under a key read from the store ([[LH-497]]).
-    unready = (holder is not None and not holder.ready) or not commit_ids_of(request.app).ready
+    return (holder is not None and not holder.ready) or not commit_ids_of(request).ready
+
+
+async def signing_gate_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    """Refuse a write the catalog would announce while it holds no signing key or no commit id key.
+
+    A catalog whose lifespan wired either holder not at all, or no settings, cannot say whether it could sign, so each
+    such write is refused as the server fault it is (500, the spec's InternalError, with :func:`app_wire`'s ERROR line
+    naming the wire), never admitted unsigned and never told to retry: no re-read of a key mends a wire nobody set.
+    """
+    try:
+        unready, fault = _unready(request), None
+    except InternalError as exc:
+        unready, fault = True, exc
     # The path routing matches, never `request.url.path`: that re-parses the decoded path as a URL, so a `?` in a name
     # would end the path there and the action read would be a segment of the name ([[LH-526]]).
     path = route_path(request.scope)
-    settings: Settings | None = getattr(request.app.state, "settings", None)
-    if unready and path.startswith(GATED_MOUNTS) and is_mutating(request) and announces(path, settings):
-        return unsigned_response()
-    return await call_next(request)
+    if not (unready and path.startswith(GATED_MOUNTS) and is_mutating(request)):
+        return await call_next(request)
+    try:
+        if not announces(path, app_wire(request, "settings", Settings)):
+            return await call_next(request)
+    except InternalError as exc:
+        fault = fault or exc
+    return fault_response(fault) if fault is not None else unsigned_response()
+
+
+def commit_ids_ready_check(inner: ReadyCheck) -> ReadyCheck:
+    """A `/readyz` check adding the commit id key to ``inner``: a catalog without it is `unhealthy` (503), as one
+    without its signing key is, so it leaves its Service while `/livez` stays 200. A catalog wired no holder answers the
+    probe with the server fault :func:`commit_ids_of` raises, which takes it out of its Service as well."""
+
+    async def check(request: Request) -> Readiness:
+        body = await inner(request)
+        holder = commit_ids_of(request)
+        if holder.ready:
+            return body
+        return body.model_copy(update={"status": ReadinessStatus.unhealthy, "components": {**body.components, "commit_ids": holder.reason}})
+
+    return check

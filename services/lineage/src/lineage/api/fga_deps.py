@@ -46,7 +46,7 @@ from lakehouse.governed.decider import AccessDecider
 from lakehouse.governed.principal import is_principal
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import identifier_location
-from lineage.api.dependencies import BearerDep, NamesDep, SettingsDep
+from lineage.api.dependencies import BearerDep, NamesDep, SettingsDep, app_wire
 from lineage.api.security import Caller, CurrentToken
 from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
@@ -60,7 +60,7 @@ from lineage.models import (
     UngovernedOutputError,
     author_sub_from_payload,
 )
-from lineage.services.provenance import feed_key
+from lineage.services.provenance import ProvenanceStore, feed_key
 from lineage.services.signature import verify_arrived_event
 
 
@@ -468,10 +468,9 @@ async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object],
     """
     # THE FEED'S OWN ROW KEY, never `run_id`: a static change has no run id and is stored under the id derived from its
     # content and who vouches for it (`feed_key`), so only its own row can say whether this is that row again.
-    provenance = getattr(app.state, "provenance", None)
-    if provenance is None or not event.feed_id:
+    if not event.feed_id:
         return False
-    stored = await provenance.recorded_event(feed_key(event))
+    stored = await app_wire(app, "provenance", ProvenanceStore).recorded_event(feed_key(event))
     return stored is not None and stored == payload
 
 
@@ -639,10 +638,10 @@ async def enforce_output_authz(
     # may write those outputs. The author is the verified subject of the run's first recorded event: the HTTP door
     # stamps the caller's token subject (`enforce_author`), and the bus, the outbox and a kept delivery's replay present the subject a
     # listed signer verified, so one rule holds at every door. A run the feed does not hold yet has no author, and
-    # its first event founds it.
-    provenance = getattr(app.state, "provenance", None)
-    if provenance is not None and event.run_id:
-        author = await provenance.run_author(event.run_id)
+    # its first event founds it. The feed is a wire the lifespan always sets: a lineage without it faults (`app_wire`),
+    # never skips the check.
+    if event.run_id:
+        author = await app_wire(app, "provenance", ProvenanceStore).run_author(event.run_id)
         if author is not None and author != token.subject:
             _denied("ingest_run_mutation_denied", subject=token.subject, relation="author", resources=[f"run:{event.run_id}"])
             raise ForeignRunError(f"run {event.run_id} was founded by another subject; only its author may extend it")

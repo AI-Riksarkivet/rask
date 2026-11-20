@@ -269,6 +269,8 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     app.state.grants = grants
     app.state.provenance = store
     app.state.names = CatalogNames.from_settings(settings)
+    # The off value lineage's lifespan sets for a process the chart names no bus.
+    app.state.bus = None
     app.state.published_keys = store_published_keys()
     try:
         with TestClient(app) as client:
@@ -284,6 +286,16 @@ def relay_tick(lineage: TestClient) -> RelayReport:
 
     assert lineage.portal is not None, "the relay ticks inside the app's lifespan"
     return lineage.portal.call(relay.tick, cast(FastAPI, lineage.app), get_settings())
+
+
+def served_relay_tick(lineage_url: str, *, timeout: float = 120) -> RelayReport:
+    """One relay tick of the lineage :func:`live_lineage` serves at ``lineage_url``, run on that server's own event loop
+    with lineage's settings, as its timer runs one; answers what the tick reports, or raises what it raised."""
+    from lineage.api import relay
+    from lineage.core.config import get_settings
+    from lineage.main import app
+
+    return asyncio.run_coroutine_threadsafe(relay.tick(app, get_settings()), _SERVED_ON[lineage_url]).result(timeout=timeout)
 
 
 def ensure_tables(store: ProvenanceStore, *, deadline_seconds: float = 30.0) -> None:

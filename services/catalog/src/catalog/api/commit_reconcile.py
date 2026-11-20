@@ -35,9 +35,9 @@ from lance_namespace import DescribeTableRequest, LanceNamespace, NamespaceNotFo
 from opentelemetry import metrics
 from pydantic import BaseModel, Field
 
-from catalog.api.dependencies import ObjectUuids, estate_namespace, namespace_for_table
+from catalog.api.dependencies import ObjectUuids, app_wire, estate_namespace, namespace_for_table
+from catalog.api.signing_gate import commit_ids_of
 from catalog.api.ticks import Tick
-from catalog.core.commit_ids import commit_ids_of
 from catalog.core.config import CatalogLineageSettings, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import LineageEmitter, emit_write_event, run_inputs
@@ -224,9 +224,9 @@ async def _announce(
 async def tick(ctx: Tick) -> CommitReconcileTick:
     """Announce every committed version past the grace that lineage's feed lacks."""
     request, settings, so, clock = ctx.request, ctx.settings, ctx.storage_options, ctx.clock
-    if not commit_ids_of(request.app).ready:
+    if not commit_ids_of(request).ready:
         return CommitReconcileTick(skipped=True)
-    emitter: LineageEmitter = request.app.state.lineage_emitter
+    emitter = app_wire(request, "lineage_emitter", LineageEmitter)
     estate = await estate_namespace(request, settings)
     late_derived = await _watch_released(settings, estate, so)
     try:

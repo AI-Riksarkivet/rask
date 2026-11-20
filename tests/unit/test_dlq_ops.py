@@ -97,6 +97,16 @@ class _Repo:
         # One call records the edges and the feed row — a replay has one call to make, not two.
         self.ingested.append(event)
 
+    async def run_author(self, run_id: str) -> str | None:
+        """The feed holds no run, so a replayed event founds its own."""
+        del run_id
+        return None
+
+    async def recorded_event(self, key: str) -> dict[str, Any] | None:
+        """No row of the feed, so a refused event is never the replay of one recorded."""
+        del key
+        return None
+
 
 def _request(**state: object) -> Any:
     return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(**state)))
@@ -179,7 +189,8 @@ def test_list_filters_events_to_visible_datasets(tmp_path: Path, monkeypatch: py
 
 def _replay(s: LineageSettings, run_id: str, repo: Any, token: Any = None) -> Any:
     flt = _filter(_request(decider=OpenFgaDecider(cast("Any", object()))), s, token)
-    return dlq.replay_dlq(run_id, _request(decider=OpenFgaDecider(cast("Any", object()))), repo, s, token, flt, None)
+    # The door's feed is the one lineage's lifespan wires on its app, which the run-author check reads.
+    return dlq.replay_dlq(run_id, _request(decider=OpenFgaDecider(cast("Any", object())), provenance=repo), repo, s, token, flt, None)
 
 
 def test_replay_reingests_and_drops(tmp_path: Path) -> None:

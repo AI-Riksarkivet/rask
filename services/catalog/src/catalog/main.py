@@ -17,22 +17,25 @@ from functools import partial
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespaceError
+from openfga_sdk import OpenFgaClient
 from starlette.middleware import Middleware
 
+from catalog.api import fga_deps
 from catalog.api.control_lane import STREAM as CONTROL_STREAM
 from catalog.api.control_lane import TOPIC as CONTROL_TOPIC
 from catalog.api.control_lane import ControlLane, create_signature_refused_series
 from catalog.api.control_relay import attach_published_keys
+from catalog.api.dependencies import app_wire
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
 from catalog.api.path_reading import PathReadingMiddleware
 from catalog.api.security import authenticate, judge
-from catalog.api.signing_gate import signing_gate_middleware
+from catalog.api.signing_gate import commit_ids_ready_check, signing_gate_middleware
 from catalog.api.timers import start_timers
 from catalog.api.v1.router import api_router
 from catalog.core import base_judge
 from catalog.core.commit_ids import STATE as COMMIT_IDS_STATE
-from catalog.core.commit_ids import CommitIdKeyHolder, commit_ids_ready_check, make_commit_ids
+from catalog.core.commit_ids import CommitIdKeyHolder, make_commit_ids
 from catalog.core.config import CatalogReadBounds, CatalogStore, Settings, get_settings
 from catalog.core.control_signing import control_sign
 from catalog.core.lineage_emit import make_emitter
@@ -74,15 +77,26 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
     and the provenance namespace is one of them (`services.provenance_namespace`). Retried rather than tried once:
     lineage writes nothing until the namespace exists and grants it `writer`, and the store or OpenFGA this needs may
     still be starting when the catalog is. Every step is idempotent.
+
+    Its wires are read once, before the first try: one the lifespan did not set is no outage a retry outlasts, so it
+    ends the task, and the supervisor ends the process with it (`app_wire`). An authorization client missing where
+    authorization is on is retried as the outage it may be (`fga_deps.wired`), never read as off: a namespace made
+    with no grant would leave lineage unable to write its feed.
+
+    Raises:
+        InternalError: The lifespan wired no settings, no connections or no authorization client, not even its ``None``.
     """
     from catalog.services.provenance_namespace import ensure_provenance_namespace
 
+    settings = app_wire(app, "settings", Settings)
+    connections = app_wire(app, "connections", NamespaceConnections)
+    client = app_wire(app, "fga", OpenFgaClient, none_is_off=True)
     delay = _PROVENANCE_RETRY_FIRST_SECONDS
     while True:
         try:
-            namespace = await run_in_threadpool(app.state.connections.connection, app.state.settings)
-            await run_in_threadpool(warehouses.ensure_catalog_row, namespace, app.state.settings.estate_warehouse)
-            await ensure_provenance_namespace(namespace, app.state.settings, getattr(app.state, "fga", None))
+            namespace = await run_in_threadpool(connections.connection, settings)
+            await run_in_threadpool(warehouses.ensure_catalog_row, namespace, settings.estate_warehouse)
+            await ensure_provenance_namespace(namespace, settings, fga_deps.wired(settings, client))
             return
         except asyncio.CancelledError:
             raise

@@ -31,7 +31,7 @@ from lance_namespace import ServiceUnavailableError
 
 from catalog.api import fga_deps
 from catalog.api.control_lane import STREAM, TOPIC, control_event_in, judge
-from catalog.api.dependencies import FgaClientDep, SettingsDep
+from catalog.api.dependencies import FgaClientDep, SettingsDep, app_wire
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import EventsResponse
@@ -78,8 +78,9 @@ async def poll_control_events(
 
 async def _served(request: Request, settings: Settings, since: int) -> tuple[list[CatalogControlEvent], int, bool]:
     """The events the stream holds after ``since`` that the doors admit, the cursor after them, and whether the stream
-    no longer holds what came after ``since``. A process that emits no control events, or is named no bus, serves none."""
-    bus: Bus | None = getattr(request.app.state, "bus", None)
+    no longer holds what came after ``since``. A process that emits no control events, or is named no bus, serves none;
+    one whose lifespan set no bus at all, not even that ``None``, faults rather than serving an empty page (`app_wire`)."""
+    bus = app_wire(request, "bus", Bus, none_is_off=True)
     if bus is None or not settings.control_emit_enabled:
         return [], 0, False
     try:

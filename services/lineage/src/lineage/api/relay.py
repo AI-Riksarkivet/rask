@@ -19,6 +19,7 @@ import logging
 from contextlib import suppress
 from functools import partial
 
+import httpx
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError
@@ -29,6 +30,7 @@ from lakehouse.events.bus import Bus
 from lakehouse.process.supervision import Supervisor
 from lakehouse.storage.options import StorageOptions
 from lakehouse.timers import Timer
+from lineage.api.dependencies import app_wire
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.api.ingest_lane import park
 from lineage.core.config import LineageSettings, storage_options
@@ -162,9 +164,18 @@ async def tick(app: FastAPI, settings: LineageSettings) -> RelayReport:
 
     Each step degrades to a warning, so one step's failure leaves the others to this tick and the report says what
     each did, and which could not run (``failed``), which the timer's work raises on.
+
+    Its wires are read before any step: one the lifespan did not set fails the tick, which the timer counts failed
+    (`app_wire`), rather than draining with no publisher or skipping the forward as though no graph backend were named.
+    The forward client is ``None`` only where no graph backend is named, as the lifespan sets it.
+
+    Raises:
+        InternalError: The lifespan wired no provenance store, no bus (not even its ``None``), or no forward client
+            where a graph backend is named.
     """
-    provenance: ProvenanceStore = app.state.provenance
-    publisher: Bus | None = getattr(app.state, "bus", None)
+    provenance = app_wire(app, "provenance", ProvenanceStore)
+    publisher = app_wire(app, "bus", Bus, none_is_off=True)
+    client = app_wire(app, "forward_client", httpx.AsyncClient, none_is_off=not settings.forward_url)
     report = RelayReport()
     if settings.outbox_uri:
         try:
@@ -179,7 +190,6 @@ async def tick(app: FastAPI, settings: LineageSettings) -> RelayReport:
     except Exception as exc:
         report.failed.append("parks")
         log.warning("lineage_parks_retire_failed", extra={"error": str(exc)})
-    client = getattr(app.state, "forward_client", None)
     if settings.forward_url and client is not None:
         try:
             forwarded = await forward(provenance, settings, client)

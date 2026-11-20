@@ -522,7 +522,8 @@ def test_enforce_output_authz_bounds_a_service_principal_by_its_own_rung(held: s
         asyncio.run(
             fga_deps.enforce_output_authz(
                 _service_run(),
-                _request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))).app,
+                # The feed lineage's lifespan always wires, here one holding no run, so the event founds its run.
+                _request(decider=OpenFgaDecider(cast(OpenFgaClient, object())), provenance=_FakeStore()).app,
                 _settings(**_FULL_AUTH),
                 security.ServicePrincipal.for_account(_SERVICE_ACCOUNT),
             )

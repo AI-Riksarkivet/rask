@@ -98,11 +98,26 @@ def _settings(signers: set[str], delegators: set[str], *, fga_enabled: bool = Fa
     )
 
 
+class _EmptyFeed:
+    """Lineage's feed as the door reads it, holding no row and no run, so a refused event is never the replay of a
+    recorded one."""
+
+    async def recorded_event(self, key: str) -> dict[str, Any] | None:
+        del key
+        return None
+
+    async def run_author(self, run_id: str) -> str | None:
+        del run_id
+        return None
+
+
 async def _drive(event: dict[str, Any], settings: LineageSettings) -> None:
     """Through the REAL door, as the bus drives it: the parsed model plus the bytes that arrived."""
     app = FastAPI()
     app.state.decider = OpenFgaDecider(cast("Any", object()))
     app.state.published_keys = store_published_keys()
+    # The feed lineage's lifespan always wires, which the door reads when it refuses.
+    app.state.provenance = _EmptyFeed()
     parsed = parse_event(json.loads(json.dumps(event)))
     await fga_deps.enforce_bus_authz(parsed, app, settings, event)
 

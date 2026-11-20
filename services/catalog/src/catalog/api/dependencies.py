@@ -6,9 +6,9 @@ import logging
 from collections.abc import Callable
 from datetime import UTC, datetime
 from functools import partial
-from typing import Annotated, cast
+from typing import Annotated, Final, cast, overload
 
-from fastapi import Depends, Header, Query, Request
+from fastapi import Depends, FastAPI, Header, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     InternalError,
@@ -44,7 +44,19 @@ log = logging.getLogger(__name__)
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 
 
-def app_wire[T](request: Request, name: str, kind: type[T]) -> T:
+#: What ``getattr`` answers for a wire the lifespan never set, told apart from the ``None`` a lifespan sets for "off".
+_UNSET: Final = object()
+
+
+@overload
+def app_wire[T](owner: Request | FastAPI, name: str, kind: type[T]) -> T: ...
+
+
+@overload
+def app_wire[T](owner: Request | FastAPI, name: str, kind: type[T], *, none_is_off: bool) -> T | None: ...
+
+
+def app_wire[T](owner: Request | FastAPI, name: str, kind: type[T], *, none_is_off: bool = False) -> T | None:
     """What the lifespan wired onto ``app.state`` as ``name``: an emitter, the credential vendor, the connections.
 
     Off is what a setting says, and the lifespan wires the explicit off object for it (`catalog.main._build`), so a
@@ -53,17 +65,23 @@ def app_wire[T](request: Request, name: str, kind: type[T]) -> T:
     answer 200, and an event never emitted is one no notifier can repair. The ERROR line names the wire, since the
     caller's 500 is redacted.
 
+    ``none_is_off`` names a wire whose off value the lifespan sets as ``None`` (the bus of a process the chart names no
+    bus, the signing holder of a catalog that does not sign, the authorization client with authorization off): there
+    ``None`` is the answer, and only a wire never set is the fault. A request reads it through its ``Request``; a
+    background task or a tick, which has none of its own, through the app.
+
     ``kind`` names what the lifespan wires there, for the reader's type; it is not checked, so a test may wire a
     stand-in of its own.
 
     Raises:
-        InternalError: Nothing is wired as ``name``.
+        InternalError: Nothing is wired as ``name``, or ``None`` is, where ``None`` is not that wire's off value.
     """
-    wire = getattr(request.app.state, name, None)
-    if wire is None:
+    state = owner.state if isinstance(owner, FastAPI) else owner.app.state
+    wire = getattr(state, name, _UNSET)
+    if wire is _UNSET or (wire is None and not none_is_off):
         log.error("missing_wire", extra={"wire": name})
         raise InternalError(f"the catalog has no {name} wired: its lifespan did not build it")
-    return cast(kind, wire)
+    return cast("T | None", wire)
 
 
 class ServedWarehouse(BaseModel):

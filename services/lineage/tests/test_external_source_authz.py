@@ -34,6 +34,7 @@ from typing import Any, cast
 import pytest
 from fastapi import FastAPI
 from lance_namespace import PermissionDeniedError
+from lineage_lane import Feed
 
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE
@@ -152,6 +153,8 @@ def app_with(monkeypatch):
         monkeypatch.setattr(fga, "batch_check", fake.batch_check)
         app = FastAPI()
         app.state.decider = _Claims(cast("Any", object()), held or {})
+        # The feed lineage's lifespan always wires, here one holding no run, so each event founds its run.
+        app.state.provenance = Feed()
         return app, fake
 
     return _make

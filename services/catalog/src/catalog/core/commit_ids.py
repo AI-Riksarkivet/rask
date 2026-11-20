@@ -27,12 +27,8 @@ import uuid
 from contextlib import suppress
 from typing import TYPE_CHECKING, Final
 
-from fastapi import FastAPI, Request
-
 from lakehouse.governed.secrets import read_secret, secret_store_configured
 from lakehouse.governed.signing_key import SigningKeyUnavailableError
-from lakehouse.process.probes import ReadyCheck
-from lakehouse.schemas.health import Readiness, ReadinessStatus
 
 
 if TYPE_CHECKING:
@@ -172,23 +168,3 @@ type CommitIds = CommitIdKeyHolder | UnkeyedCommitIds
 def make_commit_ids() -> CommitIds:
     """The key holder for a catalog the chart named a secret store, else the empty key."""
     return CommitIdKeyHolder() if secret_store_configured() else UnkeyedCommitIds()
-
-
-def commit_ids_of(app: FastAPI) -> CommitIds:
-    """The holder the lifespan published on ``app``, or the empty key for an app no lifespan wired."""
-    holder: CommitIds | None = getattr(app.state, STATE, None)
-    return holder if holder is not None else UnkeyedCommitIds()
-
-
-def commit_ids_ready_check(inner: ReadyCheck) -> ReadyCheck:
-    """A `/readyz` check adding the commit id key to ``inner``: a catalog without it is `unhealthy` (503), as one
-    without its signing key is, so it leaves its Service while `/livez` stays 200."""
-
-    async def check(request: Request) -> Readiness:
-        body = await inner(request)
-        holder = commit_ids_of(request.app)
-        if holder.ready:
-            return body
-        return body.model_copy(update={"status": ReadinessStatus.unhealthy, "components": {**body.components, "commit_ids": holder.reason}})
-
-    return check
