@@ -153,9 +153,9 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
     """
     if on_s3(outbox_uri):
         bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
-        # The stage's own client (:func:`~lakehouse.storage.options.object_client`): a delete signed with less than the whole key pair falls back
-        # to boto3's default chain, and the lineage pod carries no ambient `AWS_*` (measured 2026-09-10), so that would be
-        # a delete with no credential at all; pinned in `test_the_outbox_drain_needs_no_write_permission.py`.
+        # The stage's own client (:func:`~lakehouse.storage.options.object_client`): it signs with the whole key pair of these options or builds
+        # no client (`StorageOptions.signing_pair`), so a delete is never signed by whatever the pod's environment holds;
+        # pinned in `test_the_outbox_drain_needs_no_write_permission.py`.
         client = object_client(storage_options)
         # An absent object already satisfies the post-condition, and S3's DeleteObject is idempotent for
         # a missing key (204, no error) — so this suppression is for a NON-S3 double or backend that

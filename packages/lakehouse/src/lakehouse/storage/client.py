@@ -2,13 +2,19 @@
 
 rask is storage-agnostic: the client below speaks only standard S3, so the
 backend is a runtime choice (endpoint + credentials), never a code one. It derives no
-credential of its own: a key pair is passed per client or comes from the standard AWS chain.
+credential of its own and reads none from its surroundings: every client signs with the key pair its caller passes, and
+a caller with none gets no client ([[XC-219]]).
 """
 
+import os
+from functools import cache
 from typing import Any, Final
 
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.errors import MissingStoreCredentialError
 
 
 # Public alias for the boto3 S3 client. boto3 ships no public stubs, so this
@@ -68,63 +74,90 @@ def configured_endpoint() -> str | None:
     return S3EnvSettings().endpoint
 
 
-def s3_client(
-    endpoint: str | None = None,
-    *,
-    access_key: str | None = None,
-    secret_key: str | None = None,
-    session_token: str | None = None,
-    region: str | None = None,
-    insecure: bool | None = None,
-) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """Build a boto3 S3 client for any S3-compatible backend (RustFS / AWS / any S3).
+def s3_client(endpoint: str | None = None, *, key_pair: S3KeyPair, region: str | None = None, insecure: bool | None = None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+    """Build a boto3 S3 client for any S3-compatible backend (RustFS / AWS / any S3), signed by ``key_pair``.
 
     Endpoint/CA/insecure flags resolve from env (`RASK_S3_*`). Path-style + s3v4 are the RustFS-safe, AWS-accepted defaults.
 
-    ``access_key``/``secret_key``/``session_token``/``region``/``insecure`` override the env for THIS
-    client only. Env-only credentials are a single global pair, so one process could address exactly
-    one backend — and the estate genuinely spans two: the governed tables on the deployment's own
-    store, and sources on an external one with different keys. Reading a store from the wrong backend
-    does not error, it returns an empty listing, which is the least debuggable failure available.
-    Passing them per call is what lets one process serve both. Omitted → the env chain.
+    ``key_pair`` is the only credential the client signs with (:func:`_signing`). ``region`` and ``insecure`` override
+    the env for THIS client only: the estate spans more than one store (the governed tables on the deployment's own, a
+    warehouse on another), and reading a store from the wrong backend does not error, it returns an empty listing, which
+    is the least debuggable failure available. ``region`` omitted → ``AWS_REGION``, default us-east-1.
 
-    ``region`` is per-client for the same reason: a caller holding a store's OWN region (a warehouse
-    record, a lance-style ``storage_options`` dict) must be able to spend it, or every backend in the
-    process is pinned to whatever ``AWS_REGION`` says. Omitted → ``AWS_REGION``, default us-east-1.
-
-    ``session_token`` completes a vended temporary credential. It is refused without its key pair
-    because botocore silently IGNORES a lone token and falls back to the env credential chain — the
-    request then signs as a different identity and the store's 403 names the wrong problem.
+    Raises:
+        TypeError: ``key_pair`` is not an :class:`~lakehouse.storage.credential.S3KeyPair`.
+        MissingStoreCredentialError: ``key_pair`` names no key id or no secret.
     """
     env = S3EnvSettings()
-    return _client(endpoint or env.endpoint, env, access_key=access_key, secret_key=secret_key, session_token=session_token, region=region, insecure=insecure)
+    return _client(endpoint or env.endpoint, env, key_pair=key_pair, region=region, insecure=insecure)
 
 
-def aws_s3_client(*, access_key: str | None, secret_key: str | None, session_token: str | None = None, region: str) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """A boto3 S3 client for AWS proper in ``region``, signed by the pair it is given (the pod's own chain when given
-    none): the client for a root whose storage options name no endpoint.
+def aws_s3_client(*, key_pair: S3KeyPair, region: str) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+    """A boto3 S3 client for AWS proper in ``region``, signed by ``key_pair``: the client for a root whose storage
+    options name no endpoint.
 
     It addresses the endpoint botocore resolves for the region and no other: neither the deployment's own
     (``RASK_S3_ENDPOINT_URL``) nor one the environment or a shared config file names (``AWS_ENDPOINT_URL``,
     ``AWS_ENDPOINT_URL_S3``, ``endpoint_url``), any of which would be handed the pair and the bytes ([[LH-572]]).
+
+    Raises:
+        TypeError: ``key_pair`` is not an :class:`~lakehouse.storage.credential.S3KeyPair`.
+        MissingStoreCredentialError: ``key_pair`` names no key id or no secret.
     """
-    return _client(None, S3EnvSettings(), access_key=access_key, secret_key=secret_key, session_token=session_token, region=region, insecure=None)
+    return _client(None, S3EnvSettings(), key_pair=key_pair, region=region, insecure=None)
 
 
-def _client(
-    endpoint: str | None,
-    env: S3EnvSettings,
-    *,
-    access_key: str | None,
-    secret_key: str | None,
-    session_token: str | None,
-    region: str | None,
-    insecure: bool | None,
-) -> Any:  # noqa: ANN401 — boto3 client has no public stub
-    """The boto3 client both builders hand out; ``endpoint`` None is the region's own, whatever the environment names."""
+@cache
+def aws_session() -> Any:  # noqa: ANN401 — boto3 ships no public stub for its Session
+    """The one boto3 session every client of this package is built from: it reads no profile and no shared file.
+
+    boto3's default session takes ``AWS_PROFILE``/``AWS_DEFAULT_PROFILE``, ``AWS_CONFIG_FILE`` and
+    ``AWS_SHARED_CREDENTIALS_FILE`` from the environment, so a profile name the environment holds decides whether a
+    client can be built at all (``ProfileNotFound``, measured on botocore 1.43.58 with an explicit key pair passed), and
+    a config file it names applies its settings to every client. These three are pinned here to no profile and no file.
+
+    Built once per process: a client costs about 1.6 ms from a built session and about 35 ms from a fresh one (measured
+    on botocore 1.43.58), and every read of the store builds one. Shared across threads as boto3's default session is.
+    """
     import boto3
+    from botocore.session import Session
+
+    # botocore's `session_vars` entries are (config file key, environment variables, default, converter).
+    unread = {
+        "profile": (None, None, None, None),
+        "config_file": (None, None, os.devnull, None),
+        "credentials_file": (None, None, os.devnull, None),
+    }
+    return boto3.session.Session(botocore_session=Session(session_vars=unread))
+
+
+def _signing(key_pair: S3KeyPair) -> dict[str, str]:
+    """The credential arguments a client is built with: ``key_pair`` and nothing else.
+
+    botocore uses its default chain (environment variables, shared files, profiles, a credential process, an assumed
+    role, container and instance metadata) whenever a client is built without both halves of a pair, including when it
+    is given a lone session token, and signs with whatever that finds. So a pair missing a half builds no client.
+
+    Raises:
+        TypeError: ``key_pair`` is not an :class:`~lakehouse.storage.credential.S3KeyPair`.
+        MissingStoreCredentialError: ``key_pair`` names no key id or no secret.
+    """
+    if not isinstance(key_pair, S3KeyPair):
+        raise TypeError(f"a store client signs with an S3KeyPair, not {type(key_pair).__name__}")
+    secret = key_pair.secret_access_key.get_secret_value()
+    if missing := [name for name, value in (("access_key_id", key_pair.access_key_id), ("secret_access_key", secret)) if not value]:
+        raise MissingStoreCredentialError(f"the key pair names no {' and no '.join(missing)}, so no store client is built")
+    signing = {"aws_access_key_id": key_pair.access_key_id, "aws_secret_access_key": secret}
+    if key_pair.session_token is not None and (token := key_pair.session_token.get_secret_value()):
+        signing["aws_session_token"] = token
+    return signing
+
+
+def _client(endpoint: str | None, env: S3EnvSettings, *, key_pair: S3KeyPair, region: str | None, insecure: bool | None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+    """The boto3 client both builders hand out; ``endpoint`` None is the region's own, whatever the environment names."""
     from botocore.config import Config
 
+    signing = _signing(key_pair)
     cfg = Config(
         signature_version="s3v4",
         s3={"addressing_style": "path"},
@@ -140,27 +173,16 @@ def _client(
         # config file names. Its type stub does not list the option, so this one key is passed as a map.
         unlisted: dict[str, Any] = {"ignore_configured_endpoint_urls": True}
         cfg = cfg.merge(Config(**unlisted))
-    if session_token and not (access_key and secret_key):
-        raise ValueError("session_token needs access_key and secret_key: botocore drops a lone token and signs with the env credential chain instead")
-    kwargs: dict = {
-        "endpoint_url": endpoint,
-        "region_name": region or AwsRegionSettings().aws_region,
-        "config": cfg,
-    }
-    if access_key and secret_key:
-        kwargs["aws_access_key_id"] = access_key
-        kwargs["aws_secret_access_key"] = secret_key
-        if session_token:
-            kwargs["aws_session_token"] = session_token
+    verify: str | bool | None = None
     skip_verify = insecure if insecure is not None else env.insecure
     if ca := env.ca_bundle:
-        kwargs["verify"] = ca
+        verify = ca
     elif skip_verify:
         import urllib3
 
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-        kwargs["verify"] = False
-    return boto3.client("s3", **kwargs)
+        verify = False
+    return aws_session().client("s3", endpoint_url=endpoint, region_name=region or AwsRegionSettings().aws_region, config=cfg, verify=verify, **signing)
 
 
 __all__ = [
@@ -169,6 +191,7 @@ __all__ = [
     "S3Client",
     "S3EnvSettings",
     "aws_s3_client",
+    "aws_session",
     "configured_endpoint",
     "s3_client",
 ]

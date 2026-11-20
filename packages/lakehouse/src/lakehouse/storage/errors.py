@@ -33,6 +33,7 @@ from contextlib import contextmanager
 
 __all__ = [
     "BucketNotFoundError",
+    "MissingStoreCredentialError",
     "ObjectNotFoundError",
     "StorageError",
     "s3_errors",
@@ -72,6 +73,15 @@ class ObjectNotFoundError(StorageError):
         self.bucket = bucket
         self.key = key
         super().__init__(f"object does not exist: {bucket}/{key}")
+
+
+class MissingStoreCredentialError(StorageError):
+    """A store client was asked for without a whole key pair to sign with, so none is built.
+
+    botocore and pyarrow fill a missing credential from their default chain (environment variables, shared files,
+    profiles, a credential process, container and instance metadata), and in a pod that chain signs as a credential
+    nobody scoped. The message names the missing parts, never a value.
+    """
 
 
 def _error_code(exc: BaseException) -> str | None:

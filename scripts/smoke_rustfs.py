@@ -10,7 +10,8 @@ or manually against any S3-compatible endpoint (RustFS / AWS / any S3):
     RASK_S3_INSECURE=1 uv run python scripts/smoke_rustfs.py
 
 It exercises the SAME code the lakehouse uses:
-  - `lakehouse.storage.client.s3_client()` (boto3, the client the registries' conditional writes use): bucket + object round-trip.
+  - `lakehouse.storage.client.s3_client` (boto3, the client the registries' conditional writes use), signed by the pair
+    `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` name: bucket + object round-trip.
   - pylance over `s3://` (Lance's object_store, the catalog's data plane and the strictest S3-compat
     surface): create a 2.2 table with stable row ids, as the catalog's create does, and read it back.
 Exits non-zero on any failure. No credentials are hard-coded; everything is env-driven
@@ -27,8 +28,10 @@ from collections.abc import Callable
 import lance
 import pyarrow as pa
 from dotenv import load_dotenv
+from pydantic import SecretStr
 
 from lakehouse.storage.client import AwsRegionSettings, S3EnvSettings, configured_endpoint, s3_client
+from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.endpoint_scheme import allow_http_for
 
 
@@ -46,7 +49,7 @@ def main() -> int:
     load_dotenv()
     # `configured_endpoint` rather than a local env chain: this value both reports the backend and
     # decides whether the smoke runs at all, so a copy that omits an alias refuses a backend
-    # `s3_client()` would have reached — a green-looking refusal, the worst answer available here.
+    # `s3_client` would have reached — a green-looking refusal, the worst answer available here.
     endpoint = configured_endpoint()
     print(f"endpoint: {endpoint}", flush=True)
     print(f"creds set: {bool(os.getenv('AWS_ACCESS_KEY_ID') and os.getenv('AWS_SECRET_ACCESS_KEY'))}", flush=True)
@@ -61,7 +64,8 @@ def main() -> int:
 
     # ---- boto3 path: lakehouse.storage.client.s3_client, the lakehouse's S3 client ----
     print("\n== boto3 path (lakehouse.storage.client.s3_client) ==", flush=True)
-    c = s3_client()
+    pair = S3KeyPair(access_key_id=os.environ["AWS_ACCESS_KEY_ID"], secret_access_key=SecretStr(os.environ["AWS_SECRET_ACCESS_KEY"]))
+    c = s3_client(key_pair=pair)
 
     def ensure_bucket() -> None:
         try:
@@ -89,8 +93,8 @@ def main() -> int:
     print("\n== Lance path (s3:// — the catalog's data plane) ==", flush=True)
     storage_opts = {
         "aws_endpoint": endpoint,
-        "aws_access_key_id": os.environ["AWS_ACCESS_KEY_ID"],
-        "aws_secret_access_key": os.environ["AWS_SECRET_ACCESS_KEY"],
+        "aws_access_key_id": pair.access_key_id,
+        "aws_secret_access_key": pair.secret_access_key.get_secret_value(),
         "aws_region": AwsRegionSettings().aws_region,
         "aws_virtual_hosted_style_request": "false",
         "allow_http": allow_http_for(endpoint),

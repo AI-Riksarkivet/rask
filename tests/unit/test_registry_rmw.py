@@ -33,11 +33,17 @@ from unittest.mock import MagicMock
 
 import pytest
 from botocore.exceptions import ClientError
+from pydantic import SecretStr
 
 import lakehouse.storage.client as storage_client
 from catalog.services import warehouses
 from lakehouse.storage import conditional_records
+from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import ENDPOINT, StorageOptions
+
+
+#: The pair a registry on S3 signs with, as every one the catalog reaches one with carries.
+_PAIR = S3KeyPair(access_key_id="k", secret_access_key=SecretStr("s"))
 
 
 def _root(tmp_path: Any) -> str:
@@ -147,7 +153,7 @@ def test_s3_replace_sends_if_match_and_maps_412_to_a_lost_race(monkeypatch: pyte
     with pytest.raises(conditional_records.RecordChangedError):
         conditional_records.mutate_json(
             "s3://ctl/root",
-            StorageOptions(options={ENDPOINT: "http://store.test:9000"}),
+            StorageOptions(key_pair=_PAIR, options={ENDPOINT: "http://store.test:9000"}),
             "_warehouses/w.json",
             lambda r: {**r, "status": "deactivated"},
             attempts=1,
@@ -164,7 +170,7 @@ def test_s3_read_surfaces_a_non_404_error_instead_of_reporting_absent(monkeypatc
     client.get_object.side_effect = _client_error("AccessDenied", 403)
     monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(Exception, match="AccessDenied"):
-        conditional_records.read_json("s3://ctl/root", StorageOptions(options={ENDPOINT: "http://store.test:9000"}), "_warehouses/w.json")
+        conditional_records.read_json("s3://ctl/root", StorageOptions(key_pair=_PAIR, options={ENDPOINT: "http://store.test:9000"}), "_warehouses/w.json")
 
 
 # --------------------------------------------------------------------------- #

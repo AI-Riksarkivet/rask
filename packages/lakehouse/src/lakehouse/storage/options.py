@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator, m
 
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.endpoint_scheme import allow_http_for, endpoint_scheme
+from lakehouse.storage.errors import MissingStoreCredentialError
 
 
 if TYPE_CHECKING:
@@ -90,13 +91,14 @@ class StorageOptions(BaseModel):
     log line or an error that echoes these options, or any model holding them (a history fence, a claim store, a base
     registry, an expiry target), carries neither, as a vend carries neither ([[LH-072]]). They leave only at the call
     that signs: :meth:`in_clear` builds the flat map Lance and the ``dir`` namespace take, and
-    :meth:`credential_in_clear` hands boto3 and pyarrow the pair.
+    :meth:`signing_pair` hands boto3 the pair and :meth:`credential_in_clear` hands pyarrow its halves.
     """
 
     #: ``hide_input_in_errors``: a refusal of these options echoes none of their values.
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
-    #: ``None`` signs with the ambient credential chain: a local root, or a store sharing the deployment's identity.
+    #: ``None`` carries no credential: a local root, which nothing signs for. No S3 client is built from such options
+    #: (:meth:`signing_pair`), since the one it built would sign with the default credential chain.
     key_pair: S3KeyPair | None = None
     #: Every other key, as `lance_docs/lance/guide/object_store.md` names it (endpoint, region, path-style, timeouts,
     #: encryption); never a credential's.
@@ -204,17 +206,32 @@ class StorageOptions(BaseModel):
             credential["aws_session_token"] = token
         return {**options, **credential}
 
-    def credential_in_clear(self) -> tuple[str | None, str | None, str | None]:
-        """The (access key, secret, session token) these options sign with, in clear for the boto3 or pyarrow client being
-        built with them.
+    def signing_pair(self) -> S3KeyPair:
+        """The whole key pair a client built from these options signs with.
 
-        ``None`` for a field the options carry no value for — meaning "use the ambient chain for this one", which is what a
-        store sharing the deployment's credentials deliberately wants.
+        boto3 and pyarrow each fill a missing credential, or a missing half of one, from their default chain, which in a
+        pod signs as a credential nobody scoped, so options without a whole pair build no client.
+
+        Raises:
+            MissingStoreCredentialError: The options carry no key pair, or one without its key id or its secret.
         """
-        if (pair := self.key_pair) is None:
-            return None, None, None
+        pair = self.key_pair
+        if pair is None:
+            raise MissingStoreCredentialError("these storage options carry no key pair, so no store client is built from them")
+        if not (pair.access_key_id and pair.secret_access_key.get_secret_value()):
+            raise MissingStoreCredentialError("these storage options' key pair lacks its key id or its secret, so no store client is built from them")
+        return pair
+
+    def credential_in_clear(self) -> tuple[str, str, str | None]:
+        """The (access key, secret, session token) these options sign with, in clear for the pyarrow client being built
+        with them; the token ``None`` when the pair carries none.
+
+        Raises:
+            MissingStoreCredentialError: The options carry no whole key pair (:meth:`signing_pair`).
+        """
+        pair = self.signing_pair()
         session_token = pair.session_token.get_secret_value() if pair.session_token is not None else None
-        return pair.access_key_id or None, pair.secret_access_key.get_secret_value() or None, session_token or None
+        return pair.access_key_id, pair.secret_access_key.get_secret_value(), session_token or None
 
 
 def _split(flat: Mapping[str, str]) -> tuple[S3KeyPair | None, dict[str, str]]:
@@ -290,16 +307,19 @@ def object_client(storage_options: StorageOptions) -> S3Client:
     whenever the options carry one: a vended credential without it is not a weaker credential but an invalid one, and boto3
     would fall back to whatever ambient chain it finds, broader rights than the vend scoped. ``lakehouse.storage.client`` is
     imported at call time so a test replaces the seam rather than this wrapper, and a local root needs no S3 stack at all.
+
+    Raises:
+        MissingStoreCredentialError: The options carry no whole key pair (:meth:`StorageOptions.signing_pair`).
     """
     from lakehouse.storage.client import aws_s3_client, s3_client
 
-    access_key, secret_key, session_token = storage_options.credential_in_clear()
+    key_pair = storage_options.signing_pair()
     region = storage_options.region or DEFAULT_REGION
     if not storage_options.endpoint:
         # Options naming no endpoint are AWS proper (:func:`on_s3`), which the read reaches too: never an endpoint the
         # environment names, which would be handed the pair and the bytes.
-        return aws_s3_client(access_key=access_key, secret_key=secret_key, session_token=session_token, region=region)
-    return s3_client(storage_options.endpoint, access_key=access_key, secret_key=secret_key, session_token=session_token, region=region)
+        return aws_s3_client(key_pair=key_pair, region=region)
+    return s3_client(storage_options.endpoint, key_pair=key_pair, region=region)
 
 
 def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: bool = False) -> pafs.S3FileSystem:
@@ -316,7 +336,11 @@ def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: boo
     The ``session_token`` and the region are forwarded for the same reasons :func:`object_client` forwards them, and the
     stakes are higher here: pyarrow falls back to the default credential chain for anything it was not
     given, so a half-forwarded vended credential can sign with the POD's own role — broader rights than
-    the catalog scoped, not narrower. Dropping it fails open.
+    the catalog scoped, not narrower. Dropping it fails open, and so would options with no whole pair, which build no
+    filesystem.
+
+    Raises:
+        MissingStoreCredentialError: The options carry no whole key pair (:meth:`StorageOptions.signing_pair`).
     """
     endpoint = storage_options.endpoint or ""
     parts = urlsplit(endpoint)

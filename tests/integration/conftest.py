@@ -19,8 +19,10 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse, LanceNamespace
 from moto.server import ThreadedMotoServer
+from pydantic import SecretStr
 
 from lakehouse.naming import UUID_PROPERTY
+from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
 
 
@@ -98,7 +100,9 @@ def client(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     from catalog.main import app
 
     app.dependency_overrides[get_namespace] = lambda: fake_ns
-    app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
+    # A whole pair, as the catalog's own options always carry: a location the double describes on S3 builds no client
+    # from options without one.
+    app.dependency_overrides[get_storage_options] = lambda: StorageOptions(key_pair=S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")))
     # THE DOUBLE DESCRIBES A REAL LOCATION, as the backend it stands in for does. A data door judges the
     # table's declared bases on the dataset it describes before handing the op to the backend
     # ([[LH-279]]), so a location that opens nothing would answer 404 where the backend is under test.

@@ -293,7 +293,7 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     built, so a probe key no statement of that policy matches as the claim needs fails here. A store's refusal names its
     check."""
     vending = _VendingStore(ignores=ignores)
-    monkeypatch.setattr(wh_ep, "s3_client", lambda *a, **k: vending.signed_as(str(k["access_key"])))
+    monkeypatch.setattr(wh_ep, "s3_client", lambda *a, **k: vending.signed_as(k["key_pair"].access_key_id))
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
     client.app.dependency_overrides[get_vendor] = lambda: _ScopedVendor(vending, unreachable=unreachable, encrypts_with=encrypts_with)
     _mk_projects(client, "acme")

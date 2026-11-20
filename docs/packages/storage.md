@@ -15,16 +15,19 @@ from: a workload's sources and sinks live in that workload, outside the lakehous
 
 ## S3 client (`s3_client`)
 
-`s3_client(endpoint=None)` builds a boto3 client for any S3-compatible store:
+`s3_client(endpoint=None, *, key_pair)` builds a boto3 client for any S3-compatible store:
 
 - **path-style addressing** (required by RustFS unless its server domains are set),
 - s3v4 signing, adaptive retries,
 - checksum calculation/validation set to `when_required`,
 - 10s connect / 60s read timeouts.
 
-It derives no credential: a key pair (and a vended session token) is passed per client, or the standard AWS chain
-supplies one. A lone `session_token` without its key pair is refused, because botocore would drop it and sign with the
-env chain.
+It derives no credential and reads none from its surroundings: it signs with the `S3KeyPair` it is passed (its session
+token too, for a session or a vend) and nothing else. A pair without its key id or its secret is refused with
+`MissingStoreCredentialError`, and `object_client` and `s3_filesystem` refuse storage options that carry no whole pair,
+because botocore and pyarrow would otherwise sign with their default chain (environment variables, shared files,
+profiles, a credential process, container or instance metadata). Every client is built from one boto3 session that reads
+no profile and no shared file, so no `AWS_PROFILE` or config file the environment names changes what a client is.
 
 **TLS precedence:** a custom CA (`RASK_S3_CA_BUNDLE`) wins; else insecure (`RASK_S3_INSECURE` set to
 `1`/`true`/`yes`) sets `verify=False` and silences urllib3 warnings; else system trust.

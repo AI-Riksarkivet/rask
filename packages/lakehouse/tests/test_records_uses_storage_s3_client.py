@@ -77,7 +77,7 @@ def test_create_json_builds_its_client_through_the_storage_seam(seam: tuple[_Rec
     assert built, "create_json did not build its client via storage.client.s3_client"
     endpoint, kwargs = built[0]
     assert endpoint == "http://rf:9000"
-    assert kwargs == {"access_key": "ak", "secret_key": "sk", "session_token": "tok", "region": "eu-north-1"}
+    assert kwargs == {"key_pair": _SO.key_pair, "region": "eu-north-1"}
     assert client.calls[0][1]["IfNoneMatch"] == "*"
 
 
@@ -87,7 +87,7 @@ def test_mutate_json_builds_its_client_through_the_storage_seam(seam: tuple[_Rec
     conditional_records.mutate_json("s3://ctrl/prefix", _SO, "_warehouses/wh-a.json", lambda r: {**r, "status": "deactivated"}, attempts=1)
 
     assert built, "mutate_json did not build its client via storage.client.s3_client"
-    assert all(kwargs["region"] == "eu-north-1" and kwargs["session_token"] == "tok" for _endpoint, kwargs in built)
+    assert all(kwargs == {"key_pair": _SO.key_pair, "region": "eu-north-1"} for _endpoint, kwargs in built)
     assert client.calls[-1][1]["IfMatch"] == "abc123"
 
 
@@ -96,7 +96,12 @@ def test_a_storage_options_without_a_region_still_reaches_the_seam(seam: tuple[_
     handed it explicitly rather than left to resolve `AWS_REGION`, which is a different value."""
     _client, built = seam
 
-    conditional_records.create_json("s3://ctrl", StorageOptions(options={"endpoint": "http://rf:9000"}), "_projects/acme.json", {"id": "acme"})
+    conditional_records.create_json(
+        "s3://ctrl",
+        StorageOptions.from_flat({"endpoint": "http://rf:9000", "access_key_id": "ak", "secret_access_key": "sk"}),
+        "_projects/acme.json",
+        {"id": "acme"},
+    )
 
     assert built[0][1]["region"] == "us-east-1"
-    assert built[0][1]["session_token"] is None
+    assert built[0][1]["key_pair"].session_token is None

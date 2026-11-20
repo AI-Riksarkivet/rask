@@ -170,9 +170,12 @@ class AdminClient:
 
 
 def _s3(plan: Plan, secret: str) -> S3Client:
-    from lakehouse.storage.client import s3_client
+    from pydantic import SecretStr
 
-    return s3_client(plan.endpoint, access_key=plan.root_access_key, secret_key=secret, region=REGION)
+    from lakehouse.storage.client import s3_client
+    from lakehouse.storage.credential import S3KeyPair
+
+    return s3_client(plan.endpoint, key_pair=S3KeyPair(access_key_id=plan.root_access_key, secret_access_key=SecretStr(secret)), region=REGION)
 
 
 def _await_store(client: S3Client) -> None:

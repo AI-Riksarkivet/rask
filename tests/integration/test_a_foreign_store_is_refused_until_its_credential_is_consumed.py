@@ -24,9 +24,11 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from catalog.services import warehouses
 from lakehouse.storage.client import s3_client
+from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
@@ -110,7 +112,7 @@ def _seed_project(tmp_path: Path) -> None:
 
 
 def _estate_buckets(moto_url: str) -> set[str]:
-    client = s3_client(moto_url, access_key=_ESTATE_KEY_ID, secret_key=_ESTATE_SECRET)
+    client = s3_client(moto_url, key_pair=S3KeyPair(access_key_id=_ESTATE_KEY_ID, secret_access_key=SecretStr(_ESTATE_SECRET)))
     return {bucket["Name"] for bucket in client.list_buckets().get("Buckets", [])}
 
 

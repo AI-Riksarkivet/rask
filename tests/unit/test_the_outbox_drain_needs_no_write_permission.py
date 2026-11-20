@@ -29,7 +29,12 @@ from typing import Any
 import pytest
 
 from lakehouse.events import outbox
+from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
+
+
+#: The stage's own options: a whole pair, as every one the outbox is handed carries.
+_KEYED = {"endpoint": "http://rustfs:9000", "access_key_id": "K", "secret_access_key": "S"}
 
 
 class _RecordingS3:
@@ -52,7 +57,7 @@ def test_dropping_an_s3_event_issues_ONLY_a_delete(monkeypatch: pytest.MonkeyPat
     client = _RecordingS3()
     monkeypatch.setattr("lakehouse.storage.client.s3_client", lambda *_a, **_kw: client)
 
-    outbox.drop_event("s3://lance-catalog/_lineage_outbox", StorageOptions(options={"endpoint": "http://rustfs:9000"}), "run-1@COMPLETE")
+    outbox.drop_event("s3://lance-catalog/_lineage_outbox", StorageOptions.from_flat(_KEYED), "run-1@COMPLETE")
 
     assert [name for name, _ in client.calls] == ["delete_object"], f"the delete path made {client.calls}"
     _, kw = client.calls[0]
@@ -74,7 +79,7 @@ def test_an_absent_object_is_idempotent_success(monkeypatch: pytest.MonkeyPatch)
             raise FileNotFoundError("NoSuchKey")
 
     monkeypatch.setattr("lakehouse.storage.client.s3_client", lambda *_a, **_kw: _Missing())
-    outbox.drop_event("s3://lance-catalog/_lineage_outbox", StorageOptions(options={"endpoint": "http://rustfs:9000"}), "gone@COMPLETE")
+    outbox.drop_event("s3://lance-catalog/_lineage_outbox", StorageOptions.from_flat(_KEYED), "gone@COMPLETE")
 
 
 def test_staging_an_s3_event_issues_ONLY_a_put(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,9 +104,7 @@ def test_staging_an_s3_event_issues_ONLY_a_put(monkeypatch: pytest.MonkeyPatch) 
     client = _RecordingS3()
     monkeypatch.setattr("lakehouse.storage.client.s3_client", lambda *_a, **_kw: client)
 
-    outbox.stage_event(
-        "s3://lance-catalog/_lineage_outbox", StorageOptions(options={"endpoint": "http://rustfs:9000"}), "run-9@COMPLETE", '{"eventType": "COMPLETE"}'
-    )
+    outbox.stage_event("s3://lance-catalog/_lineage_outbox", StorageOptions.from_flat(_KEYED), "run-9@COMPLETE", '{"eventType": "COMPLETE"}')
 
     assert [name for name, _ in client.calls] == ["put_object"], f"the stage path made {client.calls}"
     _, kw = client.calls[0]
@@ -134,6 +137,8 @@ def test_the_stage_signs_with_the_whole_key_pair_in_either_spelling(monkeypatch:
     monkeypatch.setattr("lakehouse.storage.client.s3_client", _factory)
     outbox.stage_event("s3://lance-catalog/_lineage_outbox", StorageOptions.from_flat(options), "run-8", '{"eventType": "FAIL"}')
 
-    assert seen.get("access_key") == "K", f"the {spelling} access key never reached the client: {seen}"
-    assert seen.get("secret_key") == "S", f"the {spelling} secret key never reached the client: {seen}"
-    assert seen.get("session_token") == "T", f"the {spelling} session token never reached the client: {seen}"
+    pair = seen.get("key_pair")
+    assert isinstance(pair, S3KeyPair), f"the {spelling} key pair never reached the client: {seen}"
+    assert pair.access_key_id == "K", f"the {spelling} access key never reached the client"
+    assert pair.secret_access_key.get_secret_value() == "S", f"the {spelling} secret key never reached the client"
+    assert pair.session_token is not None and pair.session_token.get_secret_value() == "T", f"the {spelling} session token never reached the client"

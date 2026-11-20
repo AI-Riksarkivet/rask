@@ -57,7 +57,7 @@ _SO = StorageOptions.from_flat({"endpoint": "http://rf:9000", "access_key_id": "
 
 def test_provision_creates_bucket() -> None:
     fake = MagicMock()
-    with patch("boto3.client", return_value=fake):
+    with patch("lakehouse.storage.client.s3_client", return_value=fake):
         warehouses.provision_bucket("bkt-a", _SO)
     fake.create_bucket.assert_called_once_with(Bucket="bkt-a")  # us-east-1 → no LocationConstraint
 
@@ -65,7 +65,7 @@ def test_provision_creates_bucket() -> None:
 def test_provision_adds_location_constraint_off_us_east_1() -> None:
     # Real AWS S3 rejects create_bucket without a LocationConstraint outside us-east-1 (RustFS ignores it).
     fake = MagicMock()
-    with patch("boto3.client", return_value=fake):
+    with patch("lakehouse.storage.client.s3_client", return_value=fake):
         warehouses.provision_bucket("bkt-a", _SO.with_options({"region": "eu-west-1"}))
     fake.create_bucket.assert_called_once_with(Bucket="bkt-a", CreateBucketConfiguration={"LocationConstraint": "eu-west-1"})
 
@@ -74,14 +74,14 @@ def test_provision_adds_location_constraint_off_us_east_1() -> None:
 def test_provision_idempotent_on_existing(code: str) -> None:
     fake = MagicMock()
     fake.create_bucket.side_effect = ClientError({"Error": {"Code": code}}, "CreateBucket")
-    with patch("boto3.client", return_value=fake):
+    with patch("lakehouse.storage.client.s3_client", return_value=fake):
         warehouses.provision_bucket("bkt-a", _SO)  # must NOT raise — a re-provision is a no-op
 
 
 def test_provision_reraises_real_errors() -> None:
     fake = MagicMock()
     fake.create_bucket.side_effect = ClientError({"Error": {"Code": "AccessDenied"}}, "CreateBucket")
-    with patch("boto3.client", return_value=fake), pytest.raises(ClientError):
+    with patch("lakehouse.storage.client.s3_client", return_value=fake), pytest.raises(ClientError):
         warehouses.provision_bucket("bkt-a", _SO)
 
 

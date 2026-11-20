@@ -175,8 +175,8 @@ class _SharedRead(BaseModel):
     table_uuid: str
     #: The store's non-credential options (endpoint, region, path style) the read is made with.
     options: tuple[tuple[str, str], ...]
-    #: The access key id the read is signed with, the credential's identity as the store names it; ``None`` for the
-    #: ambient chain. Never the secret, which no key holds.
+    #: The access key id the read is signed with, the credential's identity as the store names it; ``None`` for a
+    #: root that is not on S3. Never the secret, which no key holds.
     signer: str | None
 
 

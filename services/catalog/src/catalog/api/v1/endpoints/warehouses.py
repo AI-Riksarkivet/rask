@@ -1373,8 +1373,7 @@ def _probe_the_write_tier(
     if options is None:
         checks.extend(ProbeCheck(name=n, outcome="skip", detail="no write-tier credential") for n in _WRITE_TIER_CHECKS[1:])
         return []
-    access_key, secret_key, session_token = options.credential_in_clear()
-    writer = s3_client(store_endpoint or None, access_key=access_key, secret_key=secret_key, session_token=session_token, region=options.region)
+    writer = s3_client(store_endpoint or None, key_pair=options.signing_pair(), region=options.region)
     if not step(STAGED_MANIFEST, lambda: writer.put_object(Bucket=bucket, Key=staged, Body=b"scope-probe")):
         checks.extend(ProbeCheck(name=n, outcome="skip", detail="the write tier staged nothing") for n in _WRITE_TIER_CHECKS[2:])
         return []
@@ -1438,8 +1437,7 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
         ]
         return checks
 
-    access_key, secret_key, session_token = options.credential_in_clear()
-    s3 = s3_client(store_endpoint or None, access_key=access_key, secret_key=secret_key, session_token=session_token, region=options.region)
+    s3 = s3_client(store_endpoint or None, key_pair=options.signing_pair(), region=options.region)
 
     def _step(name: str, fn: Callable[[], object], *, accepted_is: str = "") -> bool:
         """Run one check: ``fn`` must go through, or, where ``accepted_is`` says what the store did wrong by accepting

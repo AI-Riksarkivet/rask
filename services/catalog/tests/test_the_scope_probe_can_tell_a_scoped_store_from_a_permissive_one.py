@@ -153,10 +153,10 @@ def store_factory(monkeypatch: pytest.MonkeyPatch) -> Callable[..., _Installed]:
     def _install(*, scoped: bool, conditional: str = "honours") -> _Installed:
         installed = _Installed()
 
-        def _client(endpoint_url: str | None = None, **kwargs: object) -> _Store:
+        def _client(endpoint_url: str | None = None, *, key_pair: S3KeyPair, **_kwargs: object) -> _Store:
             if installed.store is None:
                 installed.store = _Store(scoped_to=installed.prefix if scoped else None, conditional=conditional)
-            return installed.store.signed_as(str(kwargs["access_key"]))
+            return installed.store.signed_as(key_pair.access_key_id)
 
         monkeypatch.setattr(endpoint, "s3_client", _client)
         return installed

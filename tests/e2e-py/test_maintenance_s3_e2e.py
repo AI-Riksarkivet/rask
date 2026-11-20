@@ -121,9 +121,14 @@ def _wipe(client: Any, bucket: str) -> None:
 @pytest.fixture(scope="module")
 def s3(rustfs_store: ThrowawayStore) -> Any:
     """A client on the throwaway store, via lakehouse.storage — never raw boto3 (repo rule)."""
-    from lakehouse.storage.client import s3_client
+    from pydantic import SecretStr
 
-    client = s3_client(rustfs_store.endpoint, access_key=rustfs_store.root_access_key, secret_key=rustfs_store.root_secret())
+    from lakehouse.storage.client import s3_client
+    from lakehouse.storage.credential import S3KeyPair
+
+    client = s3_client(
+        rustfs_store.endpoint, key_pair=S3KeyPair(access_key_id=rustfs_store.root_access_key, secret_access_key=SecretStr(rustfs_store.root_secret()))
+    )
     skip_unless_live(rustfs_store.endpoint, what="the S3 store", probe=lambda _url, _timeout: client.list_buckets())
     return client
 

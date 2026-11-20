@@ -1,7 +1,7 @@
 """STS clients for the token exchange — the estate's second boto3 client family.
 
-STS is not S3, and this module shares nothing with :mod:`lakehouse.storage.client` but the rule that puts it
-here: every ``boto3`` client is built in ``lakehouse.storage`` alone (ruff's TID251 refuses a ``boto3`` import
+STS is not S3, and this module shares two things with :mod:`lakehouse.storage.client`: the one session every client is
+built from, and the rule that puts it here: every ``boto3`` client is built in ``lakehouse.storage`` alone (ruff's TID251 refuses a ``boto3`` import
 anywhere else), so every AWS-protocol client the estate builds gets an explicit timeout and retry policy rather than botocore's defaults. Those
 defaults carry NO connect or read timeout, and an STS exchange sits on the synchronous path of a
 data-plane request — an endpoint that accepts the connection and never answers would hang the worker
@@ -9,6 +9,8 @@ instead of failing the vend.
 """
 
 from typing import Any
+
+from lakehouse.storage.client import aws_session
 
 
 # Public alias for the boto3 STS client, mirroring `lakehouse.storage.client.S3Client`: boto3 ships no public stubs,
@@ -28,9 +30,10 @@ def sts_client(*, region: str, endpoint: str | None = None) -> Any:  # noqa: ANN
     UNSIGNED, because the one call the estate makes is ``AssumeRoleWithWebIdentity`` (ADR 0170): the
     projected ServiceAccount token in the request body is the credential, and the caller holds no key
     to sign with. A signed client would look for a key in botocore's default chain and fail with
-    ``NoCredentialsError`` in a pod that holds none.
+    ``NoCredentialsError`` in a pod that holds none. An unsigned client resolves no credential at all (botocore 1.43.58,
+    ``Session.create_client``), and it is built from :func:`~lakehouse.storage.client.aws_session`, so no profile the
+    environment names can refuse to build it.
     """
-    import boto3
     from botocore import UNSIGNED
     from botocore.config import Config
 
@@ -44,7 +47,7 @@ def sts_client(*, region: str, endpoint: str | None = None) -> Any:  # noqa: ANN
         retries={"max_attempts": 3, "mode": "standard"},
         signature_version=UNSIGNED,
     )
-    return boto3.client("sts", region_name=region, endpoint_url=endpoint, config=cfg)
+    return aws_session().client("sts", region_name=region, endpoint_url=endpoint, config=cfg)
 
 
 __all__ = [
