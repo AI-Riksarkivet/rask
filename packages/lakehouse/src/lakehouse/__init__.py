@@ -6,10 +6,10 @@ The data plane: object-store resolution and the S3 seam (``storage``), the catal
 (``records``: the record store and the registries over it, the commit records, turns and fences, location claims,
 protection and trash, the maintenance policies), and what
 every plane reads and judges a Lance table by (``lancekit``: versions, filters, absence, the commit verdict, the
-manifest and its feature flags, the table layout). The events: the control lane (``control_events``,
-``control_emit``, ``signature_doors``), the outbox and the process's own connection to the bus (``bus``), the OpenLineage
-facets the lakehouse emits (``openlineage``), and the emission and Ed25519 signing seam a producer and the lineage door
-share (``lineage``).
+manifest and its feature flags, the table layout). The events (``events``): the control lane, the outbox, the
+process's own connection to the bus, the OpenLineage vocabulary the lakehouse emits and the Ed25519 signing seam a
+producer and the lineage door share. What a process is and says about itself (``process``): its supervised loops, its
+lifecycle and drain, its probes and health watch, its logging and the request's correlation.
 
 A client reaches the lakehouse through its published doors and events (``docs/*-openapi.json``,
 ``docs/COMMIT-EVENTS.md``), never by importing this package. The package root exports nothing, so ``import lakehouse``

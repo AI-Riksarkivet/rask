@@ -727,3 +727,7 @@ was added; a planted `from lakehouse.governed import fga_writes` in `fga_model` 
 `fga_ids` in `fga_resilience`.
 
 Flat modules rather than a `governed/fga/` subpackage: the prefix keeps each call site and each `banned-api` path saying which job it is (`fga_writes.write_tuples`), where `writes.write_tuples` under a package import would not, and a subpackage's `__init__` is the place a facade grows back.
+
+## Later the same day (2026-11-20)
+
+`lakehouse.events.openlineage_schemas`, named in the events section above, was deleted by XC-219 (`90debb0f5`): the client's conversions it carried had no production caller, and the names production uses (`PRODUCER`, `TERMINAL_STATES`, the parent run facet's models) live in `lakehouse.events.openlineage`. The events contract named there was tightened by the process group to services only.

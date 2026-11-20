@@ -54,7 +54,7 @@ DECISIONS_PREFIX: Final = "/management/v1/decisions"
 MAX_OBJECTS_PER_QUESTION: Final = 1000
 
 #: How often a decision is re-sent after the catalog could not be reached at all. Only a connection that never opened
-#: is retried: a request the catalog received may already be retrying OpenFGA (up to `fga`'s 15 s budget), and sending
+#: is retried: a request the catalog received may already be retrying OpenFGA (up to `fga_resilience`'s 15 s budget), and sending
 #: it again would multiply that load rather than answer sooner.
 _TRANSPORT_ATTEMPTS: Final = 3
 

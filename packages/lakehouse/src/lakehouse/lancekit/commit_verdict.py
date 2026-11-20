@@ -1,10 +1,8 @@
 """ONE vocabulary for what a failed Lance commit MEANS, shared by every lakehouse plane that has to answer it.
 
-Two planes classify the same condition and they disagreed. The catalog carries the full taxonomy
-(`catalog/services/dataplane.py`, audit 2026-07-14) and maps it to `lance_namespace` errors;
-`lancekit/writer.py` carried two markers and mapped them to `DomainError`s. The vocabularies could not
-simply be merged, because each plane must raise ITS OWN error type — so what is shared is the VERDICT,
-and each plane maps it.
+The catalog's data plane maps the verdict to `lance_namespace` errors (`catalog/services/dataplane.py`), and
+`lakehouse.problems.outage` reads it to tell a lost commit from a store that did not answer. What is shared is the
+VERDICT: a caller raises its own error type, so each maps the verdict itself.
 
 WHY THE SPLIT MATTERED RATHER THAN BEING UNTIDY. Lance's messages for the two conflict outcomes both
 mention concurrency, and only one is safe to retry:
@@ -16,10 +14,9 @@ mention concurrency, and only one is safe to retry:
                                                              contents); the delta describes rows that
                                                              no longer belong
 
-`writer.py` matched the bare word `concurrent`, which appears in both, so an INCOMPATIBLE transaction
-was answered `409 re-read and re-send` — the one thing the caller must not do, and what the catalog's
-own classifier calls "how you corrupt a table". Ordering the markers is the whole fix, and it is why
-this is a shared ordered function rather than a shared tuple of strings.
+The bare word `concurrent` appears in both, so a classifier matching it answers an INCOMPATIBLE transaction
+`409 re-read and re-send`: the one thing the caller must not do, since the delta would be applied to a table it no
+longer describes. The markers are therefore ORDERED, which is why this is a function rather than a tuple of strings.
 
 THE TYPE FIRST, LANCE'S WORDING WHERE IT RAISES NO TYPE. pylance 13.0.0 raises `lance.commit.CommitConflictError`, whose
 `retryable` says which conflict the commit lost, from `add_columns` and `LanceDataset.commit`; every other path raises a
@@ -46,7 +43,7 @@ class CommitVerdict(Enum):
 
     A plain ``Enum``: this is dispatched on, never serialised, so a ``str`` base would advertise an interchange format nothing
     reads. Not a ``Literal`` alias — the estate's idiom for a closed set of strings that CROSS a
-    boundary (`ControlAction`, `RunStatus`, `Rung`) — because these values cross none.
+    boundary (`ControlAction`, `Rung`) — because these values cross none.
     """
 
     #: An append whose read_version has no committed base — a declared-only table, or a version

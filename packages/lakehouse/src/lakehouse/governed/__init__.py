@@ -7,7 +7,9 @@ service's gate is built from (`settings`), the issuer mirror's app (`issuer_mirr
 value names a person (`subjects`, named by this path in `docs/COMMIT-EVENTS.md`). What this pod presents as itself: the
 projected token file (`projected_token`), the OTLP exporters' session (`otlp_identity`), its login to the secret store
 (`secrets`) and its signing key (`signing_key`); the object-store key pair a store credential is carried as is the
-store's (`lakehouse.storage.credential`). What a caller may do: OpenFGA (`fga`, with the model the chart writes under `auth/`), the decision
+store's (`lakehouse.storage.credential`). What a caller may do: OpenFGA (the six `fga_*` modules, one per
+job: the model as data, ids, resilience, provisioning, reads and writes; the model the chart writes is under `auth/`), the
+decision
 seam (`decider`) and the wiring a service's lifespan runs (`auth_lifespan`). The trail: `audit`.
 
 These modules are imported by the catalog, lineage and maintenance alike, and inside the library by the store and the

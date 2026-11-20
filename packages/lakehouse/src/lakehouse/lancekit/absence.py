@@ -1,19 +1,11 @@
 """ONE vocabulary for "is this Lance target ABSENT?", shared by every lakehouse plane that has to answer it.
 
-The sibling of `commit_verdict`, for the question that is not a commit verdict. Four seams asked it
-and each carried its own marker list: the catalog's `_ABSENCE_MARKERS`, the catalog's own
-`plan_compaction` (which did not use them), `ingest._reads_as_absent`, and `lineage`'s
-`read_table_version`. Only lineage was right, and it had written down why — a loose match "would also
-match S3's `Bucket 'x' not found`, so a misconfigured endpoint would go on reading as a deleted
-dataset".
+The sibling of `commit_verdict`, for the question that is not a commit verdict. The catalog asks it where it opens
+a table (`catalog.core.namespace`). The list is narrow because a loose match would also match S3's `Bucket 'x' not
+found`, so a misconfigured endpoint would go on reading as a table nobody wrote.
 
-WHY THIS IS WORTH A SHARED FUNCTION RATHER THAN A SHARED TUPLE. What each caller DOES with "absent" is
-destructive in a different direction, so the answer has to be the same one everywhere:
-
-    ingest       absent -> `create_empty`, the one operation that must never run over a live table
-    catalog      absent -> "this run has not committed", after which the caller appends the rows again
-    catalog      absent -> `TableNotFoundError`, sending an operator to look for an unwritten table
-    lineage      absent -> the dataset is deleted, so its lineage node stops being reported as loss
+WHY ONE FUNCTION RATHER THAN A TUPLE EACH CALLER KEEPS. What a caller DOES with "absent" is destructive: the catalog
+answers that no dataset is at the location, so a wrong "absent" reads a live table as one nobody wrote.
 
 MEASURED 2026-09-09 on pylance 11.0.0, driving a stub S3 endpoint that returns each error verbatim.
 Every non-2xx object-store failure arrives as one flattened string carrying the HTTP STATUS LINE:
@@ -33,11 +25,8 @@ TEXT, NOT TYPES, and that is forced the same way `commit_verdict` is forced: the
 flattens absence into a bare `ValueError`/`OSError` with the reason only in the message. The one typed
 signal is `FileNotFoundError`, which local paths still raise.
 
-THE SERVING LAYER ASKS THE SAME QUESTION AND GETS THE SAME ANSWER. The registry (`table_dataset`),
-the reader (`_at_version`) and discovery (`discover_tables`) translate "missing" into a 404, and they
-come here for it rather than to a classifier of their own — a second SHARED vocabulary would be the
-same drift as a private one, a level up. The narrow list is right for them for one extra reason worth
-stating, because a 404 looks harmless and is not:
+A DOOR THAT ANSWERS "MISSING" WITH A 404 ASKS HERE TOO, rather than a classifier of its own. The narrow list is
+right for it for one more reason, because a 404 looks harmless and is not:
 
     a deleted data FILE   `Not found: t/data/<uuid>.lance` — the dataset EXISTS and is CORRUPT, so
                           answering "no such table" is how data loss gets reported as a typo
