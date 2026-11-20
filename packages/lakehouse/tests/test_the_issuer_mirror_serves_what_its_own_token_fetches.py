@@ -116,3 +116,14 @@ def test_an_issuer_that_refuses_the_mirror_is_answered_as_a_bad_gateway_problem(
 
     assert (answer.status_code, answer.headers["content-type"]) == (502, "application/problem+json")
     assert answer.json()["detail"] == f"the issuer answered 401 to {url}/.well-known/openid-configuration"
+
+
+def test_a_mirror_whose_own_token_cannot_be_read_says_so_and_names_no_file(issuer: tuple[str, Path, list[str]], tmp_path: Path) -> None:
+    """The door answers a caller with no credential, so what it says of the pod's own files stays in the log."""
+    url, _token, seen = issuer
+    settings = IssuerMirrorSettings(issuer=url, public_url="http://rask-issuer-mirror:8080", token_file=str(tmp_path / "absent"))
+
+    with TestClient(create_app(settings)) as verifier:
+        answer = verifier.get("/.well-known/openid-configuration")
+
+    assert (answer.status_code, answer.json()["detail"], seen) == (503, "the mirror's own token cannot be read", [])

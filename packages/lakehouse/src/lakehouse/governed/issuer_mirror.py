@@ -25,6 +25,7 @@ the mirror depends on.
 
 from __future__ import annotations
 
+import logging
 import ssl
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -42,6 +43,9 @@ from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, i
 from lakehouse.lifecycle import mark_draining, mark_started
 from lakehouse.probes import make_probes_router
 from lakehouse.schemas.health import Readiness, ReadinessStatus
+
+
+log = logging.getLogger(__name__)
 
 
 DISCOVERY_PATH: Final = "/.well-known/openid-configuration"
@@ -85,7 +89,9 @@ async def _fetch(client: httpx.AsyncClient, url: str, token_file: str) -> dict[s
     try:
         response = await client.get(url, headers=identity_bearer(token_file))
     except IdentityTokenUnavailableError as exc:
-        raise ServiceUnavailableError(str(exc)) from exc
+        # The cause names the token file's path, and this door answers callers with no credential.
+        log.error("issuer_mirror_token_unreadable", exc_info=True)
+        raise ServiceUnavailableError("the mirror's own token cannot be read") from exc
     except httpx.HTTPError as exc:
         raise IssuerUnansweredError(f"the issuer did not answer {url}: {exc}") from exc
     if response.status_code != 200:

@@ -29,6 +29,7 @@ from lineage.core.metrics import Door
 from lineage.models import DatasetEvent, RunEvent
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.provenance import ProvenanceStore
+from tests.open_gate import admits_everything
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 
@@ -109,6 +110,6 @@ def test_the_bus_door_accepts_it(operation: str, door: str) -> None:
 
     # CAST, not a subclass: the fake records which shape arrived, which is the whole assertion, and the real
     # store would need a catalog for a test about the parse.
-    verdict = asyncio.run(handle_cloud_event(cast(ProvenanceStore, repo), {"data": _emitted(operation)}, door=Door.SUBSCRIBER))
+    verdict = asyncio.run(handle_cloud_event(cast(ProvenanceStore, repo), {"data": _emitted(operation)}, admits_everything, door=Door.SUBSCRIBER))
     assert verdict is Verdict.TAKEN, f"{operation} -> {verdict}"
     assert len(getattr(repo, door)) == 1, f"{operation} was recorded as neither shape: runs={repo.runs} datasets={repo.datasets}"

@@ -14,6 +14,7 @@ Uses stdlib ``asyncio.run`` so no pytest-asyncio dependency is needed.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 
@@ -247,3 +248,20 @@ def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:
         )
     )
     assert [r.user for r in client.requests] == ["role:project_admin#member"]
+
+
+def test_a_client_whose_token_cannot_be_read_fails_closed_and_names_no_file(tmp_path: Path) -> None:
+    """The pod's own fault at its token is the same answer to a caller as any other failure to ask: the one constant
+    503, in the spec's vocabulary, with the file's path in the log alone."""
+    token = tmp_path / "token"
+    token.write_text("projected")
+
+    async def ask() -> None:
+        async with fga.make_client("http://127.0.0.1:1", "01HZX0000000000000000000ST", "01HZX0000000000000000000MD", token_file=str(token)) as client:
+            token.unlink()
+            await fga.check(client, user="dex~alice", relation="can_read_data", obj="table:t", retry=fga.ONE_ATTEMPT)
+
+    with pytest.raises(ServiceUnavailableError) as refused:
+        asyncio.run(ask())
+
+    assert str(refused.value) == "authorization service unavailable"

@@ -26,6 +26,7 @@ from lineage.core.metrics import Door
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.provenance import EDGES, FEED, RUNS, ProvenanceStore
 from tests.integration.lineage_app import ensure_tables, live_catalog, run_event
+from tests.open_gate import admits_everything
 
 
 _ALICE = "dex~alice"
@@ -64,7 +65,7 @@ def _deliver(store: ProvenanceStore, events: Sequence[dict[str, Any]]) -> list[V
     """Present each of ``events`` to the bus door concurrently, as the lane's deliveries in flight arrive; each verdict, in order."""
 
     async def burst() -> list[Verdict]:
-        return await asyncio.gather(*(handle_cloud_event(store, {"data": event}, door=Door.SUBSCRIBER) for event in events))
+        return await asyncio.gather(*(handle_cloud_event(store, {"data": event}, admits_everything, door=Door.SUBSCRIBER) for event in events))
 
     return asyncio.run(burst())
 

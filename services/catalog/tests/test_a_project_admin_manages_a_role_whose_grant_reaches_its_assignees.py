@@ -25,7 +25,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.schemas import RoleRecord
-from catalog.services import roles, warehouses
+from catalog.services import roles, subject_tuples, warehouses
 from lakehouse.governed import fga
 from lakehouse.storage_options import StorageOptions
 from tests import seeding
@@ -172,6 +172,32 @@ def test_an_unassignment_and_an_admin_revoke_at_once_leave_the_project_administe
     (loser,) = {"alice", "bob"} - {winner}
     assert [(a.status_code, a.json().get("code")) for a in answers if a.status_code != 200] == [refused[loser]], [a.text for a in answers]
     _status(catalog.client.get(members, headers=catalog.bearer(winner)), 200)
+
+
+def test_a_role_made_an_admin_while_it_is_ended_is_emptied_only_by_who_may_unmake_admins(governed_catalog: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """grace, a security admin, ends ``staff``, which administers nothing when her ending first reads it. acme's
+    ``admin`` is granted to the role after its grants are revoked and before its assignees are withdrawn, so that
+    withdrawal unmakes dave an administrator: it is judged on its own read and refused her, as an unassignment is."""
+    catalog = governed_catalog
+    root, grace = catalog.bearer("root"), catalog.bearer("grace")
+    catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
+    _status(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=root), 200)
+    role = _status(catalog.client.post(ROLES, json={"name": "staff"}, headers=root), 201).json()
+    assignees, everyone_in = f"{ROLES}/{role['id']}/assignees", f"role:{role['id']}#assignee"
+    _status(catalog.client.put(assignees, json={"user": "dex~dave"}, headers=root), 200)
+    catalog.store.write((catalog.person("grace"), "security_admin", "project:acme"))
+    revoke = subject_tuples.revoke_naming
+
+    async def revoke_then_the_role_is_made_an_admin(*args: Any, **kwargs: Any) -> list[fga.ClientTuple]:  # noqa: ANN401 — revoke_naming's signature
+        removed = await revoke(*args, **kwargs)
+        await asyncio.to_thread(catalog.store.write, (everyone_in, "admin", "project:acme"))
+        return removed
+
+    monkeypatch.setattr(subject_tuples, "revoke_naming", revoke_then_the_role_is_made_an_admin)
+
+    _status(catalog.client.delete(f"{ROLES}/{role['id']}", headers=grace), 404, TABLE_NOT_FOUND)
+
+    assert (catalog.person("dave"), "assignee", f"role:{role['id']}") in catalog.store.tuples()
 
 
 def test_a_role_whose_ending_failed_part_way_is_ended_by_calling_its_door_again(governed_catalog: Any, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog

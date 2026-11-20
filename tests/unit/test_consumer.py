@@ -16,6 +16,7 @@ from lakehouse.cloud_events import lineage_envelope
 from lineage.core.metrics import Door
 from lineage.models import RunEvent
 from lineage.services.consumer import handle_cloud_event
+from tests.open_gate import admits_everything
 
 
 _VALID = {
@@ -54,5 +55,5 @@ class _FakeRepo:
 def test_handle_retries_on_transient_ingest_failure() -> None:
     # The catalog down → again; the lane delivers it again after its delay (a record is idempotent, so a retry is safe).
     repo = _FakeRepo(fail=True)
-    verdict = asyncio.run(handle_cloud_event(cast(Any, repo), _CLOUD_EVENT, door=Door.SUBSCRIBER))
+    verdict = asyncio.run(handle_cloud_event(cast(Any, repo), _CLOUD_EVENT, admits_everything, door=Door.SUBSCRIBER))
     assert verdict is Verdict.AGAIN

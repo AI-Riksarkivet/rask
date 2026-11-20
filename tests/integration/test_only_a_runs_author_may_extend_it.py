@@ -38,6 +38,7 @@ from lineage.api.v1.endpoints.events import targeting_view
 from lineage.core.metrics import Door
 from lineage.services.consumer import handle_cloud_event
 from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, run_event
+from tests.open_gate import admits_everything
 
 
 _TABLE = "lance_catalog$acme-silver$pages"
@@ -105,7 +106,9 @@ def test_a_change_the_catalog_announces_is_recorded_though_a_poster_sent_its_ide
     # Everything the identity is derived from is the announcement's own, and a writer of the table reads each of them.
     posted = lineage.post("/api/v1/lineage", json=announced, headers={SUBJECT_HEADER: _BOB})
     delivered = asyncio.run(
-        handle_cloud_event(lineage.app.state.provenance, {"data": event_signer(_CATALOG).sign(announced, on_behalf_of=_ALICE)}, door=Door.SUBSCRIBER)
+        handle_cloud_event(
+            lineage.app.state.provenance, {"data": event_signer(_CATALOG).sign(announced, on_behalf_of=_ALICE)}, admits_everything, door=Door.SUBSCRIBER
+        )
     )
 
     assert posted.status_code == 201, posted.text

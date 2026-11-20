@@ -87,7 +87,7 @@ from tenacity import (
 )
 
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.governed.machine_identity import read_identity_token
+from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, read_identity_token
 from lakehouse.governed.principal import Principal
 from lakehouse.naming import CATALOG_DELIMITER
 
@@ -131,10 +131,14 @@ BREAKER_RESET_SECONDS = 15.0
 # error — NOT openfga_sdk.ApiException — so these must be retried AND caught by the
 # fail-closed handlers, otherwise the single most likely outage escapes as a 500.
 # (asyncio.TimeoutError is builtin TimeoutError on 3.11+; ClientConnectorError ⊂ OSError.)
+#
+# The pod's own token file failing to read is the same kind: the request was never sent, the next read may find the
+# file the kubelet wrote, and its error names the file's path, which the fail-closed answer keeps out of the body.
 _TRANSIENT_NETWORK: tuple[type[BaseException], ...] = (
     aiohttp.ClientError,
     asyncio.TimeoutError,
     OSError,
+    IdentityTokenUnavailableError,
 )
 
 
@@ -400,8 +404,9 @@ class _Circuit:
 
     Closed, it counts outages in a row. At ``BREAKER_THRESHOLD`` it opens and refuses every call for
     ``BREAKER_RESET_SECONDS``; after that calls pass again, and the first to end decides: an answer closes the circuit,
-    an outage opens it again at once. A call that ends any other way (cancelled, a fault of this process) says nothing
-    about OpenFGA and changes nothing. Timed on the monotonic clock, so a stepped wall clock neither holds it open nor
+    an outage opens it again at once. This pod's own token failing to read counts as an outage: no call can be sent
+    without it. A call that ends any other way (cancelled, another fault of this process) says nothing about OpenFGA
+    and changes nothing. Timed on the monotonic clock, so a stepped wall clock neither holds it open nor
     closes it early.
     """
 

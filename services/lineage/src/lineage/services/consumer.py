@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 async def handle_cloud_event(
     provenance: ProvenanceStore,
     body: Any,
-    authorize: Callable[[RunEvent | DatasetEvent, Mapping[str, Any]], Awaitable[frozenset[str]]] | None = None,
+    authorize: Callable[[RunEvent | DatasetEvent, Mapping[str, Any]], Awaitable[frozenset[str]]],
     *,
     door: Door,
 ) -> Verdict:
@@ -51,8 +51,9 @@ async def handle_cloud_event(
 
     ``authorize`` runs after the parse and before any write, and answers the tables the event's datasets alias, which
     its feed row is scoped by (`fga_deps.enforce_bus_authz`). It is injected rather than imported so this module stays
-    free of FGA — the door owns the policy, this owns what a delivery is answered — and it splits the failure kinds
-    the way the lane needs them:
+    free of FGA — the door owns the policy, this owns what a delivery is answered. It has no default, as ``door`` has
+    none: a call site that named no gate would record every event unjudged. It splits the failure kinds the way the
+    lane needs them:
 
     * **AN EVENT NO LISTED SIGNER'S KEY VERIFIES IS TAKEN** ([[LH-064]], `UnverifiedEventError`). Unsigned, forged or
       signed by an identity the chart does not list: no redelivery can add a signature to published bytes, so a park
@@ -85,26 +86,24 @@ async def handle_cloud_event(
         # parking them would keep a copy no reader can act on. The count is the signal (`Outcome.UNREPAIRABLE`), and
         # the event stays on the stream for its retention.
         return Verdict.TAKEN
-    aliased: frozenset[str] = frozenset()
-    if authorize is not None:
-        try:
-            # THE ARRIVED DICT RIDES ALONG, not just the parsed event. The door's signature check covers
-            # the bytes the producer signed, and a model is a reconstruction of them — it grows every
-            # field the schema defaults. `data` is what the bus delivered; the parse above is for everything
-            # else.
-            aliased = await authorize(event, data if isinstance(data, dict) else {})
-        except PermissionDeniedError as exc:
-            # ONE VERDICT (:func:`refusal_outcome`), the one every door that records an event counts by. Only a named
-            # person lacking a grant is parked for repair; every other refusal is final, so it is taken and its count
-            # is the whole trace it leaves (each refusal type says why it is final).
-            outcome = refusal_outcome(exc)
-            log.warning("lineage_event_refused", extra={"run": event.run_id, "outcome": outcome, "reason": str(exc)})
-            record_outcome(outcome, door=door)
-            return Verdict.PARK if outcome is Outcome.REFUSED else Verdict.TAKEN
-        except Exception as exc:
-            log.warning("lineage_authz_unavailable", extra={"run": event.run_id, "error": str(exc)})
-            record_outcome(Outcome.RETRIED, door=door)
-            return Verdict.AGAIN
+    try:
+        # THE ARRIVED DICT RIDES ALONG, not just the parsed event. The door's signature check covers
+        # the bytes the producer signed, and a model is a reconstruction of them — it grows every
+        # field the schema defaults. `data` is what the bus delivered; the parse above is for everything
+        # else.
+        aliased = await authorize(event, data if isinstance(data, dict) else {})
+    except PermissionDeniedError as exc:
+        # ONE VERDICT (:func:`refusal_outcome`), the one every door that records an event counts by. Only a named
+        # person lacking a grant is parked for repair; every other refusal is final, so it is taken and its count
+        # is the whole trace it leaves (each refusal type says why it is final).
+        outcome = refusal_outcome(exc)
+        log.warning("lineage_event_refused", extra={"run": event.run_id, "outcome": outcome, "reason": str(exc)})
+        record_outcome(outcome, door=door)
+        return Verdict.PARK if outcome is Outcome.REFUSED else Verdict.TAKEN
+    except Exception as exc:
+        log.warning("lineage_authz_unavailable", extra={"run": event.run_id, "error": str(exc)})
+        record_outcome(Outcome.RETRIED, door=door)
+        return Verdict.AGAIN
     started = time.perf_counter()
     try:
         # The edges, then the feed row, each keyed: a failure here asks for the delivery again, and the next one lands

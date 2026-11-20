@@ -61,7 +61,7 @@ async def end_role(
     removed = await subject_tuples.revoke_naming(client, subject, naming, actor=actor, origin="lifecycle_delete", permit=permit)
     on_it = [fga.ClientTuple(user=t.user, relation=t.relation, object=obj) for t in await fga.read_object_tuples(client, obj) if t.object == obj]
     if assigned := [t for t in on_it if t.relation != "project"]:
-        removed.extend(await project_admins.withdraw(client, assigned, actor=actor, origin="lifecycle_delete"))
+        removed.extend(await project_admins.withdraw(client, assigned, actor=actor, origin="lifecycle_delete", permit=permit))
     await run_in_threadpool(roles.end_role_record, control_root, storage_options, role)
     if edge := [t for t in on_it if t.relation == "project"]:
         try:
