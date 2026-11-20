@@ -14,16 +14,20 @@ event's outputs + ``can_get_metadata`` on its inputs (:func:`enforce_output_auth
 is off (dev/tests). Every replay is audited on the ``lance.audit`` trail (#41).
 
 A STAGED EVENT IS SCOPED AS THE CALLER, NOW ([[LH-598]]). No door has admitted it yet, so nothing recorded which
-tables its locations and ``symlinks`` name: the catalog is asked for every staged event the door reads
+tables its locations and other identifiers name: the catalog is asked for every staged event the door reads
 (`fga_deps.DatasetFilter.scope_unrecorded`), and an event naming a table the caller may not see under any identifier is
-neither listed nor replayable, answered as an event nothing staged.
+neither listed nor replayable, answered as an event nothing staged. An event the catalog attests by the signature its
+staged bytes carry (`fga_deps.DatasetFilter.attestation`) names its tables by uuid and has none of its other
+identifiers asked about: a rename's previous name, which no table holds once the rename landed. That read counts and
+warns about nothing and answers an outage as "not attested", so the event takes the full check and the page still
+answers; only the replay's own verification (`enforce_bus_authz`) answers a refusal or an outage as such.
 """
 
 from __future__ import annotations
 
 import logging
 from collections import Counter
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -111,7 +115,10 @@ async def list_dlq(
     # Drop events referencing datasets the caller may not see (fail-closed). A poison event has no parseable
     # datasets, so under FGA it is filtered out (dataset-less → dropped); in dev/tests (FGA off) it shows.
     parsed = [_parsed(event_json) for _, event_json in staged]
-    scopes = iter(await datasets.scope_unrecorded([event for event in parsed if event is not None]))
+    readable = [held for held in parsed if held is not None]
+    # Only scoping reads a signature, and with FGA off nothing is scoped.
+    signatures = [await datasets.attestation(arrived) if settings.fga_enabled else None for _, arrived in readable]
+    scopes = iter(await datasets.scope_unrecorded([event for event, _ in readable], signatures))
     # A poison object names nothing, so nothing is asked about it.
     events = [
         (_summary(run_id, event_json), next(scopes) if event is not None else Governed()) for (run_id, event_json), event in zip(staged, parsed, strict=True)
@@ -120,10 +127,11 @@ async def list_dlq(
     return DlqBacklog(depth=depth, oldest_age_seconds=oldest_age, events=[summary for summary, _ in visible], limit=limit)
 
 
-def _parsed(event_json: str) -> RunEvent | DatasetEvent | None:
-    """The event a staged object holds, or ``None`` for a poison object."""
+def _parsed(event_json: str) -> tuple[RunEvent | DatasetEvent, dict[str, Any]] | None:
+    """The event a staged object holds and the bytes its producer signed, or ``None`` for a poison object."""
     try:
-        return parse_staged(read_staged(event_json))
+        staged = read_staged(event_json)
+        return parse_staged(staged), staged.data
     except UnparseableEventError:
         return None
 
@@ -174,9 +182,10 @@ async def replay_dlq(
             raise TransactionNotFoundError(f"no staged lineage event for run {run_id}") from exc
         raise UnsupportedOperationError(f"staged event for run {run_id} is unparseable (poison)") from exc
     # Visibility gate — mirror list_dlq's governance: you may only replay an event you could have SEEN. An
-    # event referencing a dataset the caller can't read, by its name, its location, a symlink or a column upstream, is
+    # event referencing a dataset the caller can't read, by its name, its location, another identifier or a column upstream, is
     # hidden as a 404, so enforce_output_authz's dataset-naming 403 can never disclose a dataset the list view withheld.
-    (refs,) = await datasets.scope_unrecorded([event])
+    signature = await datasets.attestation(staged.data) if settings.fga_enabled else None
+    (refs,) = await datasets.scope_unrecorded([event], [signature])
     if settings.fga_enabled and not refs.names_nothing and (refs.unresolved or refs.objects - await datasets.visible(refs.objects)):
         raise TransactionNotFoundError(f"no staged lineage event for run {run_id}")
     # TWO GATES, because a replay answers two questions. The relay's own, over the STAGED BYTES: the
@@ -184,7 +193,10 @@ async def replay_dlq(
     # and a forged or re-targeted object stays refused however trusted the operator is. Then the ingest
     # door's, over the operator: a caller may only replay what they could have written in the first place.
     arrived = staged.data
-    aliased = await enforce_bus_authz(event, request.app, settings, arrived) | await enforce_output_authz(event, request.app, settings, token)
+    # The operator's rungs are asked whoever signed; what the catalog attests is only the names its event uses.
+    aliased = await enforce_bus_authz(event, request.app, settings, arrived) | await enforce_output_authz(
+        event, request.app, settings, token, names_vouched_by=signature
+    )
     await provenance.record(event, aliased=aliased)  # idempotent: every row under its key
     # BEFORE the drop: the staged object is the only copy the relay could still re-publish. The feed is
     # already repaired when this fails, so the answer says so, and the partial outcome is audited: a 503

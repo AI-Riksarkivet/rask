@@ -6,7 +6,7 @@ OpenLineage is an external standard whose wire format is camelCase (``eventType`
 
 from __future__ import annotations
 
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator
@@ -27,8 +27,9 @@ MAX_DATASETS: Final = 64
 #: default `max_payload`, 1 MiB, which the NATS fixture does not raise, so this refuses at the HTTP door only an event
 #: the bus could never have carried.
 MAX_EVENT_BYTES: Final = 1024 * 1024
-#: The most distinct identifiers one event may name: its datasets, the identifiers their ``symlinks`` facets list and the
-#: column upstreams their ``columnLineage`` facets name. Each is asked about by name at the catalog's decision door, so the
+#: The most distinct identifiers one event may name: its datasets, the other identifiers they are named by (their
+#: ``symlinks`` facets' and ``lifecycleStateChange``'s ``previousIdentifier``) and the column upstreams their
+#: ``columnLineage`` facets name. Each is asked about by name at the catalog's decision door, so the
 #: bound is what one of its questions holds (`lakehouse.governed.decider.MAX_OBJECTS_PER_QUESTION`), and an event costs
 #: one question of each kind however many names it carries. :data:`MAX_DATASETS` bounds the datasets alone, while the
 #: weight bound let the facets list tens of thousands; the catalog's own events name at most 64 inputs, an output and a
@@ -47,11 +48,13 @@ def _within_names(datasets: list[Dataset]) -> None:
     """Refuse an event naming more than :data:`MAX_NAMED_IDENTIFIERS` distinct identifiers through ``datasets``."""
     named = {
         *((dataset.namespace, dataset.name) for dataset in datasets),
-        *(identifier for dataset in datasets for identifier in dataset.symlink_identifiers),
+        *(identifier for dataset in datasets for identifier in dataset.other_identifiers),
         *((upstream.namespace, upstream.name) for dataset in datasets for upstream in dataset.column_upstreams),
     }
     if len(named) > MAX_NAMED_IDENTIFIERS:
-        raise ValueError(f"the event names {len(named)} distinct datasets, symlinks and column upstreams; lineage takes at most {MAX_NAMED_IDENTIFIERS}")
+        raise ValueError(
+            f"the event names {len(named)} distinct datasets, other identifiers and column upstreams; lineage takes at most {MAX_NAMED_IDENTIFIERS}"
+        )
 
 
 class ColumnUpstream(BaseModel):
@@ -118,6 +121,32 @@ class _SymlinksFacet(BaseModel):
     identifiers: list[_SymlinkIdentifier] = Field(default_factory=list)
 
 
+class _PreviousIdentifier(BaseModel):
+    """A ``lifecycleStateChange`` facet's ``previousIdentifier``: ``namespace`` and ``name`` are required strings
+    (``LifecycleStateChangeDatasetFacet`` 1-0-0 and 1-0-1), so one lacking either is malformed and its event is refused."""
+
+    model_config = _MODEL
+    namespace: str
+    name: str
+
+
+class _LifecycleStateChangeFacet(BaseModel):
+    """The standard ``lifecycleStateChange`` dataset facet: the state is required, one of the spec's six, and
+    ``previousIdentifier`` names the dataset by the identifier it held before.
+
+    A graph backend that follows a rename joins the previous identifier's node to this dataset's, so the identifier is a
+    name the dataset claims, as a ``symlinks`` identifier is, and is decided as one.
+    """
+
+    model_config = _MODEL
+    state: Literal["ALTER", "CREATE", "DROP", "OVERWRITE", "RENAME", "TRUNCATE"] = Field(alias="lifecycleStateChange")
+    previous: _PreviousIdentifier | None = Field(default=None, alias="previousIdentifier")
+
+
+#: The standard facet saying what a DDL operation did to its dataset.
+_LIFECYCLE_FACET: Final = "lifecycleStateChange"
+
+
 #: The run operations that maintain a table rather than write it: they need `can_maintain` at the ingest
 #: door. `expire_versions` is maintenance's version reclamation; `compact_table` and `create_index` are the
 #: catalog's names for a bring-your-own job's compaction and index commits.
@@ -141,7 +170,8 @@ class Dataset(BaseModel):
 
     ``facets`` carries the standard OpenLineage dataset facets; lineage reads ``version`` (which Lance
     version a run produced or read), the catalog's ``rask_lance`` facet (the ref an input was read on) and
-    ``columnLineage`` and ``symlinks`` (the other datasets it names, which the ingest authorizer checks).
+    ``columnLineage``, ``symlinks`` and ``lifecycleStateChange`` (the other datasets it names, which the ingest
+    authorizer checks).
 
     The spec splits dataset metadata across THREE slots, by the facet's base type: plain
     ``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and
@@ -155,24 +185,22 @@ class Dataset(BaseModel):
     name: str
     facets: dict[str, Any] = Field(default_factory=dict)
     _column_upstreams: list[ColumnUpstream] = PrivateAttr(default_factory=list)
-    _symlink_identifiers: list[tuple[str, str]] = PrivateAttr(default_factory=list)
+    _other_identifiers: list[tuple[str, str]] = PrivateAttr(default_factory=list)
 
     @model_validator(mode="after")
     def _read_named_datasets(self) -> Dataset:
-        """Read the facets that name OTHER datasets, ``columnLineage`` and ``symlinks``, in EVERY slot that carries one,
-        refusing a copy the spec calls malformed.
+        """Read the facets that name OTHER datasets, ``columnLineage``, ``symlinks`` and ``lifecycleStateChange``'s
+        ``previousIdentifier``, in EVERY slot that carries one, refusing a copy the spec calls malformed.
 
         Every slot, not the first that holds it: the event is stored and forwarded whole, so a second copy is as much a
         claim as the first, and a reading that stopped at one would leave the other unchecked. A producer may repeat a
         facet across slots; what it names is the union. An entry with an empty name names no dataset and is left out.
         """
         self._column_upstreams = [entry for copy in self.facet_copies(_COLUMN_LINEAGE_FACET) for entry in _ColumnLineageFacet.model_validate(copy).upstreams]
-        self._symlink_identifiers = [
-            (entry.namespace, entry.name)
-            for copy in self.facet_copies(SYMLINKS_FACET)
-            for entry in _SymlinksFacet.model_validate(copy).identifiers
-            if entry.name
-        ]
+        symlinked = [(entry.namespace, entry.name) for copy in self.facet_copies(SYMLINKS_FACET) for entry in _SymlinksFacet.model_validate(copy).identifiers]
+        lifecycles = [_LifecycleStateChangeFacet.model_validate(copy).previous for copy in self.facet_copies(_LIFECYCLE_FACET)]
+        previous = [(entry.namespace, entry.name) for entry in lifecycles if entry is not None]
+        self._other_identifiers = [(namespace, name) for namespace, name in [*symlinked, *previous] if name]
         return self
 
     @property
@@ -215,9 +243,10 @@ class Dataset(BaseModel):
         return next((copy for copy in self.facet_copies(name) if isinstance(copy, dict)), None)
 
     @property
-    def symlink_identifiers(self) -> list[tuple[str, str]]:
-        """The ``(namespace, name)`` identifiers this dataset's standard ``symlinks`` facets list, in every slot."""
-        return self._symlink_identifiers
+    def other_identifiers(self) -> list[tuple[str, str]]:
+        """The ``(namespace, name)`` identifiers this dataset is also named by, in every slot: those its standard
+        ``symlinks`` facets list and the ``previousIdentifier`` of its ``lifecycleStateChange`` facets."""
+        return self._other_identifiers
 
     @property
     def column_upstreams(self) -> list[ColumnUpstream]:

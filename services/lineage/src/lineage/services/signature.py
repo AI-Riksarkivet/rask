@@ -100,3 +100,23 @@ async def verify_arrived_event(arrived: Mapping[str, Any], app: FastAPI, setting
         raise ServiceUnavailableError(_bounded(str(exc))) from exc
     record_signature_verified(verified.identity)
     return verified
+
+
+async def staged_signature(arrived: Mapping[str, Any], app: FastAPI, settings: LineageSettings) -> VerifiedSignature | None:
+    """The signature a staged event carries, verified over the same bytes, keys and signer sets as
+    :func:`verify_arrived_event`, or ``None`` where that would not answer VERIFIED: signing not enforced, no signature, a
+    refusal, or an outage.
+
+    For a door that only READS a staged event, scoping what it names for its caller: it refuses and records nothing, so a
+    failure to verify is no refusal to count or warn about, and the event takes the full check rather than the page
+    failing. A door that records the event verifies with :func:`verify_arrived_event`, which answers each outcome.
+    """
+    signing = settings.signing
+    claim = signature_of(arrived)
+    if not signing.enforced or claim is None:
+        return None
+    keys: PublishedKeys = app.state.published_keys
+    try:
+        return await run_in_threadpool(verify_signature, arrived, source=keys.for_event(claim.kid), signers=signing.signers, delegators=signing.delegators)
+    except (SignatureError, KeySourceUnavailableError):
+        return None

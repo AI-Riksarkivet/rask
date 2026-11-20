@@ -61,7 +61,7 @@ from lineage.models import (
     author_sub_from_payload,
 )
 from lineage.services.provenance import ProvenanceStore, feed_key
-from lineage.services.signature import verify_arrived_event
+from lineage.services.signature import staged_signature, verify_arrived_event
 
 
 log = logging.getLogger(__name__)
@@ -477,8 +477,8 @@ async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object],
 class Aliases(BaseModel):
     """The governed tables an event's datasets are named as besides their own names ([[LH-553]]), as the catalog answers.
 
-    ``objects`` are the tables each dataset (by its index in the list asked about) names by a storage location or a
-    ``symlinks`` identifier; ``located`` the indices of the datasets whose own name is a location a governed table holds,
+    ``objects`` are the tables each dataset (by its index in the list asked about) names by a storage location or
+    another identifier (:attr:`Dataset.other_identifiers`); ``located`` the indices of the datasets whose own name is a location a governed table holds,
     each of which is that table; ``hidden`` are, by the same index, the identifiers naming a governed table by name the
     caller may not see, which no grant asked about the dataset reaches; ``tables`` are the uuids of every table
     ``objects`` names."""
@@ -497,7 +497,8 @@ class Aliases(BaseModel):
 
 
 async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, user: str) -> Aliases:
-    """The governed tables ``datasets`` are named as by a storage location or a ``symlinks`` identifier.
+    """The governed tables ``datasets`` are named as by a storage location or another identifier: a ``symlinks`` entry or a
+    ``lifecycleStateChange``'s ``previousIdentifier``.
 
     A GRAPH BACKEND JOINS A DATASET BY EVERY IDENTIFIER IT CARRIES. The catalog names each table's location in its events'
     ``symlinks`` facet, so an engine naming the table by that location (``s3://<bucket>`` and the key) is recorded on the
@@ -506,7 +507,13 @@ async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, us
     may not see on that table's node. So the catalog is asked which table each location holds (``locate``): one a table
     holds is that table, and one no table holds stays the outside world. A ``symlinks`` identifier naming a governed table
     by its name is resolved as the caller (``check_tables`` on ``can_get_metadata``), and one the caller may not see is
-    ``hidden``.
+    ``hidden``. A ``lifecycleStateChange``'s ``previousIdentifier`` is one more identifier its dataset is named by
+    (:attr:`Dataset.other_identifiers`), since a backend following a rename joins that node to the dataset's, and is
+    resolved the same way: a governed name no table holds any longer, which is every true rename's, is ``hidden``.
+
+    Never asked about an event the catalog attests (:func:`_attested`), on any door: the catalog names its tables by uuid
+    and vouches for the names it uses, so its announcement of a rename is recorded, listed and replayed without its
+    previous name being resolved (:func:`enforce_output_authz`, :func:`governed_with_aliases`).
     """
     locations: dict[str, list[int]] = {}
     names: dict[str, list[int]] = {}
@@ -515,7 +522,7 @@ async def resolve_aliases(decider: AccessDecider, datasets: list[Dataset], *, us
         if is_external_source(dataset.namespace, dataset.name) and (location := identifier_location(dataset.namespace, dataset.name)) is not None:
             own[index] = location
             locations.setdefault(location, []).append(index)
-        for namespace, name in dataset.symlink_identifiers:
+        for namespace, name in dataset.other_identifiers:
             if not is_external_source(namespace, name):
                 names.setdefault(name, []).append(index)
             elif (location := identifier_location(namespace, name)) is not None:
@@ -563,16 +570,21 @@ def upstreams_named_as_tables(datasets: Iterable[Dataset]) -> set[str]:
     return {up.name for ds in datasets for up in ds.column_upstreams if not is_external_source(up.namespace, up.name)}
 
 
-async def governed_with_aliases(decider: AccessDecider, events: Sequence[RunEvent | DatasetEvent], *, user: str) -> list[Governed]:
+async def governed_with_aliases(decider: AccessDecider, events: Sequence[RunEvent | DatasetEvent], *, user: str, attested: Sequence[bool]) -> list[Governed]:
     """What each of ``events`` names in the governed estate for the reader ``user``, under every identifier it uses.
 
     For an event no door has scoped yet, a staged one ([[LH-598]]), by the rule `enforce_output_authz` admits one on:
     beside the tables its datasets carry the uuids of, it names every table an input, an output or a column upstream is
-    named as by a storage location or a ``symlinks`` identifier (:func:`resolve_aliases`), and a name the reader may
-    not see, symlinked or a column upstream's, is unresolved, so the event is hidden. Asked in one question about every
-    location and one about every symlinked name, whatever the number of events.
+    named as by a storage location or another identifier (:func:`resolve_aliases`), and a name the reader may not see,
+    another identifier's or a column upstream's, is unresolved, so the event is hidden. An event the catalog attests
+    (``attested``, by position, :func:`_attested` over `staged_signature`) names its tables by uuid alone, as at
+    the doors that record it. Asked in one question about every location and one about every other name, whatever the
+    number of events.
     """
-    named_by = [[*event.inputs, *event.outputs, *_upstreams_named_by_a_location([*event.inputs, *event.outputs])] for event in events]
+    named_by = [
+        [] if vouched else [*event.inputs, *event.outputs, *_upstreams_named_by_a_location([*event.inputs, *event.outputs])]
+        for event, vouched in zip(events, attested, strict=True)
+    ]
     owners = [position for position, datasets in enumerate(named_by) for _ in datasets]
     aliases = await resolve_aliases(decider, [dataset for datasets in named_by for dataset in datasets], user=user)
     objects: list[set[str]] = [set() for _ in events]
@@ -595,6 +607,7 @@ async def enforce_output_authz(
     *,
     relations: tuple[str, ...] = _WRITE_RELATIONS,
     signed_by: VerifiedSignature | None = None,
+    names_vouched_by: VerifiedSignature | None = None,
 ) -> frozenset[str]:
     """Output-scoped ingest authz: require the producer may WRITE every output dataset it claims.
 
@@ -618,11 +631,16 @@ async def enforce_output_authz(
     back. Everything else still holds for it: the run-author check, and the refusal of an output or input that names no
     uuid, since neither depends on when the event is recorded.
 
+    ``names_vouched_by`` is a staged event's own signature (`staged_signature`) where ``token`` is not its producer:
+    an operator replaying it. One the catalog attests vouches for the names its event uses, so they are not resolved, and
+    for nothing about the caller, whose rungs on the event's datasets are asked as for any other event.
+
     Returns:
-        The uuids of the governed tables the event's datasets are named as by a storage location or a ``symlinks``
-        identifier, as the catalog answered (:func:`resolve_aliases`): what the event's feed row is scoped by beside the
+        The uuids of the governed tables the event's datasets are named as by a storage location or another
+        identifier (a ``symlinks`` entry or a ``previousIdentifier``), as the catalog answered (:func:`resolve_aliases`): what the event's feed row is scoped by beside the
         uuids its datasets carry, so a reader of the feed is shown the row only if it may see those tables too
-        ([[LH-598]]). Empty with authorization off, and for an event the catalog attests, which names its tables by uuid.
+        ([[LH-598]]). Empty with authorization off, and for an event the catalog attests or whose names it vouches for
+        (``names_vouched_by``), which names its tables by uuid.
     """
     if not settings.fga_enabled:
         return frozenset()
@@ -650,11 +668,12 @@ async def enforce_output_authz(
             _denied("ingest_run_mutation_denied", subject=token.subject, relation="author", resources=[f"run:{event.run_id}"])
             raise ForeignRunError(f"run {event.run_id} was founded by another subject; only its author may extend it")
     attested = _attested(signed_by, settings)
-    # WHAT THE EVENT NAMES BY A LOCATION OR A SYMLINK ([[LH-553]]): the catalog attests its own, so they are not re-derived.
-    written = Aliases() if attested else await resolve_aliases(decider, list(event.outputs), user=token.subject)
+    # WHAT THE EVENT NAMES BY A LOCATION OR ANOTHER IDENTIFIER ([[LH-553]]): the catalog attests its own, so they are not re-derived.
+    vouched = attested or _attested(names_vouched_by, settings)
+    written = Aliases() if vouched else await resolve_aliases(decider, list(event.outputs), user=token.subject)
     # A column upstream named by a location is read as its table too: a graph backend joins it there as it joins an input.
     sources = [*event.inputs, *_upstreams_named_by_a_location([*event.inputs, *event.outputs])]
-    read_as = Aliases() if attested else await resolve_aliases(decider, sources, user=token.subject)
+    read_as = Aliases() if vouched else await resolve_aliases(decider, sources, user=token.subject)
     # OUTPUTS ARE NEVER EXEMPTED: writing is the direction that mutates the estate, so an output naming an external
     # namespace is a producer claiming to have written the outside world, and it names no object, as an output carrying
     # no uuid names none. No grant can name either, so the refusal is unrepairable ([[LH-166]]). An output named by the
@@ -681,7 +700,7 @@ async def enforce_output_authz(
     # THE AUTHZ SET MUST COVER EVERY DATASET THE EVENT ASSERTS READING.
     #
     # This check covers an event's `inputs`, its `outputs` and the column upstreams the `columnLineage` facet of any of
-    # them names (`Dataset.column_upstreams`); the identifiers a `symlinks` facet names are resolved with the names. The feed stores the whole event and the
+    # them names (`Dataset.column_upstreams`); the other identifiers a dataset is named by (`Dataset.other_identifiers`: its `symlinks` and its `previousIdentifier`) are resolved with the names. The feed stores the whole event and the
     # forwarder sends it to the configured graph backend, so a column upstream naming a GOVERNED table is
     # a claim to have read it whether or not lineage keeps a column plane of its own.
     #
@@ -753,13 +772,20 @@ class DatasetFilter:
             self._decided.update({obj: bool(allowed.get(obj)) for obj in undecided})
         return {obj for obj in unique if self._decided[obj]}
 
-    async def scope_unrecorded(self, events: Sequence[RunEvent | DatasetEvent]) -> list[Governed]:
+    async def attestation(self, arrived: Mapping[str, Any]) -> VerifiedSignature | None:
+        """The signature a staged event's bytes carry, verified as the doors that record it verify it, or ``None`` for one
+        that does not verify now (`staged_signature`)."""
+        return await staged_signature(arrived, self._request.app, self._settings)
+
+    async def scope_unrecorded(self, events: Sequence[RunEvent | DatasetEvent], signatures: Sequence[VerifiedSignature | None]) -> list[Governed]:
         """Ask the authorization service what each of ``events`` names for this caller: for an event no door has recorded,
-        whose aliases the catalog answers now (:func:`governed_with_aliases`). With FGA off nothing is asked."""
+        whose aliases the catalog answers now (:func:`governed_with_aliases`), unless the catalog attests it by its
+        signature in ``signatures`` (:meth:`attestation`, by position). With FGA off nothing is asked."""
         if not self._settings.fga_enabled:
             return [governed_refs([*event.inputs, *event.outputs]) for event in events]
         decider, subject = self._asking()
-        return await governed_with_aliases(decider, events, user=subject)
+        attested = [_attested(signature, self._settings) for signature in signatures]
+        return await governed_with_aliases(decider, events, user=subject, attested=attested)
 
     def _asking(self) -> tuple[AccessDecider, str]:
         """The authorization service and the subject it is asked as; fail-closed where either is missing."""

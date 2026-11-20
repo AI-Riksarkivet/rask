@@ -729,7 +729,8 @@ export interface operations {
                      *
                      *     ``facets`` carries the standard OpenLineage dataset facets; lineage reads ``version`` (which Lance
                      *     version a run produced or read), the catalog's ``rask_lance`` facet (the ref an input was read on) and
-                     *     ``columnLineage`` and ``symlinks`` (the other datasets it names, which the ingest authorizer checks).
+                     *     ``columnLineage``, ``symlinks`` and ``lifecycleStateChange`` (the other datasets it names, which the ingest
+                     *     authorizer checks).
                      *
                      *     The spec splits dataset metadata across THREE slots, by the facet's base type: plain
                      *     ``DatasetFacet``s ride ``facets``, ``InputDatasetFacet``s ride ``inputFacets`` on an input, and

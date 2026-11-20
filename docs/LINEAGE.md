@@ -110,9 +110,12 @@ since no tuple could ever exist for it. On the bus doors an announcement the cat
 authenticated is recorded on that signature instead, with neither rung re-derived: the catalog checked both before it
 committed the write, so a grant revoked since takes nothing back (LH-551). The catalog's re-announcement of a commit
 whose own announcement was lost is signed only for the author the catalog recorded authorizing that commit (LH-550),
-so it is recorded on the signature too. One event names at most 64 inputs and 64 outputs and
+so it is recorded on the signature too. A dataset's other identifiers, its `symlinks` entries and a
+`lifecycleStateChange`'s `previousIdentifier`, are decided as the table each names, on the rung the dataset's own slot
+needs: a governed name the caller may not see, or that no table holds any longer, is refused 403, so only the catalog's
+signed announcement of a rename names the old name. One event names at most 64 inputs and 64 outputs and
 weighs at most 1 MiB as JSON, else 422. Every door (HTTP, bus, outbox drain, DLQ replay) parses through the same models, so all of them refuse
-alike, and one event names at most 1,000 distinct identifiers across its datasets, their `symlinks` and their
+alike, and one event names at most 1,000 distinct identifiers across its datasets, their other identifiers and their
 `columnLineage` upstreams, what one question to the catalog's decision door holds. The caller is bound as the author
 before any name is resolved, and where the catalog decides (`RASK_FGA_DECIDER_URL`), the event's names are resolved in
 one decision question as the caller, so a caller who may see none of them costs the catalog that one question, never a

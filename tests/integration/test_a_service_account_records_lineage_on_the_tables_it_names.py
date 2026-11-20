@@ -192,9 +192,17 @@ def _columns(*entries: dict[str, str]) -> dict[str, Any]:
     return {"fields": {"id": {"inputFields": list(entries)}}}
 
 
-def _carrying(table: str, **slots: dict[str, Any]) -> dict[str, Any]:
-    """``table`` as a dataset carrying, in each slot ``slots`` names, the ``columnLineage`` facet it maps the slot to."""
-    return {"namespace": "lance_catalog", "name": table, **{slot: {"columnLineage": facet} for slot, facet in slots.items()}}
+def _carrying(table: str, facet: str = "columnLineage", **slots: dict[str, Any]) -> dict[str, Any]:
+    """``table`` as a dataset carrying, in each slot ``slots`` names, the ``facet`` (``columnLineage`` unless named) it maps
+    the slot to."""
+    return {"namespace": "lance_catalog", "name": table, **{slot: {facet: value} for slot, value in slots.items()}}
+
+
+def _renamed_from(*dropped: str) -> dict[str, Any]:
+    """A ``lifecycleStateChange`` facet saying its dataset was renamed from ``_THEIRS``, without the members of its
+    ``previousIdentifier`` ``dropped`` names."""
+    previous = {key: value for key, value in {"namespace": "lance_catalog", "name": _THEIRS}.items() if key not in dropped}
+    return {"lifecycleStateChange": "RENAME", "previousIdentifier": previous}
 
 
 @pytest.mark.parametrize(
@@ -204,16 +212,28 @@ def _carrying(table: str, **slots: dict[str, Any]) -> dict[str, Any]:
         pytest.param({"outputs": [_carrying(_MINE, facets=_columns(), outputFacets=_columns(_theirs()))]}, 403, 15, id="a-second-copy-in-another-slot"),
         pytest.param({"outputs": [_carrying(_MINE, facets={"fields": {}, "dataset": [_theirs()]})]}, 403, 15, id="the-whole-dataset-list"),
         pytest.param({"outputs": [_carrying(_MINE)], "inputs": [_carrying(_READ, facets=_columns(_theirs()))]}, 403, 15, id="an-inputs-own-facet"),
+        pytest.param({"outputs": [_carrying(_MINE, "lifecycleStateChange", facets=_renamed_from())]}, 403, 15, id="a-previous-identifier"),
+        pytest.param(
+            {"outputs": [_carrying(_MINE, "lifecycleStateChange", facets={"lifecycleStateChange": "ALTER"}, outputFacets=_renamed_from())]},
+            403,
+            15,
+            id="a-previous-identifier-in-another-slot",
+        ),
+        pytest.param(
+            {"outputs": [_carrying(_MINE, "lifecycleStateChange", facets=_renamed_from("namespace"))]},
+            422,
+            13,
+            id="a-previous-identifier-without-its-namespace",
+        ),
     ],
 )
-def test_every_column_upstream_an_event_names_is_decided_before_it_is_recorded(
-    estate: Estate, sa_issuer: Any, datasets: dict[str, Any], status: int, code: int
-) -> None:
+def test_every_dataset_a_facet_names_is_decided_before_it_is_recorded(estate: Estate, sa_issuer: Any, datasets: dict[str, Any], status: int, code: int) -> None:
     """The producer may write ``_MINE`` and read ``_READ``, and holds nothing on ``_THEIRS``. Its event names ``_THEIRS``
-    as a column upstream wherever a ``columnLineage`` facet can: an entry lacking a member the OpenLineage ``InputField``
-    requires is refused as malformed; a second copy of the facet in another slot, the facet's whole-dataset list and
-    an input's own facet are each decided as an output's column upstream is. Nothing is recorded or forwarded as having
-    been read from ``_THEIRS``."""
+    wherever a facet naming another dataset can: as a column upstream of a ``columnLineage`` facet, and as the
+    ``previousIdentifier`` of a ``lifecycleStateChange`` facet, under which a graph backend may join ``_THEIRS``'s node to
+    ``_MINE``'s. An entry lacking a member the OpenLineage spec requires is refused as malformed; a second copy of a facet
+    in another slot, the column facet's whole-dataset list and an input's own facet are each decided as an output's own
+    copy is. Nothing is recorded or forwarded as naming ``_THEIRS``."""
     event = run_event("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a03", "COMPLETE", "2026-11-20T10:00:00+00:00", outputs=[]) | datasets
     producer = {"Authorization": f"Bearer {sa_issuer.mint(_PRODUCER_SA, namespace='etl', audience='rask-lineage')}"}
     with httpx.Client(base_url=estate.lineage_url, headers=producer, timeout=60) as lineage:
@@ -288,6 +308,86 @@ def test_an_event_naming_a_table_by_an_alias_is_shown_only_to_a_reader_of_that_t
             "replay": (200, "application/json", {"status": "replayed", "title": None, "detail": None, "code": None, "run_id": staged}),
         },
     )
+
+
+#: The identity the catalog signs its announcements under.
+_CATALOG = "service-catalog"
+
+
+@pytest.fixture
+def catalog_signs(monkeypatch: pytest.MonkeyPatch, event_signer: Any) -> Any:  # noqa: ANN401 — root conftest's EventSigner
+    """Lineage enforces signing, the catalog its one signer and delegator, as the chart renders both wherever auth is on.
+    Requested before ``estate``, so lineage boots with it; the catalog's published keys are installed once it has."""
+    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([_CATALOG]))
+    monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps([_CATALOG]))
+    return event_signer(_CATALOG)
+
+
+def test_the_catalogs_signed_rename_is_listed_and_replayed_from_the_outbox_while_an_unsigned_one_stays_hidden(
+    catalog_signs: Any, estate: Estate, sa_issuer: Any, openfga_store: Any
+) -> None:
+    """The catalog stages its announcement that ``_MINE`` was renamed from a name no table holds any longer, signed for
+    the table's owner. The owner, the warehouse's admin and a reader of ``_MINE`` each list it at the outbox door: the
+    catalog attests the names its announcement uses, so its previous name is not asked about. What the operator may write
+    still is: the reader's replay is refused and records nothing, and the admin's is recorded. A producer's unsigned
+    staged event naming ``_THEIRS`` as its previous name is not attested, and stays hidden from the owner, who may not
+    see ``_THEIRS``. While the catalog's published keys cannot be read the list still answers, the signed announcement
+    taking the full check, under which its previous name hides it."""
+    from catalog.core.lineage_emit import build_write_event
+    from lakehouse.events.published_keys import PublishedKeys
+    from lineage.main import app
+
+    app.state.published_keys = PublishedKeys(lambda identity: {"keys": catalog_signs.public} if identity == _CATALOG else {})
+    available = app.state.published_keys
+    owner, admin, viewer = "owner", "admin", "viewer"
+    openfga_store.write(
+        (fga_ids.user_object(f"kubernetes~system:serviceaccount:etl:{owner}"), "owner", fga_ids.table_object(estate.uuids[_MINE])),
+        (fga_ids.user_object(f"kubernetes~system:serviceaccount:etl:{admin}"), "owner", "warehouse:lance_catalog"),
+        (fga_ids.user_object(f"kubernetes~system:serviceaccount:etl:{viewer}"), "reader", fga_ids.table_object(estate.uuids[_MINE])),
+    )
+    renamed = build_write_event(
+        table_id=_MINE,
+        namespace="lance-namespace://localhost/api/catalog",
+        author=f"kubernetes~system:serviceaccount:etl:{owner}",
+        version=None,
+        operation="rename_table",
+        run_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a05",
+        event_time="2026-11-20T10:00:00+00:00",
+        job_namespace="lance-catalog",
+        uuids=DatasetUuids(table_uuid=estate.uuids[_MINE], namespace_uuid=estate.namespace_uuid),
+        renamed_from="lance_catalog$acme$gone",
+    )
+    signed = lineage_envelope(catalog_signs.sign(renamed, on_behalf_of=f"kubernetes~system:serviceaccount:etl:{owner}"))
+    mine = DatasetUuids(table_uuid=estate.uuids[_MINE], namespace_uuid=estate.namespace_uuid)
+    claimed = run_event("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a06", "COMPLETE", "2026-11-20T10:00:01+00:00", outputs=[_MINE])
+    claimed["outputs"] = [with_dataset_uuids(_carrying(_MINE, "lifecycleStateChange", facets=_renamed_from()), mine, producer="https://example.invalid/etl")]
+    unsigned = lineage_envelope(claimed)
+    for envelope in (signed, unsigned):
+        outbox.stage_envelope(estate.outbox_uri, StorageOptions(), envelope)
+
+    def caller(name: str) -> dict[str, str]:
+        return {"Authorization": f"Bearer {sa_issuer.mint(name, namespace='etl', audience='rask-lineage')}"}
+
+    def recorded(lineage: httpx.Client) -> list[tuple[list[str], list[str]]]:
+        return [(row["outputs"], row["table_uuids"]) for row in lineage.get("/events", headers=caller(admin)).json()["events"]]
+
+    with httpx.Client(base_url=estate.lineage_url, timeout=60) as lineage:
+        listed = {
+            name: sorted(event["run_id"] for event in lineage.get("/admin/dlq", headers=caller(name)).json()["events"]) for name in (owner, admin, viewer)
+        }
+        app.state.published_keys = PublishedKeys(lambda _identity: {})
+        outage = lineage.get("/admin/dlq", headers=caller(owner))
+        app.state.published_keys = available
+        refused = lineage.post(f"/admin/dlq/{signed.id}/replay", headers=caller(viewer))
+        unrecorded = recorded(lineage)
+        replayed = lineage.post(f"/admin/dlq/{signed.id}/replay", headers=caller(admin))
+        recorded_after = recorded(lineage)
+
+    # A run lists under its run id, and a dataset change, which has none, under the key it was staged by.
+    assert listed == {owner: [signed.id], admin: sorted([signed.id, claimed["run"]["runId"]]), viewer: [signed.id]}, listed
+    assert (outage.status_code, outage.json().get("events")) == (200, []), outage.text
+    assert (refused.status_code, refused.json().get("code"), unrecorded) == (403, 15, []), refused.text
+    assert (replayed.status_code, recorded_after) == (200, [([_MINE], [estate.uuids[_MINE]])]), replayed.text
 
 
 def _named_by_more_than_one_question_holds() -> dict[str, Any]:

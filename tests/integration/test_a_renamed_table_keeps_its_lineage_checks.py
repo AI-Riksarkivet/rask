@@ -4,7 +4,9 @@ A rename keeps a table's uuid and every grant held by it (ADR 0173 §8, [[LH-524
 name and carries its uuid in the dataset's `rask_lance` facet (ADR 0173 §10, [[LH-522]]). Lineage asks the decision door
 about that uuid, never the name. So after a live catalog renames `acme$t` to `acme$u`, a write to `acme$u` whose run read
 the source under the name it held before the rename, and an outside producer's event naming `acme$u` (which lineage's
-HTTP door resolves to the same uuid), are both admitted.
+HTTP door resolves to the same uuid), are both admitted. So is the catalog's own announcement of the rename, which names
+the source's old name as its ``previousIdentifier``: that name resolves to no table once the rename landed, and the
+announcement is admitted on the catalog's signature, as every announcement the catalog attests is.
 
 Every decision is the real model's, on a store of this test's own ([[LH-235]]), asked through the `OpenFgaDecider` the
 services use.
@@ -31,13 +33,17 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lineage.api.fga_deps import enforce_bus_authz, enforce_output_authz
-from lineage.core.config import LineageSettings
+from lineage.core.config import LineageSettings, Signing
 from lineage.models import RunEvent, parse_event
 from lineage.services.names import CatalogNames, stamp_resolved_uuids
+from lineage.services.signature import store_published_keys
 from tests.integration.lineage_app import live_catalog
+from tests.secret_store_double import SecretStoreDouble
 
 
 PIPELINE = "dex~pipeline"
+#: The identity the catalog signs its announcements under, and the dataset namespace it names its tables under.
+CATALOG, CATALOG_NAMESPACE = "service-catalog", "lance-namespace://localhost/api/catalog"
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
 
 
@@ -116,19 +122,39 @@ def _lineage_app(decider: OpenFgaDecider) -> FastAPI:
     return app
 
 
-@pytest.mark.asyncio
-async def test_a_renamed_tables_writes_pass_lineages_checks(decider: OpenFgaDecider, renamed: Renamed) -> None:
-    """Each gate refuses by raising, so the write and the outside producer's event are admitted when none raises."""
-    settings = LineageSettings.model_validate(
-        {
-            "oidc_enabled": True,
-            "oidc_issuer": "https://idp.example.com",
-            "oidc_audience": "lance",
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "fga_enabled": True,
-        }
+def _announced_rename(renamed: Renamed) -> dict[str, Any]:
+    """The catalog's announcement of `acme$t`'s rename to `acme$u`, from the catalog's own builder, for the pipeline."""
+    from catalog.core.lineage_emit import build_write_event
+
+    return build_write_event(
+        table_id="lance_catalog$acme$u",
+        namespace=CATALOG_NAMESPACE,
+        author=PIPELINE,
+        version=None,
+        operation="rename_table",
+        run_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a04",
+        event_time="2026-11-20T10:00:00+00:00",
+        job_namespace="lance-catalog",
+        uuids=DatasetUuids(table_uuid=renamed.table),
+        renamed_from="lance_catalog$acme$t",
     )
+
+
+@pytest.mark.asyncio
+async def test_a_renamed_tables_writes_pass_lineages_checks(
+    decider: OpenFgaDecider, renamed: Renamed, event_signer: Any, secret_store: SecretStoreDouble
+) -> None:
+    """Each gate refuses by raising, so the write, the outside producer's event and the catalog's signed announcement of
+    the rename are admitted when none raises."""
+    auth = {
+        "oidc_enabled": True,
+        "oidc_issuer": "https://idp.example.com",
+        "oidc_audience": "lance",
+        "oidc_idp_id": "dex",
+        "oidc_connectors": {"local": "dex"},
+        "fga_enabled": True,
+    }
+    settings = LineageSettings.model_validate(auth)
     caller = PersonPrincipal(principal=Principal(idp_id="dex", subject="pipeline"), claims=IDToken(iss="i", sub="pipeline", aud="lance", exp=1, iat=1))
     write = _write(
         outputs=[_dataset("lance_catalog$acme$u", renamed.table)],
@@ -150,3 +176,10 @@ async def test_a_renamed_tables_writes_pass_lineages_checks(decider: OpenFgaDeci
     await enforce_bus_authz(RunEvent.model_validate(write), app, settings, write)
     await stamp_resolved_uuids(outside, cast(CatalogNames, _Catalog()), bearer="pipeline-token")
     await enforce_output_authz(outside, app, settings, caller)
+    catalog = event_signer(CATALOG)
+    secret_store.hold(f"signing-public-{CATALOG}", {"keys": catalog.public})
+    announced = catalog.sign(_announced_rename(renamed), on_behalf_of=PIPELINE)
+    assert announced["dataset"]["facets"]["lifecycleStateChange"]["previousIdentifier"] == {"namespace": CATALOG_NAMESPACE, "name": "lance_catalog$acme$t"}
+    app.state.published_keys = store_published_keys()
+    signed = LineageSettings.model_validate({**auth, "signing": Signing(signers=frozenset({CATALOG}), delegators=frozenset({CATALOG}))})
+    await enforce_bus_authz(parse_event(announced), app, signed, announced)

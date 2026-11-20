@@ -136,7 +136,10 @@ Events posted to `POST /api/lineage/api/v1/lineage` by other OpenLineage produce
 Their `rask_author.sub` is bound to the posting token, and each governed dataset's `tableUuid` and `namespaceUuid` are the
 ones its name resolved to through the catalog with that token when lineage took the event in, whatever the producer
 claimed. A name the token cannot resolve (a service account's token is lineage's audience, which the catalog refuses)
-is recorded without a uuid. Every other facet is that producer's own claim.
+is recorded without a uuid. A governed table another producer names by any identifier (an input, an output, a
+`symlinks` entry, a `columnLineage` upstream, a `lifecycleStateChange`'s `previousIdentifier`) is decided as that table
+before the event is recorded, so a rename's old name, which no table holds once the rename landed, is named only by the
+catalog's own signed announcement. Every other facet is that producer's own claim.
 
 A dataset another producer names by a storage location, and every identifier its `symlinks` facet lists, is decided on
 the table it names, because the forwarded graph joins them to that table: lineage asks the catalog which table a
