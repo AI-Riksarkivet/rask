@@ -97,7 +97,7 @@ from tenacity import (
     wait_exponential_jitter,
 )
 
-from lakehouse.projected_token import read_token_file
+from lakehouse.governed.projected_token import read_token_file
 
 
 if TYPE_CHECKING:
@@ -788,3 +788,19 @@ def secret_store_answers() -> None:
 def forget_secret_store() -> None:
     """Close this process's session and forget its login, so the next read opens one from the settings in force then."""
     _PROCESS.forget()
+
+
+__all__ = [
+    "SecretStore",
+    "SecretStoreSettings",
+    "SecretStoreUnansweredError",
+    "fits_a_header",
+    "forget_secret_store",
+    "read_required_secret",
+    "read_secret",
+    "read_secret_answered",
+    "secret_store_answers",
+    "secret_store_configured",
+    "secret_store_login_held",
+    "secret_store_session",
+]

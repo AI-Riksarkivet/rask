@@ -192,3 +192,15 @@ def audit(
             **{f"audit.{key}": value for key, value in fields.items()},
         },
     )
+
+
+__all__ = [
+    "ALL_COLUMNS",
+    "AUDIT_FORMAT",
+    "AUDIT_LOGGER",
+    "AuditAction",
+    "AuditOutcome",
+    "audit",
+    "audit_read",
+    "configure_audit",
+]

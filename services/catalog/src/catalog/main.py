@@ -39,10 +39,10 @@ from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import NamespaceConnections
 from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import provenance_namespace, warehouses
-from lakehouse.admission import judge_before_the_body
 from lakehouse.events.bus import Bus, bus_session
 from lakehouse.events.control_emit import make_control_emitter
 from lakehouse.events.signing import SigningKey, parse_published_keys
+from lakehouse.governed.admission import judge_before_the_body
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
@@ -406,5 +406,5 @@ app = build_service_app(
     outer_middleware=[Middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes), Middleware(PathReadingMiddleware)],
 )
 # Every door that authenticates its caller does so from the request's headers before its body is read
-# (`lakehouse.admission`): a caller with no token is refused before a byte is buffered, and never takes a write seat.
+# (`lakehouse.governed.admission`): a caller with no token is refused before a byte is buffered, and never takes a write seat.
 judge_before_the_body(app, gate=authenticate, judge=judge)

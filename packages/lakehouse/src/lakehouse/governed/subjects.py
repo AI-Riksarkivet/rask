@@ -34,3 +34,8 @@ def is_person_subject(value: str | None) -> bool:
         return not Principal.parse(value).is_machine
     except ValueError:
         return False
+
+
+__all__ = [
+    "is_person_subject",
+]

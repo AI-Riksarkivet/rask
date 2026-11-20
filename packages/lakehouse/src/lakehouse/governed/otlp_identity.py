@@ -37,3 +37,8 @@ def session() -> requests.Session:
     sender = requests.Session()
     sender.auth = _ProjectedToken(path)
     return sender
+
+
+__all__ = [
+    "session",
+]

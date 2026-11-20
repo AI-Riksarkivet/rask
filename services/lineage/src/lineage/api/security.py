@@ -27,7 +27,7 @@ from typing import Annotated, Protocol, cast
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from lakehouse.admission import admitted_caller, caller_judge
+from lakehouse.governed.admission import admitted_caller, caller_judge
 from lakehouse.governed.door_caller import caller_of
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
@@ -76,7 +76,7 @@ def _authenticated(request: Request, settings: LineageSettings, bearer: str | No
 #: The authenticated caller — a ``PersonPrincipal``, a ``ServicePrincipal``, or ``None`` when OIDC is off.
 CurrentToken = Annotated[Caller | None, Depends(authenticate)]
 #: Every door that depends on `authenticate` judges its caller from the headers before its body is read
-#: (`lakehouse.admission`): the intake's JSON body is never read, let alone parsed, for a caller with no token.
+#: (`lakehouse.governed.admission`): the intake's JSON body is never read, let alone parsed, for a caller with no token.
 judge = caller_judge(gate=authenticate, settings=get_settings, authenticated=_authenticated)
 
 __all__ = ["Caller", "CurrentToken", "PersonPrincipal", "ServicePrincipal", "authenticate"]

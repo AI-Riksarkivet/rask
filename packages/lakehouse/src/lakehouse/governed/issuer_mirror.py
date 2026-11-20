@@ -140,3 +140,13 @@ def create_app(settings: IssuerMirrorSettings | None = None) -> FastAPI:
         return await _fetch(client, str(document["jwks_uri"]), resolved.token_file)
 
     return app
+
+
+__all__ = [
+    "DISCOVERY_PATH",
+    "JWKS_PATH",
+    "IssuerMirrorSettings",
+    "IssuerUnansweredError",
+    "UpstreamDep",
+    "create_app",
+]

@@ -84,6 +84,26 @@ allowed_importers =
     maintenance
     lakehouse.health
 
+# The auth plane is imported where an identity is presented or a caller judged, and nowhere else (ADR 0224): the services
+# verify, decide and audit through it; inside the library the app factory installs its audit trail, the bus and the
+# store session present the pod's own identity, and the store's options and filesystem carry a credential as its key
+# pair. A new importer in the library is either one of these kinds, added here deliberately, or the rest of the library
+# taking a judgement of a caller it was not built to make. Its own modules import each other.
+[importlinter:contract:the-auth-plane-is-imported-by-the-services-and-its-named-users-only]
+name = ADR 0224: lakehouse.governed is imported by the services and its named users in the library only
+type = protected
+protected_modules =
+    lakehouse.governed
+allowed_importers =
+    catalog
+    lineage
+    maintenance
+    lakehouse.service_app.factory
+    lakehouse.events.bus
+    lakehouse.store_session
+    lakehouse.storage_options
+    lakehouse.objectfs
+
 [importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
 name = Phase 1 (3): no lakehouse service and nothing in the lakehouse library imports a workflow engine
 type = forbidden

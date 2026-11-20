@@ -44,7 +44,7 @@ dependencies = [
     # when telemetry is on, which loads every instrumentor INSTALLED, so this list is that instrumentation: declared
     # here, in the library all three services install, so none of them can ship without it.
     "opentelemetry-exporter-otlp-proto-http>=1.44.0",
-    # The session the OTLP/HTTP exporters send with (`lakehouse.otlp_identity`), which presents the pod's own token.
+    # The session the OTLP/HTTP exporters send with (`lakehouse.governed.otlp_identity`), which presents the pod's own token.
     "requests>=2.32",
     "opentelemetry-instrumentation-fastapi>=0.65b0",
     "opentelemetry-instrumentation-httpx>=0.65b0",
@@ -58,7 +58,7 @@ dependencies = [
 
 [project.entry-points.opentelemetry_otlp_credential_provider]
 # Named by the chart's `OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER`: every OTLP export carries the pod's own token.
-rask_service_account = "lakehouse.otlp_identity:session"
+rask_service_account = "lakehouse.governed.otlp_identity:session"
 
 [dependency-groups]
 dev = [

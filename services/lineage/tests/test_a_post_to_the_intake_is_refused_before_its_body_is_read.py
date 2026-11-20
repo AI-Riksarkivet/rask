@@ -3,7 +3,7 @@
 The intake (`POST /api/v1/lineage`) takes an OpenLineage event as a JSON body, and FastAPI reads and parses a route's body
 before it solves any dependency, the bearer check included. So lineage's app is built with a body cap that refuses a
 body declared over it from its Content-Length (413), and its caller is judged from the headers before the body is read
-(`lakehouse.admission`), so a post with no token is refused 401 whatever it would send. Driven over a socket to a live
+(`lakehouse.governed.admission`), so a post with no token is refused 401 whatever it would send. Driven over a socket to a live
 uvicorn, as a client reaches it: only the headers are sent, and the answer must arrive while the body is still unsent.
 Authentication is on, against the loopback Dex in the root conftest; the provenance store is one whose feed answers at
 once, since the claim is about the door.

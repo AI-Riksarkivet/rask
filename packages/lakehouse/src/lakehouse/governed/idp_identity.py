@@ -207,3 +207,14 @@ class IdpVerifier:
             return PersonPrincipal(principal=self._naming[issuer].person(claims), claims=claims)
         except ValidationError as exc:
             raise UnauthenticatedError("Invalid or expired token") from exc
+
+
+__all__ = [
+    "ConnectorNaming",
+    "FederatedClaims",
+    "IdpVerifier",
+    "PersonNaming",
+    "PersonPrincipal",
+    "SubjectNaming",
+    "person_naming",
+]

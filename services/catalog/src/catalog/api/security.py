@@ -28,7 +28,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from catalog.api.dependencies import SettingsDep
 from catalog.core.config import Settings, get_settings
-from lakehouse.admission import admitted_caller, caller_judge
+from lakehouse.governed.admission import admitted_caller, caller_judge
 from lakehouse.governed.door_caller import caller_of
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
@@ -76,7 +76,7 @@ def _authenticated(request: Request, settings: Settings, bearer: str | None) -> 
 #: this and narrow with ``isinstance``; router-level use enforces authentication.
 CurrentToken = Annotated[Caller | None, Depends(authenticate)]
 #: Every door that depends on `authenticate` judges its caller from the headers before its body is read
-#: (`lakehouse.admission`), so no caller without a token makes this service buffer one.
+#: (`lakehouse.governed.admission`), so no caller without a token makes this service buffer one.
 judge = caller_judge(gate=authenticate, settings=get_settings, authenticated=_authenticated)
 
 

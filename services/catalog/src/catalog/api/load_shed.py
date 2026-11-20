@@ -11,7 +11,7 @@ memory pressure rather than adding to it. Reads and non-bulk writes (``version/c
 pass through untouched. ``max_concurrent=0`` disables it entirely.
 
 A WRITE TAKES ITS SEAT WHEN ITS BODY IS FIRST READ, not when it arrives. The catalog judges a caller from its headers
-before its body is read (`lakehouse.admission`), so a request it refuses never reads its body and never sits. Seated on
+before its body is read (`lakehouse.governed.admission`), so a request it refuses never reads its body and never sits. Seated on
 arrival, an upload with no token holds one of the two production seats for as long as it trickles in, and every
 authenticated write behind it is shed with 429.
 

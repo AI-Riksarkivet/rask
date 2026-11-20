@@ -118,3 +118,16 @@ def _principal_key(key: str) -> str:
 
 #: A setting or a field that must name a principal: a bare name is refused when it is read.
 type PrincipalKey = Annotated[str, AfterValidator(_principal_key)]
+
+
+__all__ = [
+    "CLIENT_IDP_SUFFIX",
+    "FGA_USER_MAX_BYTES",
+    "SEPARATOR",
+    "SERVICE_ACCOUNT_IDP",
+    "Principal",
+    "PrincipalKey",
+    "is_machine_idp",
+    "is_principal",
+    "require_idp_id",
+]

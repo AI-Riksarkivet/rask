@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from lakehouse.exceptions import ServiceUnavailableError
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.principal import CLIENT_IDP_SUFFIX, SERVICE_ACCOUNT_IDP, Principal
-from lakehouse.projected_token import EmptyTokenFileError, read_token_file
+from lakehouse.governed.projected_token import EmptyTokenFileError, read_token_file
 
 
 log = logging.getLogger(__name__)
@@ -140,3 +140,14 @@ def read_identity_token(path: str | Path) -> str:
 def identity_bearer(path: str | Path) -> dict[str, str]:
     """The Authorization header carrying this pod's identity token, read now."""
     return {"Authorization": f"Bearer {read_identity_token(path)}"}
+
+
+__all__ = [
+    "IdentityTokenUnavailableError",
+    "ServiceAccountVerifier",
+    "ServicePrincipal",
+    "client_principal",
+    "identity_bearer",
+    "read_identity_token",
+    "service_account_principal",
+]

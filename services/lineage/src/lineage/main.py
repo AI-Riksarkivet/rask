@@ -15,8 +15,8 @@ from typing import Final
 import httpx
 from fastapi import FastAPI, Request
 
-from lakehouse.admission import judge_before_the_body
 from lakehouse.events.bus import Bus, bus_session
+from lakehouse.governed.admission import judge_before_the_body
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
@@ -203,5 +203,5 @@ app = build_service_app(
 
 
 # Every door that authenticates its caller does so from the request's headers before its body is read
-# (`lakehouse.admission`): the intake's JSON body is never read, let alone parsed, for a caller with no token.
+# (`lakehouse.governed.admission`): the intake's JSON body is never read, let alone parsed, for a caller with no token.
 judge_before_the_body(app, gate=authenticate, judge=judge)

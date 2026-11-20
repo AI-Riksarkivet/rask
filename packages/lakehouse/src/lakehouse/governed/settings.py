@@ -311,3 +311,13 @@ def assert_authentication_configured(*, oidc_enabled: bool, insecure_allow_unaut
         "RASK_OIDC_ENABLED=true (with RASK_OIDC_ISSUER + RASK_OIDC_AUDIENCE), or set "
         "RASK_INSECURE_ALLOW_UNAUTHENTICATED=true to declare that an open service is what you meant."
     )
+
+
+__all__ = [
+    "ClientMarker",
+    "FgaSettings",
+    "GovernedAuthSettings",
+    "OidcProvider",
+    "OidcSettings",
+    "assert_authentication_configured",
+]

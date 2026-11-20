@@ -87,3 +87,9 @@ def _proved(verifier: IdpVerifier | ServiceAccountVerifier | None, bearer: str) 
         raise
     audit(AuditAction.AUTHN, AuditOutcome.SUCCESS, subject=principal.subject)
     return principal
+
+
+__all__ = [
+    "DoorSettings",
+    "caller_of",
+]

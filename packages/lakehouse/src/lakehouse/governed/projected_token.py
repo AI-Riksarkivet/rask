@@ -25,3 +25,9 @@ def read_token_file(path: str | Path) -> str:
     if not token:
         raise EmptyTokenFileError(f"the token file {path} is empty")
     return token
+
+
+__all__ = [
+    "EmptyTokenFileError",
+    "read_token_file",
+]

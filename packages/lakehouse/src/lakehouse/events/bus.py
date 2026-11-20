@@ -84,8 +84,8 @@ from lakehouse.context import continuing, current_trace_context
 from lakehouse.events.bus_delivery import Delivery, Handle, Lane, Outcome, Park, Settlement, being_cancelled, envelope_of, judged
 from lakehouse.events.bus_metrics import create_delivery_series, record_delivery, record_processing, record_publish, record_pull_failed, record_refusal
 from lakehouse.events.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent, trace_context
+from lakehouse.governed.projected_token import read_token_file
 from lakehouse.lifecycle import closed_quietly
-from lakehouse.projected_token import read_token_file
 
 
 if TYPE_CHECKING:

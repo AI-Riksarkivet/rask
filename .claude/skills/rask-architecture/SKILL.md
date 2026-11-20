@@ -92,7 +92,7 @@ loop under a `lakehouse.supervision.Supervisor` (a loop that ends ends the proce
 lineage's feed gate; the bus, the secret store, lineage's OpenFGA and maintenance's and lineage's object store are
 reported only, every service on one cadence), with its own facts beside them
 (the catalog's namespace and signing key, maintenance's signing key). A service whose doors authenticate builds its
-judge with `lakehouse.admission.caller_judge` and calls `judge_before_the_body` once its routes are mounted, so its
+judge with `lakehouse.governed.admission.caller_judge` and calls `judge_before_the_body` once its routes are mounted, so its
 caller is judged from the headers before FastAPI reads a body.
 A client is an outside tool on the public API and builds its own app (owner, 2026-11-07). The lance services keep the `fastapi` skill's `api/v1/endpoints/` + `core/` + `services/` layout; the factory owns
 the boot, not the layout. A `main.py` that opens

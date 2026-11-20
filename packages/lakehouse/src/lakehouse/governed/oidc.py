@@ -66,7 +66,7 @@ from lance_namespace import UnauthenticatedError
 from pydantic import AfterValidator, BaseModel, ConfigDict, ValidationError
 
 from lakehouse.exceptions import ServiceUnavailableError
-from lakehouse.projected_token import read_token_file
+from lakehouse.governed.projected_token import read_token_file
 
 
 _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
@@ -573,3 +573,13 @@ class OIDCVerifier:
         except (jwt.PyJWTError, ValidationError) as exc:
             # Never leak the underlying JWT/crypto/validation error to the client.
             raise UnauthenticatedError("Invalid or expired token") from exc
+
+
+__all__ = [
+    "DEFAULT_ALLOWED_ALGORITHMS",
+    "HTTP_FETCH_TIMEOUT_SECONDS",
+    "UNKNOWN_KID_REFRESH_INTERVAL_SECONDS",
+    "IDToken",
+    "OIDCVerifier",
+    "ProviderUnavailableError",
+]

@@ -402,7 +402,7 @@ vendor headers). The SDK appends /v1/{traces,metrics,logs} to the endpoint.
 
 Each export is the service's own, authenticated (ADR 0215). The OTel SDK's OTLP/HTTP exporters load the
 `requests.Session` they post with from the entry point this names (group `opentelemetry_otlp_credential_provider`);
-`rask_service_account` is `lakehouse.otlp_identity`, a session that reads the pod's projected token from
+`rask_service_account` is `lakehouse.governed.otlp_identity`, a session that reads the pod's projected token from
 `RASK_OTLP_TOKEN_FILE` on every request and sends it as a bearer, so a rotated token is used from the kubelet's next
 write and no telemetry secret exists. The exporter itself stays the SDK's.
 

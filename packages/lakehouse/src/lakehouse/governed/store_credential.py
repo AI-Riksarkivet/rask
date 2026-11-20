@@ -31,3 +31,9 @@ class StoreCredentialUnavailableError(ServiceUnavailableError):
 
     `ServiceUnavailableError` is `lance_namespace`'s, which the problem handlers of every plane map to 503.
     """
+
+
+__all__ = [
+    "S3KeyPair",
+    "StoreCredentialUnavailableError",
+]

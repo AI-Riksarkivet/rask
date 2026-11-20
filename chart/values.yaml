@@ -1948,9 +1948,9 @@ allocator:
 # evaluator and how the audit trail is routed and kept. The product chart renders none of it. Each lakehouse service
 # exports its traces, metrics and logs over OTLP/HTTP to the endpoint named here, and its `lance.audit` records under
 # that instrumentation scope, which is what the platform routes the governance trail by. Every export presents the
-# pod's own projected ServiceAccount token for `identity.audience` as a bearer (`lakehouse.otlp_identity`), so the
-# platform's gateway verifies the sender against the cluster's issuer and no telemetry credential exists. rask's alert
-# rules are an artefact of their own (deploy/alerting/rules.yml). Development gets the platform's half from
+# pod's own projected ServiceAccount token for `identity.audience` as a bearer (`lakehouse.governed.otlp_identity`), so
+# the platform's gateway verifies the sender against the cluster's issuer and no telemetry credential exists. rask's
+# alert rules are an artefact of their own (deploy/alerting/rules.yml). Development gets the platform's half from
 # deploy/fixtures/observability (a Collector that verifies the token, GreptimeDB, Perses, vmalert, Alertmanager),
 # which deploy/values-local.yaml names.
 observability:

@@ -315,3 +315,10 @@ def build_catalog_decider(settings: _DeciderSettings, *, service: str) -> Access
 
     log.info("%s: authorization decided by the catalog (%s)", service, settings.fga_decider_url)
     return CatalogDecider(settings.fga_decider_url, token=token, timeout_seconds=settings.fga_timeout_seconds)
+
+
+__all__ = [
+    "attach_auth",
+    "build_catalog_decider",
+    "build_fga_client",
+]

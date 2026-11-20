@@ -356,8 +356,8 @@ The product chart renders **no OTel Collector** (ADR 0215). Each lakehouse servi
 maintenance-worker) exports traces, metrics and logs over OTLP/HTTP to **`observability.export.endpoint`**, the
 platform's OTLP gateway, as itself: every export carries the pod's projected ServiceAccount token for
 `observability.identity.audience` (default `rask-otlp`) as a bearer, read from file on each request by the OTel SDK
-credential entry point `rask_service_account` (`lakehouse.otlp_identity`). No telemetry secret exists. The governance
-trail rides the same export under the `lance.audit` instrumentation scope.
+credential entry point `rask_service_account` (`lakehouse.governed.otlp_identity`). No telemetry secret exists. The
+governance trail rides the same export under the `lance.audit` instrumentation scope.
 
 **The trail's records are counted as they are emitted, so a store can tell when it lost some.** The records ride the
 log export, which is not lossless: a full export queue, a process killed before its batch left, or a gateway whose

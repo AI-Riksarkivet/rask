@@ -14,6 +14,7 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 from openfga_sdk.exceptions import ApiException
@@ -211,5 +212,5 @@ def test_commit_unless_changed_reports_a_rolled_back_write_and_fails_closed_on_a
     if exc.status == 409:
         assert asyncio.run(commit()) is False
     else:
-        with pytest.raises(fga.ServiceUnavailableError):
+        with pytest.raises(ServiceUnavailableError):
             asyncio.run(commit())

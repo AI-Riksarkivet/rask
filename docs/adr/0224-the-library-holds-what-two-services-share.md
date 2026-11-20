@@ -154,3 +154,72 @@ A module's logger and tracer are named by its path, so five names on a record or
 `lakehouse.bus` (logger and tracer), `lakehouse.bus_delivery`, `lakehouse.outbox`, `lakehouse.control_emit` and
 `lakehouse.openlineage` are `lakehouse.events.<module>`. No alert rule, dashboard or collector route names them; the
 meters (`lance.bus`, `lance.outbox`, `lance.<service>`) are named by hand and keep their names.
+
+## The auth plane group (2026-11-20)
+
+The third group by job is the auth plane, `lakehouse.governed`: who a caller is, what it may do, and the trail of both.
+It already existed under that name, which some 1,970 references use, so the name stays and this commit pays the group's
+debts and takes in its stragglers. Measured with `ast` on `a5124d9ac` (module-level, function-local, `TYPE_CHECKING`
+and relative imports; 111 modules, 230 edges):
+
+- **No eager facade.** `governed/__init__.py` held a docstring and no import, and the one module that hands on names it does not define is `fga`, which
+  re-exports the SDK's `ClientTuple` and `RelationshipCondition` on purpose and lists both in its `__all__`. `governed/auth/` had no `__init__.py`: an implicit namespace package, which the
+  import graph `.importlinter` judges did not contain, so no contract saw `write_model`'s imports. It is a regular
+  package now, with a docstring only.
+- **No `__all__`** in fifteen of the group's sixteen modules (`decider` declared one), nor in two of the three
+  stragglers below (`admission` declared one). Each now declares the public names it defines.
+- **Edges.** The group imports `context`, `log_handler`, `supervision`, `naming`, `draining`, `exceptions`,
+  `lifecycle`, `probes`, `schemas.health` and `health`. The rest imports the group from `service_app.factory`
+  (`audit`), `store_session` (`machine_identity`, `secrets`, `store_credential`), `storage_options` and `objectfs`
+  (`store_credential`), and, with this commit, `events.bus` (`projected_token`).
+
+| Module | In the group as |
+| --- | --- |
+| `lakehouse.admission` | `lakehouse.governed.admission` |
+| `lakehouse.projected_token` | `lakehouse.governed.projected_token` |
+| `lakehouse.otlp_identity` | `lakehouse.governed.otlp_identity` |
+
+Each joins because its job is authentication's and its move closes no loop: `admission` judges a request's caller
+before its body is read and imports only `governed.settings`; `otlp_identity` is the session every OTLP export presents
+the pod's token with and imports only `governed.machine_identity`; `projected_token` reads the token every caller that
+presents this pod's identity sends, imports nothing in the library, and is imported by `machine_identity`, `oidc`,
+`secrets` and the bus's login, so the bus becomes one more importer of the group and the group imports nothing of the
+events. The OTel credential entry point `rask_service_account` (`packages/lakehouse/pyproject.toml`) names
+`lakehouse.governed.otlp_identity:session`; the chart names only the entry point, so no chart value changes. None of
+the three has a logger or a tracer, so no record or span name changes.
+
+Left out:
+
+- `store_session`: the service's store login, exchanging its ServiceAccount token for a session. Its job is the
+  store's credential, and it imports `storage_options`, which imports `governed.store_credential`, so in the group it
+  would make the group and the rest import each other through the store.
+- `storage_options`, `objectfs`, `endpoint_scheme`, `storage.sts`: the store's credential guard and plumbing; they carry
+  a credential and judge no caller.
+- `context`: the trace id a request runs under is a correlation id, never evidence (its own docstring), and the bus,
+  the problem answers and the log handler import it.
+
+Observed and not changed here: the group and the rest already import each other through the readiness probe, since
+`governed.signing_key` takes `health.Dependency`, and `health` imports `objectfs`, which imports
+`governed.store_credential`. Cutting it means `store_credential` living with the store or the probe's `Dependency` type
+living below both, and is a question for the group that holds the store.
+
+`.importlinter`'s `the-auth-plane-is-imported-by-the-services-and-its-named-users-only` (a `protected` contract) holds
+it: only `catalog`, `lineage`, `maintenance`, `lakehouse.service_app.factory`, `lakehouse.events.bus`,
+`lakehouse.store_session`, `lakehouse.storage_options` and `lakehouse.objectfs` import `lakehouse.governed`, and its
+own modules import each other. It was kept before it was written; a planted `import lakehouse.governed.fga` in
+`lakehouse.timers` broke it.
+
+**Proposed, for a commit of its own: `fga.py` by job.** Its 2,317 lines (before `__all__`) do six jobs, each with
+importers of its own (production files, measured by the names each uses):
+
+| Job | Lines | Public names | Importers |
+| --- | --- | --- | --- |
+| The model as data: load, type restrictions, `admits`, machine relations, hierarchy edges | 97-98, 165-253, 315-321 | `load_model`, `load_model_dsl`, `admits`, `machine_relations`, `hierarchy_edge_tuples` | 7 catalog files, `maintenance.services.rebuild` |
+| User and object ids | 254-314, 322-375 | `user_object`, `subject_of`, `grantee_object`, `is_object_id`, `canonical_object_id`, `table_object`, ... | 39 catalog, 4 lineage and 2 maintenance files, `governed.decider`, `scripts/lane_estate_owner.py` |
+| The call's resilience: timeout, retry policy, circuit breaker, the fail-closed guard | 100-164, 376-515 | `RetryPolicy`, `DEFAULT_RETRY`, `ONE_ATTEMPT`, `reset_circuit` | the reads and writes, `governed.decider`, 2 catalog files |
+| The store and its model: client configuration, provision, resolve, model history | 516-998 | `make_client`, `provision`, `resolve`, `ModelHistory`, `canonical_model`, `newest_store` | `governed.auth_lifespan`, `governed.auth.write_model`, 2 scripts |
+| Reads: check, batch check, list objects and users, expand, read tuples and changes | 999-1796 | `check`, `batch_check`, `list_users`, `read_object_tuples`, `dispose`, ... | `governed.decider`, `governed.auth_lifespan`, 16 catalog and 2 lineage files |
+| Writes: grants, revokes, the hierarchy's edges, the census, the audit of each | 1797-2317 | `write_tuples`, `delete_tuples`, `grant_on_create`, `census`, `move_parent`, ... | 15 catalog and 2 maintenance files |
+
+The split moves every `banned-api` entry in `pyproject.toml` that names `lakehouse.governed.fga.*` with the name it
+bans, and every `monkeypatch` target on `fga`, in the same commit.

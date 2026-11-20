@@ -170,3 +170,14 @@ def main() -> int:
 
 if __name__ == "__main__":  # pragma: no cover - the container entrypoint
     raise SystemExit(main())
+
+
+__all__ = [
+    "STORE_NAME",
+    "ModelHookSettings",
+    "fga_headers",
+    "history",
+    "main",
+    "model_document",
+    "shape",
+]

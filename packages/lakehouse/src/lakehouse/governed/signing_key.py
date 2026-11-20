@@ -339,3 +339,25 @@ def signing_ready_check(inner: ReadyCheck | None = None) -> ReadyCheck:
         return body.model_copy(update={"status": ReadinessStatus.unhealthy, "components": {**body.components, "signing": holder.reason}})
 
     return check
+
+
+__all__ = [
+    "KEYS_FIELD",
+    "KEY_READ_TIMEOUT_SECONDS",
+    "MAX_REFRESH_SECONDS",
+    "SEED_FIELD",
+    "SIGNING_STATE",
+    "SigningKeyHolder",
+    "SigningKeyLike",
+    "SigningKeyUnavailableError",
+    "SigningStatus",
+    "attach_signing",
+    "make_signing_holder",
+    "published_key_fetch",
+    "secret_store_dependency",
+    "signing_key_name",
+    "signing_key_secret",
+    "signing_of",
+    "signing_public_secret",
+    "signing_ready_check",
+]
