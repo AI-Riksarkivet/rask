@@ -50,10 +50,10 @@ from lance.fragment import write_fragments
 from lance.namespace import DirectoryNamespace
 from lance_namespace import DescribeTableRequest, DescribeTableResponse, InternalError, PermissionDeniedError
 
-from lakehouse import manifest_wire
 from lakehouse.events.bus_delivery import Outcome
-from lakehouse.listing_floor import FLOOR_KEY
-from lakehouse.manifest_names import committed_version
+from lakehouse.lancekit import manifest_wire
+from lakehouse.lancekit.listing_floor import FLOOR_KEY
+from lakehouse.lancekit.manifest_names import committed_version
 from tests.integration.lineage_app import catalog_tick, joined_bus, live_catalog, live_lineage
 from tests.traces import trace_id_of
 

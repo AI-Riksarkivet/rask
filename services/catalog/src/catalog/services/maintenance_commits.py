@@ -23,8 +23,8 @@ import time
 from typing import Final
 
 from catalog.services import dataplane, table_claims
-from lakehouse import auto_cleanup
-from lakehouse.listing_floor import FLOOR_KEY
+from lakehouse.lancekit import auto_cleanup
+from lakehouse.lancekit.listing_floor import FLOOR_KEY
 from lakehouse.storage.options import StorageOptions
 
 

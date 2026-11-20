@@ -4,6 +4,11 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 
 
+__all__ = [
+    "committed_at",
+]
+
+
 def committed_at(version: Mapping[str, object]) -> datetime:
     """The commit time of one ``LanceDataset.versions()`` entry, as an aware UTC datetime.
 

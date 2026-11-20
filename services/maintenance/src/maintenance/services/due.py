@@ -1,7 +1,7 @@
 """Whether a table needs compacting or reindexing: maintenance's decision, written as the table's due record (ADR 0162).
 
 Read-only over the dataset. A compaction is due when the winning policy leaves it enabled, the layout passes the
-compaction gate (:func:`lakehouse.features.describe_compaction_unsupported_flags`, fed the three base
+compaction gate (:func:`lakehouse.lancekit.features.describe_compaction_unsupported_flags`, fed the three base
 readings exactly as a rewrite would be judged), and Lance's own planner has a task under the policy's fragment size.
 An index optimize is due when the policy leaves it enabled and an index has unindexed rows or too many deltas
 (:func:`maintenance.services.index_health.due_indices`). Due on either writes the record; due on neither deletes it.
@@ -22,10 +22,10 @@ import lance
 from lance.optimize import Compaction, CompactionOptions
 from pydantic import BaseModel
 
-from lakehouse.base_refs import normalise
 from lakehouse.compaction_gate import compaction_refusal
 from lakehouse.governed.fga import canonical_object_id
-from lakehouse.lance_session import open_dataset
+from lakehouse.lancekit.base_refs import normalise
+from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.maintenance_due import CompactionDue, DueRecord, IndexDue, delete_due, write_due
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceStore, shared_lance_session

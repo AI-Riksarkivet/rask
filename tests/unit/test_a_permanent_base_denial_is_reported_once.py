@@ -32,7 +32,7 @@ from typing import cast
 
 import pytest
 
-from lakehouse import features
+from lakehouse.lancekit import features
 
 
 class _Ref:

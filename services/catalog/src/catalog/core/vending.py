@@ -43,11 +43,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import open_location
 from lakehouse import file_identities, history_fences
-from lakehouse.base_refs import decoded_path, location_within, names_a_location, normalise
 from lakehouse.base_registry import BaseJudgement, BaseRole, BaseStanding
-from lakehouse.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
-from lakehouse.features import CREATE_FORMAT, BasePathRef, TableFileFormat, manifest_base_path_refs, table_file_format
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError
+from lakehouse.lancekit.base_refs import decoded_path, location_within, names_a_location, normalise
+from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
+from lakehouse.lancekit.features import CREATE_FORMAT, BasePathRef, TableFileFormat, manifest_base_path_refs, table_file_format
+from lakehouse.lancekit.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, WRITER_PUT_GLOBS
 from lakehouse.naming import PLATFORM_PREFIX
 from lakehouse.outage import reads_as_store_outage, store_refusal
 from lakehouse.storage import store_session
@@ -55,7 +56,6 @@ from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.store_session import IssuedSession, WebIdentity
-from lakehouse.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, WRITER_PUT_GLOBS
 
 
 if TYPE_CHECKING:
@@ -425,7 +425,7 @@ def _reject_a_base_that_is_not_a_location(base: str, base_prefix: str) -> None:
     a file directory (``lance_docs/lance/format/table/layout.md``, Base Path System), never at a bucket. A base in its OWN bucket
     stays legitimate — containment here is about DEPTH, not about the bucket matching the table's.
 
-    A spelling that names no location (``lakehouse.base_refs.names_a_location``: a ``..`` segment, an empty one) is
+    A spelling that names no location (``lakehouse.lancekit.base_refs.names_a_location``: a ``..`` segment, an empty one) is
     refused too: ``<table>/../victim`` starts with the table's prefix and is not under it, and no location the catalog
     vends is spelled that way, so its presence is evidence the value was not vended.
     """
@@ -837,7 +837,7 @@ def build_session_policy(
 
     * ``read``: nothing else.
     * ``write`` (``can_write_data``): put and abort-upload on what a managed-versioning writer stages under
-      the ref it writes (``lakehouse.table_layout.WRITER_PUT_GLOBS``: ``data/``,
+      the ref it writes (``lakehouse.lancekit.table_layout.WRITER_PUT_GLOBS``: ``data/``,
       ``_transactions/``, ``_deletions/``, ``_indices/`` and a staged ``_versions/<n>.manifest-<uuid>``), and
       an explicit Deny on every final manifest under it, at any depth (``FINAL_MANIFEST_GLOB``). The table's
       own credential (no ``branch``) also puts under ``tree/`` ([[LH-490]]): a stock client opens a branch

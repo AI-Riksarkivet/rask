@@ -27,7 +27,7 @@ import pyarrow as pa
 import pytest
 
 from lakehouse import location_claims, maintenance_due, trash
-from lakehouse.base_refs import normalise
+from lakehouse.lancekit.base_refs import normalise
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import table_pass

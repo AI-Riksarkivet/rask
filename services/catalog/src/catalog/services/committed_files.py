@@ -27,11 +27,12 @@ from lance import Transaction
 from opentelemetry import metrics
 
 from catalog.services import client_fragments
-from lakehouse import base_refs, file_identities
-from lakehouse.branch_layout import BRANCH_CONTAINER
+from lakehouse import file_identities
+from lakehouse.lancekit import base_refs
+from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
+from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
-from lakehouse.transactions import read_transaction
 
 
 log = logging.getLogger(__name__)

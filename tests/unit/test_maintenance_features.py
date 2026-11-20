@@ -24,8 +24,8 @@ import pyarrow as pa
 import pytest
 from lance.dataset import DatasetBasePath
 
-from lakehouse import features
-from lakehouse.manifest_wire import ManifestWireError
+from lakehouse.lancekit import features
+from lakehouse.lancekit.manifest_wire import ManifestWireError
 from lakehouse.storage.objectfs import dataset_root_probe, same_store_uri
 from lakehouse.storage.options import StorageOptions
 

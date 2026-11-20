@@ -13,6 +13,17 @@ import re
 from typing import Final
 
 
+__all__ = [
+    "U64_MAX",
+    "VERSIONS_DIR",
+    "committed_names",
+    "committed_version",
+    "detached_name",
+    "is_detached",
+    "staged_version",
+]
+
+
 #: The directory of a ref that holds its manifests.
 VERSIONS_DIR: Final = "_versions"
 

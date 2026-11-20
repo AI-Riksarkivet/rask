@@ -33,13 +33,13 @@ measuring on the installed pylance"). Measured examples of the gap:
 - **The feature-flag table allocates twenty flags** (`lance/format/table/versioning.md` § Current Feature Flags,
   `2^0` through `2^19`). pylance 14.0.3 allocates eighteen (its release notes: flags `2^14` to `2^17` allocated,
   `FLAG_UNKNOWN = 1 << 18`), so `FLAG_ROW_ADDR_INDICES` (`2^18`) and `FLAG_INLINE_DELETIONS` (`2^19`) are newer than the
-  installed release. `lakehouse.features` names all twenty and supports none above `2^13`; a table carrying one is
+  installed release. `lakehouse.lancekit.features` names all twenty and supports none above `2^13`; a table carrying one is
   refused by name, which is the refusal the format asks of a reader that does not support it.
 - **The table layout adds `_blobs/{UUID}.blob`** (`lance/format/table/layout.md` § Basic Layout), Managed blob
   payloads under `FLAG_MANAGED_BLOBS`. pylance 14.0.3 writes them: a table created with schema metadata
   `lance.blob.managed = "true"` carries flags `(16386, 16386)` and a `_blobs/` directory (measured 2026-11-17). The
   catalog serves none: every door refuses the key (`catalog.core.formats.FLAG_LOCKING_KEYS`), every flag gate refuses
-  `2^14`, and the vend allow-list (`lakehouse.table_layout.WRITER_PUT_GLOBS`) names no `_blobs/*`. Serving them needs
+  `2^14`, and the vend allow-list (`lakehouse.lancekit.table_layout.WRITER_PUT_GLOBS`) names no `_blobs/*`. Serving them needs
   the directory judged there, and in the orphan scan, before a table may opt in.
 - **Repacking a fragment's columns** (`lance/guide/read_and_write.md` § Repack columns: `max_data_files_per_fragment`,
   `scope`, `dataset.stats.column_layout_stats()`, and a compaction that commits two versions). pylance 14.0.3's
@@ -71,7 +71,7 @@ the copied dataset and the absent fragment tree were not re-measured.
   0.13.0 define 22 (`TableBranchNotFound`) and 23 (`TableBranchAlreadyExists`); cite `spec.yaml`.
 - **Unrendered message tables.** `lance/` holds 71 placeholders (69 `%%% proto.message.* %%%`, 2
   `%%% mem_wal.message.* %%%`), and pylance 14.0.3 ships no `.proto`, so a message's field numbers are measured or read
-  off the binary, never off these pages (`lakehouse.manifest_wire`).
+  off the binary, never off these pages (`lakehouse.lancekit.manifest_wire`).
 - **A branch's ref file** (`lance/format/table/branch_tag.md` § Branch File Format). `_refs/branches/<branch>.json` also
   carries `identifier.version_mapping`, a list of `[version, uuid]` pairs, which the page's field table omits.
 - **`lance.auto_cleanup.delete_concurrency`** (`lance/guide/read_and_write.md`). pylance 14.0.3's
@@ -95,7 +95,7 @@ the copied dataset and the absent fragment tree were not re-measured.
 - **Branch and tag names** (`lance/format/table/branch_tag.md`). A branch's ref file percent-encodes every character a
   file name cannot hold as it stands (`ä` is `%C3%A4.json`), not only `/`; Unicode letters are accepted in branch and
   tag names; a branch name may start or end with `.`. The catalog's create door holds a branch to its own rule
-  (`lakehouse.branch_layout`, [[LH-203]]).
+  (`lakehouse.lancekit.branch_layout`, [[LH-203]]).
 
 ### Measured on pylance 14.0.3 and lance-namespace 0.13.0
 
@@ -103,7 +103,7 @@ For LH-595 (#831), on local datasets, 2026-11-15 and 2026-11-17. What changed fr
 
 - **`read_transaction` raises `TypeError` on a `Rewrite` that rewrote an index** (lance-format/lance#11117, the fix
   proposed in #11118). pylance builds `LanceOperation.RewrittenIndex` from two of its five fields
-  (`python/src/transaction.rs`). Every reader of a transaction goes through `lakehouse.transactions.read_transaction`,
+  (`python/src/transaction.rs`). Every reader of a transaction goes through `lakehouse.lancekit.transactions.read_transaction`,
   which reads the three as absent; `packages/lakehouse/tests/test_a_rewrite_that_rewrote_an_index_reads_back.py` goes
   red the day a release reads it back unaided.
 - **A compaction of a stable-row-id table rewrites a BTREE index** under a new uuid (BITMAP, LABEL_LIST and INVERTED
@@ -131,7 +131,7 @@ For LH-595 (#831), on local datasets, 2026-11-15 and 2026-11-17. What changed fr
   on a CreateIndex's, field 21 is absent from both, and `catalog.core.manifest_bytes` reads the transaction from each
   (it reads field 23 first and field 21 after it).
 - **A write that names neither** writes file version 2.2 with no stable row ids (`write_dataset(table, uri)`: flags
-  `(0, 0)`). Every create the catalog makes names both (`lakehouse.features.CREATE_FORMAT`).
+  `(0, 0)`). Every create the catalog makes names both (`lakehouse.lancekit.features.CREATE_FORMAT`).
 - `cleanup_old_versions` takes `delete_concurrency`; `compact_files(defer_index_remap=True)` is refused on a
   stable-row-id table; `MINHASHLSH` builds.
 - lance-namespace 0.13's `MergeInsertIntoTableRequest.on` and the urllib3 client's `merge_insert_into_table` take the
@@ -167,7 +167,7 @@ release: the timings and thread-pool figures (the retry budgets against a store 
 concurrent renames, row-id order under racing appends, the merge that drops its key check, § Transaction properties);
 what needs a counting or faulting store (the request counts of a pass and of an open, the store-fault message texts,
 endpoint scheme handling); the crash measurements (a pyarrow offset past its buffer, 150,000 OR terms); the spelling
-hazards `lakehouse.base_refs` refuses; and every `rust/...` source line cited at `v12.0.0` or `v13.0.0`.
+hazards `lakehouse.lancekit.base_refs` refuses; and every `rust/...` source line cited at `v12.0.0` or `v13.0.0`.
 
 ## `ns_catalog/spec.yaml`
 
@@ -214,7 +214,7 @@ ids:
   `update(data_storage_version="2.1")` on a 2.2 table leaves flags `(258, 258)`. No rask code passes it, and a stock
   client's `update` is judged at `version/create`, which refuses the files that would set it.
 
-`lakehouse.features.describe_foreign_data_file_versions` names the files that would set it.
+`lakehouse.lancekit.features.describe_foreign_data_file_versions` names the files that would set it.
 
 ### The thread pools
 

@@ -29,7 +29,7 @@ from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.services import manifest_reclaim, table_claims
 from lakehouse import location_claims
 from lakehouse.governed import fga
-from lakehouse.lance_session import open_dataset
+from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.location_claims import ClaimStore
 from lakehouse.naming import uuid_of
 from lakehouse.storage.objectfs import fs_and_base

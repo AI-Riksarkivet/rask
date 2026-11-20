@@ -47,9 +47,9 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from lakehouse import control_prefixes, location_claims, project_records, trash, warehouse_records
-from lakehouse.base_refs import decoded_path, normalise
 from lakehouse.governed import fga
-from lakehouse.lance_session import open_dataset
+from lakehouse.lancekit.base_refs import decoded_path, normalise
+from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.project_records import ProjectRecord, UnreadableProjectRecordError
 from lakehouse.storage.objectfs import fs_and_base

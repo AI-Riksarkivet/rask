@@ -39,10 +39,10 @@ from catalog.core.config import CatalogStore
 from catalog.core.vending import ReclaimScope
 from catalog.services import table_claims
 from lakehouse import clone_sources, location_claims, trash
-from lakehouse.base_refs import decoded_segments, store_of
 from lakehouse.base_registry import BaseRegistry
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.data_directories import directories_to_end, directory_uri
+from lakehouse.lancekit.base_refs import decoded_segments, store_of
 from lakehouse.location_claims import LocationClaim
 from lakehouse.storage.stored_objects import list_under
 from lakehouse.table_paths import objects_at

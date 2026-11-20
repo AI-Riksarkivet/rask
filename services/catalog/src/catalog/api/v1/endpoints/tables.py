@@ -104,10 +104,10 @@ from lakehouse import base_registry, location_claims, object_records, protection
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent, ControlAction
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.features import CREATE_FORMAT, table_file_format
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
+from lakehouse.lancekit.features import CREATE_FORMAT, table_file_format
 from lakehouse.naming import uuid_of
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.protection import ProtectionRecord
@@ -746,7 +746,7 @@ def _load_detailed_metadata(response: DescribeTableResponse, dataset: lance.Lanc
     (`lance_docs/ns_catalog/spec.yaml` DescribeTableRequest); the stats are ``TableBasicStats``, which Lance's
     ``dataset_stats`` reads off the manifest the handle already holds. ``metadata`` is the table's user metadata, read
     from the same handle, so a table property a caller writes through ``schema_metadata/update`` is read back here, and
-    the table's file format (`lakehouse.features.DATA_STORAGE_VERSION_KEY`, `STABLE_ROW_IDS_KEY`): ``metadata`` is the
+    the table's file format (`lakehouse.lancekit.features.DATA_STORAGE_VERSION_KEY`, `STABLE_ROW_IDS_KEY`): ``metadata`` is the
     spec's map for "the information of the table [that] requires loading the table", where ``properties`` is what the
     namespace manages.
     """

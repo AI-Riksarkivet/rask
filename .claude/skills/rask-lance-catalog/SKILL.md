@@ -977,7 +977,7 @@ governing their data. The project-scoped surface is the console's project page, 
 - **A vend's tier is one FGA rung's allow-list over the Lance layout** ([[LH-202]], [[LH-229]],
   `vending.build_session_policy`). Every tier lists and gets `<prefix>/*`. `write` (`can_write_data`) is a
   managed-versioning writer (ADR 0157): put on what a commit needs under the ref it writes
-  (`lakehouse.table_layout.WRITER_PUT_GLOBS`: `data/`, `_transactions/`, `_deletions/`, `_indices/` and a
+  (`lakehouse.lancekit.table_layout.WRITER_PUT_GLOBS`: `data/`, `_transactions/`, `_deletions/`, `_indices/` and a
   staged `_versions/<n>.manifest-<uuid>`) and an explicit Deny on every final manifest under it at any depth
   (`*.manifest`); nothing under `_refs/`, no version hint, no delete. The table's own write credential also puts
   under `tree/*` ([[LH-490]], ADR 0164): a stock client opens a branch with the table's `DescribeTable` and stages
@@ -990,7 +990,7 @@ governing their data. The project-scoped surface is the console's project page, 
   `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest, and `tree/*` reaches every branch's
   `_versions/`. The catalog finalizes what the writer staged (`version/create`, below). `maintain` (`can_vend_maintain`) gets and deletes on the whole prefix for
   cleanup and puts nothing of the table (ADR 0204, [[LH-575]]: maintenance's commits are the catalog's, at its maintainer
-  doors), with an explicit Deny of delete on `<prefix>/_refs/*` (`lakehouse.table_layout.REFS_GLOB`), plus, on
+  doors), with an explicit Deny of delete on `<prefix>/_refs/*` (`lakehouse.lancekit.table_layout.REFS_GLOB`), plus, on
   the control root, the table's history fence (get/put) and its committed-file records `_file_identities/<uuid>/*`
   (get/delete) (`vending.TableRecords`, [[LH-219]]), and get/delete on the table's own data directories, those of its declared bases its base record holds as
   `data` entries (`vending.VendableBases`, [[LH-286]]); every other base is read-only at every tier. The warehouse scope
@@ -1300,7 +1300,7 @@ governing their data. The project-scoped surface is the console's project page, 
   `_indices/` are listed past it (lance #8944 for `data/`, pylance 13.0.0), so an unreferenced data or
   index file is Lance's own to reclaim once it is 7 days old; `orphans._LISTED_PAST_THE_FLOOR_KINDS`
   classifies by that, and the floor raise (`floor.py`, [[LH-094]]) acts only for the floor-bound kinds. A table carrying
-  the raise's stamp (`lakehouse.listing_floor.FLOOR_KEY`) is raised again only once its floor has moved past the stamp (measured
+  the raise's stamp (`lakehouse.lancekit.listing_floor.FLOOR_KEY`) is raised again only once its floor has moved past the stamp (measured
   2026-11-10 on pylance 13.0.0: a second raise over a moved floor, then one cleanup, removed the file stranded since).
   The floor and the stamp are read off one handle, and a reading that fails refuses the raise, so a store that fails a
   second read never reads as "never raised".
@@ -1475,7 +1475,7 @@ governing their data. The project-scoped surface is the console's project page, 
   as garbage. Branches are caught by the `tree/` directory probe; base_paths by TWO checks, and both
   are needed — the consequence (a referenced path not present locally) plus the MANIFEST FLAG.
 - **A branch's directory holds only that branch's files, and that is rask's rule, not Lance's**
-  ([[LH-203]], `lakehouse.branch_layout`). The format joins the name verbatim, so `a/b`
+  ([[LH-203]], `lakehouse.lancekit.branch_layout`). The format joins the name verbatim, so `a/b`
   lives inside `tree/a/` and `a/_versions` inside `a`'s own version directory, and Lance reads
   whatever lies under a branch's directory as that branch's (measured on pylance 12.0.0: a reclaim of
   `a` deleted `a/_versions`'s manifests; deleting `a/_versions` deleted `a`'s history). So the create
@@ -1494,10 +1494,10 @@ governing their data. The project-scoped surface is the console's project page, 
   which reads both. DescribeTable refuses a tag on a branch with the code `branch` gets (406, code 0), since
   DescribeTableResponse has no field to name the branch. Pinned by `tests/integration/test_moto_s3.py::test_describe_at_tag_resolves_via_the_catalog`.
 - **The manifest's feature flags ARE reachable, and they are the refusal gate (#64).**
-  `packages/lakehouse/src/lakehouse/features.py` reads
+  `packages/lakehouse/src/lakehouse/lancekit/features.py` reads
   `reader_feature_flags`/`writer_feature_flags` as varints at
   protobuf fields 9/10 of `LanceDataset._ds.serialized_manifest()` — pylance exposes neither field
-  but its own pickle path uses that blob. The masks live in `lakehouse/features.py` because `services/maintenance`
+  but its own pickle path uses that blob. The masks live in `lakehouse/lancekit/features.py` because `services/maintenance`
   and `catalog/services/maintenance.py` both consume them, and a mask widened for one must not silently
   widen for the other. Measured on pylance 9.0.0: plain `(0,0)`,
   `delete()` `(1,1)`, `enable_stable_row_ids` `(2,2)`, `add_bases`/`shallow_clone` set 16, a committed

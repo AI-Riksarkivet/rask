@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from catalog.services import maintenance
-from lakehouse.manifest_wire import encode_varint
+from lakehouse.lancekit.manifest_wire import encode_varint
 from lakehouse.storage.options import StorageOptions
 
 
@@ -143,7 +143,7 @@ def test_run_gc_PERMITS_a_clone_the_SWEEP_reclaims_on_EVERY_TICK(tmp_path: Any) 
     """
     import lance
 
-    from lakehouse.features import describe_gc_unsupported_flags, manifest_feature_flags
+    from lakehouse.lancekit.features import describe_gc_unsupported_flags, manifest_feature_flags
 
     source = str(tmp_path / "src.lance")
     src = lance.write_dataset(_rows(), source)

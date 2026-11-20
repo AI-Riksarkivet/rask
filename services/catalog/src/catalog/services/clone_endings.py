@@ -66,8 +66,8 @@ from catalog.core.config import CatalogStore
 from catalog.services import clone_ending_records, table_claims
 from catalog.services.clone_ending_records import CloneEnding, EndingIntent
 from lakehouse import base_registry, clone_sources, location_claims
-from lakehouse.base_refs import decoded_path, key_uri, store_of
 from lakehouse.base_registry import BaseRegistry
+from lakehouse.lancekit.base_refs import decoded_path, key_uri, store_of
 from lakehouse.storage import conditional_records, objectfs
 from lakehouse.storage.options import StorageOptions
 

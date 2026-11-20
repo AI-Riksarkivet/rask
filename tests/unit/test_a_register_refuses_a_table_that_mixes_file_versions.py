@@ -37,7 +37,7 @@ import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 
-from lakehouse.features import manifest_feature_flags
+from lakehouse.lancekit.features import manifest_feature_flags
 
 
 @pytest.fixture

@@ -8,7 +8,7 @@ branch sets flag 16. Those bases are the table's own history, and a branch's com
 its own ``tree/<name>/data/`` on purpose (measured on pylance 13.0.0: a stock compaction on a branch rewrote the
 inherited fragments there and main stayed at its version). So a base inside the table, by the rule the base judge
 calls a table's own (:func:`lakehouse.base_registry.is_own`), is not weighed, and every other base is
-weighed by :func:`lakehouse.features.describe_compaction_unsupported_flags`.
+weighed by :func:`lakehouse.lancekit.features.describe_compaction_unsupported_flags`.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ from __future__ import annotations
 import logging
 
 from lakehouse.base_registry import is_own
-from lakehouse.features import (
+from lakehouse.lancekit.features import (
     FLAG_BASE_PATHS,
     BasePathRef,
     CompactionBases,

@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
-from lakehouse.base_refs import decoded_path, normalise
+from lakehouse.lancekit.base_refs import decoded_path, normalise
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 

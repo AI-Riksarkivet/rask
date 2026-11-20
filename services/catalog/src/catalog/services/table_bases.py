@@ -43,11 +43,11 @@ from catalog.core.run_context import RunInput
 from catalog.core.vending import IAM_POLICY_SYNTAX
 from catalog.services import clone_ending_records, native, table_inputs
 from lakehouse import base_registry, clone_sources, control_prefixes, location_claims
-from lakehouse.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
-from lakehouse.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
 from lakehouse.governed import fga
 from lakehouse.history_fences import HistoryFencedError
-from lakehouse.lance_session import open_dataset
+from lakehouse.lancekit.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
+from lakehouse.lancekit.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef
+from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.outage import store_refusal
 from lakehouse.storage import conditional_records
 from lakehouse.storage.objectfs import fs_and_base
@@ -140,7 +140,7 @@ def require_registrable_location(location: str | None, *, root: str, control_roo
 
     - it must be relative (the backend refuses an absolute one too; this door refuses it first);
     - its spelling must name the location the store opens, by the rule the base judge applies
-      (:func:`~lakehouse.base_refs.names_a_location`): each segment, percent-decoded once, is
+      (:func:`~lakehouse.lancekit.base_refs.names_a_location`): each segment, percent-decoded once, is
       not empty, ``.`` or ``..`` (which also refuses the namespace root itself), holds no ASCII control
       character, no ``?`` and no ``/`` or ``\\`` the decode added. The store keeps a ``?`` under a re-encoded name
       that holds no table, so an id registered there finds no table on query or count (measured on pylance 13.0.0

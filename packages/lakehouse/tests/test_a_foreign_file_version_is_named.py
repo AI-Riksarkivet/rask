@@ -16,7 +16,7 @@ import lance
 import pyarrow as pa
 import pytest
 
-from lakehouse.features import describe_foreign_data_file_versions, manifest_feature_flags, mixes_data_file_versions
+from lakehouse.lancekit.features import describe_foreign_data_file_versions, manifest_feature_flags, mixes_data_file_versions
 
 
 def _ids(*values: int) -> pa.Table:

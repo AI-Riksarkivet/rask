@@ -29,8 +29,9 @@ from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import InvalidTableStateError, ServiceUnavailableError
 from pydantic import BaseModel
 
-from lakehouse import base_refs, base_registry
-from lakehouse.features import BasePathRef
+from lakehouse import base_registry
+from lakehouse.lancekit import base_refs
+from lakehouse.lancekit.features import BasePathRef
 
 
 if TYPE_CHECKING:

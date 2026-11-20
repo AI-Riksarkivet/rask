@@ -40,8 +40,8 @@ from catalog.core.version_retention import recorded_branch
 from catalog.services import contracts, native
 from catalog.services.object_uuids import UnidentifiedObjectError
 from lakehouse import commit_records, commit_turns, file_identities, history_fences, location_claims, trash
-from lakehouse.base_refs import decoded_path
 from lakehouse.governed import fga
+from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.location_claims import ClaimRead, ClaimStore, LocationClaim
 from lakehouse.storage.options import StorageOptions
 

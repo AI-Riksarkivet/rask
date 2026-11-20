@@ -16,8 +16,8 @@ import pyarrow as pa
 import pytest
 from lance import LanceOperation
 
-from lakehouse import transactions
-from lakehouse.transactions import read_transaction
+from lakehouse.lancekit import transactions
+from lakehouse.lancekit.transactions import read_transaction
 
 
 @pytest.fixture
@@ -44,7 +44,9 @@ def test_a_rewrite_that_rewrote_an_index_reads_back_with_its_groups_and_both_ind
 
 
 @pytest.mark.xfail(
-    strict=True, raises=TypeError, reason="lance-format/lance#11117: fixed by the release that carries #11118; then delete lakehouse.transactions' stand-in"
+    strict=True,
+    raises=TypeError,
+    reason="lance-format/lance#11117: fixed by the release that carries #11118; then delete lakehouse.lancekit.transactions' stand-in",
 )
 def test_pylance_itself_reads_a_rewrite_that_rewrote_an_index(compacted: lance.LanceDataset, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(LanceOperation, "RewrittenIndex", transactions._REWRITTEN_INDEX.__mro__[1])

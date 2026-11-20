@@ -31,9 +31,9 @@ from catalog.schemas import CredentialResponse, TrashEndResponse, TrashRefusalRe
 from catalog.services import trash_reclaim
 from catalog.services.announcement_intents import Announcement
 from lakehouse import trash
-from lakehouse.base_refs import decoded_path
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.location_claims import LocationClaim
 from lakehouse.trash import TrashKind, TrashRecord
 

@@ -20,7 +20,7 @@ from typing import TYPE_CHECKING, Final
 import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
-from lakehouse.base_refs import decoded_path
+from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import REGION, VIRTUAL_HOSTED, StorageOptions, on_s3, s3_filesystem
 
@@ -199,7 +199,7 @@ def is_lance_dataset_root(uri: str, storage_options: StorageOptions) -> bool:
     caller a confident False it has no way to question. A path that simply is not there is not an
     unreadable one — it answers False, which is an OBSERVATION (nothing is at that prefix) and not a
     guess; a base whose root has been deleted is still caught by the ``DataFile.base_id`` reading in
-    :func:`lakehouse.features.gather_compaction_bases`.
+    :func:`lakehouse.lancekit.features.gather_compaction_bases`.
     """
     fs, base = fs_and_base(uri, storage_options)
     return fs.get_file_info(f"{base}/_versions").type == pafs.FileType.Directory

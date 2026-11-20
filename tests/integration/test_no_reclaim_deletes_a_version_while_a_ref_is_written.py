@@ -31,8 +31,8 @@ from pydantic import SecretStr
 
 from lakehouse import history_fences, maintenance_due, maintenance_policies, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.base_refs import normalise
 from lakehouse.history_fences import HistoryWork, TableHistory
+from lakehouse.lancekit.base_refs import normalise
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage import conditional_records
 from lakehouse.storage.credential import S3KeyPair

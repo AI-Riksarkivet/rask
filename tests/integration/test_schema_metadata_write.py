@@ -20,7 +20,7 @@ import pyarrow.ipc as ipc
 from fastapi.testclient import TestClient
 
 from catalog.core.lineage_metadata import build_lineage_metadata
-from lakehouse.features import DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY
+from lakehouse.lancekit.features import DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}

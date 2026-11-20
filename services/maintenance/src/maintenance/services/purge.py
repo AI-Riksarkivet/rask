@@ -74,13 +74,13 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse import trash, warehouse_records
-from lakehouse.base_refs import decoded_path, decoded_segments, location_within, names_a_location, store_of
 from lakehouse.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError
 from lakehouse.control_prefixes import CONTROL_PREFIXES
 from lakehouse.data_directories import delete_directories, directories_to_end, directory_uri
 from lakehouse.events.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from lakehouse.events.control_events import ControlAction, ControlObjectType, ControlUuids
-from lakehouse.lance_session import open_dataset
+from lakehouse.lancekit.base_refs import decoded_path, decoded_segments, location_within, names_a_location, store_of
+from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions, on_s3
 from lakehouse.storage.stored_objects import StoredObject, delete_objects, list_under

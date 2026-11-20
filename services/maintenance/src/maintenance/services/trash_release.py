@@ -39,7 +39,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from lakehouse import trash, warehouse_records
-from lakehouse.base_refs import location_within
+from lakehouse.lancekit.base_refs import location_within
 from lakehouse.storage.options import StorageOptions, on_s3
 from lakehouse.trash import TrashRecord
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore

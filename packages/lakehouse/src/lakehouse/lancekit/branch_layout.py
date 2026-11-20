@@ -26,6 +26,20 @@ from typing import Final
 from urllib.parse import quote
 
 
+__all__ = [
+    "BRANCH_CONTAINER",
+    "BRANCH_FILE_DIRS",
+    "RESERVED_SEGMENTS",
+    "branch_named_by",
+    "branches_enclosing",
+    "branches_inside",
+    "lies_in_files_of",
+    "ref_file_name",
+    "ref_root",
+    "reserved_segment",
+]
+
+
 #: The directories a branch writes its own files into under ``tree/<branch>/``. `lance_docs/lance/format/table/branch_tag.md` § "Branch
 #: Dataset Layout" lists the first four; ``data`` holds the files a branch writes itself (measured on
 #: pylance 12.0.0: an append to a branch lands its fragment under ``tree/<branch>/data/``). A

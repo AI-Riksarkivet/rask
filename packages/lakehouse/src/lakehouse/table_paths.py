@@ -2,7 +2,7 @@
 spelled ([[LH-319]]).
 
 ``describe_table`` answers a location percent-encoding the table's name. pylance opens it at each segment decoded once
-(:func:`lakehouse.base_refs.decoded_path`), and the ``dir`` namespace writes the table's reservation marker under the
+(:func:`lakehouse.lancekit.base_refs.decoded_path`), and the ``dir`` namespace writes the table's reservation marker under the
 location as spelled: measured on pylance 13.0.0 through the catalog's create door over moto, ``räksmörgås`` keeps its
 versions, data and branches under ``…$räksmörgås/`` and the marker under ``…$r%C3%A4ksm%C3%B6rg%C3%A5s/``, and ``sp ace``
 keeps both under ``…$sp ace/``. The two are one place for a name that needs no escape.
@@ -12,7 +12,7 @@ Every function that reads the store is BLOCKING IO; callers threadpool it.
 
 from __future__ import annotations
 
-from lakehouse.base_refs import decoded_path, normalise, store_of
+from lakehouse.lancekit.base_refs import decoded_path, normalise, store_of
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.stored_objects import StoredObject, list_under
 

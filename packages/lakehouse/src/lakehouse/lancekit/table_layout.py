@@ -38,7 +38,16 @@ from __future__ import annotations
 
 from typing import Final
 
-from lakehouse.branch_layout import BRANCH_CONTAINER
+from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
+
+
+__all__ = [
+    "BRANCH_STAGING_GLOB",
+    "DATA_DIR",
+    "FINAL_MANIFEST_GLOB",
+    "REFS_GLOB",
+    "WRITER_PUT_GLOBS",
+]
 
 
 #: Where a client writes data files (and blob sidecars beneath them).

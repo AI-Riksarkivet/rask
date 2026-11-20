@@ -23,9 +23,9 @@ from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
 from lance_namespace import InvalidInputError, InvalidTableStateError, UnsupportedOperationError
 
 from catalog.core.version_retention import ExplainedDataset, fork_versions, reclaimable_versions, recorded_branch, tag_versions
-from lakehouse import branch_layout
 from lakehouse.compaction_gate import compaction_refusal
-from lakehouse.features import FragmentCarrier, ManifestCarrier, describe_gc_unsupported_flags, manifest_feature_flags
+from lakehouse.lancekit import branch_layout
+from lakehouse.lancekit.features import FragmentCarrier, ManifestCarrier, describe_gc_unsupported_flags, manifest_feature_flags
 
 
 if TYPE_CHECKING:
@@ -38,7 +38,7 @@ log = logging.getLogger(__name__)
 # The dataset surface these doors need, stated (CAT-CORE-15). Structural, not nominal
 # `lance.LanceDataset`: the module docstring promises these are "pure over a Lance dataset handle, so
 # both are unit-testable with a fake ``ds``", and a nominal type would make that promise unkeepable.
-# Split per verb, mirroring `lakehouse.features`' ManifestCarrier/FragmentCarrier: a door
+# Split per verb, mirroring `lakehouse.lancekit.features`' ManifestCarrier/FragmentCarrier: a door
 # that only previews must not claim it can reclaim.
 # --------------------------------------------------------------------------- #
 
@@ -95,7 +95,7 @@ def require_compactable(ds: FragmentCarrier, table_location: str, storage_option
 
     The gate maintenance asks before it lists a table as due for compaction, one function
     (:func:`~lakehouse.compaction_gate.compaction_refusal`), so a compaction is judged by the evidence that
-    listed it: :func:`~lakehouse.features.describe_compaction_unsupported_flags` over three readings
+    listed it: :func:`~lakehouse.lancekit.features.describe_compaction_unsupported_flags` over three readings
     (the manifest's ``BasePath.is_dataset_root``, an object-store probe of each base, and whether any ``DataFile``
     resolves through one). It fails closed on every unknown and refuses a real shallow clone, whose compaction
     materialises the shared data into its own root (measured: 1,072 -> 108,199 bytes against a 119,693-byte base).
@@ -113,7 +113,7 @@ def require_compactable(ds: FragmentCarrier, table_location: str, storage_option
 def require_reclaimable(ds: ManifestCarrier) -> None:
     """#121 for the GC door: refuse a dataset whose versions this button must not reclaim.
 
-    **THE GATE IS MAINTENANCE'S, per verb** — :func:`~lakehouse.features.describe_gc_unsupported_flags`,
+    **THE GATE IS MAINTENANCE'S, per verb** — :func:`~lakehouse.lancekit.features.describe_gc_unsupported_flags`,
     which is what ``maintenance.services.expiry`` asks before its own ``cleanup_old_versions``.
     Version reclamation and index maintenance are ROOT-SCOPED, so ``base_paths`` (16) does not
     endanger them: measured on pylance 9.0.0 across six cleanup shapes and ten repeat cycles, one

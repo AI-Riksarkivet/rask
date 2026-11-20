@@ -22,6 +22,12 @@ from typing import Any, Protocol
 from lance import LanceOperation
 
 
+__all__ = [
+    "ReadsTransactions",
+    "read_transaction",
+]
+
+
 class ReadsTransactions(Protocol):
     """A dataset handle a version's transaction is read from."""
 

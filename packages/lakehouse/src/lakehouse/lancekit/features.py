@@ -49,11 +49,66 @@ from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import manifest_wire
+from lakehouse.lancekit import manifest_wire
 
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Sequence
+
+
+__all__ = [
+    "CREATE_FILE_VERSION",
+    "CREATE_FORMAT",
+    "DATA_STORAGE_VERSION_KEY",
+    "FLAG_BASE_PATHS",
+    "FLAG_COVERED_INDEX_METADATA",
+    "FLAG_DELETION_FILES",
+    "FLAG_DISABLE_TRANSACTION_FILE",
+    "FLAG_FRAGMENT_REUSE_INDEX",
+    "FLAG_FRAGMENT_TREE",
+    "FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS",
+    "FLAG_INDEPENDENT_COVERING_FIELDS",
+    "FLAG_INLINE_DELETIONS",
+    "FLAG_MANAGED_BLOBS",
+    "FLAG_MIXED_DATA_FILE_VERSIONS",
+    "FLAG_NON_REUSABLE_FIELD_IDS",
+    "FLAG_OBJECT_METADATA",
+    "FLAG_ROW_ADDR_INDICES",
+    "FLAG_SPILLED_ROW_LINEAGE",
+    "FLAG_STABLE_ROW_IDS",
+    "FLAG_TABLE_CONFIG",
+    "FLAG_UNSTABLE_DATA_OVERLAY_FILES",
+    "FLAG_USE_V2_FORMAT_DEPRECATED",
+    "FLAG_ZONE_WRITE_SEEDS",
+    "STABLE_ROW_IDS_KEY",
+    "SUPPORTED",
+    "SUPPORTED_FOR_GC",
+    "BaseEvidence",
+    "BasePathRef",
+    "CompactionBases",
+    "DatasetRootProbe",
+    "FormattedDataset",
+    "FragmentCarrier",
+    "ManifestCarrier",
+    "TableFileFormat",
+    "VersionedDataFile",
+    "data_file_base_paths",
+    "describe_compaction_unsupported_flags",
+    "describe_foreign_data_file_versions",
+    "describe_gc_unsupported_flags",
+    "describe_read_unsupported_flags",
+    "describe_unsupported_flags",
+    "flags_from_open_error",
+    "gather_compaction_bases",
+    "manages_blobs",
+    "manifest_base_path_refs",
+    "manifest_feature_flags",
+    "mixes_data_file_versions",
+    "table_file_format",
+    "unsupported_features",
+    "unsupported_features_from_open_error",
+    "unsupported_read_flags",
+]
 
 
 log = logging.getLogger(__name__)

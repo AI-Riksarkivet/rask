@@ -8,7 +8,7 @@ before registering its destination, left eight live ids on one location in 4 of 
 on one dataset a destructive drop of either deletes the bytes the other still resolves to.
 
 THE STORE PICKS ONE HOLDER INSTEAD. A claim is one JSON record per location, keyed by the sha256 of the
-path the location decodes to (:func:`lakehouse.base_refs.decoded_path`, so the catalog's
+path the location decodes to (:func:`lakehouse.lancekit.base_refs.decoded_path`, so the catalog's
 percent-encoded spelling and the decoded directory are one key), created put-if-not-exists and handed
 over under its ETag (:mod:`lakehouse.storage.conditional_records`) — the ``claim_bucket`` precedent applied to a
 table location. A catalog with a relational store answers the same question inside its create transaction (a
@@ -84,7 +84,7 @@ from datetime import datetime, timedelta
 from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse import control_prefixes, record_store
-from lakehouse.base_refs import decoded_path
+from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 

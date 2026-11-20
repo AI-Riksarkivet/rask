@@ -4,7 +4,7 @@ pylance exposes neither a manifest's own ``version`` field, its ``next_row_id``,
 operation of a transaction it models no class for, and a manifest copied into another version slot must say that
 slot's version, so the catalog reads and writes those fields itself. Every other byte is kept as it was.
 
-The message is parsed by `lakehouse.manifest_wire`, which `lakehouse.features` reads the feature flags through, and a
+The message is parsed by `lakehouse.lancekit.manifest_wire`, which `lakehouse.lancekit.features` reads the feature flags through, and a
 message that does not parse is refused here as the bytes a caller handed the catalog.
 """
 
@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Final
 
 from lance_namespace import InvalidInputError
 
-from lakehouse import manifest_wire
+from lakehouse.lancekit import manifest_wire
 
 
 if TYPE_CHECKING:
@@ -77,7 +77,7 @@ _OPERATION_FIELDS: Final = range(100, 200)
 
 @contextmanager
 def _parsed() -> Generator[None]:
-    """Refuse a message :mod:`lakehouse.manifest_wire` cannot parse as the caller's input.
+    """Refuse a message :mod:`lakehouse.lancekit.manifest_wire` cannot parse as the caller's input.
 
     Raises:
         InvalidInputError: The message ends inside a field or carries a wire type proto3 does not.

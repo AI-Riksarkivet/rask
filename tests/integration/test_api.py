@@ -32,7 +32,7 @@ from lance_namespace import (
 
 from catalog.services import table_bases
 from catalog.services.dataplane import CommitReadback
-from lakehouse.features import DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY
+from lakehouse.lancekit.features import DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY
 from lakehouse.naming import UUID_PROPERTY
 from tests import seeding
 

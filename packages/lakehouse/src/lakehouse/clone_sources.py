@@ -13,7 +13,7 @@ The tag is named for the clone's location (:func:`tag_of`), digested as its loca
 that forgets the clone's base record releases what it holds without knowing more (`base_registry.forget_base_record`),
 and a re-registration of the same bytes takes the same tag. It is also the source's own record of who reads it: a drop
 that destroys a table's bytes, and the purge of a trashed one, refuse while one stands (:func:`clones_reading`). No
-writer can plant one: no vend puts under ``_refs/`` (`lakehouse.table_layout`), and the tag doors refuse every
+writer can plant one: no vend puts under ``_refs/`` (`lakehouse.lancekit.table_layout`), and the tag doors refuse every
 ``rask.`` tag.
 
 Every function is blocking IO.
@@ -28,12 +28,12 @@ from typing import TYPE_CHECKING, Final
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse import location_claims
-from lakehouse.base_refs import decoded_path, key_uri, store_of
-from lakehouse.branch_layout import BRANCH_CONTAINER
 from lakehouse.history_fences import HistoryWork, TableHistory
-from lakehouse.lance_session import fresh_session, open_dataset
+from lakehouse.lancekit.base_refs import decoded_path, key_uri, store_of
+from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
+from lakehouse.lancekit.lance_session import fresh_session, open_dataset
+from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.storage import objectfs, stored_objects
-from lakehouse.transactions import read_transaction
 
 
 if TYPE_CHECKING:

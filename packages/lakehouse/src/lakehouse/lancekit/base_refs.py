@@ -12,6 +12,18 @@ from __future__ import annotations
 from urllib.parse import unquote_to_bytes
 
 
+__all__ = [
+    "decoded_path",
+    "decoded_segments",
+    "key_uri",
+    "location_in_store",
+    "location_within",
+    "names_a_location",
+    "normalise",
+    "store_of",
+]
+
+
 def normalise(uri: str) -> str:
     """Compare paths, not spellings: drop the scheme and any trailing slash.
 

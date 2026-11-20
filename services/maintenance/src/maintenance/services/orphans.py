@@ -53,8 +53,8 @@ import lance
 import pyarrow.fs as pafs
 from pydantic import BaseModel, Field
 
-from lakehouse import lance_session
-from lakehouse.features import unsupported_features, unsupported_features_from_open_error
+from lakehouse.lancekit import lance_session
+from lakehouse.lancekit.features import unsupported_features, unsupported_features_from_open_error
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import shared_lance_session
@@ -266,7 +266,7 @@ def _unscannable_reason(ds: lance.LanceDataset, *, fs: pafs.FileSystem, prefix: 
 
     **Unsupported manifest feature flags (#64) — checked FIRST.** The flags are the format's own
     answer to "is this a layout you understand", and the spec requires a reader that does not know a
-    flag to refuse the dataset outright. Reading them (`lakehouse.features`) catches the whole
+    flag to refuse the dataset outright. Reading them (`lakehouse.lancekit.features`) catches the whole
     class at once, including shapes with no observable consequence yet: `add_bases` registers a base
     path that no DataFile resolves through, so a referenced file is listed under the root after all
     and only the flag tells (measured). The listing's own check (:class:`_ReferencedElsewhere`) is the

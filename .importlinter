@@ -119,7 +119,19 @@ ignore_imports =
     lakehouse.storage.store_session -> lakehouse.governed.machine_identity
     lakehouse.storage.store_session -> lakehouse.governed.secrets
     lakehouse.storage.store_session -> lakehouse.supervision
-    lakehouse.storage.objectfs -> lakehouse.base_refs
+    lakehouse.storage.objectfs -> lakehouse.lancekit.base_refs
+
+# The Lance table plane is the floor of the library (ADR 0224): how every service reads and judges a Lance table, from a
+# version's commit time and a manifest's wire to its feature flags, its layout and a location's spellings. It is built
+# on Lance and the standard library alone, and the records, the store and the services build on it, so it imports
+# nothing else in the library, directly or through another module.
+[importlinter:contract:the-lance-table-plane-imports-nothing-else-in-the-library]
+name = ADR 0224: lakehouse.lancekit imports nothing else in the library
+type = forbidden
+source_modules =
+    lakehouse.lancekit
+forbidden_modules =
+    lakehouse.*
 
 [importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
 name = Phase 1 (3): no lakehouse service and nothing in the lakehouse library imports a workflow engine

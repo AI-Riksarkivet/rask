@@ -14,7 +14,7 @@ from lance_namespace import connect
 from moto.server import ThreadedMotoServer
 
 from lakehouse import location_claims
-from lakehouse.base_refs import normalise
+from lakehouse.lancekit.base_refs import normalise
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.storage.options import StorageOptions
 from maintenance.core import metrics

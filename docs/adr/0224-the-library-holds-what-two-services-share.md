@@ -43,7 +43,7 @@ edges:
    `concurrent writer won`), so they are two rules and not a copy of one. Making them one is a change to what a
    failed pass's event or a door's answer says, and is decided on its own.
 4. **The library imports no service**, by any chain: `.importlinter`'s `the-library-imports-no-service` forbids
-   `catalog`, `lineage` and `maintenance` from `lakehouse`. It was kept before it was written, so it costs nothing and
+   `catalog`, `lineage` and `maintenance` from `lakehouse`. The contract held before it was added, so it costs nothing and
    stops the first edge that would make one service run another's code.
 5. **Grouping the rest by job follows one concern per commit**, each commit paying its own group's debts (a declared
    `__all__`, no eager facade, a name that collides with nothing), and each judged on the graph as it then stands.
@@ -147,7 +147,7 @@ Left out:
 
 `.importlinter`'s `the-events-are-imported-by-the-services-and-the-probe-only` (a `protected` contract) holds it: only
 `catalog`, `lineage`, `maintenance` and `lakehouse.health` import `lakehouse.events`, and its own modules import each
-other. It was kept before it was written; a planted `import lakehouse.events.outbox_metrics` in `lakehouse.timers`
+other. The contract held before it was added; a planted `import lakehouse.events.outbox_metrics` in `lakehouse.timers`
 broke it.
 
 A module's logger and tracer are named by its path, so five names on a record or span follow the group:
@@ -206,7 +206,7 @@ living below both, and is a question for the group that holds the store.
 `.importlinter`'s `the-auth-plane-is-imported-by-the-services-and-its-named-users-only` (a `protected` contract) holds
 it: only `catalog`, `lineage`, `maintenance`, `lakehouse.service_app.factory`, `lakehouse.events.bus`,
 `lakehouse.store_session`, `lakehouse.storage_options` and `lakehouse.objectfs` import `lakehouse.governed`, and its
-own modules import each other. It was kept before it was written; a planted `import lakehouse.governed.fga` in
+own modules import each other. The contract held before it was added; a planted `import lakehouse.governed.fga` in
 `lakehouse.timers` broke it.
 
 **Proposed, for a commit of its own: `fga.py` by job.** Its 2,317 lines (before `__all__`) do six jobs, each with
@@ -275,7 +275,7 @@ nor the store, so that `signing_key` imports no probe that reaches them; that is
 
 `.importlinter`'s `the-store-imports-only-its-named-dependencies-in-the-library` (a `forbidden` contract from
 `lakehouse.storage` to `lakehouse.*`) holds it: the group imports nothing else in the library, directly or through
-another module, beyond the four named imports `ignore_imports` lists. It was kept before it was written; a planted
+another module, beyond the four named imports `ignore_imports` lists. The contract held before it was added; a planted
 `import lakehouse.record_store` in `lakehouse.storage.uri` broke it. The auth plane's contract names
 `lakehouse.storage.store_session` as its one importer in the store, since `options` and `objectfs` import nothing of
 it.
@@ -288,3 +288,74 @@ A module's logger is named by its path, so three record names follow the group: 
 `lakehouse.storage.conditional_records` and `lakehouse.storage.stored_objects`. No alert rule, dashboard, collector
 route or test names them. The file audit logger `lakehouse.file_audit` is named by hand and keeps its name. No module
 of the group has a tracer.
+
+## The Lance table plane group (2026-11-20)
+
+The fifth group by job is the Lance table plane, `lakehouse.lancekit`: how every service reads and judges a Lance table.
+Measured with `ast` on `fb10c462b` (module-level, function-local, `TYPE_CHECKING` and relative imports; 112 modules, 242
+edges), the brief's two candidate halves are two jobs, not one: the table plane (what a manifest, a version, a
+transaction, a branch and a location mean to Lance) and the catalog's records (the registries and governance records
+kept under the control root). Their edges run one way: 6 record modules import 5 table modules (`base_refs` from five,
+`features` from two, `branch_layout`, `lance_session` and `transactions` from `clone_sources`), and no table module
+imports a record. Of the table candidates, the ten below import nothing in the library but each other (`features` ->
+`manifest_wire`, `table_layout` -> `branch_layout`), and the rest imports them from the records, the store
+(`storage.objectfs` -> `base_refs`) and `table_paths`, so the group is the floor of the library and this commit does
+it.
+
+`lancekit` already held four modules of the job (`versions`, `filters`, `absence`, `commit_verdict`), so the name stays:
+16 references name it, which a plainer name would move for no gain in meaning, and it says what it holds (Lance primitives). Its
+`__init__` was a docstring with no import, so no facade is removed: 0 references reached a name through it. Every module
+of the group declares `__all__` (twelve did not: the ten joining and `versions` and `filters`); `log` is left out of
+each.
+
+| Module | In the group as |
+| --- | --- |
+| `lakehouse.features` | `lakehouse.lancekit.features` |
+| `lakehouse.manifest_wire` | `lakehouse.lancekit.manifest_wire` |
+| `lakehouse.manifest_names` | `lakehouse.lancekit.manifest_names` |
+| `lakehouse.transactions` | `lakehouse.lancekit.transactions` |
+| `lakehouse.branch_layout` | `lakehouse.lancekit.branch_layout` |
+| `lakehouse.table_layout` | `lakehouse.lancekit.table_layout` |
+| `lakehouse.base_refs` | `lakehouse.lancekit.base_refs` |
+| `lakehouse.lance_session` | `lakehouse.lancekit.lance_session` |
+| `lakehouse.auto_cleanup` | `lakehouse.lancekit.auto_cleanup` |
+| `lakehouse.listing_floor` | `lakehouse.lancekit.listing_floor` |
+
+Each keeps its name: none collides inside the package, and `lance_session` keeps its name beside the function of the same name it
+defines, which its importers call. `auto_cleanup` and `listing_floor` join as manifest config keys a committer writes and a
+reader judges a table by (Lance's `lance.auto_cleanup.*` and the floor's stamp), not as records: neither reads or
+writes the control root. `base_refs` joins as Lance's spellings of a location (a manifest's `base_paths` against
+`describe_table`'s answer); the store's contract names `lakehouse.storage.objectfs -> lakehouse.lancekit.base_refs` as
+its one import of it.
+
+Left out:
+
+- `table_paths`: lists a table's objects through the store (`storage.stored_objects`), and the store imports the group,
+  so in it the group and the store would import each other.
+- `arrow_ipc`: the Arrow IPC body of the namespace's write doors, a wire of the spec, not of a table.
+- `outage`: whether the store answered, read with the spec's error answers (`ns_errors` imports it).
+- `lance_metrics`: the process's telemetry, bridging Lance's IO meters into OpenTelemetry.
+- `derived_tables`: lineage's edge list walked for erasure, a provenance read.
+- `data_directories`, `file_identities`, `clone_sources`, `compaction_gate`: each imports a record
+  (`base_registry`, `location_claims`, `record_store`), so each is the records' or above them.
+
+`.importlinter`'s `the-lance-table-plane-imports-nothing-else-in-the-library` (a `forbidden` contract from
+`lakehouse.lancekit` to `lakehouse.*`, with no ignored import) holds it. The contract held before it was added; a planted
+`import lakehouse.naming` in `lakehouse.lancekit.versions` broke it.
+
+A module's logger is named by its path, so two logger names follow the group: `lakehouse.features` and
+`lakehouse.lance_session` are `lakehouse.lancekit.features` and `lakehouse.lancekit.lance_session`. No alert rule,
+dashboard or collector route names them; the one test that reads one (`caplog` in
+`tests/unit/test_a_permanent_base_denial_is_reported_once.py`) names it as `features.__name__`. No module of the group
+has a tracer.
+
+**Proposed, for a commit of its own: the catalog's records.** Measured on the same tree after this commit, 19 modules
+(`record_store`, `control_prefixes`, `object_records`, `project_records`, `warehouse_records`, `location_claims`,
+`trash`, `protection`, `maintenance_policies`, `maintenance_due`, `history_fences`, `commit_records`, `commit_turns`,
+`base_registry`, `clone_sources`, `file_identities`, `data_directories`, `compaction_gate`, `table_paths`) import only
+`lakehouse.lancekit`, `lakehouse.storage` and `lakehouse.naming` (`warehouse_records`) in the rest of the library, and
+one module of the rest imports them: `timers` (`control_prefixes`, for its window claims' prefix). A subpackage holding
+them, with `timers` either joining as a claim on the control root or named as the one importer, is held by a
+`forbidden` contract from it to `lakehouse.*` ignoring the three, and moves 622 references in the same change. The
+name is the group's to choose: `lakehouse.records` is free, since the store's writes it arbitrates are
+`storage.conditional_records`.

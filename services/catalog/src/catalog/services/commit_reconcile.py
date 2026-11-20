@@ -41,19 +41,20 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core import lineage_emit, run_context
 from catalog.core.config import CatalogStore, Settings
 from catalog.services import dataplane, maintenance_commits, managed_versions, provenance_namespace
-from lakehouse import auto_cleanup, commit_records
-from lakehouse.base_refs import decoded_path, key_uri, store_of
+from lakehouse import commit_records
 from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.events.openlineage import BRANCH_IDENTIFIER
 from lakehouse.events.signing import SIGNATURE_FACET
-from lakehouse.features import flags_from_open_error
 from lakehouse.governed import fga
-from lakehouse.lance_session import fresh_session, open_dataset
+from lakehouse.lancekit import auto_cleanup
+from lakehouse.lancekit.base_refs import decoded_path, key_uri, store_of
+from lakehouse.lancekit.features import flags_from_open_error
 from lakehouse.lancekit.filters import sql_literal
-from lakehouse.manifest_names import committed_version
+from lakehouse.lancekit.lance_session import fresh_session, open_dataset
+from lakehouse.lancekit.manifest_names import committed_version
+from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.storage import stored_objects
 from lakehouse.storage.options import StorageOptions, on_s3
-from lakehouse.transactions import read_transaction
 
 
 log = logging.getLogger(__name__)
@@ -440,7 +441,7 @@ def _operation_of(name: str, *, version: int, branch: str | None) -> str | None:
 
 def _only_disarms(operation: object) -> bool:
     """Whether a version disarms commit-path cleanup and does nothing else: an ``UpdateConfig`` removing
-    ``lance.auto_cleanup.*`` keys alone (:func:`lakehouse.auto_cleanup.disarm`), which every door commits before its own
+    ``lance.auto_cleanup.*`` keys alone (:func:`lakehouse.lancekit.auto_cleanup.disarm`), which every door commits before its own
     and no feed announces ([[LH-245]]). It deletes nothing and reaches no row, so it needs no author. Any other config
     commit is a door's, its author recorded, or was made past every door ([[LH-575]]). Measured on pylance 13.0.0:
     ``delete_config_keys`` records each key in ``config_updates`` mapped to ``None``, ``replace`` false, and the other three

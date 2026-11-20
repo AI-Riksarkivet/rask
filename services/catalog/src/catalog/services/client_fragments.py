@@ -37,8 +37,8 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from catalog.core import blobs, encoding
 from lakehouse import base_registry
-from lakehouse.base_refs import normalise, store_of
-from lakehouse.features import describe_foreign_data_file_versions
+from lakehouse.lancekit.base_refs import normalise, store_of
+from lakehouse.lancekit.features import describe_foreign_data_file_versions
 from lakehouse.storage.options import StorageOptions
 
 
@@ -468,7 +468,7 @@ def _external_bases(table: lance.LanceDataset, recorded: Sequence[base_registry.
     """``{base id: base URI}`` of the table's registered non-root bases its record holds as external blob bases, by path and store.
 
     ``base_paths()`` is the library's own answer for the manifest's bases, as
-    ``lakehouse.features.manifest_base_path_refs`` reads it.
+    ``lakehouse.lancekit.features.manifest_base_path_refs`` reads it.
     """
     allowed = {(entry.path, entry.store) for entry in recorded if entry.role is base_registry.BaseRole.EXTERNAL_BLOB and not entry.is_dataset_root}
     declared = table.base_paths()

@@ -740,13 +740,13 @@ def shared_lance_session() -> lance.Session:
     so a compaction writes NEW keys and a new version is never served stale. An OLD version is: measured
     on pylance 12.0.0, a version this session has read, whose manifest cleanup kept, keeps answering
     after cleanup deletes its data file, which is why a read that must see storage opens on
-    `lakehouse.lance_session.fresh_session` instead.
-    `lakehouse.lance_session` records its thread-safety under concurrent opens.
+    `lakehouse.lancekit.lance_session.fresh_session` instead.
+    `lakehouse.lancekit.lance_session` records its thread-safety under concurrent opens.
 
     ONE OBJECT per cap pair: `lance_session` is `@cache`d on its arguments, so every caller here gets
     the same session and the opens actually share a cache rather than each minting one.
     """
-    from lakehouse.lance_session import lance_session
+    from lakehouse.lancekit.lance_session import lance_session
 
     return lance_session(*_affordable_caps())
 
@@ -754,7 +754,7 @@ def shared_lance_session() -> lance.Session:
 def _affordable_caps() -> tuple[int, int]:
     """The configured cache caps, clamped from the cgroup rather than by lowering the defaults, so they
     track the pod's real limit instead of a literal somebody has to remember to change."""
-    from lakehouse.lance_session import affordable_cache_bytes
+    from lakehouse.lancekit.lance_session import affordable_cache_bytes
 
     caps = _session_caps()
     return affordable_cache_bytes(caps.lance_metadata_cache_mb << 20, caps.lance_index_cache_mb << 20)

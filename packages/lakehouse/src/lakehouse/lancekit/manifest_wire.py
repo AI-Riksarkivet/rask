@@ -2,7 +2,7 @@
 the one varint encoder a plane that edits one writes with.
 
 pylance exposes neither a manifest's feature flags nor the fields the catalog edits to finalize a staged version, so
-``lakehouse.features`` and ``catalog.core.manifest_bytes`` read the ``Manifest`` message's bytes themselves. They read it
+``lakehouse.lancekit.features`` and ``catalog.core.manifest_bytes`` read the ``Manifest`` message's bytes themselves. They read it
 here, so a message that ends inside a field, or carries a wire type proto3 does not, is refused by both: a reader that
 stopped there and answered what it had read so far would answer feature flags ``(0, 0)``, which every gate passes.
 """
@@ -10,6 +10,16 @@ stopped there and answered what it had read so far would answer feature flags ``
 from __future__ import annotations
 
 from typing import Final
+
+
+__all__ = [
+    "ManifestWireError",
+    "encode_varint",
+    "fields",
+    "next_field",
+    "read_varint",
+    "varint_field",
+]
 
 
 class ManifestWireError(ValueError):

@@ -37,6 +37,16 @@ if TYPE_CHECKING:
     from lance_namespace import LanceNamespace
 
 
+__all__ = [
+    "EVIDENCE_CACHE_BYTES",
+    "affordable_cache_bytes",
+    "cache_budget_bytes",
+    "fresh_session",
+    "lance_session",
+    "open_dataset",
+]
+
+
 #: Where a container states its own memory limit. v2 first — it is what cgroup-v2 hosts (k3s included)
 #: expose — with the v1 path kept because a reader that knows one layout silently reports "unlimited"
 #: on the other, and "unlimited" is the answer that disables the clamp below.

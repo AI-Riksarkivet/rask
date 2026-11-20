@@ -34,7 +34,7 @@ about WHICH FIELD an operation is entitled to ignore, never about relaxing a wri
 
 from __future__ import annotations
 
-from lakehouse import features
+from lakehouse.lancekit import features
 
 
 #: A bit above everything the spec defines. The spec says so in as many words: "Flags with bit values

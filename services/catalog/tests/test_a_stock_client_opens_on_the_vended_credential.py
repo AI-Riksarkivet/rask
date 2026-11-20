@@ -45,7 +45,7 @@ from moto.sts.models import sts_backends
 from pydantic import BaseModel
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.base_refs import decoded_path
+from lakehouse.lancekit.base_refs import decoded_path
 
 
 _REGION = "us-east-1"

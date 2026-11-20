@@ -14,7 +14,7 @@ from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol
 
-from lakehouse.manifest_names import committed_version
+from lakehouse.lancekit.manifest_names import committed_version
 
 
 if TYPE_CHECKING:

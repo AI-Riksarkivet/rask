@@ -32,6 +32,13 @@ if TYPE_CHECKING:
     import lance
 
 
+__all__ = [
+    "AUTO_CLEANUP_PREFIX",
+    "armed_keys",
+    "disarm",
+]
+
+
 #: Every manifest config key Lance's commit-path auto-cleanup reads. A PREFIX, not the two keys pylance's
 #: ``disable_auto_cleanup`` deletes: measured on 12.0.0, that call removes only ``.interval`` and
 #: ``.older_than`` and leaves ``.retain_versions`` standing, a retention instruction the next arming reuses.

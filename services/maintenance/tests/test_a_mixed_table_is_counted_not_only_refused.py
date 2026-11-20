@@ -21,7 +21,7 @@ import lance
 import pyarrow as pa
 import pytest
 
-from lakehouse.features import manifest_feature_flags, mixes_data_file_versions
+from lakehouse.lancekit.features import manifest_feature_flags, mixes_data_file_versions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials, expiry, table_pass

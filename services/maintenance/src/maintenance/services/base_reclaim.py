@@ -18,7 +18,7 @@ plain base (:mod:`lakehouse.data_directories` holds the rule). A dataset-root ba
 clone's source, a branch's parent) and is never listed here, and a record naming a directory whose claim the table does
 not hold, such as an approved base itself, which every table naming it once shared, is never listed either.
 
-A TABLE THAT MANAGES ITS BLOBS IS LEFT WHOLE ([[LH-575]]). Under :data:`lakehouse.features.FLAG_MANAGED_BLOBS` a live
+A TABLE THAT MANAGES ITS BLOBS IS LEFT WHOLE ([[LH-575]]). Under :data:`lakehouse.lancekit.features.FLAG_MANAGED_BLOBS` a live
 row's blob descriptor addresses its object directly, under ``_blobs/`` or at a sidecar path whose data file a rewrite
 removed, and cleanup keeps it while any protected snapshot's rows reference it
 (`lance_docs/lance/format/table/blob.md` § Garbage Collection), so a file no fragment names may still be live. A table
@@ -39,10 +39,10 @@ from typing import Final
 import lance
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse import features
-from lakehouse.base_refs import decoded_path, store_of
 from lakehouse.base_registry import RecordedBase
 from lakehouse.data_directories import directory_uri
+from lakehouse.lancekit import features
+from lakehouse.lancekit.base_refs import decoded_path, store_of
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.stored_objects import StoredObject, delete_objects, list_under
 
@@ -135,7 +135,7 @@ def unreferenced(
 
     The listing comes first and the manifests only for what it leaves: a directory holding nothing past the age costs one
     listing, and one whose old files the heads still reference costs the heads' manifests and no more. Nothing is
-    unreferenced in a table one of whose heads manages its blobs (:func:`lakehouse.features.manages_blobs`).
+    unreferenced in a table one of whose heads manages its blobs (:func:`lakehouse.lancekit.features.manages_blobs`).
     """
     cutoff = now - UNVERIFIED_AGE
     listed = {directory.path: list_under(directory_uri(directory), storage_options) for directory in directories}

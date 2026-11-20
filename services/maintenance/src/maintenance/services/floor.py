@@ -65,9 +65,9 @@ from typing import TYPE_CHECKING
 import lance
 from pydantic import BaseModel
 
-from lakehouse.lance_session import open_dataset
+from lakehouse.lancekit.lance_session import open_dataset
+from lakehouse.lancekit.listing_floor import FLOOR_KEY
 from lakehouse.lancekit.versions import committed_at
-from lakehouse.listing_floor import FLOOR_KEY
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import shared_lance_session
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, raise_floor

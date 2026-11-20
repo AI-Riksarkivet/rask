@@ -47,7 +47,6 @@ from catalog.core.identifiers import parse_identifier, require_names
 from catalog.services import table_claims
 from catalog.services.object_uuids import UnidentifiedObjectError
 from lakehouse import location_claims
-from lakehouse.base_refs import names_a_location
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.decider import (
@@ -63,6 +62,7 @@ from lakehouse.governed.decider import (
     TableDecision,
 )
 from lakehouse.governed.settings import FgaSettings
+from lakehouse.lancekit.base_refs import names_a_location
 from lakehouse.location_claims import ClaimStore
 
 

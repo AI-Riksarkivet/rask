@@ -474,8 +474,8 @@ def shared_lance_session() -> lance.Session:
     minting and discarding Lance's default 1 GiB + 6 GiB ceilings per open — ceilings that dwarf
     the pod's own 512Mi limit. Caps are LRU soft bounds; session keys carry (uri, version, etag),
     so a commit bumping a version writes new keys and a new version is never served stale. An old
-    version whose data files were reclaimed can be (`lakehouse.lance_session`)."""
-    from lakehouse.lance_session import affordable_cache_bytes, lance_session
+    version whose data files were reclaimed can be (`lakehouse.lancekit.lance_session`)."""
+    from lakehouse.lancekit.lance_session import affordable_cache_bytes, lance_session
 
     settings = get_settings()
     # CLAMPED TO WHAT THIS CONTAINER HOLDS, because the configured pair did not fit it. 128 + 256 MB

@@ -138,11 +138,11 @@ extend-select = ["TID251", "FAST001", "T20"]
 # The data plane's measured sites, one file each (2026-11-02, every data-plane module of the library): the typographic
 # minus sign in `lance_session`'s prose, the two loops PERF401 reads as a comprehension, and the four files whose
 # `# noqa: BLE001` / `SLF001` directives carry their written reason (RUF100, as the note above records).
-"packages/lakehouse/src/lakehouse/lance_session.py" = ["RUF002"]
+"packages/lakehouse/src/lakehouse/lancekit/lance_session.py" = ["RUF002"]
 "packages/lakehouse/src/lakehouse/object_records.py" = ["PERF401"]
 "packages/lakehouse/src/lakehouse/commit_turns.py" = ["RUF100"]
 "packages/lakehouse/src/lakehouse/compaction_gate.py" = ["RUF100"]
-"packages/lakehouse/src/lakehouse/features.py" = ["RUF100"]
+"packages/lakehouse/src/lakehouse/lancekit/features.py" = ["RUF100"]
 "packages/lakehouse/src/lakehouse/history_fences.py" = ["RUF100"]
 # `schemas/**` had the same 21-rule row and NOT ONE of them fired under it — a row that suppressed
 # nothing while implying the subtree needed suppressing. Deleted 2026-08-22 rather than narrowed.
@@ -176,7 +176,7 @@ extend-select = ["TID251", "FAST001", "T20"]
 "dapr".msg = "The lakehouse speaks to the bus through lakehouse.events.bus and to its secret store through lakehouse.governed.secrets, each on the process's own connection."
 "boto3".msg = "Build S3/STS clients through lakehouse.storage.client.s3_client / lakehouse.storage.sts.sts_client: a raw boto3 client carries no timeouts."
 "lance.write_dataset".msg = "Lance is written only at the registered write doors (the catalog dataplane)."
-"lance.dataset".msg = "Open a dataset through lakehouse.lance_session.open_dataset, which takes the session the open reads through: an open that names none takes Lance's default 1 GiB + 6 GiB cache caps for that one handle."
+"lance.dataset".msg = "Open a dataset through lakehouse.lancekit.lance_session.open_dataset, which takes the session the open reads through: an open that names none takes Lance's default 1 GiB + 6 GiB cache caps for that one handle."
 "lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (the catalog dataplane)."
 "lakehouse.events.bus.publish_event".msg = "A publish site is registered deliberately (a line-level noqa): a direct publish skips the outbox or the bounded timeout."
 "signal.signal".msg = "SIGTERM is taken only by lakehouse.draining; a second handler replaces the drain."

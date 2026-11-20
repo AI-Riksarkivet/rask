@@ -18,19 +18,20 @@ from typing import Final, Literal
 import lance
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse import manifest_names, trash
+from lakehouse import trash
 from lakehouse.base_registry import RecordedBase
-from lakehouse.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
 from lakehouse.events.lineage_events import DatasetUuids
-from lakehouse.features import (
+from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
+from lakehouse.lancekit import manifest_names
+from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
+from lakehouse.lancekit.features import (
     describe_gc_unsupported_flags,
     flags_from_open_error,
     manifest_feature_flags,
     mixes_data_file_versions,
     unsupported_features_from_open_error,
 )
-from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
-from lakehouse.lance_session import open_dataset
+from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.stored_objects import delete_objects, list_under_at, recording_removed_transactions
 from maintenance.core.config import shared_lance_session
@@ -351,7 +352,7 @@ def lost_staged_manifests(uri: str, storage_options: StorageOptions, *, version:
     a commit still in flight, and is not one of these. ``cleanup_old_versions`` never reclaims a staged one: Lance's
     listing drops the name (`detect_scheme`, `rust/lance-table/src/io/commit.rs:138-150` at v13.0.0).
 
-    A detached manifest (:func:`lakehouse.manifest_names.is_detached`) is one of these whatever the version: every
+    A detached manifest (:func:`lakehouse.lancekit.manifest_names.is_detached`) is one of these whatever the version: every
     catalog commit writes one to judge the version before it finalizes it, and deletes it within the request
     (`catalog.services.dataplane.discard_detached_manifest`), so one past :data:`DETACHED_MANIFEST_GRACE` belongs to a
     commit that died, or whose delete the store refused, between the two. Lance's cleanup keeps it: measured on pylance

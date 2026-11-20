@@ -70,7 +70,7 @@ async def require_reclaimable_history(request: Request, table: DoorTableDep, res
     That tier deletes and puts anywhere in the table, and a session policy cannot refuse a put over an existing manifest,
     so its holder could delete or rewrite the history the policy keeps. The pass has nothing to write there: it reclaims
     nothing on a held table, and the commit-path cleanup a held table may be armed with fires only inside a commit, which
-    every catalog door disarms before it makes (``lakehouse.auto_cleanup``). The policy is resolved as maintenance
+    every catalog door disarms before it makes (``lakehouse.lancekit.auto_cleanup``). The policy is resolved as maintenance
     resolves it, each record read by its key: the table's own record, else its nearest namespace's, else its project's
     (``maintenance_policies.governing_policy``), its settings read strictly (``maintenance_policies.PolicySettings``), so
     a hold written ``cleanup_enabled: "false"`` past the policy door is a hold. A record that cannot be read may be the

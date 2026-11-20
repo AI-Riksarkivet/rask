@@ -125,26 +125,16 @@ from catalog.core.version_retention import MAIN_BRANCH, recorded_branch
 from catalog.services import changes, commit_authors, committed_files, contracts, native, primary_keys, table_bases, table_claims
 from catalog.services.cast_size import bytes_after_cast
 from catalog.services.object_uuids import UnidentifiedObjectError
-from lakehouse import (
-    auto_cleanup,
-    base_registry,
-    branch_layout,
-    clone_sources,
-    commit_records,
-    commit_turns,
-    data_directories,
-    file_identities,
-    location_claims,
-    manifest_names,
-    trash,
-)
+from lakehouse import base_registry, clone_sources, commit_records, commit_turns, data_directories, file_identities, location_claims, trash
 from lakehouse.arrow_ipc import ArrowBodyError, ArrowBodyTooLargeError, decode_arrow_body, encode_arrow_stream
-from lakehouse.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from lakehouse.control_prefixes import CONTROL_PREFIXES
-from lakehouse.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base_path_refs
 from lakehouse.history_fences import HistoryWork
-from lakehouse.lance_session import open_dataset
+from lakehouse.lancekit import auto_cleanup, branch_layout, manifest_names
+from lakehouse.lancekit.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure, is_retryable_conflict
+from lakehouse.lancekit.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base_path_refs
+from lakehouse.lancekit.lance_session import open_dataset
+from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.ns_errors import PartiallyApplied
@@ -152,7 +142,6 @@ from lakehouse.outage import reads_as_store_outage
 from lakehouse.storage import stored_objects
 from lakehouse.storage.options import StorageOptions, object_client, on_s3, s3_filesystem
 from lakehouse.storage.uri import split_s3_uri
-from lakehouse.transactions import read_transaction
 from lakehouse.trash import TrashRecord
 
 

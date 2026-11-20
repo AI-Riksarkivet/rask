@@ -11,6 +11,11 @@ from __future__ import annotations
 from typing import Final
 
 
+__all__ = [
+    "FLOOR_KEY",
+]
+
+
 #: Namespaced, so an operator reading a table's config can tell the raise apart from a real commit. To the fraction, as
 #: the floor is: a stamp cut to its second could read as passed by a manifest written earlier in it.
 FLOOR_KEY: Final = "rask.maintenance.floor_raised_at"

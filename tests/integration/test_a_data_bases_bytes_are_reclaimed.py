@@ -42,8 +42,8 @@ from pydantic import SecretStr
 
 from lakehouse import base_registry, data_directories, location_claims, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.base_refs import normalise
 from lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
+from lakehouse.lancekit.base_refs import normalise
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.credential import S3KeyPair

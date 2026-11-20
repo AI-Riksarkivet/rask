@@ -10,7 +10,7 @@ on: a recorded file deleted while a retained version names it breaks every read 
 daily pass names it, while maintenance's own cleanup deletes would otherwise hold a second pass after every pass.
 
 A key's table is a root its key passes through just before a directory a vended writer may put under
-(``lakehouse.table_layout.WRITER_PUT_GLOBS``: ``data``, ``_versions``, ``_transactions``, ``_deletions``, ``_indices``, and
+(``lakehouse.lancekit.table_layout.WRITER_PUT_GLOBS``: ``data``, ``_versions``, ``_transactions``, ``_deletions``, ``_indices``, and
 ``tree`` for a branch's own), the only places a recorded file can be overwritten; the rest of a table's layout
 (``_blobs``, ``_refs``, ``_bt``, ``lance_docs/lance/format/table/layout.md``) takes no vended write. The claim on that
 root names the table, and the roots are tried shallowest first, so a warehouse prefix that happens to be named like one
@@ -36,7 +36,8 @@ from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from lakehouse import location_claims, table_layout
+from lakehouse import location_claims
+from lakehouse.lancekit import table_layout
 from lakehouse.storage.credential import StoreCredentialUnavailableError
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.naming import claim_store, claimed_location

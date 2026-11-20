@@ -29,11 +29,11 @@ import lance
 from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse import file_identities
-from lakehouse.base_refs import decoded_path
-from lakehouse.branch_layout import BRANCH_CONTAINER
+from lakehouse.lancekit.base_refs import decoded_path
+from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
+from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.storage import stored_objects
 from lakehouse.storage.options import StorageOptions
-from lakehouse.transactions import read_transaction
 from maintenance.services import base_reclaim
 
 

@@ -35,7 +35,7 @@ from pydantic import SecretStr
 
 from catalog.core.config import get_settings
 from lakehouse import location_claims
-from lakehouse.features import manifest_base_path_refs
+from lakehouse.lancekit.features import manifest_base_path_refs
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.store_session import IssuedSession
 

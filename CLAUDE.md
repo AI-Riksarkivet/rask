@@ -257,8 +257,11 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     (`lakehouse.log_handler`), the probes and the drain, the body cap; the auth plane (`lakehouse.governed`); the naming and
     the spec's error mapping (`naming`, `ns_errors`, `spec_routes`); the input and credential guards
     (`arrow_ipc`, `storage.options`); the catalog's records, registries and governance guards (protection, trash,
-    history fences, retention); the table layout and feature checks; what every plane reads a Lance
-    table by (`lakehouse.lancekit`: versions, filters, absence and the commit verdict); the events (`lakehouse.events`: `control_events`, `control_emit`, `signature_doors`, `lineage_events`,
+    history fences, retention); what every plane reads and judges a Lance table by (`lakehouse.lancekit`: versions,
+    filters, absence and the commit verdict, the manifest's wire and names in `manifest_wire` and `manifest_names`, its
+    feature checks in `features`, the table layout in `table_layout` and `branch_layout`, a location's spellings in
+    `base_refs`, the transaction reader in `transactions`, the bounded session in `lance_session`, and the config keys
+    in `auto_cleanup` and `listing_floor`); the events (`lakehouse.events`: `control_events`, `control_emit`, `signature_doors`, `lineage_events`,
     `cloud_events`, the CloudEvents envelope each event rides the bus in, `bus`, the one module
     that publishes an event and takes a delivery, on the process's own connection to NATS JetStream, `bus_delivery`,
     the rule that settles a delivery by what its handling answers, the outbox seams (`outbox`), the OpenLineage builders in
@@ -384,7 +387,7 @@ Key facts that aren't obvious from any single file:
   COMMITTED and stamps reader flag 256 (mixed data file versions), which no operation removes:
   maintenance refuses the table, and pylance 11 and lancedb 0.34 cannot open it, while lancedb 0.41 (the
   pinned one) can (`lance_docs/PROVENANCE.md`). The catalog's `version/create` (a stock client's commit, ADR 0157) and the register door refuse
-  such a set (`lakehouse.features.describe_foreign_data_file_versions`), and the maintenance
+  such a set (`lakehouse.lancekit.features.describe_foreign_data_file_versions`), and the maintenance
   counter `maintenance.datasets.mixed_file_versions` pages on one. From pylance 13, `update()`,
   `merge_insert().data_storage_version()` and `compact_files()` also take a `data_storage_version` that
   can stamp the flag: a stock client's such commit is refused at `version/create`, and rask code never passes it.

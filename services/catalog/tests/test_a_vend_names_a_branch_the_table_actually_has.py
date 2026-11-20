@@ -42,7 +42,7 @@ from catalog.api.v1.endpoints.credentials import vend_credentials
 from catalog.core.vending import ReclaimScope, VendedSession
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse import location_claims
-from lakehouse.features import TableFileFormat
+from lakehouse.lancekit.features import TableFileFormat
 from lakehouse.location_claims import ClaimStore
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions

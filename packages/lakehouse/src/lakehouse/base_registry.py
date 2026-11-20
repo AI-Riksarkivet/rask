@@ -15,7 +15,7 @@ without that rule a table registered at ``.`` or ``_bases`` is vended exactly th
 KEYED BY THE TABLE ROOT LOCATION, not the table id. The consumers that read it — the base-reference
 pre-pass and the lineage reconcile — hold URIs, not ids; and a location key survives the deregister→register an
 undrop performs, while a drop→re-declare mints a new location and so a fresh, empty record (lh279 s3). The key is the path the location decodes to
-(:func:`lakehouse.base_refs.decoded_path`): the doors write the record under the catalog's
+(:func:`lakehouse.lancekit.base_refs.decoded_path`): the doors write the record under the catalog's
 percent-encoded spelling while the pre-pass reads it under the decoded directory discovery lists (lh279 r6
 spellings), and both name one table.
 
@@ -36,8 +36,8 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from lakehouse import clone_sources, control_prefixes, location_claims
-from lakehouse.base_refs import decoded_path, key_uri, location_in_store, names_a_location, normalise, store_of
-from lakehouse.features import BasePathRef
+from lakehouse.lancekit.base_refs import decoded_path, key_uri, location_in_store, names_a_location, normalise, store_of
+from lakehouse.lancekit.features import BasePathRef
 from lakehouse.record_store import delete_record, record_key
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
@@ -80,9 +80,9 @@ class RecordedBase(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    #: The base location, normalised (:func:`lakehouse.base_refs.normalise`).
+    #: The base location, normalised (:func:`lakehouse.lancekit.base_refs.normalise`).
     path: str
-    #: The store the base resolves in (:func:`lakehouse.base_refs.store_of`). The normalised
+    #: The store the base resolves in (:func:`lakehouse.lancekit.base_refs.store_of`). The normalised
     #: ``path`` carries no scheme, and the same path under another scheme is another location. Read off
     #: ``path`` as spelled when none is given.
     store: str = ""
@@ -471,7 +471,7 @@ def judge_base(table_root: str, ref: BasePathRef, *, configured: Sequence[str], 
     inside one counts only when it is declared as a plain base: a configured base declared as a DATASET
     ROOT resolves data files through it, which no configuration sanctioned. A recorded entry matches on
     its normalised path AND its root-ness, for the same reason. Every one of the three compares the store
-    as well as the path (:func:`lakehouse.base_refs.store_of`): the table's own path, a
+    as well as the path (:func:`lakehouse.lancekit.base_refs.store_of`): the table's own path, a
     configured base or a recorded one spelled under another scheme is another location.
     """
     fast = _standing_without_a_read(table_root, ref, configured)

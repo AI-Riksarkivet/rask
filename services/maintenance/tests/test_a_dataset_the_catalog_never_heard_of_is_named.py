@@ -29,7 +29,7 @@ from types import SimpleNamespace
 import pytest
 from pydantic import SecretStr
 
-from lakehouse.base_refs import normalise
+from lakehouse.lancekit.base_refs import normalise
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
 from maintenance.services.naming import TableIds

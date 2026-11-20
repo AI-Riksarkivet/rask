@@ -56,9 +56,9 @@ from catalog.services import clone_ending_records, dataplane, native, table_base
 from catalog.services import clone_endings as clone_endings_door
 from lakehouse import base_registry, clone_sources, location_claims, trash
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.base_refs import normalise
-from lakehouse.features import manifest_base_path_refs
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
+from lakehouse.lancekit.base_refs import normalise
+from lakehouse.lancekit.features import manifest_base_path_refs
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage import conditional_records
 from lakehouse.storage.client import S3Client
