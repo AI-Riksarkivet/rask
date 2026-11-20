@@ -89,7 +89,7 @@ TERMINAL_STATES: Final = frozenset({"COMPLETE", "FAIL", "ABORT"})
 
 FEED: Final = "events"
 REFUSALS: Final = "refusals"
-#: A delivery the ingest lane parks unrecorded is kept in ``refusals`` under this prefix and its CloudEvent id (its feed
+#: An event parked unrecorded, by the ingest lane or the outbox drain, is kept in ``refusals`` under this prefix and its CloudEvent id (its feed
 #: row's key when the envelope carries no id), beside the outbox refusals keyed by their staged object ([[LH-148]]): a
 #: re-park of the same delivery lands on its row.
 PARKED_KEY_PREFIX: Final = "dead_letter:"
@@ -694,7 +694,7 @@ class ProvenanceStore:
         await self._run(lambda: self._writer(REFUSALS).merge_upsert(pa.Table.from_pylist([row], schema=REFUSAL_SCHEMA), on=["outbox_key"]))
 
     async def parked(self, run_id: str | None = None) -> list[ParkedDelivery]:
-        """Each delivery the ingest lane's park kept ([[LH-148]]), of ``run_id`` or of every run."""
+        """Each event a park kept, the ingest lane's or the outbox drain's ([[LH-148]]), of ``run_id`` or of every run."""
         where = f"starts_with(outbox_key, {sql_literal(PARKED_KEY_PREFIX)})" + (f" AND run_id = {sql_literal(run_id)}" if run_id is not None else "")
         rows = await self._run(lambda: self._reader(REFUSALS).to_table(columns=["outbox_key", "run_id", "event"], filter=where))
         return [parked_delivery(row["outbox_key"], row["run_id"], json.loads(row["event"])) for row in rows.to_pylist()]

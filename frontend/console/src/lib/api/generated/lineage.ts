@@ -37,7 +37,7 @@ export interface paths {
         };
         /**
          * List Parked
-         * @description The runs whose deliveries the ingest lane's park keeps, each with how many, for the estate admin ([[LH-148]]).
+         * @description The runs whose events lineage's park keeps, from the bus or the outbox, each with how many, for the estate admin ([[LH-148]]).
          */
         get: operations["list_parked_admin_dlq_parked_get"];
         put?: never;
@@ -59,12 +59,12 @@ export interface paths {
         put?: never;
         /**
          * Replay Parked
-         * @description Re-present the deliveries of ``run_id`` the ingest lane's park kept, once their cause is fixed ([[LH-148]]).
+         * @description Re-present the events of ``run_id`` lineage's park kept, from the bus or the outbox, once their cause is fixed ([[LH-148]]).
          *
          *     Each kept CloudEvent goes through the ingest lane's own handling (``handle_cloud_event`` under
          *     :func:`enforce_bus_authz`: the signature over the bytes that arrived, and what the stamped author may record), so
          *     this admits nothing the bus refuses, however trusted the operator is. It writes to the feed directly and publishes
-         *     nothing: the run's subscribers heard the original publish, and the feed is what was missing it. Each delivery is
+         *     nothing: the feed is what was missing the event, and a subscriber hears of it only from its producer's publish. Each delivery is
          *     judged on its own feed row: one the feed then holds is RECOVERED and no longer kept, and one it still lacks stays
          *     kept, so a run whose START landed while its COMPLETE is still refused keeps the COMPLETE.
          *
@@ -474,7 +474,7 @@ export interface components {
         LivenessStatus: "ok";
         /**
          * ParkedRuns
-         * @description The runs whose deliveries the ingest lane's park keeps, each with how many, for the estate admin ([[LH-148]]).
+         * @description The runs whose events a park keeps, from the bus lane and the outbox drain alike, each with how many, for the estate admin ([[LH-148]]).
          */
         ParkedRuns: {
             /** Runs */

@@ -64,6 +64,10 @@ async def republish_staged(publisher: Bus | None, settings: LineageDelivery, sta
     """
     if publisher is None:
         return
-    await publish_event(
-        publisher, lineage_envelope(staged.data).with_trace_of(staged), topic=settings.lineage_topic, timeout_seconds=settings.publish_timeout_seconds
-    )
+    await publish_event(publisher, bus_copy(staged), topic=settings.lineage_topic, timeout_seconds=settings.publish_timeout_seconds)
+
+
+def bus_copy(staged: CloudEvent) -> CloudEvent:
+    """The envelope the bus carries of a staged event: derived from the event alone, under the id its producer's publish
+    carried, in the trace it was staged under (ADR 0209). What the relay re-announces and what it parks."""
+    return lineage_envelope(staged.data).with_trace_of(staged)

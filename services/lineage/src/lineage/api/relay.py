@@ -30,12 +30,13 @@ from lakehouse.storage_options import StorageOptions
 from lakehouse.supervision import Supervisor
 from lakehouse.timers import Timer
 from lineage.api.fga_deps import enforce_bus_authz
+from lineage.api.ingest_lane import park
 from lineage.core.config import LineageSettings, storage_options
-from lineage.core.metrics import Door, record_outcome, refusal_outcome
+from lineage.core.metrics import Door, Outcome, record_outcome, refusal_outcome
 from lineage.models import DatasetEvent, RunEvent, author_sub_from_payload
 from lineage.services.forward import follower, forward
 from lineage.services.provenance import ProvenanceStore
-from lineage.services.staged import UnparseableEventError, parse_staged, read_staged, republish_staged
+from lineage.services.staged import UnparseableEventError, bus_copy, parse_staged, read_staged, republish_staged
 
 
 log = logging.getLogger(__name__)
@@ -50,19 +51,25 @@ class DrainOutcome(BaseModel):
     and those need different responses.
 
     ``refused`` IS THAT DISTINCTION MADE LOAD-BEARING rather than left to a reader. A governance refusal
-    is not a failed tick: the event is well-formed, the answer is deterministic, and no retry changes it.
-    Counted as ``stranded`` it made the pair say both things at once — measured on the live estate,
-    `drained=0 stranded=6` unchanged for 2.1 days while the relay was healthy.
+    is not a failed tick: the event is well-formed and the gate's answer stays the same on every tick until
+    something outside the relay changes it. Counted as ``stranded`` it made the pair say both things at once —
+    measured on the live estate, `drained=0 stranded=6` unchanged for 2.1 days while the relay was healthy.
 
-    A REFUSED EVENT IS RETIRED ONLY ONCE IT IS RECORDED. Its verdict and payload reach the refusals table
-    first (`record_refusal`, [[LH-182]]) and the staged object is deleted after; deleting it unrecorded would
-    destroy the only durable copy of a committed write's provenance.
+    ONE VERDICT, ONE REPAIR, AT EVERY DOOR (`refusal_outcome`). A named person lacking a grant is repaired by
+    writing the tuple, so the event is PARKED exactly as the ingest lane parks a delivery (`ingest_lane.park`), and
+    the estate admin lists and replays it at ``/admin/dlq/parked``. Every other refusal is final (no signature
+    any key verifies, no author, a run another subject founded, no governed output), and is kept in the refusals
+    table under its staged key as the trace of what was refused.
+
+    A REFUSED EVENT IS RETIRED ONLY ONCE IT IS KEPT. It reaches the refusals table first ([[LH-182]]) and the
+    staged object is deleted after; deleting it unkept would destroy the only durable copy of a committed
+    write's provenance.
     """
 
     drained: int = 0
     stranded: int = 0
     refused: int = 0
-    #: Refusals whose verdict was recorded, and whose object was therefore safe to drop. `recorded == refused`
+    #: Refusals kept in the refusals table, parked or final, whose object was therefore safe to drop. `recorded == refused`
     #: means the loop is closing; `recorded == 0` with `refused > 0` means it is not.
     recorded: int = 0
 
@@ -255,7 +262,7 @@ async def _drain_outbox(
             await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
         except PermissionDeniedError as exc:
             # NEITHER POISON NOR STRANDED: a governance answer about a well-formed event, so the object is retired
-            # only once the verdict AND the event are recorded below — never on the verdict alone.
+            # only once the event is kept below — never on the verdict alone.
             refused += 1
             outcome = refusal_outcome(exc)
             refused_author = author_sub_from_payload(staged_copy.data)
@@ -263,19 +270,25 @@ async def _drain_outbox(
                 "lineage_outbox_event_unauthorized",
                 extra={"outbox_key": key, "run_id": event.run_id, "author": refused_author, "outcome": outcome, "reason": str(exc)},
             )
-            # RECORD, THEN RETIRE ([[LH-182]]). A crash after the record leaves the object, the next tick
-            # re-refuses it, and the upsert on `outbox_key` makes that a no-op; delete-first would lose the only
-            # durable copy. ITS OWN TRY ([[LH-297]]): a record or a drop that raised here would leave the loop.
+            # KEEP, THEN RETIRE ([[LH-182]]). A crash after the keep leaves the object, the next tick re-refuses
+            # it, and the upsert on the row's key (the bus copy's id for a park, the staged key otherwise) makes that
+            # a no-op; delete-first would lose the only durable copy. ITS OWN TRY ([[LH-297]]): a keep or a drop that
+            # raised here would leave the loop.
             landed = False
             try:
-                await provenance.record_refusal(
-                    outbox_key=key, run_id=event.run_id, author=refused_author, reason=str(exc), event_json=json.dumps(staged_copy.data)
-                )
+                if outcome is Outcome.REFUSED:
+                    # A GRANT REPAIRS IT: parked as the bus lane parks the same event, under the id its bus copy
+                    # carries, so the two routes keep one row and the parked doors replay either.
+                    await park(provenance, bus_copy(staged_copy).as_wire(), str(exc))
+                else:
+                    await provenance.record_refusal(
+                        outbox_key=key, run_id=event.run_id, author=refused_author, reason=str(exc), event_json=json.dumps(staged_copy.data)
+                    )
                 landed = True
                 recorded += 1
-                # COUNTED ONCE RECORDED, under the outcome every door counts a refusal by, so the alerts reading it see a
-                # drained refusal as they see a delivered one ([[LH-573]]); one whose record failed stays staged and is
-                # counted by the tick that records it.
+                # COUNTED ONCE KEPT, under the outcome every door counts a refusal by, so the alerts reading it see a
+                # drained refusal as they see a delivered one ([[LH-573]]); one whose keep failed stays staged and is
+                # counted by the tick that keeps it.
                 record_outcome(outcome, door=Door.OUTBOX)
                 await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
             except Exception as unretired:

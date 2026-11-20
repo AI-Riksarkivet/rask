@@ -63,7 +63,9 @@ async def handle_cloud_event(
 
     * **DENIED, AND THE ANSWER DEPENDS ON WHETHER ANYTHING COULD EVER CHANGE IT.** A named PERSON who lacks a grant is
       parked: a tuple can be written and the same event then succeeds on its next presentation, so the kept copy is a
-      repairable event held for repair (`ingest_lane`, the provenance namespace's ``refusals`` table). A run carrying
+      repairable event held for repair (`ingest_lane.park`, the provenance namespace's ``refusals`` table). That is the
+      rule at every door that cannot answer its producer: the relay parks a staged event refused this way through the
+      same park, and the estate admin's replay re-presents either here. A run carrying
       NO author cannot be repaired by any tuple, redelivery or restart — `UnauthoredRunError` marks that case at the
       door — so it is TAKEN and counted instead: parking it would keep a copy no reader can act on, and log and count
       it as a loss again on every replay of the retained stream, which re-refuses the same events (measured

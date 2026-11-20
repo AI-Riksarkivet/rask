@@ -1,8 +1,9 @@
 """Admin DLQ / transactional-outbox ops endpoints (#83) — view + replay the at-risk lineage events.
 
-The lineage delivery path has two failure backstops (see ``docs/RESILIENCE.md``): the ingest lane's **park**
-(`lineage.api.ingest_lane`: a delivery it ends unrecorded is kept in the provenance namespace's ``refusals`` table and
-replayed at this module's ``/parked`` doors), and the **transactional outbox** (``lakehouse.events.outbox``) — an object-store of events staged BEFORE publish and
+The lineage delivery path has two failure backstops (see ``docs/RESILIENCE.md``): the **park**
+(`lineage.api.ingest_lane.park`: a delivery the ingest lane ends unrecorded, or a staged event the relay drains that a
+grant would admit, is kept in the provenance namespace's ``refusals`` table and replayed at this module's ``/parked``
+doors), and the **transactional outbox** (``lakehouse.events.outbox``) — an object-store of events staged BEFORE publish and
 dropped on ack. A surviving outbox object is a committed write whose lineage was not yet confirmed delivered:
 the at-risk set the reconcile relay drains on a timer. This module surfaces that set for an operator and lets
 them replay one on demand instead of waiting for the next reconcile tick.
@@ -205,18 +206,18 @@ async def replay_dlq(
 
 @router.get("/parked", dependencies=[Depends(require_parks_reader)])
 async def list_parked(provenance: ProvenanceDep) -> ParkedRuns:
-    """The runs whose deliveries the ingest lane's park keeps, each with how many, for the estate admin ([[LH-148]])."""
+    """The runs whose events lineage's park keeps, from the bus or the outbox, each with how many, for the estate admin ([[LH-148]])."""
     return ParkedRuns(runs=dict(Counter(delivery.run_id or "" for delivery in await provenance.parked())))
 
 
 @router.post("/parked/{run_id}/replay", dependencies=[Depends(require_parks_replayer)])
 async def replay_parked(run_id: str, request: Request, provenance: ProvenanceDep, settings: SettingsDep, token: CurrentToken) -> DlqReplayResponse:
-    """Re-present the deliveries of ``run_id`` the ingest lane's park kept, once their cause is fixed ([[LH-148]]).
+    """Re-present the events of ``run_id`` lineage's park kept, from the bus or the outbox, once their cause is fixed ([[LH-148]]).
 
     Each kept CloudEvent goes through the ingest lane's own handling (``handle_cloud_event`` under
     :func:`enforce_bus_authz`: the signature over the bytes that arrived, and what the stamped author may record), so
     this admits nothing the bus refuses, however trusted the operator is. It writes to the feed directly and publishes
-    nothing: the run's subscribers heard the original publish, and the feed is what was missing it. Each delivery is
+    nothing: the feed is what was missing the event, and a subscriber hears of it only from its producer's publish. Each delivery is
     judged on its own feed row: one the feed then holds is RECOVERED and no longer kept, and one it still lacks stays
     kept, so a run whose START landed while its COMPLETE is still refused keeps the COMPLETE.
 

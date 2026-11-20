@@ -367,7 +367,7 @@ tests:
               service: "lineage"
             exp_annotations:
               summary: "Lineage ingest dead-lettering — provenance is being LOST"
-              description: "Lineage's ingest lane parked an event the feed does not hold: it could not be recorded on any of its deliveries, or its author lacks a grant. The event is kept in the refusals table for the estate admin's replay, and the feed lacks its row until then. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
+              description: "Lineage parked an event the feed does not hold: a bus delivery that could not be recorded on any of its deliveries, or an event, delivered or staged in the outbox, whose author lacks a grant. The event is kept in the refusals table for the estate admin's replay, and the feed lacks its row until then. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up"
 
   # M24 d. A flat dead-letter counter is the healthy estate; it must stay silent.
   - interval: 1m

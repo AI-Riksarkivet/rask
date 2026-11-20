@@ -140,6 +140,34 @@ def test_a_refused_complete_is_kept_and_replayed_into_the_feed_once_its_tuple_is
     assert estate.bus.sent == [], "a replayed park was published again"
 
 
+def test_a_staged_event_a_grant_would_admit_is_parked_by_the_relay_and_replayed_into_the_feed_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The outbox drain's refusal has the bus lane's repair: kept where the estate admin lists and replays it, its staged
+    copy retired, and recorded once after the grant is written, however often the relay ticks or the admin replays."""
+    from lakehouse.events import outbox
+    from lakehouse.events.cloud_events import lineage_envelope
+    from lakehouse.storage_options import StorageOptions
+
+    outbox_uri = f"file://{tmp_path}/outbox"
+    monkeypatch.setenv("LINEAGE_OUTBOX_URI", outbox_uri)
+    with _estate(tmp_path, monkeypatch) as estate:
+        lineage, table = estate.lineage, estate.table
+        outbox.stage_envelope(outbox_uri, StorageOptions(), lineage_envelope(_event("COMPLETE", table, outputs=True)))
+        refused = relay_tick(lineage)
+        listed = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
+        staged = list(outbox.list_events(outbox_uri, StorageOptions()))
+        lineage.app.state.grants.allowed.add((user_object(_AUTHOR), "can_write_data", table))
+        replayed = lineage.post(_REPLAY, headers={SUBJECT_HEADER: _ADMIN})
+        again = lineage.post(_REPLAY, headers={SUBJECT_HEADER: _ADMIN})
+        relay_tick(lineage)
+        left = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
+        feed = asyncio.run(lineage.app.state.provenance.list_events())
+
+    assert (refused.outbox_refused, staged, listed.json()) == (1, [], {"runs": {_RUN: 1}}), "the refused staged event is not kept for replay"
+    assert (replayed.status_code, replayed.json()) == (200, {"status": "recovered", "run_id": _RUN}), replayed.text
+    assert (again.status_code, left.json()) == (404, {"runs": {}}), "a recovered park is still kept"
+    assert [record.event_type for record in feed] == ["COMPLETE"], "the feed does not hold the replayed event exactly once"
+
+
 def test_the_relay_tick_retires_a_kept_park_the_feed_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A kept delivery whose row reaches the feed by another path (here the producer's own ingest over HTTP) is retired
     by the next relay tick, rather than kept until an admin replays it."""

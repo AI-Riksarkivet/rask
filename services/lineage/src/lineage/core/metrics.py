@@ -170,8 +170,8 @@ class Door(StrEnum):
     #: arrival but a giving-up and its repair, and an operator reads it as neither of the above.
     DEAD_LETTER = "dead_letter"
     #: The relay tick's outbox drain: an event a producer staged, recorded through the bus door's own gate. Only its
-    #: refusals are counted here, each once the drain has recorded it in the refusals table, which is where it is
-    #: repaired from; the drain's other outcomes are the outbox's own counters.
+    #: refusals are counted here, each once the drain has kept it in the refusals table: parked for repair when a grant
+    #: would admit it, as the ingest lane parks one; the drain's other outcomes are the outbox's own counters.
     OUTBOX = "outbox"
 
 

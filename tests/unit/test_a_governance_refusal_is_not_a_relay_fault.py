@@ -82,6 +82,10 @@ class _Repo:
     async def record(self, ev: Any, *, aliased: Collection[str]) -> None:  # noqa: ANN401 — the drain's own shape
         self.ingested.append(ev.run.run_id)
 
+    async def events_recorded(self, keys: Collection[str]) -> set[str]:
+        """The park asks whether the feed holds the event's row first; it holds none."""
+        return set()
+
 
 def _settings(uri: str) -> Any:  # noqa: ANN401 — a stand-in for the drain's settings protocol
     class _S:
@@ -115,8 +119,8 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
 
     Poison is DROPPED because a malformed object wedges the drain forever. A refusal is well-formed and
     deterministic, so it lands on `refused`, never `stranded`, and its object is retired only AFTER the
-    verdict and the event are recorded ([[LH-182]]): a drop first would destroy the only durable copy of
-    a committed write's provenance. DRIVEN, with the order observed at the two calls themselves.
+    event is kept, here parked for the grant it lacks ([[LH-182]]): a drop first would destroy the only durable
+    copy of a committed write's provenance. DRIVEN, with the order observed at the two calls themselves.
     """
 
     async def _refuse(*_args: object, **_kwargs: object) -> None:
@@ -141,6 +145,9 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
 
         async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
             steps.append("record")
+
+        async def events_recorded(self, keys: Collection[str]) -> set[str]:
+            return set()
 
     app = cast("Any", SimpleNamespace(state=SimpleNamespace()))
     outcome = asyncio.run(relay._drain_outbox(app, cast("Any", _OrderRepo()), _governed_settings(uri), StorageOptions()))

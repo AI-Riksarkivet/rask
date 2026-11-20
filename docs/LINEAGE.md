@@ -100,7 +100,7 @@ An in-place refinement (a run that reads and writes one table) bumps that table'
 | `GET /events/projection` | The same feed without the per-dataset filter, cut to the fields that decide whom to notify, with the `rask_signature` lineage verified when it recorded each event, which tells the catalog's change from one a writer posted under the same identity; gated on `can_read_event_feed`, for a notifier holding `event_reader` (granted at the estate admin's tuple door) |
 | `GET /tables/{name}/derived?depth=` | Every table derived from `name`, nearest first |
 | `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | The outbox's at-risk events: list them, replay one |
-| `GET /admin/dlq/parked`, `POST /admin/dlq/parked/{run_id}/replay` | The bus deliveries the ingest lane parked in the refusals table: list them by run, re-present a run's (the estate admin's) |
+| `GET /admin/dlq/parked`, `POST /admin/dlq/parked/{run_id}/replay` | The events parked in the refusals table, a bus delivery by the ingest lane or a staged event by the outbox drain: list them by run, re-present a run's (the estate admin's) |
 | `GET /livez` | Liveness |
 
 **Intake.** The author is stamped from the verified bearer token, overwriting any `rask_author` facet the body carries, and

@@ -83,6 +83,10 @@ class _Repo:
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
 
+    async def events_recorded(self, keys: Collection[str]) -> set[str]:
+        """A park asks whether the feed holds the refused event's row first; this feed holds none."""
+        return set()
+
 
 @pytest.fixture
 def catalog(event_signer: Any, secret_store: SecretStoreDouble, respx_allows_unused_routes: None) -> Any:  # noqa: ANN401 — the root conftest's `EventSigner`
