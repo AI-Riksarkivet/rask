@@ -46,9 +46,9 @@ from store_identity import store_options
 from topology import namespace_id
 
 from catalog.core.lineage_emit import INSERT, build_write_event
-from lakehouse import outbox
+from lakehouse.events import outbox
+from lakehouse.events.signing import SigningKey, attach_signature
 from lakehouse.governed.signing_key import signing_key_secret
-from lakehouse.lineage.signing import SigningKey, attach_signature
 from lakehouse.storage_options import StorageOptions
 
 
@@ -151,8 +151,8 @@ def _kill_producer_mid_flight(event_json: str, run_id: str) -> None:
     child = textwrap.dedent(f"""
         import json, sys, time
         sys.path.insert(0, {os.path.join(os.getcwd(), "services")!r})
-        from lakehouse import outbox
-        from lakehouse.cloud_events import lineage_envelope
+        from lakehouse.events import outbox
+        from lakehouse.events.cloud_events import lineage_envelope
         from lakehouse.storage_options import StorageOptions
         so = StorageOptions.from_flat(json.loads(sys.stdin.readline()))
         event_json = {event_json!r}

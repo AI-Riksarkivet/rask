@@ -268,7 +268,7 @@ def _governed_settings(tmp_path: Any) -> Settings:
 
 def _create_as(settings: Settings, sub: str, body: Any) -> Any:
     from catalog.api.v1.endpoints import warehouses as wh_ep
-    from lakehouse.control_emit import NoopControlEmitter
+    from lakehouse.events.control_emit import NoopControlEmitter
 
     return asyncio.run(
         wh_ep.create_warehouse(
@@ -285,7 +285,7 @@ def _create_as(settings: Settings, sub: str, body: Any) -> Any:
 
 def _create_project_as(settings: Settings, sub: str, project_id: str) -> Any:
     from catalog.api.v1.endpoints import projects as proj_ep
-    from lakehouse.control_emit import NoopControlEmitter
+    from lakehouse.events.control_emit import NoopControlEmitter
 
     return asyncio.run(
         proj_ep.create_project(
@@ -344,7 +344,7 @@ def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing
     creates a project must name the person who administers it; it is refused 400 before anything is written
     when it names nobody or a service account's subject, and when it names a person only that person is seeded."""
     from catalog.api.v1.endpoints import projects as proj_ep
-    from lakehouse.control_emit import NoopControlEmitter
+    from lakehouse.events.control_emit import NoopControlEmitter
     from lakehouse.governed.machine_identity import ServicePrincipal
 
     provisioner = "kubernetes~system:serviceaccount:ops:provisioner"

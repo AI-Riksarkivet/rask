@@ -24,7 +24,7 @@ from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import EmitFields
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.events.control_events import CatalogControlEvent
 
 
 ADMIN, MEMBER, RECLAIMER = "alice", "carol", "maintenance"

@@ -29,7 +29,7 @@ from pydantic import BaseModel
 from lakehouse import location_claims, trash
 from lakehouse.base_registry import BaseRegistry
 from lakehouse.commit_records import is_canonical_uuid
-from lakehouse.control_emit import ControlEmitter
+from lakehouse.events.control_emit import ControlEmitter
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore
 from maintenance.services.bucket_events import report_bucket_events
 from maintenance.services.clone_endings import finish_clone_endings

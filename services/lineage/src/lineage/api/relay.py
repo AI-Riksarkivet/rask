@@ -24,8 +24,8 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, Field
 
-from lakehouse import outbox, outbox_metrics
-from lakehouse.bus import Bus
+from lakehouse.events import outbox, outbox_metrics
+from lakehouse.events.bus import Bus
 from lakehouse.storage_options import StorageOptions
 from lakehouse.supervision import Supervisor
 from lakehouse.timers import Timer

@@ -27,7 +27,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.lineage_emit import BusEmitter
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.events.control_events import CatalogControlEvent
 from tests.bus_double import BusDouble
 
 

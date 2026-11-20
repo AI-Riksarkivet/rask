@@ -41,9 +41,9 @@ import pytest
 from lance_namespace import PermissionDeniedError
 
 from catalog.core.lineage_emit import INSERT, build_write_event
-from lakehouse import outbox
-from lakehouse.cloud_events import lineage_envelope
-from lakehouse.openlineage import run_id_for
+from lakehouse.events import outbox
+from lakehouse.events.cloud_events import lineage_envelope
+from lakehouse.events.openlineage import run_id_for
 from lakehouse.storage_options import StorageOptions
 from lineage.api import relay
 from lineage.core.config import LineageSettings

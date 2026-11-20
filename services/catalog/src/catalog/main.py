@@ -40,8 +40,9 @@ from catalog.core.namespace import NamespaceConnections
 from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import provenance_namespace, warehouses
 from lakehouse.admission import judge_before_the_body
-from lakehouse.bus import Bus, bus_session
-from lakehouse.control_emit import make_control_emitter
+from lakehouse.events.bus import Bus, bus_session
+from lakehouse.events.control_emit import make_control_emitter
+from lakehouse.events.signing import SigningKey, parse_published_keys
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
@@ -49,7 +50,6 @@ from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
 from lakehouse.health import Dependency, HealthWatch, bus_dependency, openfga_dependency, store_dependency
 from lakehouse.lance_metrics import instrument_lance_if_available
-from lakehouse.lineage import SigningKey, parse_published_keys
 from lakehouse.obs import configure_app_logging
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.factory import build_service_app
@@ -238,7 +238,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     base_judge.install(partial(base_judge.BaseJudge.from_settings, settings))
     stack.callback(base_judge.install, None)
     # THIS PROCESS'S ONE CONNECTION TO THE BUS ([[XC-199]]), as the catalog's own bus user, which both emitters and the
-    # control relay publish on (`lakehouse.bus`). A loop of `loops` connects it behind the start and keeps it, so the
+    # control relay publish on (`lakehouse.events.bus`). A loop of `loops` connects it behind the start and keeps it, so the
     # catalog serves, and stages what it announces, while the bus is away. Entered before everything that publishes, so
     # it is drained after them. None for a stack the chart names no bus.
     bus = await stack.enter_async_context(bus_session(loops, settings.bus))

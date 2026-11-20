@@ -9,12 +9,12 @@ Emission is **inline-awaited + best-effort**: the write endpoints ``await`` it (
 BackgroundTasks fire-and-forget — that dies with the worker + can't reach the durable transport before
 the response) but it swallows every error, so the lineage service being down/slow can never block or
 fail a catalog write. There is one transport, :class:`BusEmitter`: it publishes on the bus, NATS JetStream, over this
-process's own connection (``lakehouse.bus``), so the catalog hands no caller's credential to another service. One bounded
+process's own connection (``lakehouse.events.bus``), so the catalog hands no caller's credential to another service. One bounded
 attempt whose acknowledgement means the stream holds the event. The lineage service pulls it from its own durable
 consumer on its own connection, and a delivery it cannot record within its lane's attempts is parked: kept in the
 provenance namespace's ``refusals`` table, ERROR-logged and counted, for the estate admin to replay
 (``lineage.api.ingest_lane``, docs/RESILIENCE.md). With ``LANCE_LINEAGE_OUTBOX_URI`` set the event is staged in the
-object-store outbox (``lakehouse.outbox``) before the publish, which narrows the loss window
+object-store outbox (``lakehouse.events.outbox``) before the publish, which narrows the loss window
 to commit→stage; the catalog's commit reconcile announces a version whose event a crash in that window lost,
 from the version log (``catalog.api.commit_reconcile``, [[LH-497]]).
 
@@ -39,17 +39,11 @@ from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, 
 from catalog.core.identifiers import warehouse_of
 from catalog.core.run_context import RunContext
 from catalog.core.schema_facet import SchemaFields
-from lakehouse import outbox, outbox_metrics
-from lakehouse.bus import Bus
-from lakehouse.cloud_events import lineage_envelope
-from lakehouse.governed import fga
-from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
-from lakehouse.governed.subjects import is_person_subject
-from lakehouse.lineage import CanonError, ParentRunFacet, SigningKey, attach_signature, author_of
-from lakehouse.lineage.schemas import JobRef, RunRef
-from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, with_dataset_uuids
-from lakehouse.naming import is_safe_project
-from lakehouse.openlineage import (
+from lakehouse.events import outbox, outbox_metrics
+from lakehouse.events.bus import Bus
+from lakehouse.events.cloud_events import lineage_envelope
+from lakehouse.events.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, with_dataset_uuids
+from lakehouse.events.openlineage import (
     BRANCH_IDENTIFIER,
     DATASET_EVENT_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
@@ -66,6 +60,12 @@ from lakehouse.openlineage import (
     schema_facet,
     symlinks_facet,
 )
+from lakehouse.events.openlineage_schemas import JobRef, ParentRunFacet, RunRef
+from lakehouse.events.signing import CanonError, SigningKey, attach_signature, author_of
+from lakehouse.governed import fga
+from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
+from lakehouse.governed.subjects import is_person_subject
+from lakehouse.naming import is_safe_project
 from lakehouse.storage_options import StorageOptions
 
 
@@ -422,7 +422,7 @@ def build_write_event(
     if schema_fields:
         # Standard schema facet → the per-version column schema (blob/vector-aware) (#24), so a
         # catalog-written table carries its real columns in the feed and in a forwarded graph backend.
-        # Built by the SHARED lakehouse.openlineage helper — one spec version across all emitters.
+        # Built by the SHARED lakehouse.events.openlineage helper — one spec version across all emitters.
         facets["schema"] = schema_facet(_PRODUCER, schema_fields)
     # WHICH CATALOG GOVERNS THIS, so two estates writing `bronze$events` are not one dataset in a shared
     # graph backend. `job_namespace` is reused as the catalog's NAME rather than taking a second parameter:
@@ -766,9 +766,9 @@ class _BaseLineageEmitter:
 class BusEmitter(_BaseLineageEmitter):
     """Publishes OpenLineage events on the bus, NATS JetStream, over this process's own connection.
 
-    One bounded publish per event (`lakehouse.bus.publish_event`): the stream's acknowledgement is the delivery, and
+    One bounded publish per event (`lakehouse.events.bus.publish_event`): the stream's acknowledgement is the delivery, and
     an event it did not acknowledge stays in the outbox for lineage's relay. Each event rides
-    the envelope derived from it (`lakehouse.cloud_events.lineage_envelope`), with the publish's trace context. The topic
+    the envelope derived from it (`lakehouse.events.cloud_events.lineage_envelope`), with the publish's trace context. The topic
     is versioned (``lineage.events.v1``). The bus says which of its users published
     an event and not which person the producer wrote it for, so the ``author`` stamped inside is a claim until the
     event is signed. A catalog holding a signing key signs each authored event as itself (:meth:`_signed`), and

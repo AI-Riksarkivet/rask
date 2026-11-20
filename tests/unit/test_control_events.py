@@ -11,13 +11,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from lakehouse.control_emit import (
+from lakehouse.events.control_emit import (
     BusControlEmitter,
     NoopControlEmitter,
     emit_control,
     make_control_emitter,
 )
-from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent, ControlAction
+from lakehouse.events.control_events import CONTROL_TOPIC, CatalogControlEvent, ControlAction
 from tests.bus_double import BusDouble
 
 

@@ -33,8 +33,8 @@ from botocore.exceptions import ClientError
 from tests.secret_store_double import SecretStoreDouble
 
 from lakehouse import location_claims
-from lakehouse.cloud_events import lineage_envelope
-from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
+from lakehouse.events.cloud_events import lineage_envelope
+from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.arrival import Arrivals, LaneTask, lane_task
 from maintenance.services.queue import QueueUnavailableError, Task, TaskQueue
@@ -361,7 +361,7 @@ async def test_a_lane_that_cannot_read_the_signers_keys_asks_for_the_event_again
 ) -> None:
     """Enforcing, a lane that cannot read a signer's keys can neither admit nor refuse the event, so it raises the error the
     worker hands the delivery back for, since the read can succeed on a later delivery, and queues nothing meanwhile. Off
-    reads no key: the shared judge answers off before it verifies anything (`lakehouse.lineage.door.judge`)."""
+    reads no key: the shared judge answers off before it verifies anything (`lakehouse.events.door_verdict.judge`)."""
     delegator = event_signer(SIGNER)
     keys = secret_store.hold(f"signing-public-{SIGNER}", httpx.Response(503))
     arrivals, queue = commit_lane("enforce")

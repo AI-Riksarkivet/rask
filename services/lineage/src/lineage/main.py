@@ -16,7 +16,7 @@ import httpx
 from fastapi import FastAPI, Request
 
 from lakehouse.admission import judge_before_the_body
-from lakehouse.bus import Bus, bus_session
+from lakehouse.events.bus import Bus, bus_session
 from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.fga import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
@@ -126,7 +126,7 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     # 503s that read as a slow feed, not as a broken authorization plane.
     stack.push_async_callback(fga_dispose, app)
     await attach_auth(app, settings, service="lineage", loops=loops, fatal=True)
-    # THIS PROCESS'S OWN CONNECTION TO THE BUS ([[XC-199]]), as lineage's bus user (`lakehouse.bus`): lineage takes its
+    # THIS PROCESS'S OWN CONNECTION TO THE BUS ([[XC-199]]), as lineage's bus user (`lakehouse.events.bus`): lineage takes its
     # deliveries on it, and the relay re-publishes a recovered event on it, so a consumer that never saw it still acts on
     # it. A loop of `loops` connects it behind the start and keeps it, so lineage serves while the bus is away, and the
     # bus keeps what it could not deliver. None for a stack the chart names no bus.

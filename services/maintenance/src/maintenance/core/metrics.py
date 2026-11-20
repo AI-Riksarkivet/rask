@@ -10,7 +10,7 @@ from typing import Literal, get_args
 
 from opentelemetry import metrics
 
-from lakehouse.lineage.signing import RefusalReason
+from lakehouse.events.signing import RefusalReason
 
 
 #: What parks a TABLE ID, and the closed `refused_by` set of `maintenance.tables.parked`: the vend door's 403, its 404
@@ -163,7 +163,7 @@ _datasets_swept = _meter.create_counter(
 type SignatureDoor = Literal["maintenance-arrival"]
 
 #: Events a door refused because no listed signer's published key verifies them. A refusal is acknowledged and acts on
-#: nothing, so this count and one log line are all it leaves. `reason` is `lakehouse.lineage.signing`'s closed `RefusalReason`, never the
+#: nothing, so this count and one log line are all it leaves. `reason` is `lakehouse.events.signing`'s closed `RefusalReason`, never the
 #: event's own text, so the series stays a handful.
 _signature_refused = _meter.create_counter(
     "maintenance.signature.refused",

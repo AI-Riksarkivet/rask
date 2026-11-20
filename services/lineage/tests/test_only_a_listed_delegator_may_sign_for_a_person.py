@@ -23,7 +23,7 @@ import pytest
 from lineage_lane import Feed, governed, started
 from openfga_sdk import OpenFgaClient
 
-from lakehouse.bus_delivery import Outcome, Settlement
+from lakehouse.events.bus_delivery import Outcome, Settlement
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.signing_key import signing_public_secret
 from tests.secret_store_double import SecretStoreDouble

@@ -69,7 +69,7 @@ from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
 from catalog.services import dataplane, native, provenance_namespace, table_bases, table_claims, table_inputs
 from lakehouse import base_registry
-from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.storage_options import StorageOptions
 

@@ -52,7 +52,7 @@ from catalog.core import manifest_bytes
 from catalog.services import dataplane, table_claims
 from lakehouse import commit_records, commit_turns, control_prefixes, manifest_wire, records
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga as fga_module
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.idp_identity import PersonPrincipal

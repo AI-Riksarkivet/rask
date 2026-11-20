@@ -11,7 +11,7 @@ import asyncio
 
 import pytest
 
-from lakehouse.lineage_events import DatasetUuids
+from lakehouse.events.lineage_events import DatasetUuids
 from maintenance.core.lineage_emit import UNRESOLVED
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.table_pass import emit_pass_lineage

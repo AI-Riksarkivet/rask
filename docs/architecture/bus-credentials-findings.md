@@ -216,7 +216,7 @@ One `lakehouse` seam owns the connection. It is mechanism-agnostic: the same cod
   that is current, treats a failed ack as "will be redelivered", and stays idempotent per message id.
 - **Publishing.** Every publish carries `Nats-Msg-Id` (#787 item 1); one that times out stays staged, and its relay
   sends it again under the same id. A duplicate PubAck counts as delivered once the stored message is read back and
-  carries the same event (`lakehouse.bus`). Measured: publishes that timed out while the bus refused the client were
+  carries the same event (`lakehouse.events.bus`). Measured: publishes that timed out while the bus refused the client were
   retried with the same id, and the stream held each message once (§ 6.4).
 
 ## 6. Measurements, 2026-11-10

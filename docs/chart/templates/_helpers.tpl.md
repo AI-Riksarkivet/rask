@@ -277,7 +277,7 @@ session lives (`RASK_BUS_SESSION_SECONDS`, `nats.auth.sessionSeconds`) and, with
 (`RASK_BUS_CA_FILE`). Given for the catalog and lineage, and for maintenance's own user while the worker publishes events;
 with an empty user only the token, session and CA values are given, which is how the maintenance worker's queue
 connection (`maintenance-worker`) gets its own. Each service publishes its events, and takes its deliveries, on a
-connection of its own as that user (`lakehouse.bus`, [[XC-199]]), presenting the pod's token (`lance.busIdentity` mounts
+connection of its own as that user (`lakehouse.events.bus`, [[XC-199]]), presenting the pod's token (`lance.busIdentity` mounts
 it) and holding no bus credential, with replies arriving under `_INBOX_<user>`, which `nats.auth.users` grants to that
 user alone. The render refuses a user the table does not declare, a user that is not a session user (`lance.busSessionUser`:
 it has no ServiceAccount, so it has no token to present), and a user whose row grants no inbox of its own, since the bus
@@ -360,7 +360,7 @@ this release's to retire.
   Its ack wait is `services.lineage.delivery.ackWaitSeconds` (lineage cuts a handling 10 s short of it), its
   `max_ack_pending` is `services.lineage.deliveriesInFlight`, the bound across every replica, and its `max_deliver` is
   unlimited (-1): lineage's own rule ends a delivery, parking it after `services.lineage.delivery.attempts`
-  deliveries `retrySeconds` apart (`lakehouse.bus_delivery`), since a pull consumer has no dead letter.
+  deliveries `retrySeconds` apart (`lakehouse.events.bus_delivery`), since a pull consumer has no dead letter.
 - `MAINTENANCE_TASKS/maintenance-worker`, `MAINTENANCE_SCHEDULES/maintenance-due` and
   `STORE_EVENTS/maintenance-store-events`, under `maintenance.enabled`: the worker's queue, its fired schedules and
   the store's change events, each delivered from the stream's first message.

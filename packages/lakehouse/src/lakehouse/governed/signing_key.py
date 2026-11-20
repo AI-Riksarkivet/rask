@@ -23,12 +23,12 @@ while unresolved and at most every five minutes once ready, so a signer heals in
 untouched: a signer that is waiting for its key is alive.
 
 THE KEY AND ITS PARSING ARE ARGUMENTS. The services pass the lineage signing seam's `SigningKey.from_seed` and
-`parse_published_keys` (`lakehouse.lineage.signing`, which owns the wire format); the holder's own suite passes
+`parse_published_keys` (`lakehouse.events.signing`, which owns the wire format); the holder's own suite passes
 stand-ins, so every answer the store can give is driven without cryptography. A key is listed exactly when its public
 NKEY is in the list the parser returns.
 
 THE VERIFIERS' READ LIVES HERE TOO ([[XC-078]]). `published_key_fetch` is the secret read every verifying door hands
-`lakehouse.lineage.keys.PublishedKeys`, so the timeout and retry policy of a read on the delivery path is written once.
+`lakehouse.events.published_keys.PublishedKeys`, so the timeout and retry policy of a read on the delivery path is written once.
 """
 
 from __future__ import annotations
@@ -147,7 +147,7 @@ def secret_store_dependency() -> Dependency:
 
 
 def published_key_fetch() -> Callable[[str], Mapping[str, str]]:
-    """The read a verifier's `lakehouse.lineage.keys.PublishedKeys` takes: an identity's published list (its
+    """The read a verifier's `lakehouse.events.published_keys.PublishedKeys` takes: an identity's published list (its
     `signing-public-<name>`, `signing_public_secret`) from the store, under THIS process's own login.
 
     One attempt bounded by `KEY_READ_TIMEOUT_SECONDS`. A secret the store does not serve answers ``{}``, which the
@@ -177,9 +177,9 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
         Args:
             identity: The identity this service signs as, as the chart names it.
             load_key: Turns the stored seed text into a key, raising `ValueError` or `TypeError` for text that is no
-                seed (`lakehouse.lineage.SigningKey.from_seed`).
+                seed (`lakehouse.events.signing.SigningKey.from_seed`).
             parse_published: Turns the stored `keys` text into the public NKEYs it lists
-                (`lakehouse.lineage.parse_published_keys`).
+                (`lakehouse.events.signing.parse_published_keys`).
             refresh_seconds: Between resolutions while ready, at most `MAX_REFRESH_SECONDS`.
             retry_seconds: Between resolutions while not ready, at most `refresh_seconds`.
 

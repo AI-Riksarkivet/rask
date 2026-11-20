@@ -36,7 +36,7 @@ from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
 from catalog.services import table_claims
 from lakehouse import location_claims
-from lakehouse.control_events import ControlUuids
+from lakehouse.events.control_events import ControlUuids
 from lakehouse.storage_options import StorageOptions
 
 

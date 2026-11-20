@@ -16,11 +16,11 @@ from typing import Annotated, Self
 from pydantic import AfterValidator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse.bus_delivery import Lane
+from lakehouse.events.bus_delivery import Lane
+from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.governed.settings import GovernedAuthSettings
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import lance_storage_options
-from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.storage_options import StorageOptions, on_s3
 from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
 
@@ -94,7 +94,7 @@ class LineageDelivery(BaseSettings):
 
     # --- Durable ingest off the bus: the catalog publishes to NATS JetStream, which keeps each event, and this service
     # pulls it from its own consumer on its own connection wherever the chart names it a bus (`lineage.api.ingest_lane`,
-    # `lakehouse.bus`), so a lineage outage never loses provenance. The HTTP /api/v1/lineage endpoint stays for
+    # `lakehouse.events.bus`), so a lineage outage never loses provenance. The HTTP /api/v1/lineage endpoint stays for
     # external producers.
     #: The topic lineage's events ride: the one its consumer takes, and the one the relay publishes a recovered event on.
     lineage_topic: str = Field(default="lineage.events.v1", alias="RASK_LINEAGE_TOPIC")

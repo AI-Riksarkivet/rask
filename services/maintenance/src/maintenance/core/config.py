@@ -17,11 +17,11 @@ from typing import TYPE_CHECKING, Annotated, Self
 from pydantic import AfterValidator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse.bus import BusSettings
+from lakehouse.events.bus import BusSettings
+from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
+from lakehouse.events.signature_doors import SignatureDoorSettings
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.objectfs import StoreTimeouts, lance_storage_options
-from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
-from lakehouse.signature_doors import SignatureDoorSettings
 from lakehouse.storage_options import StorageOptions
 from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
 
@@ -200,7 +200,7 @@ class MaintenanceQueue(BaseSettings):
     # NATS JetStream, which every replica's worker pulls from; the streams and their durable consumers are the chart's
     # (`chart/templates/nats-stream-job.yaml`), so the worker binds to them and creates nothing.
     #: The bus the worker connects to; empty runs no worker, for a stack with no NATS and for the tests. The worker
-    #: presents its pod's token there (`lakehouse.bus.BusSettings`), and the session it is granted carries the chart's
+    #: presents its pod's token there (`lakehouse.events.bus.BusSettings`), and the session it is granted carries the chart's
     #: `nats.auth.users` row: pull and ack on its consumers, publish tasks and schedules.
     nats_url: str = Field(default="", alias="MAINTENANCE_NATS_URL")
     #: How often a running task tells JetStream it is still being worked on, well inside the consumer's ack wait (the
@@ -316,7 +316,7 @@ class MaintenanceSettings(SignatureDoorSettings, MaintenanceStore, MaintenanceCa
     staged_manifest_grace_seconds: int = Field(default=600, ge=0, alias="MAINTENANCE_STAGED_MANIFEST_GRACE_SECONDS")
 
     # --- Lineage emission (opt-in, best-effort) — record a maintenance run on each dataset whose versions
-    # were reclaimed, on the bus, over this process's own connection (`lakehouse.bus`). Publishes on the SAME topic
+    # were reclaimed, on the bus, over this process's own connection (`lakehouse.events.bus`). Publishes on the SAME topic
     # the catalog publishes to and the lineage service subscribes to, so an expiry run shows up in producers()
     # next to the writes. Off by default; a publish the bus did not take stays staged and never fails a pass.
     lineage_emit_enabled: bool = Field(default=False, alias="MAINTENANCE_LINEAGE_EMIT_ENABLED")

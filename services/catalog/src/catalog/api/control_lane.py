@@ -1,8 +1,8 @@
 """The catalog's own control-plane change events: each replica judges every one it follows, and counts what it refuses.
 
 The catalog publishes ``CatalogControlEvent``s on ``catalog.control.v1`` over its own connection to the bus
-(``lakehouse.control_emit``), and each replica **follows** that topic here on the same connection, by reading its
-stream by sequence (`lakehouse.bus.Bus.follow`). The lane runs **only** when control eventing is enabled
+(``lakehouse.events.control_emit``), and each replica **follows** that topic here on the same connection, by reading its
+stream by sequence (`lakehouse.events.bus.Bus.follow`). The lane runs **only** when control eventing is enabled
 (``control_emit_enabled``, matching the emitter gate in ``main.py``), so a control-off deployment follows nothing. What
 the console reads is served from the same stream at its poll (``GET /management/v1/events``,
 ``api/v1/endpoints/events.py``), judged by the same rule (:func:`judge`), so no replica holds what another must serve.
@@ -15,7 +15,7 @@ the control doors' own rule, against the identities of the role ``control_signer
 
 **The lane waits for keys once, not once per event.** Keys cannot be read while the store does not answer, and also
 when an event names a key id the list read moments ago does not hold: the reader reads again for such an id once per
-interval (`lakehouse.lineage.keys.KEY_REFRESH_INTERVAL_SECONDS`), so a made-up key id is refused, and counted, only once
+interval (`lakehouse.events.published_keys.KEY_REFRESH_INTERVAL_SECONDS`), so a made-up key id is refused, and counted, only once
 the lane has waited for that read. The follow hands on one event at a time, so a wait holds back every event behind it:
 an event whose keys still cannot be read after ``_KEY_READS`` judgements is given up as not handled
 (`KeysUnavailableError`, counted by the follow as ``bus.deliveries`` at ``failed``), and after a wait, one is given up on
@@ -33,11 +33,11 @@ from opentelemetry import metrics
 from pydantic import ValidationError
 
 from catalog.api.control_relay import bounded, published_keys
-from lakehouse.bus_delivery import Delivery
-from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent, control_signer_role
-from lakehouse.lineage.door import DoorMode, DoorVerdict
-from lakehouse.lineage.door import judge as judge_door
-from lakehouse.lineage.signing import RefusalReason, control_signature_of, verify_control_signature
+from lakehouse.events.bus_delivery import Delivery
+from lakehouse.events.control_events import CONTROL_TOPIC, CatalogControlEvent, control_signer_role
+from lakehouse.events.door_verdict import DoorMode, DoorVerdict
+from lakehouse.events.door_verdict import judge as judge_door
+from lakehouse.events.signing import RefusalReason, control_signature_of, verify_control_signature
 
 
 if TYPE_CHECKING:

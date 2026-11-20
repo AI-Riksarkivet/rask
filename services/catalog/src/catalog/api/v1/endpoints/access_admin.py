@@ -60,7 +60,7 @@ from catalog.schemas import (
 )
 from catalog.services import object_names, principals, subject_tuples
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordHeld
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.principal import is_principal

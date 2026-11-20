@@ -20,7 +20,7 @@ from fastapi.testclient import TestClient
 from catalog.api.dependencies import get_control_emitter, get_namespace
 from catalog.core.config import Settings, get_settings
 from catalog.services import object_uuids, table_claims, warehouses
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.storage_options import StorageOptions
 from tests import seeding

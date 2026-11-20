@@ -35,7 +35,7 @@ from catalog.schemas import (
     NamedAccessTuple,
     TupleCondition,
 )
-from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed import fga
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken

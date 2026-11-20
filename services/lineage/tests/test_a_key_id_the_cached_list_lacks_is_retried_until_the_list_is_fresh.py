@@ -30,9 +30,9 @@ import httpx
 import pytest
 from lineage_lane import Feed, started
 
-from lakehouse.bus_delivery import Outcome, Settlement
+from lakehouse.events.bus_delivery import Outcome, Settlement
+from lakehouse.events.published_keys import KEY_REFRESH_INTERVAL_SECONDS, KEY_TTL_SECONDS
 from lakehouse.governed.signing_key import KEY_READ_TIMEOUT_SECONDS
-from lakehouse.lineage.keys import KEY_REFRESH_INTERVAL_SECONDS, KEY_TTL_SECONDS
 from lineage import main
 from lineage.core.config import LineageSettings
 from lineage.services.signature import store_published_keys
@@ -150,7 +150,7 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
     monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps([]))
     # One key id remembered: the second distinct unknown one pushes the first out. `raising=False` lets the test run against a reader
     # with no bound at all (the red check); if the patch ever fails to take effect the eviction case fails, so it cannot pass unnoticed.
-    monkeypatch.setattr("lakehouse.lineage.keys.MAX_UNKNOWN_KEY_IDS", 1, raising=False)
+    monkeypatch.setattr("lakehouse.events.published_keys.MAX_UNKNOWN_KEY_IDS", 1, raising=False)
     clock = _Clock()
     signers = {name: event_signer(SIGNER) for name in RUN_IDS}
     events = {name: signer.sign(_event(RUN_IDS[name])) for name, signer in signers.items()}

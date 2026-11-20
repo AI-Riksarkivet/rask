@@ -16,15 +16,8 @@ from typing import NoReturn
 
 import pytest
 
-from lakehouse.lineage import (
-    DoorMode,
-    DoorVerdict,
-    KeySourceUnavailableError,
-    SignatureRefusedError,
-    VerifiedSignature,
-    judge,
-)
-from lakehouse.lineage.door import KEYS_UNAVAILABLE
+from lakehouse.events.door_verdict import KEYS_UNAVAILABLE, DoorMode, DoorVerdict, judge
+from lakehouse.events.signing import KeySourceUnavailableError, SignatureRefusedError, VerifiedSignature
 
 
 def _verifies() -> VerifiedSignature:

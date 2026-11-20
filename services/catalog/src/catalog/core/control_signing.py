@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from lakehouse.control_emit import ControlSign
+from lakehouse.events.control_emit import ControlSign
+from lakehouse.events.signing import SigningKey, attach_control_signature
 from lakehouse.governed.signing_key import SigningKeyHolder
-from lakehouse.lineage import SigningKey, attach_control_signature
 
 
-#: How a control event names a PERSON as its actor, which is how `lakehouse.lineage.signing` reads one too. The catalog stamps
+#: How a control event names a PERSON as its actor, which is how `lakehouse.events.signing` reads one too. The catalog stamps
 #: every caller its door authenticated as `user:<principal>`, and no actor at all when it authenticated nobody.
 _PERSON_ACTOR_PREFIX = "user:"
 

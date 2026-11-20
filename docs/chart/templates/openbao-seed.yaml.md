@@ -129,7 +129,7 @@ that left the table with no stored secret left to name it) while every credentia
 the table holds now is newer and keeps admitting. Written only when the bound moves.
 
 Measured 2026-11-07 on nats-server 2.14.2, nsc 2.15.0 and nats.go 1.39.1: a client holding a revoked JWT is closed after
-two refused reconnects, which is the closed connection a service's own connection opens again from (`lakehouse.bus`).
+two refused reconnects, which is the closed connection a service's own connection opens again from (`lakehouse.events.bus`).
 
 ## `converge_auth() {`
 

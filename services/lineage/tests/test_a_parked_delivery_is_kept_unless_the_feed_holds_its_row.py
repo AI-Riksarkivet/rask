@@ -31,7 +31,7 @@ from typing import Any
 import pytest
 from lineage_lane import Feed, Kept, measured, outcome, started
 
-from lakehouse.bus_delivery import Outcome, Settlement
+from lakehouse.events.bus_delivery import Outcome, Settlement
 from lineage.core import metrics as lineage_metrics
 from lineage.core.config import get_settings
 from lineage.services.provenance import delivery_feed_key

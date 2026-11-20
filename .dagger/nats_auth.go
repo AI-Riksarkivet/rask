@@ -23,7 +23,7 @@ const busSignerDockerfile = ".docker/bus-signer.dockerfile"
 // replicas as on the estate, TLS on the client port, test-only keys minted with nsc, a static user per row that is no
 // session user's, and for each session user a scoped signing key its pod's session is signed with by the fixture's
 // stand-in signer (two of them, against a TokenReview the test answers). Each service's own connection
-// (`lakehouse.bus`) presents only its pod's token, publishes, pulls its durable consumer and follows its subject
+// (`lakehouse.events.bus`) presents only its pod's token, publishes, pulls its durable consumer and follows its subject
 // against it, renews its session, and the chart's stream Job declares and retires the streams and consumers
 // (tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py says what it asserts). On the same rig, the
 // maintenance worker on the queue the chart's stream Job declares, as its own bus user: two replicas share a burst, a

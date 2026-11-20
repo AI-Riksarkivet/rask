@@ -131,7 +131,7 @@ def audited(maintenance: TestClient) -> dict[str, Any]:
 def scanned(maintenance: TestClient) -> dict[str, Any]:
     """One daily scan on the loop maintenance's standing resources run on, under its settings, as the worker runs the
     scan's task; the payload it logs."""
-    from lakehouse.control_emit import NoopControlEmitter
+    from lakehouse.events.control_emit import NoopControlEmitter
     from maintenance.services.audit import run_scan
 
     portal = maintenance.portal

@@ -20,7 +20,7 @@ per terminal state of a run, one per arrival of a non-terminal state, and one pe
 
 A BURST IS ONE COMMIT PER TABLE ([[LH-533]]). Every commit is a Lance version and a fragment that each later open and
 scan of the table pays for (ADR 0174), and the ingest lane handles up to `services.lineage.deliveriesInFlight` deliveries
-at once (`lakehouse.bus.Bus.consume`), so the events recorded while a commit is in flight wait and land
+at once (`lakehouse.events.bus.Bus.consume`), so the events recorded while a commit is in flight wait and land
 together in the next one: one writer per process, started by the first event of a burst and gone with its last, with no
 timer, so an idle estate waits on nothing. Measured on pylance 13.0.0 against the catalog app, 29
 concurrent deliveries recorded one commit each took 16, 16 and 13 commits on `runs`, `edges` and `events`, and the
@@ -57,14 +57,14 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from lakehouse import derived_tables
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.derived_tables import EDGES
+from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
+from lakehouse.events.openlineage import BRANCH_IDENTIFIER
+from lakehouse.events.openlineage_schemas import ParentRunFacet
+from lakehouse.events.signing import SIGNATURE_FACET
 from lakehouse.exceptions import ServiceUnavailableError
 from lakehouse.governed.machine_identity import read_identity_token
 from lakehouse.lancekit.filters import in_lists, sql_literal
-from lakehouse.lineage import ParentRunFacet
-from lakehouse.lineage.signing import SIGNATURE_FACET
-from lakehouse.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
-from lakehouse.openlineage import BRANCH_IDENTIFIER
 from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload, parse_event

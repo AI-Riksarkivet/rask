@@ -30,7 +30,7 @@ from catalog.api import control_lane
 from catalog.api.control_lane import TOPIC, ControlLane, KeysUnavailableError
 from catalog.api.control_relay import attach_published_keys
 from catalog.core.config import Settings, get_settings
-from lakehouse.bus_delivery import Delivery
+from lakehouse.events.bus_delivery import Delivery
 from lakehouse.governed.signing_key import signing_public_secret
 from tests.secret_store_double import SecretStoreDouble
 

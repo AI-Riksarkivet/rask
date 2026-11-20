@@ -11,8 +11,8 @@ from typing import cast
 
 from catalog.api.announcing import Announcer, Filing
 from catalog.services.announcement_intents import Announcement, ControlMessage, LineageMarker, Message
-from lakehouse.control_emit import ControlEmitter
-from lakehouse.lineage_events import DatasetUuids
+from lakehouse.events.control_emit import ControlEmitter
+from lakehouse.events.lineage_events import DatasetUuids
 
 
 class _Unfiled:

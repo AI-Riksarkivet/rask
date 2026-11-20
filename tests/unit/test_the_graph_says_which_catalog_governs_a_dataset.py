@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from lakehouse.openlineage import CATALOG_FRAMEWORK, catalog_facet, dataset_type_facet
+from lakehouse.events.openlineage import CATALOG_FRAMEWORK, catalog_facet, dataset_type_facet
 
 
 _PRODUCER = "https://example.invalid/catalog"

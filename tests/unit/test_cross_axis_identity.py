@@ -17,7 +17,7 @@ import pyarrow as pa
 import pytest
 
 from lakehouse.arrow_ipc import encode_arrow_stream
-from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal

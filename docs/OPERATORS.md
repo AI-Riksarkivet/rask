@@ -282,7 +282,7 @@ replacement that mints a new bus root still needs the NATS pods restarted and th
 The NATS bus is a prerequisite rask never installs (ADR 0153, XC-129); development runs it from `deploy/fixtures/nats`
 (release `nats`, Service `rask-nats`). It runs in operator mode, and each connection may publish and subscribe only what
 its user's row of `nats.auth.users` (values.yaml) grants. There is one user per connection a service opens: `catalog` and
-`lineage` each publish and take their deliveries on a connection of their own as that user (`lakehouse.bus`), whose
+`lineage` each publish and take their deliveries on a connection of their own as that user (`lakehouse.events.bus`), whose
 replies arrive under `_INBOX_<user>`, a prefix the table grants to that user alone; `maintenance-worker` works the queue
 and pulls the write-event lane the same way; and `maintenance` exists only while the worker publishes
 (`maintenance.lineageEmit`, `maintenance.controlEmit`). Each service binds to the durable consumer the stream Job
@@ -299,7 +299,7 @@ at `/var/run/secrets/rask/identity/<audience>/token`, `lance.busIdentity`) and p
 under the user's name, over TLS. The bus hands the connection to its signer, which checks the token with a TokenReview
 for that audience and answers with a session as that user that ends within `nats.auth.sessionSeconds` (default 300,
 at least 60 and below 600), signed by that user's scoped signing key; the bus enforces the key's scope, which is the
-user's row. The client asks for a new session shortly before the old one ends, on the same connection (`lakehouse.bus`;
+user's row. The client asks for a new session shortly before the old one ends, on the same connection (`lakehouse.events.bus`;
 the maintenance worker's queue does the same in `maintenance.services.queue`). No `nats-user-<user>` secret exists for a
 session user: none is minted, read, mounted or attested. The pod is given `RASK_BUS_URL`, `RASK_BUS_USER`,
 `RASK_BUS_TOKEN_FILE`, `RASK_BUS_SESSION_SECONDS` and, with `nats.ca.configMap`, `RASK_BUS_CA_FILE` (`lance.busEnv`).
@@ -323,7 +323,7 @@ chains to; it is mounted read-only into every session user's pod. Empty means th
 
 **A `tls://` server takes the TLS handshake before its greeting** (nats-server `tls { handshake_first: true }`, or
 `auto` to serve clients of both kinds; the NATS fixture sets `auto`). Every client of the release opens with the
-handshake (`lakehouse.bus`, the maintenance worker's queue, the stream Job's `--tlsfirst`), because a NATS client that
+handshake (`lakehouse.events.bus`, the maintenance worker's queue, the stream Job's `--tlsfirst`), because a NATS client that
 waits for the greeting encrypts only when that unencrypted line asks it to: a server that leaves the request out, or
 anyone on the path who removes it, is then sent the pod's token in the clear (measured on nats-py 2.16.0, 2026-11-15,
 `packages/lakehouse/tests/test_a_process_publishes_to_the_bus_as_itself.py`). Against a server that greets first the

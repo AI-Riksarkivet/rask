@@ -48,7 +48,7 @@ CATALOG = f"{RELEASE}-catalog"
 LINEAGE = f"{RELEASE}-lineage"
 OPENFGA = f"{RELEASE}-openfga"
 #: The release's workloads whose own connection to the bus the drills' readings depend on, and which ride out a bus
-#: outage in-process (`lakehouse.bus`): the catalog announces and follows its control lane, lineage records and relays.
+#: outage in-process (`lakehouse.events.bus`): the catalog announces and follows its control lane, lineage records and relays.
 #: The maintenance worker holds a connection of its own too, but a replica in the middle of a pass when the outage
 #: outlasts its ack wait ends itself (ADR 0198), so a drill holds it to its consumer delivering again instead.
 BUS_CLIENTS = (CATALOG, LINEAGE)
@@ -67,7 +67,7 @@ CATALOG_PORT = int(os.environ.get("LANCE_E2E_CATALOG_PORT", "2333"))
 #: drops the key within that of the store's loss; the rest is the slack of one failed re-read.
 SIGNER_DROP_SECONDS = 360.0
 #: How long a service's own NATS client goes on reconnecting before it closes for good and the service opens another:
-#: `lakehouse.bus` sets 10 attempts at the server, 2 s apart, each connect bounded at 2 s.
+#: `lakehouse.events.bus` sets 10 attempts at the server, 2 s apart, each connect bounded at 2 s.
 RECONNECT_WINDOW_SECONDS = 40.0
 #: How many times Lance issues a failed listing per dataset open, whatever `client_max_retries` says (measured on
 #: pylance 12.0.0, `lakehouse.objectfs.StoreTimeouts`).

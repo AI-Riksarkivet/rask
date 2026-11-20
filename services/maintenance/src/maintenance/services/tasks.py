@@ -18,8 +18,8 @@ from typing import Final, get_args
 
 from fastapi.concurrency import run_in_threadpool
 
-from lakehouse.bus import BusSettings
-from lakehouse.control_emit import ControlEmitter
+from lakehouse.events.bus import BusSettings
+from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.supervision import EndProcess, Supervisor, end_process
 from maintenance.core.config import MaintenanceQueue, MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
@@ -96,7 +96,7 @@ async def connected_queue(settings: MaintenanceQueue) -> AsyncGenerator[TaskQueu
     """The work queue, connected as this service's own bus user and drained on the way out; ``None`` for a stack with no
     bus.
 
-    The worker holds no bus credential: its connection presents this pod's own token (`lakehouse.bus.BusSettings`).
+    The worker holds no bus credential: its connection presents this pod's own token (`lakehouse.events.bus.BusSettings`).
 
     Raises:
         OSError: The pod's token is not there to read.

@@ -170,7 +170,7 @@ backend's. Development runs Marquez from `deploy/fixtures/marquez` (Service `ras
 ## OpenLineage facets
 
 The catalog and maintenance build each `RunEvent` by hand and keep it spec-true through one shared helper
-(`lakehouse.openlineage`): a UUID `runId`, the top-level `schemaURL`, and `_producer`/`_schemaURL` on every facet,
+(`lakehouse.events.openlineage`): a UUID `runId`, the top-level `schemaURL`, and `_producer`/`_schemaURL` on every facet,
 so a forwarded backend ingests them unchanged. Intake tolerates every facet, stores the whole event in the feed's
 `event` column, and reads these:
 
@@ -192,7 +192,7 @@ stamps is a claim until a signature proves it. Every producer that publishes to 
 in the outbox signs it with its own Ed25519 key. The signature rides inside the event, in the `rask_signature` facet of
 `run.facets` (or `dataset.facets` for a catalog change), over the canon-1 bytes of the whole event. The facet names the
 signer (`identity`), its key (`kid`) and, for a delegation, `onBehalfOf`. Lineage holds public keys only, so it can admit
-or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/lineage/signing.py` owns the format).
+or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/events/signing.py` owns the format).
 
 - **Who signs.** The identities the chart lists in `LINEAGE_SIGNERS` (`lance.signingIdentities`): the catalog and
   maintenance. A signer is its own author. The one exception is
@@ -202,8 +202,8 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/linea
   `rask_signature.signature` removed. The envelope's `actor` plays the author: a `user:<sub>` actor verifies only under a
   delegation (`onBehalfOf` equal to the whole actor) declared by a delegator, and an absent or non-`user:` actor is a
   service acting for itself, signed with no delegation. The emitting service signs at emit, before the event is staged
-  (`lakehouse.control_emit`, its signer injected). Who signs which action is
-  `lakehouse.control_events.control_signer_role`: the catalog signs every action it emits, for the person it
+  (`lakehouse.events.control_emit`, its signer injected). Who signs which action is
+  `lakehouse.events.control_events.control_signer_role`: the catalog signs every action it emits, for the person it
   authenticated; maintenance signs `table_purged` and `namespace_purged` as itself. No action is exempt: the lane carries only the
   lakehouse's own signed events, and a client tool publishes nothing on it (ADR 0171). A signer whose key
   is unresolved publishes and stages nothing unsigned: it withholds the event, counts it under
@@ -237,7 +237,7 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/linea
   [RUNBOOK-oncall.md](runbooks/RUNBOOK-oncall.md#lineage-refusing-a-signers-events).
 - **The lanes that act on the bus.** The catalog's control lane (which feeds `GET /management/v1/events`) and the maintenance worker's write-event lane verify the same signatures before they act, in
   the mode `RASK_SIGNATURE_DOORS` names (chart `signing.doors`: off, observe or enforce), and a notifier's doors verify
-  them with the same settings (`lakehouse.signature_doors`). A lineage event verifies against `RASK_EVENT_SIGNERS` and
+  them with the same settings (`lakehouse.events.signature_doors`). A lineage event verifies against `RASK_EVENT_SIGNERS` and
   `RASK_EVENT_DELEGATORS`, lineage's own sets. A control
   event verifies against the identities `RASK_CONTROL_SIGNER_ROLES` lists for the role its action names. Only an event
   the door would act on is verified. Enforcing, a refusal is acknowledged and drives nothing, counted in

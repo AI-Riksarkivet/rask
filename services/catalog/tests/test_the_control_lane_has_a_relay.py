@@ -35,14 +35,15 @@ from catalog.api.ticks import Tick
 from catalog.api.timers import start_timers
 from catalog.core.config import Settings
 from catalog.core.control_signing import control_sign
-from lakehouse import outbox, store_session
-from lakehouse.bus import MAX_PAYLOAD_BYTES
-from lakehouse.cloud_events import control_envelope
-from lakehouse.control_emit import BusControlEmitter
-from lakehouse.control_events import CONTROL_TOPIC, CatalogControlEvent
+from lakehouse import store_session
+from lakehouse.events import outbox
+from lakehouse.events.bus import MAX_PAYLOAD_BYTES
+from lakehouse.events.cloud_events import control_envelope
+from lakehouse.events.control_emit import BusControlEmitter
+from lakehouse.events.control_events import CONTROL_TOPIC, CatalogControlEvent
+from lakehouse.events.signing import SigningKey, parse_published_keys
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
 from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.lineage import SigningKey, parse_published_keys
 from lakehouse.storage_options import StorageOptions
 from lakehouse.supervision import Supervisor
 from tests.bus_double import BusDouble

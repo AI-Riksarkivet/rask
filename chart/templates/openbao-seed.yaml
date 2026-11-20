@@ -155,7 +155,7 @@ data:
     # nats-server 2.14.2, nsc 2.15.0 and nats.go 1.39.1: an older JWT for a reissued key keeps its grant until such a
     # revocation, which refuses it and admits the newer one; nsc writes the grants sorted, `>` as `>`; and a client
     # holding the revoked JWT is closed after two refused reconnects, from which a service opens its connection again
-    # with the JWT the store then holds (lakehouse.bus).
+    # with the JWT the store then holds (lakehouse.events.bus).
     nats_user() {
       j=; s=
       if j=$(bao kv get -field=jwt "secret/nats-user-$1" 2>/dev/null); then

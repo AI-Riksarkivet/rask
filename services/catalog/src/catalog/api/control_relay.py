@@ -12,9 +12,9 @@ lane, so a dropped event is a person never told, with the route 200, every pod g
 wrote it: anything that can write under the prefix can stage an object that parses as a control event. A relay that signed
 what it found would sign that object as the catalog, declaring whatever person it named as the one the catalog
 authenticated, and every enforcing door would admit it. So the catalog's emitter signs each event before it stages it and
-withholds what it cannot sign (`lakehouse.control_emit`), and the relay verifies each staged object as a control event
+withholds what it cannot sign (`lakehouse.events.control_emit`), and the relay verifies each staged object as a control event
 signed by THIS catalog's own identity, against the keys that identity publishes, and republishes the staged event as it
-is, in the envelope derived from it (`lakehouse.cloud_events.control_envelope`):
+is, in the envelope derived from it (`lakehouse.events.cloud_events.control_envelope`):
 
 * verified: republished as staged, then dropped on ack;
 * not a control event, or not signed by this catalog (unsigned, signed by another identity, altered, an unknown key, a
@@ -51,14 +51,13 @@ from pydantic import BaseModel, ValidationError
 
 from catalog.api.ticks import Tick
 from catalog.core.config import CatalogControlBusSettings, Settings
-from lakehouse import outbox, outbox_metrics
-from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the control relay is a registered publish site
-from lakehouse.cloud_events import CloudEvent, control_envelope
-from lakehouse.control_events import CONTROL_TOPIC
+from lakehouse.events import outbox, outbox_metrics
+from lakehouse.events.bus import Bus, publish_event  # noqa: TID251 — the control relay is a registered publish site
+from lakehouse.events.cloud_events import CloudEvent, control_envelope
+from lakehouse.events.control_events import CONTROL_TOPIC
+from lakehouse.events.published_keys import PublishedKeys
+from lakehouse.events.signing import KeySourceUnavailableError, SignatureError, SigningKey, VerifiedSignature, control_signature_of, verify_control_signature
 from lakehouse.governed.signing_key import SIGNING_STATE, SigningKeyHolder, published_key_fetch
-from lakehouse.lineage import SigningKey
-from lakehouse.lineage.keys import PublishedKeys
-from lakehouse.lineage.signing import KeySourceUnavailableError, SignatureError, VerifiedSignature, control_signature_of, verify_control_signature
 
 
 log = logging.getLogger(__name__)
@@ -104,7 +103,7 @@ class ControlRelayReport(BaseModel):
 def get_control_publisher(request: Request) -> Bus | None:
     """This process's connection to the bus, or ``None`` when the chart names it no bus.
 
-    Read off ``app.state``, where the lifespan keeps the one connection the process holds (`lakehouse.bus`).
+    Read off ``app.state``, where the lifespan keeps the one connection the process holds (`lakehouse.events.bus`).
     ``None`` makes the tick a pure OBSERVATION — it still reports depth and age, so
     a backlog accruing on a mis-wired deployment is visible instead of silently unmeasured.
     """

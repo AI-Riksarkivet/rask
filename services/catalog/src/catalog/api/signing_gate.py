@@ -1,7 +1,7 @@
 """A catalog that cannot sign takes no write it would announce ([[XC-095]]), nor one whose run id it cannot derive.
 
 Every write the catalog commits is announced after the commit, signed with the catalog's own key: its lineage event
-(`catalog.core.lineage_emit`) and its control events (`lakehouse.control_emit`). A holder without its key withholds
+(`catalog.core.lineage_emit`) and its control events (`lakehouse.events.control_emit`). A holder without its key withholds
 both, so a write it took would stay committed and be told to nobody: not lineage's feed, not the edge list, not a
 pipeline following them, not a person. While the key is unresolved the catalog therefore refuses every write it would
 announce, ServiceUnavailable before the commit, classifying a write the way the read-only window does

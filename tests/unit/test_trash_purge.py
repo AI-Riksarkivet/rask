@@ -49,7 +49,7 @@ from pydantic import SecretStr
 
 from lakehouse import base_registry, location_claims, trash
 from lakehouse.base_registry import BaseOrigin, BaseRole, RecordedBase
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.storage_options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import purge as mod

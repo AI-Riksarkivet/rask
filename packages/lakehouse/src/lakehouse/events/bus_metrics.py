@@ -1,7 +1,7 @@
 """The bus instruments the lakehouse owns: how long each publish took and how it ended, each publish refused before
 anything was sent, and how each delivery a process took was settled and how long its handling took.
 
-A PUBLISH IS MEASURED WHERE IT IS MADE (`lakehouse.bus.publish_event`). The process publishes on its own connection, so
+A PUBLISH IS MEASURED WHERE IT IS MADE (`lakehouse.events.bus.publish_event`). The process publishes on its own connection, so
 nothing else counts it. One histogram carries what an operator reads for a boundary: its count is the traffic, its
 `error.type` attribute the failures, its buckets the latency. It is named and labelled by OpenTelemetry's messaging
 conventions (`messaging.client.operation.duration`), so a backend's stock messaging views read it.
@@ -90,7 +90,7 @@ def record_delivery(consumer: str, outcome: str) -> None:
     Args:
         consumer: The durable consumer it was taken from, or the subject a process follows: a chart value or a
             constant, never a value off a message.
-        outcome: How it was settled, a closed set: `lakehouse.bus_delivery.Outcome`, or ``failed`` for a followed
+        outcome: How it was settled, a closed set: `lakehouse.events.bus_delivery.Outcome`, or ``failed`` for a followed
             message whose handling raised.
     """
     _deliveries.add(1, {"lance.bus.consumer": consumer, "lance.bus.outcome": outcome})
@@ -121,3 +121,13 @@ def record_publish(attributes: Mapping[str, str], seconds: float, *, failure: st
         failure: The exception's class name, a closed set by construction; None for a delivered publish.
     """
     _duration.record(seconds, {**attributes, "error.type": failure} if failure is not None else attributes)
+
+
+__all__ = [
+    "create_delivery_series",
+    "record_delivery",
+    "record_processing",
+    "record_publish",
+    "record_pull_failed",
+    "record_refusal",
+]

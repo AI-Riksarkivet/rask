@@ -58,7 +58,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
 
-from lakehouse.lineage.schemas import PRODUCER
+from lakehouse.events.openlineage_schemas import PRODUCER
 
 
 if TYPE_CHECKING:
@@ -69,7 +69,7 @@ if TYPE_CHECKING:
 SIGNATURE_FACET = "rask_signature"
 
 #: The facet naming the subject a producer stamped on its own event, read by :func:`author_of`. The same name as
-#: ``lakehouse.lineage_events.AUTHOR_FACET``, which every emitter writes: the two packages never import each other.
+#: ``lakehouse.events.lineage_events.AUTHOR_FACET``, which every emitter writes: the two modules never import each other.
 AUTHOR_FACET = "rask_author"
 
 #: The schema the facet's `_schemaURL` names. The URL is inside the signed bytes, so it cannot be corrected
@@ -268,8 +268,8 @@ class SigningKey(BaseModel):
             TypeError: `seed` is not a string.
             ValueError: `seed` is not a well-formed NKEY user seed. The message never echoes it.
         """
-        # Imported here, not at module scope: an emitter that only sends over HTTP imports lakehouse.lineage and never signs,
-        # so the wheel is needed only where a key is loaded.
+        # Imported here, not at module scope: a process that imports this module for its facet names and never signs
+        # does not load it, so the wheel is needed only where a key is loaded or a signature checked.
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
         private = Ed25519PrivateKey.from_private_bytes(_decode_nkey(seed, prefix=_SEED_PREFIX, text_length=_SEED_TEXT_LENGTH, what="NKEY user seed"))
@@ -707,3 +707,32 @@ def verify_control_signature(envelope: Mapping[str, Any], *, source: PublicKeySo
     with _unexpected_is_a_refusal():
         _check_signature(_control_without_signature_value(envelope), raw_public, raw_signature)
     return VerifiedSignature(identity=claim.identity, kid=claim.kid, on_behalf_of=claim.on_behalf_of)
+
+
+__all__ = [
+    "AUTHOR_FACET",
+    "CANON_VERSION",
+    "MAX_NESTING",
+    "SIGNATURE_ALG",
+    "SIGNATURE_FACET",
+    "SIGNATURE_FACET_SCHEMA_URL",
+    "CanonError",
+    "KeySourceUnavailableError",
+    "PublicKeySource",
+    "RefusalReason",
+    "Signature",
+    "SignatureError",
+    "SignatureRefusedError",
+    "SigningKey",
+    "UnsignedEventError",
+    "VerifiedSignature",
+    "attach_control_signature",
+    "attach_signature",
+    "author_of",
+    "canon_1",
+    "control_signature_of",
+    "parse_published_keys",
+    "signature_of",
+    "verify_control_signature",
+    "verify_signature",
+]

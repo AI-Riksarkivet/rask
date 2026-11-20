@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import pytest
 
-from lakehouse.openlineage import (
+from lakehouse.events.openlineage import (
     lifecycle_facet,
 )
 

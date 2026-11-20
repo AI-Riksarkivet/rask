@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from lakehouse.bus import BusSettings
-from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.events.bus import BusSettings
+from lakehouse.events.control_emit import NoopControlEmitter
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
 from maintenance.services import tasks

@@ -39,8 +39,8 @@ from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
 from lakehouse import location_claims
+from lakehouse.events.lineage_events import DatasetUuids, dataset_uuids
 from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.lineage_events import DatasetUuids, dataset_uuids
 from lakehouse.maintenance_due import DueRecord, write_due
 from lakehouse.objectfs import lance_storage_options
 from lakehouse.storage_options import StorageOptions

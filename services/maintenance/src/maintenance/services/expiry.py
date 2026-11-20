@@ -21,6 +21,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from lakehouse import manifest_names, trash
 from lakehouse.base_registry import RecordedBase
 from lakehouse.branch_layout import BRANCH_CONTAINER, branch_named_by, branches_inside
+from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.features import (
     describe_gc_unsupported_flags,
     flags_from_open_error,
@@ -30,7 +31,6 @@ from lakehouse.features import (
 )
 from lakehouse.history_fences import HistoryFencedError, HistoryWork, TableHistory
 from lakehouse.lance_session import open_dataset
-from lakehouse.lineage_events import DatasetUuids
 from lakehouse.storage_options import StorageOptions
 from lakehouse.stored_objects import delete_objects, list_under_at, recording_removed_transactions
 from maintenance.core.config import shared_lance_session

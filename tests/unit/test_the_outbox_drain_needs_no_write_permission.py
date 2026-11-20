@@ -28,7 +28,7 @@ from typing import Any
 
 import pytest
 
-from lakehouse import outbox
+from lakehouse.events import outbox
 from lakehouse.storage_options import StorageOptions
 
 

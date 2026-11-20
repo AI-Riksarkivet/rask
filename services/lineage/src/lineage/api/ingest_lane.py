@@ -1,7 +1,7 @@
 """Lineage's ingest lane: every event on `lineage.events.v1`, pulled on this service's own connection to the bus.
 
 The chart's stream Job declares the durable consumer (:data:`CONSUMER` on :data:`STREAM`); lineage binds to it,
-creates nothing, and its replicas share it, so each event is delivered to one of them. `lakehouse.bus` pulls and
+creates nothing, and its replicas share it, so each event is delivered to one of them. `lakehouse.events.bus` pulls and
 settles; this module is what lineage does with one delivery, and what it keeps of one it ends without recording.
 
 A DELIVERY IS HANDLED BY THE BUS DOOR'S OWN GATE (`consumer.handle_cloud_event` under `fga_deps.enforce_bus_authz`): the
@@ -29,7 +29,7 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Final
 
-from lakehouse.bus_delivery import Delivery, Lane, Verdict
+from lakehouse.events.bus_delivery import Delivery, Lane, Verdict
 from lineage.api.fga_deps import enforce_bus_authz
 from lineage.core.config import LineageDelivery, LineageSettings
 from lineage.core.metrics import Door, Outcome, record_outcome

@@ -9,9 +9,9 @@ from typing import Any
 
 import pytest
 
-from lakehouse import outbox
-from lakehouse.cloud_events import TRACE_ATTRIBUTES, lineage_envelope
 from lakehouse.context import continuing
+from lakehouse.events import outbox
+from lakehouse.events.cloud_events import TRACE_ATTRIBUTES, lineage_envelope
 from lakehouse.storage_options import StorageOptions
 from tests.bus_double import BusDouble
 

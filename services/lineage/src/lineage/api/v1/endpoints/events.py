@@ -19,9 +19,9 @@ from fastapi import APIRouter, Query, Request
 from lance_namespace import InvalidInputError
 from pydantic import BaseModel, ConfigDict
 
+from lakehouse.events.lineage_events import AUTHOR_FACET, LANCE_FACET
+from lakehouse.events.signing import SIGNATURE_FACET
 from lakehouse.governed import fga
-from lakehouse.lineage.signing import SIGNATURE_FACET
-from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET
 from lakehouse.naming import CATALOG_DELIMITER
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, Governed, governed, governed_refs, output_refs, require_event_feed_reader
@@ -112,7 +112,7 @@ def _governed_datasets(record: EventRecord) -> Governed:
 
 
 #: The top-level fields of an OpenLineage event that targeting reads: the state, when it happened, and the
-#: producer (half of the id a static change is keyed by, `lakehouse.lineage_events.static_event_id`).
+#: producer (half of the id a static change is keyed by, `lakehouse.events.lineage_events.static_event_id`).
 _TARGETING_FIELDS: Final = ("eventType", "eventTime", "producer")
 #: The facets that name WHO: the verified author, and rask's own facet carrying the tenant, the originator
 #: and the producer's run id. Every other facet describes the data or the job.

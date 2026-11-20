@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from catalog.services.changes import ChangeKind
 from catalog.services.object_labels import LabelDefinition, LabelKind, LabelScope
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.features import TableFileFormat
 from lakehouse.maintenance_due import CompactionDue, IndexDue
 from lakehouse.warehouse_records import DeleteMode

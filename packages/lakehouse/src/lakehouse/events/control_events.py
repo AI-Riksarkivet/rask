@@ -9,8 +9,8 @@ the same).
 
 Defined here, in the library, so the producers (the catalog, maintenance) and the lakehouse's own consumers import ONE
 model; a client reads the same event by its published contract (`docs/COMMIT-EVENTS.md`). The event is a
-plain pointer payload (claim-check invariant — no data), published onto the bus by `lakehouse.control_emit` in the
-CloudEvents envelope `lakehouse.cloud_events.control_envelope` derives from it, as its `data`. An event is a
+plain pointer payload (claim-check invariant — no data), published onto the bus by `lakehouse.events.control_emit` in the
+CloudEvents envelope `lakehouse.events.cloud_events.control_envelope` derives from it, as its `data`. An event is a
 **refresh hint**, never authoritative data: a consumer
 re-reads state through the normal FGA-governed path, so a dropped/duplicated/late event only costs a
 redundant re-read. `event_id` is the client-side dedupe key.
@@ -134,7 +134,7 @@ class CatalogControlEvent(BaseModel):
     `actor` is the person the emitting service authenticated (`user:<principal>`), or a service principal or None when a
     service acts for itself. Several services publish on this topic (`control_signer_role` names the one that signs
     each action), so to a consumer the actor is a claim until the envelope's `rask_signature` proves who stamped it
-    (`lakehouse.lineage.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
+    (`lakehouse.events.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
     envelope parse alike.
     """
 
@@ -244,3 +244,14 @@ def control_signer_role(action: ControlAction) -> ControlSigner:
             return "maintenance"
         case _:
             assert_never(action)
+
+
+__all__ = [
+    "CONTROL_TOPIC",
+    "CatalogControlEvent",
+    "ControlAction",
+    "ControlObjectType",
+    "ControlSigner",
+    "ControlUuids",
+    "control_signer_role",
+]

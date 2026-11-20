@@ -43,14 +43,14 @@ from catalog.core.config import CatalogStore, Settings
 from catalog.services import dataplane, maintenance_commits, managed_versions, provenance_namespace
 from lakehouse import auto_cleanup, commit_records, stored_objects
 from lakehouse.base_refs import decoded_path, key_uri, store_of
+from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
+from lakehouse.events.openlineage import BRANCH_IDENTIFIER
+from lakehouse.events.signing import SIGNATURE_FACET
 from lakehouse.features import flags_from_open_error
 from lakehouse.governed import fga
 from lakehouse.lance_session import fresh_session, open_dataset
 from lakehouse.lancekit.filters import sql_literal
-from lakehouse.lineage.signing import SIGNATURE_FACET
-from lakehouse.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.manifest_names import committed_version
-from lakehouse.openlineage import BRANCH_IDENTIFIER
 from lakehouse.storage_options import StorageOptions, on_s3
 from lakehouse.transactions import read_transaction
 

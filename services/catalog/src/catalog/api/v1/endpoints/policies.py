@@ -49,7 +49,7 @@ from catalog.services import projects as project_registry
 from catalog.services import table_claims, warehouses
 from lakehouse import maintenance_policies as policies
 from lakehouse import records
-from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.location_claims import ClaimStore
 from lakehouse.maintenance_policies import PolicyRecord

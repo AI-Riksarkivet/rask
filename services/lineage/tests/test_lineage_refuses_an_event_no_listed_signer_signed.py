@@ -25,8 +25,8 @@ import pytest
 from fastapi import FastAPI
 from lineage_lane import Feed, Lineage, measured, started
 
-from lakehouse.bus_delivery import Outcome, Settlement
-from lakehouse.lineage.signing import RefusalReason
+from lakehouse.events.bus_delivery import Outcome, Settlement
+from lakehouse.events.signing import RefusalReason
 from lineage import main
 from lineage.core.config import LineageSettings, get_settings
 from tests.secret_store_double import SecretStoreDouble

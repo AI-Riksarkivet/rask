@@ -98,8 +98,8 @@ from catalog.services.vend_probe import (
     summarize_probe,
 )
 from lakehouse import base_registry, clone_sources, data_directories, location_claims, trash
-from lakehouse.control_emit import ControlEmitter, emit_control
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.events.control_emit import ControlEmitter, emit_control
+from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE

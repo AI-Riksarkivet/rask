@@ -726,7 +726,7 @@ catalog:
     # -- Seconds a `__manifest` version is kept before the reclaim removes it (LANCE_MANIFEST_RETAIN_SECONDS); a dropped id stays readable in the history this long, and the catalog rebuilds each namespace connection after a quarter of it.
     retainSeconds: 3600 # @schema type: integer; minimum: 0
 
-# The lineage topic. Every service publishes on its own connection to the bus (lakehouse.bus) and takes its deliveries
+# The lineage topic. Every service publishes on its own connection to the bus (lakehouse.events.bus) and takes its deliveries
 # on that connection too, from a durable consumer the stream Job declares with this topic as its filter
 # (templates/nats-stream-job.yaml).
 pubsub:
@@ -1420,7 +1420,7 @@ nats:
       catalog:
         publish:
           - lineage.events.v1 # every committed write, on its own connection
-          - $JS.API.STREAM.MSG.GET.LINEAGE # its own connection reads back the stored message a duplicate acknowledgement names (lakehouse.bus)
+          - $JS.API.STREAM.MSG.GET.LINEAGE # its own connection reads back the stored message a duplicate acknowledgement names (lakehouse.events.bus)
         subscribe: [_INBOX_catalog.>]
       lineage:
         publish:
@@ -1870,7 +1870,7 @@ signing:
   # whose doors take control events (the catalog under catalog.controlEmit) also carry RASK_CONTROL_SIGNER_ROLES, a JSON object
   # from each service that emits control events to the identities it signs as (lance.signers' `role`): catalog -> the
   # catalog, maintenance -> maintenance (its purge, under maintenance.controlEmit). The keys are
-  # exactly lakehouse.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
+  # exactly lakehouse.events.control_events.ControlSigner, which the services type, so a key they do not know fails their boot;
   # every key is present, and a role whose service is not deployed is an empty list. A door's per-action policy
   # (control_signer_role) resolves every action's allowed signers from it. Without the store or auth nothing is rendered and the doors
   # verify nothing, as lineage does.

@@ -42,7 +42,7 @@ from catalog.services import declaration, project_admins, warehouses
 from catalog.services import projects as project_registry
 from catalog.services.control_records import GIT, ProtectionChange
 from catalog.services.declaration import Declaration, DeclaredProject, DeclaredWarehouse, GrantTuple
-from lakehouse.control_emit import ControlEmitter
+from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.governed import fga
 from lakehouse.warehouse_records import DeleteMode, WarehouseRecord
 

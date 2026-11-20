@@ -4,7 +4,7 @@ The bus admits a client by the user it connects as (values.yaml `nats.auth`), an
 quietly: a refused pull is asked again for as long as the pod runs, a publish with no inbox times out and stays staged,
 and the pod stays Ready throughout. So the table the dev seed issues is held here to what each render configures.
 
-A SERVICE'S OWN CONNECTION ([[XC-199]], `lakehouse.bus`). Each service connects as the bus user its pod is named
+A SERVICE'S OWN CONNECTION ([[XC-199]], `lakehouse.events.bus`). Each service connects as the bus user its pod is named
 (`RASK_BUS_USER`), a session user: it holds no bus credential, and presents the ServiceAccount token its pod projects
 for the bus's audience, so the signer's table (`<release>-nats-permissions`) must bind that user to the pod's own
 ServiceAccount, the pod must project that token where `RASK_BUS_TOKEN_FILE` names it, and no bus Secret may be mounted;
@@ -37,8 +37,8 @@ from collections import defaultdict
 import pytest
 
 from catalog.api import control_lane
-from lakehouse.bus import BusSettings
-from lakehouse.control_events import CONTROL_TOPIC
+from lakehouse.events.bus import BusSettings
+from lakehouse.events.control_events import CONTROL_TOPIC
 from lineage.api import ingest_lane
 from maintenance.services import queue
 from tests.chart import chart_render

@@ -15,13 +15,13 @@ from typing import TYPE_CHECKING
 from fastapi import FastAPI, Request
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.bus import Bus, bus_session
-from lakehouse.control_emit import ControlEmitter, ControlSign, make_control_emitter
+from lakehouse.events.bus import Bus, bus_session
+from lakehouse.events.control_emit import ControlEmitter, ControlSign, make_control_emitter
+from lakehouse.events.signing import SigningKey, attach_control_signature, parse_published_keys
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency
 from lakehouse.health import Dependency, HealthWatch, store_dependency
 from lakehouse.lance_metrics import instrument_lance_if_available
-from lakehouse.lineage import SigningKey, attach_control_signature, parse_published_keys
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 from lakehouse.store_session import require_env_pair, start_store_session
 from lakehouse.supervision import Supervisor
@@ -110,7 +110,7 @@ async def collaborators(app: FastAPI, settings: MaintenanceSettings, loops: Supe
     loops on ``loops``, and stop it all on the way out."""
     async with AsyncExitStack() as stack:
         # ONE CONNECTION TO THE BUS for both emitters, lineage (data) and control (governance), as this service's own
-        # bus user ([[XC-199]], `lakehouse.bus`), beside the work queue's (ADR 0198). Held when either emits; a loop of
+        # bus user ([[XC-199]], `lakehouse.events.bus`), beside the work queue's (ADR 0198). Held when either emits; a loop of
         # `loops` connects it behind the start, so a pass runs, and stages what it emits, while the bus is away.
         emits = settings.lineage_emit_enabled or settings.control_emit_enabled
         bus = await stack.enter_async_context(bus_session(loops)) if emits else None

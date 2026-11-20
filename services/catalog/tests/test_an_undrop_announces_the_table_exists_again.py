@@ -32,7 +32,7 @@ from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses
 from catalog.services.dataplane import create_table
 from lakehouse.base_registry import BaseRegistry
-from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal

@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from lakehouse.cloud_events import control_envelope, lineage_envelope
+from lakehouse.events.cloud_events import control_envelope, lineage_envelope
 
 
 RUN = "0190f3a2-7c1e-7b7a-9d2e-5a4c3b2a1f00"

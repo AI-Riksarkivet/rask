@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.api import commit_reconcile, control_relay, declaration_converge, erasure_release, manifest_reclaim
 from catalog.api.ticks import Tick
 from catalog.core.config import Settings
-from lakehouse import outbox_metrics
+from lakehouse.events import outbox_metrics
 from lakehouse.supervision import Supervisor
 from lakehouse.timers import Timer
 

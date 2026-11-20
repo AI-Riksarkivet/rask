@@ -31,11 +31,11 @@ from contextlib import suppress
 
 import pyarrow.fs as pafs
 
-from lakehouse import outbox_metrics
-from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the outbox is a registered publish site
-from lakehouse.cloud_events import CloudEvent
+from lakehouse.events import outbox_metrics
+from lakehouse.events.bus import Bus, publish_event  # noqa: TID251 — the outbox is a registered publish site
+from lakehouse.events.cloud_events import CloudEvent
+from lakehouse.events.outbox_metrics import OutboxLane
 from lakehouse.objectfs import fs_and_base
-from lakehouse.outbox_metrics import OutboxLane
 from lakehouse.storage import split_s3_uri
 from lakehouse.storage_options import StorageOptions, object_client, on_s3
 
@@ -80,7 +80,7 @@ def left_staged(failure: Exception) -> bool:
 
 def stage_event(outbox_uri: str, storage_options: StorageOptions, key: str, event_json: str) -> None:
     """Persist the event JSON at ``<outbox_uri>/<key>.json``. The key is the event's own, its envelope's id
-    (`lakehouse.cloud_events`): the event's identity and its state together, so a run's COMPLETE cannot
+    (`lakehouse.events.cloud_events`): the event's identity and its state together, so a run's COMPLETE cannot
     truncate its own FAIL, and a redelivery of the SAME event re-stages the same object. Blocking
     object-store IO; callers run it in a threadpool.
 
@@ -241,7 +241,7 @@ def backlog(outbox_uri: str, storage_options: StorageOptions) -> tuple[int, floa
 
 
 def measured_backlog(lane: OutboxLane, outbox_uri: str, storage_options: StorageOptions) -> tuple[int, float]:
-    """:func:`backlog` of ``lane``'s outbox, reported as the lane's saturation snapshot (`lakehouse.outbox_metrics`).
+    """:func:`backlog` of ``lane``'s outbox, reported as the lane's saturation snapshot (`lakehouse.events.outbox_metrics`).
 
     What a relay calls on every tick. A listing the store does not answer reports no backlog from this process until
     one is measured again: the last reading says nothing about the outbox now, and an empty one read before an outage
@@ -306,7 +306,7 @@ async def publish_with_outbox(
 ) -> None:
     """Durably publish ANY bus event: stage → publish → drop-on-ack (#4).
 
-    Lane-agnostic on purpose: what a lane brings is its event's envelope (`lakehouse.cloud_events`). The
+    Lane-agnostic on purpose: what a lane brings is its event's envelope (`lakehouse.events.cloud_events`). The
     control lane needs the guarantee the lineage lane has — a dropped `table_tag_updated` cancels the next
     hop of a pipeline that waits on it — and a SECOND implementation is how two mechanisms doing one job
     drift apart (owner ruling 2026-08-25).
@@ -321,8 +321,8 @@ async def publish_with_outbox(
     publish's failures are, so a store refusing every delete shows as itself rather than as a backlog nobody explains.
 
     Args:
-        bus: This process's connection to the bus (`lakehouse.bus`).
-        envelope: The event in the envelope its lane derives from it (`lakehouse.cloud_events`). What is staged is that
+        bus: This process's connection to the bus (`lakehouse.events.bus`).
+        envelope: The event in the envelope its lane derives from it (`lakehouse.events.cloud_events`). What is staged is that
             envelope carrying the caller's trace (:meth:`CloudEvent.under_current_trace`), its ``data`` the event as its
             producer signed it: the relay that delivers a staged copy derives the same envelope from the event, so the
             copy goes out under the id the first publish carried, and publishes it in the trace it was staged under.
@@ -332,7 +332,7 @@ async def publish_with_outbox(
         storage_options: What reaches that prefix.
         topic: The lane's topic.
         timeout_seconds: How long the publish may take.
-        lane: Which outbox ``outbox_uri`` is, the attribute its counts carry (`lakehouse.outbox_metrics`).
+        lane: Which outbox ``outbox_uri`` is, the attribute its counts carry (`lakehouse.events.outbox_metrics`).
 
     Raises:
         UnpublishedEventError: The publish did not reach the bus; its ``staged`` says whether the relay holds the event.
@@ -370,3 +370,19 @@ async def publish_with_outbox(
     except Exception as exc:  # the event is delivered; what is left is a staged copy the relay re-ingests and drops
         outbox_metrics.record_drop_failed(lane)
         log.warning("outbox_drop_failed", extra={"outbox_uri": outbox_uri, "key": envelope.id, "error": str(exc)})
+
+
+__all__ = [
+    "UnpublishedEventError",
+    "backlog",
+    "drop_event",
+    "left_staged",
+    "list_events",
+    "measured_backlog",
+    "publish_with_outbox",
+    "read_event",
+    "resolve_event",
+    "stage_envelope",
+    "stage_event",
+    "staged_envelope",
+]

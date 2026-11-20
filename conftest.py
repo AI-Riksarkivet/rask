@@ -570,7 +570,7 @@ def _nkey(prefix: bytes, raw: bytes) -> str:
 
 
 def canon_1(value: object) -> bytes:
-    """The LH-064 contract's canonical bytes, written from the contract and not imported from `lakehouse.lineage`."""
+    """The LH-064 contract's canonical bytes, written from the contract and not imported from `lakehouse.events.signing`."""
     import json
     import math
 
@@ -598,7 +598,7 @@ class EventSigner:
     """An Ed25519 signing identity in the LH-064 wire format, for tests of the doors that verify it ([[LH-064]]).
 
     Built from the contract alone (NKEY-encoded keys, canon-1, a 16-hex kid, the `rask_signature` facet with only its
-    `signature` member left out of the signed bytes), never from `lakehouse.lineage`, so a door test checks conformance to the
+    `signature` member left out of the signed bytes), never from `lakehouse.events.signing`, so a door test checks conformance to the
     wire format instead of agreeing with the code it tests. A control event ([[XC-078]]) has no facet bag: `sign_control`
     puts the same facet at the top level of the flat envelope.
     """

@@ -346,7 +346,7 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   seed stopping only on a stored JWT that names no key; and the APP account's `*` revocation sits one second before the
   oldest JWT a static user holds, taking back whatever earlier reseeds left (measured 2026-11-07, nats-server 2.14.2, nsc
   2.15.0, nats.go 1.39.1: a client holding a revoked JWT is closed after two refused reconnects, the state a service's own
-  connection opens again from, in-process, `lakehouse.bus`; the maintenance worker ends its process instead and starts
+  connection opens again from, in-process, `lakehouse.events.bus`; the maintenance worker ends its process instead and starts
   again, `TaskQueue.connect`); a non-dev store waits for `nats.auth.provisioned`, which attests that the platform's signer
   admits each session user of `<release>-nats-permissions` and that each static user's secret exists. **The seed revokes
   every static APP bus user the release stops issuing**: it lists the `nats-user-*` secrets in its own store and the one

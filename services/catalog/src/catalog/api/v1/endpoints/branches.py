@@ -27,7 +27,7 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable
-from lakehouse.control_emit import ControlEmitter, emit_control
+from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga
 from lakehouse.storage_options import StorageOptions
 

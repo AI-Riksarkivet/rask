@@ -24,7 +24,7 @@ from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import dataplane
 from lakehouse import clone_sources
-from lakehouse.control_emit import emit_control
+from lakehouse.events.control_emit import emit_control
 from lakehouse.governed import fga
 
 

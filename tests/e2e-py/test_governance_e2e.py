@@ -44,9 +44,9 @@ from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 from refusals import assert_refused, described, namespace_uuid
 from topology import OUTSIDER, create_namespace, namespace_id
 
+from lakehouse.events.openlineage import RUN_EVENT_SCHEMA_URL, author_facet, run_id_for
 from lakehouse.governed import fga
 from lakehouse.governed.principal import is_principal
-from lakehouse.openlineage import RUN_EVENT_SCHEMA_URL, author_facet, run_id_for
 from lineage.models import author_sub_from_payload
 
 

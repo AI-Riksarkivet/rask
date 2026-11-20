@@ -96,3 +96,61 @@ Left out, each for a later group:
 `.importlinter`'s `the-service-app-is-imported-by-the-services-only` (a `protected` contract) holds it: only `catalog`,
 `lineage` and `maintenance` import `lakehouse.service_app`, and its own modules import each other. It was kept before
 it was written; a planted `import lakehouse.service_app.deadline` in `lakehouse.supervision` broke it.
+
+## The events group (2026-11-20)
+
+The second group by job is `lakehouse.events`: what the lakehouse's services publish and take on the bus. Measured with
+`ast` on `ea704efb7` (module-level, function-local, `TYPE_CHECKING` and relative imports), the candidates import the
+rest of the library (`context`, `lifecycle`, `supervision`, `projected_token`, `storage`, `storage_options`, `objectfs`,
+`naming`) and are imported back by one module, `health`, under `TYPE_CHECKING` for the bus's readiness dependency;
+nothing they import reaches them again, so the group and the rest import in one direction. The name collides with no
+module or installed package (no top-level `events` exists), and it does not read like a service the way
+`lakehouse.lineage` read like the `lineage` service, so that subpackage folds in and its name is free.
+
+| Module | In the group as |
+| --- | --- |
+| `lakehouse.bus` | `lakehouse.events.bus` |
+| `lakehouse.bus_delivery` | `lakehouse.events.bus_delivery` |
+| `lakehouse.bus_metrics` | `lakehouse.events.bus_metrics` |
+| `lakehouse.cloud_events` | `lakehouse.events.cloud_events` |
+| `lakehouse.control_events` | `lakehouse.events.control_events` |
+| `lakehouse.control_emit` | `lakehouse.events.control_emit` |
+| `lakehouse.lineage_events` | `lakehouse.events.lineage_events` |
+| `lakehouse.openlineage` | `lakehouse.events.openlineage` |
+| `lakehouse.outbox` | `lakehouse.events.outbox` |
+| `lakehouse.outbox_metrics` | `lakehouse.events.outbox_metrics` |
+| `lakehouse.signature_doors` | `lakehouse.events.signature_doors` |
+| `lakehouse.lineage.schemas` | `lakehouse.events.openlineage_schemas` |
+| `lakehouse.lineage.signing` | `lakehouse.events.signing` |
+| `lakehouse.lineage.keys` | `lakehouse.events.published_keys` |
+| `lakehouse.lineage.door` | `lakehouse.events.door_verdict` |
+
+The module names stay where they already say what they hold; the four from `lakehouse.lineage` take the name of their
+content, since `schemas`, `keys` and `door` say nothing beside the others. `lakehouse.lineage`'s `__init__`, an eager
+facade of 52 names from its four modules, is not kept: every importer names the defining module, each module declares
+`__all__`, and `lakehouse.events`'s `__init__` exports nothing. `docs/COMMIT-EVENTS.md` names the new paths in the same change:
+its section on the names that carry the contract points into the library for the lakehouse's own producers, and a
+client still reads the events with no import from it.
+
+Left out:
+
+- `control_prefixes`: it names the outbox's prefix among the store's control segments, but its job is the store's
+  layout, and thirteen record modules import it.
+- `governed.subjects`: the address rule a notifier reads, which is the auth plane's judgement of a subject;
+  `docs/COMMIT-EVENTS.md` names it where it is.
+- `governed.signing_key`: the service's own key, read from the secret store under its login; it names the signing
+  seam in prose and takes its loader by injection.
+- `health`: the readiness probe, whose bus dependency reads the connection's state; it is the one importer in the
+  library the contract allows.
+- `context`, `projected_token`, `supervision`, `lifecycle`: primitives the bus builds on and the auth plane and the
+  store session import too.
+
+`.importlinter`'s `the-events-are-imported-by-the-services-and-the-probe-only` (a `protected` contract) holds it: only
+`catalog`, `lineage`, `maintenance` and `lakehouse.health` import `lakehouse.events`, and its own modules import each
+other. It was kept before it was written; a planted `import lakehouse.events.outbox_metrics` in `lakehouse.timers`
+broke it.
+
+A module's logger and tracer are named by its path, so five names on a record or span follow the group:
+`lakehouse.bus` (logger and tracer), `lakehouse.bus_delivery`, `lakehouse.outbox`, `lakehouse.control_emit` and
+`lakehouse.openlineage` are `lakehouse.events.<module>`. No alert rule, dashboard or collector route names them; the
+meters (`lance.bus`, `lance.outbox`, `lance.<service>`) are named by hand and keep their names.

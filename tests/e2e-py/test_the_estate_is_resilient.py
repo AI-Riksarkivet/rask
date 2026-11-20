@@ -21,7 +21,7 @@ The drills, and what each outage must look like while it lasts:
 4. The bus, held down past the window a service's own NATS client reconnects for. Commits and grants go on landing while
    NATS is gone, each announcement staged in the catalog's outbox, and the lineage relay records the staged writes
    without the bus. The outage closes each service's connection for good, and each opens another in-process once the bus
-   answers again (`lakehouse.bus`): no pod of the catalog or lineage restarts, both relays publish what they hold, and
+   answers again (`lakehouse.events.bus`): no pod of the catalog or lineage restarts, both relays publish what they hold, and
    every consumer delivers again: lineage's records each commit, the catalog's control feed takes the grant made while
    the bus was gone, and the maintenance worker's commit lane, where the release runs it, settles every announcement.
 5. The issuer. A door verifies a bearer offline against the issuer's key set, which it holds for 300 s

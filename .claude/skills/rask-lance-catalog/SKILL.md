@@ -796,7 +796,7 @@ governing their data. The project-scoped surface is the console's project page, 
   chart's durable consumers, binding to them and creating none, as its own bus user (`maintenance-worker`) through
   nats-py, so a running task tells the bus it is still in progress and a held task carries its schedule header
   (`maintenance.services.queue`). What a pass emits, the worker publishes on a
-  second connection, as the bus user `maintenance` (`lakehouse.bus`, `maintenance.runtime.collaborators`), held only
+  second connection, as the bus user `maintenance` (`lakehouse.events.bus`, `maintenance.runtime.collaborators`), held only
   when it emits. It takes one task at a time and heartbeats it
   every `maintenance.queue.heartbeatSeconds`, so a killed replica's task goes to another after `ackWaitSeconds`; a replica
   whose heartbeats the bus stops answering ends itself before that ack wait runs out (`Worker._tell`), its telemetry
@@ -1314,7 +1314,7 @@ governing their data. The project-scoped surface is the console's project page, 
   reached through the UI cannot be seeded either. A grant whose create failed is SKIPPED rather than
   written; writing it is exactly how a ghost is made.
 - **The control-event vocabulary is a wire contract in three files.** `ControlAction` /
-  `ControlObjectType` (`lakehouse/control_events.py`) reach the frontend through
+  `ControlObjectType` (`lakehouse/events/control_events.py`) reach the frontend through
   `docs/catalog-openapi.json` → `frontend/console/src/lib/api/generated/catalog.ts`. Adding an action
   without `make openapi` + `bun --cwd=frontend run gen:types:catalog` leaves the TS client unable to
   name an event the backend publishes, and `test_openapi_contract` fails. Same for `TupleOrigin`
@@ -1575,7 +1575,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (`dependencies._resolve_warehouse_root` keeps it on `request.state`): its record and status are read live, so a
   deactivation or a delete is in force from the next request on every replica, and no control event evicts anything.
   The chart couples no catalog replica count to `catalog.controlEmit`. `GET /management/v1/events` reads the control
-  topic's stream by sequence (`lakehouse.bus.Bus.read`), its cursor the stream's sequence, so any replica answers any
+  topic's stream by sequence (`lakehouse.events.bus.Bus.read`), its cursor the stream's sequence, so any replica answers any
   poller and the Service balances every request (ADR 0216).
 - The `\Z`-anchored `CONTROL_ID_RE` (`catalog/core/identifiers.py`) is the ONE id-shape rule. It was
   three copies that had already drifted: Python's `$` also matches before a trailing newline, so

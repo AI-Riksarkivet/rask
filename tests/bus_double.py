@@ -1,10 +1,10 @@
 """A process's connection to the bus, for a test: each publish is taken as the stream would take it, and kept, and a
 delivery is handed to the service as the bus would hand it.
 
-A publish under test goes through the seam's own `lakehouse.bus.publish_event` (its size guard, its trace context, its
+A publish under test goes through the seam's own `lakehouse.events.bus.publish_event` (its size guard, its trace context, its
 timeout) and ends here, where the real `Bus` hands the message to nats-py. A delivery under test starts here, where the
 real `Bus` takes a message from nats-py: the service's own handling is handed it and the seam's own rule settles it
-(`lakehouse.bus_delivery.judged`), so a test reads what the bus would be told. What a real broker does with a
+(`lakehouse.events.bus_delivery.judged`), so a test reads what the bus would be told. What a real broker does with a
 connection (its permission table, a session it ends, a duplicate it stores once, a message it delivers again after a
 delay) is driven on the seam's own tests and the nats-auth lane; a test that takes this double is about what a
 publisher sends and what a consumer does with what it is handed.
@@ -23,8 +23,8 @@ from typing import Any, Final, override
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.bus import Bus, BusSettings, Follow, StreamPage
-from lakehouse.bus_delivery import Delivery, Handle, Lane, Park, Settlement, judged
+from lakehouse.events.bus import Bus, BusSettings, Follow, StreamPage
+from lakehouse.events.bus_delivery import Delivery, Handle, Lane, Park, Settlement, judged
 from lakehouse.supervision import Supervisor
 
 
@@ -48,7 +48,7 @@ class Sent(BaseModel):
 
 
 class BusDouble(Bus):
-    """Stands where `lakehouse.bus.Bus` does, connected and taking every publish; ``failing`` is raised for each one
+    """Stands where `lakehouse.events.bus.Bus` does, connected and taking every publish; ``failing`` is raised for each one
     instead, as a bus that does not answer or refuses would, and ``down`` is a connection that is away."""
 
     def __init__(self, *, failing: Exception | None = None) -> None:
@@ -82,7 +82,7 @@ class BusDouble(Bus):
 
     @override
     async def read(self, stream: str, subject: str, *, after: int, limit: int) -> StreamPage:
-        """What the stream of what was taken holds on ``subject`` after ``after``, paged by `lakehouse.bus.StreamPage`'s
+        """What the stream of what was taken holds on ``subject`` after ``after``, paged by `lakehouse.events.bus.StreamPage`'s
         own rules: the subject's end is its last message the stream still holds, as the bus answers it."""
         held = [(n, sent) for n, sent in enumerate(self.sent, start=1) if sent.topic == subject and n > self._expired_through]
         end = held[-1][0] if held else 0
@@ -153,7 +153,7 @@ class BusDouble(Bus):
 
 
 def session_holding(bus: BusDouble) -> Callable[..., AbstractAsyncContextManager[Bus | None]]:
-    """What a service's lifespan opens in place of `lakehouse.bus.bus_session`, to hold ``bus`` for the length of its
+    """What a service's lifespan opens in place of `lakehouse.events.bus.bus_session`, to hold ``bus`` for the length of its
     block: `monkeypatch.setattr(<the service's main>, "bus_session", session_holding(bus))`."""
 
     @asynccontextmanager

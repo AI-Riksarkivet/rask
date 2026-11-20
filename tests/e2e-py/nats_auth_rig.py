@@ -53,8 +53,8 @@ from cryptography.x509.oid import NameOID
 from nats.errors import NoRespondersError
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, SecretStr
 
-from lakehouse.bus import BusSettings
-from lakehouse.lineage.signing import SigningKey
+from lakehouse.events.bus import BusSettings
+from lakehouse.events.signing import SigningKey
 from tests.chart.chart_render import bus_sessions, containers, env_of, nats_users
 from tests.loopback import free_ports
 

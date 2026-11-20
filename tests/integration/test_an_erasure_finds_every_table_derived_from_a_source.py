@@ -39,7 +39,7 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 
-from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
+from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from tests.integration.lineage_app import SUBJECT_HEADER, catalog_tick, governed_lineage, joined_bus, live_catalog, live_lineage, run_event
 
 

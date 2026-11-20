@@ -32,7 +32,7 @@ from catalog.core.config import Settings
 from catalog.services import table_claims
 from catalog.services.table_claims import ResolvedTable
 from lakehouse import location_claims, protection
-from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import StorageOptions
 from tests.unit.no_uuids import NO_OBJECT_UUIDS

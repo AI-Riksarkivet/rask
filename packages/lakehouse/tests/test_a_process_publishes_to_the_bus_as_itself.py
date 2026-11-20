@@ -1,6 +1,6 @@
 """A process publishes to the bus as itself: one connection as its own bus user, and each event once under its own id.
 
-[[XC-199]] (#787). The seam is `lakehouse.bus`: every publish site hands it an envelope, and it is the only lakehouse
+[[XC-199]] (#787). The seam is `lakehouse.events.bus`: every publish site hands it an envelope, and it is the only lakehouse
 module that publishes one. What a real broker does with it is the nats-auth lane's to show
 (`tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py`): a service connected as its own user under the
 permission table, its event kept once under its id as the structured envelope, an id another message holds, a bus that
@@ -34,10 +34,10 @@ from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import HistogramDataPoint, InMemoryMetricReader, NumberDataPoint
 from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, TraceState
 
-from lakehouse import bus, bus_metrics
-from lakehouse.bus_delivery import Delivery, Lane, Verdict
-from lakehouse.cloud_events import CloudEvent
 from lakehouse.context import continuing
+from lakehouse.events import bus, bus_metrics
+from lakehouse.events.bus_delivery import Delivery, Lane, Verdict
+from lakehouse.events.cloud_events import CloudEvent
 from lakehouse.supervision import EndProcess, Supervisor
 from tests.traces import trace_id_of
 

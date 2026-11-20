@@ -20,7 +20,7 @@ from unfiled_announcer import unfiled
 
 from catalog.api.v1.endpoints import members
 from catalog.core.config import Settings
-from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.exceptions import ForbiddenError
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken

@@ -12,7 +12,7 @@ The signals, mapped to the four:
   · Errors   — publish_failed (event left staged = the crash window doing its job) + poison_dropped
   · Saturation — DEPTH and OLDEST-AGE gauges: the alertable pair. Depth > 0 sustained means the relay is
     not draining; oldest-age bounds how much lineage is at risk. These are what a human is actually paged on.
-  · Latency  — the publish itself is timed where it is made (`lakehouse.bus`: `messaging.client.operation.duration`).
+  · Latency  — the publish itself is timed where it is made (`lakehouse.events.bus`: `messaging.client.operation.duration`).
 
 Bounded cardinality (observability.md): NO run_id / dataset / token labels — those are unbounded and belong
 on spans and logs, not metric attributes. Every series carries one attribute, its lane.
@@ -233,3 +233,20 @@ def forget_backlog(lane: OutboxLane) -> None:
     exported ends.
     """
     _backlogs.pop(lane, None)
+
+
+__all__ = [
+    "OutboxLane",
+    "create_series",
+    "forget_backlog",
+    "observe_backlog",
+    "record_drained",
+    "record_drop_failed",
+    "record_poison_dropped",
+    "record_publish_failed",
+    "record_published",
+    "record_refused",
+    "record_stage_failed",
+    "record_staged",
+    "record_stranded",
+]

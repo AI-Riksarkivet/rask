@@ -16,9 +16,9 @@ import pytest
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 
-from lakehouse import control_emit, outbox_metrics
-from lakehouse.control_emit import BusControlEmitter
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.events import control_emit, outbox_metrics
+from lakehouse.events.control_emit import BusControlEmitter
+from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.storage_options import StorageOptions
 from tests.bus_double import BusDouble
 from tests.unit.no_store_session import no_store_session
@@ -59,7 +59,7 @@ def _event() -> CatalogControlEvent:
 @pytest.mark.asyncio
 async def test_a_SUCCESSFUL_publish_drops_the_staged_copy(tmp_path: Any) -> None:
     """Drop-on-ack. A staged object that outlives its delivery is one the relay re-publishes forever."""
-    from lakehouse import outbox
+    from lakehouse.events import outbox
 
     uri = f"file://{tmp_path}/control-outbox"
     emitter = BusControlEmitter(BusDouble(), topic="catalog.control.v1", timeout_seconds=1.0, service="catalog", sign=None, outbox_uri=uri)

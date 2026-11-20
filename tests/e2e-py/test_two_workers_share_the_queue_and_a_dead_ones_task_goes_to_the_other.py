@@ -114,9 +114,9 @@ from opentelemetry.trace import SpanKind
 from pydantic import BaseModel, SecretStr
 
 from lakehouse import location_claims, store_session
-from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.events.control_emit import NoopControlEmitter
+from lakehouse.events.lineage_events import LANCE_FACET, DatasetUuids, with_dataset_uuids
 from lakehouse.governed.store_credential import S3KeyPair
-from lakehouse.lineage_events import LANCE_FACET, DatasetUuids, with_dataset_uuids
 from lakehouse.supervision import EndProcess, end_process
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
@@ -193,7 +193,7 @@ _PULL_TRANSIT = 0.3
 #: that waited for its flush would outlive the worker's hold on its task.
 _DOOMED = f"""
 import asyncio, logging, socket, sys
-from lakehouse.bus import BusSettings
+from lakehouse.events.bus import BusSettings
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
@@ -237,7 +237,7 @@ asyncio.run(main(sys.argv[1], float(sys.argv[2])))
 #: and holds the connection.
 _HOLDING = """
 import asyncio, sys
-from lakehouse.bus import BusSettings
+from lakehouse.events.bus import BusSettings
 from maintenance.services.queue import TaskQueue
 
 async def main(url: str) -> None:

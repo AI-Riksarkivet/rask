@@ -7,7 +7,7 @@ license = "Apache-2.0"
 dependencies = [
     # The lakehouse's library: the spec's REST client the feed is read and written through (the catalog's own `query` and
     # `merge_insert` doors, `lineage.services.provenance`), and the producer-signature seam ([[LH-064]]):
-    # `services/signature.py` verifies an event's Ed25519 signature with `lakehouse.lineage.signing`, so the verifier
+    # `services/signature.py` verifies an event's Ed25519 signature with `lakehouse.events.signing`, so the verifier
     # shares the producer's definition of what was signed (canon-1, the facet's members).
     "lakehouse",
     "fastapi>=0.115",

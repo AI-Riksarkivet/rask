@@ -1,7 +1,7 @@
 """``GET /management/v1/events`` — the control-plane change-event poll endpoint (P2).
 
 Serves the control topic's durable stream to the admin console (ADR 0216): the events after the
-caller's ``since`` cursor, read by sequence (`lakehouse.bus.Bus.read`), the new cursor, and a ``reset`` flag when the
+caller's ``since`` cursor, read by sequence (`lakehouse.events.bus.Bus.read`), the new cursor, and a ``reset`` flag when the
 stream no longer holds what came after the cursor. The cursor is the stream's sequence, the same on every replica, so any
 replica answers any poller and the Service needs no affinity. An event is served only when the control doors' rule admits
 it (``api/control_lane.judge``); one whose keys cannot be read yet ends the page before it, so it is served once they are.
@@ -35,8 +35,8 @@ from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import EventsResponse
-from lakehouse.bus import Bus, BusUnavailableError
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.events.bus import Bus, BusUnavailableError
+from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
 

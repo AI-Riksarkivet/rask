@@ -35,7 +35,7 @@ whole run, outage and recovery included, on the e2e-stack kind lane (run 3904982
 | Object store (`rask-rustfs`)¹ | scaled to zero | A write through the catalog's insert door is refused 503 code 17, or gets no answer within the bound the catalog's own store timeouts set (2 × 6 listings × (retries + 1) × max(connect, request): 60 s at the defaults). It never lands while the store is gone. | 24 s |
 | OpenFGA | scaled to zero | A governed write answers 503 code 17 at its authorization check: never an allow, and never a deny that would read as a missing grant. | 20 s |
 | Lineage | scaled to zero | Commits go on landing; its durable consumer resumes where it stopped and records each announcement once. | 39 s |
-| The bus (`rask-nats`, three nodes) | scaled 3 → 0 for 150 s | Commits and grants land, their announcements staged in the outboxes, and the lineage relay records the staged writes without the bus. Each service's own connection is opened again by its own loop (`lakehouse.bus`), and its consumers are pulled or followed again on it (below). | 320 s, 150 s of it the outage² |
+| The bus (`rask-nats`, three nodes) | scaled 3 → 0 for 150 s | Commits and grants land, their announcements staged in the outboxes, and the lineage relay records the staged writes without the bus. Each service's own connection is opened again by its own loop (`lakehouse.events.bus`), and its consumers are pulled or followed again on it (below). | 320 s, 150 s of it the outage² |
 | Dex | its Service cut from its pod | A door holding the issuer's key set (300 s) accepts an existing token. A door that must fetch the key set answers 503 code 17, never 401, and accepts the token again once Dex is back, with no restart. | 69 s |
 | The secret store (`rask-openbao`) | sealed in place | Within one re-read of its key (300 s) the catalog drops its signing key, then refuses every write it would announce with 503 code 17 before committing it. The store's contents survive the seal, so nothing is minted again. | 290 s, most of it the re-read |
 | The catalog | its uvicorn SIGKILLed, four writers committing through `version/create` | Every acknowledged commit lands once, a commit whose answer the kill lost lands at most once, and no run lands twice: Lance's put-if-not-exists of each `_versions/` manifest keeps one history. | 168 s |
@@ -47,7 +47,7 @@ again on the estate rebuilt on RustFS from empty the same day (helm rev 1, "XC-1
 2026-11-14).
 
 **A bus outage of any length leaves every service pulling again once the bus is back, with no pod restarted.** Each
-service publishes and takes its deliveries on a connection of its own (`lakehouse.bus`). While that connection is away
+service publishes and takes its deliveries on a connection of its own (`lakehouse.events.bus`). While that connection is away
 a publish fails at once, so its event stays staged in the outbox for its relay. nats-py reconnects by itself through a
 short cut; past its attempts, or when the bus ends the session, the service's own loop (`Bus.keep_connected`) opens a
 new client with the credential the secret store holds then. A pull consumer (`Bus.consume`) is pulled again on the new
@@ -70,7 +70,7 @@ Since 2026-11-14 (XC-199 step D4) a body that is no event envelope reaches linea
 `lineage_event_invalid` at ERROR, counts it `unrepairable` and acknowledges it; nothing parks it unseen.
 
 So: **a service going down delays the pipeline; it does not lose or corrupt data.** A transient dependency failure is
-asked for again by the lane that met it, on the numbers that lane names (`lakehouse.bus_delivery.judged`):
+asked for again by the lane that met it, on the numbers that lane names (`lakehouse.events.bus_delivery.judged`):
 
 - **Lineage** handles a delivery up to `services.lineage.delivery.attempts` (5) times, `retrySeconds` (120) apart, so it
   rides out an outage of 8 minutes. A handling that raises, or runs past the consumer's ack wait (`ackWaitSeconds`,
@@ -100,7 +100,7 @@ asked for again by the lane that met it, on the numbers that lane names (`lakeho
    response returns, but its errors are swallowed so a lineage outage never fails the write. If the catalog
    crashes (or the bus cannot be reached) **between the S3 write and the publish**, the data exists on storage but
    **the lineage event is lost** — the feed under-reports that write. No corruption, but a provenance hole.
-   *Mitigation (shipped):* the **object-store outbox** (`lakehouse.outbox`, opt-in via the
+   *Mitigation (shipped):* the **object-store outbox** (`lakehouse.events.outbox`, opt-in via the
    catalog's `LANCE_LINEAGE_OUTBOX_URI` and the relay's `LINEAGE_OUTBOX_URI`) narrows the window to commit→stage
    for producers that stage the event before publishing. A crash between the write and the stage is not detected:
    nothing compares on-disk versions with the feed (parked as LH-497, "the commit is the outbox"). *Ops surface (#83):* the outbox
@@ -110,7 +110,7 @@ asked for again by the lane that met it, on the numbers that lane names (`lakeho
    relay tick's drain, for an operator who does not want to wait for the next tick.
 
 2. **A delivery lineage cannot record is parked where the estate admin can replay it.** A pull consumer has no dead
-   letter, so the rule that ends a delivery is the lakehouse's own (`lakehouse.bus_delivery.judged`, pinned by
+   letter, so the rule that ends a delivery is the lakehouse's own (`lakehouse.events.bus_delivery.judged`, pinned by
    `packages/lakehouse/tests/test_a_delivery_is_settled_by_what_its_handling_answers.py`). Lineage parks a delivery on
    its last attempt (above), and at once when its handling refuses a named person who lacks a grant, since a grant can
    repair it. A park keeps the delivery in the provenance namespace's `refusals` table under `dead_letter:<CloudEvent
@@ -189,7 +189,7 @@ chart and live-verified on kind.
 - **Graceful rollout drain.** Every app Deployment has a `preStop` sleep + `terminationGracePeriodSeconds`
   (maintenance gets a longer budget, so a running table pass finishes inside `maintenance.queue.drainSeconds`) so endpoint removal propagates before SIGTERM —
   in-flight requests drain instead of connection-refusing (`lance.preStop`, `lifecycle.*`).
-- **Bounded publishes.** Every `lakehouse.bus.publish_event` runs under its caller's `timeout_seconds`, and a publish
+- **Bounded publishes.** Every `lakehouse.events.bus.publish_event` runs under its caller's `timeout_seconds`, and a publish
   with no connection fails at once, so a bus that does not answer cannot hold a write handler.
 - **Liveness + readiness probes on every workload.** App pods get an HTTP `readinessProbe` (`/readyz`,
   dependency-aware) **and** `livenessProbe` (`/livez`, process-up only — never restarts on a slow backend);
@@ -224,7 +224,7 @@ pipeline's own invariants are its engine's business. One rule binds the work the
 without it:
 
 - **A stopping process parks nothing it was handling.** A delivery whose handling is cut because its process stops is
-  settled by nobody (`lakehouse.bus_delivery.judged` lets the cancellation through, and parks nothing): `Bus.consume`
+  settled by nobody (`lakehouse.events.bus_delivery.judged` lets the cancellation through, and parks nothing): `Bus.consume`
   hands it back to the bus at once, so another replica takes it without waiting out the ack wait, and a good message
   is never parked for a human to find. Pinned by
   `packages/lakehouse/tests/test_a_delivery_is_settled_by_what_its_handling_answers.py`.

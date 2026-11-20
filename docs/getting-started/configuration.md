@@ -38,7 +38,7 @@ The catalog's own settings carry the `LANCE_` prefix, and a setting every lakeho
 
 ## The bus (every service that publishes)
 
-Declared once in `packages/lakehouse/src/lakehouse/bus.py`:
+Declared once in `packages/lakehouse/src/lakehouse/events/bus.py`:
 
 | Variable | Purpose |
 |---|---|

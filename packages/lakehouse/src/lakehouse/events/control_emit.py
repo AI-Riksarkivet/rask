@@ -1,6 +1,6 @@
 """Best-effort control-plane change-event emission onto the bus, signed by the service that emits.
 
-The publish half of :mod:`lakehouse.control_events`, which owns the wire model. Every producer of a
+The publish half of :mod:`lakehouse.events.control_events`, which owns the wire model. Every producer of a
 governance mutation notice uses THIS module — the catalog (grants, warehouses, policies, namespaces,
 tables) and maintenance (the expired-trash purge destroys bytes and revokes grants).
 
@@ -25,10 +25,10 @@ withholds a lineage event it cannot sign, while the signer reports itself not re
 by nothing but the signature they carry, so nothing may sign them later: a relay that signed what it found staged
 would sign whatever any other writer of the prefix put there. A service run with no signing identity (a stack with
 no secret store) passes ``sign=None`` and publishes unsigned, which only a door verifying nothing acts on: every
-action has a signer (:func:`lakehouse.control_events.control_signer_role`).
+action has a signer (:func:`lakehouse.events.control_events.control_signer_role`).
 
 **One seam to the broker.** Publishing goes over this process's own connection to the bus
-(:func:`lakehouse.bus.publish_event`): one bounded attempt, and the outbox's relay is the retry. Each catalog
+(:func:`lakehouse.events.bus.publish_event`): one bounded attempt, and the outbox's relay is the retry. Each catalog
 replica follows the topic by reading its stream by sequence (`catalog.api.control_lane`), and the events poll reads the
 same stream (ADR 0216).
 
@@ -48,10 +48,10 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from opentelemetry import metrics
 
-from lakehouse import outbox, outbox_metrics
-from lakehouse.bus import Bus
-from lakehouse.cloud_events import control_envelope
-from lakehouse.control_events import (
+from lakehouse.events import outbox, outbox_metrics
+from lakehouse.events.bus import Bus
+from lakehouse.events.cloud_events import control_envelope
+from lakehouse.events.control_events import (
     CONTROL_TOPIC,
     CatalogControlEvent,
     ControlAction,
@@ -63,7 +63,7 @@ from lakehouse.storage_options import StorageOptions
 log = logging.getLogger(__name__)
 
 #: Signs one control event as the emitting service: given the JSON the bus will carry, read back, it returns a copy
-#: carrying `rask_signature` (`lakehouse.lineage.signing.attach_control_signature` over the service's own key), and raises
+#: carrying `rask_signature` (`lakehouse.events.signing.attach_control_signature` over the service's own key), and raises
 #: `SigningKeyUnavailableError` while that key is unresolved. A callable because the key is the emitting service's own:
 #: the service binds it, and one with no signing identity passes no signer at all.
 type ControlSign = Callable[[dict[str, Any]], dict[str, Any]]
@@ -157,7 +157,7 @@ class BusControlEmitter:
         double-applied.
 
         SIGNED BEFORE IT IS STAGED, so the staged copy is the signed event and a relay republishes it as it is,
-        in the envelope derived from it (`lakehouse.cloud_events.control_envelope`), whose id is the `event_id`: the
+        in the envelope derived from it (`lakehouse.events.cloud_events.control_envelope`), whose id is the `event_id`: the
         stream stores a relay's copy of an event it already holds once. An event this service cannot sign, its key
         unresolved or the event without a canonical form, is WITHHELD: neither staged nor published, counted under `reason="unsigned"` and logged with
         its action and `event_id`. Published, a door would refuse it and acknowledge the refusal; staged,
@@ -281,3 +281,13 @@ async def emit_control(
         )
         return
     await emitter.emit(event)
+
+
+__all__ = [
+    "BusControlEmitter",
+    "ControlEmitter",
+    "ControlSign",
+    "NoopControlEmitter",
+    "emit_control",
+    "make_control_emitter",
+]

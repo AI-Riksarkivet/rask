@@ -24,7 +24,7 @@ import pytest
 
 from catalog.core.lineage_emit import EmitFields, InputRef, OriginatorBoundEmitter, _BaseLineageEmitter, emit_write_event
 from catalog.core.run_context import RunContext
-from lakehouse.lineage_events import DatasetUuids
+from lakehouse.events.lineage_events import DatasetUuids
 
 
 class _NoUuids:

@@ -188,7 +188,7 @@ def test_custom_metric_incremented(pipeline_run: dict[str, Any]) -> None:
 def test_distributed_trace_spans_catalog_to_lineage(pipeline_run: dict[str, Any]) -> None:
     """3. The create's own trace spans catalog → its publish on the bus → lineage → its feed write — true distributed tracing.
 
-    The publish is the catalog's own span (`lakehouse.bus`, named `publish <topic>`), and the envelope carries its
+    The publish is the catalog's own span (`lakehouse.events.bus`, named `publish <topic>`), and the envelope carries its
     `traceparent` to lineage, whose delivery of it is a CONSUMER span `process <topic>` in the same trace. The span is
     read with its service: the maintenance worker's commit lane names its own delivery of the same publish alike.
 

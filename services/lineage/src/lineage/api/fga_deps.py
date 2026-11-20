@@ -37,15 +37,15 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, ConfigDict
 
+from lakehouse.events.lineage_events import AUTHOR_FACET, dataset_uuids
+from lakehouse.events.openlineage import author_facet, lifecycle_state
+from lakehouse.events.signing import VerifiedSignature
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.decider import AccessDecider
 from lakehouse.governed.principal import is_principal
 from lakehouse.governed.settings import FgaSettings
-from lakehouse.lineage.signing import VerifiedSignature
-from lakehouse.lineage_events import AUTHOR_FACET, dataset_uuids
 from lakehouse.naming import identifier_location
-from lakehouse.openlineage import author_facet, lifecycle_state
 from lineage.api.dependencies import BearerDep, NamesDep, SettingsDep
 from lineage.api.security import Caller, CurrentToken
 from lineage.core.config import LineageSettings

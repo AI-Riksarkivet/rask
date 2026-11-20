@@ -37,8 +37,8 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse import control_prefixes, location_claims, records, stored_objects
-from lakehouse.control_events import CatalogControlEvent
-from lakehouse.lineage_events import DatasetUuids
+from lakehouse.events.control_events import CatalogControlEvent
+from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.storage_options import StorageOptions
 
 

@@ -28,7 +28,7 @@ from catalog.schemas import ContractResponse
 from catalog.services import contracts
 from catalog.services.table_claims import DoorTable
 from lakehouse import records
-from lakehouse.control_emit import emit_control
+from lakehouse.events.control_emit import emit_control
 from lakehouse.governed import fga
 from lakehouse.storage_options import StorageOptions
 

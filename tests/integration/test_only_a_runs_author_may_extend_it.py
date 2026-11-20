@@ -31,9 +31,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.lineage_emit import build_write_event
-from lakehouse.bus_delivery import Verdict
-from lakehouse.lineage_events import DatasetUuids
-from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE
+from lakehouse.events.bus_delivery import Verdict
+from lakehouse.events.lineage_events import DatasetUuids
+from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE
 from lineage.api.v1.endpoints.events import targeting_view
 from lineage.core.metrics import Door
 from lineage.services.consumer import handle_cloud_event

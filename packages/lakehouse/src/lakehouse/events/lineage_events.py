@@ -2,7 +2,7 @@
 identity of an event.
 
 What every reader of the lakehouse's lineage events in the lakehouse needs: lineage's durable feed and the catalog's
-outbox. The lakehouse's emitters build their events with `lakehouse.openlineage`, which builds on these names, so a
+outbox. The lakehouse's emitters build their events with `lakehouse.events.openlineage`, which builds on these names, so a
 reader and a writer cannot disagree about a facet key, a uuid's place or an event's identity. A client reads the same
 events by their published contract (`docs/COMMIT-EVENTS.md`, `spec/facets/rask/`), with no import from the lakehouse.
 """
@@ -18,7 +18,7 @@ from pydantic import BaseModel, ConfigDict
 
 #: Where rask publishes its custom facets' schemas (`spec/facets/rask/`): under a git tag, since OpenLineage asks a
 #: facet's ``_schemaURL`` to be "an immutable pointer to the version of the facet schema", a tag or a sha, never a
-#: branch. A changed schema is a new tag. ``lakehouse.lineage.signing.SIGNATURE_FACET_SCHEMA_URL`` names the same tag.
+#: branch. A changed schema is a new tag. ``lakehouse.events.signing.SIGNATURE_FACET_SCHEMA_URL`` names the same tag.
 RASK_FACET_SCHEMAS: Final = "https://raw.githubusercontent.com/AI-Riksarkivet/rask/facets-1.0.0/spec/facets/rask"
 #: The ``_schemaURL`` of :data:`LANCE_FACET`, a JSON pointer to its definition (`RaskLanceFacet.json`).
 LANCE_FACET_SCHEMA_URL: Final = f"{RASK_FACET_SCHEMAS}/RaskLanceFacet.json#/$defs/RaskLanceFacet"
@@ -27,11 +27,11 @@ AUTHOR_FACET_SCHEMA_URL: Final = f"{RASK_FACET_SCHEMAS}/RaskAuthorFacet.json#/$d
 
 #: rask's own dataset and run facet: the ref an input was read on or a run wrote, and the uuids the catalog minted for the
 #: dataset's table and its namespace. Custom, so its key is ``{prefix}_{name}`` (OpenLineage spec, "Custom Facet Naming")
-#: and its schema is rask's own (:data:`LANCE_FACET_SCHEMA_URL`, `lakehouse.openlineage.lance_facet`).
+#: and its schema is rask's own (:data:`LANCE_FACET_SCHEMA_URL`, `lakehouse.events.openlineage.lance_facet`).
 LANCE_FACET: Final = "rask_lance"
 #: rask's run facet (a DatasetEvent's dataset facet) naming the verified subject a run was authored by, ``{"name", "sub"}``.
 #: Custom, named as :data:`LANCE_FACET` is, with its own schema (:data:`AUTHOR_FACET_SCHEMA_URL`,
-#: `lakehouse.openlineage.author_facet`).
+#: `lakehouse.events.openlineage.author_facet`).
 AUTHOR_FACET: Final = "rask_author"
 _TABLE_UUID: Final = "tableUuid"
 _NAMESPACE_UUID: Final = "namespaceUuid"
@@ -123,7 +123,7 @@ def event_identity(event: Mapping[str, Any]) -> str:
     """The identity of one OpenLineage event on the wire, whichever shape it is.
 
     A run event IS its run id. A ``DatasetEvent`` has none, and three hops need one anyway — the bus
-    and the outbox name the event by it and its state (`lakehouse.cloud_events.lineage_envelope`; a
+    and the outbox name the event by it and its state (`lakehouse.events.cloud_events.lineage_envelope`; a
     wrong name stages the event where the relay cannot find it, which is the provenance loss the
     outbox exists to prevent), lineage's durable feed dedups on it, and a notifier keys what it
     delivers by it. One derivation, so a single change cannot acquire three identities and be staged,
@@ -145,3 +145,17 @@ def event_identity(event: Mapping[str, Any]) -> str:
         operation=str(lance.get("operation") or ""),
         event_time=str(event.get("eventTime") or ""),
     )
+
+
+__all__ = [
+    "AUTHOR_FACET",
+    "AUTHOR_FACET_SCHEMA_URL",
+    "LANCE_FACET",
+    "LANCE_FACET_SCHEMA_URL",
+    "RASK_FACET_SCHEMAS",
+    "DatasetUuids",
+    "dataset_uuids",
+    "event_identity",
+    "static_event_id",
+    "with_dataset_uuids",
+]

@@ -71,10 +71,10 @@ from catalog.services import clone_endings, dataplane, native, protections, tabl
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves
 from catalog.services.clone_ending_records import CloneEnding
 from lakehouse import base_registry, clone_sources, location_claims, protection, trash
-from lakehouse.control_emit import emit_control
-from lakehouse.control_events import CatalogControlEvent, ControlUuids
+from lakehouse.events.control_emit import emit_control
+from lakehouse.events.control_events import CatalogControlEvent, ControlUuids
+from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
-from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.protection import ProtectionRecord
 from lakehouse.storage_options import StorageOptions

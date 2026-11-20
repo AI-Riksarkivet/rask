@@ -205,7 +205,7 @@ release issues it, and with no stream behind the subject its publishes are refus
 
 CATALOG_CONTROL carries the catalog's control-plane change events, under `catalog.controlEmit`. Every catalog replica
 must see every event, so no consumer is declared on it: each replica follows the topic by reading the stream by
-sequence on its own connection (`lakehouse.bus.Bus.follow`, nats-py's `get_msg`). A replica holds nothing on the bus,
+sequence on its own connection (`lakehouse.events.bus.Bus.follow`, nats-py's `get_msg`). A replica holds nothing on the bus,
 so one that is gone leaves nothing to reap.
 
 ## `{{- range $consumers }}`
@@ -242,4 +242,4 @@ consumer the phase has just read.
 The phase runs after the sync (a Helm `post-install,post-upgrade` hook, an Argo CD `PostSync` hook), so nothing of the
 new revision still pulls what it removes. Neither Helm's wait nor Argo CD's health waits for the previous revision's
 terminating pods, so one of those may still be stopping: its pulls of a consumer that is gone are refused, which its
-lane waits out until the pod ends (`lakehouse.bus` says a refused pull once and asks again).
+lane waits out until the pod ends (`lakehouse.events.bus` says a refused pull once and asks again).

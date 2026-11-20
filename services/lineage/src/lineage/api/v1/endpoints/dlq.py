@@ -2,7 +2,7 @@
 
 The lineage delivery path has two failure backstops (see ``docs/RESILIENCE.md``): the ingest lane's **park**
 (`lineage.api.ingest_lane`: a delivery it ends unrecorded is kept in the provenance namespace's ``refusals`` table and
-replayed at this module's ``/parked`` doors), and the **transactional outbox** (``lakehouse.outbox``) — an object-store of events staged BEFORE publish and
+replayed at this module's ``/parked`` doors), and the **transactional outbox** (``lakehouse.events.outbox``) — an object-store of events staged BEFORE publish and
 dropped on ack. A surviving outbox object is a committed write whose lineage was not yet confirmed delivered:
 the at-risk set the reconcile relay drains on a timer. This module surfaces that set for an operator and lets
 them replay one on demand instead of waiting for the next reconcile tick.
@@ -28,11 +28,11 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError, ServiceUnavailableError, TransactionNotFoundError, UnauthenticatedError, UnsupportedOperationError
 
-from lakehouse import outbox
-from lakehouse.bus_delivery import Verdict
+from lakehouse.events import outbox
+from lakehouse.events.bus_delivery import Verdict
+from lakehouse.events.lineage_events import dataset_uuids
 from lakehouse.governed import audit, fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome
-from lakehouse.lineage_events import dataset_uuids
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
 from lineage.api.fga_deps import (
     FilterDep,

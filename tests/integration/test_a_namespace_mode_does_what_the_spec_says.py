@@ -30,7 +30,7 @@ from catalog.api.dependencies import get_namespace
 from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
 from lakehouse import maintenance_policies
-from lakehouse.control_emit import CatalogControlEvent
+from lakehouse.events.control_emit import CatalogControlEvent
 from lakehouse.storage_options import StorageOptions
 from tests import seeding
 from tests.integration.openfga_grants import act_as

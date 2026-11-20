@@ -27,7 +27,7 @@ from typing import Any, cast
 
 import pytest
 
-from lakehouse.lineage_events import DatasetUuids
+from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.storage_options import StorageOptions
 
 

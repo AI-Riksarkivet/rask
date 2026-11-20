@@ -16,7 +16,7 @@ call site; a table that lets anyone else publish a subject fails, and so does on
 client makes is read off the broker's trace: a call the table refuses fails the run, and so does a grant of a user
 this module drives that no call of that user used.
 
-Each service's own connection is the seam itself: the real `lakehouse.bus.Bus`, connected as the bus user the render
+Each service's own connection is the seam itself: the real `lakehouse.events.bus.Bus`, connected as the bus user the render
 names that service, handed what the chart hands its pod and nothing else: a token file, the bus's CA and the session's
 length (`nats_auth_rig.Pod`).
 
@@ -104,11 +104,11 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 from opentelemetry.trace import SpanKind
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse import bus as seam
-from lakehouse import bus_metrics
-from lakehouse.bus import Bus, BusSettings, BusUnavailableError, Follow, bus_session, publish_event
-from lakehouse.bus_delivery import MAX_ENVELOPE_DEPTH, Delivery, Handle, Lane, Verdict
-from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent
+from lakehouse.events import bus as seam
+from lakehouse.events import bus_metrics
+from lakehouse.events.bus import Bus, BusSettings, BusUnavailableError, Follow, bus_session, publish_event
+from lakehouse.events.bus_delivery import MAX_ENVELOPE_DEPTH, Delivery, Handle, Lane, Verdict
+from lakehouse.events.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent
 from lakehouse.supervision import Supervisor
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM
@@ -126,7 +126,7 @@ REPO = Path(__file__).resolve().parents[2]
 RIG = "rask-test-rig"
 #: How many times the stream Job runs before the lane gives up on it, inside the chart's `backoffLimit` of 20.
 _JOB_RUNS = 3
-#: The topics a service publishes on its own connection: its lineage events (`lakehouse.outbox`) and the control lane's.
+#: The topics a service publishes on its own connection: its lineage events (`lakehouse.events.outbox`) and the control lane's.
 OWN_CONNECTION_TOPICS = ("lineage.events.v1", "catalog.control.v1")
 LINEAGE_TOPIC, CONTROL_TOPIC = OWN_CONNECTION_TOPICS
 #: The stream the catalog's control events are kept on, which each catalog replica follows (`catalog.api.control_lane`).
@@ -148,7 +148,7 @@ _PUBLISH_EVERY = 0.25
 _SIGNERS_AWAY = 14.0
 #: The seam's reconnect budget in this run, shortened from the service's (ten attempts two seconds apart, then a pause of
 #: 2 to 15 s) so that a cut of seconds outlasts nats-py's own reconnects: attempts, seconds apart, and the pause's bounds.
-#: `lakehouse.bus` takes them from no setting, so the run sets the module's own.
+#: `lakehouse.events.bus` takes them from no setting, so the run sets the module's own.
 _RECONNECT_ATTEMPTS = 3
 _RECONNECT_WAIT_SECONDS = 1
 _PAUSE_SECONDS = (0.5, 1.0)
@@ -342,7 +342,7 @@ async def _settles(session: Bus, *, up: bool, within: float) -> bool:
 
 @asynccontextmanager
 async def _session_of(settings: BusSettings) -> AsyncGenerator[Bus]:
-    """A service's own connection to the bus, as the chart names it to a pod (`lakehouse.bus.bus_session`), up or not."""
+    """A service's own connection to the bus, as the chart names it to a pod (`lakehouse.events.bus.bus_session`), up or not."""
     async with Supervisor() as loops, bus_session(loops, settings) as session:
         assert session is not None, "the seam opens no connection for a process named a bus"
         yield session

@@ -35,11 +35,11 @@ import pytest
 from fastapi import FastAPI
 from lance_namespace import PermissionDeniedError
 
+from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
+from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE
 from lakehouse.governed import fga
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.machine_identity import ServicePrincipal
-from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
-from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE
 from lineage.api.fga_deps import Governed, enforce_output_authz, is_external_source
 from lineage.core.config import LineageSettings
 from lineage.models import Dataset, Job, Run, RunEvent

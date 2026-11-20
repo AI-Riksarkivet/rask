@@ -277,7 +277,7 @@ event rides the envelope its first publish rode.
   which is why the state is part of it. One event is told under one id by design: every failure of maintenance's pass
   over a table carries the run id derived from that table, so a failure repeated inside the window is stored once, as
   the feed keeps its row once. A publisher counts a publish the stream answers as a duplicate as delivered only when
-  the stored message carries the same event (`lakehouse.bus` reads it back), so a repeat that differs stays staged
+  the stored message carries the same event (`lakehouse.events.bus` reads it back), so a repeat that differs stays staged
   where its lane stages, and its relay delivers it once the window has passed. The id is the key lineage's feed keeps the row of a run's event, and of a signed dataset
   change, under, so a reader of the bus and a walker of the feed key those alike; the feed keys an unsigned dataset
   change under the subject it was recorded for as well.
@@ -296,16 +296,16 @@ A client reads these events with no import from the lakehouse: this section and 
 (`spec/facets/rask/`) are the contract. Inside the lakehouse its producers and doors share one definition of each
 name, in the `lakehouse` library:
 
-- `lakehouse.cloud_events`: `CloudEvent`, and `lineage_envelope` and `control_envelope`, the one derivation of each
+- `lakehouse.events.cloud_events`: `CloudEvent`, and `lineage_envelope` and `control_envelope`, the one derivation of each
   lane's envelope (§ The envelope on the bus above), which a producer's publish and a relay's copy share;
-- `lakehouse.control_events`: `CatalogControlEvent`, `ControlAction`, `CONTROL_TOPIC` and `control_signer_role`;
-- `lakehouse.lineage_events`: the `rask_lance` and `rask_author` facet keys and their schema URLs, `dataset_uuids`
+- `lakehouse.events.control_events`: `CatalogControlEvent`, `ControlAction`, `CONTROL_TOPIC` and `control_signer_role`;
+- `lakehouse.events.lineage_events`: the `rask_lance` and `rask_author` facet keys and their schema URLs, `dataset_uuids`
   and `with_dataset_uuids`, and `event_identity` and `static_event_id`, the one derivation of an event's identity
   (§ An event's identity below), so a notifier reading the bus and one walking the feed key a change alike;
 - `lakehouse.governed.subjects`: `is_person_subject`, the address rule above;
-- `lakehouse.signature_doors`: `SignatureDoorSettings`, a verifying door's mode (`RASK_SIGNATURE_DOORS`) and the
+- `lakehouse.events.signature_doors`: `SignatureDoorSettings`, a verifying door's mode (`RASK_SIGNATURE_DOORS`) and the
   identities that sign the lakehouse's events (`RASK_EVENT_SIGNERS`, `RASK_EVENT_DELEGATORS`,
-  `RASK_CONTROL_SIGNER_ROLES`), against which a notifier verifies each event's `rask_signature` (`lakehouse.lineage.signing`)
+  `RASK_CONTROL_SIGNER_ROLES`), against which a notifier verifies each event's `rask_signature` (`lakehouse.events.signing`)
   before it tells anyone. Each signer's public key is the secret `signing-public-<key name>` (the signer's
   ServiceAccount name, `lance.signingKeys`) in the platform's secret store. No store role the product chart renders
   names a client (`lance.storeReads`), so a notifier's release provisions its own role to read those keys.

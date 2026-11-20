@@ -32,7 +32,7 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.lineage.signing import KeySourceUnavailableError, SignatureError, VerifiedSignature
+from lakehouse.events.signing import KeySourceUnavailableError, SignatureError, VerifiedSignature
 
 
 #: What OBSERVE reports when it could not read the keys a signature is checked against: the one outcome that is not a refusal
@@ -82,3 +82,11 @@ def judge(verify: Callable[[], VerifiedSignature], mode: DoorMode) -> DoorVerdic
     except KeySourceUnavailableError:
         return DoorVerdict(act=True, observed=KEYS_UNAVAILABLE) if observing else DoorVerdict(act=False, retry=True)
     return DoorVerdict(act=True)
+
+
+__all__ = [
+    "KEYS_UNAVAILABLE",
+    "DoorMode",
+    "DoorVerdict",
+    "judge",
+]

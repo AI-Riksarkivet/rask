@@ -39,7 +39,7 @@ from unfiled_announcer import unfiled
 from catalog.api.idempotency import KeyedDoor
 from catalog.core.config import Settings
 from catalog.services import warehouses
-from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage_options import StorageOptions

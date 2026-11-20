@@ -23,7 +23,7 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoi
 from pydantic import BaseModel, ConfigDict
 from starlette.testclient import TestClient
 
-from lakehouse.bus_delivery import Lane, Settlement
+from lakehouse.events.bus_delivery import Lane, Settlement
 from lakehouse.governed import fga
 from lakehouse.governed.decider import AccessDecider
 from lineage import main

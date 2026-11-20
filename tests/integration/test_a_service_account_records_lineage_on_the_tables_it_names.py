@@ -37,14 +37,14 @@ import pyarrow as pa
 import pytest
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse import outbox
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.cloud_events import lineage_envelope
+from lakehouse.events import outbox
+from lakehouse.events.cloud_events import lineage_envelope
+from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
+from lakehouse.events.openlineage import SYMLINKS_FACET_SCHEMA_URL, author_facet
 from lakehouse.governed import fga
 from lakehouse.governed.decider import MAX_OBJECTS_PER_QUESTION
-from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.naming import location_identifier
-from lakehouse.openlineage import SYMLINKS_FACET_SCHEMA_URL, author_facet
 from lakehouse.storage_options import StorageOptions
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event
 from tests.integration.store_requests import CountedStore, counted

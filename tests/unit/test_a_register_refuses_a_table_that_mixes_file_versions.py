@@ -287,7 +287,7 @@ class TestThePublicDoor:
         """The caller sends a relative location; the lineage edge and the control event must carry the absolute one."""
         from catalog.api import announcing
         from catalog.api.dependencies import get_control_emitter
-        from lakehouse.control_events import CatalogControlEvent
+        from lakehouse.events.control_events import CatalogControlEvent
 
         sent: dict[str, object] = {}
 

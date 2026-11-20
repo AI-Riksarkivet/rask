@@ -101,13 +101,13 @@ from catalog.services.announcement_intents import Announcement, ControlMessage, 
 from catalog.services.clone_ending_records import CloneEnding
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse import base_registry, location_claims, object_records, protection, trash
-from lakehouse.control_emit import ControlEmitter, emit_control
-from lakehouse.control_events import CatalogControlEvent, ControlAction
+from lakehouse.events.control_emit import ControlEmitter, emit_control
+from lakehouse.events.control_events import CatalogControlEvent, ControlAction
+from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.features import CREATE_FORMAT, table_file_format
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings
-from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import uuid_of
 from lakehouse.ns_errors import PartiallyApplied
 from lakehouse.protection import ProtectionRecord

@@ -2,7 +2,7 @@
 
 A door that verifies a lineage event or a catalog control event before it acts on it (the catalog's and maintenance's
 control-lane consumers) mixes :class:`SignatureDoorSettings` into its own settings. The signer roles are the control
-lane's (:data:`~lakehouse.control_events.ControlSigner`), part of the contract the lakehouse publishes for its events.
+lane's (:data:`~lakehouse.events.control_events.ControlSigner`), part of the contract the lakehouse publishes for its events.
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ from typing import Self
 
 from pydantic import Field, model_validator
 
-from lakehouse.control_events import ControlSigner
-from lakehouse.lineage.door import DoorMode
+from lakehouse.events.control_events import ControlSigner
+from lakehouse.events.door_verdict import DoorMode
 
 
 class SignatureDoorSettings:
@@ -43,3 +43,8 @@ class SignatureDoorSettings:
         if self.signature_doors is not DoorMode.OFF and not self.event_signers:
             raise ValueError(f"RASK_SIGNATURE_DOORS={self.signature_doors} needs RASK_EVENT_SIGNERS: a door would verify against no signer")
         return self
+
+
+__all__ = [
+    "SignatureDoorSettings",
+]

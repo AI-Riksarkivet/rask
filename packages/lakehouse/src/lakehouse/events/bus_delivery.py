@@ -2,7 +2,7 @@
 
 A PULL CONSUMER HAS NO DEAD LETTER. JetStream delivers a message until it is acknowledged or ended, and a message asked
 for again with no delay comes back at once (measured on nats-server 2.15.2, 2026-11-13: 0.00 s). So the rule that ends
-a delivery taken through `lakehouse.bus.Bus.consume` is the lakehouse's own, stated here, and each lane names its
+a delivery taken through `lakehouse.events.bus.Bus.consume` is the lakehouse's own, stated here, and each lane names its
 numbers (:class:`Lane`):
 
 * a handling answers :class:`Verdict`: taken, again, or park;
@@ -15,7 +15,7 @@ numbers (:class:`Lane`):
 * a delivery's handling and its park share one bound, the consumer's ack wait less what is kept for the settle: past
   the ack wait the bus hands the message to another replica, whatever this one is still doing with it.
 
-This module names no broker: `lakehouse.bus` applies a :class:`Settlement` to the message it came for.
+This module names no broker: `lakehouse.events.bus` applies a :class:`Settlement` to the message it came for.
 """
 
 from __future__ import annotations

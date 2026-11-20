@@ -8,9 +8,9 @@ subscribers what another withholds, unseen.
 
 from __future__ import annotations
 
-from lakehouse.bus import Bus, publish_event  # noqa: TID251 — the relay's republish is a registered publish site
-from lakehouse.cloud_events import CloudEvent, lineage_envelope
-from lakehouse.outbox import staged_envelope
+from lakehouse.events.bus import Bus, publish_event  # noqa: TID251 — the relay's republish is a registered publish site
+from lakehouse.events.cloud_events import CloudEvent, lineage_envelope
+from lakehouse.events.outbox import staged_envelope
 from lineage.core.config import LineageDelivery
 from lineage.models import DatasetEvent, RunEvent, parse_event
 
@@ -58,7 +58,7 @@ async def republish_staged(publisher: Bus | None, settings: LineageDelivery, sta
     ``staged`` IS THE STAGED ENVELOPE AS IT PARSES, never the model's dump. The model is the parsed Python shape
     (`run_id`, `event_type`); the wire is OpenLineage (`runId`, `eventType`), so a round-trip through the model
     publishes a document no subscriber can parse. The staged event is what subscribers would have seen the
-    first time, and its envelope is derived from it alone (`lakehouse.cloud_events.lineage_envelope`), so the
+    first time, and its envelope is derived from it alone (`lakehouse.events.cloud_events.lineage_envelope`), so the
     copy goes out under the id its producer's publish carried: inside its duplicate window the stream stores
     it only when that publish never arrived. It goes out in the trace it was staged under (ADR 0209).
     """

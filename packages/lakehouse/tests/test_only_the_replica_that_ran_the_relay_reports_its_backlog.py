@@ -18,7 +18,7 @@ from opentelemetry import metrics as otel_metrics
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 
-from lakehouse import outbox, outbox_metrics
+from lakehouse.events import outbox, outbox_metrics
 from lakehouse.storage_options import StorageOptions
 
 

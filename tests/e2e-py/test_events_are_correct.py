@@ -8,7 +8,7 @@ lineage's feed serves it, and holds them to six claims:
    `rask_signature` facet against `spec/facets/rask/RaskSignatureRunFacet.json`, and each `rask_lance` and `rask_author`
    facet, in any facet bag, against `RaskLanceFacet.json` and `RaskAuthorFacet.json` and the `_schemaURL` naming it
    ([[LH-500]]); a control event parses strictly as
-   the control envelope (`lakehouse.control_events.CatalogControlEvent`); and each rides the bus in the CloudEvent its
+   the control envelope (`lakehouse.events.control_events.CatalogControlEvent`); and each rides the bus in the CloudEvent its
    contract derives from it (`docs/COMMIT-EVENTS.md` § The envelope on the bus), stored under that envelope's id, the
    message id a stream deduplicates on ([[XC-199]]);
 2. lineage recorded each as the person who called the catalog's door: the author is that person's principal, the
@@ -68,9 +68,9 @@ from pydantic import BaseModel, ValidationError
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
-from lakehouse.control_events import CatalogControlEvent, control_signer_role
+from lakehouse.events.control_events import CatalogControlEvent, control_signer_role
+from lakehouse.events.lineage_events import dataset_uuids, event_identity
 from lakehouse.governed.fga import user_object
-from lakehouse.lineage_events import dataset_uuids, event_identity
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM
 from tests.unit.rask_facets import rask_facet_errors

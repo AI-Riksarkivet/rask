@@ -1,8 +1,8 @@
 """The handling of one event delivered from the bus: the durable ingest path for catalog→lineage events (#25).
 
 The catalog publishes OpenLineage events to NATS JetStream, which keeps them, and this service pulls each from its
-own consumer on its own connection (`lineage.api.ingest_lane`, `lakehouse.bus`). The handling records the event in
-the commit feed and the edge list and answers the lane what became of the delivery (`lakehouse.bus_delivery.Verdict`):
+own consumer on its own connection (`lineage.api.ingest_lane`, `lakehouse.events.bus`). The handling records the event in
+the commit feed and the edge list and answers the lane what became of the delivery (`lakehouse.events.bus_delivery.Verdict`):
 *taken* (recorded, or refused for good), *again* (a dependency did not answer; the lane delivers it again after its
 delay, and parks it on its last delivery), or *park* (a refusal a grant can repair, kept for one). Redelivery is safe:
 every feed row and edge is written under its key with an insert-only merge, so a redelivered event lands nothing new
@@ -25,7 +25,7 @@ from typing import Any
 from lance_namespace import PermissionDeniedError
 from pydantic import ValidationError
 
-from lakehouse.bus_delivery import Verdict
+from lakehouse.events.bus_delivery import Verdict
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome, refusal_outcome
 from lineage.models import DatasetEvent, ForeignRunError, RunEvent, parse_event
 from lineage.services.provenance import ProvenanceStore
@@ -42,7 +42,7 @@ async def handle_cloud_event(
     door: Door,
 ) -> Verdict:
     """Ingest one delivered CloudEvent. ``body["data"]`` is the OpenLineage event, which the envelope its publisher
-    built carries as JSON (`lakehouse.cloud_events`). ``body`` is an untrusted external envelope, hence ``Any`` + the
+    built carries as JSON (`lakehouse.events.cloud_events`). ``body`` is an untrusted external envelope, hence ``Any`` + the
     ``isinstance`` guard. Returns what the lane does with the delivery.
 
     ``door`` is the ingress the delivery arrived through, with no default: every outcome below is counted under it,

@@ -26,10 +26,10 @@ from lance_namespace import PermissionDeniedError
 from lineage_lane import Feed, governed, started
 from openfga_sdk import OpenFgaClient
 
-from lakehouse.bus_delivery import Outcome, Settlement
+from lakehouse.events.bus_delivery import Outcome, Settlement
+from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.decider import OpenFgaDecider
-from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from lineage.api import fga_deps
 from lineage.api.fga_deps import relations_for_operation
 from lineage.core.config import LineageSettings, Signing

@@ -18,7 +18,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, NamedTuple
 
-from lakehouse.lineage.signing import KeySourceUnavailableError, PublicKeySource, parse_published_keys
+from lakehouse.events.signing import KeySourceUnavailableError, PublicKeySource, parse_published_keys
 
 
 #: An identity publishes its keys as the comma-separated text of its list's `keys` field.
@@ -194,3 +194,11 @@ class _KeysForOneEvent:
 
     def refresh(self, identity: str) -> Sequence[str]:
         return self._keys.read_for_unknown_key_id(identity, self._kid, arrived=self._arrived)
+
+
+__all__ = [
+    "KEY_REFRESH_INTERVAL_SECONDS",
+    "KEY_TTL_SECONDS",
+    "MAX_UNKNOWN_KEY_IDS",
+    "PublishedKeys",
+]

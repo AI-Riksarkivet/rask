@@ -21,7 +21,7 @@ from pydantic import BaseModel
 
 from catalog.api.ticks import Tick
 from catalog.services import erasure_release, table_claims
-from lakehouse.control_emit import emit_control
+from lakehouse.events.control_emit import emit_control
 from lakehouse.governed import fga
 from lakehouse.lance_session import fresh_session, open_dataset
 from lakehouse.location_claims import ClaimStore

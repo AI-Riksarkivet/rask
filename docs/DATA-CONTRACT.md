@@ -121,10 +121,10 @@ Access is a separate gate, checked at every door: OpenFGA decides who may read, 
 - **Columns no contract names.** A table with no contract, and every column a contract leaves out, changes freely.
 - **Inputs outside the run rule.** Under a namespace declaring `rask.requires_run = "true"` a write names its run and
   inputs (ADR 0211). Elsewhere a writer names them only if it chooses, so a table there may record no upstream.
-- **The claim-check rule is a guard on size, not on shape.** Every publish goes through `lakehouse.bus.publish_event`,
+- **The claim-check rule is a guard on size, not on shape.** Every publish goes through `lakehouse.events.bus.publish_event`,
   which refuses an envelope past 900 KiB and logs one past 64 KiB.
 - **A message body is read as an envelope only when it is a JSON object nested no deeper than 300 levels**
-  (`lakehouse.bus_delivery.envelope_of`). A body past that is handled as one that carries no event.
+  (`lakehouse.events.bus_delivery.envelope_of`). A body past that is handled as one that carries no event.
 
 **Recorded, not built:** a `DataContract` custom resource, reconciled by the rask operator (XC-210), will later apply
 the same door from git.
@@ -138,7 +138,7 @@ makes the data contract *checkable*:
   Limits retention for `nats.streamMaxAgeSeconds` (604,800 s, 168 h). Lineage pulls the durable consumer
   `lineage-ingest`, which the stream Job declares with a 300 s ack wait (`services.lineage.delivery.ackWaitSeconds`);
   a delivery lineage cannot record is delivered again up to 5 times, 120 s apart, then parked in the provenance
-  namespace's `refusals` table (`lakehouse.bus_delivery`, `lineage.api.ingest_lane`). Nothing of the lakehouse's is
+  namespace's `refusals` table (`lakehouse.events.bus_delivery`, `lineage.api.ingest_lane`). Nothing of the lakehouse's is
   published on `DLQ`: it holds what a subscriber outside the release parks on `dlq.<its own name>`. Maintenance's streams are work queues it reads with
   nats-py (ADR 0198): `MAINTENANCE_TASKS` holds one task per table for at most 24 h, delivered up to
   `maintenance.queue.maxDeliver` + 1 (11) times on a `maintenance.queue.ackWaitSeconds` (60 s) ack wait kept alive by
@@ -146,9 +146,9 @@ makes the data contract *checkable*:
   `maintenance.queue.storeEventsMaxBytes` (128 MiB), dropping its oldest (`chart/templates/nats-stream-job.yaml`). Its ~1 MB
   message bound is *why* the claim-check rule exists: the bus physically cannot carry data, so
   events must be pointers — a contract enforced by constraint.
-- **The bus seam** (`lakehouse.bus`) supplies the consuming side: each service publishes and takes its deliveries on a
+- **The bus seam** (`lakehouse.events.bus`) supplies the consuming side: each service publishes and takes its deliveries on a
   connection of its own, as its own bus user, and the bus lets each user pull only its own consumer. Every delivery is
-  settled by one rule (`lakehouse.bus_delivery.judged`): a handling answers taken (acknowledged), again (delivered
+  settled by one rule (`lakehouse.events.bus_delivery.judged`): a handling answers taken (acknowledged), again (delivered
   again after its lane's delay) or park (kept by the lane, then ended), and a handling is cut 10 s before its
   consumer's ack wait. Who wrote an event is proven by its `rask_signature`, which each lane verifies, not by the bus.
 - The **data** contract itself is enforced by Lance (manifest schema + CAS commit) and by the
@@ -186,14 +186,14 @@ publish site is caught by review alone.
 
 ### 7.1 Envelope: CloudEvents, built by the lakehouse
 
-Every publish goes through the one bounded seam `packages/lakehouse/src/lakehouse/bus.py::publish_event`, which
+Every publish goes through the one bounded seam `packages/lakehouse/src/lakehouse/events/bus.py::publish_event`, which
 takes the event in its envelope and sends it on the process's own connection in structured mode
 (`application/cloudevents+json`), under the envelope's `id` as the message's `Nats-Msg-Id`. The envelope is derived from the event alone
-(`packages/lakehouse/src/lakehouse/cloud_events.py`; its attributes are `docs/COMMIT-EVENTS.md` § The envelope on
+(`packages/lakehouse/src/lakehouse/events/cloud_events.py`; its attributes are `docs/COMMIT-EVENTS.md` § The envelope on
 the bus), so a relay's copy of an event carries the `id` its first publish carried, the message id a stream
 deduplicates on. Its `traceparent` and `tracestate` are the publish's own, made in the trace of the request that caused
 the event, which an outbox stages with the envelope (ADR 0209). Consumers
-read the envelope from the delivery (`Delivery.envelope()` in `lakehouse.bus_delivery`, None for a body that is no
+read the envelope from the delivery (`Delivery.envelope()` in `lakehouse.events.bus_delivery`, None for a body that is no
 JSON object) and read its `data`: `handle_cloud_event` in `services/lineage/services/consumer.py` and
 `ControlLane.handle` in `services/catalog/api/control_lane.py` treat it as untrusted and guard with `isinstance` before
 touching `data`.
@@ -203,7 +203,7 @@ touching `data`.
 | Topic | Producer → consumer | Schema (the pydantic model) | Where the name lives |
 |---|---|---|---|
 | `lineage.events.v1` | catalog (`catalog/core/lineage_emit.py`), maintenance (`maintenance/core/lineage_emit.py`) → lineage (consumer `lineage-ingest`) and, under `maintenance.arrivalEnabled`, the maintenance worker's write-event lane (consumer `maintenance-arrival`), each a durable pull consumer the stream Job declares | `lineage.models.RunEvent` (OpenLineage) | defaults on `RASK_LINEAGE_TOPIC` in each service's `core/config.py` |
-| `catalog.control.v1` | the catalog and maintenance through `packages/lakehouse/src/lakehouse/control_emit.py`, each signed as `control_signer_role` names → every catalog replica, each following the topic by reading its stream by sequence (`lakehouse.bus.Bus.follow`), each verifying the signature | `lakehouse.control_events.CatalogControlEvent`, whose model ignores the top-level `rask_signature` member | `CONTROL_TOPIC` in `packages/lakehouse/src/lakehouse/control_events.py`, imported by every producer and by the catalog subscriber |
+| `catalog.control.v1` | the catalog and maintenance through `packages/lakehouse/src/lakehouse/events/control_emit.py`, each signed as `control_signer_role` names → every catalog replica, each following the topic by reading its stream by sequence (`lakehouse.events.bus.Bus.follow`), each verifying the signature | `lakehouse.events.control_events.CatalogControlEvent`, whose model ignores the top-level `rask_signature` member | `CONTROL_TOPIC` in `packages/lakehouse/src/lakehouse/events/control_events.py`, imported by every producer and by the catalog subscriber |
 | `dlq.*` | a subscriber outside the release, on `dlq.<its own name>` | what that subscriber parks; nothing of the lakehouse's | the `DLQ` stream binds `dlq.>` in `nats-stream-job.yaml` |
 
 The two **cross-plane** topics carry an explicit `.v1`: the version in the NAME is the compatibility
@@ -237,7 +237,7 @@ already support (subjects `lineage.events.*` style bindings cost nothing).
 
 A registry earns its keep when producers and consumers ship independently. Here they cannot drift:
 **one repo, one CI** — producers and consumers import the same model classes
-(`lakehouse.control_events`, `lineage.models.RunEvent`), so `ty` type-checks both sides of every topic
+(`lakehouse.events.control_events`, `lineage.models.RunEvent`), so `ty` type-checks both sides of every topic
 in the same run. A registry would add an operand and a failure mode to re-prove a property CI already
 proves. **Revisit trigger:** the moment a consumer is deployed from OUTSIDE
 this repo's CI — an independently-released service, or tenant-authored consumers on the bus — the

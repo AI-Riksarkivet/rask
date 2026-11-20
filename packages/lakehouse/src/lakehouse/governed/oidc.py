@@ -86,7 +86,7 @@ HTTP_FETCH_TIMEOUT_SECONDS = 15.0
 #: buys a live fetch from the IdP (and, for a service-account issuer, the mirror's two from the API server), each free to
 #: hold a threadpool worker for `HTTP_FETCH_TIMEOUT_SECONDS` ([[LH-431]]). Paced, a flood costs one fetch per interval,
 #: and an honest rotation's first token is found by the first refetch that begins once the interval has passed. The same
-#: interval as `lakehouse.lineage.keys.KEY_REFRESH_INTERVAL_SECONDS`, which paces the same refetch for signed lineage events.
+#: interval as `lakehouse.events.published_keys.KEY_REFRESH_INTERVAL_SECONDS`, which paces the same refetch for signed lineage events.
 UNKNOWN_KID_REFRESH_INTERVAL_SECONDS: Final = 30.0
 
 #: Asymmetric signing algorithms we are willing to accept. Symmetric (``HS*``) and

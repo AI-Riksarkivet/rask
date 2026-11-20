@@ -6,7 +6,7 @@ the client (maintenance's work queue, `maintenance.services.queue`, is the one o
 
 A SERVICE TAKES ITS DELIVERIES ON THE SAME CONNECTION, by pulling. :meth:`Bus.consume` pulls a durable consumer the
 chart's stream Job declares, which the service binds to and never creates, and settles each message by the one rule
-`lakehouse.bus_delivery` states: acknowledged, asked for again after the lane's delay, or parked and ended. A pull
+`lakehouse.events.bus_delivery` states: acknowledged, asked for again after the lane's delay, or parked and ended. A pull
 consumer has no dead letter, so that rule is what ends a message. :meth:`Bus.follow` hands a process every message of
 a subject in the stream's order, read by sequence with no consumer on the bus: what each replica must see, and none
 may take from another. Both wait for a connection, and take up again on the next one when
@@ -41,7 +41,7 @@ that meets it waits up to ``_RENEWED_WITHIN_SECONDS`` for the connection to be b
 or when the bus ends the session (its time ran out unasked, or the signer's key for the user was withdrawn: the client
 then closes for good), the loop opens a new client. So a process is never left with a closed client and a healthy face.
 
-THE ENVELOPE IS THE BODY (`lakehouse.cloud_events`), in structured mode under ``application/cloudevents+json``, and its
+THE ENVELOPE IS THE BODY (`lakehouse.events.cloud_events`), in structured mode under ``application/cloudevents+json``, and its
 ``id`` is the message's ``Nats-Msg-Id``: inside the stream's duplicate window a second publish of one event is stored
 once. A DUPLICATE ACKNOWLEDGEMENT IS BELIEVED ONLY AFTER THE STORED MESSAGE IS READ BACK. A message id names nobody, so
 any publisher on a topic can store a message of its own under an event's id first, and the stream then drops the event
@@ -80,10 +80,10 @@ from opentelemetry.trace import Link, Span, SpanKind, StatusCode
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse.bus_delivery import Delivery, Handle, Lane, Outcome, Park, Settlement, being_cancelled, envelope_of, judged
-from lakehouse.bus_metrics import create_delivery_series, record_delivery, record_processing, record_publish, record_pull_failed, record_refusal
-from lakehouse.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent, trace_context
 from lakehouse.context import continuing, current_trace_context
+from lakehouse.events.bus_delivery import Delivery, Handle, Lane, Outcome, Park, Settlement, being_cancelled, envelope_of, judged
+from lakehouse.events.bus_metrics import create_delivery_series, record_delivery, record_processing, record_publish, record_pull_failed, record_refusal
+from lakehouse.events.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBUTES, CloudEvent, trace_context
 from lakehouse.lifecycle import closed_quietly
 from lakehouse.projected_token import read_token_file
 
@@ -526,7 +526,7 @@ class Bus:
 
     async def consume(self, lane: Lane, handle: Handle, *, park: Park) -> None:
         """Hand every message of ``lane``'s consumer to ``handle`` until cancelled, at most ``lane.in_flight`` at once,
-        and tell the bus what became of each (`lakehouse.bus_delivery.judged`).
+        and tell the bus what became of each (`lakehouse.events.bus_delivery.judged`).
 
         The consumer is the chart's: this binds to it and creates nothing, and a consumer the bus does not hold yet is
         asked for again until it does. A pull the bus refuses or drops is said once and asked again, and a connection
@@ -992,3 +992,19 @@ async def bus_session(loops: Supervisor, settings: BusSettings | None = None) ->
             await asyncio.gather(keeping, return_exceptions=True)
         finally:
             await bus.close()
+
+
+__all__ = [
+    "MAX_PAYLOAD_BYTES",
+    "WARN_PAYLOAD_BYTES",
+    "Bus",
+    "BusSettings",
+    "BusUnavailableError",
+    "Follow",
+    "PullEndedError",
+    "StreamPage",
+    "bus_session",
+    "processing",
+    "publish_event",
+    "pull",
+]

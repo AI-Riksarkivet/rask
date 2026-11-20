@@ -39,7 +39,7 @@ from pydantic import BaseModel, SecretStr
 
 from catalog.services.warehouses import ensure_catalog_row
 from lakehouse import location_claims, maintenance_policies, record_store, trash
-from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed.store_credential import S3KeyPair, StoreCredentialUnavailableError
 from lakehouse.listing_floor import FLOOR_KEY
 from lakehouse.naming import UUID_PROPERTY

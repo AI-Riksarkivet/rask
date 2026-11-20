@@ -17,14 +17,14 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Self
 from pydantic import AfterValidator, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from lakehouse.bus import BusSettings
+from lakehouse.events.bus import BusSettings
+from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
+from lakehouse.events.signature_doors import SignatureDoorSettings
 from lakehouse.governed.principal import PrincipalKey
 from lakehouse.governed.settings import GovernedAuthSettings
 from lakehouse.governed.store_credential import S3KeyPair
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_options
-from lakehouse.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
-from lakehouse.signature_doors import SignatureDoorSettings
 from lakehouse.storage_options import StorageOptions, on_s3
 from lakehouse.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
 
@@ -311,7 +311,7 @@ class CatalogLineageSettings(BaseSettings):
     # service on a table write — fire-and-forget + best-effort, so the lineage service being down can
     # never block or fail a catalog write. The catalog is the only component that knows the verified
     # principal, so it is the authoritative source of "who created/changed a table" (author = token.subject).
-    # It is published on NATS JetStream over this process's own connection (`lakehouse.bus`), the one transport.
+    # It is published on NATS JetStream over this process's own connection (`lakehouse.events.bus`), the one transport.
     lineage_emit_enabled: bool = Field(default=False, alias="LANCE_LINEAGE_EMIT_ENABLED")
     #: The topic the emitter publishes on. Versioned: a breaking schema change is a new ``.vN``.
     lineage_topic: str = Field(default="lineage.events.v1", alias="RASK_LINEAGE_TOPIC")
@@ -506,7 +506,7 @@ class Settings(
     # See tests/unit/test_settings_env_namespace.py.
     model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", alias_generator=env_alias("LANCE"), extra="ignore")
 
-    #: The bus this process is named and the user it connects to it as (`lakehouse.bus`), read with the rest of the
+    #: The bus this process is named and the user it connects to it as (`lakehouse.events.bus`), read with the rest of the
     #: settings, so the connection the lifespan opens is the one the emission checks below were made about.
     bus: BusSettings = Field(default_factory=BusSettings)
 

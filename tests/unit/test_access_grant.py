@@ -21,7 +21,7 @@ from unfiled_announcer import unfiled
 
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
-from lakehouse.control_emit import NoopControlEmitter
+from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome, configure_audit
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken

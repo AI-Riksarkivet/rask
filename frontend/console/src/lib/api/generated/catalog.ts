@@ -5598,7 +5598,7 @@ export interface components {
          *     `actor` is the person the emitting service authenticated (`user:<principal>`), or a service principal or None when a
          *     service acts for itself. Several services publish on this topic (`control_signer_role` names the one that signs
          *     each action), so to a consumer the actor is a claim until the envelope's `rask_signature` proves who stamped it
-         *     (`lakehouse.lineage.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
+         *     (`lakehouse.events.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
          *     envelope parse alike.
          */
         CatalogControlEvent: {

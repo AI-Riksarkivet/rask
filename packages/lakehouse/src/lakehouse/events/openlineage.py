@@ -15,7 +15,7 @@ already drifted (``SchemaDatasetFacet`` 1-1-1→1-2-0, ``DatasourceDatasetFacet`
 1-0-0→1-0-1 — the 1-0-0 facets ``$ref`` the retired ``1-0-2`` core spec while our envelope declares 2-0-2).
 
 What a READER of the events needs (rask's own facet keys and schemas, the uuids a dataset carries, an event's identity)
-is `lakehouse.lineage_events`, which the lakehouse's readers share; the builders here are its emitters' and build on it.
+is `lakehouse.events.lineage_events`, which the lakehouse's readers share; the builders here are its emitters' and build on it.
 A client reads the same events by their published contract (`docs/COMMIT-EVENTS.md`), importing neither.
 """
 
@@ -25,7 +25,7 @@ import logging
 import uuid
 from typing import Final
 
-from lakehouse.lineage_events import AUTHOR_FACET_SCHEMA_URL, LANCE_FACET_SCHEMA_URL
+from lakehouse.events.lineage_events import AUTHOR_FACET_SCHEMA_URL, LANCE_FACET_SCHEMA_URL
 from lakehouse.naming import CATALOG_DATASET_SCHEME, is_catalog_dataset_namespace, location_identifier
 
 
@@ -68,13 +68,13 @@ def run_id_for(seed: str) -> str:
 
 
 def lance_facet(producer: str, **fields: object) -> dict[str, object]:
-    """A ``rask_lance`` payload (`lakehouse.lineage_events.LANCE_FACET`) carrying ``fields``, with the ``_producer`` and
+    """A ``rask_lance`` payload (`lakehouse.events.lineage_events.LANCE_FACET`) carrying ``fields``, with the ``_producer`` and
     the ``_schemaURL`` every facet needs."""
     return {"_producer": producer, "_schemaURL": LANCE_FACET_SCHEMA_URL, **fields}
 
 
 def author_facet(producer: str, subject: str) -> dict[str, object]:
-    """The ``rask_author`` facet (`lakehouse.lineage_events.AUTHOR_FACET`) naming ``subject``, a principal key, as both
+    """The ``rask_author`` facet (`lakehouse.events.lineage_events.AUTHOR_FACET`) naming ``subject``, a principal key, as both
     its ``sub`` and its ``name``."""
     return {"_producer": producer, "_schemaURL": AUTHOR_FACET_SCHEMA_URL, "name": subject, "sub": subject}
 
@@ -243,7 +243,7 @@ def catalog_facet(producer: str, *, impl: str, name: str, warehouse_uri: str = "
     return facet
 
 
-#: The ``rask_lance`` facet key (`lakehouse.lineage_events.LANCE_FACET`) for the incarnation of the ref it names: the
+#: The ``rask_lance`` facet key (`lakehouse.events.lineage_events.LANCE_FACET`) for the incarnation of the ref it names: the
 #: last uuid of pylance's ``branch_identifier`` chain, on a run's facet for the ref it wrote and on an input's for the ref
 #: it was read on ([[LH-413]]).
 BRANCH_IDENTIFIER: Final = "branchIdentifier"
@@ -320,3 +320,37 @@ def symlinks_facet(producer: str, *, location: str) -> dict[str, object]:
 
 #: OpenLineage's spec URL for a `DatasetEvent` — a dataset change that no job performed.
 DATASET_EVENT_SCHEMA_URL: Final = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/DatasetEvent"
+
+
+__all__ = [
+    "BRANCH_IDENTIFIER",
+    "CATALOG_FACET_SCHEMA_URL",
+    "CATALOG_FRAMEWORK",
+    "DATASET_EVENT_SCHEMA_URL",
+    "DATASET_TYPE_FACET_SCHEMA_URL",
+    "DATASET_TYPE_FILE",
+    "DATASET_TYPE_TABLE",
+    "DATASOURCE_FACET_SCHEMA_URL",
+    "DEFAULT_DATASET_NAMESPACE",
+    "ERROR_MESSAGE_FACET_SCHEMA_URL",
+    "FACET_MAX_FIELDS",
+    "LIFECYCLE_FACET_SCHEMA_URL",
+    "PROCESSING_ENGINE_FACET_SCHEMA_URL",
+    "RUN_EVENT_SCHEMA_URL",
+    "SCHEMA_FACET_SCHEMA_URL",
+    "SYMLINKS_FACET",
+    "SYMLINKS_FACET_SCHEMA_URL",
+    "SYMLINK_TYPE_LOCATION",
+    "VERSION_FACET_SCHEMA_URL",
+    "author_facet",
+    "catalog_facet",
+    "dataset_type_facet",
+    "lance_facet",
+    "lifecycle_facet",
+    "lifecycle_state",
+    "processing_engine_facet",
+    "require_dataset_namespace",
+    "run_id_for",
+    "schema_facet",
+    "symlinks_facet",
+]

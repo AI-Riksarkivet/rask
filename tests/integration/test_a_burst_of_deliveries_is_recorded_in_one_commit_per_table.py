@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from catalog.core.config import get_settings
-from lakehouse.bus_delivery import Verdict
+from lakehouse.events.bus_delivery import Verdict
 from lineage.core.metrics import Door
 from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport
 from lineage.services.consumer import handle_cloud_event

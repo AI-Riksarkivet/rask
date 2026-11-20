@@ -24,7 +24,7 @@ from typing import get_args
 from lance_namespace import PermissionDeniedError
 from opentelemetry import metrics
 
-from lakehouse.lineage.signing import RefusalReason
+from lakehouse.events.signing import RefusalReason
 from lineage.models import ForeignRunError, UnauthoredRunError, UngovernedOutputError, UnverifiedEventError
 
 
@@ -99,7 +99,7 @@ def create_signature_refused_series() -> None:
 
 
 def record_signature_refused(reason: str) -> None:
-    """Count one refused event. ``reason`` is `lakehouse.lineage.signing.RefusalReason`, a closed set, never the event's own text."""
+    """Count one refused event. ``reason`` is `lakehouse.events.signing.RefusalReason`, a closed set, never the event's own text."""
     _signature_refused.add(1, {"lance.lineage.reason": reason})
 
 

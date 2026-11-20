@@ -8,7 +8,7 @@ test reaches, the expiry purge maintenance's sweep emits.
 
 from __future__ import annotations
 
-from lakehouse.control_events import control_signer_role
+from lakehouse.events.control_events import control_signer_role
 
 
 def test_an_expiry_purge_is_signed_by_maintenance() -> None:

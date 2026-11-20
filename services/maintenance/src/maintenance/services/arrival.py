@@ -28,7 +28,7 @@ A WRITE IS ITS PUBLISHER'S CLAIM UNTIL ITS SIGNATURE IS CHECKED ([[XC-078]], own
 table says who may publish on the topic, not who wrote a given event, and the location a write names is what this
 service reads. So before it acts, the lane checks the write's `rask_signature` against the keys its signer publishes,
 with the signer sets lineage verifies with (`RASK_EVENT_SIGNERS`, `RASK_EVENT_DELEGATORS`), and `RASK_SIGNATURE_DOORS`
-decides what it does with the verdict (`lakehouse.lineage.door`): off checks nothing, observe acts as before and counts
+decides what it does with the verdict (`lakehouse.events.door_verdict`): off checks nothing, observe acts as before and counts
 what enforcing would refuse, and enforce acts only on a write a listed signer's key verifies. A refusal is acknowledged
 and holds nothing, since no redelivery can sign bytes already published; a key list that cannot be read is asked for
 again, since it says nothing about the signature. Only an event the lane would hold a task for is checked
@@ -46,15 +46,15 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from lakehouse import location_claims
-from lakehouse.bus import processing
-from lakehouse.bus_delivery import envelope_of
 from lakehouse.commit_records import is_canonical_uuid
+from lakehouse.events.bus import processing
+from lakehouse.events.bus_delivery import envelope_of
+from lakehouse.events.door_verdict import DoorMode, DoorVerdict, judge
+from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
+from lakehouse.events.published_keys import PublishedKeys
+from lakehouse.events.signing import signature_of, verify_signature
 from lakehouse.governed.signing_key import published_key_fetch
 from lakehouse.governed.store_credential import StoreCredentialUnavailableError
-from lakehouse.lineage.door import DoorMode, DoorVerdict, judge
-from lakehouse.lineage.keys import PublishedKeys
-from lakehouse.lineage.signing import signature_of, verify_signature
-from lakehouse.lineage_events import LANCE_FACET, dataset_uuids
 from maintenance.core.metrics import ArrivalOutcome, SignatureDoor, record_signature_refused, record_signature_would_refuse
 from maintenance.services.naming import claim_store
 from maintenance.services.queue import ARRIVALS_CONSUMER, Task, TaskQueue

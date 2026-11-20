@@ -1,7 +1,7 @@
 """A delivery is settled by what its handling answers: acknowledged, asked for again after the lane's delay, or parked.
 
 [[XC-199]] (#787). A pull consumer has no dead letter: the bus delivers a message until it is acknowledged or ended, so
-the rule that ends one is the lakehouse's own (`lakehouse.bus_delivery.judged`). Here is that rule alone, each branch
+the rule that ends one is the lakehouse's own (`lakehouse.events.bus_delivery.judged`). Here is that rule alone, each branch
 once, with a handler and a park of the test's own. What a real broker does with the answer (a delayed redelivery, an
 ended message that never comes back) is the nats-auth lane's to show
 (`tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py`).
@@ -15,7 +15,7 @@ import logging
 
 import pytest
 
-from lakehouse.bus_delivery import MAX_ENVELOPE_DEPTH, Delivery, Handle, Lane, Outcome, Settlement, Verdict, judged
+from lakehouse.events.bus_delivery import MAX_ENVELOPE_DEPTH, Delivery, Handle, Lane, Outcome, Settlement, Verdict, judged
 
 
 #: A lane that handles a message on three deliveries, two minutes apart.
@@ -111,7 +111,7 @@ async def test_a_handling_that_fails_counts_as_asked_for_again(
 ) -> None:
     # The seam logs a failure with its traceback as the handler raised it, and pytest-xdist cannot carry a report whose
     # captured log holds text with no UTF-8 form (measured on pytest-xdist as locked: the worker is lost).
-    caplog.set_level(logging.ERROR, logger="lakehouse.bus_delivery")
+    caplog.set_level(logging.ERROR, logger="lakehouse.events.bus_delivery")
 
     async def handle(_: Delivery) -> Verdict:
         raise ConnectionError(said)

@@ -31,13 +31,13 @@ from openfga_sdk.models.check_error import CheckError
 from openfga_sdk.models.read_request_tuple_key import ReadRequestTupleKey
 from openfga_sdk.models.read_response import ReadResponse
 
-from lakehouse.bus_delivery import Outcome, Settlement
+from lakehouse.events.bus_delivery import Outcome, Settlement
+from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.governed import fga
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.lineage_events import DatasetUuids, with_dataset_uuids
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings, get_settings
 from lineage.models import RunEvent

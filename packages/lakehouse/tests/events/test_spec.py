@@ -18,7 +18,8 @@ from openlineage.client.facet_v2 import (
 )
 from openlineage.client.serde import Serde
 
-from lakehouse.lineage import (
+from lakehouse.events.openlineage import run_id_for
+from lakehouse.events.openlineage_schemas import (
     BASE_FACET_SCHEMA_URL,
     DATASET_VERSION_FACET_SCHEMA_URL,
     DATASOURCE_FACET_SCHEMA_URL,
@@ -28,21 +29,26 @@ from lakehouse.lineage import (
     PRODUCER,
     SCHEMA_FACET_SCHEMA_URL,
     Dataset,
+    DatasetFacets,
     DatasetVersionFacet,
     DatasourceFacet,
     ErrorMessageRunFacet,
     Job,
+    JobRef,
     OutputDataset,
+    OutputDatasetFacets,
     OutputStatisticsFacet,
+    ParentRunFacet,
+    RootRef,
     Run,
     RunEvent,
+    RunFacets,
+    RunRef,
     RunState,
     SchemaDatasetFacet,
     SchemaField,
     custom_facet,
 )
-from lakehouse.lineage.schemas import DatasetFacets, JobRef, OutputDatasetFacets, ParentRunFacet, RootRef, RunFacets, RunRef
-from lakehouse.openlineage import run_id_for
 
 
 _JOB_RUN_ID = "3f2504e0-4f89-11d3-9a0c-0305e82c3301"

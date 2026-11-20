@@ -11,8 +11,8 @@ import asyncio
 from collections.abc import Collection
 from typing import Any, cast
 
-from lakehouse.bus_delivery import Verdict
-from lakehouse.cloud_events import lineage_envelope
+from lakehouse.events.bus_delivery import Verdict
+from lakehouse.events.cloud_events import lineage_envelope
 from lineage.core.metrics import Door
 from lineage.models import RunEvent
 from lineage.services.consumer import handle_cloud_event

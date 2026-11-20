@@ -45,9 +45,9 @@ from catalog.services import commit_reconcile, dataplane, erasure_derived, nativ
 from lakehouse import location_claims
 from lakehouse.base_refs import decoded_path
 from lakehouse.context import continuing
+from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.lineage_events import DatasetUuids
 from lakehouse.storage_options import StorageOptions
 
 

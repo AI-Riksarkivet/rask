@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 from lineage_lane import Feed, started
 
-from lakehouse.bus_delivery import Lane
+from lakehouse.events.bus_delivery import Lane
 
 
 def test_lineage_pulls_its_consumer_with_the_numbers_its_settings_name(monkeypatch: pytest.MonkeyPatch) -> None:

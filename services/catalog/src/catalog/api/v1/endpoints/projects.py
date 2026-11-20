@@ -85,8 +85,8 @@ from catalog.services import projects as project_registry
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, RecordHeld
 from catalog.services.control_records import GIT, ProtectionChange
 from lakehouse import maintenance_policies
-from lakehouse.control_emit import ControlEmitter, emit_control
-from lakehouse.control_events import CatalogControlEvent
+from lakehouse.events.control_emit import ControlEmitter, emit_control
+from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.settings import FgaSettings

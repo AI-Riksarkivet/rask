@@ -24,12 +24,12 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.lineage_events import DatasetUuids
 from lineage.api.fga_deps import enforce_bus_authz, enforce_output_authz
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent, parse_event

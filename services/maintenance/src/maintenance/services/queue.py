@@ -2,7 +2,7 @@
 that put a task back on the queue when its time comes.
 
 THE WORK QUEUE IS HELD HERE, ON A CONNECTION OF ITS OWN (ADR 0198 decision 5); what a pass emits goes out on the
-service's other connection (`lakehouse.bus`). A pass tells the bus it is still working, so one longer than its ack
+service's other connection (`lakehouse.events.bus`). A pass tells the bus it is still working, so one longer than its ack
 wait is never delivered again beneath itself, and a held task is a message whose headers name when it fires. nats-py is
 the client, and the worker is a pull worker. The streams and their durable consumers
 are the chart's (`chart/templates/nats-stream-job.yaml`), so this binds to them and creates nothing, under a bus user of its
@@ -55,8 +55,8 @@ from opentelemetry import propagate, trace
 from opentelemetry.trace import Link, SpanKind, StatusCode
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from lakehouse.bus import BusSettings, pull
 from lakehouse.commit_records import is_canonical_uuid
+from lakehouse.events.bus import BusSettings, pull
 from lakehouse.supervision import FLUSH_SECONDS, EndProcess, end_process, is_panic
 from maintenance.core.metrics import (
     ArrivalOutcome,
@@ -100,7 +100,7 @@ STORE_EVENTS_CONSUMER: Final = "maintenance-store-events"
 ARRIVALS_CONSUMER: Final = "maintenance-arrival"
 
 #: The bus user the queue is worked as, which names its connection, and the prefix of that user's reply subjects
-#: (`_INBOX_<user>`, as `lakehouse.bus` names each user's), so no other bus user reads the tasks it fetches or the
+#: (`_INBOX_<user>`, as `lakehouse.events.bus` names each user's), so no other bus user reads the tasks it fetches or the
 #: answers it gets.
 BUS_USER: Final = "maintenance-worker"
 INBOX_PREFIX: Final = f"_INBOX_{BUS_USER}"
@@ -373,7 +373,7 @@ class TaskQueue:
 
     @classmethod
     async def connect(cls, url: str, presenting: BusSettings, *, name: str, end: EndProcess = end_process) -> TaskQueue:
-        """Connect as the bus user ``name``, presenting this pod's token (`lakehouse.bus`), and reconnect for ever: a bus
+        """Connect as the bus user ``name``, presenting this pod's token (`lakehouse.events.bus`), and reconnect for ever: a bus
         outage must leave the worker waiting on the bus, never closed for good.
 
         The worker holds no bus credential. Each connect presents the token the kubelet last wrote, and the bus's signer
@@ -702,7 +702,7 @@ class TaskQueue:
 
     async def pulled(self, stream: str, consumer: str, *, wait: float, answered_within: float) -> Msg | None:
         """The message one pull on the chart's durable ``consumer`` of ``stream`` is answered with, or ``None`` once the
-        bus ends the pull with none (:func:`lakehouse.bus.pull`, which reads each pull on an inbox of its own until the bus
+        bus ends the pull with none (:func:`lakehouse.events.bus.pull`, which reads each pull on an inbox of its own until the bus
         ends it).
 
         Raises:

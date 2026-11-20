@@ -1,7 +1,7 @@
 """The stream Job declares the consumer each service binds to, and its retire phase removes only this release's own ([[XC-199]]).
 
 A service takes its deliveries from a durable consumer it never creates: it binds by name to the one the stream Job
-declared (`lakehouse.bus.Bus.consume`, `maintenance.services.queue.Worker`), and a name the Job does not declare is a
+declared (`lakehouse.events.bus.Bus.consume`, `maintenance.services.queue.Worker`), and a name the Job does not declare is a
 lane that pulls nothing while its pod stays Ready. So the names the chart declares are held here to the names the
 services' own code binds to, in every render that switches a lane on or off, and lineage's lane to the numbers its
 settings are given: a consumer whose ack wait is shorter than the one lineage cuts its handling by hands an event to a

@@ -16,7 +16,7 @@ THE SPLIT IS "COULD ANYTHING EVER CHANGE THE ANSWER", and it is the only line th
   next presentation, so it is parked where the estate admin can replay it.
 
 THE LANE READS EVERY EVENT LINEAGE'S MODEL ACCEPTS. The bus seam reads no body nested deeper than
-`lakehouse.bus_delivery.MAX_ENVELOPE_DEPTH` as an envelope, and lineage's HTTP door stages whatever its model accepts.
+`lakehouse.events.bus_delivery.MAX_ENVELOPE_DEPTH` as an envelope, and lineage's HTTP door stages whatever its model accepts.
 An event the model accepted and the lane did not read would be answered 202 at the door and taken here unrecorded, so
 the two bounds are held together from both sides.
 
@@ -31,7 +31,7 @@ import pytest
 from lineage_lane import Feed, governed, started
 from pydantic import ValidationError
 
-from lakehouse.bus_delivery import MAX_ENVELOPE_DEPTH, Outcome, Settlement
+from lakehouse.events.bus_delivery import MAX_ENVELOPE_DEPTH, Outcome, Settlement
 from lineage.services.provenance import parse_event
 
 

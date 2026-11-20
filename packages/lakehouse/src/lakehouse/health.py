@@ -35,7 +35,7 @@ from lakehouse.supervision import Supervisor
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-    from lakehouse.bus import Bus
+    from lakehouse.events.bus import Bus
     from lakehouse.storage_options import StorageOptions
 
 

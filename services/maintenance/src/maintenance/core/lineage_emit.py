@@ -6,7 +6,7 @@ each dataset whose versions it reclaimed as an OpenLineage ``RunEvent`` (output 
 ``errorMessage`` facet (§4 failure visibility; deterministic per-dataset run id as the flood guard) — published on
 the bus, on the SAME topic the catalog publishes to and the lineage service subscribes to, so expiry runs (and
 failures) land in the feed alongside the writes. The publish goes over this process's own connection to the bus
-(``lakehouse.bus``), one bounded attempt, with the outbox's relay as its retry.
+(``lakehouse.events.bus``), one bounded attempt, with the outbox's relay as its retry.
 
 Self-contained: the maintenance service never imports the catalog (zero cross-service imports — the
 mergeability invariant). The only shared code is ``lakehouse.governed.fga`` for the id↔namespace derivation, so the
@@ -33,13 +33,11 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Final, Protocol, runtime_checkable
 
-from lakehouse import outbox, outbox_metrics
-from lakehouse.bus import Bus
-from lakehouse.cloud_events import lineage_envelope
-from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
-from lakehouse.lineage import CanonError, SigningKey, attach_signature
-from lakehouse.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, with_dataset_uuids
-from lakehouse.openlineage import (
+from lakehouse.events import outbox, outbox_metrics
+from lakehouse.events.bus import Bus
+from lakehouse.events.cloud_events import lineage_envelope
+from lakehouse.events.lineage_events import AUTHOR_FACET, LANCE_FACET, DatasetUuids, with_dataset_uuids
+from lakehouse.events.openlineage import (
     ERROR_MESSAGE_FACET_SCHEMA_URL,
     RUN_EVENT_SCHEMA_URL,
     SYMLINKS_FACET,
@@ -48,6 +46,8 @@ from lakehouse.openlineage import (
     run_id_for,
     symlinks_facet,
 )
+from lakehouse.events.signing import CanonError, SigningKey, attach_signature
+from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from lakehouse.storage_options import StorageOptions
 
 
@@ -61,7 +61,7 @@ EXPIRE_VERSIONS = "expire_versions"
 #: OpenLineage ``producer`` URI — identifies the software that emitted the event (spec-required).
 _PRODUCER = "https://github.com/AI-Riksarkivet/rask/tree/main/services/maintenance/src/maintenance/core/lineage_emit.py"
 
-#: Standard ``ErrorMessageRunFacet`` schema URL, shared from ``lakehouse.openlineage`` so every FAIL emitter
+#: Standard ``ErrorMessageRunFacet`` schema URL, shared from ``lakehouse.events.openlineage`` so every FAIL emitter
 #: stamps one spec version.
 _ERROR_FACET_SCHEMA_URL = ERROR_MESSAGE_FACET_SCHEMA_URL
 
@@ -227,9 +227,9 @@ class NoopEmitter:
 class BusMaintenanceEmitter:
     """Publishes maintenance events on the bus, NATS JetStream, over this process's own connection (the production path).
 
-    One bounded publish per event (`lakehouse.bus.publish_event`): the stream's acknowledgement is the delivery, and
+    One bounded publish per event (`lakehouse.events.bus.publish_event`): the stream's acknowledgement is the delivery, and
     an event it did not acknowledge stays in the outbox for lineage's relay. Each event rides the envelope derived
-    from it (`lakehouse.cloud_events.lineage_envelope`), with the publish's trace context.
+    from it (`lakehouse.events.cloud_events.lineage_envelope`), with the publish's trace context.
     Best-effort: a bus outage logs and leaves the event staged rather than failing maintenance.
     """
 

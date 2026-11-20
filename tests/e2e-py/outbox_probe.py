@@ -29,7 +29,7 @@ import requests
 from credentials import Credential, credential
 from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 
-from lakehouse.lineage_events import DatasetUuids
+from lakehouse.events.lineage_events import DatasetUuids
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")

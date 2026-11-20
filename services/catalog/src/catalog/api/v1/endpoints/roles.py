@@ -44,7 +44,7 @@ from catalog.core.identifiers import require_names
 from catalog.schemas import AssigneeRequest, Role, RoleCreateRequest, RoleDeleted, RoleList, RoleRecord
 from catalog.services import project_admins, role_grants, roles
 from catalog.services import projects as project_registry
-from lakehouse.control_emit import emit_control
+from lakehouse.events.control_emit import emit_control
 from lakehouse.governed import fga
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.records import RecordExistsError

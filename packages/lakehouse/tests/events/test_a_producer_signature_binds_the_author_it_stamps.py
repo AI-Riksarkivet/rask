@@ -1,7 +1,7 @@
 """A producer's Ed25519 signature binds the event it signs, author included, to a key its identity publishes.
 
 [[LH-064]] C3. The bus authenticates the connection that published, not the producer, so the author stamped on an
-event is a claim. The signature turns it into one a listed signer's published key vouches for, and `lakehouse.lineage.signing`
+event is a claim. The signature turns it into one a listed signer's published key vouches for, and `lakehouse.events.signing`
 is the one implementation every signer and verifier imports.
 
 [[XC-078]]. A control event is the same claim in another layout: a flat object whose `actor` plays the author and whose
@@ -36,7 +36,8 @@ from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT202012
 
-from lakehouse.lineage import (
+from lakehouse.events.signing import (
+    MAX_NESTING,
     CanonError,
     KeySourceUnavailableError,
     SignatureError,
@@ -51,7 +52,6 @@ from lakehouse.lineage import (
     verify_control_signature,
     verify_signature,
 )
-from lakehouse.lineage.signing import MAX_NESTING
 
 
 STAGE, CATALOG, OTHER_DELEGATOR, ROGUE = "service-pipeline-a", "service-catalog", "service-other-delegator", "service-trainer"

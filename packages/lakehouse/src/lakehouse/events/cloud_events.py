@@ -7,7 +7,7 @@ a relay delivering its staged copy. The bus needs that of the ``id``. A JetStrea
 COMPLETE share a run id, so the id is the event's identity and its state together.
 
 ``data`` is the event exactly as its producer signed it: a signature covers the event, never its envelope
-(`lakehouse.lineage.signing`). The contract a reader of the bus holds is `docs/COMMIT-EVENTS.md` § The envelope on the
+(`lakehouse.events.signing`). The contract a reader of the bus holds is `docs/COMMIT-EVENTS.md` § The envelope on the
 bus.
 
 A model of the lakehouse's own rather than the CloudEvents Python SDK: that SDK (2.2.0, read 2026-11-13) has no pydantic
@@ -23,9 +23,9 @@ from typing import TYPE_CHECKING, Any, Final
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 from lakehouse.context import current_trace_context, extracted, is_traceparent, is_tracestate
-from lakehouse.control_events import CatalogControlEvent, control_signer_role
-from lakehouse.lineage.schemas import TERMINAL_STATES
-from lakehouse.lineage_events import dataset_uuids, event_identity
+from lakehouse.events.control_events import CatalogControlEvent, control_signer_role
+from lakehouse.events.lineage_events import dataset_uuids, event_identity
+from lakehouse.events.openlineage_schemas import TERMINAL_STATES
 
 
 if TYPE_CHECKING:
@@ -75,7 +75,7 @@ class CloudEvent(BaseModel):
     dataschema: str | None = Field(default=None, min_length=1)
     data: dict[str, Any]
     #: The W3C trace context the envelope was staged under (CloudEvents' distributed tracing extension, ADR 0209): the
-    #: trace of the request the event was made for, which a publish of the envelope continues (`lakehouse.bus`), so a
+    #: trace of the request the event was made for, which a publish of the envelope continues (`lakehouse.events.bus`), so a
     #: relay's copy is a span of that request's trace rather than the first of a trace of its own. A fresh envelope has
     #: none, and its publish runs in whatever trace the publisher is in.
     traceparent: str | None = None
@@ -223,3 +223,13 @@ def _in_utc(occurred_at: datetime) -> datetime:
 
 def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+__all__ = [
+    "STRUCTURED_CONTENT_TYPE",
+    "TRACE_ATTRIBUTES",
+    "CloudEvent",
+    "control_envelope",
+    "lineage_envelope",
+    "trace_context",
+]

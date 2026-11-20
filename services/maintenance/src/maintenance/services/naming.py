@@ -16,8 +16,8 @@ from pydantic import BaseModel, Field
 from lakehouse import location_claims
 from lakehouse.base_refs import key_uri, normalise, store_of
 from lakehouse.branch_layout import BRANCH_CONTAINER
+from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga
-from lakehouse.lineage_events import DatasetUuids
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
 from maintenance.core.config import MaintenanceStore
 

@@ -6,7 +6,7 @@ from typing import Annotated
 
 from fastapi import Depends, Request
 
-from lakehouse.bus import Bus
+from lakehouse.events.bus import Bus
 from lineage.core.config import LineageSettings, get_settings
 from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore

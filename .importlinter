@@ -68,6 +68,22 @@ allowed_importers =
     lineage
     maintenance
 
+# The events build on the rest of the library and the rest does not build on them (ADR 0224): the bus, the envelope, the
+# control and lineage lanes, the outbox and the signing seam import the primitives below them (the request context, the
+# supervisor, the store), and a service imports them to publish, take and verify. Inside the library only the readiness
+# probe names the bus, to report its connection, so a new importer in the library is either a probe of the same kind,
+# added here deliberately, or an edge that would let the events and the rest import each other.
+[importlinter:contract:the-events-are-imported-by-the-services-and-the-probe-only]
+name = ADR 0224: lakehouse.events is imported by the services and lakehouse.health only
+type = protected
+protected_modules =
+    lakehouse.events
+allowed_importers =
+    catalog
+    lineage
+    maintenance
+    lakehouse.health
+
 [importlinter:contract:the-lakehouse-is-not-built-on-a-workflow-engine]
 name = Phase 1 (3): no lakehouse service and nothing in the lakehouse library imports a workflow engine
 type = forbidden

@@ -31,9 +31,9 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from lakehouse import outbox
-from lakehouse.bus import BusUnavailableError
-from lakehouse.cloud_events import lineage_envelope
+from lakehouse.events import outbox
+from lakehouse.events.bus import BusUnavailableError
+from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.storage_options import StorageOptions
 from lakehouse.timers import Outcome, Timer
 from lineage import main

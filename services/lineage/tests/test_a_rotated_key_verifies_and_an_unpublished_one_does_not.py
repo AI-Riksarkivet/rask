@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 from lineage_lane import Feed, started
 
-from lakehouse.bus_delivery import Outcome, Settlement
+from lakehouse.events.bus_delivery import Outcome, Settlement
 from tests.secret_store_double import SecretStoreDouble
 
 

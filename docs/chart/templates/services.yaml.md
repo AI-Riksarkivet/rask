@@ -6,7 +6,7 @@ every release revision, under a 1 MiB ceiling. Each section is headed by the tem
 ## `apiVersion: apps/v1`
 
 Catalog (producer): creates Lance tables on S3 and publishes its OpenLineage events and its control-plane change events
-on NATS JetStream, over a connection of its own as the bus user `lance.busEnv` names it (`lakehouse.bus`). On the same
+on NATS JetStream, over a connection of its own as the bus user `lance.busEnv` names it (`lakehouse.events.bus`). On the same
 connection each replica follows the control topic into its own buffer (`catalog.api.control_lane`).
 
 ## `args:`
@@ -257,7 +257,7 @@ reads it (`lance.storeReads`).
 The ingest lane's numbers, rendered from the same values the stream Job declares `lineage-ingest` with
 (`lance.busConsumers`), so the bound lineage handles at once and the consumer's `max_ack_pending` are one value, and the
 ack wait lineage cuts a handling 10 s short of is the consumer's own. `LINEAGE_DELIVERY_ATTEMPTS` and
-`LINEAGE_DELIVERY_RETRY_SECONDS` are lineage's own rule for ending a delivery (`lakehouse.bus_delivery`): a delivery
+`LINEAGE_DELIVERY_RETRY_SECONDS` are lineage's own rule for ending a delivery (`lakehouse.events.bus_delivery`): a delivery
 it cannot record is asked for again after the retry delay, and on its last attempt is parked in the provenance
 namespace's `refusals` table, from which the estate admin's replay door (`POST /admin/dlq/parked/{run_id}/replay`)
 records it. The consumer's own `max_deliver` is unlimited, so this rule is the only one that ends a delivery; nothing

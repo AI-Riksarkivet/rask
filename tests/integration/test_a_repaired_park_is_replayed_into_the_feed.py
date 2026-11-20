@@ -26,7 +26,7 @@ from fastapi.testclient import TestClient
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 
-from lakehouse.bus_delivery import Outcome, Settlement
+from lakehouse.events.bus_delivery import Outcome, Settlement
 from lakehouse.governed import fga
 from lakehouse.governed.fga import user_object
 from tests.bus_double import BusDouble
