@@ -40,7 +40,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from lakehouse.records import control_prefixes, location_claims, object_records
 from lakehouse.records.base_registry import BaseRegistry, forget_base_record
 from lakehouse.records.record_store import delete_record, list_records, put_record, read_record, record_key
-from lakehouse.storage.conditional_records import RecordChangedError, RecordMissingError, mutate_json
+from lakehouse.storage.conditional_records import RecordChangedError, RecordMissingError, mutate_json, read_json, replace_json
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 
@@ -65,6 +65,7 @@ __all__ = [
     "note_refusal",
     "put",
     "read",
+    "stamp_dropped_under",
 ]
 
 
@@ -120,6 +121,9 @@ class TrashRecord(BaseModel):
     location: str = ""
     dropped_by: str = "anonymous"
     dropped_at: str = ""
+    #: The keyed attempt whose drop detached the object, stamped once its detach returned, which a resend of that
+    #: request finds its drop by.
+    dropped_under: str | None = None
     #: The deadline as the drop stamped it, so a later change to the estate's grace period cannot shorten a window
     #: someone is still inside. Read through :attr:`deadline`.
     expires_at: str | None = None
@@ -341,6 +345,29 @@ def put(control_root: str, storage_options: StorageOptions, record: TrashRecord)
     if record.uuid is None:
         raise ValueError(f"a trash record is filed under its object's uuid, and the record of {record.id!r} names none")
     put_record(control_root, storage_options, key(record.uuid, kind=record.kind), record.stored())
+
+
+def stamp_dropped_under(control_root: str, storage_options: StorageOptions, record: TrashRecord, *, attempt: str) -> bool:
+    """Stamp ``record``, as its drop filed it, with the keyed ``attempt`` that detached its object; whether it did.
+
+    Replaced under the ETag of a read that finds the record exactly as filed, so a record another drop wrote since, or
+    one an undrop or a purge cleared, is left as it stands: ``False``.
+
+    Raises:
+        ValueError: The record names no uuid.
+        OSError: The store refused the read or the write, or did not answer.
+    """
+    if record.uuid is None:
+        raise ValueError(f"a trash record is filed under its object's uuid, and the record of {record.id!r} names none")
+    at = key(record.uuid, kind=record.kind)
+    found = read_json(control_root, storage_options, at)
+    if found is None or found[0] != record.stored():
+        return False
+    try:
+        replace_json(control_root, storage_options, at, record.model_copy(update={"dropped_under": attempt}).stored(), etag=found[1])
+    except RecordChangedError:
+        return False
+    return True
 
 
 def keeps(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> bool:

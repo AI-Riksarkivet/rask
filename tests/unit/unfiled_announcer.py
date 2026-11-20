@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from typing import cast
 
 from catalog.api.announcing import Announcer, Filing
-from catalog.services.announcement_intents import Announcement, ControlMessage, LineageMarker, Message
+from catalog.services.announcement_intents import Announcement, ControlMessage, Evidence, LineageMarker, Message
 from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.events.lineage_events import DatasetUuids
 
@@ -43,6 +43,10 @@ class _Unfiled:
     async def announcing(self, *, door: str, target: str, announcements: Sequence[Announcement]) -> AsyncGenerator[Filing]:
         del door, target, announcements
         yield Filing(self._send, {})
+
+    async def landed(self, evidence: Evidence) -> bool:
+        """Judged only on a keyed takeover, which no straight call of a door makes."""
+        raise AssertionError(f"a door called straight judged {evidence!r}")
 
     async def _send(self, message: Message) -> None:
         if isinstance(message, ControlMessage):

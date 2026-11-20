@@ -97,7 +97,7 @@ from catalog.core.vending import (
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import clone_endings, commit_reconcile, dataplane, native, protections, table_bases, table_claims, trash_doors, warehouses
-from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves
+from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, TrashedUnder
 from catalog.services.clone_ending_records import CloneEnding
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse.events.control_emit import ControlEmitter, emit_control
@@ -352,7 +352,7 @@ async def declare_table(
         )
     segments = parse_identifier(id)
     # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/declare", target=fga_ids.canonical_object_id(segments))
+    converge = await keyed.begin(target=fga_ids.canonical_object_id(segments), takeover="rerun")
     if converge.replay is not None:
         return DeclareTableResponse.model_validate(converge.replay.body)
     await fga_deps.require_parent_exists(ns, "table", segments)
@@ -810,12 +810,12 @@ async def drop_table(
     with or without it."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # DELETES BYTES or files a trash record. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/drop", target=fga_ids.canonical_object_id(parse_identifier(id)))
+    segments = parse_identifier(id)
+    canonical = fga_ids.canonical_object_id(segments)
+    converge = await keyed.begin(target=canonical, captured=idem.capture(canonical, _resolved_object(table)), takeover=announcer.landed)
     if converge.replay is not None:
         return DropTableResponse.model_validate(converge.replay.body)
 
-    segments = parse_identifier(id)
-    canonical = fga_ids.canonical_object_id(segments)
     await fga_deps.require_table_unprotected(settings, table, force=force)
     table_uuid = table.require_uuid()
     # What the drop's announcements name the table by, read while it still stands (ADR 0173 §10).
@@ -833,8 +833,15 @@ async def drop_table(
     gone = NameResolves(segments=segments, uuid=table_uuid, held=False)
     dropped = _marker(announcer, token, gone, segments, operation=DROP_TABLE, uuids=known)
     dropped_event = _table_event(token, gone, action="table_dropped", table_uuid=table_uuid, name=canonical, extra={"recoverable": trashed}, named_by=known)
+    # A recoverable drop is proven by the trash record this attempt files, stamped with the attempt, once the name no
+    # longer names the table. A destroying drop leaves nothing of the attempt and intends nothing, so its takeover runs
+    # again: the name holds nothing and the run refuses 404, or it still names this table, which the first never dropped.
+    attempt = converge.attempt if converge.key is not None else None
+    if trashed and attempt is not None:
+        answer = DropTableResponse(transaction_id=fga_ids.canonical_object_id([*segments, table_uuid]))
+        await converge.intend([gone, TrashedUnder(trash_kind="table", uuid=table_uuid, attempt=attempt)], answer)
     async with announcer.announcing(door="drop_table", target=fga_ids.table_object(table_uuid), announcements=[dropped, dropped_event]) as filing:
-        response = await _drop(ns, settings, table, segments=segments, table_uuid=table_uuid, known=known, grace=grace, token=token, so=so)
+        response = await _drop(ns, settings, table, segments=segments, table_uuid=table_uuid, known=known, grace=grace, token=token, so=so, attempt=attempt)
         # Record the drop as lineage — provenance of the deletion (the dataset node persists in the graph, named a
         # `drop_table` run). Sent BEFORE the revoke, so a revoke that fails ends the request with the marker already
         # published. Lineage admits a drop this catalog signed on that signature, never on the grants the revoke takes.
@@ -851,6 +858,30 @@ async def drop_table(
     return response
 
 
+async def _stamp_the_drop(settings: CatalogStore, record: trash.TrashRecord, *, attempt: str) -> None:
+    """Stamp the trash record a keyed drop filed with its attempt, once the detach returned.
+
+    ONLY ONCE THE DETACH RETURNED: a record an attempt filed before dying ahead of the detach describes a table still
+    live (at this name, or another a rename gave it), and must not prove that attempt's drop to its resend. Replaced only
+    as this attempt filed it, so a door stalled past its fence overwrites no record another drop wrote and resurrects
+    none an undrop cleared. The detach has landed whatever the stamp does, so a stamp the store refuses or a record
+    changed since is logged and the drop answers: its answer is remembered for the key, so no resend needs the stamp.
+    """
+    uuid = record.uuid
+    try:
+        stamped = await run_in_threadpool(partial(trash.stamp_dropped_under, settings.registry_root, settings.storage_options(), record, attempt=attempt))
+    except OSError as exc:
+        log.warning("drop_unstamped", extra={"uuid": uuid, "attempt": attempt, "reason": "the store refused the stamp", "error": type(exc).__name__})
+        return
+    if not stamped:
+        log.warning("drop_unstamped", extra={"uuid": uuid, "attempt": attempt, "reason": "the trash record changed since this drop filed it"})
+
+
+def _resolved_object(table: ResolvedTable) -> str | None:
+    """The authorization object ``table``'s name resolved to, ``table:<uuid>``; ``None`` when it names no identified table."""
+    return fga_ids.table_object(table.uuid) if table.location is not None and table.uuid is not None else None
+
+
 async def _drop(
     ns: LanceNamespace,
     settings: CatalogStore,
@@ -862,9 +893,10 @@ async def _drop(
     grace: float,
     token: Caller | None,
     so: StorageOptions,
+    attempt: str | None,
 ) -> DropTableResponse:
-    """Drop the table ``table`` resolved to: into the trash under a grace period, else its bytes, under the fence that
-    holds the claim its resolution read."""
+    """Drop the table ``table`` resolved to: into the trash under a grace period, its record stamped with the keyed
+    ``attempt`` once the detach returned, else its bytes, under the fence that holds the claim its resolution read."""
     canonical = fga_ids.canonical_object_id(segments)
     trashed = grace > 0
     # THE DOOR ACTS ON THE TABLE ITS NAME RESOLVED TO (ADR 0173 §7, [[LH-521]]): the fence holds the claim that
@@ -909,6 +941,8 @@ async def _drop(
             )
             await run_in_threadpool(trash.put, settings.registry_root, settings.storage_options(), record)
             await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
+            if attempt is not None:
+                await _stamp_the_drop(settings, record, attempt=attempt)
             # The bytes are deleted later, by the purge, so the spec's answer is a transaction id to track the deletion
             # by (`spec.yaml` DropTableRequest): `<table id>$<its uuid>`, which DescribeTransaction answers from the record.
             response = DropTableResponse(transaction_id=fga_ids.canonical_object_id([*segments, table_uuid]))
@@ -1004,7 +1038,9 @@ async def deregister_table(
     door failing after it still announces it ([[LH-576]])."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # retires the id while the bytes stay. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/deregister", target=fga_ids.canonical_object_id(parse_identifier(id)))
+    # A takeover runs again: a detach that landed leaves the name holding nothing, and the run refuses 404.
+    named = fga_ids.canonical_object_id(parse_identifier(id))
+    converge = await keyed.begin(target=named, captured=idem.capture(named, _resolved_object(table)), takeover="rerun")
     if converge.replay is not None:
         return DeregisterTableResponse.model_validate(converge.replay.body)
 
@@ -1224,7 +1260,7 @@ async def register_table(
     )
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # MINTS an id and seeds its ownership. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/register", target=fga_ids.canonical_object_id(parse_identifier(id)))
+    converge = await keyed.begin(target=fga_ids.canonical_object_id(parse_identifier(id)), takeover="rerun")
     if converge.replay is not None:
         return RegisterTableResponse.model_validate(converge.replay.body)
 
@@ -1576,7 +1612,7 @@ async def undrop_table(
     segments = parse_identifier(id)
     canonical = fga_ids.canonical_object_id(segments)
     # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
-    converge = await keyed.begin(endpoint="POST /management/v1/table/{id}/undrop", target=canonical)
+    converge = await keyed.begin(target=canonical, takeover="rerun")
     if converge.replay is not None:
         return RegisterTableResponse.model_validate(converge.replay.body)
     so = settings.storage_options()
@@ -1737,9 +1773,11 @@ async def rename_table(
     body.id = reconcile_body_id(segments, body.id)  # a contradictory body id is a 400, like every {id} route
     # Rename mints a new table identifier: ``new_namespace_id`` (else the source's own namespace) + ``new_table_name``.
     new_segments = rename_destination(segments, body.new_namespace_id, body.new_table_name)
-    # The key binds the destination too: under it, a rename to another name is another operation ([[LH-576]]).
+    # The key binds the destination too: under it, a rename to another name is another operation ([[LH-576]]). A takeover
+    # runs again: a rename that landed leaves the source holding nothing, and the run refuses 404.
+    source = fga_ids.canonical_object_id(segments)
     converge = await keyed.begin(
-        endpoint="POST /v1/table/{id}/rename", target=f"{fga_ids.canonical_object_id(segments)} -> {fga_ids.canonical_object_id(new_segments)}"
+        target=f"{source} -> {fga_ids.canonical_object_id(new_segments)}", captured=idem.capture(source, _resolved_object(table)), takeover="rerun"
     )
     if converge.replay is not None:
         return RenameTableResponse.model_validate(converge.replay.body)
@@ -1815,7 +1853,7 @@ async def restore_table(
     the NEW current version (restore mints a fresh version pointing at the restored data)."""
     # SAME AMPLIFIER AS create (see `catalog.api.idempotency`): a replay re-enters a door that
     # REWINDS the table to an older version. OPTIONAL, because the spec defines no such header and a stock client must keep working.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/restore", target=fga_ids.canonical_object_id(parse_identifier(id)))
+    converge = await keyed.begin(target=fga_ids.canonical_object_id(parse_identifier(id)), takeover="unknown")
     if converge.replay is not None:
         return RestoreTableResponse.model_validate(converge.replay.body)
 

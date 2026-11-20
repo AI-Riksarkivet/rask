@@ -38,6 +38,7 @@ from catalog.services.announcement_intents import (
     RecordHeld,
     RoleEnded,
     Standing,
+    TrashedUnder,
     TupleGone,
     TupleHeld,
 )
@@ -46,6 +47,7 @@ from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids, fga_reads, fga_writes
 from lakehouse.problems.outage import store_refusal
+from lakehouse.records import trash
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 
@@ -188,6 +190,7 @@ class Announcer:
 
         Raises:
             ServiceUnavailableError: The store or OpenFGA did not answer.
+            trash.UnreadableTrashRecordError: A trash record is filed and is none, so it shows neither outcome.
         """
         match evidence:
             case TupleGone() | TupleHeld():
@@ -208,6 +211,12 @@ class Announcer:
                 return not await self._absent(lambda root, so: conditional_records.read_json(root, so, key))
             case RoleEnded(project=project, role=role):
                 return await self._absent(lambda root, so: roles.find_role(root, so, project, role))
+            case TrashedUnder(trash_kind=kind, uuid=uuid, attempt=attempt):
+                try:
+                    kept = await run_in_threadpool(trash.get, self._settings.registry_root, self._settings.storage_options(), uuid, kind=kind)
+                except OSError as exc:
+                    raise store_refusal(exc, reading="whether a filed change landed", so="nothing was sent") from exc
+                return kept is not None and kept.dropped_under == attempt
 
     async def _absent(self, read: Callable[[str, StorageOptions], object]) -> bool:
         try:

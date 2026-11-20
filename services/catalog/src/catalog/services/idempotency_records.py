@@ -27,6 +27,14 @@ answered with an operation that did not touch the object named or did not do wha
 A LEASE IS TIMED ON THE STORE'S CLOCK (ADR 0179): a claim is stamped with the clock of the read it follows and judged
 against the clock of the read that finds it, so two pods' clocks are never compared.
 
+WHAT A TAKEOVER JUDGES. A door that retires or moves an object records, at its claim, the object its name resolved to
+(:class:`Captured`), which the request's authorization had admitted the caller on; a resend that finds the name holding
+nothing is authorized against that object (``catalog.api.fga_deps``). Before it changes anything, a door whose change can
+be proven records what it intends (:class:`Intent`): the evidence the store shows once its change lands, tied to the
+attempt, and the answer it gives. An attempt that takes the key over from one lost unanswered answers that answer when
+the evidence holds, and runs when it does not or when the lost attempt intended nothing, since it then changed nothing.
+How each door takes a key over is the door's to declare (``catalog.api.idempotency.Takeover``).
+
 A RECORD LIVES A LIFETIME PAST ITS LAST WRITE (:func:`reclaim`), judged on the age the store stamped on it. A reclaim
 first replaces an expired record, under the ETag it read, with a mark no claim takes over, and only then deletes it, so
 it never deletes a key a retry took over meanwhile: the store offers no conditional delete.
@@ -41,6 +49,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError
 
+from catalog.services.announcement_intents import Evidence
 from lakehouse.records import control_prefixes
 from lakehouse.storage import conditional_records, stored_objects
 from lakehouse.storage.options import StorageOptions
@@ -84,6 +93,35 @@ class KeyBinding(BaseModel):
     target: str
 
 
+class Replay(BaseModel):
+    """What the first attempt answered, to be returned instead of executing again."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: int
+    body: JsonValue = None
+
+
+class Captured(BaseModel):
+    """The object a door's name resolved to when the key was first claimed, after the request's authorization admitted it."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    #: The canonical name the request named it by.
+    name: str
+    #: Its authorization object, ``table:<uuid>`` or ``namespace:<uuid>``.
+    object: str
+
+
+class Intent(BaseModel):
+    """What an attempt was about to change: the evidence its change leaves, and the answer it gives once it has."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    evidence: list[Evidence]
+    answer: Replay
+
+
 class _Claimed(BaseModel):
     """A key an attempt holds (``in_flight``), or gave back unanswered (``released``)."""
 
@@ -97,6 +135,9 @@ class _Claimed(BaseModel):
     attempt: str
     #: When that attempt claimed it, on the store's clock.
     claimed_at: datetime
+    captured: Captured | None
+    #: What the attempt was about to change, once it recorded that; a takeover keeps the lost attempt's.
+    intent: Intent | None
 
 
 class _Answered(BaseModel):
@@ -110,6 +151,7 @@ class _Answered(BaseModel):
     digest: str
     status: int
     body: JsonValue = None
+    captured: Captured | None
 
 
 class _Reclaiming(BaseModel):
@@ -145,25 +187,20 @@ class KeyRecordUnreadableError(Exception):
     """The key's record is there and cannot be read as one, so neither a replay nor a new attempt can be judged."""
 
 
-class Replay(BaseModel):
-    """What the first attempt answered, to be returned verbatim instead of executing again."""
-
-    model_config = ConfigDict(frozen=True)
-
-    status: int
-    body: JsonValue = None
-
-
 class TakenOver(BaseModel):
     """This attempt holds the key, taken over from one that held it past its lease and never answered.
 
     That attempt may have written before it was lost, so a door whose operation is not safe to run twice looks for its
-    write before writing again; ``since`` is when that attempt claimed the key, on the store's clock.
+    write before writing again; ``since`` is when that attempt claimed the key, on the store's clock, and ``intent`` what
+    it recorded it was about to change.
     """
 
     model_config = ConfigDict(frozen=True)
 
     since: datetime
+    intent: Intent | None = None
+    #: The object the key was first claimed on, if the door captured one.
+    captured: Captured | None = None
 
 
 class Reclaimed(BaseModel):
@@ -203,6 +240,7 @@ def claim(
     binding: KeyBinding,
     digest: str,
     attempt: str,
+    captured: Captured | None = None,
     lease: timedelta = LEASE,
 ) -> Replay | TakenOver | None:
     """Claim ``key`` for ``binding``'s operation, sent as the request ``digest`` names, as ``attempt``. ``None`` means proceed; a :class:`Replay` means answer with it;
@@ -220,6 +258,7 @@ def claim(
         binding: The door and the object the operation acts on.
         digest: The request's digest: a key held for another request is refused, unless its claim was given back.
         attempt: This attempt's token, which only it gives back (:func:`release`).
+        captured: The object the door's name resolves to now; a takeover keeps the one the key was first claimed on.
         lease: How long an unanswered claim holds the key, on the store's clock.
 
     Returns:
@@ -237,10 +276,10 @@ def claim(
     for _ in range(_ROUNDS):
         found = conditional_records.read_json_at(root_uri, storage_options, record_key)
         stored = found.stored
-        claimed = _Claimed(state="in_flight", binding=binding, digest=digest, attempt=attempt, claimed_at=found.at).model_dump(mode="json")
+        claimed = _Claimed(state="in_flight", binding=binding, digest=digest, attempt=attempt, claimed_at=found.at, captured=captured, intent=None)
         if stored is None:
             try:
-                conditional_records.create_json(root_uri, storage_options, record_key, claimed)
+                conditional_records.create_json(root_uri, storage_options, record_key, claimed.model_dump(mode="json"))
             except conditional_records.RecordExistsError:
                 continue
             return None
@@ -256,13 +295,57 @@ def claim(
             return Replay(status=current.status, body=current.body)
         if current.state == "in_flight" and found.at - current.claimed_at < lease:
             raise InFlightError(f"idempotency key {key!r} is held by an attempt that has not finished")
+        lapsed = current.state == "in_flight"
+        # A lapsed attempt's capture and intent are kept: they are what the next takeover judges, should this one be lost too.
+        kept = claimed.model_copy(update={"captured": current.captured or captured, "intent": current.intent if lapsed else None})
         try:
-            conditional_records.replace_json(root_uri, storage_options, record_key, claimed, etag=stored.etag)
+            conditional_records.replace_json(root_uri, storage_options, record_key, kept.model_dump(mode="json"), etag=stored.etag)
         except conditional_records.RecordChangedError:
             continue
         # A released key was given back before its attempt wrote anything; a lapsed one may have written.
-        return TakenOver(since=current.claimed_at) if current.state == "in_flight" else None
+        return TakenOver(since=current.claimed_at, intent=current.intent, captured=current.captured) if lapsed else None
     raise conditional_records.RecordChangedError(f"the record of idempotency key {key!r} kept changing across {_ROUNDS} rounds")
+
+
+def intend(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, attempt: str, intent: Intent) -> None:
+    """Record, before ``attempt`` changes anything, what it is about to change (:class:`Intent`).
+
+    Written under the ETag of the read it follows, onto the claim ``attempt`` holds and nothing else.
+
+    Raises:
+        KeyRecordUnreadableError: The key's record cannot be read as one.
+        InFlightError: Another attempt took the key over since, so this one must change nothing.
+        conditional_records.RecordChangedError: The record changed between the read and the write.
+    """
+    record_key = _record_key(scope, key)
+    stored = conditional_records.read_json_at(root_uri, storage_options, record_key).stored
+    current = None if stored is None else _stored(stored, key)
+    if stored is None or not isinstance(current, _Claimed) or current.state != "in_flight" or current.attempt != attempt:
+        raise InFlightError(f"idempotency key {key!r} is no longer held by this attempt")
+    updated = current.model_copy(update={"intent": intent}).model_dump(mode="json")
+    conditional_records.replace_json(root_uri, storage_options, record_key, updated, etag=stored.etag)
+
+
+def captured_for(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, endpoint: str, name: str, digest: str) -> Captured | None:
+    """The object ``scope``'s ``key`` was first claimed on, when its record is ``endpoint``'s for ``name`` and this request,
+    held by an attempt or answered with a success.
+
+    ``None`` for anything else: no record, another door, another name, another request, a claim given back, a refusal
+    answered, a record being reclaimed, or one that cannot be read.
+    """
+    stored = conditional_records.read_json_at(root_uri, storage_options, _record_key(scope, key)).stored
+    if stored is None:
+        return None
+    try:
+        current = _stored(stored, key)
+    except KeyRecordUnreadableError:
+        return None
+    if isinstance(current, _Reclaiming) or current.binding.endpoint != endpoint or current.digest != digest:
+        return None
+    # A claim given back was refused before it changed anything, and a refusal answered admits nothing either.
+    if (isinstance(current, _Claimed) and current.state != "in_flight") or (isinstance(current, _Answered) and current.status >= 300):
+        return None
+    return current.captured if current.captured is not None and current.captured.name == name else None
 
 
 def release(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, attempt: str) -> None:
@@ -310,9 +393,9 @@ def record_outcome(root_uri: str, storage_options: StorageOptions, *, scope: str
         if isinstance(current, _Reclaiming):
             log.error("idempotency_outcome_unrecorded", extra={"key": key, "status": status, "reason": "the key's record is being reclaimed"})
             return
-        answered = _Answered(state="done", binding=current.binding, digest=current.digest, status=status, body=body).model_dump(mode="json")
+        answered = _Answered(state="done", binding=current.binding, digest=current.digest, status=status, body=body, captured=current.captured)
         try:
-            conditional_records.replace_json(root_uri, storage_options, record_key, answered, etag=stored.etag)
+            conditional_records.replace_json(root_uri, storage_options, record_key, answered.model_dump(mode="json"), etag=stored.etag)
         except conditional_records.RecordChangedError:
             continue
         return
@@ -384,14 +467,18 @@ def _reclaim_listed(root_uri: str, storage_options: StorageOptions, path: str, *
 __all__ = [
     "LEASE",
     "PREFIX",
+    "Captured",
     "InFlightError",
+    "Intent",
     "KeyBinding",
     "KeyRecordUnreadableError",
     "KeyReusedError",
     "Reclaimed",
     "Replay",
     "TakenOver",
+    "captured_for",
     "claim",
+    "intend",
     "reclaim",
     "record_outcome",
     "release",

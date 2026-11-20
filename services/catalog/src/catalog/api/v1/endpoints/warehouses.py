@@ -1060,7 +1060,7 @@ async def delete_warehouse(
     """
     # Asked before the record is read: a replay under the caller's key answers the first delete and reads nothing, so a
     # warehouse registered under the id since is never the one a resent delete removes.
-    converge = await keyed.begin(endpoint="DELETE /management/v1/warehouses/{warehouse_id}", target=f"warehouse:{warehouse_id}")
+    converge = await keyed.begin(target=f"warehouse:{warehouse_id}", takeover="unknown")
     if converge.replay is not None:
         return DeleteWarehouseResponse.model_validate(converge.replay.body)
     record = warehouse_its_doors_manage(warehouse_id, await administered_warehouse(warehouse_id, settings, token, client), token)

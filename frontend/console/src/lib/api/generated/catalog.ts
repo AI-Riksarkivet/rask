@@ -11591,7 +11591,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -12161,7 +12161,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -13625,7 +13625,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -14127,7 +14127,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -14556,7 +14556,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -14752,7 +14752,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -16160,7 +16160,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -16449,7 +16449,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -16553,7 +16553,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -16649,7 +16649,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -16844,7 +16844,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -17503,7 +17503,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -17610,7 +17610,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -17798,7 +17798,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -17902,7 +17902,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
             };
             path: {
@@ -18006,7 +18006,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };
@@ -18762,7 +18762,7 @@ export interface operations {
                 delimiter?: string | null;
             };
             header?: {
-                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). */
+                /** @description Optional; a UUID. The same request resent under the key (the same body bytes and parameters) is answered with the first request's response and applies nothing; the key sent with a different request, or on another door or object, is refused 400 (code 13). A resend after the first request was lost unanswered is answered with the first request's response where the catalog can prove that request landed (a recoverable drop, by its trash record, and an insert, merge_insert, update or delete, by the commit its key stamped); is refused 409 (code 14), its outcome unknown, on a door whose second run would apply again (a restore, a create with mode=Overwrite, a namespace's drop, a project's or a warehouse's delete) or where the name now names another object: read the object, then send a new key; and otherwise runs again against the state it finds, so it refuses where the first landed (409 for a name that exists, 404 for one that is gone) and applies again where another request undid it in between. A resend after a drop that destroyed the table, or after a deregister, is refused 403 like any request on a missing name, since the table's grants went with it. */
                 "Idempotency-Key"?: string | null;
                 "x-lance-originator"?: string | null;
             };

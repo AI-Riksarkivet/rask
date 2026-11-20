@@ -623,7 +623,7 @@ async def delete_project(
     """
     # Asked before the record is read: a replay under the caller's key answers the first delete and reads nothing, so a
     # project registered under the id since is never the one a resent delete removes.
-    converge = await keyed.begin(endpoint="DELETE /management/v1/projects/{project_id}", target=f"project:{project_id}")
+    converge = await keyed.begin(target=f"project:{project_id}", takeover="unknown")
     if converge.replay is not None:
         return DeleteProjectResponse.model_validate(converge.replay.body)
     record = project_its_doors_delete(project_id, await project_to_delete(project_id, settings, token, client), token)

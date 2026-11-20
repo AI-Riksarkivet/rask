@@ -54,6 +54,7 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
 
+from catalog.api import idempotency
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.read_actions import DATA_READ_ACTIONS, META_READ_ACTIONS
 from catalog.api.route_path import route_path
@@ -576,7 +577,10 @@ async def _require_rung(client: OpenFgaClient, resolver: Resolver, *, user: str,
     """Ask ``rung`` on the object its name resolves to, refuse it as :func:`_require` does, and return that object.
 
     A name that holds no object is refused alike: no tuple can name it, and the refusal names the name, as it does for
-    an object that is there.
+    an object that is there. One exception, a keyed resend: a name its caller's ``Idempotency-Key`` was first claimed on
+    for this door and this request is asked the same rung on the object the claim captured
+    (``idempotency.captured_object``), so the replay of a drop, a deregister or a rename reaches its door, and a caller
+    the rung refuses there meets the same refusal.
     """
     label = _label(rung)
     if not isinstance(rung.on, str) and rung.on.in_trash:
@@ -586,6 +590,8 @@ async def _require_rung(client: OpenFgaClient, resolver: Resolver, *, user: str,
             return await _require_trashed(client, resolver, user=user, relation=rung.relation, named=rung.on, label=label, trashed=trashed)
         resolver.admit_trashed(rung.on.kind, segments, [])
     obj = await _resolve(resolver, rung)
+    if obj is None and not isinstance(rung.on, str):
+        obj = await idempotency.captured_object(resolver.request, resolver.settings, subject=user, name=fga_ids.canonical_object_id(list(rung.on.segments)))
     if obj is None:
         raise _refuse_absent(user=user, relation=rung.relation, label=label)
     await _require(client, user=user, relation=rung.relation, obj=obj, label=label)

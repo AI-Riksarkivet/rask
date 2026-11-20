@@ -128,7 +128,21 @@ class RoleEnded(BaseModel):
     role: str
 
 
-type Evidence = Annotated[TupleGone | TupleHeld | NameResolves | NamespaceResolves | RecordGone | RecordHeld | RoleEnded, Field(discriminator="kind")]
+class TrashedUnder(BaseModel):
+    """A recoverable drop landed under one keyed attempt: the trash keeps the ``trash_kind`` object ``uuid`` names, stamped
+    by ``attempt`` once that attempt's detach returned (``lakehouse.records.trash.TrashRecord.dropped_under``)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["trashed_under"] = "trashed_under"
+    trash_kind: Literal["table", "namespace"]
+    uuid: str
+    attempt: str
+
+
+type Evidence = Annotated[
+    TupleGone | TupleHeld | NameResolves | NamespaceResolves | RecordGone | RecordHeld | RoleEnded | TrashedUnder, Field(discriminator="kind")
+]
 
 
 class ControlMessage(BaseModel):

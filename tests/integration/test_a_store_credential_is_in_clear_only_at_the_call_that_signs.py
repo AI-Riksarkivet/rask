@@ -129,7 +129,7 @@ def _base_registry(rig: _Rig) -> BaseModel:
 def _keyed_door(rig: _Rig) -> BaseModel:
     """As `idempotency.keyed_door` builds it, holding the claim `KeyedDoor.begin` answers a keyless request with."""
     door = idempotency.KeyedDoor(registry_root=rig.catalog.registry_root, storage_options=rig.catalog.storage_options(plane="data"), scope="caller", key=None)
-    asyncio.run(door.begin(endpoint="create_table", target="lance_catalog$db$t"))
+    asyncio.run(door.begin(target="lance_catalog$db$t", takeover="rerun"))
     return door
 
 

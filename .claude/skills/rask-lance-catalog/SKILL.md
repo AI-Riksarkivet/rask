@@ -903,6 +903,19 @@ governing their data. The project-scoped surface is the console's project page, 
   the ref's versions since that claim for it, answering from the commit it finds ([[LH-577]],
   `dataplane.committed_under_key`, `endpoints.data._keyed_table_write`). Each records its answer right after its commit,
   before the lineage emit, so a failure after the commit is answered on resend rather than run again.
+  Every other keyed door claims through `KeyedDoor.begin(target=, takeover=, captured=)`, the key bound to the route
+  that matched (`door_endpoint`), and `takeover` is required (`Takeover`): JUDGED (a judge, `Announcer.landed`: answered
+  from what the lost attempt recorded with `Converge.intend` before it changed anything, run when its evidence is not
+  there or nothing was intended; today the drop, whose recoverable trash record carries the attempt,
+  `TrashRecord.dropped_under`, stamped under the fence only once the detach returned, evidence `TrashedUnder`), `"rerun"` (runs again against the state it finds: it refuses where
+  the first landed and applies again where another request undid it between: a table's create and declare, register, undrop, rename and deregister, a namespace's create and undrop,
+  a create with mode=Overwrite excepted) or `"unknown"` (refused 409 code 14, the claim kept: restore, a create with
+  mode=Overwrite, a namespace's drop, a project's and a warehouse's delete). A rerun is refused as unknown too when the
+  name now names another object than the claim captured, and a judge whose read fails (an unreadable trash record) is. A drop, a deregister and a rename keep on
+  their claim the object their name resolved to (`Captured`); a resend whose name holds nothing is asked the same rung
+  on that object by the router (`fga_deps._require_rung` → `idempotency.captured_object`), and anything else (no key,
+  no record, another caller, door, name or request) meets the refusal any missing name gets. A destroying drop and a
+  deregister revoke the grants, so their resend is refused 403 as before.
 
 - **`update_table_schema_metadata` MERGES — the spec text ("Replace schema metadata") is wrong about
   every backend.** Probed against a real `dir` backend: posting `{owner}` over `{owner, tier}` leaves

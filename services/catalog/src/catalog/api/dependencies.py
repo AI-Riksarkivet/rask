@@ -307,6 +307,16 @@ class Resolver:
         self._trashed: dict[tuple[str, tuple[str, ...]], list[TrashRecord]] = {}
         self._admitted: dict[tuple[str, tuple[str, ...]], list[TrashRecord]] = {}
 
+    @property
+    def request(self) -> Request:
+        """The request whose names this resolves."""
+        return self._request
+
+    @property
+    def settings(self) -> Settings:
+        """The settings the request is served under."""
+        return self._settings
+
     async def _connection(self, segments: list[str]) -> LanceNamespace:
         # A deactivated warehouse's names still resolve here: the router asks OpenFGA about the object a name
         # resolves to before anyone is told the warehouse is suspended (`fga_deps.authorize`), so a caller holding

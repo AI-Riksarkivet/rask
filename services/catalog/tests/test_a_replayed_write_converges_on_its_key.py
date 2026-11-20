@@ -27,9 +27,13 @@ from __future__ import annotations
 import os
 import tracemalloc
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
+from typing import Any
 
+import pyarrow as pa
 import pytest
+from lance_namespace import LanceNamespace
 
 from catalog.services.idempotency_records import PREFIX, InFlightError, KeyBinding, KeyReusedError, Replay, TakenOver, claim, reclaim, record_outcome, release
 from lakehouse.storage import conditional_records
@@ -154,6 +158,173 @@ class TestTheKeyIsNeverAPathTraversal:
         at the seam, because a second caller of this module must not have to remember."""
         with pytest.raises(ValueError, match="idempotency key"):
             claim(str(tmp_path), SO, scope=SCOPE, key=bad, binding=CREATE, digest=DIGEST, attempt="a")
+
+
+TABLE = "/v1/table/lance_catalog$db$t"
+FIRST_KEY = "0b6f3f0e-5c7a-4a43-9d6e-2f1c8a9b7e11"
+_RENAME = {"new_table_name": "moved"}
+#: Whatever the store holds under a trash record's key, once it is no record.
+_NOT_A_RECORD = b"not a trash record"
+
+
+def _rows(*ids: int) -> bytes:
+    from lakehouse.arrow_ipc import encode_arrow_stream
+
+    return encode_arrow_stream(pa.table({"id": pa.array(list(ids), pa.int64())}))
+
+
+def _keyed(catalog: Any, who: str, key: str | None, door: str, query: dict[str, str], body: dict[str, Any] | None, *, table: str = TABLE) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
+    from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+
+    headers = {**catalog.bearer(who), **({"Idempotency-Key": key} if key else {})}
+    if door == "create":
+        return catalog.client.post(f"{table}/create", params=query, content=_rows(1), headers={**headers, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    return catalog.client.post(f"{table}/{door}", params=query, json=body, headers=headers)
+
+
+def _seen(answer: Any) -> tuple[int, dict[str, Any]]:  # noqa: ANN401 — an httpx response
+    """What a caller is told, less the per-request ``instance`` a problem names."""
+    return answer.status_code, {name: value for name, value in answer.json().items() if name != "instance"}
+
+
+@pytest.mark.parametrize(
+    ("case", "door", "query", "body"),
+    [
+        pytest.param("answered", "drop", {}, None, id="1-a-recoverable-drop-answered"),
+        pytest.param("lost", "drop", {}, None, id="2-a-recoverable-drop-whose-answer-was-lost"),
+        pytest.param("grants-gone", "deregister", {}, {}, id="3-a-deregister-which-takes-the-grants"),
+        pytest.param("answered", "rename", {}, _RENAME, id="4-a-rename-answered"),
+        pytest.param("no-record", "drop", {}, None, id="5-a-caller-holding-no-record"),
+        pytest.param("another-caller", "drop", {}, None, id="6-another-caller-presenting-the-key"),
+        pytest.param("revoked", "drop", {}, None, id="7-the-caller-after-their-grants-went"),
+        pytest.param("grants-gone", "drop", {"purge": "true"}, None, id="8-a-destroying-drop"),
+        pytest.param("retired-by-another", "drop", {}, None, id="9-another-request-dropped-it-first"),
+        pytest.param("died-before-the-change", "create", {}, None, id="10-a-create-lost-before-it-changed-anything"),
+        pytest.param("lost", "restore", {}, {"version": 1}, id="11-a-restore-whose-answer-was-lost"),
+        pytest.param("evidence-unreadable", "drop", {}, None, id="12-a-drop-whose-trash-record-cannot-be-read"),
+        pytest.param("died-before-the-detach", "drop", {}, None, id="13-a-drop-lost-before-its-detach-then-renamed"),
+        pytest.param("refused-first", "drop", {}, None, id="14-a-drop-refused-then-dropped-by-another"),
+        pytest.param("another-door", "drop", {}, None, id="15-the-key-on-another-door"),
+        pytest.param("another-request", "drop", {}, None, id="16-the-key-with-another-request"),
+        pytest.param("another-name", "drop", {}, None, id="17-the-key-on-another-name"),
+        pytest.param("stamp-refused", "drop", {}, None, id="18-a-drop-whose-stamp-the-store-refuses"),
+    ],
+)
+def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
+    governed_catalog: Any,  # noqa: ANN401 — the conftest's GovernedCatalog
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+    door: str,
+    query: dict[str, str],
+    body: dict[str, Any] | None,
+) -> None:
+    """XC-219. A keyed drop or rename that landed leaves its name holding nothing, so its resend is authorized against the
+    object the key was first claimed on: answered with the first answer, or, for a recoverable drop whose answer was lost
+    past the lease, with the answer its trash record proves. Anyone else, or the caller once the rung no longer admits
+    them, is refused exactly as on any missing name, and so is the key on another door, name or request, or one whose
+    first request was refused; a destroying drop and a deregister took the grants, so their resend is refused too. A
+    takeover the evidence does not prove runs again against the state it finds (a drop another request landed first
+    refuses 404; a create lost before it changed anything creates; a drop lost before its detach, its table renamed since,
+    is not answered as done), and is refused as of unknown outcome where a second run would apply again (a restore) or the
+    evidence cannot be read."""
+    from catalog.api import idempotency as keyed_doors
+    from catalog.core.config import get_settings
+    from catalog.services import dataplane, idempotency_records, native, table_claims
+    from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+    from lakehouse.records import trash
+    from lakehouse.storage.objectfs import fs_and_base
+
+    catalog = governed_catalog
+    settings = get_settings().model_copy(update={"trash_grace_days": 1.0})
+    catalog.client.app.dependency_overrides[get_settings] = lambda: settings
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
+    alice = catalog.bearer("alice")
+    arrow = {**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE}
+    assert catalog.client.post(f"{TABLE}/create", content=_rows(1), headers=arrow).status_code == 200
+    assert catalog.client.post(f"{TABLE}/insert", params={"mode": "append"}, content=_rows(2), headers=arrow).status_code == 200
+    uuid = catalog.client.post(f"{TABLE}/describe", json={}, headers=alice).json()["properties"]["rask.uuid"]
+    table = "/v1/table/lance_catalog$db$fresh" if door == "create" else TABLE
+
+    async def lost(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("the pod ended before the answer was recorded")
+
+    def faults(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("the pod ended before the door changed anything")
+
+    detach = native.call
+
+    def detach_faults(ns: LanceNamespace, op: str, request: object) -> object:
+        if op == "deregister_table":
+            raise RuntimeError("the pod ended after the trash record was filed, before the detach")
+        return detach(ns, op, request)
+
+    def store_refuses(*_args: object, **_kwargs: object) -> bool:
+        raise OSError("the store refused the write")
+
+    if case == "refused-first":
+        protected = catalog.client.post("/management/v1/table/lance_catalog$db$t/protection", json={"protected": True}, headers=alice)
+        assert protected.status_code == 200, protected.text
+    with monkeypatch.context() as during:
+        if case in {"lost", "evidence-unreadable"}:
+            during.setattr(keyed_doors.Converge, "remember", lost)
+        if case == "retired-by-another":
+            during.setattr(table_claims, "fence", faults)
+        if case == "died-before-the-change":
+            during.setattr(dataplane, "create_table", faults)
+        if case == "died-before-the-detach":
+            during.setattr(native, "call", detach_faults)
+        if case == "stamp-refused":
+            during.setattr(trash, "stamp_dropped_under", store_refuses)
+        try:
+            first = _keyed(catalog, "alice", FIRST_KEY, door, query, body, table=table)
+        except RuntimeError:
+            first = None
+    if case == "refused-first":
+        assert first is not None and first.status_code == 409, first.text if first is not None else None
+        assert catalog.client.post(f"{TABLE}/drop", params={"force": "true"}, headers=alice).status_code == 200
+    if case == "retired-by-another":
+        assert catalog.client.post(f"{TABLE}/drop", headers=alice).status_code == 200
+    if case == "died-before-the-detach":
+        assert catalog.client.post(f"{TABLE}/rename", json={"new_table_name": "m"}, headers=alice).status_code == 200
+    if case == "evidence-unreadable":
+        fs, base = fs_and_base(settings.registry_root, settings.storage_options())
+        with fs.open_output_stream(f"{base}/{trash.key(uuid)}") as planted:
+            planted.write(_NOT_A_RECORD)
+    if first is None:
+        monkeypatch.setattr(idempotency_records, "claim", partial(idempotency_records.claim, lease=timedelta(0)))
+    if case == "revoked":
+        catalog.store.delete(*[held for held in catalog.store.tuples() if held[0] == catalog.person("alice")])
+    who, key = {"no-record": ("alice", "0b6f3f0e-5c7a-4a43-9d6e-2f1c8a9b7e12"), "another-caller": ("bob", FIRST_KEY)}.get(case, ("alice", FIRST_KEY))
+    # The resend's door, query and name, where it is not the first request's.
+    door, query, body, table = {
+        "another-door": ("deregister", {}, None, table),
+        "another-request": ("drop", {"purge": "true"}, None, table),
+        "another-name": ("drop", {}, None, "/v1/table/lance_catalog$db$other"),
+    }.get(case, (door, query, body, table))
+
+    again = _keyed(catalog, who, key, door, query, body, table=table)
+
+    if case == "died-before-the-detach":
+        assert (again.status_code, again.json().get("code")) == (404, 4), f"a drop that never detached must not be answered as done: {again.text}"
+        assert catalog.client.post("/v1/table/lance_catalog$db$m/describe", json={}, headers=alice).status_code == 200, "the table must still be readable"
+    elif case == "stamp-refused":
+        dropped = {"transaction_id": f"lance_catalog$db$t${uuid}"}
+        assert first is not None and _seen(first) == (200, dropped), first.text if first is not None else None
+        assert trash.get(settings.registry_root, settings.storage_options(), uuid) is not None, "the drop must have filed its trash record"
+        assert _seen(again) == (200, dropped), again.text
+    elif case == "answered" or (case == "lost" and door == "drop"):
+        answered = {"transaction_id": f"lance_catalog$db$t${uuid}"} if first is None else first.json()
+        assert _seen(again) == (200, answered), again.text
+    elif case == "retired-by-another":
+        assert (again.status_code, again.json().get("code")) == (404, 4), again.text
+    elif case == "died-before-the-change":
+        assert again.status_code == 200, again.text
+        assert catalog.client.post(f"{table}/describe", json={}, headers=alice).status_code == 200, "the resend must have created the table"
+    elif case in {"lost", "evidence-unreadable"}:
+        assert (again.status_code, again.json().get("code")) == (409, 14), again.text
+    else:
+        assert _seen(again) == _seen(_keyed(catalog, who, None, door, query, body, table=table)), "the refusal must be the one any missing name gets"
+        assert again.status_code == 403, again.text
 
 
 class TestARequestIsDigestedWithoutACopy:

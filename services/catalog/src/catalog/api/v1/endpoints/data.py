@@ -183,7 +183,9 @@ async def create_table(
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
-    converge = await keyed.begin(endpoint="POST /v1/table/{id}/create", target=fga_ids.canonical_object_id(parse_identifier(id)))
+    converge = await keyed.begin(
+        target=fga_ids.canonical_object_id(parse_identifier(id)), takeover="unknown" if create_mode is CreateMode.OVERWRITE else "rerun"
+    )
     if converge.replay is not None:
         return CreateTableResponse.model_validate(converge.replay.body)
 
@@ -258,7 +260,7 @@ async def insert_into_table(
     # After every shape refusal, so a malformed body claims no key. The claim binds the mode too, so the key on another
     # mode is refused rather than answered with this append's response ([[LH-576]]).
     converge, answered = await _keyed_table_write(
-        keyed, door=f"insert mode={insert_mode.value}", table=table, so=so, segments=segments, branch=branch, answer=InsertIntoTableResponse
+        keyed, mode=insert_mode.value, table=table, so=so, segments=segments, branch=branch, answer=InsertIntoTableResponse
     )
     if answered is not None:
         return answered
@@ -302,9 +304,16 @@ async def insert_into_table(
 
 
 async def _keyed_table_write[R: BaseModel](
-    keyed: idem.KeyedDoor, *, door: str, table: DoorTable, so: StorageOptions, segments: list[str], branch: str | None, answer: type[R]
+    keyed: idem.KeyedDoor,
+    *,
+    table: DoorTable,
+    so: StorageOptions,
+    segments: list[str],
+    branch: str | None,
+    answer: type[R],
+    mode: str | None = None,
 ) -> tuple[idem.Converge, R | None]:
-    """Claim the request's ``Idempotency-Key`` for the table write ``door`` on ``branch``, and the answer it already has.
+    """Claim the request's ``Idempotency-Key`` for the table write on ``branch`` (an insert's in ``mode``), and the answer it already has.
 
     The four table writes whose blind retry applies again (an append lands its rows again, an update's ``x = x + 1`` adds
     again, a merge's or a delete's predicate takes rows another writer committed in between) share this one claim, under
@@ -313,9 +322,8 @@ async def _keyed_table_write[R: BaseModel](
     key over from one lost unanswered past its lease, the answer that attempt's commit carries beside the key
     (:func:`dataplane.committed_under_key`), recorded now; ``None`` means the door writes, stamping :func:`_keyed_stamp`.
     """
-    converge = await keyed.begin(
-        endpoint=f"POST /v1/table/{{id}}/{door} branch={dataplane.recorded_branch(branch) or ''}", target=fga_ids.canonical_object_id(segments)
-    )
+    moded = "" if mode is None else f" mode={mode}"
+    converge = await keyed.begin_write(target=fga_ids.canonical_object_id(segments), qualifier=f"{moded} branch={dataplane.recorded_branch(branch) or ''}")
     if converge.replay is not None:
         return converge, answer.model_validate(converge.replay.body)
     if converge.taken_over_since is None or converge.mark is None:
@@ -397,9 +405,7 @@ async def merge_insert_into_table(
         use_index=use_index,
         branch=branch,
     )
-    converge, answered = await _keyed_table_write(
-        keyed, door="merge_insert", table=table, so=so, segments=segments, branch=branch, answer=MergeInsertIntoTableResponse
-    )
+    converge, answered = await _keyed_table_write(keyed, table=table, so=so, segments=segments, branch=branch, answer=MergeInsertIntoTableResponse)
     if answered is not None:
         return answered
     await lineage_deps.record_declared_inputs(settings, resolver, run, table=table.resolved, segments=segments)
@@ -461,7 +467,7 @@ async def update_table(
     body.id = reconcile_body_id(segments, body.id)
     expressions = [expression for _, expression in body.updates or []]
     await fga_deps.require_classifier_to_copy_a_label(client, settings, token, table=table, so=so, branch=body.branch, expressions=expressions)
-    converge, answered = await _keyed_table_write(keyed, door="update", table=table, so=so, segments=segments, branch=body.branch, answer=UpdateTableResponse)
+    converge, answered = await _keyed_table_write(keyed, table=table, so=so, segments=segments, branch=body.branch, answer=UpdateTableResponse)
     if answered is not None:
         return answered
     response: UpdateTableResponse = await run_in_threadpool(
@@ -503,9 +509,7 @@ async def delete_from_table(
     table or ref is refused 400, and a request without one is served as ever."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    converge, answered = await _keyed_table_write(
-        keyed, door="delete", table=table, so=so, segments=segments, branch=body.branch, answer=DeleteFromTableResponse
-    )
+    converge, answered = await _keyed_table_write(keyed, table=table, so=so, segments=segments, branch=body.branch, answer=DeleteFromTableResponse)
     if answered is not None:
         return answered
     response: DeleteFromTableResponse = await run_in_threadpool(

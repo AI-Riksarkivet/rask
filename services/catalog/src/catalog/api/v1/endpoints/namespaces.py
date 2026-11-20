@@ -174,7 +174,7 @@ async def create_namespace(
     # whole bucket, its owners included. Shape rung, so 400, and before the native call.
     fga_deps.require_namespace_depth(segments)
     # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
-    converge = await keyed.begin(endpoint="POST /v1/namespace/{id}/create", target=fga_ids.canonical_object_id(segments))
+    converge = await keyed.begin(target=fga_ids.canonical_object_id(segments), takeover="rerun")
     if converge.replay is not None:
         return CreateNamespaceResponse.model_validate(converge.replay.body)
     req = body or CreateNamespaceRequest()
@@ -851,8 +851,10 @@ async def drop_namespace(
     # non-empty namespace, so there are never extra tuples to revoke on that path.
     cascade = DropBehavior.parse(req.behavior) is DropBehavior.CASCADE
     req.id = reconcile_body_id(segments, req.id)
-    # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
-    converge = await keyed.begin(endpoint="POST /v1/namespace/{id}/drop", target=fga_ids.canonical_object_id(segments))
+    # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters
+    # nothing. Its claim captures no namespace, so a second run cannot tell the namespace from one created under the name
+    # since, which a cascade would remove: a resend taking over a lost drop is told its outcome is unknown.
+    converge = await keyed.begin(target=fga_ids.canonical_object_id(segments), takeover="unknown")
     if converge.replay is not None:
         return DropNamespaceResponse.model_validate(converge.replay.body)
     # The namespace the name resolves to now, with the uuid its records are kept under (ADR 0173 §8). A `Skip` of a
@@ -1052,7 +1054,7 @@ async def undrop_namespace(
     segments = parse_identifier(id)
     canonical = fga_ids.canonical_object_id(segments)
     # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
-    converge = await keyed.begin(endpoint="POST /management/v1/namespace/{id}/undrop", target=canonical)
+    converge = await keyed.begin(target=canonical, takeover="rerun")
     if converge.replay is not None:
         return CreateNamespaceResponse.model_validate(converge.replay.body)
     so = settings.storage_options()
