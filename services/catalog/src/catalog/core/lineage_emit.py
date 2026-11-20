@@ -50,6 +50,9 @@ from lakehouse.events.openlineage import (
     RUN_EVENT_SCHEMA_URL,
     SYMLINKS_FACET,
     VERSION_FACET_SCHEMA_URL,
+    JobRef,
+    ParentRunFacet,
+    RunRef,
     author_facet,
     catalog_facet,
     dataset_type_facet,
@@ -60,7 +63,6 @@ from lakehouse.events.openlineage import (
     schema_facet,
     symlinks_facet,
 )
-from lakehouse.events.openlineage_schemas import JobRef, ParentRunFacet, RunRef
 from lakehouse.events.signing import CanonError, SigningKey, attach_signature, author_of
 from lakehouse.governed import fga
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError

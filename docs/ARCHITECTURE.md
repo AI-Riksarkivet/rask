@@ -315,7 +315,9 @@ and records each as a row of `lance_catalog$provenance$events` and its table-lev
 catalog's provenance namespace, written through the catalog's `merge_insert` door as lineage's own principal, so every
 write is authorized, judged and audited like any writer's. `GET /tables/{name}/derived` walks the edge list (how an
 erasure finds every derived table), and a relay tick forwards every recorded event as standard OpenLineage to the
-configured graph backend (Marquez in development). Producers emit via the official `openlineage-python` client.
+configured graph backend (Marquez in development). The lakehouse's own emitters build the standard wire form without
+the official `openlineage-python` client, which the image's import gate refuses; `tests/unit/test_openlineage_spec_conformance.py`
+holds what they emit to the vendored 2-0-2 schema and to the client's facet versions. A client's producer uses any OpenLineage client.
 Full design + API in [`docs/LINEAGE.md`](LINEAGE.md).
 
 ---

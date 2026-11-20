@@ -1,9 +1,9 @@
 """The OpenLineage spec-fidelity gate every emitter has to pass.
 
 Our services build ``RunEvent`` wire dicts by hand — ``openlineage-python`` is a **dev-only**
-dependency, deliberately kept out of the service images, so only ``lineage.seed`` (the demo producer)
-constructs events through the official ``event_v2`` / ``facet_v2`` classes. That trade is only safe with
-a gate, and until 2026-07-26 there was none: validating the LIVE ``/events`` feed against
+dependency, kept out of the service image by its import gate (``.docker/import-gate.py --absent openlineage``
+in ``.docker/rest-catalog.dockerfile``), so no service constructs an event through the official ``event_v2`` /
+``facet_v2`` classes. That trade is only safe with a gate, and until 2026-07-26 there was none: validating the LIVE ``/events`` feed against
 ``https://openlineage.io/spec/2-0-2/OpenLineage.json`` failed 15 of 200 events, and three facet
 ``_schemaURL``s had silently drifted a version behind the client.
 
@@ -115,6 +115,9 @@ def test_catalog_write_event_conforms_and_names_the_table_by_the_catalog_and_its
         [{"namespace": "s3://lakehouse", "name": "bronze/images", "type": "LOCATION"}],
     )
     assert [(i["namespace"], i["name"]) for i in event["inputs"]] == [(_DATASETS, "alpha$raw$drop")]
+    # The writer's run rides the standard `parent` facet, whose `_schemaURL` is the model's default: the version the
+    # client stamps, so a facet version the client moves reddens here.
+    assert event["run"]["facets"]["parent"]["_schemaURL"] == facet_v2.parent_run.ParentRunFacet._get_schema()
 
 
 @pytest.mark.parametrize("operation", [catalog_emit.DROP_TABLE])

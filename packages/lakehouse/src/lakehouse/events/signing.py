@@ -58,7 +58,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
 
-from lakehouse.events.openlineage_schemas import PRODUCER
+from lakehouse.events.openlineage import PRODUCER
 
 
 if TYPE_CHECKING:

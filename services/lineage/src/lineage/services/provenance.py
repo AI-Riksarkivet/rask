@@ -58,8 +58,7 @@ from lakehouse import derived_tables
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.derived_tables import EDGES
 from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
-from lakehouse.events.openlineage import BRANCH_IDENTIFIER
-from lakehouse.events.openlineage_schemas import ParentRunFacet
+from lakehouse.events.openlineage import BRANCH_IDENTIFIER, ParentRunFacet
 from lakehouse.events.signing import SIGNATURE_FACET
 from lakehouse.governed.machine_identity import read_identity_token
 from lakehouse.lancekit.filters import in_lists, sql_literal

@@ -24,7 +24,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validato
 
 from lakehouse.events.control_events import CatalogControlEvent, control_signer_role
 from lakehouse.events.lineage_events import dataset_uuids, event_identity
-from lakehouse.events.openlineage_schemas import TERMINAL_STATES
+from lakehouse.events.openlineage import TERMINAL_STATES
 from lakehouse.process.correlation import current_trace_context, extracted, is_traceparent, is_tracestate
 
 

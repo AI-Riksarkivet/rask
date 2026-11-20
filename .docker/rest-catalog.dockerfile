@@ -120,9 +120,11 @@ COPY --link scripts/rustfs_admin.py /srv/rustfs_admin.py
 # only be seen here, where the deployable's own closure is the only one present. See the script.
 # `lakehouse` is gated beside the three services because the chart runs modules of it directly (the issuer mirror,
 # the authorization model's writer), so a module no service imports still has to import here.
-# `--absent`: lancedb (a client's dataset reader) never ships in the lakehouse image ([[XC-178]]).
+# `--absent`: lancedb (a client's dataset reader) never ships in the lakehouse image ([[XC-178]]), nor does the
+# official OpenLineage client: the services hand-build their events, and the client is the dev-only authority
+# `tests/unit/test_openlineage_spec_conformance.py` checks them against ([[XC-219]]).
 COPY .docker/import-gate.py /tmp/import-gate.py
-RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance lakehouse --absent lancedb && rm /tmp/import-gate.py
+RUN --network=none /opt/venv/bin/python /tmp/import-gate.py catalog lineage maintenance lakehouse --absent lancedb openlineage && rm /tmp/import-gate.py
 
 # ── the pool gate ────────────────────────────────────────────────────────────
 # Measure the pools OMP_NUM_THREADS bounds, under the environment this stage ships: a pool wider than it fails the build.

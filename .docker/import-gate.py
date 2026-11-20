@@ -5,7 +5,8 @@ the runtime stage actually ships. A non-zero exit fails the build.
 
 `--absent` names what the image must NOT ship: each module after it fails the build when the venv can import it. The
 lakehouse image names lancedb, so a dependency that drags a client's library into the lakehouse is refused at the build
-that would ship it ([[XC-178]]).
+that would ship it ([[XC-178]]), and openlineage, the official OpenLineage client its tests check the hand-built events
+against and its services never import ([[XC-219]]).
 
 **Why this exists.** A deployable's module can import a package that only a SIBLING workspace member
 declares. The whole suite stays green, because the workspace venv resolves it through that sibling. The

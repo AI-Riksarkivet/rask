@@ -64,7 +64,7 @@ notifier runs no visibility check on a control event: **being named IS the targe
 Four things must ALL hold, or the run names nobody. A notifier answers such an event "ack it, tell nobody", and that
 ack is a SUCCESS, so nothing anywhere reports the loss: the estate's most expensive silent failure mode.
 
-1. **Terminal state** — `COMPLETE` / `FAIL` / `ABORT` (`lakehouse.events.openlineage_schemas.TERMINAL_STATES`). `START`/`RUNNING` end nothing.
+1. **Terminal state** — `COMPLETE` / `FAIL` / `ABORT` (`lakehouse.events.openlineage.TERMINAL_STATES`). `START`/`RUNNING` end nothing.
    `RECONCILED` is lineage's REPAIR marker for a run whose real terminal event was lost, not an outcome anyone chose.
 2. **A VERIFIED `rask_author.sub`** — see traps 1 and 2. This is the one that keeps biting.
 3. **`rask_lance.project`** — optional, but omitting it costs you **every** watcher.

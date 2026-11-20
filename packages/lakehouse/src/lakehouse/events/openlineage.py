@@ -5,14 +5,18 @@ reusable by a Marquez-style consumer): a valid **UUID** ``runId``, the **require
 ``schemaURL``, and the ``_producer`` / ``_schemaURL`` every facet — standard OR custom — must carry.
 
 We hand-build the wire dicts rather than importing ``openlineage-python``: the client is a **dev-only**
-dependency (``[dependency-groups] dev`` in ``pyproject.toml``) and is deliberately kept out of the service
-images, so ``lineage.seed`` (the demo producer) is the only module that constructs events through the
-official ``event_v2`` / ``facet_v2`` classes. What makes the hand-built path safe is that these constants
+dependency (``[dependency-groups] dev`` in ``pyproject.toml``), and the lakehouse image's import gate refuses it
+(``.docker/import-gate.py --absent openlineage``), so no service constructs an event through the official
+``event_v2`` / ``facet_v2`` classes. What makes the hand-built path safe is that these constants
 are asserted EQUAL to the official facet classes' ``_get_schema()`` by
 ``tests/unit/test_openlineage_spec_conformance.py`` — bumping ``openlineage-python`` reddens CI the moment
 a facet's published version moves. That gate was missing until 2026-07-26, and three of the URLs below had
 already drifted (``SchemaDatasetFacet`` 1-1-1→1-2-0, ``DatasourceDatasetFacet`` and ``ErrorMessageRunFacet``
 1-0-0→1-0-1 — the 1-0-0 facets ``$ref`` the retired ``1-0-2`` core spec while our envelope declares 2-0-2).
+
+The standard ``parent`` run facet is a pydantic model here (``ParentRunFacet``) because it crosses services: the
+catalog writes it with ``model_dump(by_alias=True, exclude_none=True)`` and lineage reads the writer's run back with
+``ParentRunFacet.model_validate``.
 
 What a READER of the events needs (rask's own facet keys and schemas, the uuids a dataset carries, an event's identity)
 is `lakehouse.events.lineage_events`, which the lakehouse's readers share; the builders here are its emitters' and build on it.
@@ -24,6 +28,8 @@ from __future__ import annotations
 import logging
 import uuid
 from typing import Final
+
+from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse.events.lineage_events import AUTHOR_FACET_SCHEMA_URL, LANCE_FACET_SCHEMA_URL
 from lakehouse.naming import CATALOG_DATASET_SCHEME, is_catalog_dataset_namespace, location_identifier
@@ -318,6 +324,54 @@ def symlinks_facet(producer: str, *, location: str) -> dict[str, object]:
     }
 
 
+#: This library, as the ``_producer`` a facet's model stamps by default and the producer the signing seam names.
+PRODUCER: Final = "https://github.com/AI-Riksarkivet/rask/tree/main/packages/lakehouse"
+
+#: Standard ``ParentRunFacet`` schema URL — the run a write's own tooling answers to (``ParentRunFacet``).
+PARENT_RUN_FACET_SCHEMA_URL: Final = "https://openlineage.io/spec/facets/1-2-0/ParentRunFacet.json#/$defs/ParentRunFacet"
+
+
+#: The terminal OpenLineage run states (``eventType``): a run emits at most one of them, and ``START``, ``RUNNING`` and
+#: ``OTHER`` end nothing.
+TERMINAL_STATES: Final = frozenset({"COMPLETE", "ABORT", "FAIL"})
+
+
+class _WireModel(BaseModel):
+    """Base: alias-tolerant (wire keys OR pythonic names), ignores unknown wire keys."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+
+
+class RunRef(_WireModel):
+    """A reference to a run by id (the parent facet's ``run`` / ``root.run``)."""
+
+    run_id: str = Field(alias="runId")
+
+
+class JobRef(_WireModel):
+    """A reference to a job by namespace + name."""
+
+    namespace: str
+    name: str
+
+
+class RootRef(_WireModel):
+    """The topmost run of a hierarchy (``ParentRunFacet.root``)."""
+
+    run: RunRef
+    job: JobRef
+
+
+class ParentRunFacet(_WireModel):
+    """``parent`` run facet — what links a run to the run and job it answers to."""
+
+    producer: str = Field(default=PRODUCER, alias="_producer")
+    schema_url: str = Field(default=PARENT_RUN_FACET_SCHEMA_URL, alias="_schemaURL")
+    run: RunRef
+    job: JobRef
+    root: RootRef | None = None
+
+
 #: OpenLineage's spec URL for a `DatasetEvent` — a dataset change that no job performed.
 DATASET_EVENT_SCHEMA_URL: Final = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/DatasetEvent"
 
@@ -335,13 +389,20 @@ __all__ = [
     "ERROR_MESSAGE_FACET_SCHEMA_URL",
     "FACET_MAX_FIELDS",
     "LIFECYCLE_FACET_SCHEMA_URL",
+    "PARENT_RUN_FACET_SCHEMA_URL",
     "PROCESSING_ENGINE_FACET_SCHEMA_URL",
+    "PRODUCER",
     "RUN_EVENT_SCHEMA_URL",
     "SCHEMA_FACET_SCHEMA_URL",
     "SYMLINKS_FACET",
     "SYMLINKS_FACET_SCHEMA_URL",
     "SYMLINK_TYPE_LOCATION",
+    "TERMINAL_STATES",
     "VERSION_FACET_SCHEMA_URL",
+    "JobRef",
+    "ParentRunFacet",
+    "RootRef",
+    "RunRef",
     "author_facet",
     "catalog_facet",
     "dataset_type_facet",

@@ -265,7 +265,7 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     `cloud_events`, the CloudEvents envelope each event rides the bus in, `bus`, the one module
     that publishes an event and takes a delivery, on the process's own connection to NATS JetStream, `bus_delivery`,
     the rule that settles a delivery by what its handling answers, the outbox seams (`outbox`), the OpenLineage builders in
-    `openlineage`, the OpenLineage models in `openlineage_schemas`, and the Ed25519 signing and verifying seam in
+    `openlineage` with the parent run facet's model, and the Ed25519 signing and verifying seam in
     `signing`, `published_keys` and `door_verdict`; the address rule `governed.subjects` stays with the auth plane);
     and the store (`lakehouse.storage`: the S3 and STS clients in `client` and `sts`, `iter_keys` in `s3`, `split_s3_uri`
     in `uri`, the `StorageError` family in `errors`, the key pair in `credential`, `options`, `endpoint_scheme`, `objectfs`,
