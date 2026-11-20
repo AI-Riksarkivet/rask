@@ -56,7 +56,7 @@ _SCOPED = {
     "aws_endpoint": "https://s3.public.example",
     "allow_http": "false",
 }
-_VEND = {"mode": "direct", "credentials": {"storage_options": _SCOPED}}
+_VEND = {"mode": "direct", "credentials": {"storage_options": _SCOPED}, "location": _URI}
 
 
 def _settings(catalog_url: str = CATALOG) -> MaintenanceSettings:

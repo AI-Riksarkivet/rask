@@ -56,6 +56,7 @@ _CATALOG_URL = "http://catalog:2333"
 #: The table-scoped session the catalog's vend door answers maintenance with.
 _VEND = {
     "mode": "direct",
+    "location": _URI,
     "credentials": {
         "storage_options": {
             "endpoint": "https://s3.public.example",

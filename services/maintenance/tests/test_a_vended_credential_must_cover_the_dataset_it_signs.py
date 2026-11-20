@@ -83,20 +83,3 @@ def test_a_dataset_under_the_table_root_is_covered(door: respx.MockRouter, answe
     options = credentials.write_options_for(held, _settings(), table_id="tracka$rd2_28877454")
 
     assert options == SIGNED, f"{held} was refused a credential vended for its own table root {answered}"
-
-
-def test_a_vend_that_names_no_location_proceeds_and_says_so(door: respx.MockRouter, caplog: pytest.LogCaptureFixture) -> None:
-    """A missing location means the catalog did not tell us, NOT that there is a crossing.
-
-    Refusing on absence would stop maintaining the whole estate the day the response shape changed —
-    the same asymmetry `_may_write_anything` states: an uncertain answer must never be the one that
-    silently stops maintenance. So it proceeds, loudly, and this test is what makes that a decision
-    rather than an oversight.
-    """
-    _vends(door, "bronze$events", None)
-
-    with caplog.at_level("WARNING"):
-        options = credentials.write_options_for("s3://bind86-wh/medallion/silver", _settings(), table_id="bronze$events")
-
-    assert options == SIGNED
-    assert any("location" in record.getMessage() for record in caplog.records), "an unverifiable vend passed silently"

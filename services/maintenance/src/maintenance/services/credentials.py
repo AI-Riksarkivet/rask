@@ -235,7 +235,7 @@ class Vended(BaseModel):
     by a field already on the wire, not by a second round trip maintenance cannot afford (the tick walks
     552 datasets).
 
-    ``None`` where the door named none. A catalog that does not say is not a catalog that disagrees.
+    ``None`` where the door named none, which the table vend's crossing check reads as no answer.
 
     The options hold the key pair as ``S3KeyPair``, its secret and session token ``SecretStr`` ([[LH-072]], [[LH-543]]), so a
     repr, a log line or an error that echoes a vend carries neither; only the call that signs puts them in clear.
@@ -358,17 +358,16 @@ def _refuse_a_credential_that_does_not_cover(*, uri: str, table_id: str, locatio
     Re-implementing either reading here is what ``base_refs.normalise``'s docstring names as the failure
     indistinguishable from having no guard at all.
 
-    AN UNVERIFIABLE VEND PROCEEDS, loudly. A missing location means the catalog did not say, not that
-    it disagrees, and refusing on absence would stop maintaining the estate the day the response shape
-    changed — the same asymmetry ``table_pass._probe_before_vending`` argues for uncertainty.
+    A VEND NAMING NO LOCATION IS NO ANSWER. The table vend door names the location it scoped the credential to on
+    every 200, so a body without one is not the door's answer, and a credential nothing places cannot be checked
+    against the dataset it would sign for: the pass stops undecided and the next one asks again.
+
+    Raises:
+        VendUndecided: The vend names no location.
+        GovernedElsewhere: The catalog governs ``table_id`` at a location that does not hold ``uri``.
     """
     if location is None:
-        logger.warning(
-            "vended credential for %s carries no location, so it cannot be checked against %s — this pass proceeds unverified",
-            table_id,
-            uri,
-        )
-        return
+        raise VendUndecided(f"the vend for {table_id!r} names no location, so its credential cannot be checked against {uri}")
     governed, holding = decoded_path(location), normalise(uri)
     if holding == governed or holding.startswith(f"{governed}/"):
         return

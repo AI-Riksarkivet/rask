@@ -123,6 +123,18 @@ def test_a_refused_table_is_not_cleaned(
     assert result.data_storage_version == "2.2", f"the refusal dropped the manifest's version from the census: {result.data_storage_version!r}"
 
 
+def test_a_vend_naming_no_location_is_no_answer_and_cleans_nothing(tmp_path: Path, maintain_one: Callable[..., DatasetResult]) -> None:
+    """A credential the catalog does not place cannot be checked against the dataset it would sign for, so the pass
+    stops as a failure the next one retries, as for any body that names no answer."""
+    uri = _indexed(tmp_path)
+    vended = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
+
+    result = _execute(maintain_one, uri, vend=lambda _uri: httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": vended}}))
+
+    assert len(lance.dataset(uri).versions()) == 7, "a table whose vend names no location had its versions cleaned up"
+    assert (result.refused_by, result.error_type) == (None, "VendUndecided"), (result.refused_by, result.error)
+
+
 def test_the_fixture_is_cleaned_when_nothing_refuses_it(tmp_path: Path, maintain_one: Callable[..., DatasetResult]) -> None:
     """The control: the cleanup has work to do here, so an unchanged table means it was skipped."""
     uri = _indexed(tmp_path)
