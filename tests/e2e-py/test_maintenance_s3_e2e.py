@@ -211,7 +211,7 @@ def estate(s3: Any, rustfs_store: ThrowawayStore) -> Iterator[Estate]:
         s3.put_object(
             Bucket=built.ctl,
             Key=f"_warehouses/{wid}.json",
-            Body=json.dumps({"id": wid, "project": "e2e-maint", "bucket": bucket, "status": status}).encode(),
+            Body=json.dumps({"id": wid, "project": "e2e-maint", "bucket": bucket, "root_uri": f"s3://{bucket}", "status": status}).encode(),
         )
 
     yield built

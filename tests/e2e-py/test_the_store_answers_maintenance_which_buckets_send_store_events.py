@@ -53,7 +53,7 @@ def test_the_store_answers_maintenance_which_buckets_send_store_events(rustfs_st
     store_admin.put("add-user", {"accessKey": user}, json.dumps({"secretKey": secret, "status": "enabled"}).encode())
     store_admin.put("set-user-or-group-policy", {"policyName": f"rask-test-maintenance-{suffix}", "userOrGroup": user, "isGroup": "false"}, b"")
     (tmp_path / "_warehouses").mkdir()
-    (tmp_path / "_warehouses" / "w.json").write_text(json.dumps({"id": "w", "bucket": unconfigured}))
+    (tmp_path / "_warehouses" / "w.json").write_text(json.dumps({"id": "w", "bucket": unconfigured, "root_uri": f"s3://{unconfigured}", "project": "acme"}))
     settings = MaintenanceSettings.model_validate(
         {
             "MAINTENANCE_S3_BUCKET": configured,
