@@ -228,3 +228,4 @@ replacing it; a superseded or retired record is kept as written, as the record o
 | [0219](0219-an-endpoint-module-exports-named-routers-and-a-worker-has-no-api-tree.md) | LH-580 | An endpoint module exports named routers, one list mounts them, and a worker has no api tree (2026-11-18) | accepted |
 | [0220](0220-pod-to-pod-transport-encryption-is-the-platforms.md) | LH-580 | Pod-to-pod transport encryption is the platform's; rask serves no TLS between its own pods (2026-11-18) | accepted |
 | [0221](0221-protection-guards-a-tables-drop-not-its-rows.md) | XC-219 | Protection guards a table's drop, not its rows: an overwrite, a delete and a merge ask nothing of it (2026-11-20) | accepted |
+| [0222](0222-lineage-verifies-wherever-it-can-there-is-no-unenforced-deployment.md) | XC-219 | Lineage verifies wherever it can: the chart has no `signing.enforce`, and lineage refuses to start with auth, a secret store and no signer (2026-11-20) | accepted |

@@ -304,6 +304,6 @@ ran on its field default (§ Q17-27). hasKey+ternary for the reason recorded at 
 catalog's copy: `| default` makes an explicit false un-settable, and a bare reference
 renders "" on a `--reuse-values` upgrade, which is a bool_parsing crash at boot.
 
-## `{{- if (.Values.signing).enforce }}`
+## `{{- $signers := include "lance.signingIdentities" . | splitList " " | compact }}`
 
-ENFORCEMENT (values.yaml `signing:`): both sets or neither, and never an empty signer list.
+ENFORCEMENT (values.yaml `signing:`): wherever auth is on, both sets, and never an empty signer list.

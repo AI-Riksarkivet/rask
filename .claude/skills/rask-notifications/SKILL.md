@@ -75,7 +75,7 @@ ack is a SUCCESS, so nothing anywhere reports the loss: the estate's most expens
    output's `rask_lance` facet.
 
 **And the event is SIGNED.** Lineage verifies the `rask_signature` of every event on the bus and in the outbox
-(`signing.enforce`, on by default) and refuses what does not verify (trap 5). A notifier verifies the same signature
+(wherever auth is on; there is no switch) and refuses what does not verify (trap 5). A notifier verifies the same signature
 against the same signer sets, by the contract `docs/LINEAGE.md` § Signed events (the `rask_signature` facet) publishes,
 so an unsigned event reaches nobody whose notifier enforces.
 

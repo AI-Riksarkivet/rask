@@ -281,7 +281,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.replicas | int | `1` | Replica count of lineage; its replicas share one durable consumer, so it scales freely. |
 | services.lineage.requestDeadlineSeconds | int | `300` | Seconds a lineage request may run before its caller is answered 503 (code 17) while it runs on to its end (LINEAGE_REQUEST_DEADLINE_SECONDS, ADR 0203). |
 | signing.doors | string | `"enforce"` | Mode of the bus doors' signature check: "off", "observe" (count would-refuse) or "enforce" (ack and refuse). Always quoted. |
-| signing.enforce | bool | `true` | Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing. |
 | signing.provisioned | bool | `false` | Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there. |
 | vending.encryption | object | `{}` | Server-side encryption for direct writes, carried in vended storage options: `algorithm` (AES256, aws:kms, aws:kms:dsse) and `kmsKeyId` (kms only, the key ARN under web_identity vending). Empty = bucket default. |
 | vending.endpoint | string | `""` | Object-store endpoint every vended credential names (LANCE_S3_VENDED_ENDPOINT). Empty = the catalog's own store endpoint. https on a real deployment: the render refuses an http one. |

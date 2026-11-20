@@ -1089,7 +1089,7 @@ activeDeadlineSeconds: 1800
 {{- range (include "lance.signers" . | fromJsonArray) }}{{- $_ := set $own .app (concat (get $own .app | default list) (list (printf "signing-key-%s" .key) (printf "signing-public-%s" .key))) }}{{- end -}}
 {{- $apps := list
   (dict "app" $v.services.catalog.appId "sa" "catalog" "api" (concat (list "commit-id-key") (ternary $everySigner list (and $v.auth.enabled $doors $v.catalog.controlEmit))))
-  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list (and $v.auth.enabled ($v.signing).enforce)))) -}}
+  (dict "app" $v.services.lineage.appId "sa" "lineage" "api" (concat (compact (list $v.services.lineage.forward.authSecret.name)) (ternary $everySigner list $v.auth.enabled))) -}}
 {{- if $v.maintenance.enabled -}}
 {{- $apps = append $apps (dict "app" $v.maintenance.appId "sa" "maintenance" "api" (ternary $everySigner list (and $v.auth.enabled $doors $v.maintenance.arrivalEnabled))) -}}
 {{- end -}}

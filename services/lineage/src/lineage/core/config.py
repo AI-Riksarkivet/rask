@@ -33,8 +33,9 @@ class Signing(BaseSettings):
     person). Both are rendered by the chart from the identities it mints keys for (`LINEAGE_SIGNERS`,
     `LINEAGE_DELEGATORS`, JSON lists), so what lineage trusts and what the estate provisions cannot drift.
 
-    EMPTY SIGNERS MEAN NOTHING IS VERIFIED. An estate that does not enforce signing (the store off, auth off, or
-    `signing.enforce` false) renders both empty: a `rask_signature` an event carries is then ignored, and nothing
+    EMPTY SIGNERS MEAN NOTHING IS VERIFIED. A process with no secret store or with authentication off (the offline
+    and Dagger lanes) lists neither, and a deployment with both lists its signers or is refused its start
+    (:meth:`require_signers_where_they_can_be_verified`): a `rask_signature` an event carries is then ignored, and nothing
     a signature would attest is admitted on it. One object rather than two attributes so that a settings double
     carries the whole verifier configuration or none of it: a double without it fails on the missing attribute
     instead of silently skipping the check.
@@ -49,6 +50,23 @@ class Signing(BaseSettings):
     def enforced(self) -> bool:
         """Whether lineage refuses an event no listed signer's key verifies."""
         return bool(self.signers)
+
+    def require_signers_where_they_can_be_verified(self, *, authenticated: bool, secret_store: bool) -> None:
+        """Refuse a start that could verify and lists nobody to verify.
+
+        A deployment with authentication and a secret store, the published keys' source, has one state: lineage
+        verifies what its bus and outbox doors record. With no signer listed there, a `rask_signature` an event
+        carries would be recorded unverified, take the catalog's own feed row and be served as verified. A process
+        with no secret store has no key to verify against, and one with authentication off authenticates nobody.
+
+        Raises:
+            RuntimeError: Authentication and a secret store are on and ``LINEAGE_SIGNERS`` lists nobody.
+        """
+        if authenticated and secret_store and not self.enforced:
+            raise RuntimeError(
+                "lineage is authenticated and has a secret store, and LINEAGE_SIGNERS lists no signer: it would record "
+                "signatures nobody verified. List the identities that sign (the chart renders them wherever auth is on)."
+            )
 
 
 class LineageForward(BaseSettings):

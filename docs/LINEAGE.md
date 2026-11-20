@@ -217,12 +217,14 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/linea
   the store refuses stays staged (WARN `control_outbox_left_staged`, `outbox_drop_failed_total` for one already
   republished) and the pass goes on to the events behind it; the next tick publishes it again under the same
   `event_id`, which the stream and every subscriber deduplicate on.
-- **What lineage accepts, and from where.** With `signing.enforce` on (the default, rendered only where auth and the
-  secret store are on) lineage records an event only when a listed signer's published key verifies it. All four doors
+- **What lineage accepts, and from where.** Wherever auth is on (the chart then renders the signer and
+  delegator sets, and lineage refuses to start with a secret store and no signer) lineage records an event only when a
+  listed signer's published key verifies it. All four doors
   that record a bus or staged event apply the rule: the ingest lane (`lineage.api.ingest_lane`), the outbox drain, the
   operator's replay of an outbox event and the estate admin's replay of a parked delivery. The authenticated HTTP door (`POST /api/v1/lineage`: a user's pipeline, any
   OpenLineage client) takes no signature; it authenticates the caller's bearer token and strips any
-  `rask_signature` the body carries. With `signing.enforce` off lineage verifies nothing and ignores a present facet.
+  `rask_signature` the body carries. A lineage with authentication off, or with no secret store to read
+  published keys from (the offline and Dagger lanes), verifies nothing and admits nothing on a present facet.
 - **What is refused.** An event with no facet (`unsigned`), a malformed facet or an unsupported `alg` or `canon`, an
   identity outside `LINEAGE_SIGNERS` (`signer`), a signer that is not the stamped author and declares no delegation
   (`author`), a delegation from a non-delegator (`delegation`) or for another subject (`author`), a `kid` its signer does

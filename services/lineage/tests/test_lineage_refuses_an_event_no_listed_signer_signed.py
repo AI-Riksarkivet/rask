@@ -15,17 +15,20 @@ through a real in-memory reader.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable, Iterator
 from typing import Any, get_args
 
 import httpx
 import pytest
+from fastapi import FastAPI
 from lineage_lane import Feed, Lineage, measured, started
 
 from lakehouse.bus_delivery import Outcome, Settlement
 from lakehouse.lineage.signing import RefusalReason
-from lineage.core.config import get_settings
+from lineage import main
+from lineage.core.config import LineageSettings, get_settings
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -103,3 +106,16 @@ def test_lineage_records_a_bus_event_only_when_a_listed_signer_signed_it(
     assert bool(lane.feed.recorded) is recorded, f"{case}: recorded {lane.feed.recorded}"
     # A refusal is taken off the bus, so its count is the only trace it leaves; an outage is asked for again and counts nothing.
     assert {series: count for series, count in signature_counts().items() if count} == ({counted: 1} if counted else {})
+
+
+def test_lineage_does_not_start_authenticated_with_a_secret_store_and_no_signer(monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble) -> None:
+    """A deployment with authentication and a secret store has one state: lineage verifies what its bus and outbox
+    doors record. Listing no signer there would record a `rask_signature` nobody verified, so the start ends before
+    it logs in to the store or serves."""
+    authenticated = {"oidc_enabled": True, "RASK_OIDC_IDP_ID": "dex", "RASK_OIDC_ISSUER": "https://auth.example.com/dex", "RASK_OIDC_AUDIENCE": "rask"}
+    monkeypatch.setattr(main, "get_settings", lambda: LineageSettings.model_validate(authenticated))
+
+    with pytest.raises(RuntimeError, match="LINEAGE_SIGNERS lists no signer"):
+        asyncio.run(main.lifespan(FastAPI()).__aenter__())
+
+    assert secret_store.login.call_count == 0

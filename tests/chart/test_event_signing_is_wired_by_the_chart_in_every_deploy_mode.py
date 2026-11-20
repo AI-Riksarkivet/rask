@@ -6,9 +6,9 @@
   and lineage could verify nothing. The render refuses it, naming every secret and the script that creates them, until the
   operator attests with `signing.provisioned`. Nor does it mint a NATS user ([[XC-078]], values.yaml `nats.auth`): each
   `nats-user-<user>` waits for `nats.auth.provisioned`.
-- `signing.enforce` is lineage's switch, on by default. On, lineage carries the signer set and the delegator set the chart derives,
-  and only when the store and auth are on; off, it carries neither. An enforced render with no signer at all is refused rather
-  than rendered as a lineage that requires nothing.
+- Lineage has no switch: wherever auth is on it carries the signer set and the delegator set the chart derives, and with auth
+  off it carries neither. A render with auth on and no signer at all is refused rather than rendered as a lineage that
+  requires nothing.
 - `signing.doors` is the bus doors' mode (off, observe or enforce). Wherever the store and auth are on, every pod whose app hosts a
   door carries that mode and the two sets lineage verifies with. The pods whose doors take
   control events also carry the role map their per-action policy resolves signers from. A door verifying against other sets would
@@ -166,7 +166,6 @@ def test_a_store_nothing_seeds_is_refused_until_the_operator_attests_its_signing
         pytest.param(
             ("--set", "signing.doors=enforce", "--set", "maintenance.enabled=false"), True, "enforce", _CONTROL_HOSTS, id="the-mode-asked-with-maintenance-off"
         ),
-        pytest.param(("--set", "signing.enforce=false"), False, "enforce", _ALL_HOSTS, id="lineage-off-when-asked"),
         pytest.param(("--set", "auth.enabled=false"), False, None, _ALL_HOSTS, id="not-without-auth"),
     ],
 )

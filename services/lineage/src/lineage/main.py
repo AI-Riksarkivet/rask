@@ -78,6 +78,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         oidc_enabled=settings.oidc_enabled,
         insecure_allow_unauthenticated=settings.insecure_allow_unauthenticated,
     )
+    settings.signing.require_signers_where_they_can_be_verified(authenticated=settings.oidc_enabled, secret_store=secret_store_configured())
     # EVERYTHING ACQUIRED BELOW IS RELEASED BY THIS STACK, in reverse, whether the start completes or fails part-way
     # (ADR 0203), so a start that fails after the store session or a client is built leaves none of them open.
     async with AsyncExitStack() as stack:

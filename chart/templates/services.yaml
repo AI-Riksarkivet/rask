@@ -261,12 +261,10 @@ spec:
             - { name: RASK_AUDIT_ENABLED, value: {{ hasKey .Values.auth "audit" | ternary .Values.auth.audit true | quote }} }
             {{- include "lance.saVerifier" (list $root "env" "lineage") | nindent 12 }}
 
-            {{- if (.Values.signing).enforce }}
             {{- $signers := include "lance.signingIdentities" . | splitList " " | compact }}
-            {{- if not $signers }}{{ fail "signing.enforce=true but no identity signs: lineage would verify nothing" }}{{- end }}
+            {{- if not $signers }}{{ fail "auth.enabled=true but no identity signs: lineage would verify nothing" }}{{- end }}
             - { name: LINEAGE_SIGNERS, value: {{ $signers | toJson | quote }} }
             - { name: LINEAGE_DELEGATORS, value: {{ include "lance.delegatorIdentities" . | splitList " " | compact | toJson | quote }} }
-            {{- end }}
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}

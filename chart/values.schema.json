@@ -1675,10 +1675,6 @@
                     "description": "Mode of the bus doors' signature check: \"off\", \"observe\" (count would-refuse) or \"enforce\" (ack and refuse). Always quoted.",
                     "type": "string"
                 },
-                "enforce": {
-                    "description": "Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing.",
-                    "type": "boolean"
-                },
                 "provisioned": {
                     "description": "Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there.",
                     "type": "boolean"

@@ -1853,12 +1853,9 @@ openbao:
 # THE STORE HOLDS THE SAME LINE ([[XC-165]]): each service logs in as its own ServiceAccount, and its role's policy reads
 # `signing-key-<key>` only for the app that signs with it, so reaching :8200 without that app's login reads no private key.
 signing:
-  # LINEAGE'S SWITCH. True renders LINEAGE_SIGNERS and LINEAGE_DELEGATORS (lance.signingIdentities, lance.delegatorIdentities),
-  # and only when the secret store and auth.enabled are on as well: lineage then refuses an unsigned or non-verifying event
-  # before it records it. False renders neither, so lineage verifies nothing, ignores a present `rask_signature` and keeps
-  # its catalog-DROP shortcut off. The bus doors have their own switch, `doors` below.
-  # -- Lineage refuses unsigned or non-verifying events when the secret store and auth are also on. False renders no signer sets and lineage verifies nothing.
-  enforce: true
+  # LINEAGE HAS NO SWITCH: wherever auth.enabled is on it carries LINEAGE_SIGNERS and LINEAGE_DELEGATORS
+  # (lance.signingIdentities, lance.delegatorIdentities) and refuses an unsigned or non-verifying event before it records
+  # it, and it refuses to start with a secret store, authentication and no signer. The bus doors' mode is `doors` below.
   # THE BUS DOORS' MODE ([[XC-078]]): "off", "observe" or "enforce", always quoted, because YAML reads a bare off as false and
   # the render refuses anything but the three strings (as it refuses an unset value under `--reuse-values`).
   #

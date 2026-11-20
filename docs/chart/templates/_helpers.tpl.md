@@ -984,7 +984,7 @@ No lakehouse service reads a bus credential: each is a session user that present
 
 The split is by READER SET, because the store grants by secret name: a secret two apps read is one secret both name
 (a signer's public key), never a copy, so a rotation writes one place. The verifier
-lists follow the env the same flags render (`LINEAGE_SIGNERS` under `signing.enforce`, the doors under
+lists follow the env the same flags render (`LINEAGE_SIGNERS` wherever auth is on, the doors under
 `signing.doors`), and a signer reads its own pair. Maintenance's worker reads the signers' public keys when its write-event lane checks
 signatures (`auth.enabled`, `maintenance.arrivalEnabled`, and `signing.doors` not `off`).
 
