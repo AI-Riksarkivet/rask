@@ -523,8 +523,9 @@ def names_now(store: ClaimStore, records: list[TableRecord]) -> list[str | None]
     return [current_name(store, record.location, record.uuid) for record in records]
 
 
-def fence(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable, *, holder: str, verb: str) -> DoorFence:
-    """Fence the claim ``table`` resolved to, before a door that removes ``holder`` from ``__manifest`` acts on it.
+def fence(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable, *, holder: str, verb: str, token: str | None = None) -> DoorFence:
+    """Fence the claim ``table`` resolved to, before a door that removes ``holder`` from ``__manifest`` acts on it, under
+    ``token`` where the door names one (a recoverable drop's id, which a judge of its outcome reads the fence by).
 
     A claim naming another table that still resolves to the location refuses too, deregister and recoverable drop
     included: it is what the resolution reads when a rename landed between its describe and its claim read, and acting
@@ -539,7 +540,7 @@ def fence(ns: LanceNamespace, store: ClaimStore, table: ResolvedTable, *, holder
     """
     if table.location is None:
         raise TableNotFoundError(f"table not found: {holder}")
-    token = uuid4().hex
+    token = token or uuid4().hex
     try:
         location_claims.fence(
             store, table.location, table.claim, table=holder, segments=table.segments, token=token, is_gone=lambda claim: holder_is_gone(ns, store, claim)
@@ -578,6 +579,21 @@ def fence_listed(ns: LanceNamespace, store: ClaimStore, resolved: ResolvedTable,
         log.warning("cascade_refused_replaced_table", extra={"table": holder, "listed": listed_uuid, "found": resolved.uuid})
         raise ConcurrentModificationError(f"cannot {verb} {holder}: another table took its name while this request was being served; retry")
     return fence(ns, store, resolved, holder=holder, verb=verb)
+
+
+def holds_fence(store: ClaimStore, fenced: DoorFence) -> bool:
+    """Whether the door that set ``fenced`` still holds it: its claim carries the fence's token with more than
+    ``location_claims.DOOR_MARGIN`` of its lease left, on the store's clock (:meth:`LocationClaim.fenced_by`). A door that
+    does not has lost its turn, and acts on nothing of the table: what it filed is the finish's to judge, which fences
+    the claim before it withdraws a record and stamps one only by a conditional replace of the record it judged.
+
+    Raises:
+        OSError: The store refused the read or did not answer.
+        ValueError: The claim is no claim.
+    """
+    found = location_claims.read(store, fenced.location)
+    now = location_claims.store_now(store, fenced.location)
+    return found is not None and found.claim.fenced_by(fenced.token, now, margin=location_claims.DOOR_MARGIN)
 
 
 def lift_fence(store: ClaimStore, fenced: DoorFence) -> None:

@@ -274,7 +274,7 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
         if case == "died-before-the-detach":
             during.setattr(native, "call", detach_faults)
         if case == "stamp-refused":
-            during.setattr(trash, "stamp_dropped_under", store_refuses)
+            during.setattr(trash, "stamp_detached", store_refuses)
         try:
             first = _keyed(catalog, "alice", FIRST_KEY, door, query, body, table=table)
         except RuntimeError:

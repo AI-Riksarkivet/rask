@@ -259,14 +259,17 @@ async def _finish_announcement_intents(settings: MaintenanceCatalogDoor) -> dict
     unanswered door is logged and asked again by the next audit, never fatal to this one; each send the catalog makes is
     logged NAMED by the catalog, which knows what it sent."""
     finished = sent = unlanded = left = 0
+    after: str | None = None
     for _ in range(_FINISH_CALLS):
         try:
-            done = await run_in_threadpool(finish_announcement_intents, settings)
+            # Each call resumes past what the one before looked at, so filings left standing hold back none behind them.
+            done = await run_in_threadpool(partial(finish_announcement_intents, settings, after=after))
         except (MaintenanceDenied, VendUndecided, TableNotGoverned) as exc:
             log.warning("announcement_intents_unfinished", extra={"reason": str(exc)})
             return {"finished": finished, "sent": sent, "unlanded": unlanded, "left": left, "reason": str(exc)}
         finished, sent, unlanded, left = finished + done.finished, sent + done.sent, unlanded + done.unlanded, done.left
-        if not left:
+        after = done.next
+        if after is None:
             break
     if sent or unlanded:
         log.warning("announcement_intents_finished", extra={"finished": finished, "sent": sent, "unlanded": unlanded, "left": left})

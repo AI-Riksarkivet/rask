@@ -341,6 +341,11 @@ class Resolver:
             self._tables[key] = await run_in_threadpool(table_claims.resolve, connection, table_claims.claim_store(self._settings), list(segments))
         return self._tables[key]
 
+    async def table_now(self, segments: list[str]) -> ResolvedTable:
+        """The table ``segments`` names as the store holds it now, resolved afresh: for a judgement that orders its own
+        reads, which this request's earlier resolution of the name would not."""
+        return await run_in_threadpool(table_claims.resolve, await self._connection(segments), table_claims.claim_store(self._settings), list(segments))
+
     async def namespace_uuid(self, segments: list[str]) -> str | None:
         """The uuid of the namespace ``segments`` names, or ``None`` when no namespace has that name (or for the root).
 

@@ -40,7 +40,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 from lakehouse.records import control_prefixes, location_claims, object_records
 from lakehouse.records.base_registry import BaseRegistry, forget_base_record
 from lakehouse.records.record_store import delete_record, list_records, put_record, read_record, record_key
-from lakehouse.storage.conditional_records import RecordChangedError, RecordMissingError, mutate_json, read_json, replace_json
+from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, mutate_json, read_json, replace_json
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 
@@ -65,7 +65,8 @@ __all__ = [
     "note_refusal",
     "put",
     "read",
-    "stamp_dropped_under",
+    "stamp_detached",
+    "withdraw",
 ]
 
 
@@ -121,9 +122,12 @@ class TrashRecord(BaseModel):
     location: str = ""
     dropped_by: str = "anonymous"
     dropped_at: str = ""
-    #: The keyed attempt whose drop detached the object, stamped once its detach returned, which a resend of that
-    #: request finds its drop by.
-    dropped_under: str | None = None
+    #: The id the drop that filed the record minted, which its announcements and its keyed resend are filed under, so
+    #: each finds this record as that drop's own.
+    drop: str | None = None
+    #: Stamped by that drop once its detach returned (:func:`stamp_detached`): the proof that it dropped the object. A
+    #: record of its own left unstamped is judged by the catalog from the location's claim.
+    detached: Literal[True] | None = None
     #: The deadline as the drop stamped it, so a later change to the estate's grace period cannot shorten a window
     #: someone is still inside. Read through :attr:`deadline`.
     expires_at: str | None = None
@@ -151,7 +155,7 @@ class TrashRecord(BaseModel):
     def _a_namespace_or_a_table(cls, value: object) -> str:
         return "namespace" if value == "namespace" else "table"
 
-    @field_validator("uuid", "namespace_uuid", "cascade", mode="before")
+    @field_validator("uuid", "namespace_uuid", "cascade", "drop", mode="before")
     @classmethod
     def _a_name_or_nothing(cls, value: object) -> object:
         return value if isinstance(value, str) and value else None
@@ -189,7 +193,7 @@ class TrashRecord(BaseModel):
         except ValidationError:
             return None
 
-    @field_validator("residue", mode="before")
+    @field_validator("residue", "detached", mode="before")
     @classmethod
     def _marked_only_by_true(cls, value: object) -> object:
         return True if value is True else None
@@ -283,6 +287,7 @@ def make_record(
     namespace_uuid: str | None = None,
     cascade: str | None = None,
     residue: bool = False,
+    drop: str | None = None,
 ) -> TrashRecord:
     """The trash record of the object ``uuid`` names, dropped while ``canonical_id`` named it (:class:`TrashRecord`
     says what each field keeps).
@@ -305,6 +310,7 @@ def make_record(
         namespace_uuid=namespace_uuid or None,
         cascade=cascade or None,
         residue=True if residue else None,
+        drop=drop,
     )
 
 
@@ -347,27 +353,77 @@ def put(control_root: str, storage_options: StorageOptions, record: TrashRecord)
     put_record(control_root, storage_options, key(record.uuid, kind=record.kind), record.stored())
 
 
-def stamp_dropped_under(control_root: str, storage_options: StorageOptions, record: TrashRecord, *, attempt: str) -> bool:
-    """Stamp ``record``, as its drop filed it, with the keyed ``attempt`` that detached its object; whether it did.
+def stamp_detached(control_root: str, storage_options: StorageOptions, record: TrashRecord, *, refile: bool = False) -> bool:
+    """Stamp ``record``'s drop's own record as detached once that drop's detach returned; whether it is stamped.
 
-    Replaced under the ETag of a read that finds the record exactly as filed, so a record another drop wrote since, or
-    one an undrop or a purge cleared, is left as it stands: ``False``.
+    The record filed there is this drop's own when it names the same object and drop id (:func:`_own`), whatever else
+    has been noted on it since; it is stamped as stored, under the ETag of that read, so a note landing meanwhile is
+    kept or the stamp lost. A record another drop filed is left as it stands: ``False``. A record that is gone is left
+    gone, ``False``, unless ``refile``: the door whose detach returned files it again, stamped, create-if-absent, where
+    the finish withdrew it, having judged the table still registered while the door's detach was in flight and its fence
+    lapsed (the door re-files only once it finds the table registered under no name, ``tables._stamp_the_drop``).
 
     Raises:
-        ValueError: The record names no uuid.
+        ValueError: The record names no uuid, or the one filed is no trash record.
         OSError: The store refused the read or the write, or did not answer.
     """
+    at, found = _filed(control_root, storage_options, record)
+    try:
+        if found is None:
+            if not refile:
+                return False
+            create_json(control_root, storage_options, at, record.model_copy(update={"detached": True}).stored())
+            return True
+        kept = _own(found[0], record, at=at)
+        if kept is None or kept.detached:
+            return kept is not None
+        replace_json(control_root, storage_options, at, kept.model_copy(update={"detached": True}).stored(), etag=found[1])
+    except (RecordChangedError, RecordExistsError):
+        return False
+    return True
+
+
+def withdraw(
+    control_root: str, storage_options: StorageOptions, record: TrashRecord, *, claims: location_claims.ClaimStore, token: str, margin: timedelta = timedelta(0)
+) -> bool:
+    """Remove ``record``'s drop's own unstamped record once that drop is known not to have detached its object; whether
+    it did.
+
+    The store offers no conditional delete (:mod:`lakehouse.records.location_claims` says why the estate requires none),
+    so the record is read and compared, and removed only while the caller's fence ``token`` stands on the object's
+    claim with more than ``margin`` of its lease left (:meth:`location_claims.LocationClaim.fenced_by`; a door passes
+    ``location_claims.DOOR_MARGIN``), or while that claim is not the object's (absent, released,
+    another uuid's): every drop fences the object's claim before it files a record, so in either case no other drop's
+    record lands between the read and the delete.
+
+    Raises:
+        ValueError: The record names no uuid, or the one filed, or the claim, is none.
+        OSError: The store refused a read or the delete, or did not answer.
+    """
+    at, found = _filed(control_root, storage_options, record)
+    kept = _own(found[0], record, at=at) if found is not None else None
+    if kept is None or kept.detached:
+        return False
+    claim = location_claims.read(claims, record.location)
+    objects = claim is not None and claim.claim.uuid == record.uuid and claim.claim.released_at is None
+    if objects and claim is not None and not claim.claim.fenced_by(token, location_claims.store_now(claims, record.location), margin=margin):
+        return False
+    return delete_record(control_root, storage_options, at)
+
+
+def _own(raw: dict[str, Any], record: TrashRecord, *, at: str) -> TrashRecord | None:
+    """The record ``raw`` holds when ``record``'s drop filed it: the same kind, uuid and drop id, which nothing but that
+    drop writes; what is noted on a record since (a refusal, a release) does not make it another drop's."""
+    kept = read(raw, at=at)
+    return kept if record.drop is not None and (kept.kind, kept.uuid, kept.drop) == (record.kind, record.uuid, record.drop) else None
+
+
+def _filed(control_root: str, storage_options: StorageOptions, record: TrashRecord) -> tuple[str, tuple[dict[str, Any], str] | None]:
+    """The key ``record`` is filed under, and what is stored there with its ETag."""
     if record.uuid is None:
         raise ValueError(f"a trash record is filed under its object's uuid, and the record of {record.id!r} names none")
     at = key(record.uuid, kind=record.kind)
-    found = read_json(control_root, storage_options, at)
-    if found is None or found[0] != record.stored():
-        return False
-    try:
-        replace_json(control_root, storage_options, at, record.model_copy(update={"dropped_under": attempt}).stored(), etag=found[1])
-    except RecordChangedError:
-        return False
-    return True
+    return at, read_json(control_root, storage_options, at)
 
 
 def keeps(control_root: str, storage_options: StorageOptions, uuid: str, *, kind: TrashKind = "table") -> bool:

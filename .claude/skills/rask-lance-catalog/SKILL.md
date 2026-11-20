@@ -906,8 +906,13 @@ governing their data. The project-scoped surface is the console's project page, 
   Every other keyed door claims through `KeyedDoor.begin(target=, takeover=, captured=)`, the key bound to the route
   that matched (`door_endpoint`), and `takeover` is required (`Takeover`): JUDGED (a judge, `Announcer.landed`: answered
   from what the lost attempt recorded with `Converge.intend` before it changed anything, run when its evidence is not
-  there or nothing was intended; today the drop, whose recoverable trash record carries the attempt,
-  `TrashRecord.dropped_under`, stamped under the fence only once the detach returned, evidence `TrashedUnder`), `"rerun"` (runs again against the state it finds: it refuses where
+  there or nothing was intended; today the recoverable drop, whose trash record carries the id the drop minted,
+  `TrashRecord.drop`, and is stamped `detached` only once the detach returned, evidence `TrashedUnder`, which its
+  announcements are filed under too; a record of its own left unstamped is judged by `Announcer.landed` from the
+  location's claim, fenced under that id: still fenced by it with the holder naming no such table, the drop detached
+  it and the record is stamped; any other claim, it did not and the record is withdrawn under a fence; a door whose
+  detach returned files a withdrawn record again, stamped, and one whose fence was taken does not detach; the trash
+  release refuses while a filing on the object stands, so no purge ends a record before its drop is told), `"rerun"` (runs again against the state it finds: it refuses where
   the first landed and applies again where another request undid it between: a table's create and declare, register, undrop, rename and deregister, a namespace's create and undrop,
   a create with mode=Overwrite excepted) or `"unknown"` (refused 409 code 14, the claim kept: restore, a create with
   mode=Overwrite, a namespace's drop, a project's and a warehouse's delete). A rerun is refused as unknown too when the

@@ -13,7 +13,9 @@ router's own dependency, as the trash doors' is.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Query
 
 from catalog.api.announcing import AnnouncerDep
 from catalog.api.security import CurrentToken
@@ -30,22 +32,29 @@ management_router = APIRouter(prefix="/management/v1/announcement-intents", tags
 FINISH_LIMIT = 200
 
 
-@management_router.post("/finish")
-async def finish_announcement_intents(token: CurrentToken, announcer: AnnouncerDep) -> AnnouncementIntentsFinishResponse:
+@management_router.post("/finish", response_model_exclude_none=True)
+async def finish_announcement_intents(
+    token: CurrentToken,
+    announcer: AnnouncerDep,
+    after: Annotated[str | None, Query(description="The `next` an earlier call of the same pass answered, to resume past every filing it looked at.")] = None,
+) -> AnnouncementIntentsFinishResponse:
     """Send what each filing a failed door left names, wherever the store shows its change landed, and remove the filing.
 
-    A filing younger than a door can act is left to its door. Each announcement goes out as its door built it, under its
-    own id, so one the door had sent before failing is the same event again.
+    A filing younger than a door can act is left to its door, and one that cannot be judged is left standing. A call
+    judges at most a batch and answers ``next`` while filings remain past it, which the caller's next call passes as
+    ``after``, so a pass reaches the filings behind any it left standing. Each announcement goes out as its door built
+    it, under its own id, so one the door had sent before failing is the same event again.
     \f
 
     Args:
         token: The verified caller.
         announcer: Where the filings are judged and sent from.
+        after: Where an earlier call of the same pass stopped.
 
     Returns:
         How many filings it removed, announcements it sent and left, and filings it left.
     """
-    done = await announcer.finish(limit=FINISH_LIMIT)
+    done = await announcer.finish(limit=FINISH_LIMIT, after=after)
     audit(
         AuditAction.ANNOUNCEMENT_INTENTS_FINISH,
         AuditOutcome.SUCCESS,

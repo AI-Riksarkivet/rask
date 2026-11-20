@@ -14,10 +14,13 @@ from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Literal
+from uuid import uuid4
 
 from fastapi import Depends, Request
 from fastapi.concurrency import run_in_threadpool
+from lance_namespace import ConcurrentModificationError, InvalidInputError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
+from opentelemetry import metrics
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api import fga_deps
@@ -25,7 +28,7 @@ from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, ObjectUuid
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_event
 from catalog.schemas import AnnouncementIntentsFinishResponse, RoleRecord
-from catalog.services import announcement_intents, roles, subject_tuples
+from catalog.services import announcement_intents, roles, subject_tuples, table_claims
 from catalog.services.announcement_intents import (
     Announcement,
     ControlMessage,
@@ -47,16 +50,59 @@ from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids, fga_reads, fga_writes
 from lakehouse.problems.outage import store_refusal
-from lakehouse.records import trash
+from lakehouse.records import location_claims, trash
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
 
+_meter = metrics.get_meter("lance.catalog")
+_left_standing = _meter.create_counter(
+    "catalog.announcement_intents.left",
+    unit="{filing}",
+    description="Filings a finish left standing, by why: `young` (its door may still be at work), `at_work` (a door is "
+    "acting on the table a recoverable drop filed for) or `failed` (judging it raised, logged as "
+    "`announcement_intent_unjudged` with its key).",
+)
+_oldest_standing = _meter.create_gauge(
+    "catalog.announcement_intents.oldest",
+    unit="s",
+    description="How long the oldest filing the last finish pass left standing has stood, on the store's clock, as this "
+    "replica found it: 0 when that pass left none. A filing stands at most its lease and one audit while every judgement of "
+    "it settles, and while it stands its object's trash is neither released nor purged.",
+)
+
+
+#: The oldest age, in seconds, of a filing the pass under way has left standing; a pass begins with a call naming no cursor.
+_oldest_left = [0.0]
+
+
+def _left(filing: Standing, reason: str) -> None:
+    """Count ``filing`` left standing for ``reason``, and keep its age where it is the pass's oldest so far."""
+    _left_standing.add(1, {"lance.catalog.reason": reason})
+    _oldest_left[0] = max(_oldest_left[0], filing.age.total_seconds())
+
+
+def _create_left_series() -> None:
+    """Create every reason's series at 0, so the first filing left for one is an increase."""
+    for reason in ("young", "at_work", "failed"):
+        _left_standing.add(0, {"lance.catalog.reason": reason})
+
+
 type GrantAction = Literal["grant_added", "grant_revoked"]
 #: A tuple's place in what a door filed: its object, relation and user.
 type TupleKey = tuple[str, str, str]
+
+
+class DropAtWorkError(Exception):
+    """A door is acting on the table a recoverable drop filed for, or the drop's own fence still stands, so whether the
+    drop detached it is not yet the store's to tell: its filing stands for a later judgement."""
+
+
+class WithdrawalLeftError(DropAtWorkError):
+    """A recoverable drop did not detach its table, and its trash record is left for the finish to withdraw: the door
+    judging it may not fence the claim it has read."""
 
 
 class Announcer:
@@ -118,13 +164,14 @@ class Announcer:
         Raises:
             ServiceUnavailableError: The store or OpenFGA did not answer a read, or the store the filing; nothing was changed.
             InternalError: The store refused the filing; nothing was changed.
+            ConcurrentModificationError: A recoverable drop filed on ``target`` is not settled yet; nothing was changed.
         """
         if not announcements:
             yield Filing(self._send, {})
             return
         root, so = self._settings.registry_root, self._settings.storage_options()
         try:
-            earlier, _listed = await run_in_threadpool(partial(announcement_intents.standing, root, so, target=target))
+            earlier = (await run_in_threadpool(partial(announcement_intents.standing, root, so, target=target))).filings
         except OSError as exc:
             raise store_refusal(exc, reading=f"what was filed on {target}", so="nothing was changed") from exc
         reused, left = await self._take_over(earlier, wanted={announcement_intents.identity(a) for a in announcements})
@@ -152,30 +199,65 @@ class Announcer:
                 if (key := announcement_intents.identity(announcement)) in wanted:
                     reused.setdefault(key, announcement)
             if not filing.young:
-                left.append((filing, [a for a in filing.intent.announcements if await self.landed(a.evidence)]))
+                try:
+                    # Judged without withdrawing a drop's trash record: that fences the claim this door has read.
+                    left.append((filing, [a for a in filing.intent.announcements if await self.landed(a.evidence, withdrawing=False)]))
+                except WithdrawalLeftError:
+                    continue
+                except DropAtWorkError as at_work:
+                    # A drop on this door's own object whose fence may lapse at any moment: acting now, an undrop could
+                    # restore the table its drop detached before that drop is told, and the drop would never be.
+                    raise ConcurrentModificationError(f"{at_work}; retry once it has settled") from at_work
         return reused, left
 
-    async def finish(self, *, limit: int) -> AnnouncementIntentsFinishResponse:
+    async def finish(self, *, limit: int, after: str | None = None) -> AnnouncementIntentsFinishResponse:
         """Send what each filing older than :data:`announcement_intents.LEASE` names wherever the store shows its change
-        landed, and remove the filing, at most ``limit`` filings, oldest first.
+        landed, and remove the filing, at most ``limit`` filings, oldest first, from past the cursor ``after`` an earlier
+        call of the same pass returned: the answer's ``next`` resumes past every filing this call looked at, so a pass
+        reaches the filings behind those it left standing.
+
+        A filing whose judgement raises anything but an outage is left standing and logged, and the rest are finished.
 
         Raises:
             ServiceUnavailableError: The store or OpenFGA did not answer a read; the filing being judged stands for the next.
+            InvalidInputError: ``after`` is no cursor a finish returned.
         """
         root, so = self._settings.registry_root, self._settings.storage_options()
         try:
-            filings, listed = await run_in_threadpool(partial(announcement_intents.standing, root, so, limit=limit))
+            read = await run_in_threadpool(partial(announcement_intents.standing, root, so, limit=limit, after=after))
         except OSError as exc:
             raise store_refusal(exc, reading="the filed announcements", so="nothing was sent") from exc
-        done = AnnouncementIntentsFinishResponse(left=max(listed - limit, 0))
-        for filing in filings:
+        except ValueError as exc:
+            raise InvalidInputError(str(exc)) from exc
+        done = AnnouncementIntentsFinishResponse(left=max(read.listed - limit, 0), next=read.next)
+        _create_left_series()
+        if after is None:  # a pass begins: what it reports is the oldest filing it leaves standing
+            _oldest_left[0] = 0.0
+        for filing in read.filings:
             if filing.young:
                 done.young += 1
+                _left(filing, "young")
                 continue
-            for announcement in filing.intent.announcements:
-                if not await self.landed(announcement.evidence):
-                    done.unlanded += 1
-                    continue
+            try:
+                landed = [announcement for announcement in filing.intent.announcements if await self.landed(announcement.evidence)]
+            except DropAtWorkError:
+                done.young += 1
+                _left(filing, "at_work")
+                continue
+            except ServiceUnavailableError:
+                raise
+            except Exception as exc:  # noqa: BLE001 — one filing that cannot be judged must not stop every filing after it
+                # Judged alone: a record or a claim that cannot be read leaves this filing standing, said once a pass by
+                # its key, and the rest of the batch is finished.
+                log.error(
+                    "announcement_intent_unjudged",
+                    extra={"key": filing.key, "door": filing.intent.door, "target": filing.intent.target, "error": type(exc).__name__},
+                )
+                done.failed += 1
+                _left(filing, "failed")
+                continue
+            done.unlanded += len(filing.intent.announcements) - len(landed)
+            for announcement in landed:
                 await self._send(announcement.message)
                 done.sent += 1
             try:
@@ -183,14 +265,17 @@ class Announcer:
             except OSError as exc:
                 raise store_refusal(exc, reading=f"removing the finished filing {filing.key}", so="its announcements went out") from exc
             done.finished += 1
+        _oldest_standing.set(_oldest_left[0])
         return done
 
-    async def landed(self, evidence: Evidence) -> bool:
-        """Whether the store shows the change ``evidence`` names landed.
+    async def landed(self, evidence: Evidence, *, withdrawing: bool = True) -> bool:
+        """Whether the store shows the change ``evidence`` names landed. A recoverable drop judged not to have detached its
+        table has its trash record withdrawn (:meth:`_drop_landed`), unless ``withdrawing`` is off.
 
         Raises:
             ServiceUnavailableError: The store or OpenFGA did not answer.
             trash.UnreadableTrashRecordError: A trash record is filed and is none, so it shows neither outcome.
+            DropAtWorkError: A recoverable drop's outcome cannot be told yet.
         """
         match evidence:
             case TupleGone() | TupleHeld():
@@ -211,12 +296,79 @@ class Announcer:
                 return not await self._absent(lambda root, so: conditional_records.read_json(root, so, key))
             case RoleEnded(project=project, role=role):
                 return await self._absent(lambda root, so: roles.find_role(root, so, project, role))
-            case TrashedUnder(trash_kind=kind, uuid=uuid, attempt=attempt):
-                try:
-                    kept = await run_in_threadpool(trash.get, self._settings.registry_root, self._settings.storage_options(), uuid, kind=kind)
-                except OSError as exc:
-                    raise store_refusal(exc, reading="whether a filed change landed", so="nothing was sent") from exc
-                return kept is not None and kept.dropped_under == attempt
+            case TrashedUnder(uuid=uuid, attempt=drop):
+                return await self._drop_landed(uuid, drop, withdrawing=withdrawing)
+
+    async def _drop_landed(self, uuid: str, drop: str, *, withdrawing: bool) -> bool:
+        """Whether the recoverable drop ``drop`` detached the table ``uuid`` names.
+
+        Its trash record proves it once stamped (``trash.stamp_detached``), and no record of this drop's own disproves it.
+        A record of its own left unstamped (the drop ended between its record and its stamp) is judged from the claim on
+        the table's location: read, the holder it names resolved, read again unchanged. While a fence on it stands, a door
+        is at work and nothing is told. Every door that unregisters the table or moves it to another name (a rename, a
+        drop, a deregister, a cascade) writes the claim first, fencing it, and can only fence a table still registered.
+        An undrop may take the claim without writing it, since the claim already names the table, but an undrop only
+        makes the table resolve, which this judgement reads as not landed. So a claim still fenced by this drop, whose
+        holder names no such table, shows that nothing but this drop's detach unregistered the table: it is stamped, and
+        landed. Any other claim shows the table registered, or moved by a door that found it registered, after this drop
+        fenced it: the drop did not detach it, and its record, which would keep a live table out of maintenance and
+        answer for a drop that never happened, is withdrawn under a fence of the finish's own.
+        """
+        store = table_claims.claim_store(self._settings)
+        root, so = store.control_root, store.storage_options
+        record = await self._read(partial(trash.get, root, so, uuid))
+        if record is None or record.drop != drop:
+            return False
+        if record.detached:
+            return True
+        first = await self._read(partial(location_claims.read, store, record.location))
+        if first is None or first.claim.uuid != uuid or first.claim.released_at is not None:
+            return await self._withdrawn(record, None, withdrawing=withdrawing)
+        holder = await self._resolver.table_now(first.claim.segments)
+        second = await self._read(partial(location_claims.read, store, record.location))
+        now = await self._read(partial(location_claims.store_now, store, record.location))
+        fence = second.claim.fence if second is not None else None
+        if second is None or second.etag != first.etag or (fence is not None and now - fence.at < location_claims.LEASE):
+            raise DropAtWorkError(f"a door is at work on table {uuid}")
+        if (holder.location is None or holder.uuid != uuid) and fence is not None and fence.token == drop:
+            if not await self._read(partial(trash.stamp_detached, root, so, record)):
+                raise DropAtWorkError(f"the trash record of table {uuid} changed while it was judged")
+            return True
+        return await self._withdrawn(record, second, withdrawing=withdrawing)
+
+    async def _withdrawn(self, record: trash.TrashRecord, claim: location_claims.ClaimRead | None, *, withdrawing: bool) -> bool:
+        """Withdraw ``record``, which a drop that never detached its table filed, under a fence on ``claim`` taken as read;
+        ``False``, the drop not landed.
+
+        Raises:
+            DropAtWorkError: ``withdrawing`` is off, or the claim or the record changed since it was read.
+        """
+        if not withdrawing:
+            raise WithdrawalLeftError(f"the trash record of table {record.uuid} is left for the finish to withdraw")
+        store = table_claims.claim_store(self._settings)
+        fenced = table_claims.DoorFence(location=record.location, token=uuid4().hex)
+        if claim is not None:
+            table, segments = claim.claim.table, claim.claim.segments
+            fencing = partial(location_claims.fence, store, record.location, claim, table=table, segments=segments, token=fenced.token, is_gone=lambda _: False)
+            try:
+                await self._read(fencing)
+            except (location_claims.LocationHeldError, location_claims.ClaimChangedError):
+                raise DropAtWorkError(f"the claim of table {record.uuid} changed while it was judged") from None
+        try:
+            withdrawn = await self._read(partial(trash.withdraw, store.control_root, store.storage_options, record, claims=store, token=fenced.token))
+        finally:
+            if claim is not None:
+                await run_in_threadpool(table_claims.lift_fence, store, fenced)
+        if not withdrawn:
+            raise DropAtWorkError(f"the trash record of table {record.uuid} changed while it was judged")
+        log.warning("drop_withdrawn", extra={"uuid": record.uuid, "drop": record.drop, "reason": "the drop never detached its table"})
+        return False
+
+    async def _read[T](self, read: Callable[[], T]) -> T:
+        try:
+            return await run_in_threadpool(read)
+        except OSError as exc:
+            raise store_refusal(exc, reading="whether a filed change landed", so="nothing was sent") from exc
 
     async def _absent(self, read: Callable[[str, StorageOptions], object]) -> bool:
         try:

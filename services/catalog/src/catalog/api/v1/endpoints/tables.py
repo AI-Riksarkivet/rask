@@ -97,7 +97,7 @@ from catalog.core.vending import (
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import clone_endings, commit_reconcile, dataplane, native, protections, table_bases, table_claims, trash_doors, warehouses
-from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, TrashedUnder
+from catalog.services.announcement_intents import Announcement, ControlMessage, Evidence, NameResolves, TrashedUnder
 from catalog.services.clone_ending_records import CloneEnding
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse.events.control_emit import ControlEmitter, emit_control
@@ -460,7 +460,7 @@ async def _vended_declaration(
 def _marker(
     announcer: Announcer,
     token: Caller | None,
-    evidence: NameResolves,
+    evidence: Evidence,
     segments: list[str],
     *,
     operation: str,
@@ -476,7 +476,7 @@ def _marker(
 
 def _table_event(
     token: Caller | None,
-    evidence: NameResolves,
+    evidence: Evidence,
     *,
     action: ControlAction,
     table_uuid: str,
@@ -829,19 +829,19 @@ async def drop_table(
     grace = 0.0 if purge else await trash_doors.drop_grace_days(settings, segments)
     trashed = grace > 0
     # What the drop announces is filed before anything changes, so a door failing after the drop still announces it
-    # ([[LH-576]]): it landed when the name no longer resolves to this table.
-    gone = NameResolves(segments=segments, uuid=table_uuid, held=False)
-    dropped = _marker(announcer, token, gone, segments, operation=DROP_TABLE, uuids=known)
-    dropped_event = _table_event(token, gone, action="table_dropped", table_uuid=table_uuid, name=canonical, extra={"recoverable": trashed}, named_by=known)
-    # A recoverable drop is proven by the trash record this attempt files, stamped with the attempt, once the name no
-    # longer names the table. A destroying drop leaves nothing of the attempt and intends nothing, so its takeover runs
-    # again: the name holds nothing and the run refuses 404, or it still names this table, which the first never dropped.
-    attempt = converge.attempt if converge.key is not None else None
-    if trashed and attempt is not None:
-        answer = DropTableResponse(transaction_id=fga_ids.canonical_object_id([*segments, table_uuid]))
-        await converge.intend([gone, TrashedUnder(trash_kind="table", uuid=table_uuid, attempt=attempt)], answer)
+    # ([[LH-576]]). A recoverable drop mints its own id, files its trash record under it and stamps that record once its
+    # detach returned: it landed when this drop's record is stamped, or shows it detached the table (`TrashedUnder`), and
+    # its keyed resend is answered from the same proof. A destroying drop landed when the name no longer resolves to this
+    # table; it leaves nothing of the attempt and intends nothing, so its takeover runs again: the name holds nothing and
+    # the run refuses 404, or it still names this table, which the first never dropped.
+    drop = uuid4().hex if trashed else None
+    landed: Evidence = TrashedUnder(uuid=table_uuid, attempt=drop) if drop is not None else NameResolves(segments=segments, uuid=table_uuid, held=False)
+    dropped = _marker(announcer, token, landed, segments, operation=DROP_TABLE, uuids=known)
+    dropped_event = _table_event(token, landed, action="table_dropped", table_uuid=table_uuid, name=canonical, extra={"recoverable": trashed}, named_by=known)
+    if drop is not None:
+        await converge.intend([landed], DropTableResponse(transaction_id=fga_ids.canonical_object_id([*segments, table_uuid])))
     async with announcer.announcing(door="drop_table", target=fga_ids.table_object(table_uuid), announcements=[dropped, dropped_event]) as filing:
-        response = await _drop(ns, settings, table, segments=segments, table_uuid=table_uuid, known=known, grace=grace, token=token, so=so, attempt=attempt)
+        response = await _drop(ns, settings, table, segments=segments, table_uuid=table_uuid, known=known, grace=grace, token=token, so=so, drop=drop)
         # Record the drop as lineage — provenance of the deletion (the dataset node persists in the graph, named a
         # `drop_table` run). Sent BEFORE the revoke, so a revoke that fails ends the request with the marker already
         # published. Lineage admits a drop this catalog signed on that signature, never on the grants the revoke takes.
@@ -858,23 +858,90 @@ async def drop_table(
     return response
 
 
-async def _stamp_the_drop(settings: CatalogStore, record: trash.TrashRecord, *, attempt: str) -> None:
-    """Stamp the trash record a keyed drop filed with its attempt, once the detach returned.
+async def _stamp_the_drop(
+    ns: LanceNamespace, settings: CatalogStore, record: trash.TrashRecord, fenced: table_claims.DoorFence, *, segments: list[str]
+) -> bool:
+    """Stamp the trash record a recoverable drop filed as detached, once the detach returned and while the drop still holds
+    its fence (`table_claims.holds_fence`); whether the fence is to be lifted.
 
-    ONLY ONCE THE DETACH RETURNED: a record an attempt filed before dying ahead of the detach describes a table still
-    live (at this name, or another a rename gave it), and must not prove that attempt's drop to its resend. Replaced only
-    as this attempt filed it, so a door stalled past its fence overwrites no record another drop wrote and resurrects
-    none an undrop cleared. The detach has landed whatever the stamp does, so a stamp the store refuses or a record
-    changed since is logged and the drop answers: its answer is remembered for the key, so no resend needs the stamp.
+    ONLY ONCE THE DETACH RETURNED: a record a drop filed before dying ahead of the detach describes a table still live,
+    and must not prove that drop. Held, a record withdrawn meanwhile is filed again, stamped (`trash.stamp_detached`). A
+    stamp the store refuses is logged and the drop answers: its fence is left to lapse, which is how the finish tells
+    this drop's detach (`Announcer.landed`).
+
+    LOST, the detach having returned after the fence lapsed, the door answers the drop's success where its record stands
+    stamped for it (the finish judged it), and where no record stands and the table resolves under no name: the finish
+    withdrew the record while the detach was in flight, judging the table still registered, and the record is filed
+    again, stamped, create-if-absent. That cannot keep a live table in the trash: an undrop restores only from a record,
+    and none stands; a registration since makes the table resolve; a record another drop filed since makes the create
+    fail. Anything else answers the conflict a lost fence answers, and is the finish's to judge.
+
+    Raises:
+        ConcurrentModificationError: The drop lost its fence, and its record is not stamped for it.
     """
-    uuid = record.uuid
+    root, so, claims = settings.registry_root, settings.storage_options(), table_claims.claim_store(settings)
+    if not await run_in_threadpool(table_claims.holds_fence, claims, fenced):
+        kept = await run_in_threadpool(partial(trash.get, root, so, record.uuid or ""))
+        if kept is not None and kept.drop == record.drop and kept.detached:
+            return False
+        refiled = (
+            kept is None
+            and not await run_in_threadpool(_still_registered, ns, claims, record, segments)
+            and await run_in_threadpool(partial(trash.stamp_detached, root, so, record, refile=True))
+        )
+        if refiled:
+            return False
+        raise _lost_turn(fga_ids.canonical_object_id(segments))
     try:
-        stamped = await run_in_threadpool(partial(trash.stamp_dropped_under, settings.registry_root, settings.storage_options(), record, attempt=attempt))
+        stamped = await run_in_threadpool(partial(trash.stamp_detached, root, so, record, refile=True))
     except OSError as exc:
-        log.warning("drop_unstamped", extra={"uuid": uuid, "attempt": attempt, "reason": "the store refused the stamp", "error": type(exc).__name__})
-        return
+        log.warning("drop_unstamped", extra={"uuid": record.uuid, "drop": record.drop, "reason": "the store refused the stamp", "error": type(exc).__name__})
+        return False
     if not stamped:
-        log.warning("drop_unstamped", extra={"uuid": uuid, "attempt": attempt, "reason": "the trash record changed since this drop filed it"})
+        log.warning("drop_unstamped", extra={"uuid": record.uuid, "drop": record.drop, "reason": "another drop's record stands in its place"})
+    return stamped
+
+
+async def _settle_a_failed_drop(
+    ns: LanceNamespace, settings: CatalogStore, record: trash.TrashRecord, fenced: table_claims.DoorFence, *, segments: list[str], detached: bool
+) -> None:
+    """Settle, on evidence only and only while the drop holds its fence, the trash record it filed before it failed,
+    then lift the fence.
+
+    Stamped where the detach returned (``detached``); withdrawn where the table still resolves, at this name or at the
+    one its claim names, so the drop did not reach it. Otherwise whether the detach landed is unknown (it raised), and a
+    drop that lost its fence touches nothing: the record and the claim are left, and the finish judges the record by the
+    claim once the fence has lapsed (`Announcer.landed`), as it does where a read or write here fails.
+    """
+    claims = table_claims.claim_store(settings)
+    root, so = settings.registry_root, settings.storage_options()
+    try:
+        if not await run_in_threadpool(table_claims.holds_fence, claims, fenced):
+            settled = False
+        elif detached:
+            settled = await run_in_threadpool(partial(trash.stamp_detached, root, so, record, refile=True))
+        elif await run_in_threadpool(_still_registered, ns, claims, record, segments):
+            settled = await run_in_threadpool(partial(trash.withdraw, root, so, record, claims=claims, token=fenced.token, margin=location_claims.DOOR_MARGIN))
+        else:
+            settled = False
+    except Exception as exc:  # noqa: BLE001 — the drop's own failure is what the caller answers; the finish settles this
+        log.warning("drop_unsettled", extra={"uuid": record.uuid, "drop": record.drop, "error": str(exc)[:300]})
+        return
+    if settled:
+        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
+
+
+def _still_registered(ns: LanceNamespace, claims: location_claims.ClaimStore, record: trash.TrashRecord, segments: list[str]) -> bool:
+    """Whether the table ``record`` keeps resolves at ``segments``, or at the name its location's claim names now."""
+    names = [segments]
+    if (found := location_claims.read(claims, record.location)) is not None and found.claim.uuid == record.uuid and found.claim.segments != segments:
+        names.append(found.claim.segments)
+    return any((resolved := table_claims.resolve(ns, claims, name)).location is not None and resolved.uuid == record.uuid for name in names)
+
+
+def _lost_turn(holder: str) -> ConcurrentModificationError:
+    """What a drop answers once it no longer holds its fence: another request may have acted on the table since."""
+    return ConcurrentModificationError(f"cannot drop {holder}: it changed while this request was being served; describe it and retry")
 
 
 def _resolved_object(table: ResolvedTable) -> str | None:
@@ -893,10 +960,21 @@ async def _drop(
     grace: float,
     token: Caller | None,
     so: StorageOptions,
-    attempt: str | None,
+    drop: str | None,
 ) -> DropTableResponse:
-    """Drop the table ``table`` resolved to: into the trash under a grace period, its record stamped with the keyed
-    ``attempt`` once the detach returned, else its bytes, under the fence that holds the claim its resolution read."""
+    """Drop the table ``table`` resolved to: into the trash under a grace period, its record filed under the recoverable
+    ``drop``'s id and stamped once the detach returned, else its bytes, under the fence that holds the claim its
+    resolution read, which a recoverable drop sets under its id.
+
+    A recoverable drop acts on its record and on the registration only while it holds its fence with
+    ``location_claims.DOOR_MARGIN`` of the lease left (`table_claims.holds_fence`), and the finish judges a stopped drop
+    only once that lease has passed. WHAT CANNOT BE CLOSED: the detach is a Lance manifest write, which cannot check the
+    claim's fence, so a ``deregister_table`` call that outlasts the margin at the very end of the lease, with a finish
+    pass and a second actor (an undrop, a rename, another drop) inside that window, can still interleave with them. It
+    is bounded by the margin, by the door filing its record again where its detach landed and none stands
+    (`_stamp_the_drop`), and by the alert on a filing left standing (``CatalogAnnouncementFilingStanding``). Accepted by
+    the owner, 2026-11-20.
+    """
     canonical = fga_ids.canonical_object_id(segments)
     trashed = grace > 0
     # THE DOOR ACTS ON THE TABLE ITS NAME RESOLVED TO (ADR 0173 §7, [[LH-521]]): the fence holds the claim that
@@ -904,10 +982,12 @@ async def _drop(
     # itself, rather than the drop reaching whatever table holds the name by then. The drop deletes the LOCATION, so it
     # also refuses while the claim names another table that still resolves to it ([[LH-204]]).
     claims = table_claims.claim_store(settings)
-    fenced = await run_in_threadpool(partial(table_claims.fence, ns, claims, table, holder=canonical, verb="drop"))
+    fenced = await run_in_threadpool(partial(table_claims.fence, ns, claims, table, holder=canonical, verb="drop", token=drop))
     location = fenced.location
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
     ending: CloneEnding | None = None
+    filed: trash.TrashRecord | None = None
+    detached = stamped = False
     try:
         if trashed:
             # RECORD FIRST, DETACH SECOND (diff2 F6 leg a). This was deregister-then-record, and a
@@ -938,11 +1018,15 @@ async def _drop(
                 dropped_by=f"user:{token.subject}" if token is not None else None,
                 grace_days=grace,
                 namespace_uuid=known.namespace_uuid,
+                drop=drop,
             )
             await run_in_threadpool(trash.put, settings.registry_root, settings.storage_options(), record)
+            filed = record
+            if not await run_in_threadpool(table_claims.holds_fence, claims, fenced):
+                raise _lost_turn(canonical)
             await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
-            if attempt is not None:
-                await _stamp_the_drop(settings, record, attempt=attempt)
+            detached = True
+            stamped = await _stamp_the_drop(ns, settings, record, fenced, segments=segments)
             # The bytes are deleted later, by the purge, so the spec's answer is a transaction id to track the deletion
             # by (`spec.yaml` DropTableRequest): `<table id>$<its uuid>`, which DescribeTransaction answers from the record.
             response = DropTableResponse(transaction_id=fga_ids.canonical_object_id([*segments, table_uuid]))
@@ -952,13 +1036,13 @@ async def _drop(
             # before the row goes and cleared once the bytes are, so bytes a failed delete leaves keep their claim. A clone's
             # ending is filed once every judgement has passed, right before the row goes (ADR 0198 §1), so a refusal files
             # none: its tags are released after the row is gone, by this door or, when that fails, by maintenance's audit.
-            filed: list[CloneEnding] = []
+            endings: list[CloneEnding] = []
 
             def _file_the_ending() -> None:
                 if (
                     found := clone_endings.file_ending(registry, claims, location, table=canonical, forget_record=True, door="drop", filing=fenced.token)
                 ) is not None:
-                    filed.append(found)
+                    endings.append(found)
 
             response = await run_in_threadpool(
                 partial(
@@ -975,7 +1059,7 @@ async def _drop(
                     before_removal=_file_the_ending,
                 )
             )
-            ending = filed[0] if filed else None
+            ending = endings[0] if endings else None
     except dataplane.TableBytesLeftError:
         # The row is gone and bytes remain: the claim stays held, kept by the residue record once the fence lapses, and the
         # grants stay. The trash purge reclaims the objects; the drop's announcements wait in the door's filing, which the
@@ -983,13 +1067,18 @@ async def _drop(
         raise
     except Exception:
         # An ending filed before a failure stays: a describe cannot tell whether the row the failure followed is still
-        # the clone's, and the finish judges it on its own reads once the claim's lease has passed.
-        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
+        # the clone's, and the finish judges it on its own reads once the claim's lease has passed. A trash record filed
+        # before a failure is settled under the fence, which stays where it could not be.
+        if filed is not None:
+            await _settle_a_failed_drop(ns, settings, filed, fenced, segments=segments, detached=detached)
+        else:
+            await run_in_threadpool(table_claims.lift_fence, claims, fenced)
         raise
     if trashed:
         # [[LH-204]] The trashed id keeps its location's claim until undrop or purge, so no other id registers over
-        # bytes someone can still restore.
-        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
+        # bytes someone can still restore. An unstamped record keeps the fence too, which the finish judges it by.
+        if stamped:
+            await run_in_threadpool(table_claims.lift_fence, claims, fenced)
     else:
         # [[LH-279]] The base record goes with the bytes: left behind, it would sanction its bases for the next
         # table registered at this location. The location's claim goes too ([[LH-204]]), and the clone's ending last.
@@ -1648,6 +1737,11 @@ async def undrop_table(
         # this id would put two live ids on one dataset.
         try:
             kept = await run_in_threadpool(table_claims.take, ns, table_claims.claim_store(settings), location, canonical, segments)
+        except location_claims.LocationFencedError as fenced:
+            if fenced.claim.uuid != record_uuid:
+                raise InvalidTableStateError(f"cannot undrop {canonical}: its location is now held by another table") from None
+            # The fence is a request's on this very table: a drop of it settling, whose fence lapses within its lease.
+            raise ConcurrentModificationError(f"cannot undrop {canonical}: a drop of this table is still settling; retry once its lease has passed") from None
         except location_claims.LocationHeldError as held:
             log.warning("undrop_refused_held_location", extra={"table": canonical, "location": held.claim.location, "holder": held.claim.table})
             raise InvalidTableStateError(f"cannot undrop {canonical}: its location is now held by another table") from None

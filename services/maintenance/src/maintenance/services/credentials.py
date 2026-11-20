@@ -641,9 +641,11 @@ class AnnouncementIntentsFinished(BaseModel):
     young: int
     #: Filings past the call's limit, which a further call finishes.
     left: int
+    #: Where the next call of the same pass resumes; ``None`` once the catalog looked at the last filing.
+    next: str | None = None
 
 
-def finish_announcement_intents(settings: MaintenanceCatalogDoor) -> AnnouncementIntentsFinished:
+def finish_announcement_intents(settings: MaintenanceCatalogDoor, *, after: str | None = None) -> AnnouncementIntentsFinished:
     """Have the catalog send what each failed door left to announce, where its change landed ([[LH-576]]).
 
     Maintenance holds none of the catalog's emitters and signs for none of its callers; the catalog does.
@@ -655,6 +657,7 @@ def finish_announcement_intents(settings: MaintenanceCatalogDoor) -> Announcemen
     """
     door = Door(
         path="/management/v1/announcement-intents/finish",
+        params={"after": after} if after is not None else {},
         answer="the finish of what failed doors left to announce",
         asked_for="the announcements failed doors left",
         denial=reclaim_denial_remedy(identity=settings.catalog_service_identity),

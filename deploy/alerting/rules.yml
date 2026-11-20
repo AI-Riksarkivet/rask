@@ -608,6 +608,26 @@ groups:
             catalog_signature_refused. The change-event feed is unaffected: it serves the event once its keys are read. Read the replica's `bus_followed_message_not_handled` log for
             the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
+      # [[LH-576]] A filing stands at most its lease (15 minutes) and one hourly audit while every judgement of it
+      # settles, about 75 minutes. The catalog reports the oldest one standing on every finish; three hours is well past
+      # that bound, so a filing still standing then is one no finish will settle on its own.
+      - alert: CatalogAnnouncementFilingStanding
+        expr: max(catalog_announcement_intents_oldest_seconds) > 3 * 3600
+        for: 10m
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "A catalog announcement filing has stood unsent for over three hours"
+          description: >-
+            A door's filed announcements have stood unsent for over three hours, past the lease and the hourly audit that
+            settle every filing whose change can be judged. While it stands, the change it announces (a table's drop among
+            them) is told to nobody, and a trashed object it names is neither released nor purged. Read the catalog's
+            `announcement_intent_unjudged` log for the filing's key, door and target, and the
+            `catalog.announcement_intents.left` counter's reason: `failed` is a judgement that raised (an unreadable trash
+            record or claim), `at_work` a drop whose table a door keeps acting on. The value is the oldest filing the
+            last finish pass left standing, as the replica that served it reported it. Runbook: docs/runbooks/RUNBOOK-oncall.md
+
       - alert: CatalogWritesShedSustained
         expr: sum(rate(catalog_writes_shed_total[5m])) > 0
         for: 15m

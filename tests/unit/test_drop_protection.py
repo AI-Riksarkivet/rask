@@ -418,6 +418,31 @@ def test_a_record_is_read_whatever_its_bookkeeping_holds(tmp_path: Any) -> None:
 
     assert record is not None
     assert (record.id, record.location, record.dropped_by, record.last_refusal, record.attempts) == ("w$t", "s3://bucket/t", "anonymous", None, None)
+    # Whatever a drop files reads back as itself, so a judge comparing what is stored with what was filed finds it.
+    kinds: list[tuple[trash.TrashKind, dict[str, str] | None]] = [("table", None), ("namespace", {"rask.requires_run": "true"})]
+    filed = [
+        trash.make_record(
+            "w$t",
+            uuid=uuid,
+            location=location,
+            dropped_by=by,
+            grace_days=1.5,
+            kind=kind,
+            properties=props,
+            namespace_uuid=parent,
+            cascade=parent,
+            residue=residue,
+            drop=drop,
+        )
+        for location in ("", "s3://bucket/t/")
+        for by in (None, "user:alice")
+        for kind, props in kinds
+        for parent in (None, uuid)
+        for residue in (False, True)
+        for drop in (None, "0" * 32)
+    ]
+    assert [trash.read(made.stored(), at="a record of this test's") for made in filed] == filed
+    assert all(trash.read(made.model_copy(update={"detached": True}).stored(), at="a record of this test's").detached for made in filed)
 
 
 def test_an_undated_or_unparseable_record_is_NOT_expired(tmp_path: Any) -> None:

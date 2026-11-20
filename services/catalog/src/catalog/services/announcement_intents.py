@@ -30,7 +30,7 @@ import json
 import logging
 import re
 from collections.abc import Sequence
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Annotated, Literal
 from uuid import uuid4
 
@@ -129,13 +129,15 @@ class RoleEnded(BaseModel):
 
 
 class TrashedUnder(BaseModel):
-    """A recoverable drop landed under one keyed attempt: the trash keeps the ``trash_kind`` object ``uuid`` names, stamped
-    by ``attempt`` once that attempt's detach returned (``lakehouse.records.trash.TrashRecord.dropped_under``)."""
+    """A recoverable drop of the table ``uuid`` names landed: the trash record that drop filed under the id it minted
+    (``attempt``, ``lakehouse.records.trash.TrashRecord.drop``) is stamped detached, or, left unstamped, the location's
+    claim shows the drop detached the table (``catalog.api.announcing.Announcer.landed``). Evidence about the table and
+    this drop, never about a name: a name stops naming a table its drop never reached once a rename moves it."""
 
     model_config = ConfigDict(frozen=True)
 
     kind: Literal["trashed_under"] = "trashed_under"
-    trash_kind: Literal["table", "namespace"]
+    trash_kind: Literal["table"] = "table"
     uuid: str
     attempt: str
 
@@ -259,20 +261,42 @@ def settle(control_root: str, storage_options: StorageOptions, key: str) -> None
     stored_objects.remove_object(control_root, storage_options, key)
 
 
-def standing(control_root: str, storage_options: StorageOptions, *, target: str | None = None, limit: int | None = None) -> tuple[list[Standing], int]:
-    """The filings still standing, or only those on ``target``, oldest first, and how many the listing held: at most
-    ``limit`` of them read, so a caller bounded by it reads no more than it judges. One that cannot be read as a filing is
-    logged and left out: it names nothing a finish could send.
+class Listed(BaseModel):
+    """What one read of the standing filings found."""
+
+    model_config = ConfigDict(frozen=True)
+
+    filings: list[Standing]
+    #: How many filings the listing held past the cursor it was read after.
+    listed: int
+    #: Where the next read resumes: past the last filing this one looked at, whatever became of it; ``None`` once it looked
+    #: at the last one (:func:`standing`'s ``after``).
+    next: str | None = None
+
+
+def standing(control_root: str, storage_options: StorageOptions, *, target: str | None = None, limit: int | None = None, after: str | None = None) -> Listed:
+    """The filings still standing, or only those on ``target``, oldest first (by the store's stamp, then key), from past
+    the cursor ``after`` a read before this one returned: at most ``limit`` of them read, so a caller bounded by it reads
+    no more than it judges, and a caller resuming from the cursor reaches the filings behind any it could not settle.
+    One that cannot be read as a filing is logged and left out: it names nothing a finish could send.
 
     Raises:
         OSError: The store refused the listing or a read, or did not answer.
+        ValueError: ``after`` is no cursor this function returned.
     """
+    resume = _resumed(after)
     under = _directory(target) if target is not None else PREFIX
     listing = stored_objects.list_under_at(f"{control_root.rstrip('/')}/{under}", storage_options)
-    named = [(listed, found) for listed in sorted(listing.objects, key=lambda obj: obj.modified) if (found := _FILING_RE.search(listed.path)) is not None]
+    named = sorted(
+        (listed.modified, f"{PREFIX}/{found.group(1)}/{found.group(2)}.json")
+        for listed in listing.objects
+        if (found := _FILING_RE.search(listed.path)) is not None
+    )
+    if resume is not None:
+        named = [(modified, key) for modified, key in named if (modified, key) > resume]
+    looked = named[:limit]
     found: list[Standing] = []
-    for listed, match in named[:limit]:
-        key = f"{PREFIX}/{match.group(1)}/{match.group(2)}.json"
+    for modified, key in looked:
         try:
             read = conditional_records.read_json(control_root, storage_options, key)
             intent = None if read is None else Intent.model_validate(read[0])
@@ -280,5 +304,24 @@ def standing(control_root: str, storage_options: StorageOptions, *, target: str 
             log.error("announcement_intent_unreadable", extra={"key": key, "error": str(exc)[:300]})
             continue
         if intent is not None:
-            found.append(Standing(key=key, intent=intent, age=listing.at - listed.modified))
-    return found, len(named)
+            found.append(Standing(key=key, intent=intent, age=listing.at - modified))
+    following = f"{looked[-1][0].isoformat()} {looked[-1][1]}" if looked and len(looked) < len(named) else None
+    return Listed(filings=found, listed=len(named), next=following)
+
+
+def _resumed(after: str | None) -> tuple[datetime, str] | None:
+    """The (stamp, key) the cursor ``after`` names.
+
+    Raises:
+        ValueError: It names none.
+    """
+    if after is None:
+        return None
+    stamp, _, key = after.partition(" ")
+    if not _FILING_RE.search(f"/{key}") or not key.startswith(f"{PREFIX}/"):
+        raise ValueError(f"{after!r} is no cursor of the standing filings")
+    at = datetime.fromisoformat(stamp)
+    # The store's stamps carry their zone, and one without cannot be ordered against them.
+    if at.tzinfo is None:
+        raise ValueError(f"{after!r} is no cursor of the standing filings")
+    return at, key

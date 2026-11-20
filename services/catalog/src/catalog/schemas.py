@@ -892,10 +892,15 @@ class AnnouncementIntentsFinishResponse(BaseModel):
     sent: int = 0
     #: Announcements not sent, the store showing their change did not land.
     unlanded: int = 0
-    #: Filings left to their door, younger than a door can act.
+    #: Filings left to their door, younger than a door can act, or a drop's while a door is at work on its table.
     young: int = 0
+    #: Filings left standing because judging one raised: each is logged by its key, door and target.
+    failed: int = 0
     #: Filings past this call's limit, for the caller to ask again.
     left: int = 0
+    #: The cursor the caller's next call passes as ``after`` to resume past every filing this one looked at; ``None``
+    #: once it looked at the last.
+    next: str | None = None
 
 
 class GrantCensusResponse(BaseModel):

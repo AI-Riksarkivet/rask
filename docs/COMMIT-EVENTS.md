@@ -172,8 +172,10 @@ named the table by its id.
 - A table's lifecycle markers (a declare, a register, a rename, a drop, a deregister, an undrop) and the control
   events the doors that change grants, roles, projects and principals send are filed on the control root before their
   change ([ADR 0205](adr/0205-a-changes-announcements-are-filed-before-it-and-a-failed-doors-are-finished.md)). A door
-  that fails after its change has them sent by the catalog's finish within the hour, once the store shows the change
-  landed, as the events the door built: a marker's run id and a control event's `event_id` are the ones the door
+  that fails after its change has them sent by the catalog's finish within about 75 minutes, once the store shows the
+  change landed: a filing is judged only once its lease has passed (15 minutes, `announcement_intents.LEASE`, the
+  location claim's `LEASE`), and the finish is asked by maintenance's audit (`@hourly`, `MAINTENANCE_AUDIT_SCHEDULE`),
+  as the events the door built: a marker's run id and a control event's `event_id` are the ones the door
   would have sent, so a copy that did go out lands one row; the namespace and warehouse cascades file theirs the same
   way. A follower that must not miss a table coming or going still reads `ListTables` and `DescribeTable` as the truth,
   and the marker as its cue.

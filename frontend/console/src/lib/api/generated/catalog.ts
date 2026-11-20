@@ -289,8 +289,10 @@ export interface paths {
          * Finish Announcement Intents
          * @description Send what each filing a failed door left names, wherever the store shows its change landed, and remove the filing.
          *
-         *     A filing younger than a door can act is left to its door. Each announcement goes out as its door built it, under its
-         *     own id, so one the door had sent before failing is the same event again.
+         *     A filing younger than a door can act is left to its door, and one that cannot be judged is left standing. A call
+         *     judges at most a batch and answers ``next`` while filings remain past it, which the caller's next call passes as
+         *     ``after``, so a pass reaches the filings behind any it left standing. Each announcement goes out as its door built
+         *     it, under its own id, so one the door had sent before failing is the same event again.
          */
         post: operations["finish_announcement_intents_management_v1_announcement_intents_finish_post"];
         delete?: never;
@@ -2460,8 +2462,9 @@ export interface paths {
          *     fails after the revoke still tells them ([[LH-576]]).
          *
          *
-         *     Refused 409 (code 19) until the deadline has settled (``lakehouse.records.trash.RELEASE_SETTLE``), and while a live object
-         *     holds the record's place or name again: an undrop registers before it clears its record. Audited as it lands or as it
+         *     Refused 409 (code 19) until the deadline has settled (``lakehouse.records.trash.RELEASE_SETTLE``), while a door's
+         *     announcements on the object stand unsent, and while a live object holds the record's place or name again: an undrop
+         *     registers before it clears its record. Audited as it lands or as it
          *     fails (``trash_release``): it revokes grants on the catalog's own session, for whoever asked.
          */
         post: operations["release_trash_management_v1_trash__kind___uuid__release_post"];
@@ -5363,6 +5366,11 @@ export interface components {
          */
         AnnouncementIntentsFinishResponse: {
             /**
+             * Failed
+             * @default 0
+             */
+            failed?: number;
+            /**
              * Finished
              * @default 0
              */
@@ -5372,6 +5380,8 @@ export interface components {
              * @default 0
              */
             left?: number;
+            /** Next */
+            next?: string | null;
             /**
              * Sent
              * @default 0
@@ -10348,6 +10358,8 @@ export interface operations {
     finish_announcement_intents_management_v1_announcement_intents_finish_post: {
         parameters: {
             query?: {
+                /** @description The `next` an earlier call of the same pass answered, to resume past every filing it looked at. */
+                after?: string | null;
                 /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
                 delimiter?: string | null;
             };

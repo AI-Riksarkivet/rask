@@ -28,11 +28,12 @@ from catalog.core.config import CatalogStore
 from catalog.core.identifiers import parse_identifier
 from catalog.core.vending import reclaim_or_refuse, role_session_name
 from catalog.schemas import CredentialResponse, TrashEndResponse, TrashRefusalRequest, TrashRefusalResponse, TrashReleaseResponse, VendedCredentials
-from catalog.services import trash_reclaim
+from catalog.services import announcement_intents, trash_reclaim
 from catalog.services.announcement_intents import Announcement
 from lakehouse.governed import fga_ids, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.lancekit.base_refs import decoded_path
+from lakehouse.problems.outage import store_refusal
 from lakehouse.records import trash
 from lakehouse.records.location_claims import LocationClaim
 from lakehouse.records.trash import TrashKind, TrashRecord
@@ -62,14 +63,19 @@ async def release_trash(
     fails after the revoke still tells them ([[LH-576]]).
 
 
-    Refused 409 (code 19) until the deadline has settled (``lakehouse.records.trash.RELEASE_SETTLE``), and while a live object
-    holds the record's place or name again: an undrop registers before it clears its record. Audited as it lands or as it
+    Refused 409 (code 19) until the deadline has settled (``lakehouse.records.trash.RELEASE_SETTLE``), while a door's
+    announcements on the object stand unsent, and while a live object holds the record's place or name again: an undrop
+    registers before it clears its record. Audited as it lands or as it
     fails (``trash_release``): it revokes grants on the catalog's own session, for whoever asked.
     """
     try:
         record = await run_in_threadpool(trash_reclaim.read_record, settings, kind, uuid)
         claim = await run_in_threadpool(trash_reclaim.location_claim, settings, record)
-        if (reason := trash_reclaim.release_refusal(record, now=clock()) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
+        if (
+            reason := trash_reclaim.release_refusal(record, now=clock())
+            or await _unannounced_refusal(settings, kind=kind, uuid=uuid)
+            or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)
+        ) is not None:
             raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
         obj = fga_ids.object_of(kind, uuid)
         held = await fga_reads.read_object_tuples(wired, obj) if (wired := fga_deps.wired(settings, client)) is not None else []
@@ -169,6 +175,28 @@ async def _noted(settings: CatalogStore, *, kind: TrashKind, uuid: str, reason: 
     """Note ``reason`` on the record, as maintenance's refusals are noted, and return the refusal for the door to raise."""
     await run_in_threadpool(partial(trash_reclaim.note_refusal, settings, kind=kind, uuid=uuid, reason=reason))
     return InvalidTableStateError(reason)
+
+
+async def _unannounced_refusal(settings: CatalogStore, *, kind: TrashKind, uuid: str) -> str | None:
+    """Why the record waits for the finish, or ``None``: a door's filing on the object still stands.
+
+    A drop that ended after its detach is announced from its filing by the finish, which reads the drop's own record to
+    tell it landed. Released, the record is the purge's to end, and a purge ending it first would leave the drop announced
+    by nobody. The finish settles every filing whose door has stopped (``catalog.api.announcing.Announcer.finish``), so
+    the wait lasts as long as its lease and one finish.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer the listing.
+    """
+    try:
+        filed = (
+            await run_in_threadpool(
+                partial(announcement_intents.standing, settings.registry_root, settings.storage_options(), target=fga_ids.object_of(kind, uuid))
+            )
+        ).filings
+    except OSError as exc:
+        raise store_refusal(exc, reading="what a door filed on the trashed object", so="nothing was released") from exc
+    return "a door's announcements on the object are not sent yet; the finish sends them before its grants go" if filed else None
 
 
 async def _standing_refusal(resolver: Resolver, record: TrashRecord, claim: LocationClaim | None, *, kind: TrashKind, uuid: str) -> str | None:

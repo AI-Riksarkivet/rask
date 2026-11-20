@@ -12,14 +12,14 @@ clock is the only thing changed.
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator
-from datetime import datetime, timedelta, tzinfo
+from datetime import UTC, datetime, timedelta, tzinfo
 
 import boto3
 import pytest
 
 from lakehouse.records import history_fences, location_claims
 from lakehouse.records.history_fences import HistoryFencedError, HistoryWork, TableHistory
-from lakehouse.records.location_claims import ClaimStore, LocationClaim, LocationHeldError
+from lakehouse.records.location_claims import ClaimFence, ClaimStore, LocationClaim, LocationHeldError
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 
@@ -86,3 +86,9 @@ def test_a_pod_an_hour_ahead_still_finds_a_fresh_lease_live(
 
     with pytest.raises(refusal):
         second_pod()
+    # With half a minute of its lease left, a door counts its fence lost (its last step must fit inside what is left),
+    # while a judge of a stopped door still finds it standing (it must not act early).
+    fenced_at = datetime(2026, 11, 20, tzinfo=UTC)
+    claim = LocationClaim(location=LOCATION, table="ns$t", segments=["ns", "t"], claimed_at=fenced_at, fence=ClaimFence(token="d", at=fenced_at))
+    near_its_end = fenced_at + location_claims.LEASE - timedelta(seconds=30)
+    assert (claim.fenced_by("d", near_its_end, margin=location_claims.DOOR_MARGIN), claim.fenced_by("d", near_its_end)) == (False, True)

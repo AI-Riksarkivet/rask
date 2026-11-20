@@ -80,6 +80,7 @@ import hashlib
 import logging
 from collections.abc import Callable
 from datetime import datetime, timedelta
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -90,6 +91,7 @@ from lakehouse.storage.options import StorageOptions
 
 
 __all__ = [
+    "DOOR_MARGIN",
     "LEASE",
     "ClaimChangedError",
     "ClaimFence",
@@ -125,6 +127,10 @@ _PREFIX = control_prefixes.LOCATIONS
 #: attach by one backend call, milliseconds in practice; the lease is minutes so that a slow attach is
 #: never overtaken, and short enough that a crashed one frees its location the same day.
 LEASE = timedelta(minutes=15)
+
+#: How much of its fence's lease a door must still have to act on it: a door's final step (a detach, a record's write)
+#: must fit inside what is left, so a door finding less treats its fence as lost.
+DOOR_MARGIN: Final = timedelta(minutes=1)
 
 #: Read-and-write rounds :func:`take` and :func:`release` spend against other writers of one claim (eight renames of one
 #: source racing, [[LH-204]]); each round is arbitrated by the store, and the bound turns a livelock into an error.
@@ -173,6 +179,13 @@ class LocationClaim(BaseModel):
     def fenced_against(self, token: str | None, now: datetime) -> bool:
         """Whether a request other than ``token`` is acting on the held table."""
         return self.released_at is None and self.fence is not None and self.fence.token != token and now - self.fence.at < LEASE
+
+    def fenced_by(self, token: str, now: datetime, *, margin: timedelta = timedelta(0)) -> bool:
+        """Whether request ``token``'s fence stands on the held table: carried, and more than ``margin`` short of its
+        :data:`LEASE` (a door asks with :data:`DOOR_MARGIN`; a judge of a stopped door with none, so it never acts early).
+        A fence lapsed while its request stalled is lost to it, though the claim still carries it."""
+        held = self.released_at is None and self.fence is not None and self.fence.token == token
+        return held and self.fence is not None and now - self.fence.at < LEASE - margin
 
 
 class ClaimRead(BaseModel):

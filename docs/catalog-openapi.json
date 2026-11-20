@@ -2365,6 +2365,11 @@
       "AnnouncementIntentsFinishResponse": {
         "description": "What one finish of the announcements doors left did ([[LH-576]]).",
         "properties": {
+          "failed": {
+            "default": 0,
+            "title": "Failed",
+            "type": "integer"
+          },
           "finished": {
             "default": 0,
             "title": "Finished",
@@ -2374,6 +2379,17 @@
             "default": 0,
             "title": "Left",
             "type": "integer"
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next"
           },
           "sent": {
             "default": 0,
@@ -13575,9 +13591,27 @@
     },
     "/management/v1/announcement-intents/finish": {
       "post": {
-        "description": "Send what each filing a failed door left names, wherever the store shows its change landed, and remove the filing.\n\nA filing younger than a door can act is left to its door. Each announcement goes out as its door built it, under its\nown id, so one the door had sent before failing is the same event again.",
+        "description": "Send what each filing a failed door left names, wherever the store shows its change landed, and remove the filing.\n\nA filing younger than a door can act is left to its door, and one that cannot be judged is left standing. A call\njudges at most a batch and answers ``next`` while filings remain past it, which the caller's next call passes as\n``after``, so a pass reaches the filings behind any it left standing. Each announcement goes out as its door built\nit, under its own id, so one the door had sent before failing is the same event again.",
         "operationId": "finish_announcement_intents_management_v1_announcement_intents_finish_post",
         "parameters": [
+          {
+            "description": "The `next` an earlier call of the same pass answered, to resume past every filing it looked at.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The `next` an earlier call of the same pass answered, to resume past every filing it looked at.",
+              "title": "After"
+            }
+          },
           {
             "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
             "in": "query",
@@ -20677,7 +20711,7 @@
     },
     "/management/v1/trash/{kind}/{uuid}/release": {
       "post": {
-        "description": "Release a drop past its deadline (ADR 0146): revoke every grant on its object, tell each person who lost one, and\nstamp the record released; its bytes wait for the purge. What it tells is filed before the revoke, so a release that\nfails after the revoke still tells them ([[LH-576]]).\n\n\nRefused 409 (code 19) until the deadline has settled (``lakehouse.records.trash.RELEASE_SETTLE``), and while a live object\nholds the record's place or name again: an undrop registers before it clears its record. Audited as it lands or as it\nfails (``trash_release``): it revokes grants on the catalog's own session, for whoever asked.",
+        "description": "Release a drop past its deadline (ADR 0146): revoke every grant on its object, tell each person who lost one, and\nstamp the record released; its bytes wait for the purge. What it tells is filed before the revoke, so a release that\nfails after the revoke still tells them ([[LH-576]]).\n\n\nRefused 409 (code 19) until the deadline has settled (``lakehouse.records.trash.RELEASE_SETTLE``), while a door's\nannouncements on the object stand unsent, and while a live object holds the record's place or name again: an undrop\nregisters before it clears its record. Audited as it lands or as it\nfails (``trash_release``): it revokes grants on the catalog's own session, for whoever asked.",
         "operationId": "release_trash_management_v1_trash__kind___uuid__release_post",
         "parameters": [
           {
