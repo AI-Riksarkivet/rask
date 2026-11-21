@@ -104,34 +104,13 @@ def test_a_malformed_relation_is_denied(monkeypatch: pytest.MonkeyPatch, body: A
         _run(monkeypatch, body)
 
 
-def test_a_rung_with_no_grant_action_is_refused_before_reaching_openfga(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The phantom-relation guard. Passing the structural `parent` edge through would build ``can_grant_parent`` and
-    ask OpenFGA for a relation the model does not define — a 400 that fails closed to a 503 for EVERY caller, owners
-    included. The assertion that matters is the empty ask-list: refused locally."""
-    asked: list[tuple[str, str, str]] = []
-
-    async def fake_check(_c: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
-        asked.append((user, relation, obj))
-        return True
-
-    monkeypatch.setattr(fga_deps.fga_reads, "check", fake_check)
-    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~bob", "relation": "parent"})))
-    with pytest.raises(PermissionDeniedError):
-        asyncio.run(
-            fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False)
-        )
-    assert asked == [], "parent reached OpenFGA as a phantom relation"
-
-
-# --------------------------------------------------------------------------- #
-# REVOKE is not the mirror of GRANT
-# --------------------------------------------------------------------------- #
-
-
-def test_revoke_still_refuses_a_phantom_rung_before_reaching_openfga(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The shape check survives the authority change. A rung the model cannot grant is not a rung the
-    API may be asked to revoke, and it must be refused HERE — an undefined relation reaching OpenFGA
-    is a 400 that fails closed to a 503 for every caller."""
+@pytest.mark.parametrize("revoking", [pytest.param(False, id="grant"), pytest.param(True, id="revoke")])
+def test_a_phantom_rung_is_refused_before_reaching_openfga(monkeypatch: pytest.MonkeyPatch, revoking: bool) -> None:
+    """The phantom-relation guard, on a grant and a revoke alike. Passing the structural `parent` edge through would
+    build ``can_grant_parent`` and ask OpenFGA for a relation the model does not define — a 400 that fails closed to a
+    503 for EVERY caller, owners included. A rung the model cannot grant is not a rung the API may be asked to revoke
+    either, so the shape check holds whichever authority decides. The assertion that matters is the empty ask-list:
+    refused locally."""
     asked: list[tuple[str, str, str]] = []
 
     async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
@@ -143,10 +122,12 @@ def test_revoke_still_refuses_a_phantom_rung_before_reaching_openfga(monkeypatch
 
     with pytest.raises(PermissionDeniedError):
         asyncio.run(
-            fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"], revoking=True)
+            fga_deps._authorize_grant(
+                request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"], revoking=revoking
+            )
         )
 
-    assert asked == []
+    assert asked == [], "parent reached OpenFGA as a phantom relation"
 
 
 # --------------------------------------------------------------------------- #

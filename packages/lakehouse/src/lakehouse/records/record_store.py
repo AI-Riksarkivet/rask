@@ -15,7 +15,7 @@ two key helpers had even swapped their parameter order (``protection._key(kind, 
 **The key bytes are a persistence contract.** Records already written to control roots are addressed by
 these digests, so :func:`record_key` reproduces the old composition exactly — 24 hex characters of
 ``sha256("<kind>:<canonical_id>")``, under ``<prefix>/<kind>-<digest>.json``. Changing it orphans every
-stored record; ``tests/unit/test_lakehouse_kernel_drain.py`` pins the shape.
+stored record; ``packages/lakehouse/tests/test_lakehouse_kernel_drain.py`` pins the shape.
 
 **Not the conditional seam.** :mod:`lakehouse.storage.conditional_records` arbitrates contended writes through
 the STORE (put-if-not-exists, ETag-guarded RMW) on caller-supplied plain keys — reach for that where a

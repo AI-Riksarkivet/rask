@@ -126,7 +126,7 @@ another date is given:
 - The admission wrap and the refusal answered in the read rest on FastAPI 0.140.13's dispatch and body read, both
   measured above. A FastAPI upgrade that moves either is caught by the tests that drive them over a socket and through
   the apps: `services/lineage/tests/test_a_post_to_the_intake_is_refused_before_its_body_is_read.py`,
-  `tests/unit/test_one_lance_service_assembly.py`, `tests/unit/test_load_shed.py` and
+  `tests/integration/test_one_lance_service_assembly.py`, `services/catalog/tests/test_load_shed.py` and
   `packages/lakehouse/tests/test_shared_body_cap.py`.
 - The logs operators read change: `readyz_catalog_unavailable` is now `dependency_unavailable` naming the dependency,
   and a loop's end is `background_work_ended` (exit 70); `docs/runbooks/RUNBOOK-oncall.md` says what each means.

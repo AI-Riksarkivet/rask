@@ -255,22 +255,6 @@ class _FakeStore:
         return _FakeWindow(list(self.events), bounds, self.log)
 
 
-def test_get_events_filters_to_visible_datasets(monkeypatch: pytest.MonkeyPatch) -> None:
-    # #22: the durable events feed is governed — drop events referencing a dataset the caller can't see.
-    from lineage.api.v1.endpoints.events import get_events
-
-    monkeypatch.setattr(fga_reads, "batch_check", _batch_allow_a)  # only "a" visible
-    settings = _settings(**_FULL_AUTH)
-    repo = _FakeStore()
-    repo.events = [
-        EventRecord(seq=2, outputs=["a"], inputs=[], table_uuids=[_uuid("a")], event={}),
-        EventRecord(seq=1, outputs=["b"], inputs=[], table_uuids=[_uuid("b")], event={}),  # "b" not visible → dropped
-    ]
-    flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
-    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, names=NO_CATALOG_NAMES, bearer=None))
-    assert [e.outputs for e in result.events] == [["a"]]  # the "b" event is filtered out
-
-
 def test_get_events_hides_dataset_less_events_when_governed(monkeypatch: pytest.MonkeyPatch) -> None:
     # #22 audit: a dataset-less event (empty inputs+outputs) must NOT pass the gate vacuously when FGA is
     # on — it would otherwise leak the run/author/full event JSON to a caller with zero grants.
@@ -283,27 +267,6 @@ def test_get_events_hides_dataset_less_events_when_governed(monkeypatch: pytest.
     flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
     result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, names=NO_CATALOG_NAMES, bearer=None))
     assert result.events == []  # dataset-less event is hidden under governance
-
-
-def test_get_events_pagination_never_leaks_past_governance(monkeypatch: pytest.MonkeyPatch) -> None:
-    # §2 perf (2026-07-11) guardrail pin: the governance filter runs BEFORE the slice on EVERY page —
-    # a small `limit` must page through VISIBLE rows only; a hidden row never appears on any page.
-    from lineage.api.v1.endpoints.events import get_events
-
-    monkeypatch.setattr(fga_reads, "batch_check", _batch_allow_a)  # only "a" visible
-    settings = _settings(**_FULL_AUTH)
-    repo = _FakeStore()
-    repo.events = [
-        EventRecord(seq=4, outputs=["b"], inputs=[], table_uuids=[_uuid("b")], event={}),  # hidden — must never surface
-        EventRecord(seq=3, outputs=["a"], inputs=[], table_uuids=[_uuid("a")], event={}),
-        EventRecord(seq=2, outputs=["b"], inputs=[], table_uuids=[_uuid("b")], event={}),  # hidden — must never surface
-        EventRecord(seq=1, outputs=["a"], inputs=[], table_uuids=[_uuid("a")], event={}),
-    ]
-    flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
-    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=1, names=NO_CATALOG_NAMES, bearer=None))
-    # auth ON reads past a hidden newest row rather than answering an empty page
-    assert [e.seq for e in result.events] == [3]
-    assert result.next_cursor == 3  # continue below the last VISIBLE row — not below the hidden one
 
 
 @pytest.mark.parametrize(

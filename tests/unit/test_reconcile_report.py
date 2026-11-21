@@ -1,7 +1,7 @@
 """The cross-store reconciler (`open_hierarchy_lifecycle.md` Decision 4) — REPORT ONLY (unit).
 
 The estate is built with the CATALOG's own registry writers against a local filesystem control root
-(``file://{tmp_path}``, exactly as ``tests/unit/test_warehouses.py`` does), so these tests prove the
+(``file://{tmp_path}``, exactly as ``services/catalog/tests/test_warehouses.py`` does), so these tests prove the
 reconciler reads what the catalog actually writes rather than a copy of the layout that could drift.
 OpenFGA and S3 are faked at the seam the reconciler uses: the catalog's grant census, which maintenance reads in place of
 OpenFGA ([[XC-084]]), and ``list_buckets``.
@@ -266,9 +266,11 @@ def test_served_by_root_maps_each_root_to_every_warehouse_it_serves() -> None:
 
 def test_orphan_buckets_fires_on_a_bucket_no_warehouse_record_claims(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A warehouse delete removes the record; the bucket survives unless someone asked to purge it.
-    The claimed bucket and the platform's own primary bucket stay silent."""
+    The claimed bucket, the platform's own primary bucket and a bucket the chart declares as the platform's
+    (`MAINTENANCE_S3_PLATFORM_BUCKETS`: infrastructure no warehouse record will ever claim) stay silent."""
+    monkeypatch.setenv("MAINTENANCE_S3_PLATFORM_BUCKETS", "s3://extra-platform/")
     estate = _Estate(tmp_path)
-    estate.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a", "bkt-deleted-without-purge"])
+    estate.s3 = _FakeS3([_PRIMARY_BUCKET, "bkt-a", "extra-platform", "bkt-deleted-without-purge"])
     report = estate.run(monkeypatch)
     assert [b.bucket for b in report.orphan_buckets] == ["bkt-deleted-without-purge"]
 

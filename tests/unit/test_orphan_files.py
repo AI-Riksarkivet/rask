@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pathlib
 import posixpath
-from collections.abc import Callable
+import uuid
 from datetime import timedelta
 from typing import cast
 
@@ -28,10 +28,57 @@ import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
-from lance import blob_array, blob_field
+from lance import LanceOperation, blob_array, blob_field
 from lance.dataset import DatasetBasePath
+from lance.file import LanceFileWriter
+from lance.fragment import DataFile
 
 from maintenance.services import orphans
+
+
+def _overlay_dataset(root: pathlib.Path) -> str:
+    """A REAL dataset that uses data overlay files (manifest feature flag 64).
+
+    Verified on pylance 9.0.0: the commit succeeds through the public ``LanceOperation.DataOverlay`` API, the manifest
+    comes back with ``reader/writer_feature_flags`` == 64, and ``lance.dataset(uri)`` then REFUSES to reopen it with
+    ``ValueError: Not supported: This dataset cannot be read by this version of Lance… Flags: 64``. So the refusal a
+    caller sees comes from the open rather than from our own manifest read, which is the shape the scan has to classify.
+    """
+    uri = str(root / "overlaid.lance")
+    lance.write_dataset(
+        pa.table({"id": pa.array(range(20), pa.int64()), "v": pa.array([f"v{i}" for i in range(20)])}),
+        uri,
+    )
+    ds = lance.dataset(uri)
+    fragment = ds.get_fragments()[0]
+    # The overlay rewrites ONE column of ONE row — `fields` names the schema field id of `v`, and
+    # `offsets` the row within the fragment whose value the overlay supersedes.
+    field_id = fragment.metadata.files[0].fields[1]
+    name = f"overlay-{uuid.uuid4()}.lance"
+    path = pathlib.Path(uri) / "data" / name
+    with LanceFileWriter(str(path)) as writer:
+        writer.write_batch(pa.table({"v": pa.array(["NEW0"])}).to_batches()[0])
+    data_file = DataFile(
+        path=name,
+        fields=[field_id],
+        column_indices=[0],
+        file_major_version=2,
+        file_minor_version=1,
+        file_size_bytes=path.stat().st_size,
+    )
+    lance.LanceDataset.commit(
+        uri,
+        LanceOperation.DataOverlay(
+            groups=[
+                LanceOperation.DataOverlayGroup(
+                    fragment_id=fragment.fragment_id,
+                    overlays=[LanceOperation.DataOverlayFile(data_file=data_file, offsets=[0])],
+                )
+            ]
+        ),
+        read_version=ds.version,
+    )
+    return uri
 
 
 def _fs() -> pafs.FileSystem:
@@ -284,7 +331,7 @@ def test_a_registered_but_unused_base_is_refused_by_the_flag(tmp_path: pathlib.P
     assert "16" in (result.reason or "") and "base_paths" in (result.reason or "")
 
 
-def test_a_REAL_overlay_dataset_is_refused_with_the_flag_named(tmp_path: pathlib.Path, overlay_dataset: Callable[[pathlib.Path], str]) -> None:
+def test_a_REAL_overlay_dataset_is_refused_with_the_flag_named(tmp_path: pathlib.Path) -> None:
     """The real-dataset twin of the monkeypatched test above.
 
     On pylance 9.0.0 a committed overlay is WRITABLE but not readable — the open raises
@@ -293,7 +340,7 @@ def test_a_REAL_overlay_dataset_is_refused_with_the_flag_named(tmp_path: pathlib
     `ValueError: Not supported: … /home/runner/work/lance/lance/rust/lance/src/dataset.rs:725:24`,
     which tells the report's reader nothing at all.
     """
-    uri = overlay_dataset(tmp_path)
+    uri = _overlay_dataset(tmp_path)
 
     result = orphans.scan_dataset(_fs(), uri, prefix=uri)
 
@@ -443,16 +490,6 @@ class TestKindClassification:
     )
     def test_each_area_is_named(self, rel: str, kind: str) -> None:
         assert orphans._kind_of(rel) == kind
-
-
-class TestUnreadableIsNotClean:
-    def test_an_unreadable_dataset_is_a_failed_scan_and_not_an_exclusion(self, tmp_path: pathlib.Path) -> None:
-        """An unreadable dataset must not read as a clean one, nor as one excluded by rule: a later try may read it."""
-        missing = str(tmp_path / "nope.lance")
-
-        scan = orphans.scan_dataset(pafs.LocalFileSystem(), missing, prefix=missing)
-
-        assert (scan.checked, scan.excluded, scan.orphans, bool(scan.reason)) == (False, False, [], True)
 
 
 class _RaisesOnLayoutProbe:

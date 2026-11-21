@@ -21,7 +21,6 @@ resolves in ``lakehouse/governed/auth/model.json``, the file the app actually lo
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -39,8 +38,6 @@ from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from tests.unit.named_resolver import NamedResolver
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: Sentinel FGA client. The resolvers only ever hand it to ``fga_reads.check``/``fga_reads.batch_check``, which the
 #: recording fakes below replace — so nothing ever calls a method on it, and the cast is safe.

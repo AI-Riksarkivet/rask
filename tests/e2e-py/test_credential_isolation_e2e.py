@@ -112,7 +112,7 @@ def _client(creds: dict[str, str]) -> Any:  # noqa: ANN401 — boto3's client is
     The vended endpoint is the store's in-cluster Service name, which the runner off the cluster cannot resolve, so only
     the HOST is swapped for the address the runner reaches the store at. The key, secret and session token are used as
     vended, and the store evaluates the session policy against bucket and key, not against the address a request came in
-    on. The keys are read under the `aws_`-prefixed names the catalog emits for Lance (`tests/unit/test_vending.py`).
+    on. The keys are read under the `aws_`-prefixed names the catalog emits for Lance (`services/catalog/tests/test_vending.py`).
     """
     endpoint = creds.get(ENDPOINT) or S3
     vended = urlparse(endpoint if "://" in endpoint else f"http://{endpoint}")

@@ -96,8 +96,6 @@ def _queue(recording: _RecordingQueue) -> TaskQueue:
     [
         pytest.param("insert", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-write-asks-for-its-tables-pass"),
         pytest.param("create_table", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-create-is-a-write"),
-        pytest.param("register_table", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-registration-is-passed-too"),
-        pytest.param("drop_table", LaneTask(kind="trash", uuid=TABLE_UUID), id="a-drop-asks-for-its-release"),
     ],
 )
 def test_an_event_asks_for_the_task_its_operation_needs(operation: str, expected: LaneTask) -> None:

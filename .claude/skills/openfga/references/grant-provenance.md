@@ -46,7 +46,7 @@ Audit rows ride the OTLP log pipeline into GreptimeDB (#41). `configure_audit(en
 stream at the logger, so a service with audit disabled emits nothing at all — check that first when a
 review comes back empty, before concluding a grant was never made.
 
-**Pinned by `tests/unit/test_access_grant.py::test_the_grant_audit_row_carries_full_provenance`.** A
+**Pinned by `services/catalog/tests/test_access_grant.py::test_the_grant_audit_row_carries_full_provenance`.** A
 procedure resting on field names that nothing asserts is one refactor away from being fiction, so the
 field set above is a test, not a convention.
 

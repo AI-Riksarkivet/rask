@@ -59,8 +59,8 @@ def _client_error(code: str, status: int) -> ClientError:
 
     Duplicated from `test_registry_cas.py` rather than shared: pytest here runs with
     `--import-mode=importlib`, so test modules are not importable from one another, and the
-    alternative — hoisting fifteen lines into `tests/unit/conftest.py` — would put a boto3-shaped
-    fixture in front of every unit test in the directory to save one copy.
+    alternative — hoisting fifteen lines into `services/catalog/tests/conftest.py` — would put a boto3-shaped
+    fixture in front of every test in the catalog's suite to save one copy.
     """
     return ClientError(
         {

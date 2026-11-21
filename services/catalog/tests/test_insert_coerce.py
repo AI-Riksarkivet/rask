@@ -8,7 +8,7 @@ turns a genuinely incompatible payload into a clean 400 (InvalidInputError), nev
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 import pyarrow as pa
 import pytest
@@ -31,7 +31,7 @@ def _ipc(table: pa.Table) -> bytes:
 class _Table:
     """The door's table, answering the schema the coercion aligns to: the only thing the coercion reads of it."""
 
-    segments = ["hunt", "t"]
+    segments: ClassVar[list[str]] = ["hunt", "t"]
 
     def __init__(self, schema: pa.Schema) -> None:
         self._schema = schema

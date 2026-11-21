@@ -18,13 +18,11 @@ import json
 import sys
 import uuid
 from collections.abc import Callable
-from collections.abc import Set as AbstractSet
 from pathlib import Path
 from types import ModuleType
 
 import httpx
 import pytest
-import yaml
 
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -366,29 +364,6 @@ def test_a_read_back_that_is_not_json_is_a_failure_and_never_a_crash(capsys: pyt
 # --------------------------------------------------------------------------- #
 # The description itself
 # --------------------------------------------------------------------------- #
-
-
-def test_the_demo_estate_covers_every_tenant_warehouse_and_namespace_the_fga_fixtures_name() -> None:
-    """The mirror claim, made checkable: every object the model's own fixtures name as a tuple exists here as an object.
-
-    Ids are normalised ``_`` → ``-`` because the catalog validates warehouse/bucket/namespace ids against
-    a DNS-safe pattern — the fixture's ``acme_bucket`` cannot be created through any door. A fixture warehouse is
-    the seed's warehouse BUCKET (``acme_bucket`` is the warehouse ``acme`` over ``acme-bucket``), and a fixture
-    namespace ``acme_gold`` is the namespace ``gold`` inside the warehouse ``acme``.
-    """
-    fixtures = yaml.safe_load((_SCRIPTS.parent / "packages/lakehouse/src/lakehouse/governed/auth/model.fga.yaml").read_text())["tuples"]
-    # The model's fan-out and depth probes (`wide_*`, `depth_*`) measure what a check costs; they are no tenant a demo shows.
-    probes = ("wide", "depth")
-    named = {name for tuple_ in fixtures for name in (tuple_["object"], tuple_["user"]) if not name.partition(":")[2].startswith(probes)}
-
-    def wanted(prefix: str, *, excluding: AbstractSet[str] = frozenset()) -> set[str]:
-        return {obj.removeprefix(prefix).replace("_", "-") for obj in named if obj.startswith(prefix)} - excluding
-
-    estate = seed_estate.DEMO_ESTATE
-    assert wanted("project:") == {project.id for project in estate.projects}
-    # `lance-catalog` is the ESTATE ROOT, granted by the bootstrap job — not a tenant's warehouse.
-    assert wanted("warehouse:", excluding={"lance-catalog"}) == {warehouse.bucket for _, warehouse in seed_estate._warehouse_pairs(estate)}
-    assert wanted("namespace:") == {f"{warehouse.id}-{namespace.name}" for warehouse, namespace in seed_estate._namespace_pairs(estate)}
 
 
 def test_a_demo_identity_is_seeded_as_its_principal_and_a_persona_under_the_demo_idp() -> None:

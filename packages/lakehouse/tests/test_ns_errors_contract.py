@@ -37,9 +37,9 @@ def test_an_unsupported_answer_keeps_its_message_because_it_is_a_capability_answ
     stop asking. The blanket ``>= 500`` redaction replaced it with "Internal Server
     Error", so a user pressing the lakehouse's backfill button was told the server had broken (#101)."""
     status, body = problem_detail(UnsupportedOperationError("alter_table_backfill_columns not implemented"))
-    assert (
-        status == 406
-    )  # 406 since Q3 (2026-09-02): the spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported to NOT_ACCEPTABLE.
+    # The spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported
+    # to NOT_ACCEPTABLE.
+    assert status == 406
     assert body["detail"] == "alter_table_backfill_columns not implemented"
     assert body["error"] == body["detail"]  # the spec-0.9 twin field carries the same text
 

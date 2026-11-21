@@ -301,7 +301,7 @@ bodies** (`application/problem+json`).
 The published OpenAPI declares on every spec operation the error statuses `spec.yaml` lists for it, with the problem
 body, and 406, which any of them may answer (`lakehouse.problems.spec_routes.UNSUPPORTED_STATUS`, ADR 0020 row 11).
 The branch codes were MISSING until 2026-08-04 — a missing branch answered 500 on endpoints rask
-ships. `tests/unit/test_ns_errors_contract.py` now pins the map against the ENUM, so the next
+ships. `packages/lakehouse/tests/test_ns_errors_contract.py` now pins the map against the ENUM, so the next
 spec-added code fails a test instead of a client.
 **Never `HTTPException` with a hand-picked status** for domain errors — a 422 was shipped once and
 no generated client understood it; fixed to `InvalidInputError` (95ae4cb). `NamespaceNotEmpty → 409`
@@ -995,7 +995,7 @@ governing their data. The project-scoped surface is the console's project page, 
   whose detach fails is a 503 `PartiallyApplied` naming `attached: true`. A registration whose claim another request
   holds fenced answers 409 code 14, never the occupied-location 400: the same call is judged afresh once that
   request has ended. Only
-  `main` is judged. Pinned by `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`
+  `main` is judged. Pinned by `services/catalog/tests/test_a_register_refuses_a_table_that_mixes_file_versions.py`
   (flag 256) and `tests/integration/test_a_planted_base_is_refused_and_freezes_nothing.py` (spelling,
   overlaps and bases).
 - **An external blob base is per table, on request, and never vended** ([[LH-209]]). A create registers
@@ -1626,7 +1626,7 @@ governing their data. The project-scoped surface is the console's project page, 
 - The `\Z`-anchored `CONTROL_ID_RE` (`catalog/core/identifiers.py`) is the ONE id-shape rule. It was
   three copies that had already drifted: Python's `$` also matches before a trailing newline, so
   `"acme\n"` was refused by one door and accepted by another.
-- Credential-level tenant isolation IS attacked since #74: `tests/unit/test_vending.py` evaluates
+- Credential-level tenant isolation IS attacked since #74: `services/catalog/tests/test_vending.py` evaluates
   the cross-tenant read/write against the session-policy document the vendor really builds (IAM
   semantics, per tier, with two negative twins — B still reaches B's own table, and a read-tier
   credential cannot write its own), and `tests/e2e-py/test_credential_isolation_e2e.py` drives the

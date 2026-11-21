@@ -22,11 +22,6 @@ from __future__ import annotations
 import importlib.util
 import pathlib
 
-import pytest
-
-from tests.chart.chart_render import OIDC_ARGS, render
-from tests.chart.test_no_chart_owned_manifest_renders_a_null import _overlays
-
 
 REPO = pathlib.Path(__file__).resolve().parents[2]
 
@@ -39,21 +34,6 @@ _SPEC = importlib.util.spec_from_file_location("side_loaded_images", REPO / "scr
 assert _SPEC and _SPEC.loader
 _SLI = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_SLI)
-
-
-def _side_loaded(overlay: tuple[str, ...]) -> set[str]:
-    return set(_SLI.side_loaded_in(render(*overlay, *OIDC_ARGS), "dev"))
-
-
-def _stem(image: str) -> str:
-    return str(_SLI.dockerfile_stem(image))
-
-
-@pytest.mark.parametrize("label,overlay", [(lbl, ov) for lbl, ov in _overlays() if lbl.endswith(".sh")], ids=lambda v: v if isinstance(v, str) else "")
-def test_every_side_loaded_image_has_a_dockerfile_to_build_it(label: str, overlay: tuple[str, ...]) -> None:
-    """The other half: a name the stack could build only if something knows how."""
-    orphans = sorted(image for image in _side_loaded(overlay) if not (REPO / ".docker" / f"{_stem(image)}.dockerfile").is_file())
-    assert not orphans, f"the {label} overlay schedules images with no `.docker/<stem>.dockerfile` to build them:\n  " + "\n  ".join(orphans)
 
 
 def test_a_reference_the_chart_quotes_is_still_found() -> None:

@@ -359,7 +359,7 @@ def _judge_as_single_version(monkeypatch) -> None:
 
     Only the dataset reads are replaced — no heads to mark, and a single-version dataset with stable row ids declaring no
     base to judge — so the describe that resolves the location still runs. What the door does with a real mixed dataset is
-    pinned in `tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`, its location-exclusivity in
+    pinned in `services/catalog/tests/test_a_register_refuses_a_table_that_mixes_file_versions.py`, its location-exclusivity in
     `tests/integration/test_a_planted_base_is_refused_and_freezes_nothing.py`, and its heads in
     `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`.
     """

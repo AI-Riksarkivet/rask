@@ -15,8 +15,6 @@ Two things are being pinned, and they fail differently on purpose:
 from __future__ import annotations
 
 import pathlib
-import re
-from collections.abc import Callable
 from typing import Any, cast
 
 import lance
@@ -156,27 +154,6 @@ def test_a_registered_but_unused_base_is_caught_by_the_flag_and_by_nothing_else(
 # --------------------------------------------------------------------------- #
 # flag 64 — data overlays. Refused by pylance's OWN open, which we must classify.
 # --------------------------------------------------------------------------- #
-
-
-def test_a_data_overlay_makes_pylance_refuse_the_open_and_we_classify_it(tmp_path: pathlib.Path, overlay_dataset: Callable[[pathlib.Path], str]) -> None:
-    """Flag 64 is only ACCIDENTALLY safe today: pylance refuses the open, so our own manifest read
-    never runs. Left unclassified that refusal is a generic `open:` error carrying a Rust source path
-    from a GitHub CI runner — noise the sweep's lineage layer drops entirely.
-
-    This pins the classification, so the day pylance gains overlay READ support the dataset opens,
-    the manifest read runs, and `SUPPORTED` refuses it anyway. Either way it is a refusal.
-    """
-    uri = overlay_dataset(tmp_path)
-
-    with pytest.raises(ValueError) as caught:
-        lance.dataset(uri)
-    # A bit test, not a string match: pylance 12 commits an overlay as 64 | 256 (mixed data file versions).
-    flags = re.search(r"Flags: (\d+)", str(caught.value))
-    assert flags is not None and int(flags.group(1)) & features.FLAG_UNSTABLE_DATA_OVERLAY_FILES, "fixture must really commit a flag-64 overlay"
-
-    reason = features.unsupported_features_from_open_error(caught.value)
-    assert reason is not None, "pylance's own feature refusal must not read as an ordinary open failure"
-    assert "64" in reason and "overlay" in reason.lower(), f"the refusal must NAME the flag, got: {reason}"
 
 
 @pytest.mark.parametrize(

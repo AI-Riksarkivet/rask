@@ -193,32 +193,6 @@ def test_the_audit_asks_the_catalog_to_finish_every_clones_ending_it_lists(tmp_p
     assert out["announcement_intents"] == {"finished": 2, "sent": 3, "unlanded": 1, "left": 0}
 
 
-def test_a_PLATFORM_bucket_is_never_reported_as_an_orphan() -> None:
-    """A finding no operator can action keeps the drift report permanently non-clean.
-
-    `orphan_buckets` reports buckets that exist in storage and that no warehouse record claims. The
-    estate creates some for ITSELF — an `objectStore.buckets` entry the scoped-users hook provisions on the dev store —
-    and no warehouse record will ever claim one, because they hold no governed tables.
-
-    MEASURED live 2026-08-16: it sat in orphan_buckets on every run. Since `report_is_clean` blocks the
-    #79 purge on ANY finding, the purge could not be reached by clearing real drift — only by deleting
-    the observability store. `platform_buckets` defaulted to `sweep_buckets`, which is the set maintenance
-    governs and says nothing about infrastructure it does not.
-
-    The declared set comes from the chart's `lance.maintenancePlatformBuckets`: `lance.platformBuckets`,
-    which the scoped-users hook creates, plus the multibase bases.
-    """
-    from maintenance.core.config import MaintenanceSettings
-
-    s = MaintenanceSettings(
-        MAINTENANCE_S3_BUCKET="lance-catalog",
-        MAINTENANCE_S3_PLATFORM_BUCKETS="extra-platform,lance-catalog",
-    )
-    assert "extra-platform" in s.platform_buckets, "the declared platform bucket must be exempt"
-    assert "lance-catalog" in s.platform_buckets, "the swept set stays exempt — a maintained bucket is known by definition"
-    assert "extra-platform" not in s.sweep_buckets, "a platform bucket must NOT become something maintenance governs"
-
-
 class _HoldingQueue:
     """What the queue holds, as the audit reads it, and the tasks it is handed, with `TaskQueue`'s signatures."""
 

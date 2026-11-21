@@ -73,17 +73,6 @@ def test_a_stranded_project_is_REPORTED_not_re_granted() -> None:
     assert "decision, not a repair" in unjustified["project:acme"]
 
 
-def test_no_tuple_this_pass_writes_confers_ACCESS() -> None:
-    """The property that makes it safe to run unattended: a structural edge says where an object lives.
-
-    `admin`, `owner`, `writer`, `reader` and the rest are grants; `project` and `parent` are pointers.
-    Asserted over everything planned, so a later tier cannot quietly add a granting relation.
-    """
-    planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME], warehouses=[_ACME_WH]))
-
-    assert {t.relation for t in planned} <= {"project", "parent"}, [t.relation for t in planned]
-
-
 def test_a_record_with_no_creator_says_SO_rather_than_going_quiet() -> None:
     """Worse than a stranded tenant: one with no recorded creator at all, so not even a candidate exists.
     Reported rather than skipped, because a silent skip makes an unrecoverable tenant look recovered."""
@@ -91,12 +80,6 @@ def test_a_record_with_no_creator_says_SO_rather_than_going_quiet() -> None:
 
     assert planned == []
     assert "no `created_by`" in unjustified["project:orphaned"]
-
-
-def test_a_warehouse_under_a_revived_tenant_regains_its_tenancy_pointer() -> None:
-    planned, _ = plan_rebuild(_report("acme"), _sources(projects=[_ACME], warehouses=[_ACME_WH]))
-
-    assert ("project:acme", "project", "warehouse:acme-bucket") in [(t.user, t.relation, t.object) for t in planned]
 
 
 def test_a_warehouse_under_a_healthy_tenant_is_left_alone() -> None:

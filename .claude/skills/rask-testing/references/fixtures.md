@@ -115,8 +115,8 @@ and `test_an_absent_object_is_not_found_rather_than_forbidden.py` are the exampl
   `connect("dir", ...)` a test drives directly, or another warehouse's root, gets it from
   `catalog.services.warehouses.ensure_catalog_row(ns, "<warehouse id>")`, which mints its `rask.uuid` as the doors do
   (`services/catalog/tests/test_an_undrop_announces_the_table_exists_again.py`).
-- **An unusual manifest, written by Lance**: `tests/unit/conftest.py::overlay_dataset`, a factory
-  fixture that builds a dataset with data-overlay files (manifest feature flag 64) through
+- **An unusual manifest, written by Lance**: `tests/unit/test_orphan_files.py::_overlay_dataset`, a helper
+  that builds a dataset with data-overlay files (manifest feature flag 64) through
   `LanceFileWriter` and a `LanceOperation.DataOverlay` commit. Build other odd manifests the same way,
   through Lance's public API and not by hand, so the test agrees with what Lance writes.
 

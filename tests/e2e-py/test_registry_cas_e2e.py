@@ -1,6 +1,6 @@
 """F1 live half — contended registry-create against the DEPLOYED store (RustFS, ADR 0063).
 
-``tests/unit/test_registry_cas.py`` proves the seam's logic (local-FS exclusivity + the boto3
+``services/catalog/tests/test_registry_cas.py`` proves the seam's logic (local-FS exclusivity + the boto3
 ``IfNoneMatch`` call shape); THIS suite proves the deployed store actually arbitrates it under
 contention — the same silent-ignore hazard ``test_object_store_cas_e2e.py`` exists for (a store
 that ignores the header accepts both PUTs and the tenant-isolation guards are back to

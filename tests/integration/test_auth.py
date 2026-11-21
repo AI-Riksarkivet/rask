@@ -71,7 +71,7 @@ def test_settings_rejects_fga_without_oidc() -> None:
 
 def test_oidc_verifier_failure_maps_to_401_problem_json(client: TestClient) -> None:
     """CONTRACT: a verifier that raises ``UnauthenticatedError`` (expired / bad-sig / wrong
-    issuer / disallowed alg — all the cases unit-tested in tests/unit/test_oidc_verify.py)
+    issuer / disallowed alg — all the cases unit-tested in packages/lakehouse/tests/test_oidc_verify.py)
     is rendered by our error handler as a 401 problem+json, never leaking the cause."""
     verifier = MagicMock()
     verifier.verify.side_effect = UnauthenticatedError("Invalid or expired token")

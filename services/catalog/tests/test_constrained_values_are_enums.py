@@ -35,7 +35,7 @@ def _pascal(member: StrEnum) -> str:
     return "".join(word.capitalize() for word in member.value.split("_"))
 
 
-#: DropMode's spellings are the drop vocabulary's own test (`tests/unit/test_a_drop_mode_means_what_the_spec_says.py`).
+#: DropMode's spellings are the drop vocabulary's own test (`services/catalog/tests/test_a_drop_mode_means_what_the_spec_says.py`).
 @pytest.mark.parametrize("vocabulary", [CreateMode, RegisterMode, InsertMode, DropBehavior], ids=lambda v: v.__name__)
 def test_each_member_parses_from_both_spellings_in_any_case(vocabulary: type[StrEnum]) -> None:
     """The rule is stated once in `modes.py`, so it must hold for every set and not only the create one."""

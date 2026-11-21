@@ -16,7 +16,7 @@ it validated). So each name is sent twice and then the name it collapses to, thr
 table, and nothing may be left under the table's branch directories in between.
 
 The cases are one name per rule of the grammar (rule 7, ``main``, is the door's own 23, pinned by
-`tests/unit/test_a_branch_name_the_backend_cannot_use_is_a_caller_error.py`), plus the path steps. The grammar's names
+`services/catalog/tests/test_a_branch_name_the_backend_cannot_use_is_a_caller_error.py`), plus the path steps. The grammar's names
 walk one path through the catalog and a different rule each through pylance's validator, so a pylance that writes before
 it validates on any one rule fails here.
 """

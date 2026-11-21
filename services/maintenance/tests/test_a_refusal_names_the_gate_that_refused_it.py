@@ -50,10 +50,19 @@ def _mixed_table(root: Path) -> str:
     return uri
 
 
-def test_a_refusal_carries_the_gate(*, tmp_path: Path, maintain_one: Callable[..., DatasetResult], added: list[tuple[int, dict[str, Any] | None]]) -> None:
+def test_a_refusal_carries_the_gate(
+    *,
+    tmp_path: Path,
+    maintain_one: Callable[..., DatasetResult],
+    added: list[tuple[int, dict[str, Any] | None]],
+    parked_added: list[tuple[int, dict[str, Any] | None]],
+) -> None:
+    """A layout gate is the dataset's, not the catalog's answer about its table, so it parks no table: only the catalog's
+    refusals reach `maintenance.tables.parked`."""
     uri = _mixed_table(tmp_path)
 
     result = maintain_one(uri, MaintenanceSettings.model_validate({"s3_bucket": "b"}))
 
     assert result.refused_by == "manifest_flags", f"the dataset was not refused by manifest_flags: {result}"
     assert added == [(1, {"refused_by": "manifest_flags"})], f"the gate did not reach the series: {added}"
+    assert parked_added == [], f"a layout refusal was counted as a parked table: {parked_added}"

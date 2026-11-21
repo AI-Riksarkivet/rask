@@ -1815,7 +1815,7 @@ export interface paths {
          *     refuses the route for every caller. Any rung above the reader's refuses the feed's whole audience
          *     and records a write in the audit trail: measured 2026-09-08 at the writer rung, `can_write_data
          *     ALLOW` beside the `read_data` record for the same call. Pinned by
-         *     `tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ`.
+         *     `services/catalog/tests/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ`.
          */
         post: operations["table_changes_management_v1_table__id__changes_post"];
         delete?: never;
@@ -2035,7 +2035,7 @@ export interface paths {
          *     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``read_actions.META_READ_ACTIONS`` to get it:
          *     ``authorize`` is a router-wide dependency, so an unnamed suffix is refused for every caller and no reader
          *     ever arrives. Pinned by
-         *     ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ``.
+         *     ``services/catalog/tests/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ``.
          *
          *     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
          *     into 10k object-store round trips.

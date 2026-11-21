@@ -10,8 +10,20 @@ instant, and the row records ~10Mi of spread between two samplers reading second
 from __future__ import annotations
 
 import gc
+import logging
+from pathlib import Path
+from uuid import uuid4
 
-from maintenance.services.table_pass import memory_readings
+import lance
+import pyarrow as pa
+import pytest
+
+from lakehouse.lancekit.base_refs import normalise
+from lakehouse.records import location_claims
+from maintenance.core.config import MaintenanceSettings
+from maintenance.services import table_pass
+from maintenance.services.naming import TableIds
+from maintenance.services.table_pass import TableTask, memory_readings, run_table_pass
 
 
 #: The readings whose whole purpose is to be compared with each other. Named once: a lane that reports
@@ -19,10 +31,25 @@ from maintenance.services.table_pass import memory_readings
 _MEMORY_KEYS = frozenset({"lance_session_bytes", "lance_session_cap_bytes", "python_blocks", "rss_bytes"})
 
 
-def test_the_summary_reports_every_reading() -> None:
-    """A summary carrying a subset of the readings cannot answer the row's comparison."""
-    summary = memory_readings()
-    assert summary.keys() >= _MEMORY_KEYS, f"the summary lost a reading: {sorted(_MEMORY_KEYS - summary.keys())}"
+def test_the_pass_line_reports_every_reading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    """A pass whose line carries a subset of the readings cannot answer the row's comparison."""
+    control = tmp_path / "control"
+    control.mkdir()
+    settings = MaintenanceSettings(MAINTENANCE_CONTROL_ROOT=str(control), MAINTENANCE_POLICY_ROOT=str(control))
+    uri = str(tmp_path / "t.lance")
+    lance.write_dataset(pa.table({"n": pa.array([1, 2], pa.int64())}), uri)
+    uuid = str(uuid4())
+    claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options={})
+    location_claims.take(claims, normalise(uri), "db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=uuid)
+    named = TableIds(by_location={normalise(uri): "db$t"}, namespace_uuids={"db": str(uuid4())})
+    monkeypatch.setattr(table_pass, "table_ids_of", lambda *_a, **_k: named)
+
+    with caplog.at_level(logging.INFO, logger=table_pass.__name__):
+        run_table_pass(TableTask(uuid=uuid, location=uri), settings)
+
+    (line,) = [record for record in caplog.records if record.getMessage() == "maintenance_table_pass"]
+    missing = sorted(key for key in _MEMORY_KEYS if not isinstance(getattr(line, key, None), int))
+    assert missing == [], f"the pass's line lost a reading: {missing}"
 
 
 def test_two_readings_move_with_the_heap() -> None:

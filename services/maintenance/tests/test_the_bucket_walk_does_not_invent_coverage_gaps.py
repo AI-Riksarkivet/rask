@@ -145,7 +145,8 @@ def test_the_reconciler_walks_the_configured_bound(tmp_path: Path, monkeypatch: 
     ],
 )
 def test_a_control_prefix_is_never_walked(tmp_path: Path, control_dir: str) -> None:
-    """Control-plane bookkeeping holds no dataset, so the walk must not file it as an unscanned subtree.
+    """Control-plane bookkeeping holds no dataset, so the walk must not file it as an unscanned subtree, nor report the
+    catalog's `__manifest` or a loose file as one.
 
     `_lineage_outbox` is in the same class as `_warehouses` and `_trash`. Measured 2026-09-08 on the
     deployed estate: 10 of the primary bucket's 59 truncated prefixes were
@@ -162,6 +163,9 @@ def test_a_control_prefix_is_never_walked(tmp_path: Path, control_dir: str) -> N
     """
     (tmp_path / control_dir).mkdir(parents=True)
     lance.write_dataset(pa.table({"id": [1]}), str(tmp_path / "real.lance"))
+    # The catalog's own `__manifest` is a Lance dataset too, and a loose file is no dataset: neither is reported.
+    lance.write_dataset(pa.table({"id": [1]}), str(tmp_path / "__manifest"))
+    (tmp_path / "loose.txt").write_text("not a dataset")
 
     # The bound is set so that DESCENDING would truncate: each control directory's second level sits
     # at depth 2 and has a child. A walk that skips the prefix truncates nothing; one that enters it

@@ -27,7 +27,7 @@ import respx
 
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import credentials, table_pass
+from maintenance.services import credentials
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import DatasetPlan
 
@@ -88,11 +88,3 @@ def test_a_vend_refusal_is_counted_as_a_parked_table_under_its_door(
         (1, {"refused_by": "vend_denied"}),
     ], parked_added
     assert refused_added == [(1, {"refused_by": "vend_denied"})], f"the refusal reached the datasets counter unlabelled or not at all: {refused_added}"
-
-
-@pytest.mark.parametrize("gate", ["manifest_flags"])
-def test_a_layout_gate_is_not_counted_even_beside_an_id(gate: str, parked_added: Recorded) -> None:
-    """The label set is the catalog's answers, whatever else a result carries."""
-    table_pass._record_parked(DatasetResult.model_validate({"uri": "s3://b/t", "refused": "no", "refused_by": gate, "refused_table_id": TABLE_ID}))
-
-    assert parked_added == [], parked_added

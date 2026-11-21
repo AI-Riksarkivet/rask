@@ -144,7 +144,7 @@ async def ingest_event(
     # separate a reader being told no from a producer's provenance being dropped.
     #
     # CLASSIFIED BY THE ONE VERDICT EVERY DOOR COUNTS BY (`core/metrics.py`, `refusal_outcome`), which
-    # `tests/unit/test_both_lineage_doors_count_the_same_loss.py` drives at this door: a denied grant is repairable by
+    # `services/lineage/tests/test_both_lineage_doors_count_the_same_loss.py` drives at this door: a denied grant is repairable by
     # writing a tuple, while an ungoverned output and an unauthored run are repairable by nothing. Two
     # doors that disagreed about which is which would make the alert mean different things by route.
     #

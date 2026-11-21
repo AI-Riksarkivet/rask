@@ -109,7 +109,7 @@ async def table_history(
     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``read_actions.META_READ_ACTIONS`` to get it:
     ``authorize`` is a router-wide dependency, so an unnamed suffix is refused for every caller and no reader
     ever arrives. Pinned by
-    ``tests/unit/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ``.
+    ``services/catalog/tests/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ``.
 
     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
     into 10k object-store round trips.

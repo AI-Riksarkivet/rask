@@ -38,7 +38,7 @@ def app() -> FastAPI:
     router = APIRouter()
 
     @router.post("/v1/thing/{id}/describe")
-    def describe(id: str) -> dict[str, str]:
+    def describe(id: str) -> dict[str, str]:  # noqa: A002 — the spec's route grammar names the segment `id`
         return {"id": id}
 
     @router.get("/v1/boom")
@@ -78,7 +78,7 @@ def test_a_domain_404_is_untouched(app: FastAPI) -> None:
     router = APIRouter()
 
     @router.post("/v1/thing/{id}/domain")
-    def domain(id: str) -> None:
+    def domain(id: str) -> None:  # noqa: A002 — the spec's route grammar names the segment `id`
         raise TableNotFoundError("nope")
 
     app.include_router(router)

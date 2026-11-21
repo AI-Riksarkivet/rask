@@ -346,7 +346,7 @@ Left out:
 A module's logger is named by its path, so two logger names follow the group: `lakehouse.features` and
 `lakehouse.lance_session` are `lakehouse.lancekit.features` and `lakehouse.lancekit.lance_session`. No alert rule,
 dashboard or collector route names them; the one test that reads one (`caplog` in
-`tests/unit/test_a_permanent_base_denial_is_reported_once.py`) names it as `features.__name__`. No module of the group
+`packages/lakehouse/tests/test_a_permanent_base_denial_is_reported_once.py`) names it as `features.__name__`. No module of the group
 has a tracer.
 
 **Proposed, for a commit of its own: the catalog's records.** Measured on the same tree after this commit, 19 modules
@@ -603,12 +603,12 @@ The group's debts:
 
 - **A re-export facade.** `ns_errors` listed `PROBLEM_JSON` and `problem_body` in its `__all__` for names `problem`
   defines. Three import sites took them from there (`problem_body` in the catalog's `api.maintenance_mode` and
-  `api.signing_gate`, `PROBLEM_JSON` in `tests/unit/test_framework_errors_carry_a_code.py`), and one test docstring named
+  `api.signing_gate`, `PROBLEM_JSON` in `packages/lakehouse/tests/test_framework_errors_carry_a_code.py`), and one test docstring named
   `ns_errors.problem_body`; each names `problems.envelope`. `ns_errors` still imports both for its own handlers and lists
   neither.
 - **`PROBLEM_JSON` defined twice.** `problem` and `exceptions` each defined `application/problem+json`; `domain_errors`
   imports `envelope`'s, so the media type is defined once in the library and every handler and `send_problem` sends that
-  one. `packages/lakehouse/tests/test_problem_extension_members.py` and `tests/unit/test_framework_errors_carry_a_code.py`
+  one. `packages/lakehouse/tests/test_problem_extension_members.py` and `packages/lakehouse/tests/test_framework_errors_carry_a_code.py`
   assert the content type the two handler families send, and pass. The catalog restates the literal twice more, in
   `catalog/main.py` and `catalog/api/maintenance_mode.py` (which `api.signing_gate` imports it from); those are a
   service's, outside this group, and are named here for the catalog's own row.
@@ -625,7 +625,7 @@ The group's debts:
 
 `problems/__init__.py` is a docstring with no import. Every module of the group declares `__all__`: three did not
 (`envelope`, `spec_routes`, `domain_errors`). Names a module is imported for that are not in its `__all__`: the
-spec-status map `ns_errors._STATUS`, which `tests/unit/test_ns_errors_contract.py` reads to pin that every `ErrorCode` is
+spec-status map `ns_errors._STATUS`, which `packages/lakehouse/tests/test_ns_errors_contract.py` reads to pin that every `ErrorCode` is
 mapped, left private.
 
 Contract: `the-problems-import-nothing-else-in-the-library` (`forbidden`, from `lakehouse.problems` to `lakehouse.*`,

@@ -81,13 +81,6 @@ class _Deleter:
         self.seen.append(record.uuid)
 
 
-def test_a_record_whose_BYTES_ARE_GONE_is_planned() -> None:
-    planned, _refused = tombstones.plan_sweep(_report(), probe=_probe)
-
-    assert [p.id for p in planned] == ["tr-gone"]
-    assert planned[0].location == _GONE
-
-
 def test_a_record_whose_bytes_stand_only_in_its_data_directories_is_refused(tmp_path: Path) -> None:
     """The sweep's probe asks every place the catalog's end door judges ([[LH-286]]): the table's location, in both
     spellings, and each data directory its claim names on its table. A table whose fragments sit on a data base holds
@@ -116,7 +109,7 @@ def test_a_DRY_RUN_plans_and_deletes_NOTHING() -> None:
     out = tombstones.sweep_tombstones(_settings(), report=_report(), probe=_probe, delete=deleter)
 
     assert out.dry_run is True
-    assert [s.id for s in out.swept] == ["tr-gone"]
+    assert [(s.id, s.location) for s in out.swept] == [("tr-gone", _GONE)], "only the record whose bytes are gone is planned"
     assert deleter.seen == [], f"a dry run deleted {deleter.seen}"
 
 

@@ -111,7 +111,7 @@ def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
 @pytest.fixture
 def served_without_the_write_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
     """``served`` with the catalog's bulk-write cap off (``LANCE_MAX_CONCURRENT_WRITES=0``), for a claim about the commit
-    turn rather than the cap, which `tests/unit/test_load_shed.py` holds. The cap is read when the app is built, so the
+    turn rather than the cap, which `services/catalog/tests/test_load_shed.py` holds. The cap is read when the app is built, so the
     module is reloaded with it, and reloaded again without it once the test is done."""
     import catalog.main
     from catalog.core.config import get_settings

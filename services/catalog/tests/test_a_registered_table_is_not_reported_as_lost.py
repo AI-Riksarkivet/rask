@@ -30,7 +30,7 @@ THE SUCCESS PATH TAKES ITS LOCATION FROM THE REGISTRATION JUDGEMENT (`table_base
 which describes the table before the seed and fails closed. `absolute_table_location`, tested here, is what
 the 409 branch uses, and it never fails: an unresolvable describe leaves the registered value. The
 emitted location is pinned by behaviour in
-`tests/unit/test_a_register_refuses_a_table_that_mixes_file_versions.py`.
+`services/catalog/tests/test_a_register_refuses_a_table_that_mixes_file_versions.py`.
 """
 
 from __future__ import annotations

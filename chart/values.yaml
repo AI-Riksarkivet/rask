@@ -1711,7 +1711,7 @@ openfga: # @schema skipProperties: true; additionalProperties: true
     # not return budget; reaping idle connections needs `connMaxIdleTime`, which the 0.3.12 schema also
     # exposes and which nothing here has measured. It is left unset rather than guessed at.
     #
-    # `tests/unit/test_the_shared_postgres_budget_is_declared.py` holds the arithmetic — this ceiling
+    # `tests/chart/test_the_shared_postgres_budget_is_declared.py` holds the arithmetic — this ceiling
     # plus what the others hold must fit inside 75% of the server — so a later "just raise it" is
     # refused by a number rather than by memory.
     maxOpenConns: 30

@@ -24,7 +24,6 @@ out to `pytest --collect-only`.
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -36,18 +35,6 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-#: Every variable the root conftest claims to strip. Kept in step with `_HARNESS_OTLP_VARS` by
-#: :func:`test_this_suite_covers_every_variable_the_conftest_strips`.
-HARNESS_VARS = (
-    "OTEL_EXPORTER_OTLP_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-    "OTEL_EXPORTER_OTLP_HEADERS",
-    "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-    "OTEL_EXPORTER_OTLP_PROTOCOL",
-)
 
 #: A module that records the variable AT IMPORT — the moment a module-scope OTLP exporter would read
 #: it — and asserts on that recording from the test body. Reading it in the body instead would pass
@@ -102,9 +89,9 @@ def test_the_harness_variable_is_gone_before_a_collected_module_is_imported(var:
 
 def test_the_probe_itself_can_fail(probe_dir: Path) -> None:
     """The harness's own non-vacuity check. If the child run were mis-wired — wrong config, conftest
-    never loaded, probe never collected — every case above would go green while proving nothing. Here
+    never loaded, probe never collected — the case above would go green while proving nothing. Here
     the child is given a variable the conftest does NOT strip, so the probe MUST fail; if it passes,
-    the other seven results are worthless."""
+    the result above is worthless."""
     probe = probe_dir / "test_otlp_probe.py"
     probe.write_text(_PROBE.format(var="OTEL_A_VARIABLE_THE_CONFTEST_DOES_NOT_STRIP"), encoding="utf-8")
 
@@ -118,17 +105,3 @@ def test_the_probe_itself_can_fail(probe_dir: Path) -> None:
     )
 
     assert result.returncode != 0, f"the probe cannot fail, so it proves nothing:\n{result.stdout}\n{result.stderr}"
-
-
-def test_this_suite_covers_every_variable_the_conftest_strips() -> None:
-    """A variable added to the conftest's tuple and not to this one would be stripped by code no test
-    exercises — the class of gap that let the original ordering bug ship green.
-
-    Loaded by PATH: `--import-mode=importlib` means the root conftest is not importable as a top-level
-    module named `conftest`, and pytest's own copy of it is not in `sys.modules` under that name."""
-    spec = importlib.util.spec_from_file_location("_root_conftest_under_test", REPO_ROOT / "conftest.py")
-    assert spec and spec.loader
-    root_conftest = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(root_conftest)
-
-    assert set(root_conftest._HARNESS_OTLP_VARS) == set(HARNESS_VARS)

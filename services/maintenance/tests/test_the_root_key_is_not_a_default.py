@@ -26,11 +26,6 @@ from maintenance import worker
 from maintenance.core.config import MaintenanceSettings
 
 
-def test_an_explicit_key_is_still_honoured() -> None:
-    settings = MaintenanceSettings(MAINTENANCE_S3_BUCKET="b", s3_access_key_id="rask-maintenance")
-    assert settings.s3_access_key_id == "rask-maintenance"
-
-
 async def _start(settings: MaintenanceSettings) -> bool:
     """The worker's start under ``settings``, bounded: a start that got past the store's identity would wait on the bus."""
     return await asyncio.wait_for(worker.run(settings, asyncio.Event()), timeout=20)

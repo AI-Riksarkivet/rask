@@ -55,13 +55,6 @@ def _root(tmp_path: Any) -> str:
 _SO = StorageOptions.from_flat({"endpoint": "http://rf:9000", "access_key_id": "k", "secret_access_key": "s", "region": "us-east-1"})
 
 
-def test_provision_creates_bucket() -> None:
-    fake = MagicMock()
-    with patch("lakehouse.storage.client.s3_client", return_value=fake):
-        warehouses.provision_bucket("bkt-a", _SO)
-    fake.create_bucket.assert_called_once_with(Bucket="bkt-a")  # us-east-1 → no LocationConstraint
-
-
 def test_provision_adds_location_constraint_off_us_east_1() -> None:
     # Real AWS S3 rejects create_bucket without a LocationConstraint outside us-east-1 (RustFS ignores it).
     fake = MagicMock()

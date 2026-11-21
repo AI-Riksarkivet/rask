@@ -60,8 +60,8 @@ consequences it does not spell out.
   per-suite marker registered in the root `pyproject.toml` with a `make e2e-<suite>` target (listed in
   `E2E_SUITES`), the lane's exclusion with its reason, and either the lane that runs it (`ci.yml`, a
   `.dagger/*.go` lane) or the reason it runs only against a deployed estate. A `make e2e-<suite>` target
-  alone is not CI. `tests/unit/test_e2e_collection_gate.py` checks only that every
-  `tests/e2e-py/test_*.py` collects.
+  alone is not CI. `tests/unit/test_e2e_collection_gate.py` checks only that
+  `tests/e2e-py` collects without an error and what a live drive selects from it.
   A change that deletes a suite deletes its marker, its target, its `E2E_SUITES` entry and every
   script line that names it: pytest exits 4 on a path that does not exist and 5 on a marker no test
   carries, and either kills the lane.
@@ -169,7 +169,7 @@ from the root conftest.
 | Collaborator                  | In a test                                                                                                   |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | A service app                 | the real app under `with TestClient(app)`, set up per the service's settings shape: `references/fixtures.md` § A service app |
-| Lance / lance-namespace       | real pylance on `tmp_path`: `tests/integration/conftest.py::real_ns_client`, `tests/unit/conftest.py::overlay_dataset`. The `MagicMock(spec=LanceNamespace)` behind `::client` cannot see what Lance writes (a table landed at the wrong file version passes), so it serves only routing and error-mapping claims |
+| Lance / lance-namespace       | real pylance on `tmp_path`: `tests/integration/conftest.py::real_ns_client`, `tests/unit/test_orphan_files.py::_overlay_dataset`. The `MagicMock(spec=LanceNamespace)` behind `::client` cannot see what Lance writes (a table landed at the wrong file version passes), so it serves only routing and error-mapping claims |
 | S3 through boto3 / `lakehouse.storage` | moto `mock_aws()`                                                                                           |
 | S3 read by pylance or pyarrow | a moto server, `tests/integration/test_moto_s3.py::moto_endpoint`: `mock_aws()` patches botocore, which the native Lance and Arrow clients never go through |
 | Outbound HTTPX                | `respx` (`services/maintenance/tests/test_a_table_the_catalog_does_not_govern_is_left_alone.py`)            |
