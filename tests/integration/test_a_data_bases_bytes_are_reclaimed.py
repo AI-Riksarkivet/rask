@@ -366,7 +366,7 @@ def warehoused(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Ware
     [
         pytest.param("table", False, True, id="a-destructive-drop"),
         pytest.param("namespace", False, True, id="a-namespace-cascade"),
-        pytest.param("warehouse", False, True, id="a-warehouse-cascade-over-a-live-table"),
+        # A purging cascade over a live table is the reissued cascade's, below: it asserts the same three outcomes.
         pytest.param("warehouse", True, True, id="a-warehouse-cascade-over-a-trashed-table"),
         # A cascade keeping its bucket keeps every byte the table had, its data directory included.
         pytest.param("warehouse", False, False, id="a-warehouse-cascade-keeping-its-bucket-over-a-live-table"),

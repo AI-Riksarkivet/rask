@@ -142,65 +142,107 @@ def test_a_drop_under_a_warehouse_is_kept_as_its_delete_profile_says(estate: _Es
     assert "delete_profile" not in cleared, f"a re-POST naming the estate's profile kept the warehouse's own: {cleared}"
 
 
-def test_an_audit_releases_the_grants_of_a_drop_past_its_deadline_and_keeps_its_bytes(estate: _Estate, caplog: pytest.LogCaptureFixture) -> None:
-    """Every release and every end of a record is on the audit trail, as it lands or as the catalog refuses it: each
-    revokes grants or ends a record on the catalog's own session, for whoever asked."""
-    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
-    bronze = estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
-    expired, waiting, live = (estate.create_table(f"{bronze}${name}") for name in ("expired", "waiting", "live"))
-    estate.post(f"/v1/namespace/{bronze}$gone/create")
-    nested = estate.create_table(f"{bronze}$gone$t")
-    namespace = str(estate.post(f"/v1/namespace/{bronze}$gone/describe")["properties"]["rask.uuid"])
-    location = estate.location(f"{bronze}$expired")
-    estate.post(f"/v1/table/{bronze}$expired/drop")
-    estate.post(f"/v1/table/{bronze}$waiting/drop")
-    estate.post(f"/v1/namespace/{bronze}$gone/drop", {"behavior": "Cascade"})
-    estate.age(expired)
-    estate.age(nested)
-    estate.age(namespace, kind="namespace")
-    past = datetime.now(UTC) - timedelta(days=1)
-    estate.put_record(trash.make_record(f"{bronze}$live", uuid=live, location=estate.location(f"{bronze}$live"), dropped_by=None, grace_days=0, now=past))
-    released = {f"table:{expired}", f"table:{nested}", f"namespace:{namespace}"}
-    kept = {f"table:{waiting}", f"table:{live}"}
-    held = estate.store.naming(sorted(released | kept))
-    assert all(held.get(obj) for obj in released | kept), f"a drop kept no grant, so releasing them would pass vacuously: {held}"
+class _PastDeadline:
+    """Drops in one warehouse, aged: two tables and a cascaded namespace past their deadlines, one table still in its
+    window, and a live table whose undrop crashed before clearing its record, that record's deadline passed."""
 
+    def __init__(self, estate: _Estate) -> None:
+        self.bronze = estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
+        self.expired, self.waiting, live = (estate.create_table(f"{self.bronze}${name}") for name in ("expired", "waiting", "live"))
+        estate.post(f"/v1/namespace/{self.bronze}$gone/create")
+        nested = estate.create_table(f"{self.bronze}$gone$t")
+        self.namespace = str(estate.post(f"/v1/namespace/{self.bronze}$gone/describe")["properties"]["rask.uuid"])
+        self.location = estate.location(f"{self.bronze}$expired")
+        estate.post(f"/v1/table/{self.bronze}$expired/drop")
+        estate.post(f"/v1/table/{self.bronze}$waiting/drop")
+        estate.post(f"/v1/namespace/{self.bronze}$gone/drop", {"behavior": "Cascade"})
+        estate.age(self.expired)
+        estate.age(nested)
+        estate.age(self.namespace, kind="namespace")
+        past = datetime.now(UTC) - timedelta(days=1)
+        live_at = estate.location(f"{self.bronze}$live")
+        estate.put_record(trash.make_record(f"{self.bronze}$live", uuid=live, location=live_at, dropped_by=None, grace_days=0, now=past))
+        self.released = {f"table:{self.expired}", f"table:{nested}", f"namespace:{self.namespace}"}
+        self.kept = {f"table:{self.waiting}", f"table:{live}"}
+
+
+def _audit(estate: _Estate) -> dict[str, Any]:
+    """Maintenance's audit, asking the catalog's own release door: its trash-release report."""
     with catalog_doors(estate.catalog):
-        report = audited(estate.maintenance)["trash_release"]
-    assert {f"{entry['kind']}:{entry['uuid']}" for entry in report["released"]} == released, report
-    remaining = estate.store.naming(sorted(released | kept))
-    assert not any(remaining.get(obj) for obj in released), f"an expired drop kept its grants: {remaining}"
-    assert all(remaining.get(obj) == held[obj] for obj in kept), "a drop still in its window, or a live table, lost a grant"
-    revoked = {(event.object_id, (event.extra or {}).get("subject")) for event in estate.control.events if event.action == "grant_revoked"}
-    alice = user_object(principal_key("alice"))
-    assert {(obj, alice) for obj in released} <= revoked, f"no grant_revoked told alice of each release: {revoked}"
-    for obj in released:
-        prefix, object_uuid = obj.split(":")
-        record = estate.record(object_uuid, kind="namespace" if prefix == "namespace" else "table")
-        assert record is not None and record.is_released, f"the record of {obj} was not stamped released: {record}"
-    assert estate.objects_at(location), "the tick deleted the bytes the purge owns"
-    refused = estate.catalog.post(f"/management/v1/table/{bronze}$expired/undrop", json={})
-    assert (refused.status_code, "grace period ended" in refused.text) == (409, True), f"an expired drop undropped: {refused.text}"
+        return audited(estate.maintenance)["trash_release"]
 
-    # The end of a released record naming no bytes lands; a release before the deadline and the end of a record whose
-    # bytes stand are refused.
-    asked = [
-        estate.catalog.post(f"/management/v1/trash/table/{waiting}/release", json={}).status_code,
-        estate.catalog.delete(f"/management/v1/trash/namespace/{namespace}").status_code,
-        estate.catalog.delete(f"/management/v1/trash/table/{expired}").status_code,
-    ]
-    trail = {
+
+def _trail(caplog: pytest.LogCaptureFixture) -> set[tuple[str, str, str]]:
+    """The releases and ends of a record on the audit trail, by action, outcome and resource."""
+    return {
         (str(vars(r)["audit.action"]), str(vars(r)["audit.outcome"]), str(vars(r)["audit.resource"]))
         for r in caplog.records
         if vars(r).get("audit.action") in (AuditAction.TRASH_RELEASE, AuditAction.TRASH_END)
     }
-    assert asked == [409, 200, 409], asked
-    assert trail == {
-        *((AuditAction.TRASH_RELEASE.value, AuditOutcome.SUCCESS.value, obj) for obj in released),
-        (AuditAction.TRASH_RELEASE.value, AuditOutcome.FAILURE.value, f"table:{waiting}"),
-        (AuditAction.TRASH_END.value, AuditOutcome.SUCCESS.value, f"namespace:{namespace}"),
-        (AuditAction.TRASH_END.value, AuditOutcome.FAILURE.value, f"table:{expired}"),
-    }, sorted(trail)
+
+
+def test_an_audit_releases_the_grants_of_a_drop_past_its_deadline_and_keeps_its_bytes(estate: _Estate, caplog: pytest.LogCaptureFixture) -> None:
+    """Each release revokes grants on the catalog's own session and is on the audit trail as it lands."""
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    drops = _PastDeadline(estate)
+    held = estate.store.naming(sorted(drops.released | drops.kept))
+    assert all(held.get(obj) for obj in drops.released | drops.kept), f"a drop kept no grant, so releasing them would pass vacuously: {held}"
+
+    report = _audit(estate)
+
+    assert {f"{entry['kind']}:{entry['uuid']}" for entry in report["released"]} == drops.released, report
+    remaining = estate.store.naming(sorted(drops.released | drops.kept))
+    assert not any(remaining.get(obj) for obj in drops.released), f"an expired drop kept its grants: {remaining}"
+    assert all(remaining.get(obj) == held[obj] for obj in drops.kept), "a drop still in its window, or a live table, lost a grant"
+    revoked = {(event.object_id, (event.extra or {}).get("subject")) for event in estate.control.events if event.action == "grant_revoked"}
+    alice = user_object(principal_key("alice"))
+    assert {(obj, alice) for obj in drops.released} <= revoked, f"no grant_revoked told alice of each release: {revoked}"
+    for obj in drops.released:
+        prefix, object_uuid = obj.split(":")
+        record = estate.record(object_uuid, kind="namespace" if prefix == "namespace" else "table")
+        assert record is not None and record.is_released, f"the record of {obj} was not stamped released: {record}"
+    assert estate.objects_at(drops.location), "the tick deleted the bytes the purge owns"
+    trail = _trail(caplog)
+    assert trail == {(AuditAction.TRASH_RELEASE.value, AuditOutcome.SUCCESS.value, obj) for obj in drops.released}, sorted(trail)
+
+
+def test_a_drop_the_audit_released_is_not_undropped(estate: _Estate) -> None:
+    drops = _PastDeadline(estate)
+    _audit(estate)
+
+    refused = estate.catalog.post(f"/management/v1/table/{drops.bronze}$expired/undrop", json={})
+
+    assert (refused.status_code, "grace period ended" in refused.text) == (409, True), f"an expired drop undropped: {refused.text}"
+
+
+@pytest.mark.parametrize(
+    ("asked", "status", "action", "outcome"),
+    [
+        pytest.param("release:waiting", 409, AuditAction.TRASH_RELEASE, AuditOutcome.FAILURE, id="a-release-before-the-deadline-is-refused"),
+        pytest.param("end:namespace", 200, AuditAction.TRASH_END, AuditOutcome.SUCCESS, id="the-end-of-a-released-record-naming-no-bytes-lands"),
+        pytest.param("end:expired", 409, AuditAction.TRASH_END, AuditOutcome.FAILURE, id="the-end-of-a-record-whose-bytes-stand-is-refused"),
+    ],
+)
+def test_a_release_or_end_asked_at_the_catalog_is_on_the_audit_trail_as_it_lands_or_is_refused(  # noqa: PLR0913 — the case and what it reads
+    estate: _Estate, caplog: pytest.LogCaptureFixture, asked: str, status: int, action: AuditAction, outcome: AuditOutcome
+) -> None:
+    """Each is on the trail for whoever asked, landed or refused, on the catalog's own session."""
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    drops = _PastDeadline(estate)
+    _audit(estate)
+    caplog.clear()
+    door, which = asked.split(":")
+    resource = {"waiting": f"table:{drops.waiting}", "namespace": f"namespace:{drops.namespace}", "expired": f"table:{drops.expired}"}[which]
+    kind, object_uuid = resource.split(":")
+
+    if door == "release":
+        answer = estate.catalog.post(f"/management/v1/trash/{kind}/{object_uuid}/release", json={})
+    else:
+        answer = estate.catalog.delete(f"/management/v1/trash/{kind}/{object_uuid}")
+
+    assert answer.status_code == status, answer.text
+    trail = _trail(caplog)
+    assert trail == {(action.value, outcome.value, resource)}, sorted(trail)
 
 
 class _RecordingQueue:
