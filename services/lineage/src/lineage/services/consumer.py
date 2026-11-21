@@ -27,7 +27,8 @@ from pydantic import ValidationError
 
 from lakehouse.events.bus_delivery import Verdict
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome, refusal_outcome
-from lineage.models import DatasetEvent, ForeignRunError, RunEvent, parse_event
+from lineage.core.refusals import ForeignRunError
+from lineage.models import DatasetEvent, RunEvent, parse_event
 from lineage.services.provenance import ProvenanceStore
 
 

@@ -95,7 +95,10 @@ reported only, every service on one cadence), with its own facts beside them
 judge with `lakehouse.governed.admission.caller_judge` and calls `judge_before_the_body` once its routes are mounted, so its
 caller is judged from the headers before FastAPI reads a body.
 A client is an outside tool on the public API and builds its own app (owner, 2026-11-07). The lance services keep the `fastapi` skill's `api/v1/endpoints/` + `core/` + `services/` layout; the factory owns
-the boot, not the layout. A `main.py` that opens
+the boot, not the layout. A service's direction is a `layers` contract in its own `pyproject.toml` (`[tool.importlinter]`,
+`exhaustive`; `make lint-imports` runs `.importlinter`, then every member pyproject that declares one, found by grep):
+lineage `main` > `api` > `services` > `models | schemas` > `core`, maintenance `worker` > `runtime` > `services` > `core`
+(ADR 0224). A new top-level module names its layer there, and a type two layers share lives in the lower one. A `main.py` that opens
 its own `app = FastAPI(...)` is the exception to justify, not the norm: copied boots drift, and one once lost its
 correlation layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.md "The Python estate audit" DUP-12).
 

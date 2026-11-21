@@ -35,7 +35,8 @@ from lakehouse.events.signing import KeySourceUnavailableError, SignatureError, 
 from lakehouse.governed.signing_key import published_key_fetch
 from lineage.core.config import LineageSettings
 from lineage.core.metrics import record_signature_refused, record_signature_verified
-from lineage.models import UnverifiedEventError, run_id_from_payload
+from lineage.core.refusals import UnverifiedEventError
+from lineage.models import run_id_from_payload
 
 
 log = logging.getLogger(__name__)

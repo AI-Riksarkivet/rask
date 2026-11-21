@@ -33,7 +33,7 @@ from lance_namespace import PermissionDeniedError
 
 from lineage.core.config import LineageSettings
 from lineage.core.metrics import Door, Outcome
-from lineage.models import UnauthoredRunError, UngovernedOutputError
+from lineage.core.refusals import UnauthoredRunError, UngovernedOutputError
 from lineage.services.provenance import ProvenanceStore
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 

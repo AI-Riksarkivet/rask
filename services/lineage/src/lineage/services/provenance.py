@@ -65,8 +65,9 @@ from lakehouse.lancekit.filters import in_lists, sql_literal
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
 from lakehouse.problems.domain_errors import ServiceUnavailableError
 from lineage.core.config import LineageSettings
+from lineage.core.refusals import ForeignRunError
 from lineage.core.sources import is_external_source
-from lineage.models import Dataset, DatasetEvent, ForeignRunError, RunEvent, author_sub_from_payload, parse_event
+from lineage.models import Dataset, DatasetEvent, RunEvent, author_sub_from_payload, parse_event
 from lineage.schemas import DerivedTable, EventRecord, ParkedDelivery
 from lineage.services.catalog_client import catalog_api_client, catalog_read_client, request_headers
 from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors

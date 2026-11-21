@@ -32,7 +32,8 @@ from lakehouse.governed import fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings, Signing
-from lineage.models import UnverifiedEventError, parse_event
+from lineage.core.refusals import UnverifiedEventError
+from lineage.models import parse_event
 from lineage.services.signature import store_published_keys
 from tests.secret_store_double import SecretStoreDouble
 

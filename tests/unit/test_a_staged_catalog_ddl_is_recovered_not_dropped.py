@@ -48,7 +48,8 @@ from lakehouse.storage.options import StorageOptions
 from lineage.api import fga_deps, relay
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing
-from lineage.models import DatasetEvent, UnverifiedEventError
+from lineage.core.refusals import UnverifiedEventError
+from lineage.models import DatasetEvent
 from lineage.services.provenance import feed_key
 from lineage.services.signature import store_published_keys
 from tests.bus_double import BusDouble

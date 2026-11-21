@@ -67,6 +67,11 @@ lakehouse = { workspace = true }
 `[tool.hatch.build.targets.wheel] packages = ["src/<import_name>"]` so the
 import name resolves.
 
+A service also declares its layers there, as `lineage` and `maintenance` do (ADR 0224): one `layers` contract under
+`[tool.importlinter]` with `root_package` the service, `containers = ["<import_name>"]` and `exhaustive = true`, its
+order the one its import graph already has. `make lint-imports` runs `.importlinter`, then every member pyproject that
+declares `[tool.importlinter]`, found by grep; the service's import name is also a root package in `.importlinter`.
+
 A JS member's `package.json` is the equivalent: `workspace:*` for first-party
 deps, plus its own `lint` / `fmt` / `fmt:check` (and `check` / `test` / `build` where it has them) — the root
 scripts run `bun run --filter '*' <task>`, so a package that does not declare a script is simply not run for it.
@@ -114,6 +119,7 @@ it with `kind load image-archive`. Then a chart if it deploys to k3s: the produc
       cross-language package was added to either plane
 - [ ] member `pyproject.toml`: `[project] dependencies` + `[tool.uv.sources]` workspace pins + hatch wheel `packages` (JS: `workspace:*` deps + its own scripts)
 - [ ] `known-first-party` += import name
+- [ ] a service: a `layers` contract in its `pyproject.toml`, and its name in `.importlinter`'s `root_packages`
 - [ ] tests live in `<member>/tests` (the `testpaths` glob collects them; nothing to list)
 - [ ] `.docker/<name>.dockerfile` + `COMPOSE_IMAGES` or a hand-wired build line and `K3S_IMAGES` (if a deployable)
 - [ ] `uv sync` resolves clean; first-party import works — and for a JS member,

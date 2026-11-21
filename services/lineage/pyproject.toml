@@ -30,3 +30,20 @@ packages = ["src/lineage"]
 
 [tool.uv.sources]
 lakehouse = { workspace = true }
+
+# The service's layers, run by `make lint-imports` (ADR 0224). The app (`main`) assembles the doors; the doors (`api`: the
+# routes, the ingest lane, the relay, the authorizer) call the services; the services (the feed, the consumer, the
+# forwarder, the signature check) read and build the OpenLineage models and the response schemas; and those stand on
+# `core`, the settings, the metrics, the external-source rule and the refusal types every layer raises or counts. Each
+# layer imports only those below it, function-local imports included, and the models and the schemas import neither
+# each other. `exhaustive` makes a new top-level module name its layer here before the contract passes.
+[tool.importlinter]
+root_package = "lineage"
+
+[[tool.importlinter.contracts]]
+id = "lineage-imports-down-its-layers"
+name = "ADR 0224: lineage imports down its layers, main over api over services over the models and schemas over core"
+type = "layers"
+containers = ["lineage"]
+layers = ["main", "api", "services", "models | schemas", "core"]
+exhaustive = true

@@ -25,7 +25,7 @@ from lance_namespace import PermissionDeniedError
 from opentelemetry import metrics
 
 from lakehouse.events.signing import RefusalReason
-from lineage.models import ForeignRunError, UnauthoredRunError, UngovernedOutputError, UnverifiedEventError
+from lineage.core.refusals import ForeignRunError, UnauthoredRunError, UngovernedOutputError, UnverifiedEventError
 
 
 _meter = metrics.get_meter("lance.lineage")

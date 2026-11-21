@@ -30,6 +30,22 @@ packages = ["src/maintenance"]
 [tool.uv.sources]
 lakehouse = { workspace = true }
 
+# The service's layers, run by `make lint-imports` (ADR 0224). The worker process (`worker`) runs the queue's tasks on
+# what `runtime` starts for it (the store session, the signing key, the bus connection, the emitters); the tasks and
+# everything a task does live in `services`; and those stand on `core`, the settings, the metrics and the lineage
+# emitter. Each layer imports only those below it, function-local imports included. `exhaustive` makes a new top-level
+# module name its layer here before the contract passes.
+[tool.importlinter]
+root_package = "maintenance"
+
+[[tool.importlinter.contracts]]
+id = "maintenance-imports-down-its-layers"
+name = "ADR 0224: maintenance imports down its layers, worker over runtime over services over core"
+type = "layers"
+containers = ["maintenance"]
+layers = ["worker", "runtime", "services", "core"]
+exhaustive = true
+
 [tool.ruff]
 extend = "../../pyproject.toml"
 
