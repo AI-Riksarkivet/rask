@@ -24,9 +24,9 @@ above, so a membership FGA holds for a project no registry knows lists nothing. 
 data scope (the ``/management/v1/events`` #12 rationale): a member sees their own tenants' names,
 buckets and admins and no one else's. One tenant's detail is read by the callers the list shows it to, the
 estate admin or a member of that tenant, and anyone else is answered the missing tenant's 404
-(:func:`get_project`); create asks ``can_create_project`` on the root through ``fga_deps.require_relation``.
+(:func:`get_project`); create asks ``can_create_project`` on the root through ``door_gates.require_relation``.
 ``/management/v1/projects`` matches no resource prefix in
-``fga_deps.authorize``, so the router-wide gate only sets the 401/503 floor; every decision here is
+``route_guard.authorize``, so the router-wide gate only sets the 401/503 floor; every decision here is
 audited (allow/deny/outage, #41), and an OpenFGA outage fails the list closed with 503.
 
 **DELETE is gated differently, on purpose: ``project:<id>#can_administer``.** Retiring a tenant is an act
@@ -65,9 +65,10 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict, Field
 
-from catalog.api import announcing, fga_deps
+from catalog.api import announcing
 from catalog.api import idempotency as idem
 from catalog.api.announcing import Announcer, AnnouncerDep
+from catalog.api.authz import decisions, door_gates, hierarchy, object_grants
 from catalog.api.declared import Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import ANONYMOUS_SUBJECT, CurrentToken, current_subject
@@ -137,7 +138,7 @@ async def _admins_for(client: OpenFgaClient | None, settings: FgaSettings, proje
     down or slow. The estate gate already ran fail-closed before this, so a degraded ``admins`` is a
     display gap, not an authz gap.
     """
-    if (client := fga_deps.wired(settings, client)) is None:
+    if (client := decisions.wired(settings, client)) is None:
         return []
     try:
         async with asyncio.timeout(_ADMINS_TIMEOUT_SECONDS):
@@ -247,8 +248,8 @@ async def create_project(
     project_id = body.id
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    admin = fga_deps.project_admin_for(token, body.admin)
-    await fga_deps.require_relation(client, settings, token, relation="can_create_project", obj=settings.fga_root_object)
+    admin = object_grants.project_admin_for(token, body.admin)
+    await door_gates.require_relation(client, settings, token, relation="can_create_project", obj=settings.fga_root_object)
     record = await establish_project(settings, client, announcer, project_id=project_id, admin=admin, author=author_of(token))
     return Tenant(project=project_id, record=record).response(await _admins_for(client, settings, project_id))
 
@@ -278,7 +279,7 @@ async def establish_project(
         message=ControlMessage(event=CatalogControlEvent(action="project_created", object_type="project", object_id=obj, actor=announced)),
     )
     # `seed_project_admin` writes the admin's grant exactly when authorization is on and an admin is named.
-    seeds = author is not None and admin is not None and fga_deps.wired(settings, client) is not None
+    seeds = author is not None and admin is not None and decisions.wired(settings, client) is not None
     admin_granted = (
         announcing.grant_announcement(
             fga_writes.ClientTuple(user=fga_ids.user_object(admin), relation="admin", object=obj),
@@ -297,7 +298,7 @@ async def establish_project(
     )
     async with filed as filing:
         record = await _write_project_record(settings, so, wanted, existing=existing)
-        granted = await fga_deps.seed_project_admin(client, settings, writer, project=project_id, admin=admin)
+        granted = await object_grants.seed_project_admin(client, settings, writer, project=project_id, admin=admin)
         log.info("project_created", extra={"project": project_id, "existing": existing is not None})
         await filing.send(created)
         if granted and admin is not None and admin_granted is not None:
@@ -319,10 +320,10 @@ async def _visible_projects(client: OpenFgaClient | None, settings: FgaSettings,
 
     ``None`` for the estate admin, and with FGA off, as for every gate. Otherwise the candidates are batch-checked on
     ``member`` ([[LH-223]]): the listing never asks OpenFGA which projects the caller reaches, an answer the server stops
-    counting at its ceiling. Fail-closed: no client, no caller (``fga_deps.authorization``) and an OpenFGA outage raise,
+    counting at its ceiling. Fail-closed: no client, no caller (``decisions.authorization``) and an OpenFGA outage raise,
     so a caller is never shown more, or less, than their memberships by accident.
     """
-    if (authz := fga_deps.authorization(settings, client, token)) is None:
+    if (authz := decisions.authorization(settings, client, token)) is None:
         return None
     root = settings.fga_root_object
     try:
@@ -372,7 +373,7 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
     doors = [("can_list_all_projects", settings.fga_root_object), ("member", f"project:{project_id}")]
     try:
-        await fga_deps.require_any_relation(client, settings, token, doors=doors)
+        await door_gates.require_any_relation(client, settings, token, doors=doors)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
     tenant = (await _load_tenants(settings)).get(project_id)
@@ -411,7 +412,7 @@ async def administered_project(project_id: str, settings: SettingsDep, token: Cu
     if record is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     try:
-        await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project_id}")
+        await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project_id}")
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
     return record
@@ -452,7 +453,7 @@ async def project_to_delete(project_id: str, settings: SettingsDep, token: Curre
     if starter is not None:
         doors.append(("can_finish_project_delete", settings.fga_root_object))
     try:
-        await fga_deps.require_any_relation(client, settings, token, doors=doors)
+        await door_gates.require_any_relation(client, settings, token, doors=doors)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
     return record
@@ -544,7 +545,7 @@ async def _start_delete(project_id: str, record: ProjectRecord, settings: Catalo
     so = settings.storage_options()
     # Protection state and the warehouse listing below are both tenant DISCLOSURE, so they run only after
     # `project_to_delete` has proven the caller administers this tenant.
-    fga_deps.require_not_protected(record.is_protected, kind="project", obj_id=project_id, force=force)
+    hierarchy.require_not_protected(record.is_protected, kind="project", obj_id=project_id, force=force)
 
     # A project's contents ARE its warehouse records — the same registry the listing derives tenants from,
     # so what the 409 names is exactly what GET /management/v1/projects/{id} shows. Read whole: a record that cannot be
@@ -629,7 +630,7 @@ async def delete_project(
     record = project_its_doors_delete(project_id, await project_to_delete(project_id, settings, token, client), token)
     so = settings.storage_options()
     # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
-    authz = fga_deps.wired(settings, client)
+    authz = decisions.wired(settings, client)
     if not record.is_being_deleted:
         await _start_delete(project_id, record, settings, token, force=force)
     # The caller who retired the tenant, in the two spellings `establish_project` names its author by: the subject the

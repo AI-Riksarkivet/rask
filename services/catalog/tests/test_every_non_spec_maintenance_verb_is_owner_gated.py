@@ -1,8 +1,8 @@
 """Every `/maintenance/` verb the catalog serves clears the owner bar, derived from the ROUTES.
 
-[[LH-105]]. `fga_deps._action_relation` gates a door by the map that LISTS it — never by what it does —
+[[LH-105]]. `rungs.action_relation` gates a door by the map that LISTS it — never by what it does —
 and refuses a suffix no map declares. So a destructive verb listed in the writer map instead of the
-owner map is the hole left to close here: `_OWNER_SUFFIX_RELATION`'s own comments record two verbs that
+owner map is the hole left to close here: `OWNER_SUFFIX_RELATION`'s own comments record two verbs that
 reached the writer rung, `branches/delete` letting a non-owner destroy a branch while the same caller
 was refused the lesser `tags/delete`, and `tags/delete` letting a plain writer remove the pin a
 tag is.
@@ -28,7 +28,7 @@ from __future__ import annotations
 import pytest
 import router_walk
 
-from catalog.api.fga_deps import _action_relation
+from catalog.api.authz.rungs import action_relation
 
 
 OWNER_RELATION = "can_drop"
@@ -37,7 +37,7 @@ MAINTAINER_DOORS = {"maintenance/disarm": "can_maintain", "maintenance/floor": "
 
 
 def _maintenance_suffixes() -> list[str]:
-    """Every `/v1/table/{id}/maintenance/<verb>` POST the catalog mounts, as `_action_relation` sees it."""
+    """Every `/v1/table/{id}/maintenance/<verb>` POST the catalog mounts, as `action_relation` sees it."""
     marker = "/{id}/"
     suffixes = {path.split(marker, 1)[1] for path, route in router_walk.mounted() if "POST" in (route.methods or ()) and marker in path}
     return sorted(suffix for suffix in suffixes if suffix.startswith("maintenance/"))
@@ -46,4 +46,4 @@ def _maintenance_suffixes() -> list[str]:
 @pytest.mark.parametrize("suffix", _maintenance_suffixes())
 def test_a_maintenance_verb_clears_the_owner_bar_and_a_maintainer_door_the_maintainer_rung(suffix: str) -> None:
     """Asserted through the resolver, not the dict: the mapping is only load-bearing if it is consulted."""
-    assert _action_relation("table", suffix, method="POST") == MAINTAINER_DOORS.get(suffix, OWNER_RELATION)
+    assert action_relation("table", suffix, method="POST") == MAINTAINER_DOORS.get(suffix, OWNER_RELATION)

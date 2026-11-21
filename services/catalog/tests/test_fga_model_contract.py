@@ -14,7 +14,7 @@ catch it either: they assert whatever (object, relation) pairs the *test author*
 not be the pairs the *app* sends (the yaml exercised ``transaction:``; the app checks
 ``namespace:``). Only a cross-check of the app's own mapping tables against the compiled model
 closes it — so this test enumerates the pairs by DRIVING the real resolvers in
-``catalog.api.fga_deps`` (never a hand-copied list, which would drift) and asserts each pair
+``catalog.api.authz`` (never a hand-copied list, which would drift) and asserts each pair
 resolves in ``lakehouse/governed/auth/model.json``, the file the app actually loads.
 """
 
@@ -30,12 +30,13 @@ from fastapi import Request
 from lance_namespace import InternalError
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps, read_actions
+from catalog.api import read_actions
+from catalog.api.authz import door_gates, grant_authority, route_guard, rungs
 from catalog.api.dependencies import Resolver
 from catalog.core import write_judge
 from catalog.core.config import Settings
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed import fga_model
+from lakehouse.governed import fga_model, fga_reads
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -59,7 +60,7 @@ def _model_relations() -> dict[str, set[str]]:
 
 
 # --------------------------------------------------------------------------- #
-# Enumerate every (type, relation) pair the CATALOG can check — by driving fga_deps
+# Enumerate every (type, relation) pair the CATALOG can check — by driving catalog.api.authz
 # --------------------------------------------------------------------------- #
 
 
@@ -82,7 +83,7 @@ def _settings() -> Settings:
 
 
 class _FakeRequest:
-    """The only thing ``_authorize_batch`` and ``_authorize_grant`` touch on the Request is ``await request.json()``."""
+    """The only thing ``authorize_batch`` and ``authorize_grant`` touch on the Request is ``await request.json()``."""
 
     def __init__(self, body: dict[str, Any]) -> None:
         self._body = body
@@ -101,32 +102,32 @@ def _obj_type(obj: str) -> str:
 
 
 def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
-    """Every ``(object_type, relation)`` ``catalog.api.fga_deps`` can send to OpenFGA.
+    """Every ``(object_type, relation)`` ``catalog.api.authz`` can send to OpenFGA.
 
-    Driven through the REAL mapping tables + resolvers, so a future edit to ``_action_relation`` /
-    ``_OWNER_SUFFIX_RELATION`` / ``_BATCH_OWNER_OPS`` / ``_create_parent_rung`` /
-    ``_authorize_transaction`` is picked up here automatically instead of drifting from a copy.
+    Driven through the REAL mapping tables + resolvers, so a future edit to ``action_relation`` /
+    ``OWNER_SUFFIX_RELATION`` / ``BATCH_OWNER_OPS`` / ``create_parent_rung`` /
+    ``authorize_transaction`` is picked up here automatically instead of drifting from a copy.
     """
     pairs: set[tuple[str, str]] = set()
     settings = _settings()
 
-    # 1. Non-create ops: _action_relation(type, suffix) for EVERY guarded type x EVERY suffix the rung
+    # 1. Non-create ops: action_relation(type, suffix) for EVERY guarded type x EVERY suffix the rung
     #    maps declare — owner- and writer-tier full suffixes and reader-tier trailing actions. A suffix a type does not declare is refused and sends OpenFGA nothing, so it adds no
     #    pair. (`transaction` never routes through here.)
     suffixes = (
-        {s for m in fga_deps._OWNER_SUFFIX_RELATION.values() for s in m}
-        | {s for m in fga_deps._WRITER_SUFFIX_RELATION.values() for s in m}
+        {s for m in rungs.OWNER_SUFFIX_RELATION.values() for s in m}
+        | {s for m in rungs.WRITER_SUFFIX_RELATION.values() for s in m}
         | set(read_actions.META_READ_ACTIONS)
         | set(read_actions.DATA_READ_ACTIONS)
     )
-    # `classification` returns from its own branch in `authorize` before `_action_relation` is consulted, so
+    # `classification` returns from its own branch in `authorize` before `action_relation` is consulted, so
     # enumerating the generic suffix map against it would assert relations the app can never send: it refuses every
     # suffix but `my-permissions`.
-    for fga_type in set(fga_deps._FGA_TYPE.values()) - {"classification"}:
+    for fga_type in set(rungs.FGA_TYPE.values()) - {"classification"}:
         for suffix in suffixes:
             for method in ("POST", "GET"):
                 try:
-                    relation = fga_deps._action_relation(fga_type, suffix, method=method)
+                    relation = rungs.action_relation(fga_type, suffix, method=method)
                 except InternalError:
                     continue
                 pairs.add((fga_type, relation))
@@ -135,11 +136,11 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     #    directly in a warehouse is the warehouse, which the resolver governs a one-segment namespace name as — so each
     #    can_create_* must resolve on BOTH types.
     resolver = Resolver(cast("Request", None), settings)
-    for resource in fga_deps._CREATE_ON_PARENT_SUFFIXES:
-        nested = fga_deps._create_parent_rung(resource, ["acme-wh", "parent_ns", "child"])
+    for resource in rungs.CREATE_ON_PARENT_SUFFIXES:
+        nested = rungs.create_parent_rung(resource, ["acme-wh", "parent_ns", "child"])
         assert nested is not None
         pairs.add((_rung_type(nested), nested.relation))
-        top = fga_deps._create_parent_rung(resource, ["acme-wh", "child"])
+        top = rungs.create_parent_rung(resource, ["acme-wh", "child"])
         assert top is not None and isinstance(top.on, write_judge.Named)
         warehouse = asyncio.run(resolver.object(top.on.kind, list(top.on.segments)))
         assert warehouse is not None and _obj_type(warehouse) == "warehouse", f"a create directly in a warehouse is asked on {warehouse!r}"
@@ -164,30 +165,32 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         checked.extend((_obj_type(o), relation) for o in objects)
         return dict.fromkeys(objects, True)
 
-    # Patch the fga module AS SEEN BY fga_deps (the consuming module), so the recording fakes
+    # Patch the fga module AS SEEN BY catalog.api.authz (the consuming modules), so the recording fakes
     # intercept the exact `fga_reads.check`/`fga_reads.batch_check` references the resolvers call.
-    monkeypatch.setattr(fga_deps.fga_reads, "check", rec_check)
-    monkeypatch.setattr(fga_deps.fga_reads, "batch_check", rec_batch)
+    monkeypatch.setattr(fga_reads, "check", rec_check)
+    monkeypatch.setattr(fga_reads, "batch_check", rec_batch)
 
     token = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
     for suffix in ("describe", "alter"):
-        asyncio.run(fga_deps._authorize_transaction(_CLIENT, NamedResolver(), ["acme-wh", "db1", "t", "txn1"], suffix, token=token))
+        asyncio.run(route_guard.authorize_transaction(_CLIENT, NamedResolver(), ["acme-wh", "db1", "t", "txn1"], suffix, token=token))
 
     body = {
         "entries": [{"id": ["acme-wh", "db1", "users"]}],
         "operations": [
             {"declare_table": {"id": ["acme-wh", "db1", "new"]}},  # create-on-parent
-            *[{op: {"id": ["acme-wh", "db1", "a"]}} for op in fga_deps._BATCH_OWNER_OPS],  # owner tier
+            *[{op: {"id": ["acme-wh", "db1", "a"]}} for op in rungs.BATCH_OWNER_OPS],  # owner tier
             {"commit_table": {"id": ["acme-wh", "db1", "b"]}},  # generic writer tier
         ],
     }
-    asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, NamedResolver(), user="dex~alice"))
+    asyncio.run(route_guard.authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, NamedResolver(), user="dex~alice"))
 
     # 4. A rename: the rung the router asks on its source and the one its door asks where the table lands, each within
     #    the source's namespace and into another.
     for destination in (["acme-wh", "db1", "renamed"], ["acme-wh", "db2", "child"]):
-        pairs.add(("table", fga_deps._rename_relation(["acme-wh", "db1", "child"], destination)))
-        asyncio.run(fga_deps.require_rename_destination(_CLIENT, settings, token, NamedResolver(), source=["acme-wh", "db1", "child"], destination=destination))
+        pairs.add(("table", rungs.rename_relation(["acme-wh", "db1", "child"], destination)))
+        asyncio.run(
+            door_gates.require_rename_destination(_CLIENT, settings, token, NamedResolver(), source=["acme-wh", "db1", "child"], destination=destination)
+        )
 
     pairs.update(checked)
     return pairs
@@ -199,7 +202,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
 
 
 def test_every_relation_the_catalog_checks_exists_in_the_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    """CONTRACT: every ``(type, relation)`` ``fga_deps`` can check is DEFINED on that type in
+    """CONTRACT: every ``(type, relation)`` ``catalog.api.authz`` can check is DEFINED on that type in
     ``model.json``. A phantom relation (e.g. the shipped ``namespace#can_write_data``) is a 400 from
     OpenFGA → fail-closed 503 for EVERY caller, so it must fail the suite loudly, right here."""
     model = _model_relations()
@@ -305,7 +308,7 @@ def _types_served_by(suffix: str) -> set[str]:
 
 def test_grant_routes_are_intercepted_before_the_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
     """CONTRACT (security, #72 + the grant axis): ``access/grant`` / ``access/revoke`` are authorized
-    PER RUNG from the request body by ``_authorize_grant``, not by the suffix map.
+    PER RUNG from the request body by ``authorize_grant``, not by the suffix map.
 
     This test replaced an assertion that they resolve to the owner tier. That assertion was right while
     granting was welded to ownership and is wrong now — but deleting it would have removed the guard it
@@ -313,17 +316,18 @@ def test_grant_routes_are_intercepted_before_the_resolver(monkeypatch: pytest.Mo
     and revoke would be refused for every caller, owners included. So the guard is re-pointed, not
     dropped. It now pins the interception itself, which is the thing that must not regress.
 
-    ``authorize`` returns inside the ``_GRANT_SUFFIXES`` branch before ``_action_relation`` is ever
+    ``authorize`` returns inside the ``GRANT_SUFFIXES`` branch before ``action_relation`` is ever
     consulted. Three things are asserted here: the suffixes are declared intercepted, every rung the grant API accepts
     has a ``can_grant_*`` gate to be checked against, and every type a revoke route serves defines the relation the
-    revoke gate checks on it. A rung without a grant gate is refused by ``_authorize_grant``, so it cannot silently
+    revoke gate checks on it. A rung without a grant gate is refused by ``authorize_grant``, so it cannot silently
     open; it would simply make the rung ungrantable. A type without the revoke gate's relation fails the other way:
     OpenFGA answers a check on a relation the type does not define with a 400, which fails closed to a 503 for every
     revoke there, the curator's included."""
-    from catalog.api.fga_deps import _GRANT_SUFFIXES, _grant_actions
+    from catalog.api.authz.grant_authority import grant_actions
+    from catalog.api.authz.rungs import GRANT_SUFFIXES
     from catalog.api.v1.endpoints.access import _grantable_relations
 
-    assert frozenset({"access/grant", "access/revoke"}) == _GRANT_SUFFIXES
+    assert frozenset({"access/grant", "access/revoke"}) == GRANT_SUFFIXES
     # WHAT THE DOOR ADMITS, on the TYPES THE DOOR SERVES — and neither half is a hand-kept list any
     # more. They stopped agreeing when `_GRANTABLE_BASE` grew type-specific rungs ([[LH-055]]:
     # `classifier` on the data types, `apply` on `classification` alone), so iterating the base tuple
@@ -338,7 +342,7 @@ def test_grant_routes_are_intercepted_before_the_resolver(monkeypatch: pytest.Mo
     for fga_type in sorted(served):
         grantable = _grantable_relations(fga_type)
         assert grantable, f"{fga_type} has a grant route and no grantable rung — the door admits nothing"
-        actions = _grant_actions(fga_type)
+        actions = grant_actions(fga_type)
         for rung in grantable:
             assert f"can_grant_{rung}" in actions, f"{fga_type}: {rung} is grantable with no can_grant_{rung} gate"
 
@@ -353,11 +357,11 @@ def test_grant_routes_are_intercepted_before_the_resolver(monkeypatch: pytest.Mo
         checked.add((_obj_type(obj), relation))
         return True
 
-    monkeypatch.setattr(fga_deps.fga_reads, "check", rec_check)
+    monkeypatch.setattr(fga_reads, "check", rec_check)
     for fga_type in sorted(revoked):
         for rung in _grantable_relations(fga_type):
             request = cast("Request", _FakeRequest({"user": "dex~bob", "relation": rung}))
-            asyncio.run(fga_deps._authorize_grant(request, _CLIENT, NamedResolver(), user="dex~alice", fga_type=fga_type, segments=["x"], revoking=True))
+            asyncio.run(grant_authority.authorize_grant(request, _CLIENT, NamedResolver(), user="dex~alice", fga_type=fga_type, segments=["x"], revoking=True))
     model = _model_relations()
     undefined = sorted(f"{t}#{r}" for t, r in checked if r not in model[t])
     assert not undefined, f"the revoke gate checks {undefined}, which the model does not define: OpenFGA refuses each, and every revoke there answers 503"

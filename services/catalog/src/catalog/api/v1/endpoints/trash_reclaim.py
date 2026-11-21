@@ -8,7 +8,7 @@ role opens (the catalog's declaration grants it to maintenance's ServiceAccount,
 record a judgement refuses answers 409 (code 19) and the refusal is noted on it; a uuid no trash record holds answers
 404.
 
-The router guard leaves these paths to their handlers (``fga_deps._RESOURCES`` names no ``trash``), so the gate is this
+The router guard leaves these paths to their handlers (``rungs._RESOURCES`` names no ``trash``), so the gate is this
 router's own dependency, as the decision door's is.
 """
 
@@ -20,8 +20,9 @@ from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidTableStateError, NamespaceNotFoundError, TableNotFoundError
 
-from catalog.api import announcing, fga_deps
+from catalog.api import announcing
 from catalog.api.announcing import AnnouncerDep
+from catalog.api.authz import decisions, door_gates, object_grants
 from catalog.api.dependencies import ClockDep, FgaClientDep, Resolver, ResolverDep, SettingsDep, VendorDep
 from catalog.api.security import Caller, CurrentSubject, CurrentToken
 from catalog.core.config import CatalogStore
@@ -41,7 +42,7 @@ from lakehouse.records.trash import TrashKind, TrashRecord
 
 async def require_can_reclaim_trash(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
     """Every trash door's gate: the caller holds ``can_reclaim_trash`` on the estate root."""
-    await fga_deps.require_relation(client, settings, token, relation="can_reclaim_trash", obj=settings.fga_root_object)
+    await door_gates.require_relation(client, settings, token, relation="can_reclaim_trash", obj=settings.fga_root_object)
 
 
 management_router = APIRouter(prefix="/management/v1/trash", tags=["trash-reclaim"], dependencies=[Depends(require_can_reclaim_trash)])
@@ -79,10 +80,10 @@ async def release_trash(
         if (reason := trash_reclaim.release_refusal(record, now=clock()) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
             raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
         obj = fga_ids.object_of(kind, uuid)
-        held = await fga_reads.read_object_tuples(wired, obj) if (wired := fga_deps.wired(settings, client)) is not None else []
+        held = await fga_reads.read_object_tuples(wired, obj) if (wired := decisions.wired(settings, client)) is not None else []
         told = {(t.object, t.relation, t.user): _revoked(t, record, uuid=uuid, actor=_actor(token)) for t in held if fga_ids.names_someone(str(t.user))}
         async with announcer.announcing(door="trash_release", target=obj, announcements=list(told.values())) as filing:
-            removed = await fga_deps.revoke_expired_object(client, settings, obj, token=token)
+            removed = await object_grants.revoke_expired_object(client, settings, obj, token=token)
             # Tell each person who lost a grant on the released object: none of them can see it any more, so no feed gated
             # on seeing it would. Structural edges name objects, not people, and are not announced.
             for t in removed:
@@ -149,7 +150,7 @@ async def end_trash(
         judged = partial(trash_reclaim.end_refusal, settings, record, claim, kind=kind, uuid=uuid, now=clock())
         if (reason := await run_in_threadpool(judged) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
             raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
-        revoked = await fga_deps.revoke_removed_object(client, settings, fga_ids.object_of(kind, uuid), token=token)
+        revoked = await object_grants.revoke_removed_object(client, settings, fga_ids.object_of(kind, uuid), token=token)
         await run_in_threadpool(partial(trash.end, settings.registry_root, settings.storage_options(), record, kind=kind, uuid=uuid))
     except Exception as failed:
         _audited(AuditAction.TRASH_END, AuditOutcome.FAILURE, token, kind=kind, uuid=uuid, reason=f"{type(failed).__name__}: {failed}"[:300])

@@ -37,7 +37,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps
+from catalog.api.authz import decisions, visible_pages
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, ProvenanceNamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import CatalogMaintenanceSettings, Settings
@@ -79,7 +79,7 @@ def get_table_owners(client: FgaClientDep, settings: SettingsDep) -> TableOwners
     container above it), or nobody when authorization is off: there is then no owner to tell."""
 
     async def _owners(object_id: str) -> list[str]:
-        if (wired := fga_deps.wired(settings, client)) is None:
+        if (wired := decisions.wired(settings, client)) is None:
             return []
         return await fga_reads.list_users(wired, relation="owner_effective", obj=object_id, qualified=True)
 
@@ -279,8 +279,8 @@ async def list_erasure_obligations(
     obligations = await run_in_threadpool(erasure_obligations.list_obligations, settings.registry_root, settings.storage_options())
     # Named and judged on the uuid each obligation records ([[LH-524]]) only as the page fills, so a page costs about the
     # obligations it serves or passes over.
-    listed, next_token = await fga_deps.named_record_page(
-        fga_deps.authorization(settings, client, token),
+    listed, next_token = await visible_pages.named_record_page(
+        decisions.authorization(settings, client, token),
         table_claims.claim_store(settings),
         relation="can_maintain",
         candidates=sorted(
@@ -310,7 +310,7 @@ async def _hidden_derived(
     keys = {key for surface in surfaces if (key := erasure.derived_key(surface.surface)) is not None} | set(late)
     if not keys:
         return frozenset()
-    if (authz := fga_deps.authorization(settings, client, token)) is None:
+    if (authz := decisions.authorization(settings, client, token)) is None:
         return frozenset()
     objects = sorted(fga_ids.table_object(key) for key in keys if derived_tables.is_table_uuid(key))
     allowed = await authz.batch_check("can_get_metadata", objects) if objects else {}

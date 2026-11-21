@@ -10,7 +10,7 @@ Not listed, each for its own reason:
 
 - The trash record (:mod:`lakehouse.records.trash`) is the record of an object that is not live, and a drop files it
   rather than ending it.
-- Grants live in OpenFGA; the catalog's ``fga_deps`` revokes them.
+- Grants live in OpenFGA; the catalog's ``authz.object_grants`` revokes them.
 - Location claims and base records are keyed by the table's location, and the claim records the uuid.
 - A clone's ending (:mod:`catalog.services.clone_ending_records`) is keyed by its location too, and is filed BY the ending of the
   object, to outlive it until the clone's holds are released: ending it here would end it before its work is done.

@@ -20,7 +20,7 @@ from lance_namespace import LanceNamespaceError
 from openfga_sdk import OpenFgaClient
 from starlette.middleware import Middleware
 
-from catalog.api import fga_deps
+from catalog.api.authz import decisions
 from catalog.api.control_lane import STREAM as CONTROL_STREAM
 from catalog.api.control_lane import TOPIC as CONTROL_TOPIC
 from catalog.api.control_lane import ControlLane, create_signature_refused_series
@@ -80,7 +80,7 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
 
     Its wires are read once, before the first try: one the lifespan did not set is no outage a retry outlasts, so it
     ends the task, and the supervisor ends the process with it (`app_wire`). An authorization client missing where
-    authorization is on is retried as the outage it may be (`fga_deps.wired`), never read as off: a namespace made
+    authorization is on is retried as the outage it may be (`decisions.wired`), never read as off: a namespace made
     with no grant would leave lineage unable to write its feed.
 
     Raises:
@@ -96,7 +96,7 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
         try:
             namespace = await run_in_threadpool(connections.connection, settings)
             await run_in_threadpool(warehouses.ensure_catalog_row, namespace, settings.estate_warehouse)
-            await ensure_provenance_namespace(namespace, settings, fga_deps.wired(settings, client))
+            await ensure_provenance_namespace(namespace, settings, decisions.wired(settings, client))
             return
         except asyncio.CancelledError:
             raise

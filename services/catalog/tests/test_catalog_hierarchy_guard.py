@@ -18,7 +18,7 @@ import asyncio
 import pytest
 from lance_namespace import InvalidInputError
 
-from catalog.api import fga_deps
+from catalog.api.authz import hierarchy, objects
 from catalog.core.config import Settings
 from tests.unit.named_resolver import NamedResolver
 
@@ -34,7 +34,7 @@ def test_the_refusal_names_the_rule_and_the_fix() -> None:
     cannot quietly disappear.
     """
     with pytest.raises(InvalidInputError) as exc:
-        fga_deps.require_parent("table", ["sales"])
+        hierarchy.require_parent("table", ["sales"])
     detail = str(exc.value)
     assert "sales" in detail
     assert "namespace" in detail
@@ -47,7 +47,7 @@ def test_the_refusal_names_the_rule_and_the_fix() -> None:
 def test_only_tables_are_gated_here(resource: str) -> None:
     """Namespaces are not rejected here: a namespace's parent is the namespace above it or, for a name of two
     segments, its warehouse, and the shape a warehouse holds is the path guard's to judge (`_require_a_name_inside_a_warehouse`)."""
-    fga_deps.require_parent(resource, ["anything"])
+    hierarchy.require_parent(resource, ["anything"])
 
 
 def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
@@ -58,10 +58,10 @@ def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
     """
     settings = Settings.model_validate({"LANCE_S3_ACCESS_KEY_ID": "k", "LANCE_S3_SECRET_ACCESS_KEY": "s"})
     for segments in (["orphan"], ["bronze", "pages"], ["acme", "silver", "features"]):
-        would_orphan = asyncio.run(fga_deps.parent_object_of(NamedResolver(), settings, "table", segments)) is None
+        would_orphan = asyncio.run(objects.parent_object_of(NamedResolver(), settings, "table", segments)) is None
         refused = False
         try:
-            fga_deps.require_parent("table", segments)
+            hierarchy.require_parent("table", segments)
         except InvalidInputError:
             refused = True
         assert refused is would_orphan, f"guard and parent_object disagree on {segments}"
@@ -83,7 +83,7 @@ def test_a_rename_out_of_a_namespace_of_its_own_warehouse_is_refused(destination
     """A rename moves a pointer inside one directory catalog and never bytes, so a destination in another warehouse, or
     directly under the warehouse with no namespace, is a 400 that names the shape that would work."""
     with pytest.raises(InvalidInputError, match=rf"the new name is acme-wh\{DELIM}<namespace>\{DELIM}<table>"):
-        fga_deps.require_rename_within_its_warehouse(["acme-wh", "bronze", "pages"], destination)
+        hierarchy.require_rename_within_its_warehouse(["acme-wh", "bronze", "pages"], destination)
 
 
 # --------------------------------------------------------------------------- #

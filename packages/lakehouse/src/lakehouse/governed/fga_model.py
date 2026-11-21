@@ -11,7 +11,7 @@ a reader checks this docstring against.
 Privileges are concentric (``owner`` ⊇ ``writer`` ⊇ ``reader``) and cascade DOWN the hierarchy via ``parent`` (project → warehouse → namespace →
 nested namespace → table / materialized_view). Every API operation is checked against a
 ``can_*`` ACTION relation — the model owns the op→privilege map, the app just names the action (see
-``services/catalog/api/fga_deps.py``).
+``services/catalog/src/catalog/api/authz/rungs.py``).
 
 Nothing here dials OpenFGA; the reads, the writes and the provisioning do (`fga_reads`, `fga_writes`, `fga_provision`).
 """

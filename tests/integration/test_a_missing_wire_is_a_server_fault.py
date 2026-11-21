@@ -3,7 +3,7 @@
 Each service's lifespan always sets what its doors and ticks read on ``app.state``, to a working object or to the
 explicit off value its settings name (`catalog.main._build`, `lineage.main._build`): an off emitter or vendor, or the
 ``None`` it sets for a process named no bus, a catalog that does not sign, a lineage named no graph backend. Off is
-what the setting says, never a missing wire (the rule `catalog.api.fga_deps.wired` states for the authorization client,
+what the setting says, never a missing wire (the rule `catalog.api.authz.decisions.wired` states for the authorization client,
 [[LH-237]]): a door that read a missing emitter as "off" would commit, announce to nobody and answer 200; a signing gate
 that read a missing key holder as "does not sign" would admit every write it exists to hold; a relay that read it so
 would deliver staged events unverified. So each door depending on one refuses: 500 with the spec's ``InternalError``

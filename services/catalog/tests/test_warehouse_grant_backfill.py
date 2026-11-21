@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from catalog.api.authz import warehouse_grants
 from catalog.core.config import Settings
 from catalog.services import warehouse_grant_backfill
 from lakehouse.governed import fga_provision, fga_resilience
@@ -84,7 +85,7 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
             raise RuntimeError("openfga said no")
         return 2
 
-    monkeypatch.setattr(warehouse_grant_backfill.fga_deps, "converge_warehouse_grants", _flaky)
+    monkeypatch.setattr(warehouse_grants, "converge_warehouse_grants", _flaky)
     monkeypatch.setattr(
         warehouse_grant_backfill.warehouses,
         "list_warehouses",

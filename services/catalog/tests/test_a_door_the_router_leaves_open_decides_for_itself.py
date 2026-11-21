@@ -1,6 +1,6 @@
 """Every door the router guard leaves to its handler is decided there ([[LH-237]]).
 
-`catalog.api.fga_deps.authorize` decides every route naming an `{id}` under a guarded resource, and the two batch
+`catalog.api.authz.route_guard.authorize` decides every route naming an `{id}` under a guarded resource, and the two batch
 doors, before any handler runs (`test_an_undeclared_door_is_refused.py` walks those; `router_walk` draws the line).
 Every other route under the router it authenticates and nothing more: the projects, warehouses, models, the estate
 admin's authorization store, the decision door and every estate-wide listing. Their handlers decide them. A door
@@ -38,7 +38,7 @@ import router_walk
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict, Field
 
-from catalog.api import fga_deps
+from catalog.api.authz import route_guard
 from catalog.api.dependencies import get_fga_client
 from catalog.api.security import authenticate
 from catalog.core.config import get_settings
@@ -359,7 +359,7 @@ def test_a_door_the_router_leaves_to_its_handler_refuses_on_its_own_when_authori
     estate: Any, missing: Callable[..., object], refused: tuple[int, int]
 ) -> None:
     overrides = estate.client.app.dependency_overrides
-    overrides[fga_deps.authorize] = _decides_nothing
+    overrides[route_guard.authorize] = _decides_nothing
     overrides[missing] = _absent
     client = _as_a_caller_sees_it(estate.client)
 

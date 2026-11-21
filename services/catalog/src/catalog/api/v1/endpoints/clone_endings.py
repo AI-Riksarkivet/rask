@@ -8,7 +8,7 @@ rung the trash doors ask (``trash_reclaim``), which only the ``reclaimer`` role 
 ServiceAccount by the catalog's declaration: no new grant. Each finish is recorded on the audit trail, since it
 deletes tags and releases a claim on the catalog's own session.
 
-The router guard leaves these paths to their handlers (``fga_deps._RESOURCES`` names none of them), so the gate is this
+The router guard leaves these paths to their handlers (``rungs._RESOURCES`` names none of them), so the gate is this
 router's own dependency, as the trash doors' is.
 """
 

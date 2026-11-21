@@ -450,7 +450,7 @@ def test_deregister_emits_marker_before_revoking_tuples(client: TestClient, fake
         order.append("revoke")
 
     monkeypatch.setattr("catalog.api.announcing.emit_write_event", _emit)
-    monkeypatch.setattr("catalog.api.fga_deps.revoke_ownership", _revoke)
+    monkeypatch.setattr("catalog.api.authz.object_grants.revoke_ownership", _revoke)
     claim_described("lance_catalog$db$t")
 
     resp = client.post("/v1/table/lance_catalog$db$t/deregister")

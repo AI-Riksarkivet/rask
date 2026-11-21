@@ -7,7 +7,7 @@ import { seed } from '../mock-client';
 // catalog refuses and one it accepts land in the log, through the real sign-in round trip and the real
 // write path to the mock catalog.
 
-/** The catalog's refusal of an unforced delete of a protected project (`fga_deps.require_not_protected`). */
+/** The catalog's refusal of an unforced delete of a protected project (`hierarchy.require_not_protected`). */
 const PROTECTED_DETAIL =
 	"project 'acme' is protected against deletion. Pass force=true to override (protection only — the " +
 	'same authorization is still required), or clear the flag first.';

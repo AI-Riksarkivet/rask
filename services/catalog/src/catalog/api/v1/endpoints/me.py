@@ -8,7 +8,7 @@ each tenant's admins and so answers a caller their own tenants, and every tenant
 this route needs no FGA gate because its data scope is the caller themself).
 
 **Authenticated-only, no authorization gate.** Any VERIFIED token gets a 200; anonymous is 401 (there is
-no self to describe). ``/management/v1/me`` matches no resource prefix in ``fga_deps.authorize``, so the router-wide
+no self to describe). ``/management/v1/me`` matches no resource prefix in ``route_guard.authorize``, so the router-wide
 gate contributes only its 401/503 pre-path checks when FGA is on — the 401 floor is enforced here
 explicitly so it also holds with FGA off.
 
@@ -35,7 +35,7 @@ from fastapi import APIRouter
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps
+from catalog.api.authz import decisions
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.schemas import MeProject, MeResponse
@@ -108,7 +108,7 @@ async def get_me(settings: SettingsDep, token: CurrentToken, client: FgaClientDe
     if token is None:
         raise UnauthenticatedError("authentication required")
     name, email = _claim(token, "name"), _claim(token, "email")
-    if (client := fga_deps.wired(settings, client)) is None:
+    if (client := decisions.wired(settings, client)) is None:
         # Dev parity (FGA off): every require_* gate is a no-op, so the caller effectively holds full
         # standing — say so honestly rather than painting a locked-down shell over an open catalog.
         return MeResponse(sub=token.subject, name=name, email=email, estate_admin=True, can_create_project=True, projects=[])

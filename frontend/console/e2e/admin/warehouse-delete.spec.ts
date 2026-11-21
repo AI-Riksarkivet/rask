@@ -35,7 +35,7 @@ const BOUND_DETAIL =
 	"warehouse 'acme-wh' still holds 2 namespace(s): acme-wh$bronze, acme-wh$silver. " +
 	'Drop them first, or pass ?cascade=true to drop exactly those with the warehouse.';
 
-/** The protection refusal, verbatim (fga_deps.require_not_protected) — same 409, different lock. */
+/** The protection refusal, verbatim (hierarchy.require_not_protected) — same 409, different lock. */
 const PROTECTED_DETAIL =
 	"warehouse 'acme-wh' is protected against deletion. Pass force=true to override " +
 	'(protection only — the same authorization is still required), or clear the flag first.';

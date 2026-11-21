@@ -8,7 +8,7 @@ caller was told nothing at all; the reason existed only in the pod's traceback.
 THE SPEC ALREADY SAYS 409. `lance_docs/ns_catalog/spec.yaml:1461` declares `ConflictErrorResponse` on
 `CreateTable`, beside 400/401/403/404/503 — so a collision is a modelled outcome of this operation,
 not an internal failure. `TableAlreadyExistsError` is the typed error `install_problem_handlers`
-translates to it (`fga_deps.py:957`: both AlreadyExists shapes map to 409, spec code 2).
+translates to it (both AlreadyExists shapes map to 409, spec code 2).
 
 IT IS NOT THE SAME 409 AS A DUPLICATE TABLE, and the detail must not pretend it is. The catalog holds
 no record here — the bytes are ungoverned residue at the location the catalog COMPOSES for this id —

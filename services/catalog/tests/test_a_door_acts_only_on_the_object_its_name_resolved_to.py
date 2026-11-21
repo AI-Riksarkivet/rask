@@ -36,7 +36,7 @@ from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ConcurrentModificationError
 
-from catalog.api import fga_deps
+from catalog.api.authz import door_gates, hierarchy, route_guard
 from catalog.api.dependencies import FgaClientDep, ResolverDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.services import table_claims
@@ -208,20 +208,20 @@ def test_a_door_raced_by_a_drop_and_a_re_create_acts_on_no_other_table(
 
         monkeypatch.setattr(table_claims.DoorTable, "write_natively", _race_then_write)
     elif door in _GATED_INSIDE_THE_DOOR:
-        asked = fga_deps.require_can_drop_table
+        asked = door_gates.require_can_drop_table
 
         async def _asked_then_race(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — forwards the gate's own arguments
             await asked(*args, **kwargs)
             await run_in_threadpool(_drop_and_create_again)
 
-        monkeypatch.setattr(fga_deps, "require_can_drop_table", _asked_then_race)
+        monkeypatch.setattr(door_gates, "require_can_drop_table", _asked_then_race)
     else:
 
         async def _authorize_then_race(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
-            await fga_deps.authorize(request, settings, token, injected, resolver)
+            await route_guard.authorize(request, settings, token, injected, resolver)
             await run_in_threadpool(_drop_and_create_again)
 
-        app.dependency_overrides[fga_deps.authorize] = _authorize_then_race
+        app.dependency_overrides[route_guard.authorize] = _authorize_then_race
     caller = "alice" if door in _GATED_INSIDE_THE_DOOR else "bob"
     headers = {**estate.bearer(caller), **sent.get("headers", {})}
     keywords = {name: value for name, value in sent.items() if name != "headers"}
@@ -296,19 +296,19 @@ def test_a_namespace_door_raced_by_a_drop_and_a_re_create_acts_on_no_other_names
         made.append(_namespace_as_alice_made_it(catalog))
 
     async def _authorize_then_race(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
-        await fga_deps.authorize(request, settings, token, injected, resolver)
+        await route_guard.authorize(request, settings, token, injected, resolver)
         await run_in_threadpool(_drop_and_create_again)
 
     if race == "door":
-        checked = fga_deps.require_namespace_as_identified
+        checked = hierarchy.require_namespace_as_identified
 
         async def _checked_then_race(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — forwards the check's own arguments
             await checked(*args, **kwargs)
             await run_in_threadpool(_drop_and_create_again)
 
-        monkeypatch.setattr(fga_deps, "require_namespace_as_identified", _checked_then_race)
+        monkeypatch.setattr(hierarchy, "require_namespace_as_identified", _checked_then_race)
     else:
-        app.dependency_overrides[fga_deps.authorize] = _authorize_then_race
+        app.dependency_overrides[route_guard.authorize] = _authorize_then_race
 
     answered = catalog.client.post(path, json=sent, headers=catalog.bearer("bob"))
 

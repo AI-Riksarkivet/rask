@@ -1,6 +1,6 @@
 """A route on the MANAGEMENT prefix is gated by the same guard as one on the spec prefix ([[LH-021]]).
 
-FOUND BY SHIPPING THE FIRST ONE. `catalog.api.fga_deps._resource_for` and `_suffix` both matched
+FOUND BY SHIPPING THE FIRST ONE. `catalog.api.authz.rungs.resource_for` and `route_suffix` both matched
 `/v1/` literally, so `/management/v1/table/{id}/erasure` resolved to NO resource, fell out of
 `authorize` entirely, and was reachable by any authenticated principal — on the verb that destroys a
 table's history. `test_stores_reads_are_gated.py` caught it before it shipped; these hold the
@@ -16,22 +16,22 @@ from __future__ import annotations
 import pytest
 from lance_namespace import InternalError
 
-from catalog.api.fga_deps import _action_relation, _suffix
+from catalog.api.authz.rungs import action_relation, route_suffix
 
 
 def test_erasure_clears_the_OWNER_rung() -> None:
     """It removes a subject from every ref, drops the tags pinning the versions that held them, and
     reclaims history. `can_drop` is the highest rung there is."""
-    assert _action_relation("table", "erasure", method="POST") == "can_drop"
+    assert action_relation("table", "erasure", method="POST") == "can_drop"
 
 
 def test_a_suffix_the_parser_cannot_strip_is_refused() -> None:
-    """The RESOLVER half: `_suffix` yields `""` for a path no mount strips, and `""` names no door, so
-    `_action_relation` refuses it rather than handing out a rung nobody chose.
+    """The RESOLVER half: `route_suffix` yields `""` for a path no mount strips, and `""` names no door, so
+    `action_relation` refuses it rather than handing out a rung nobody chose.
 
-    The guard never makes this call for such a path: `_resource_for` answers `None` for an unrecognised
+    The guard never makes this call for such a path: `resource_for` answers `None` for an unrecognised
     mount and `authorize` stops at authentication, leaving the route to its handler, which
     `test_a_door_the_router_leaves_open_decides_for_itself.py` drives."""
-    assert _suffix("/some/other/mount/table/x/erasure", "table", "x") == ""
+    assert route_suffix("/some/other/mount/table/x/erasure", "table", "x") == ""
     with pytest.raises(InternalError, match="declares no rung"):
-        _action_relation("table", "", method="POST")
+        action_relation("table", "", method="POST")

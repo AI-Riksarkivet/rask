@@ -29,7 +29,7 @@ against the clock of the read that finds it, so two pods' clocks are never compa
 
 WHAT A TAKEOVER JUDGES. A door that retires or moves an object records, at its claim, the object its name resolved to
 (:class:`Captured`), which the request's authorization had admitted the caller on; a resend that finds the name holding
-nothing is authorized against that object (``catalog.api.fga_deps``). Before it changes anything, a door whose change can
+nothing is authorized against that object (``catalog.api.authz``). Before it changes anything, a door whose change can
 be proven records what it intends (:class:`Intent`): the evidence the store shows once its change lands, tied to the
 attempt, and the answer it gives. An attempt that takes the key over from one lost unanswered answers that answer when
 the evidence holds, and runs when it does not or when the lost attempt intended nothing, since it then changed nothing.

@@ -15,7 +15,7 @@ from typing import Any
 
 import pytest
 
-from catalog.api import fga_deps
+from catalog.api.authz import warehouse_grants
 from catalog.core.config import Settings
 from lakehouse.governed import fga_ids, fga_provision
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -64,7 +64,7 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
 
     async def _repair() -> None:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:
-            await fga_deps.converge_warehouse_grants(store, settings, warehouse_id="wh1", project="acme", actor="system:warehouse-grant-backfill")
+            await warehouse_grants.converge_warehouse_grants(store, settings, warehouse_id="wh1", project="acme", actor="system:warehouse-grant-backfill")
 
     asyncio.run(_repair())
 
@@ -113,7 +113,7 @@ def test_creating_a_warehouse_grants_it(
 
     async def _create() -> None:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:
-            await fga_deps.seed_warehouse(store, settings, creator, warehouse_id="wh1", project="acme")
+            await warehouse_grants.seed_warehouse(store, settings, creator, warehouse_id="wh1", project="acme")
 
     asyncio.run(_create())
 

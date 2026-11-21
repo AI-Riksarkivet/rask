@@ -660,7 +660,7 @@ export interface paths {
          *     rename since its pass changed; one whose table is gone is listed to nobody, and its next pass clears it.
          *
          *     Paged in the order of the records' keys, each keyed by its table's uuid: the door lists the keys and reads, names and
-         *     judges records only as its page fills (:func:`fga_deps.judged_page`, [[LH-562]]), so a walk a page at a time reads
+         *     judges records only as its page fills (:func:`visible_pages.judged_page`, [[LH-562]]), so a walk a page at a time reads
          *     each record a few times at most, where reading every record for every page grew with the square of the list.
          */
         get: operations["list_due_maintenance_management_v1_maintenance_due_get"];
@@ -1477,7 +1477,7 @@ export interface paths {
          * @description Grant one tenant rung to one subject — gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).
          *
          *     A role is granted only on its own project: one another project owns is refused 400 (code 13), as every grant door
-         *     refuses it (:func:`fga_deps.refuse_a_cross_tenant_role_grant`), since that project's security admins decide who is
+         *     refuses it (:func:`grant_authority.refuse_a_cross_tenant_role_grant`), since that project's security admins decide who is
          *     in it ([[LH-557]]).
          *
          *     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
@@ -2528,7 +2528,7 @@ export interface paths {
          * @description What the caller may do on this warehouse — the self-view the UI needs to render a DISABLED
          *     action with its reason instead of a button that 403s on click.
          *
-         *     GATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `fga_deps._RESOURCES`
+         *     GATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `rungs._RESOURCES`
          *     (`namespace`, `table`, `materialized_view`, `transaction`), so the router-level `authorize`
          *     returns early for every `/management/v1/warehouse/…` path and a route mounted here that forgets its own check
          *     is simply ungated — the hazard this module's own header comment names.
@@ -2697,7 +2697,7 @@ export interface paths {
          *        namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before
          *        the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the
          *        namespaces dropped deepest first, and only then what each object held ended, its records before its grants
-         *        (``fga_deps.end_removed_subtree``), and the warehouse's own row in its catalog last.
+         *        (``object_grants.end_removed_subtree``), and the warehouse's own row in its catalog last.
          *        ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a
          *        namespace Restrict whatever ``behavior`` says (measured: ``behavior="Cascade"`` is ignored, not
          *        refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not
@@ -2807,7 +2807,7 @@ export interface paths {
          *     The undrop and tasks doors are addressed by name; this is the door that answers the names. The route asks
          *     ``can_get_metadata`` on the warehouse, as its namespace listing does, and each trashed table and namespace is judged
          *     on its own uuid (``table:<uuid>``, ``namespace:<uuid>``), the object its grants are held by and the undrop and tasks
-         *     doors ask on (``fga_deps._require_trashed``): the warehouse's rung opens upward from any one child, so it says nothing
+         *     doors ask on (``decisions.require_trashed``): the warehouse's rung opens upward from any one child, so it says nothing
          *     about the siblings, and a listing judges its own candidates ([[LH-223]]). A record naming no uuid holds no grant and
          *     is listed to no one ([[LH-534]]).
          *
@@ -3901,7 +3901,7 @@ export interface paths {
          *     along: it asks ``can_move`` on the source and ``can_accept_moved_table`` on the destination's namespace instead,
          *     which under managed access need grant authority on the table and on the destination ([[LH-568]]), else a writer
          *     could bring grants into a managed namespace and an owner inside one take a table, and the authority to grant on it,
-         *     out. Into another namespace only where it inherits from moves (``fga_deps.parent_edge_mover``): its ``parent`` edge
+         *     out. Into another namespace only where it inherits from moves (``object_grants.parent_edge_mover``): its ``parent`` edge
          *     in one write before the name, its ``child`` edge taken from the source with it and written on the destination once
          *     the name is there, and both go back if the rename is undone. Its data directories' claims stay as they are: each
          *     records the table's uuid and location, which a rename changes neither of ([[LH-575]]). One versionless ``rename_table`` DatasetEvent announces it on the new id, its standard

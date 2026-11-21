@@ -38,7 +38,8 @@ from lance_namespace import (
 )
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps, lineage_deps
+from catalog.api import lineage_deps
+from catalog.api.authz import decisions, door_gates
 from catalog.api.dependencies import (
     DataNamespaceDep,
     DoorTableDep,
@@ -87,10 +88,10 @@ async def _require_classifier_for_governance_keys(
 ) -> None:
     """Refuse a governance-key write unless the caller holds ``can_classify`` on ``table``, the table the door resolved.
 
-    BODY-AUTHORIZED, like the write-tier check inside `vend_credentials` and `_authorize_grant`: the rung
+    BODY-AUTHORIZED, like the write-tier check inside `vend_credentials` and `authorize_grant`: the rung
     depends on WHAT the body touches rather than on which route it is. The router has asked `can_write_data`
     for a body that changes any ordinary key, and `can_classify` alone for one that changes governance keys
-    and nothing else (`fga_deps._classifies_only`, ADR 0225); this asks the classifier's rung of every body
+    and nothing else (`write_doors._classifies_only`, ADR 0225); this asks the classifier's rung of every body
     that touches the governance namespace either way, so the door holds the rule on its own.
 
     A DELETE COUNTS, AND IT HAS THREE SPELLINGS. `update_field_metadata` signals key removal with a
@@ -113,7 +114,7 @@ async def _require_classifier_for_governance_keys(
     touched = sorted({key for update in updates for key in (update.get("metadata") or {}) if key.startswith(PLATFORM_PREFIX)})
     if not touched and not replaces:
         return
-    await fga_deps.require_relation(client, settings, token, relation="can_classify", obj=fga_ids.table_object(table.require_uuid()))
+    await door_gates.require_relation(client, settings, token, relation="can_classify", obj=fga_ids.table_object(table.require_uuid()))
     # THE SECOND QUESTION ([[LH-055]]). `can_classify` is ONE BIT — whoever may label anything may
     # label everything — so the ruling's "per-tag `apply` delegation" needs the VALUE asked about too.
     # Asked second on purpose: a caller with no business on this table is already refused above,
@@ -124,7 +125,7 @@ async def _require_classifier_for_governance_keys(
     # could attach and nobody present could remove — so removal stays on the table rung alone.
     values = {str(v) for update in updates for key, v in (update.get("metadata") or {}).items() if key.startswith(PLATFORM_PREFIX) and v is not None}
     for value in sorted(values):
-        await fga_deps.require_relation(client, settings, token, relation="can_apply", obj=f"classification:{value}")
+        await door_gates.require_relation(client, settings, token, relation="can_apply", obj=f"classification:{value}")
 
 
 async def _sees_the_schema(client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, table: ResolvedTable) -> bool:
@@ -134,7 +135,7 @@ async def _sees_the_schema(client: OpenFgaClient | None, settings: FgaSettings, 
     path lists the table's fields and suggests the nearest. Such a caller is told only the paths it sent. The probe writes
     no denial, since nothing was attempted, and an outage answers as not seeing: the refusal stands either way.
     """
-    authz = fga_deps.authorization(settings, client, token)
+    authz = decisions.authorization(settings, client, token)
     if authz is None:
         return True
     obj = fga_ids.table_object(table.require_uuid())
@@ -164,7 +165,7 @@ async def add_columns(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     expressions = [column.expression for column in body.new_columns or [] if column.expression]
-    await fga_deps.require_classifier_to_copy_a_label(client, settings, token, table=table, so=so, branch=body.branch, expressions=expressions)
+    await door_gates.require_classifier_to_copy_a_label(client, settings, token, table=table, so=so, branch=body.branch, expressions=expressions)
     response = await run_in_threadpool(partial(schema.add_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, ADD_COLUMNS)))
     await lineage_deps.emit_measured_write(
         emitter,

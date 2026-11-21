@@ -11,7 +11,7 @@ Both edges of a table's and a namespace's create, on the uuid objects a real Ope
 these pin the branches no create door reaches.
 
 In the library's own suite rather than ``tests/unit/``: these exercise ``lakehouse.governed.fga_writes`` alone, with
-no service, while ``services/catalog/tests/test_fga_revoke.py`` drives the catalog's ``catalog.api.fga_deps``.
+no service, while ``services/catalog/tests/test_fga_revoke.py`` drives the catalog's ``catalog.api.authz``.
 
 Sync via stdlib ``asyncio.run``, matching test_fga_revoke / test_fga_resilience — no pytest-asyncio
 dependency (this repo does not set ``asyncio_mode``).

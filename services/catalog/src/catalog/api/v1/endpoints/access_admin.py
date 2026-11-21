@@ -5,7 +5,7 @@ questions about ONE table/namespace at the owner bar, this browses and edits the
 itself — every tuple, any type — so it is gated on the estate root: the surface is estate-wide,
 therefore observing (or mutating) it is a PLATFORM privilege, ``can_administer_authz`` on the fixed root
 object (``settings.fga_root_object``), decided explicitly per handler because ``/management/v1/access`` matches no
-resource prefix in ``fga_deps.authorize`` (the router gate only sets the 401/503 floor).
+resource prefix in ``route_guard.authorize`` (the router gate only sets the 401/503 floor).
 
 Fail-closed and model-true throughout: FGA off → 406 Unsupported (nothing to administer), an unwired client → 503,
 and every relation/type named by a caller is validated against the COMPILED model first, so a phantom
@@ -32,8 +32,9 @@ from lance_namespace import (
 )
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import announcing, fga_deps
+from catalog.api import announcing
 from catalog.api.announcing import Announcer, AnnouncerDep
+from catalog.api.authz import decisions, door_gates
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import CatalogStore, Settings
@@ -238,10 +239,10 @@ def _require_fga_client(client: FgaClientDep) -> OpenFgaClient:
 
     Duplicated with `estate_gate` deliberately and minimally: FastAPI resolves dependencies
     independently, so this cannot read the gate's result. Both go through the SAME body
-    (`fga_deps.require_wired`), the gate runs first, so the refusal here is unreachable in practice —
+    (`decisions.require_wired`), the gate runs first, so the refusal here is unreachable in practice —
     it exists so the TYPE is honest.
     """
-    return fga_deps.require_wired(client)
+    return decisions.require_wired(client)
 
 
 #: The raw OpenFGA client, for the handlers that operate on the tuple store directly.
@@ -274,8 +275,8 @@ async def estate_gate(client: FgaClientDep, settings: SettingsDep, token: Curren
     platform privilege, NOT per-project, because the tuple store is the whole estate's authorization state
     (authz scope == data scope, the #12 events fix). The gate itself audits the allow/deny.
     """
-    wired = fga_deps.require_fga(settings, client, feature="FGA administration")
-    await fga_deps.require_relation(wired, settings, token, relation="can_administer_authz", obj=settings.fga_root_object)
+    wired = decisions.require_fga(settings, client, feature="FGA administration")
+    await door_gates.require_relation(wired, settings, token, relation="can_administer_authz", obj=settings.fga_root_object)
 
 
 #: ONE DOOR for the whole router. See `estate_gate` — this replaces nine hand-written calls, and is

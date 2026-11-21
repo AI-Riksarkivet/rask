@@ -1,9 +1,9 @@
 """catalog-api-12 — the batch authorizer asks OpenFGA once per RELATION, never once per object.
 
-``_authorize_batch`` already batches its two other lanes (``can_write_data`` on the named tables,
+``authorize_batch`` already batches its two other lanes (``can_write_data`` on the named tables,
 ``can_create_table`` on the parents) and then falls back to a ``for obj, relation in owner_checks``
 loop of single ``fga_reads.check`` calls for the owner-tier operations. The comment called that lane "rare",
-which is a statement about today's ``_BATCH_OWNER_OPS`` (one entry) rather than about the request:
+which is a statement about today's ``BATCH_OWNER_OPS`` (one entry) rather than about the request:
 ``operations`` is client-supplied and unbounded, so a body naming 200 ``deregister_table`` ops costs
 200 sequential round trips on the AUTHORIZATION path — before any work is authorized, with the
 gateway's timeout running.
@@ -25,9 +25,10 @@ import pytest
 from fastapi import Request
 from openfga_sdk.client import OpenFgaClient
 
-from catalog.api import fga_deps
+from catalog.api.authz import route_guard, rungs
 from catalog.api.dependencies import Resolver
 from catalog.core.config import Settings
+from lakehouse.governed import fga_reads
 
 
 _CLIENT = cast("OpenFgaClient", object())
@@ -64,7 +65,7 @@ class _EveryTableHolds(Resolver):
 
 
 class _FakeRequest:
-    """`_authorize_batch` touches only ``await request.json()`` on the Request."""
+    """`authorize_batch` touches only ``await request.json()`` on the Request."""
 
     def __init__(self, body: dict[str, Any]) -> None:
         self._body = body
@@ -74,18 +75,14 @@ class _FakeRequest:
 
 
 def _owner_body(n: int) -> dict[str, Any]:
-    op = next(iter(fga_deps._BATCH_OWNER_OPS))
+    op = next(iter(rungs.BATCH_OWNER_OPS))
     return {"operations": [{op: {"id": ["db1", f"t{i}"]}} for i in range(n)]}
 
 
-def _drive(body: dict[str, Any]) -> tuple[list[str], list[tuple[str, int]]]:
-    """Run the real authorizer; return (single-check objects, [(relation, batch size)])."""
-    singles: list[str] = []
+def _drive(body: dict[str, Any]) -> list[tuple[str, int]]:
+    """Run the real authorizer; return [(relation, batch size)]. Only ``batch_check`` is recorded: a single check would
+    reach the bare-object client and fail the run."""
     batches: list[tuple[str, int]] = []
-
-    async def rec_check(_client: object, *, user: str, relation: str, obj: str) -> bool:
-        singles.append(obj)
-        return True
 
     async def rec_batch(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
         batches.append((relation, len(objects)))
@@ -93,17 +90,15 @@ def _drive(body: dict[str, Any]) -> tuple[list[str], list[tuple[str, int]]]:
 
     monkey = pytest.MonkeyPatch()
     try:
-        monkey.setattr(fga_deps.fga_reads, "check", rec_check)
-        monkey.setattr(fga_deps.fga_reads, "batch_check", rec_batch)
-        asyncio.run(fga_deps._authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, _EveryTableHolds(), user="dex~alice"))
+        monkey.setattr(fga_reads, "batch_check", rec_batch)
+        asyncio.run(route_guard.authorize_batch(cast("Request", _FakeRequest(body)), _CLIENT, _EveryTableHolds(), user="dex~alice"))
     finally:
         monkey.undo()
-    return singles, batches
+    return batches
 
 
 def test_twenty_owner_tier_ops_cost_one_round_trip_not_twenty() -> None:
-    singles, batches = _drive(_owner_body(20))
-    assert not singles, f"{len(singles)} sequential single checks on the owner lane — batch them: {singles}"
+    batches = _drive(_owner_body(20))
     assert batches == [("can_deregister", 20)] or (len(batches) == 1 and batches[0][1] == 20), f"expected ONE batch of 20, got {batches}"
 
 
@@ -120,7 +115,7 @@ def test_a_denied_owner_object_is_still_refused_by_name(openfga_store: Any, owne
 
     async def _authorized() -> None:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
-            await fga_deps._authorize_batch(cast("Request", _FakeRequest(_owner_body(2))), client, _EveryTableHolds(), user="dex~alice")
+            await route_guard.authorize_batch(cast("Request", _FakeRequest(_owner_body(2))), client, _EveryTableHolds(), user="dex~alice")
 
     refused = {f"db1${name}" for name in ("t0", "t1") if name not in owned}
     if not refused:

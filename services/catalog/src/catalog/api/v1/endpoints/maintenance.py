@@ -1,6 +1,6 @@
 """The per-table maintenance doors: #75 on-demand garbage collection, and the tables maintenance has found due.
 
-``maintenance/preview`` and ``maintenance/run`` are owner-gated by the router (``can_drop`` in ``fga_deps``: reclaiming
+``maintenance/preview`` and ``maintenance/run`` are owner-gated by the router (``can_drop`` in ``authz.rungs``: reclaiming
 version history is the drop rung, like the retention policy that schedules it). The preview never mutates; the run
 reclaims old versions with maintenance's tag exemption. Both honour ``branch``: a branch keeps its own ``_versions``,
 ``_transactions`` and ``data`` under ``tree/{branch}/`` (``lance_docs/lance/format/table/branch_tag.md``), so a reclaim through a branch
@@ -27,7 +27,8 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from fastapi.concurrency import run_in_threadpool
 
-from catalog.api import fga_deps, lineage_deps
+from catalog.api import lineage_deps
+from catalog.api.authz import decisions, visible_pages
 from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
 from catalog.schemas import CleanupDisarmed, DueTable, FloorRaised, FloorRaiseRequest, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
@@ -152,7 +153,7 @@ async def list_due_maintenance(
     rename since its pass changed; one whose table is gone is listed to nobody, and its next pass clears it.
 
     Paged in the order of the records' keys, each keyed by its table's uuid: the door lists the keys and reads, names and
-    judges records only as its page fills (:func:`fga_deps.judged_page`, [[LH-562]]), so a walk a page at a time reads
+    judges records only as its page fills (:func:`visible_pages.judged_page`, [[LH-562]]), so a walk a page at a time reads
     each record a few times at most, where reading every record for every page grew with the square of the list."""
     root, options = settings.registry_root, settings.storage_options()
     names = sorted(await run_in_threadpool(maintenance_due.due_record_names, root, options))
@@ -169,8 +170,8 @@ async def list_due_maintenance(
         # Judged on the uuid each record keeps ([[LH-524]]), the object the table's grants are held by.
         return [fga_ids.table_object(shown[name].uuid) if name in shown else None for name in batch]
 
-    page, next_token = await fga_deps.judged_page(
-        fga_deps.authorization(settings, client, token),
+    page, next_token = await visible_pages.judged_page(
+        decisions.authorization(settings, client, token),
         relation="can_maintain",
         candidates=[(name, name) for name in names],
         objects_of=judged_on,

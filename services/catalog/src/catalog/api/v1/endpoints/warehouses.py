@@ -52,9 +52,9 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
 
-from catalog.api import fga_deps
 from catalog.api import idempotency as idem
 from catalog.api.announcing import AnnouncerDep
+from catalog.api.authz import decisions, door_gates, hierarchy, object_grants, objects, visible_pages, warehouse_grants
 from catalog.api.declared import DECLARATION, Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import (
     ControlEmitterDep,
@@ -170,8 +170,8 @@ async def create_warehouse(
     """
     ids = validated_ids(settings, body)
     _warehouse_id, project, _bucket = ids
-    await fga_deps.require_project_exists(settings, project)
-    await fga_deps.require_can_create_warehouse(client, settings, token, project=project)
+    await hierarchy.require_project_exists(settings, project)
+    await door_gates.require_can_create_warehouse(client, settings, token, project=project)
     # A declaration naming the warehouse's deletion protection asks what the protection door asks ([[LH-548]]).
     if body.protected is not None:
         await _require_project_admin(client, settings, token, project=project)
@@ -248,9 +248,9 @@ async def establish_warehouse(
     ns_conn = await namespace_for_root(request, settings, root_uri, endpoint=record.endpoint or None)
     await run_in_threadpool(warehouses.ensure_catalog_row, ns_conn, warehouse_id)
     if owner is not None:
-        await fga_deps.seed_warehouse(client, settings, owner, warehouse_id=warehouse_id, project=project)
+        await warehouse_grants.seed_warehouse(client, settings, owner, warehouse_id=warehouse_id, project=project)
     elif author is not None:
-        await fga_deps.converge_warehouse_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=author.subject)
+        await warehouse_grants.converge_warehouse_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=author.subject)
     log.info("warehouse_created", extra={"warehouse": warehouse_id, "bucket": bucket, "project": project})
     await emit_control(
         control,
@@ -475,7 +475,7 @@ async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: Fg
     """Every warehouse the caller can read. Governed like the metadata feeds: with FGA on, filtered to the
     warehouses the caller has ``can_get_metadata`` on (never discloses another tenant's bucket names)."""
     records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, settings.storage_options())
-    if (authz := fga_deps.authorization(settings, client, token)) is not None:
+    if (authz := decisions.authorization(settings, client, token)) is not None:
         # The listing's own candidates, batch-checked ([[LH-223]]): never what the caller reaches across the estate,
         # which OpenFGA stops counting at its ceiling.
         allowed = await authz.batch_check("can_get_metadata", [f"warehouse:{r.id}" for r in records])
@@ -486,7 +486,7 @@ async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: Fg
 @management_router.get("/{warehouse_id}", response_model_exclude_none=True)
 async def get_warehouse(warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> WarehouseResponse:
     """One warehouse record — reader-gated on ``warehouse:<id>`` (fail-closed on an OpenFGA outage)."""
-    await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
+    await door_gates.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
     record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
@@ -509,7 +509,7 @@ async def list_warehouse_trash(
     The undrop and tasks doors are addressed by name; this is the door that answers the names. The route asks
     ``can_get_metadata`` on the warehouse, as its namespace listing does, and each trashed table and namespace is judged
     on its own uuid (``table:<uuid>``, ``namespace:<uuid>``), the object its grants are held by and the undrop and tasks
-    doors ask on (``fga_deps._require_trashed``): the warehouse's rung opens upward from any one child, so it says nothing
+    doors ask on (``decisions.require_trashed``): the warehouse's rung opens upward from any one child, so it says nothing
     about the siblings, and a listing judges its own candidates ([[LH-223]]). A record naming no uuid holds no grant and
     is listed to no one ([[LH-534]]).
 
@@ -517,7 +517,7 @@ async def list_warehouse_trash(
     warehouse's drops on a shared bucket are never listed. They sort by name and then uuid, the key the opaque page token
     resumes after (``trash_doors.listing_key``, `lance_docs/ns_catalog/spec.yaml` PageToken).
     """
-    await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
+    await door_gates.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
     so = settings.storage_options()
     record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
     if record is None:
@@ -529,8 +529,8 @@ async def list_warehouse_trash(
     async def judged_on(records: Sequence[TrashRecord]) -> list[str | None]:
         return [fga_ids.object_of(r.kind, str(r.uuid)) for r in records]
 
-    page, next_token = await fga_deps.judged_page(
-        fga_deps.authorization(settings, client, token),
+    page, next_token = await visible_pages.judged_page(
+        decisions.authorization(settings, client, token),
         relation="can_get_metadata",
         candidates=candidates,
         objects_of=judged_on,
@@ -562,7 +562,7 @@ async def _set_warehouse_status(
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     try:
-        await fga_deps.require_can_create_warehouse(client, settings, token, project=record.project)
+        await door_gates.require_can_create_warehouse(client, settings, token, project=record.project)
     except PermissionDeniedError as exc:
         # Collapse denied → not-found so existence is not disclosed to a non-admin (audit #4). A legitimate
         # admin of the warehouse's own project still passes; anyone else sees exactly a missing-warehouse 404.
@@ -628,7 +628,7 @@ async def activate_warehouse(
 async def _require_project_admin(client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, project: str) -> None:
     """Refuse a caller without ``can_administer`` on ``project``: the authority over its warehouses' destruction, and so
     over the lock on it."""
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
 
 
 async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> WarehouseRecord:
@@ -776,7 +776,7 @@ class _NamespaceSubtree(BaseModel):
     segments: list[str]
     #: The namespace's uuid, ``None`` when the backend no longer has it.
     uuid: str | None
-    descendants: list[fga_deps.GovernedObject]
+    descendants: list[objects.GovernedObject]
 
     @property
     def tables(self) -> list[list[str]]:
@@ -789,9 +789,9 @@ class _NamespaceSubtree(BaseModel):
         return [*nested, self.segments]
 
     @property
-    def guarded(self) -> list[fga_deps.GovernedObject]:
+    def guarded(self) -> list[objects.GovernedObject]:
         """Every object in the subtree whose protection the cascade is held to: its descendants and the namespace itself."""
-        own = [fga_deps.GovernedObject(kind="namespace", segments=self.segments, uuid=self.uuid)] if self.uuid is not None else []
+        own = [objects.GovernedObject(kind="namespace", segments=self.segments, uuid=self.uuid)] if self.uuid is not None else []
         return [*self.descendants, *own]
 
 
@@ -813,7 +813,7 @@ async def _cascade_subtrees(ns: LanceNamespace, settings: CatalogStore, held: li
     for name in held:
         segments = parse_identifier(name)
         try:
-            namespace = await fga_deps.standing(ns, settings, "namespace", segments)
+            namespace = await objects.standing(ns, settings, "namespace", segments)
             listed = await run_in_threadpool(namespaces_api._collect_descendants, ns, segments)  # noqa: SLF001 — one walker, deliberately
         except NamespaceNotFoundError:
             subtrees.append(_NamespaceSubtree(segments=segments, uuid=None, descendants=[]))
@@ -1040,7 +1040,7 @@ async def delete_warehouse(
        namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before
        the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the
        namespaces dropped deepest first, and only then what each object held ended, its records before its grants
-       (``fga_deps.end_removed_subtree``), and the warehouse's own row in its catalog last.
+       (``object_grants.end_removed_subtree``), and the warehouse's own row in its catalog last.
        ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a
        namespace Restrict whatever ``behavior`` says (measured: ``behavior="Cascade"`` is ignored, not
        refused), so emptying it first is what lets the drop land. A failure part-way leaves every object not
@@ -1069,7 +1069,7 @@ async def delete_warehouse(
     project = record.project
     # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
     # state, so it runs strictly after the gate above.
-    fga_deps.require_not_protected(record.is_protected, kind="warehouse", obj_id=warehouse_id, force=force)
+    hierarchy.require_not_protected(record.is_protected, kind="warehouse", obj_id=warehouse_id, force=force)
 
     # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes.
     in_estate_store = names_the_estate_store(record.endpoint, estate=settings.s3_endpoint)
@@ -1153,7 +1153,7 @@ async def delete_warehouse(
                 trashed_uuid = entry.uuid
                 if trashed_uuid is not None:
                     obj = fga_ids.object_of(kind, trashed_uuid)
-                    revoked += await fga_deps.revoke_removed_object(client, settings, obj, token=token)
+                    revoked += await object_grants.revoke_removed_object(client, settings, obj, token=token)
                 else:
                     log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": warehouse_id, "kind": kind, "id": canonical})
                 await _forget_trashed(settings, entry, purge=purge_bucket)
@@ -1179,7 +1179,7 @@ async def delete_warehouse(
                             # here would leave records and grants nobody can end, so the catalog's own records still go.
                             log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": namespace})
                         namespaces_dropped.append(fga_ids.canonical_object_id(namespace))
-                    async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
+                    async for count in object_grants.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
                         revoked += count
                 # The warehouse's own row last, once every namespace beneath it is gone.
                 with suppress(NamespaceNotFoundError):
@@ -1187,11 +1187,11 @@ async def delete_warehouse(
             # A namespace an earlier attempt removed is named by nothing but this warehouse's `child` edge, so its subtree
             # is ended from there before the warehouse's own grants go.
             ended = {fga_ids.namespace_object(subtree.uuid) for subtree in subtrees if subtree.uuid is not None}
-            for orphan in await fga_deps.orphaned_children(client, settings, f"warehouse:{warehouse_id}", ended=ended):
-                async for count in fga_deps.end_removed_subtree(client, settings, root_uuid=orphan, removed=[], token=token):
+            for orphan in await object_grants.orphaned_children(client, settings, f"warehouse:{warehouse_id}", ended=ended):
+                async for count in object_grants.end_removed_subtree(client, settings, root_uuid=orphan, removed=[], token=token):
                     revoked += count
 
-            revoked += await fga_deps.revoke_removed_object(client, settings, f"warehouse:{warehouse_id}", token=token)
+            revoked += await object_grants.revoke_removed_object(client, settings, f"warehouse:{warehouse_id}", token=token)
             # The record goes LAST: it is what the door is addressed by, so while the purge or the claim's release can still
             # fail, it keeps the warehouse for the re-issue that finishes them.
             purged = 0
@@ -1321,7 +1321,7 @@ async def validate_warehouse_credentials(
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     try:
-        await fga_deps.require_can_create_warehouse(client, settings, token, project=record.project)
+        await door_gates.require_can_create_warehouse(client, settings, token, project=record.project)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
     # [[LH-205]] The probe vends through the estate's STS and writes through the estate's client, so for

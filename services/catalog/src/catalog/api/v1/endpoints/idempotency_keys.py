@@ -8,7 +8,7 @@ delete is the catalog's, judged on its own reads (:func:`catalog.services.idempo
 role opens, granted to maintenance's ServiceAccount by the catalog's declaration: no new grant. Each reclaim is
 recorded on the audit trail, since it deletes records on the catalog's own session.
 
-The router guard leaves this path to its handler (``fga_deps._RESOURCES`` names none of it), so the gate is this
+The router guard leaves this path to its handler (``rungs._RESOURCES`` names none of it), so the gate is this
 router's own dependency, as the trash doors' is.
 """
 

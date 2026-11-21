@@ -70,12 +70,6 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
     stamped: dict[str, Any] = {}
     written: dict[str, pa.Table] = {}
 
-    # `**_kw` on purpose: this fake stands in for `seed_ownership`, whose grants are keyed by the uuid, not by
-    # either name axis this test compares — pinning its signature here only makes an unrelated change to the
-    # seam look like an identity regression.
-    async def _seed(*_a: object, **_kw: object) -> None:
-        return None
-
     real_build_meta = table_create.build_lineage_metadata
 
     def _build_meta(*, namespace: str) -> dict[str, str]:
@@ -88,7 +82,6 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
         written["table"] = table
         return SimpleNamespace(version=1, location="s3://lakehouse/0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
 
-    monkeypatch.setattr(table_create.fga_deps, "seed_ownership", _seed)
     # The write is faked, so no claim records its uuid; the uuid the seed is handed is not an axis compared here.
     monkeypatch.setattr(table_create.table_claims, "uuid_at", lambda *_a: "0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
     monkeypatch.setattr(table_create, "build_lineage_metadata", _build_meta)

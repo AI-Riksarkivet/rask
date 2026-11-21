@@ -23,7 +23,7 @@ from openfga_sdk import OpenFgaClient
 from opentelemetry import metrics
 from pydantic import BaseModel, ConfigDict
 
-from catalog.api import fga_deps
+from catalog.api.authz import decisions
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, ObjectUuidsDep, Resolver, ResolverDep, SettingsDep, app_wire, originator_hint
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_event
@@ -598,7 +598,7 @@ def get_announcer(
     gains a documented parameter by announcing."""
     return Announcer(
         settings,
-        client=fga_deps.wired(settings, client),
+        client=decisions.wired(settings, client),
         resolver=resolver,
         control=control,
         lineage=app_wire(request, "lineage_emitter", LineageEmitter),

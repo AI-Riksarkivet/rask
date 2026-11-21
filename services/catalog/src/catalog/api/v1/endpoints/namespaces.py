@@ -38,9 +38,10 @@ from lance_namespace import (
 )
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps, listings
 from catalog.api import idempotency as idem
+from catalog.api import listings
 from catalog.api.announcing import AnnouncerDep
+from catalog.api.authz import decisions, door_gates, hierarchy, object_grants, objects, visible_pages
 from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
@@ -175,7 +176,7 @@ async def create_namespace(
     # for a while; nothing capped CREATION, so the estate could be driven into a shape where
     # Check(can_get_metadata, warehouse:X) errors instead of answering — taking browsing down for the
     # whole bucket, its owners included. Shape rung, so 400, and before the native call.
-    fga_deps.require_namespace_depth(segments)
+    hierarchy.require_namespace_depth(segments)
     # As the table doors (`catalog.api.idempotency`): a replay under the caller's key answers the first attempt and re-enters nothing.
     converge = await keyed.begin(target=fga_ids.canonical_object_id(segments), takeover="rerun")
     if converge.replay is not None:
@@ -188,10 +189,10 @@ async def create_namespace(
     minted = req.properties[UUID_PROPERTY]
     await _judge_run_rule_declaration(ns, settings, token, client, segments, declared=declared, overwrite=create_mode is CreateMode.OVERWRITE)
     # The namespace's owner and its `parent` edge are written under the uuid minted above BEFORE the backend records it
-    # ([[LH-585]], `fga_deps.seed_namespace_before_write`), so a seed that fails has nothing to undo and no namespace
+    # ([[LH-585]], `object_grants.seed_namespace_before_write`), so a seed that fails has nothing to undo and no namespace
     # stands without them. They name the minted uuid, so they reach no namespace the request only finds standing: an
     # ExistOk that keeps one, or a create the backend refuses, takes them back.
-    await fga_deps.seed_namespace_before_write(client, settings, token, resolver, segments=segments, uuid=minted)
+    await object_grants.seed_namespace_before_write(client, settings, token, resolver, segments=segments, uuid=minted)
     # RACE-FREE BY CATCHING RATHER THAN PRE-CHECKING. An `exists?` read followed by a create leaves a
     # window in which another caller creates the namespace; the backend's own refusal is the only
     # answer that cannot be stale.
@@ -203,13 +204,13 @@ async def create_namespace(
         else:
             response, kept_existing = await run_in_threadpool(native.call, ns, "create_namespace", req), False
     except Exception:
-        await fga_deps.take_back_unless_namespace_stands(ns, client, settings, token, segments=segments, uuid=minted, reason="not_written")
+        await object_grants.take_back_unless_namespace_stands(ns, client, settings, token, segments=segments, uuid=minted, reason="not_written")
         raise
     if kept_existing:
         # NOT ON THE `ExistOk` KEEP PATH, for the grants and for the ANNOUNCEMENT alike: the namespace kept is another
         # caller's, under its own uuid and grants, and `namespace_created` would announce a creation that did not
         # happen to every subscriber of the control stream.
-        await fga_deps.take_back_seed(client, settings, token, segments=segments, uuid=minted, reason="not_kept", resource="namespace")
+        await object_grants.take_back_seed(client, settings, token, segments=segments, uuid=minted, reason="not_kept", resource="namespace")
         if declared and (response.properties or {}).get(write_judge.REQUIRES_RUN_PROPERTY) != write_judge.REQUIRED:
             # ExistOk keeps the namespace as it is, so a rule it does not already declare would not land. The rule is
             # declared once (ADR 0211): saying so beats a 200 that quietly ignored the declaration.
@@ -223,14 +224,14 @@ async def create_namespace(
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
 
     try:
-        await fga_deps.require_parent_as_authorized(ns, settings, client, resolver, resource="namespace", segments=segments)
+        await object_grants.require_parent_as_authorized(ns, settings, client, resolver, resource="namespace", segments=segments)
     except Exception:
         # A Restrict drop, which removes the namespace only while it holds nothing, so the undo destroys nobody's data.
-        await fga_deps.undo_a_create_whose_parent_is_unread(
+        await object_grants.undo_a_create_whose_parent_is_unread(
             client, settings, token, resource="namespace", segments=segments, uuid=minted, undo=_undo_create, remedy="drop it before retrying"
         )
         raise
-    await fga_deps.name_namespace_child(client, settings, token, resolver, segments=segments, uuid=minted)
+    await object_grants.name_namespace_child(client, settings, token, resolver, segments=segments, uuid=minted)
     await emit_control(
         control,
         action="namespace_created",
@@ -319,13 +320,13 @@ async def create_or_keep_namespace(ns: LanceNamespace, segments: list[str], req:
 async def _forget_namespace(settings: Settings, client: OpenFgaClient | None, token: Caller | None, *, namespace_uuid: str | None) -> None:
     """Remove what a dropped namespace leaves behind: the records kept under its uuid when the caller read one before
     the drop, and its FGA tuples, with those of every child an earlier attempt removed, which its `child` edges still
-    name (``fga_deps.end_removed_subtree``).
+    name (``object_grants.end_removed_subtree``).
 
     Each step is idempotent — an absent record or tuple is already the post-condition — so a retry over a
     half-finished drop converges. A grant or record left behind governs nothing, since no other namespace holds the
     uuid it is keyed by ([[LH-524]]).
     """
-    async for _ in fga_deps.end_removed_subtree(client, settings, root_uuid=namespace_uuid, removed=[], token=token):
+    async for _ in object_grants.end_removed_subtree(client, settings, root_uuid=namespace_uuid, removed=[], token=token):
         pass
 
 
@@ -354,7 +355,7 @@ async def _judge_run_rule_declaration(
     if not declared and not replaced:
         return
     project = await run_in_threadpool(warehouses.project_of, settings.registry_root, settings.storage_options(), segments[0])
-    await fga_deps.require_run_rule_authority(client, settings, token, project=project)
+    await door_gates.require_run_rule_authority(client, settings, token, project=project)
 
 
 async def _create_or_replace_empty_namespace(
@@ -386,9 +387,9 @@ async def _create_or_replace_empty_namespace(
     except NamespaceAlreadyExistsError:
         pass
     canonical = fga_ids.canonical_object_id(segments)
-    replaced = await fga_deps.identify_namespace(resolver, ns, segments)
-    await fga_deps.require_relation(client, settings, token, relation="can_delete", obj=replaced.fga_object(), label=f"namespace:{canonical}")
-    await fga_deps.require_namespace_unprotected(settings, replaced, force=False)
+    replaced = await objects.identify_namespace(resolver, ns, segments)
+    await door_gates.require_relation(client, settings, token, relation="can_delete", obj=replaced.fga_object(), label=f"namespace:{canonical}")
+    await hierarchy.require_namespace_unprotected(settings, replaced, force=False)
     _, tables = await _drain_tables(ns, segments)
     _, children = await _drain_namespaces(ns, segments)
     if tables or children:
@@ -396,7 +397,7 @@ async def _create_or_replace_empty_namespace(
             f"cannot overwrite namespace '{canonical}': Overwrite drops only an empty namespace, and it holds "
             f"tables {tables} and namespaces {children}. Drop or move them first, or drop the namespace with behavior=Cascade."
         )
-    await fga_deps.require_namespace_as_identified(ns, replaced)
+    await hierarchy.require_namespace_as_identified(ns, replaced)
     # A table landing between the listing and this drop is refused by the backend's own Restrict check.
     await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
     await _forget_namespace(settings, client, token, namespace_uuid=replaced.uuid)
@@ -446,8 +447,8 @@ async def list_namespaces(
         response = ListNamespacesResponse(namespaces=[])
         names = await run_in_threadpool(partial(warehouses.served_ids, settings.registry_root, settings.storage_options(), estate=settings.estate_warehouse))
 
-    if (authz := fga_deps.authorization(settings, client, token)) is not None:
-        response.namespaces, response.page_token = await fga_deps.authorized_page(
+    if (authz := decisions.authorization(settings, client, token)) is not None:
+        response.namespaces, response.page_token = await visible_pages.authorized_page(
             authz,
             resolver,
             relation="can_get_metadata",
@@ -474,11 +475,11 @@ async def _trash_subtree(
     settings: CatalogStore,
     token: Caller | None,
     segments: list[str],
-    descendants: list[fga_deps.GovernedObject],
+    descendants: list[objects.GovernedObject],
     *,
     own: ControlUuids,
     grace_days: float,
-) -> list[fga_deps.GovernedObject]:
+) -> list[objects.GovernedObject]:
     """DETACH the subtree instead of destroying it — the recoverable half of a cascade (#96); the tables it detached.
 
     A trash record pointing at bytes the native cascade already deleted would be a LIE: undrop
@@ -521,7 +522,7 @@ async def _trash_subtree(
     # detached in turn under the claim its resolution read, so one that changed since answers 409 at its fence.
     claims = table_claims.claim_store(settings)
     resolved_all = await asyncio.gather(*(run_in_threadpool(table_claims.resolve, ns, claims, item.segments) for item in tables))
-    detached: list[fga_deps.GovernedObject] = []
+    detached: list[objects.GovernedObject] = []
     for item, resolved in zip(tables, resolved_all, strict=True):
         trashed = await _trash_listed_table(
             ns,
@@ -541,7 +542,7 @@ async def _trash_subtree(
         described = await run_in_threadpool(native.call, ns, "describe_namespace", DescribeNamespaceRequest(id=child))
         # The backend drops by name, so the namespace the walk listed is asked for in what it describes, the last read
         # before the drop: one created under the name since would be dropped, and filed under the listed one's uuid.
-        fga_deps.require_standing_as_identified(child, identified=uuid_at[tuple(child)], standing=uuid_of(described.properties))
+        hierarchy.require_standing_as_identified(child, identified=uuid_at[tuple(child)], standing=uuid_of(described.properties))
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
         record = trash.make_record(
             fga_ids.canonical_object_id(child),
@@ -561,7 +562,7 @@ async def _trash_subtree(
 async def _trash_listed_table(
     ns: LanceNamespace,
     settings: CatalogStore,
-    item: fga_deps.GovernedObject,
+    item: objects.GovernedObject,
     *,
     resolved: table_claims.ResolvedTable,
     claims: location_claims.ClaimStore,
@@ -612,7 +613,7 @@ async def _trash_listed_table(
 async def _destroy_subtree(
     ns: LanceNamespace,
     segments: list[str],
-    descendants: list[fga_deps.GovernedObject],
+    descendants: list[objects.GovernedObject],
     *,
     root_uuid: str,
     registry: base_registry.BaseRegistry,
@@ -706,14 +707,14 @@ async def _destroy_subtree(
     # already gone is the drift the drops above tolerate; one another namespace replaced is refused.
     standing = await run_in_threadpool(object_uuids.resolve_namespace_uuid, ns, segments)
     if standing is not None:
-        fga_deps.require_standing_as_identified(segments, identified=root_uuid, standing=standing)
+        hierarchy.require_standing_as_identified(segments, identified=root_uuid, standing=standing)
     with suppress(NamespaceNotFoundError):
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
 
 
 async def _destroy_listed_table(
     ns: LanceNamespace,
-    item: fga_deps.GovernedObject,
+    item: objects.GovernedObject,
     *,
     namespace_uuid: str | None,
     registry: base_registry.BaseRegistry,
@@ -788,18 +789,18 @@ async def _destroy_listed_table(
     return True
 
 
-async def _identify(ns: LanceNamespace, settings: CatalogStore, descendants: list[tuple[str, list[str]]]) -> list[fga_deps.GovernedObject]:
+async def _identify(ns: LanceNamespace, settings: CatalogStore, descendants: list[tuple[str, list[str]]]) -> list[objects.GovernedObject]:
     """Every descendant a cascade is about to remove, with its uuid, read while it still stands.
 
     CONCURRENT (catalog-api-11): one independent read per descendant on the pre-flight of a cascade, so its latency
     does not grow with the subtree. Enumeration order is kept, so a refusal names the FIRST protected descendant.
     """
     return list(
-        await asyncio.gather(*(fga_deps.standing(ns, settings, "table" if resource == "table" else "namespace", child) for resource, child in descendants))
+        await asyncio.gather(*(objects.standing(ns, settings, "table" if resource == "table" else "namespace", child) for resource, child in descendants))
     )
 
 
-async def _require_descendants_unprotected(settings: CatalogStore, descendants: list[fga_deps.GovernedObject], *, force: bool) -> None:
+async def _require_descendants_unprotected(settings: CatalogStore, descendants: list[objects.GovernedObject], *, force: bool) -> None:
     """Refuse a cascade that would destroy a PROTECTED descendant, naming the first one found.
 
     The guard at the named rung only sees the id in the URL; a cascade's unit of destruction is the
@@ -810,7 +811,7 @@ async def _require_descendants_unprotected(settings: CatalogStore, descendants: 
         return
     records = await asyncio.gather(*(run_in_threadpool(protections.read, settings, item.kind, item.uuid) for item in descendants))
     for item, record in zip(descendants, records, strict=True):
-        fga_deps.require_not_protected(record is not None and record.protected, kind=item.kind, obj_id=fga_ids.canonical_object_id(item.segments), force=False)
+        hierarchy.require_not_protected(record is not None and record.protected, kind=item.kind, obj_id=fga_ids.canonical_object_id(item.segments), force=False)
 
 
 @spec_router.post("/{id}/drop", response_model_exclude_none=True)
@@ -876,15 +877,15 @@ async def drop_namespace(
     # The namespace the request was authorized on, with the uuid its records are kept under (ADR 0173 §8). A `Skip` of a
     # namespace that is not there answers here, before anything is enumerated.
     try:
-        dropped = await fga_deps.identify_namespace(resolver, ns, segments)
+        dropped = await objects.identify_namespace(resolver, ns, segments)
     except NamespaceNotFoundError:
         if drop_mode is not DropMode.SKIP:
             raise
         answer = DropNamespaceResponse()
         await converge.remember(200, answer)
         return answer
-    await fga_deps.require_namespace_unprotected(settings, dropped, force=force)
-    descendants: list[fga_deps.GovernedObject] = []
+    await hierarchy.require_namespace_unprotected(settings, dropped, force=force)
+    descendants: list[objects.GovernedObject] = []
     # Enumerated whenever a CASCADE is asked for — not only when FGA is on, as it used to be. A cascade
     # destroys children INSIDE the single native call, so they never re-enter this door: without this
     # list, a protected table under a cascade-dropped namespace died silently while the docstring
@@ -907,7 +908,7 @@ async def drop_namespace(
         # answer anyone can act on. `force` turns this lock exactly as it does at the named rung.
         await _require_descendants_unprotected(settings, descendants, force=force)
     # The backend drops by name, so the name is asked once more, as late as the drop allows, to hold that namespace.
-    await fga_deps.require_namespace_as_identified(ns, dropped)
+    await hierarchy.require_namespace_as_identified(ns, dropped)
     # What every announcement below names the objects by, read while they still stand (ADR 0173 §10).
     own = await uuids.namespace(segments)
     known = {tuple(item.segments): await uuids.table(item.segments, uuid=item.uuid) for item in descendants if item.kind == "table"}
@@ -1014,7 +1015,7 @@ async def drop_namespace(
         # as it was and reachable by the owner, the one person who needs to undrop it. Those die with the bytes — at
         # purge, or when the sweep's expiry reclaims the trash.
         if not recoverable:
-            async for _ in fga_deps.end_removed_subtree(client, settings, root_uuid=dropped.uuid, removed=removed, token=token):
+            async for _ in object_grants.end_removed_subtree(client, settings, root_uuid=dropped.uuid, removed=removed, token=token):
                 pass
         # Sent with the count of what this drop removed, under the id the planned event was filed with.
         await filing.send(
@@ -1223,7 +1224,7 @@ async def get_namespace_protection(id: str, ns: NamespaceDep, settings: Settings
     """Read the namespace's deletion-protection flag (#123) — the table door's read, one rung up."""
     segments = parse_identifier(id)
     canonical = fga_ids.canonical_object_id(segments)
-    namespace = await fga_deps.identify_namespace(resolver, ns, segments)
+    namespace = await objects.identify_namespace(resolver, ns, segments)
     record = await run_in_threadpool(protections.read, settings, "namespace", namespace.uuid)
     return ProtectionResponse(id=canonical, protected=record is not None and record.protected, set_by=record.set_by if record is not None else None)
 
@@ -1243,8 +1244,8 @@ async def set_namespace_protection(
     safety on what it writes). Same control-root record contract as the table door."""
     segments = parse_identifier(id)
     canonical = fga_ids.canonical_object_id(segments)
-    namespace = await fga_deps.identify_namespace(resolver, ns, segments)
-    await fga_deps.require_namespace_as_identified(ns, namespace)
+    namespace = await objects.identify_namespace(resolver, ns, segments)
+    await hierarchy.require_namespace_as_identified(ns, namespace)
     so = settings.storage_options()
     if body.protected:
         record = ProtectionRecord(
@@ -1322,8 +1323,8 @@ async def list_tables(
         candidates = await listings.holding_a_version(resolver, so, candidates)
     # With FGA on, keep only the tables the caller may actually read, each judged on the object its name resolves to
     # ([[LH-223]], [[LH-524]]).
-    if (authz := fga_deps.authorization(settings, client, token)) is not None:
-        response.tables, response.page_token = await fga_deps.authorized_page(
+    if (authz := decisions.authorization(settings, client, token)) is not None:
+        response.tables, response.page_token = await visible_pages.authorized_page(
             authz,
             resolver,
             relation="can_read_data",

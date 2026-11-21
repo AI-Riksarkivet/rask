@@ -487,7 +487,7 @@ async def revoke_object_tuples(
     full tuple set, then deletes it. No-op (0) when the object has none.
 
     Scope: revokes the object's OWN tuples and its inverse ``child`` edge. A cascade that removes a subtree
-    revokes each object in it through the catalog's ``fga_deps.end_removed_subtree``, which finds them by
+    revokes each object in it through the catalog's ``object_grants.end_removed_subtree``, which finds them by
     those ``child`` edges. An outage part-way raises :class:`RevokeInterrupted` naming the tuples removed.
     """
     tuples = await fga_reads.read_object_tuples(client, obj, retry=retry)

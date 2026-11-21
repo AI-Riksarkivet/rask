@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from catalog.api import fga_deps
+from catalog.api.authz import object_grants
 from catalog.core.config import Settings
 from lakehouse.governed import fga_provision, fga_reads
 from lakehouse.governed.machine_identity import ServicePrincipal
@@ -60,7 +60,7 @@ def test_a_SERVICE_creating_a_table_is_not_granted_owner(openfga_store: Any) -> 
 
     async def _create() -> bool:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
-            await fga_deps.seed_ownership(
+            await object_grants.seed_ownership(
                 client, _settings(), service, NamedResolver(), resource="table", segments=["acme-silver", "features"], uuid=_TABLE_UUID
             )
             return await fga_reads.check(client, user=service.subject, relation="can_drop", obj=f"table:{_TABLE_UUID}")

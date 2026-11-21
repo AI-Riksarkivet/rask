@@ -5,7 +5,7 @@ lance-ns encodes the root namespace as the delimiter alone. The stock client's
 
     GET /v1/namespace/%24/list?delimiter=%24
 
-and `parse_identifier("$", "$")` returns ZERO segments — so `_object` composes `namespace:` with an
+and `parse_identifier("$", "$")` returns ZERO segments — so `addressed_object` composes `namespace:` with an
 empty id. OpenFGA refuses that outright:
 
     openfga_sdk.exceptions.ValidationException:
@@ -48,7 +48,7 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import InvalidInputError, PermissionDeniedError
 
-from catalog.api import fga_deps
+from catalog.api.authz import route_guard
 from lakehouse.governed import fga_provision
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -70,27 +70,13 @@ class _Request:
         self.method = "POST"
 
 
-def _drive(monkeypatch: pytest.MonkeyPatch, path: str, object_id: str) -> list[str]:
-    """Run the guard, returning every object it asked OpenFGA about."""
-    asked: list[str] = []
-
-    async def _record_check(_client: object, *, user: str, relation: str, obj: str, **_: Any) -> bool:
-        del user, relation
-        asked.append(obj)
-        return True
-
-    async def _record_batch(_client: object, *, user: str, relation: str, objects: list[str], **_: Any) -> dict[str, bool]:
-        del user, relation
-        asked.extend(objects)
-        return dict.fromkeys(objects, True)
-
-    monkeypatch.setattr(fga_deps.fga_reads, "check", _record_check)
-    monkeypatch.setattr(fga_deps.fga_reads, "batch_check", _record_batch)
+def _drive(path: str, object_id: str) -> None:
+    """Run the guard on a bare-object client: a question it put to OpenFGA would fail with the client's
+    ``AttributeError``, so the refusal each caller expects is one made before OpenFGA is asked."""
     # CAST, the idiom `test_the_bus_door_authorizes_what_it_records` uses: the stand-ins carry exactly
     # the attributes the guard reads, and constructing a real Request/Settings/OpenFgaClient would drag
     # a whole app and a live store into a test about one composed object id. The caller is a real one.
-    asyncio.run(fga_deps.authorize(cast(Any, _Request(path, object_id)), cast(Any, _Settings()), _CALLER, cast(Any, object()), NamedResolver()))
-    return asked
+    asyncio.run(route_guard.authorize(cast(Any, _Request(path, object_id)), cast(Any, _Settings()), _CALLER, cast(Any, object()), NamedResolver()))
 
 
 @pytest.mark.parametrize("held", [pytest.param(None, id="a-caller-holding-nothing-is-refused"), pytest.param("reader", id="a-reader-is-admitted")])
@@ -103,24 +89,24 @@ def test_a_named_namespace_is_still_checked(openfga_store: Any, held: str | None
 
     async def _authorized() -> None:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
-            await fga_deps.authorize(request, cast(Any, _Settings()), _CALLER, client, NamedResolver())
+            await route_guard.authorize(request, cast(Any, _Settings()), _CALLER, client, NamedResolver())
 
     with pytest.raises(PermissionDeniedError) if held is None else nullcontext():
         asyncio.run(_authorized())
 
 
-def test_an_empty_id_on_a_table_is_a_typed_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_empty_id_on_a_table_is_a_typed_refusal() -> None:
     """A table id with no segments is malformed, not a root — so it earns the spec's own 400 rather
     than an empty object or a silent open."""
     with pytest.raises(InvalidInputError):
-        _drive(monkeypatch, "/v1/table/$/describe", "$")
+        _drive("/v1/table/$/describe", "$")
 
 
 @pytest.mark.parametrize("suffix", ["drop"])
-def test_every_other_action_on_the_root_is_refused(monkeypatch: pytest.MonkeyPatch, suffix: str) -> None:
+def test_every_other_action_on_the_root_is_refused(suffix: str) -> None:
     """No tuple can name the root, so an action that is not a per-item-filtered read cannot be authorized on it."""
     with pytest.raises(PermissionDeniedError):
-        _drive(monkeypatch, f"/v1/namespace/$/{suffix}", "$")
+        _drive(f"/v1/namespace/$/{suffix}", "$")
 
 
 def test_a_cascade_drop_of_the_root_is_refused_before_any_table_is_touched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

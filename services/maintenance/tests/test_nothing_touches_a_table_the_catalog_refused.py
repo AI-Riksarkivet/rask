@@ -11,7 +11,7 @@ not the catalog refusing the id: a vend that answers 200 for a location that doe
 (`governed_elsewhere`), and a 401 (`unauthenticated`, maintenance's own credential).
 
 With OIDC and FGA on (measured 2026-09-26), an id a rename left behind holds no tuples and the vend door
-answers it 403, code 15: its alternative rung goes through `fga_deps._require_any`, which never converts a
+answers it 403, code 15: its alternative rung goes through `decisions.require_any`, which never converts a
 denial to a 404.
 
 The fixture carries seven versions, and a cleanup keeping one leaves one, so an unchanged count of seven proves

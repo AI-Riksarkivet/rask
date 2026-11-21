@@ -150,7 +150,7 @@ def test_create_compensates_when_the_owner_grant_fails(moto_client: TestClient) 
     client's retry starts clean instead of hitting 'already exists' on a forever-ownerless table."""
     from lance_namespace import ServiceUnavailableError
 
-    import catalog.api.v1.endpoints.data as data_ep
+    from catalog.api.authz import object_grants
 
     async def failing_seed(*_a: object, **_kw: object) -> None:
         raise ServiceUnavailableError("fga down mid-create")  # what a real FGA outage surfaces as
@@ -160,7 +160,7 @@ def test_create_compensates_when_the_owner_grant_fails(moto_client: TestClient) 
     # the patch would fail the setup rather than the behaviour under test.
     assert moto_client.post("/v1/namespace/lance_catalog$comp/create", json={}).status_code == 200
     with pytest.MonkeyPatch.context() as mp:  # dedicated context — never the fixture's instance
-        mp.setattr(data_ep.fga_deps, "seed_ownership", failing_seed)
+        mp.setattr(object_grants, "seed_ownership", failing_seed)
         failed = moto_client.post("/v1/table/lance_catalog$comp$t/create", content=_ipc(rows), headers=ARROW)
     assert failed.status_code == 503, failed.text  # the grant failure surfaces (compensation ran)
     # the compensation deleted the half-created table…
@@ -182,7 +182,7 @@ def test_create_compensates_when_the_owner_grant_fails(moto_client: TestClient) 
 # its own id against the retry that would repair it.
 #
 # `seed_ownership` is patched, NOT the door's seam around it (`seed_before_write`): the
-# compensating seam is the code under test, so stubbing it would assert nothing. The patch lands on the fga_deps module global,
+# compensating seam is the code under test, so stubbing it would assert nothing. The patch lands on the object_grants module global,
 # which is exactly what the seam's internal call resolves.
 # --------------------------------------------------------------------------- #
 
@@ -194,9 +194,9 @@ def _failing_seed_ctx(mp: pytest.MonkeyPatch) -> None:
     async def failing_seed(*_a: object, **_kw: object) -> None:
         raise ServiceUnavailableError("fga down mid-create")
 
-    import catalog.api.fga_deps as fga_deps_mod
+    from catalog.api.authz import object_grants
 
-    mp.setattr(fga_deps_mod, "seed_ownership", failing_seed)
+    mp.setattr(object_grants, "seed_ownership", failing_seed)
 
 
 def test_declare_converges_after_a_failed_grant(moto_client: TestClient) -> None:
@@ -230,7 +230,7 @@ def test_undrop_restores_the_table_under_its_uuid_and_grants_the_undropper_nothi
     question is whether the door REACHES for a grant at all, and a tuple assertion would be vacuous
     here for the wrong reason.
     """
-    import catalog.api.fga_deps as fga_deps_mod
+    from catalog.api.authz import object_grants
 
     rows = pa.table({"id": pa.array([1], pa.int64())})
     assert moto_client_recoverable.post("/v1/namespace/lance_catalog$f3u/create", json={}).status_code == 200
@@ -240,7 +240,7 @@ def test_undrop_restores_the_table_under_its_uuid_and_grants_the_undropper_nothi
 
     seeded: list[object] = []
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(fga_deps_mod, "seed_ownership", lambda *a, **kw: seeded.append(kw or a))  # noqa: ARG005
+        mp.setattr(object_grants, "seed_ownership", lambda *a, **kw: seeded.append(kw or a))  # noqa: ARG005
         recovered = moto_client_recoverable.post("/management/v1/table/lance_catalog$f3u$t/undrop", json={})
 
     assert recovered.status_code == 200, recovered.text

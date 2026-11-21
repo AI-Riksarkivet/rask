@@ -2,7 +2,7 @@
 
 The Lance Namespace grammar puts the operation in the path (``POST /v1/<object>/{id}/<action>``), so a read arrives as
 a POST and is told from a write by the last segment of the route it matches. The router asks which rung an action takes
-(:mod:`catalog.api.fga_deps`); the read-only window and the signing gate ask whether it writes
+(:mod:`catalog.api.authz`); the read-only window and the signing gate ask whether it writes
 (:mod:`catalog.api.maintenance_mode`). Both read the data and metadata sets here, so a spec action the router gives a
 reader's rung is one the window serves; the vend door alone differs, a read to the window at its read tier only.
 """

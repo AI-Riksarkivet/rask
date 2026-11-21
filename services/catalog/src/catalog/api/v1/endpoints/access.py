@@ -32,8 +32,9 @@ from fastapi import APIRouter, Depends, Request
 from lance_namespace import InvalidInputError, NamespaceNotFoundError, ServiceUnavailableError, TableNotFoundError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import announcing, fga_deps
+from catalog.api import announcing
 from catalog.api.announcing import Announcer, AnnouncerDep
+from catalog.api.authz import decisions, door_gates, grant_authority
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
@@ -66,10 +67,10 @@ log = logging.getLogger(__name__)
 #: from `api/v1/router.py` as the spec routers do.
 table_router = APIRouter(prefix="/management/v1/table", tags=["access"])
 namespace_router = APIRouter(prefix="/management/v1/namespace", tags=["access"])
-# Warehouse is NOT in fga_deps._RESOURCES, so `authorize` returns early for these paths — every route
+# Warehouse is NOT in rungs._RESOURCES, so `authorize` returns early for these paths — every route
 # mounted here must gate itself explicitly (see `set_warehouse_managed_access`).
 warehouse_router = APIRouter(prefix="/management/v1/warehouse", tags=["access"])
-# Same rule as the warehouse router above: `/management/v1/projects/…` is outside `fga_deps._RESOURCES`, so
+# Same rule as the warehouse router above: `/management/v1/projects/…` is outside `rungs._RESOURCES`, so
 # `authorize` returns early and every route here gates itself. Its own router rather than a route on
 # the projects module so the access surface stays in one file — the place someone looks when asking
 # "what is gated, and how".
@@ -96,7 +97,7 @@ classification_router = APIRouter(prefix="/management/v1/classification", tags=[
 #:
 #: IT MUST COVER EVERY `can_grant_<rung>` THE MODEL DECLARES, and did not — `classifier` shipped with
 #: its grant action and the argument for it written into `model.fga`, while this hand-kept tuple
-#: refused the rung 400 at the only door that could delegate it. `_grant_actions` (fga_deps) reads the
+#: refused the rung 400 at the only door that could delegate it. `grant_authority.grant_actions` reads the
 #: model and this does not, so the two drifted in silence.
 #: `services/catalog/tests/test_a_grantable_rung_has_a_door.py` compares them now.
 _GRANTABLE_BASE: tuple[str, ...] = (
@@ -155,7 +156,7 @@ def _can_relations(fga_type: str) -> tuple[str, ...]:
 async def _access_list(
     client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
 ) -> AccessListResponse:
-    client = fga_deps.require_fga(settings, client, feature="access review")
+    client = decisions.require_fga(settings, client, feature="access review")
     segments = parse_identifier(id)
     obj, name = await _target(resolver, fga_type, segments)
     relations = _can_relations(fga_type)
@@ -205,35 +206,39 @@ async def require_warehouse_review(id: str, client: FgaClientDep, settings: Sett
     """Gate a warehouse's access listing on ``can_read_assignments``, the model's rung for seeing who holds what
     (``manage_grants``, which a project's admin holds through ``can_administer from project``) ([[LH-555]]). A route
     dependency, since the router leaves every warehouse route to its handler."""
-    await fga_deps.require_relation(client, settings, token, relation="can_read_assignments", obj=f"warehouse:{id}")
+    await door_gates.require_relation(client, settings, token, relation="can_read_assignments", obj=f"warehouse:{id}")
 
 
 async def require_warehouse_grant(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
     """Gate a warehouse grant as the router gates a table's or a namespace's: ``can_grant_<rung>`` read from the body, and
     no grant that raises the caller's own access ([[LH-555]])."""
-    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=False)
+    await grant_authority.require_grant_authority(
+        request, client, settings, token, resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=False
+    )
 
 
 async def require_warehouse_revoke(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
     """Gate a warehouse revoke on ``can_revoke_grant``, stricter than any grant ([[LH-555]])."""
-    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=True)
+    await grant_authority.require_grant_authority(
+        request, client, settings, token, resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=True
+    )
 
 
 async def require_project_review(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
     """Gate a project's access listing on ``can_read_assignments``, which its security admin holds ([[LH-563]]). A route
     dependency, since the router leaves every project route to its handler."""
-    await fga_deps.require_relation(client, settings, token, relation="can_read_assignments", obj=f"project:{id}")
+    await door_gates.require_relation(client, settings, token, relation="can_read_assignments", obj=f"project:{id}")
 
 
 async def require_project_grant(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
     """Gate a project grant as a warehouse's is gated: ``can_grant_<rung>`` read from the body, and no grant that raises
     the caller's own access ([[LH-563]])."""
-    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="project", segments=parse_identifier(id), revoking=False)
+    await grant_authority.require_grant_authority(request, client, settings, token, resolver, fga_type="project", segments=parse_identifier(id), revoking=False)
 
 
 async def require_project_revoke(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
     """Gate a project revoke on ``can_revoke_grant``, its security admin's ([[LH-563]])."""
-    await fga_deps.require_grant_authority(request, client, settings, token, resolver, fga_type="project", segments=parse_identifier(id), revoking=True)
+    await grant_authority.require_grant_authority(request, client, settings, token, resolver, fga_type="project", segments=parse_identifier(id), revoking=True)
 
 
 @warehouse_router.post("/{id}/access/list", dependencies=[Depends(require_warehouse_review)])
@@ -279,7 +284,7 @@ async def _access_check(
     it). Only relations the compiled model defines on ``fga_type`` may be probed, so an unknown relation
     is a clean 400 here — the caller's error, the same code the estate-admin door gives the identical
     mistake — rather than an OpenFGA 400 that fails closed to a 503 for the caller."""
-    client = fga_deps.require_fga(settings, client, feature="access simulation")
+    client = decisions.require_fga(settings, client, feature="access simulation")
     if body.relation not in _can_relations(fga_type):
         # The CLIENT's error (400), never UnsupportedOperation (406): the deployment supports the check
         # fine, the body names a relation the model does not define — access_admin.py's parity.
@@ -338,7 +343,7 @@ async def _my_permissions(
     they could not obtain by attempting the operations, and one audit row per page render would bury
     the rows that matter.
     """
-    client = fga_deps.require_fga(settings, client, feature="permission self-view")
+    client = decisions.require_fga(settings, client, feature="permission self-view")
     # `fga_enabled` implies `oidc_enabled` (the pair is refused at boot) and OIDC 401s a bearer-less
     # request before any handler runs, so a token is guaranteed once the gate above has passed. Stated
     # rather than assumed: `CurrentToken` is `Caller | None`, and the alternative is `token.subject`
@@ -382,7 +387,7 @@ async def my_warehouse_permissions(id: str, client: FgaClientDep, settings: Sett
     """What the caller may do on this warehouse — the self-view the UI needs to render a DISABLED
     action with its reason instead of a button that 403s on click.
 
-    GATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `fga_deps._RESOURCES`
+    GATED EXPLICITLY, unlike its table/namespace siblings. Warehouse is not in `rungs._RESOURCES`
     (`namespace`, `table`, `materialized_view`, `transaction`), so the router-level `authorize`
     returns early for every `/management/v1/warehouse/…` path and a route mounted here that forgets its own check
     is simply ungated — the hazard this module's own header comment names.
@@ -391,7 +396,7 @@ async def my_warehouse_permissions(id: str, client: FgaClientDep, settings: Sett
     two siblings on this router use: "what may I do here" discloses nothing about any other principal,
     and gating it at the owner bar would mean only the people who already know the answer could ask.
     """
-    await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{id}")
+    await door_gates.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{id}")
     return await _my_permissions(client, settings, token, resolver, "warehouse", id)
 
 
@@ -418,7 +423,7 @@ async def my_project_permissions(id: str, client: FgaClientDep, settings: Settin
     `can_get_metadata: member` to the model for symmetry — is a MODEL change with `.fga.yaml` updates
     and a migration story behind it, which is not something a UI-gating endpoint should drag in.
     """
-    await fga_deps.require_relation(client, settings, token, relation="member", obj=f"project:{id}")
+    await door_gates.require_relation(client, settings, token, relation="member", obj=f"project:{id}")
     return await _my_permissions(client, settings, token, resolver, "project", id)
 
 
@@ -440,9 +445,9 @@ async def _access_mutate(
 
     GATED PER RUNG FROM THE BODY, not by the router's owner-tier suffix map. This paragraph said the
     opposite until 2026-08-16 — "owner-tier gated by the router (``can_drop``/``can_delete``) … the same
-    bar as reviewing it" — which describes the behaviour ``_authorize_grant`` explicitly replaced when
-    the grant axis was separated from ownership. Neither suffix appears in ``_OWNER_SUFFIX_RELATION``
-    any more; ``fga_deps`` routes both to :func:`_authorize_grant`, which reads the rung out of the body
+    bar as reviewing it" — which describes the behaviour ``authorize_grant`` explicitly replaced when
+    the grant axis was separated from ownership. Neither suffix appears in ``OWNER_SUFFIX_RELATION``
+    any more; the router's guard routes both to :func:`~catalog.api.authz.grant_authority.authorize_grant`, which reads the rung out of the body
     because the path says only THAT a grant is happening. Grant needs ``can_grant_<relation>``; revoke
     needs ``can_revoke_grant``, which each served type defines stricter than its grants (``manage_grants``
     alone on a table or a namespace, ``curator`` alone on a classification label — a delegate must not be
@@ -453,7 +458,7 @@ async def _access_mutate(
     directions are idempotent (``write_tuples`` swallows a duplicate, ``delete_tuples`` an absent tuple) and
     audited distinctly (``access_grant`` / ``access_revoke``), carrying the grantee + rung. The announcement is filed
     before the write, so a door that fails after it is still announced, once ([[LH-576]])."""
-    client = fga_deps.require_fga(settings, client, feature="access mutation")
+    client = decisions.require_fga(settings, client, feature="access mutation")
     grantable = _grantable_relations(fga_type)
     if body.relation not in grantable:
         # 400, not 406 — same rule as the check door above: a bad rung NAME is client input, and the
@@ -471,7 +476,7 @@ async def _access_mutate(
         admitted = ", ".join(sorted(fga_model.type_restrictions(fga_type, body.relation)))
         raise InvalidInputError(f"{body.relation!r} on {fga_type} cannot name {grantee}: the model lets it name {admitted}")
     if grant:
-        await fga_deps.refuse_a_cross_tenant_role_grant(client, grantee, fga_type=fga_type, segments=segments, settings=settings)
+        await grant_authority.refuse_a_cross_tenant_role_grant(client, grantee, fga_type=fga_type, segments=segments, settings=settings)
     tup = fga_writes.ClientTuple(user=grantee, relation=body.relation, object=obj)
     event = AuditAction.ACCESS_GRANT if grant else AuditAction.ACCESS_REVOKE
     told = announcing.grant_announcement(
@@ -675,7 +680,7 @@ async def _access_graph(
     The frontend expands the cascade by calling this again on a parent node. Owner-tier gated by the router
     (same disclosure bar as ``access/list``: the graph reveals principals), audited (``access_graph``), and
     fail-closed — an OpenFGA outage is a 503, never a partial graph that reads as 'nobody has access'."""
-    client = fga_deps.require_fga(settings, client, feature="access graph")
+    client = decisions.require_fga(settings, client, feature="access graph")
     segments = parse_identifier(id)
     obj, name = await _target(resolver, fga_type, segments)
     subject = token.subject if token else "anonymous"
@@ -733,7 +738,7 @@ async def _read_managed_access(client: OpenFgaClient | None, settings: FgaSettin
     asking "is this managed?" wants an answer it can render.
     """
     segments = parse_identifier(id)
-    if (client := fga_deps.wired(settings, client)) is None:
+    if (client := decisions.wired(settings, client)) is None:
         return ManagedAccessResponse(object=f"{fga_type}:{fga_ids.canonical_object_id(segments)}", managed_access=False)
     obj, name = await _target(resolver, fga_type, segments)
     tuples = await fga_reads.read_object_tuples(client, obj)
@@ -754,7 +759,7 @@ async def get_warehouse_managed_access(
     ``authorize`` returns early and a route added here without this call is ungated."""
     segments = parse_identifier(id)
     obj = f"warehouse:{fga_ids.canonical_object_id(segments)}"
-    await fga_deps.require_relation(client, settings, token, relation="can_get_metadata", obj=obj)
+    await door_gates.require_relation(client, settings, token, relation="can_get_metadata", obj=obj)
     return await _read_managed_access(client, settings, resolver, "warehouse", id)
 
 
@@ -768,7 +773,7 @@ async def _set_managed_access(
     would 400 rather than being the no-op a caller reasonably expects. The announcement is filed before the read, as a
     grant's is ([[LH-576]]).
     """
-    client = fga_deps.require_fga(settings, client, feature="managed access")
+    client = decisions.require_fga(settings, client, feature="managed access")
     segments = parse_identifier(id)
     obj, name = await _target(resolver, fga_type, segments)
     actor = token.subject if token else "system:catalog"
@@ -833,7 +838,7 @@ async def set_warehouse_managed_access(
     """
     segments = parse_identifier(id)
     obj = f"warehouse:{fga_ids.canonical_object_id(segments)}"
-    await fga_deps.require_relation(client, settings, token, relation="can_set_managed_access", obj=obj)
+    await door_gates.require_relation(client, settings, token, relation="can_set_managed_access", obj=obj)
     return await _set_managed_access(client, announcer, settings, token, resolver, "warehouse", id, body.enabled)
 
 

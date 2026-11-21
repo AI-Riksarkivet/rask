@@ -22,7 +22,8 @@ from lance_namespace import (
     BatchCreateTableVersionsResponse,
 )
 
-from catalog.api import fga_deps, lineage_deps
+from catalog.api import lineage_deps
+from catalog.api.authz import object_grants
 from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import versions as version_door
@@ -57,7 +58,7 @@ def _app(ns: object, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, list[lis
     async def _no_emit(*_args: object, **_kwargs: object) -> None:
         return None
 
-    monkeypatch.setattr(fga_deps, "seed_ownership", _record_seed)
+    monkeypatch.setattr(object_grants, "seed_ownership", _record_seed)
     monkeypatch.setattr(lineage_deps, "emit_measured_write", _no_emit)
     return application, seeded
 

@@ -23,8 +23,9 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER
 
 
-#: The logger of the catalog's authorization gate (`catalog.api.fga_deps`), named so the catalog is imported by its fixture.
-_GATE_LOGGER = "catalog.api.fga_deps"
+#: The logger of the catalog's authorization decisions (`catalog.api.authz.decisions`, which logs each refusal), named so the
+#: catalog is imported by its fixture.
+_GATE_LOGGER = "catalog.api.authz.decisions"
 
 
 _ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))

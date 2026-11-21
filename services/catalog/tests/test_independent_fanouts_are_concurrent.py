@@ -29,7 +29,7 @@ from uuid import uuid4
 import pytest
 from lance_namespace import LanceNamespace
 
-from catalog.api.fga_deps import GovernedObject
+from catalog.api.authz.objects import GovernedObject
 from catalog.api.pagination import MAX_LIST_LIMIT
 from catalog.api.v1.endpoints import namespaces as n_ep
 from catalog.api.v1.endpoints import tables as t_ep

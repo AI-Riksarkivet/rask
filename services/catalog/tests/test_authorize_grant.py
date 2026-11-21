@@ -1,9 +1,9 @@
-"""``_authorize_grant`` — the per-rung gate on grant/revoke.
+"""``authorize_grant`` — the per-rung gate on grant/revoke.
 
 Granting used to clear the owner bar (``access/grant`` mapped to ``can_drop``/``can_delete``), which
 welded handing out access to owning the data. The rung being handed out lives in the BODY, so a
 path-suffix gate cannot express "may grant reader" — this dependency reads the body, exactly as
-``_authorize_batch`` already does for the batch routes.
+``authorize_batch`` already does for the batch routes.
 
 It runs BEFORE Pydantic on client-controlled JSON, so every malformed shape must be a 403 rather than
 a 500 — and, more importantly, a rung with no ``can_grant_*`` on the type must be refused HERE rather
@@ -20,25 +20,20 @@ from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from fastapi import Request
 from lance_namespace import PermissionDeniedError
 
-from catalog.api import fga_deps
+from catalog.api.authz import grant_authority
 from tests.unit.named_resolver import NamedResolver
 
 
-def _run(monkeypatch: pytest.MonkeyPatch, body: Any) -> list[tuple[str, str, str]]:
-    """Drive the gate on a grant of the namespace ``gold`` against a Check that allows. Returns every (user, relation,
-    object) it asked about — an empty list proves the gate refused WITHOUT consulting OpenFGA."""
-    asked: list[tuple[str, str, str]] = []
-
-    async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
-        asked.append((user, relation, obj))
-        return True
-
-    monkeypatch.setattr(fga_deps.fga_reads, "check", fake_check)
-    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro(body)))
+def _run(body: Any) -> None:
+    """Drive the gate on a grant of the namespace ``gold``. The client is a bare object, so a gate that asked OpenFGA
+    anything would fail with its ``AttributeError``: only a refusal made WITHOUT consulting OpenFGA raises the
+    ``PermissionDeniedError`` the callers expect."""
+    request = cast(Request, SimpleNamespace(json=lambda: _as_coro(body)))
     asyncio.run(
-        fga_deps._authorize_grant(
+        grant_authority.authorize_grant(
             request,
             cast(Any, object()),
             NamedResolver(),
@@ -48,7 +43,6 @@ def _run(monkeypatch: pytest.MonkeyPatch, body: Any) -> list[tuple[str, str, str
             revoking=False,
         )
     )
-    return asked
 
 
 async def _as_coro(value: Any) -> Any:
@@ -161,9 +155,9 @@ def test_a_grant_is_gated_on_the_rung_in_its_body_and_never_raises_its_callers_o
         pytest.param([], id="list-body"),
     ],
 )
-def test_a_non_dict_body_is_denied_not_crashed(monkeypatch: pytest.MonkeyPatch, body: Any) -> None:
+def test_a_non_dict_body_is_denied_not_crashed(body: Any) -> None:
     with pytest.raises(PermissionDeniedError):
-        _run(monkeypatch, body)
+        _run(body)
 
 
 @pytest.mark.parametrize(
@@ -172,32 +166,23 @@ def test_a_non_dict_body_is_denied_not_crashed(monkeypatch: pytest.MonkeyPatch, 
         pytest.param({"user": "dex~bob"}, id="missing-relation"),
     ],
 )
-def test_a_malformed_relation_is_denied(monkeypatch: pytest.MonkeyPatch, body: Any) -> None:
+def test_a_malformed_relation_is_denied(body: Any) -> None:
     with pytest.raises(PermissionDeniedError):
-        _run(monkeypatch, body)
+        _run(body)
 
 
 @pytest.mark.parametrize("revoking", [pytest.param(False, id="grant"), pytest.param(True, id="revoke")])
-def test_a_phantom_rung_is_refused_before_reaching_openfga(monkeypatch: pytest.MonkeyPatch, revoking: bool) -> None:
+def test_a_phantom_rung_is_refused_before_reaching_openfga(revoking: bool) -> None:
     """The phantom-relation guard, on a grant and a revoke alike. Passing the structural `parent` edge through would
     build ``can_grant_parent`` and ask OpenFGA for a relation the model does not define — a 400 that fails closed to a
     503 for EVERY caller, owners included. A rung the model cannot grant is not a rung the API may be asked to revoke
-    either, so the shape check holds whichever authority decides. The assertion that matters is the empty ask-list:
-    refused locally."""
-    asked: list[tuple[str, str, str]] = []
-
-    async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
-        asked.append((user, relation, obj))
-        return True
-
-    monkeypatch.setattr(fga_deps.fga_reads, "check", fake_check)
-    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~bob", "relation": "parent"})))
+    either, so the shape check holds whichever authority decides. What matters is that it is
+    refused locally, on a bare-object client that any question to OpenFGA would fail on."""
+    request = cast(Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~bob", "relation": "parent"})))
 
     with pytest.raises(PermissionDeniedError):
         asyncio.run(
-            fga_deps._authorize_grant(
+            grant_authority.authorize_grant(
                 request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"], revoking=revoking
             )
         )
-
-    assert asked == [], "parent reached OpenFGA as a phantom relation"

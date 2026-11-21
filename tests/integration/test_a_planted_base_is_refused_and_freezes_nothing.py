@@ -1084,13 +1084,13 @@ def test_a_register_undone_with_a_tag_the_store_keeps_leaves_the_clones_location
     is: a tag the store will not delete leaves the location held, so no clone registered there next takes it while that
     tag stands. The seed the door writes before the backend call lands ([[LH-588]]); the one it writes again after the
     claim fails."""
-    from catalog.api import fga_deps
+    from catalog.api.authz import object_grants
 
     bronze = estate.create("lance_catalog$db$bronze", fragments=3)
     clone = f"{estate.root}/silver"
     source = estate.open(bronze)
     source.shallow_clone(clone, source.version, storage_options=estate.key.in_clear())
-    seed, seeded = fga_deps.seed_ownership, [False]
+    seed, seeded = object_grants.seed_ownership, [False]
 
     async def _no_store(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — the seed's own arguments
         if not seeded[0]:
@@ -1098,7 +1098,7 @@ def test_a_register_undone_with_a_tag_the_store_keeps_leaves_the_clones_location
             return await seed(*args, **kwargs)
         raise OSError("the authorization store did not take the grant")
 
-    monkeypatch.setattr(fga_deps, "seed_ownership", _no_store)
+    monkeypatch.setattr(object_grants, "seed_ownership", _no_store)
     monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
 
     with pytest.raises(OSError, match="did not take the grant"):

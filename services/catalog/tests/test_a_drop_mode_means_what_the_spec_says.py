@@ -69,10 +69,10 @@ async def _drop(
     announced: list[str],
     reads: list[str] | None = None,
 ) -> DropNamespaceResponse:
-    """Drive the door with the guards, the registry and the backend all faked.
+    """Drive the door with the protection read, the registry and the backend all faked.
 
-    The guards are stubbed because each answers a different question with its own suite; what is under
-    test is what the door does with `mode` once they pass.
+    The protection read finds no record, so the guards pass, each answering a different question with its own
+    suite; what is under test is what the door does with `mode` once they pass.
     """
     reads = [] if reads is None else reads
 
@@ -80,7 +80,6 @@ async def _drop(
         reads.append("protection")
 
     monkeypatch.setattr(ns_ep.protection, "get_protection", _protection)
-    monkeypatch.setattr(ns_ep.fga_deps, "require_not_protected", lambda *a, **k: None)
     monkeypatch.setattr(ns_ep.protection, "clear_protection", lambda *a, **k: None)
 
     class _Announced:

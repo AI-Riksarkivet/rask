@@ -55,7 +55,7 @@ class BucketClaimRecord(BaseModel):
 
 
 #: The record fields deletion protection writes on a warehouse or project record: the flag
-#: `fga_deps.require_not_protected` reads, and who armed it.
+#: `hierarchy.require_not_protected` reads, and who armed it.
 PROTECTION_FIELDS = ("protected", "protected_by")
 
 

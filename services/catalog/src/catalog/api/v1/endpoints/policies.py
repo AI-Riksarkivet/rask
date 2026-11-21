@@ -39,7 +39,7 @@ from lance_namespace import (
     TableNotFoundError,
 )
 
-from catalog.api import fga_deps
+from catalog.api.authz import door_gates, hierarchy, objects
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, ResolvedTableDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import CatalogStore
@@ -210,7 +210,7 @@ async def set_namespace_policy(
     """Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth, unless
     a table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``)."""
     namespace = await _namespace(id, resolver, ns)
-    await fga_deps.require_namespace_as_identified(ns, namespace)
+    await hierarchy.require_namespace_as_identified(ns, namespace)
     canonical = fga_ids.canonical_object_id(namespace.segments)
     record = await _set(settings, "namespace", namespace.uuid, lambda stored: _record("namespace", canonical, body, stored, uuid=namespace.uuid))
     log.info("maintenance_policy_set", extra={"kind": "namespace", "id": canonical})
@@ -239,16 +239,16 @@ async def delete_namespace_policy(
 ) -> PolicyDeleteResponse:
     """Remove the namespace's maintenance policy (idempotent) — owner-gated by the router."""
     namespace = await _namespace(id, resolver, ns)
-    await fga_deps.require_namespace_as_identified(ns, namespace)
+    await hierarchy.require_namespace_as_identified(ns, namespace)
     return await _delete(settings, control, token, "namespace", key=namespace.uuid, canonical=fga_ids.canonical_object_id(namespace.segments))
 
 
-async def _namespace(id: str, resolver: Resolver, ns: LanceNamespace) -> fga_deps.GovernedObject:
+async def _namespace(id: str, resolver: Resolver, ns: LanceNamespace) -> objects.GovernedObject:
     """The namespace ``id`` names as the request resolved it, with the uuid its policy is kept under; the root holds no policy."""
     segments = parse_identifier(id)
     if not segments:
         raise InvalidInputError("a policy needs a concrete namespace, not the root")
-    return await fga_deps.identify_namespace(resolver, ns, segments)
+    return await objects.identify_namespace(resolver, ns, segments)
 
 
 def _validated_project(id: str) -> str:
@@ -282,7 +282,7 @@ async def set_project_policy(
     is refused with 409 — even if a rival claim somehow got past ``create_warehouse``'s guards, it must
     not become a policy governing (and destroying version history in) the other tenant's data."""
     project = _validated_project(id)
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
     so = settings.storage_options()
     # Read whole ([[LH-572]]): a record that cannot be read is a bucket of this project the policy would leave on the
     # defaults, or another project's claim on one it would govern.
@@ -319,7 +319,7 @@ async def describe_project_policy(id: str, settings: SettingsDep, token: Current
     """The project's maintenance policy — admin-gated like set/delete (``project`` defines no
     reader-tier relation) — or ``set: false`` when none is set; a project the registry does not know is not found."""
     project = _validated_project(id)
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
     # Read after the gate, so a caller who may not administer the project is refused alike whether it exists or not.
     if await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project) is None:
         raise TableNotFoundError(f"project not found: {project}")
@@ -330,7 +330,7 @@ async def describe_project_policy(id: str, settings: SettingsDep, token: Current
 async def delete_project_policy(id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, control: ControlEmitterDep) -> PolicyDeleteResponse:
     """Remove the project's maintenance policy (idempotent) — admin-gated."""
     project = _validated_project(id)
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
     return await _delete(settings, control, token, "project", key=project, canonical=project)
 
 
@@ -384,7 +384,7 @@ async def list_project_policies(id: str, settings: SettingsDep, token: CurrentTo
     by the registry primitives themselves.
     """
     project = _validated_project(id)
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
     so = settings.storage_options()
     registered = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
     mine = [r for r in registered if r.project == project]

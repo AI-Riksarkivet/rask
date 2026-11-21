@@ -691,7 +691,7 @@ type table
     # GRANTABLE THROUGH THE API, unlike `maintainer` and `tagger` — and the difference is WHO holds it.
     # Those two are service rungs the catalog seeds; `classifier` is meant for a PERSON (a
     # data-protection officer labelling data they may not read), and a person's grant belongs on the grant
-    # door rather than in a deploy. `_grant_actions` reads this set off the model, so without this line
+    # door rather than in a deploy. `grant_actions` reads this set off the model, so without this line
     # the rung would be declared and reachable by owners alone — a separation of duties nobody could
     # actually delegate, which is the "configured but inert" shape the estate keeps catching.
     #
@@ -757,7 +757,7 @@ type classification
         # Delegation admitted on the grant, `curator` alone on the revoke — the asymmetry the
         # reference model states as "taking a privilege back is administration, never delegation".
         # Named `can_revoke_grant` because that is the one permission the revoke door asks on every
-        # type it serves (`catalog.api.fga_deps._authorize_grant`): a served type without it answers
+        # type it serves (`catalog.api.authz.grant_authority.authorize_grant`): a served type without it answers
         # every revoke 503 (`test_grant_routes_are_intercepted_before_the_resolver`).
         define can_grant_apply: curator or (apply and pass_grants)
         define can_revoke_grant: curator

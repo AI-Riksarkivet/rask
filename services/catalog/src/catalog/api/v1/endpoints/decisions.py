@@ -25,7 +25,7 @@ check-only service records keys a table by its uuid (ADR 0173 §10). A name that
 on and one in a quarantined warehouse are answered refused. A store fault is 503, and no route answers part of what it
 was asked. Every call is audited once with what was asked and what was answered, also when it is refused or fails:
 asking what a subject may do reads the authorization graph, so the question is itself an access. A caller without the
-route's role is audited by the gate itself (`fga_deps.require_relation`).
+route's role is audited by the gate itself (`door_gates.require_relation`).
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
-from catalog.api import fga_deps
+from catalog.api.authz import decisions, door_gates
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
@@ -102,7 +102,7 @@ async def require_a_caller(client: FgaClientDep, settings: SettingsDep, token: C
 
     The check route's whole gate: what the caller is answered is then its scope's ([[LH-563]]).
     """
-    fga_deps.require_fga(settings, client, feature="authorization decisions")
+    decisions.require_fga(settings, client, feature="authorization decisions")
     if token is None:
         raise UnauthenticatedError("authentication required")
     return token
@@ -114,7 +114,7 @@ SignedInCaller = Annotated[Caller, Depends(require_a_caller)]
 async def _require(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, permission: str) -> None:
     """Refuse a caller that does not hold ``permission`` on the estate root: 401, 403, 406 or 503."""
     caller = await require_a_caller(client, settings, token)
-    await fga_deps.require_relation(client, settings, caller, relation=permission, obj=settings.fga_root_object)
+    await door_gates.require_relation(client, settings, caller, relation=permission, obj=settings.fga_root_object)
 
 
 async def require_can_expand_members(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
@@ -129,7 +129,7 @@ async def require_can_probe_governance(client: FgaClientDep, settings: SettingsD
 
 def _wired_client(client: FgaClientDep) -> OpenFgaClient:
     """The client the gate has already proved wired; typed non-optional for the handlers."""
-    return fga_deps.require_wired(client)
+    return decisions.require_wired(client)
 
 
 WiredFgaClient = Annotated[OpenFgaClient, Depends(_wired_client)]

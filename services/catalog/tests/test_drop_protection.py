@@ -523,17 +523,17 @@ def test_a_recoverable_drop_KEEPS_the_owner_grants(tmp_path: Any) -> None:
     with the BYTES (at purge, or when expiry reclaims it), not with the pointer."""
     from unittest.mock import AsyncMock
 
-    from catalog.api import fga_deps as deps
+    from catalog.api.authz import object_grants
 
     settings = _settings(tmp_path, grace_days=7)
     ns: Any = _TrashableNamespace()
     revoked = AsyncMock()
-    original = deps.revoke_ownership
-    deps.revoke_ownership = revoked
+    original = object_grants.revoke_ownership
+    object_grants.revoke_ownership = revoked
     try:
         _drop_table(settings, ns)
     finally:
-        deps.revoke_ownership = original
+        object_grants.revoke_ownership = original
     revoked.assert_not_awaited()
 
 

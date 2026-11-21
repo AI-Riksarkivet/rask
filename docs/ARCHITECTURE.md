@@ -108,10 +108,10 @@ maintenance import it:
 |---|---|
 | `services/catalog/src/catalog/main.py` (entrypoint `catalog.main:app`) | App lifespan: build OIDC verifier + OpenFGA client into `app.state`, graceful shutdown |
 | `services/catalog/src/catalog/api/security.py` | **Authn** — verify the OIDC token → `CurrentToken` (or fail closed) |
-| `services/catalog/src/catalog/api/fga_deps.py` | **Authz** — `authorize` (router-level pre-op `can_*` check) **and** `seed_ownership` (post-create grant). The op→`can_*` map is the only policy logic in the app. |
+| `services/catalog/src/catalog/api/authz/` | **Authz**, one module per job — `route_guard.authorize` (router-level pre-op `can_*` check) **and** `object_grants.seed_ownership` (post-create grant). The op→`can_*` map (`rungs`) is the only policy logic in the app. |
 | `packages/lakehouse/src/lakehouse/governed/fga_*.py` | The shared OpenFGA seam, one module per job: `fga_reads` (`check`/`batch_check`/`list_objects`/`list_users`/`expand_tree`/tuple reads), `fga_writes` (`write_tuples`/`grant_on_create`/revokes/edge moves, audited per tuple), `fga_ids` (user and object ids), `fga_model` (the model as data, `hierarchy_edge_tuples`), `fga_resilience` (retry, circuit, fail-closed), `fga_provision` (store, model, client) |
 | `packages/lakehouse/src/lakehouse/governed/auth/model.fga` / `model.json` / `model.fga.yaml` | The authorization **model** (DSL, the JSON the app loads, and the model tests) — the model owns the privilege math |
-| `services/catalog/src/catalog/api/v1/endpoints/*` | Thin HTTP handlers → `services.native`/`services.tables` for the backend, `fga_deps.seed_ownership` for grants |
+| `services/catalog/src/catalog/api/v1/endpoints/*` | Thin HTTP handlers → `services.native`/`services.tables` for the backend, `object_grants.seed_ownership` for grants |
 | `services/catalog/src/catalog/services/native.py`, `tables/` | Call pylance (run in a threadpool — it's blocking) |
 | `services/catalog/src/catalog/core/config.py` | `pydantic-settings` (env-driven config) |
 
@@ -126,7 +126,7 @@ HTTP request
   │      verify the OIDC JWT (signature via JWKS, iss/aud/exp, alg allowlist).
   │      → CurrentToken (the caller's sub) or 401. Fail closed if verifier missing → 503.
   │
-  ├─ 2. Authz  (services/catalog/api/fga_deps.authorize — a router-level dependency)
+  ├─ 2. Authz  (services/catalog/api/route_guard.authorize — a router-level dependency)
   │      derive (object, can_* relation) from the route, e.g.
   │        describe table  -> check can_get_metadata on table:<uuid>
   │        insert  table   -> check can_write_data   on table:<uuid>
@@ -142,12 +142,12 @@ HTTP request
   ├─ 3. Handler  (services/catalog/api/v1/endpoints/*)
   │      run the pylance backend op in a threadpool (it's blocking I/O).
   │
-  ├─ 4. Seed  (only on create — fga_deps.seed_ownership)
+  ├─ 4. Seed  (only on create — object_grants.seed_ownership)
   │      write owner + parent tuples for the new object so the creator keeps access
   │      and the new object inherits the cascade. No-op when FGA is off/unauthenticated.
   │
-  └─ 4b. Revoke  (a destructive table drop or a deregister — fga_deps.revoke_ownership; a dropped
-         namespace and its subtree — fga_deps.end_removed_subtree)
+  └─ 4b. Revoke  (a destructive table drop or a deregister — object_grants.revoke_ownership; a dropped
+         namespace and its subtree — object_grants.end_removed_subtree)
          delete EVERY tuple on the removed object's uuid. Every grant is held by the uuid the
          catalog minted (ADR 0173 §8), which no later object holds, so a re-created name
          inherits nothing either way: the revoke keeps the store from holding grants on
@@ -160,7 +160,7 @@ HTTP request
 **Why two authz touch-points?** Step 2 is the *pre-op check* ("may you?"). Step 4 is the
 *post-create grant* ("you made it, you own it; link it into the tree"). Step 4b is the
 *revoke-on-removal* (a destructive removal clears the grants its uuid held). All live in
-`fga_deps.py` so all request-time authz policy is in one module.
+`catalog/api/authz/` so all request-time authz policy is in one package.
 
 ---
 

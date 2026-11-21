@@ -28,8 +28,9 @@ from openfga_sdk import OpenFgaClient
 from opentelemetry import metrics
 from pydantic import BaseModel, Field
 
-from catalog.api import announcing, fga_deps
+from catalog.api import announcing
 from catalog.api.announcing import Announcer, get_announcer
+from catalog.api.authz import decisions, hierarchy, warehouse_grants
 from catalog.api.declared import DECLARATION
 from catalog.api.dependencies import ObjectUuids, Resolver, get_fga_client, get_vendor
 from catalog.api.ticks import Tick
@@ -80,7 +81,7 @@ class _Converger:
     ) -> None:
         self._request = request
         self._settings = settings
-        self._client = fga_deps.wired(settings, client)
+        self._client = decisions.wired(settings, client)
         self._control = control
         self._announcer = announcer
         self._vendor = vendor
@@ -147,7 +148,7 @@ class _Converger:
                 delete_profile=declared.delete_profile or DeleteProfile(mode=DeleteMode.ESTATE),
             )
             ids = warehouse_doors.validated_ids(self._settings, body)
-            await fga_deps.require_project_exists(self._settings, declared.project)
+            await hierarchy.require_project_exists(self._settings, declared.project)
             record = await warehouse_doors.establish_warehouse(
                 self._request, self._settings, body, ids, client=self._client, control=self._control, vendor=self._vendor, author=DECLARATION, owner=None
             )
@@ -232,11 +233,13 @@ class _Converger:
     def _wanted(self, declared: Declaration) -> set[GrantTuple]:
         """What the declaration asks for, and the maintainer rung on the estate's own warehouse.
 
-        Every registered warehouse's maintainers are written with it and converged at boot (``fga_deps.cascade_tuples``);
+        Every registered warehouse's maintainers are written with it and converged at boot (``warehouse_grants.cascade_tuples``);
         the estate's own warehouse has no record to be written with, so its maintainers converge here, from the same setting.
         """
         root, estate_warehouse = self._estate_objects
-        maintainers = {GrantTuple(user=t.user, relation=t.relation, object=t.object) for t in fga_deps.maintainer_tuples(self._settings, estate_warehouse)}
+        maintainers = {
+            GrantTuple(user=t.user, relation=t.relation, object=t.object) for t in warehouse_grants.maintainer_tuples(self._settings, estate_warehouse)
+        }
         return declared.tuples(root=root, estate_warehouse=estate_warehouse) | maintainers
 
     async def _revoke_undeclared_own_roles(self, client: OpenFgaClient, obj: str, wanted: set[GrantTuple]) -> None:
@@ -246,7 +249,7 @@ class _Converger:
         a role git stopped declaring is revoked whether or not this ledger wrote it. A role naming any other principal
         was granted at a door and stays ([[LH-563]]).
         """
-        own = fga_deps.own_users(self._settings)
+        own = warehouse_grants.own_users(self._settings)
         if not own:
             return
         declared = [grant.client_tuple for grant in wanted if grant.object == obj]

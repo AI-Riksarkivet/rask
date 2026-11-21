@@ -185,7 +185,7 @@ GATED by `maintenance.vendWriteCredentials` (`lance.fgaMaintainers`), so an
 estate that vends no write credentials grants nothing — a standing tuple for a
 service that is not using it is the kind nobody remembers to revoke.
 Measured 2026-09-15: without this the catalog's list was empty in every deployment,
-so `cascade_tuples` (the warehouse-create grants, `catalog/api/fga_deps.py`) wrote no maintainer grant, and the 93 warehouses that had one
+so `cascade_tuples` (the warehouse-create grants, `catalog/api/authz/warehouse_grants.py`) wrote no maintainer grant, and the 93 warehouses that had one
 had it written by hand into the live store.
 
 ## `- { name: LANCE_OWN_ACCOUNTS, value: {{ include "lance.ownAccounts" $root | quote }} }`

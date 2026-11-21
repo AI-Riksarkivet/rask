@@ -25,7 +25,7 @@ from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ConcurrentModificationError, ServiceUnavailableError
 
-from catalog.api import fga_deps
+from catalog.api.authz import route_guard
 from catalog.api.dependencies import FgaClientDep, ResolverDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.services import native, table_claims
@@ -84,10 +84,10 @@ def _send_raced(catalog: Any, tmp_path: Path, path: str, sent: dict[str, Any]) -
         as_alice_made_it.append(catalog.store.tuples())
 
     async def _authorize_then_race(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
-        await fga_deps.authorize(request, settings, token, injected, resolver)
+        await route_guard.authorize(request, settings, token, injected, resolver)
         await run_in_threadpool(_drop_and_create_again)
 
-    app.dependency_overrides[fga_deps.authorize] = _authorize_then_race
+    app.dependency_overrides[route_guard.authorize] = _authorize_then_race
     answered = catalog.client.post(path, headers={**catalog.bearer("bob"), **sent.get("headers", {})}, **_keywords(sent))
     assert as_alice_made_it, f"the rival never landed between bob's authorization and the door: {answered.status_code} {answered.text}"
     return _Raced(answered, as_alice_made_it[0])

@@ -8,7 +8,7 @@ again on its own reads, and answers what it did and what it refused, with why. E
 on the estate root, which only the ``reconciler`` role opens (the catalog's declaration grants it to maintenance's
 ServiceAccount, ``lance.fgaEstateRoles``).
 
-The router guard leaves these paths to their handlers (``fga_deps._RESOURCES`` names no ``grants``), so the gate is this
+The router guard leaves these paths to their handlers (``rungs._RESOURCES`` names no ``grants``), so the gate is this
 router's own dependency, as the decision door's is.
 """
 
@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError
 
-from catalog.api import fga_deps
+from catalog.api.authz import decisions, door_gates, object_grants
 from catalog.api.dependencies import FgaClientDep, SettingsDep, namespace_for_table
 from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
@@ -32,7 +32,7 @@ from lakehouse.records import location_claims
 
 async def require_can_reconcile_grants(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
     """Every grant door's gate: the caller holds ``can_reconcile_grants`` on the estate root."""
-    await fga_deps.require_relation(client, settings, token, relation="can_reconcile_grants", obj=settings.fga_root_object)
+    await door_gates.require_relation(client, settings, token, relation="can_reconcile_grants", obj=settings.fga_root_object)
 
 
 management_router = APIRouter(prefix="/management/v1/grants", tags=["grant-reconcile"], dependencies=[Depends(require_can_reconcile_grants)])
@@ -45,7 +45,7 @@ async def grant_census(settings: SettingsDep, client: FgaClientDep) -> GrantCens
     ``enabled`` is false when authorization is off in the catalog, which a drift report reads as nothing to check rather
     than as an estate holding no grants.
     """
-    if (client := fga_deps.wired(settings, client)) is None:
+    if (client := decisions.wired(settings, client)) is None:
         return GrantCensusResponse(enabled=False)
     counted = await fga_reads.census(client, exclude=grant_reconcile.platform_objects(settings))
     return GrantCensusResponse(enabled=True, counts_by_type=counted.counts_by_type)
@@ -71,7 +71,7 @@ async def revoke_ghost_grants(
         if reason is not None:
             answer.refused[obj] = reason
             continue
-        answer.revoked[obj] = await fga_deps.revoke_ghost_object(client, settings, obj, token=token)
+        answer.revoked[obj] = await object_grants.revoke_ghost_object(client, settings, obj, token=token)
     return answer
 
 
@@ -106,6 +106,6 @@ async def rebuild_warehouse_tenancy(body: TenancyRebuildRequest, settings: Setti
                 answer.unjustified[warehouse_id] = reason
             case edge:
                 edges.append(edge)
-    await fga_deps.write_registry_edges(client, settings, edges, token=token)
+    await object_grants.write_registry_edges(client, settings, edges, token=token)
     answer.written = [f"{edge.user} {edge.relation} {edge.object}" for edge in edges]
     return answer

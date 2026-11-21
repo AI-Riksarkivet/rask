@@ -5,7 +5,7 @@ route. Addressed by name as every governed door is, and the contract is kept und
 
 - ``…/contract/describe`` is a metadata read, and the router asks ``can_get_metadata``;
 - ``…/contract/set`` and ``…/contract/delete`` decide what the table's commits may do to its schema, and the router
-  asks ``can_set_contract``, the owner's act (`catalog.api.fga_deps`). Each change is announced as an untargeted
+  asks ``can_set_contract``, the owner's act (`catalog.api.authz`). Each change is announced as an untargeted
   control event.
 
 The contract is checked where every commit passes (`catalog.services.contracts`), and nowhere else: these doors hold no

@@ -32,8 +32,9 @@ from lance_namespace import (
 from lance_namespace_urllib3_client.models import QueryTableRequestColumns
 from pydantic import BaseModel, StringConstraints
 
-from catalog.api import fga_deps, lineage_deps
 from catalog.api import idempotency as idem
+from catalog.api import lineage_deps
+from catalog.api.authz import door_gates
 from catalog.api.dependencies import (
     ControlEmitterDep,
     DataNamespaceDep,
@@ -180,7 +181,7 @@ async def create_table(
     encoding.require_valid_field_encoding(table.schema)
     namespace = parse_identifier(id)[:-1]
     if (labels := provenance_guard.field_labels(table.schema)) and (parent := await resolver.object("namespace", namespace)) is not None:
-        await fga_deps.require_classifier_to_set_labels(client, settings, token, obj=parent, label=fga_ids.canonical_object_id(namespace), labels=labels)
+        await door_gates.require_classifier_to_set_labels(client, settings, token, obj=parent, label=fga_ids.canonical_object_id(namespace), labels=labels)
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
@@ -469,7 +470,7 @@ async def update_table(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     expressions = [expression for _, expression in body.updates or []]
-    await fga_deps.require_classifier_to_copy_a_label(client, settings, token, table=table, so=so, branch=body.branch, expressions=expressions)
+    await door_gates.require_classifier_to_copy_a_label(client, settings, token, table=table, so=so, branch=body.branch, expressions=expressions)
     converge, answered = await _keyed_table_write(keyed, table=table, so=so, segments=segments, branch=body.branch, answer=UpdateTableResponse)
     if answered is not None:
         return answered

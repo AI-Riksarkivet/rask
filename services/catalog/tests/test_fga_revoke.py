@@ -1,4 +1,4 @@
-"""Unit tests for the revoke-on-delete path (lakehouse.governed.fga_writes + catalog.fga_deps).
+"""Unit tests for the revoke-on-delete path (lakehouse.governed.fga_writes + catalog.api.authz.object_grants).
 
 A dropped object's FGA tuples are removed, so the store holds no grant on an object that is gone. These pin the read+delete contract WITHOUT
 the network: the paginated read returns the COMPLETE set, the delete issues exactly those tuples,
@@ -19,7 +19,7 @@ from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 from openfga_sdk.exceptions import ApiException
 
-from catalog.api import fga_deps
+from catalog.api.authz import object_grants
 from lakehouse.governed import fga_ids, fga_writes
 
 
@@ -101,20 +101,20 @@ _TABLE = fga_ids.table_object("0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
 
 def test_revoke_ownership_noop_when_fga_disabled() -> None:
     fake = _ReadDeleteClient([([_tuple("user:a", "owner", _TABLE)], "")])
-    asyncio.run(fga_deps.revoke_ownership(_client(fake), _settings(fga_enabled=False), obj=_TABLE, token=None, origin="lifecycle_delete"))
+    asyncio.run(object_grants.revoke_ownership(_client(fake), _settings(fga_enabled=False), obj=_TABLE, token=None, origin="lifecycle_delete"))
     assert fake.read_calls == 0  # FGA off → never touched
 
 
 def test_a_revoke_with_authorization_on_and_no_client_fails_closed() -> None:
     """A missing client is never read as "authorization is off" ([[LH-585]]): the dropped object would keep its grants
     without a word."""
-    with pytest.raises(fga_deps.ServiceUnavailableError, match="authorization service is not available"):
-        asyncio.run(fga_deps.revoke_ownership(None, _settings(fga_enabled=True), obj=_TABLE, token=None, origin="lifecycle_delete"))
+    with pytest.raises(ServiceUnavailableError, match="authorization service is not available"):
+        asyncio.run(object_grants.revoke_ownership(None, _settings(fga_enabled=True), obj=_TABLE, token=None, origin="lifecycle_delete"))
 
 
 def test_revoke_ownership_deletes_every_tuple_for_the_object() -> None:
     fake = _ReadDeleteClient([([_tuple("user:a", "owner", _TABLE), _tuple("user:b", "reader", _TABLE)], "")])
-    asyncio.run(fga_deps.revoke_ownership(_client(fake), _settings(fga_enabled=True), obj=_TABLE, token=None, origin="lifecycle_delete"))
+    asyncio.run(object_grants.revoke_ownership(_client(fake), _settings(fga_enabled=True), obj=_TABLE, token=None, origin="lifecycle_delete"))
     assert _keys(fake.deleted) == {
         ("user:a", "owner", _TABLE),
         ("user:b", "reader", _TABLE),

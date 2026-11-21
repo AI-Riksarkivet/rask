@@ -28,7 +28,7 @@ const HELD_BY_WAREHOUSES = {
 	},
 };
 
-/** The OTHER 409 (`fga_deps.require_not_protected`) — the one `force` is for. */
+/** The OTHER 409 (`hierarchy.require_not_protected`) — the one `force` is for. */
 const PROTECTED = {
 	status: 409,
 	body: {

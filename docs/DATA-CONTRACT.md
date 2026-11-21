@@ -98,7 +98,7 @@ nothing is checked at any other time: the catalog holds no version back, scans n
 change, then (if the column returns in a new shape) set the contract that names it again.
 
 Access is a separate gate, checked at every door: OpenFGA decides who may read, write or tag
-(`packages/lakehouse/src/lakehouse/governed/fga_reads.py`, `catalog/api/fga_deps.py`).
+(`packages/lakehouse/src/lakehouse/governed/fga_reads.py`, `catalog/api/authz/`).
 
 ## 4 · What is and is not enforced
 

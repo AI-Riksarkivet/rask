@@ -581,7 +581,7 @@ def _refuse_malformed_new_fragments(version: _Judged) -> None:
 _CARRIES_HELD_ROWS = frozenset({"Rewrite", "Restore"})
 
 #: Operations whose rung is above the writer's: they rewind, rewrite or replace the table, so moving rows and their
-#: ids is what they are for (``fga_deps.require_staged_operation``).
+#: ids is what they are for (``door_gates.require_staged_operation``).
 _REWRITING_OPERATIONS = frozenset({"Restore", "Rewrite", "Overwrite"})
 
 

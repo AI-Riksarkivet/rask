@@ -61,7 +61,7 @@ def app_wire[T](owner: Request | FastAPI, name: str, kind: type[T], *, none_is_o
     """What the lifespan wired onto ``app.state`` as ``name``: an emitter, the credential vendor, the connections.
 
     Off is what a setting says, and the lifespan wires the explicit off object for it (`catalog.main._build`), so a
-    missing wire is a catalog that did not start the way it serves, never "off" ([[XC-219]]; `fga_deps.wired` states
+    missing wire is a catalog that did not start the way it serves, never "off" ([[XC-219]]; `decisions.wired` states
     the same rule for the authorization client, [[LH-237]]). Read as off, a write would commit, announce to nobody and
     answer 200, and an event never emitted is one no notifier can repair. The ERROR line names the wire, since the
     caller's 500 is redacted.
@@ -320,7 +320,7 @@ class Resolver:
 
     async def _connection(self, segments: list[str]) -> LanceNamespace:
         # A deactivated warehouse's names still resolve here: the router asks OpenFGA about the object a name
-        # resolves to before anyone is told the warehouse is suspended (`fga_deps.authorize`), so a caller holding
+        # resolves to before anyone is told the warehouse is suspended (`route_guard.authorize`), so a caller holding
         # nothing on it is answered as for any other name.
         return await _catalog_at(self._request, self._settings, await _resolve_warehouse_root(self._request, self._settings, segments[0]))
 

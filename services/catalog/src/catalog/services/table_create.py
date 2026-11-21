@@ -30,7 +30,7 @@ took it from everyone else), and its provenance (``provenance_guard.keep_provena
 survives as the owner-tier ``can_drop`` gate: the tip's schema and rows are replaced. Its protection is not asked:
 protection guards the table's drop, and an overwrite keeps the table and every earlier version (ADR 0221).
 
-It imports ``catalog.api.fga_deps`` for the authorization seam, exactly as
+It imports ``catalog.api.authz`` for the authorization seam, exactly as
 ``catalog.services.warehouse_grant_backfill`` already does: the guards are the estate's one implementation and
 re-deriving them here would be the weakened duplicate the audit keeps finding elsewhere.
 """
@@ -55,7 +55,7 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel
 
-from catalog.api import fga_deps
+from catalog.api.authz import door_gates, hierarchy, object_grants, write_doors
 from catalog.api.dependencies import Resolver
 from catalog.api.security import Caller
 from catalog.core import encoding, provenance_guard, run_context
@@ -193,7 +193,7 @@ async def create_governed_table(
     # #118: this door had NO parent guard at all — require_parent lives in tables.py and this route
     # lives here, so the Arrow create wrote real datasets into namespaces that do not exist, with a
     # live owner grant and no parent edge.
-    await fga_deps.require_parent_exists(ns, "table", parse_identifier(id))
+    await hierarchy.require_parent_exists(ns, "table", parse_identifier(id))
     # [[LH-209]] The one external blob base this create may register, judged before the write: none unless
     # the request names one, and never one that reaches governed storage.
     external_base = await run_in_threadpool(
@@ -231,12 +231,12 @@ async def create_governed_table(
     overwriting: table_claims.DoorTable | None = None
     if overwrote_existing:
         overwritten = await resolver.table(segments, ns=ns)
-        await fga_deps.require_can_drop_table(client, settings, token, table=overwritten)
+        await door_gates.require_can_drop_table(client, settings, token, table=overwritten)
         # The table asked about is the one overwritten ([[LH-530]]).
         overwriting = table_claims.DoorTable(ns, table_claims.claim_store(settings), overwritten, announces=provenance_namespace.announcer(segments, settings))
     operation = OVERWRITE_TABLE if overwrote_existing else CREATE_TABLE
     # The grants of a table this request brings into being are written before the backend records it ([[LH-588]]).
-    grants = fga_deps.GrantsBeforeWrite(client, settings, token, resolver, segments=segments)
+    grants = object_grants.GrantsBeforeWrite(client, settings, token, resolver, segments=segments)
     # [[LH-279]] Where the create records the bases it registers — the catalog's control root, written
     # with the catalog's own credential and never through a vend.
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
@@ -263,7 +263,7 @@ async def create_governed_table(
         recorded_author=None if provenance_namespace.is_unannounced(namespace, operation, settings) else created_by,
         overwriting=overwriting,
         before_commit=table_inputs.recorder(
-            settings.registry_root, settings.storage_options(), name=table_id, declared=await fga_deps.declared_inputs(resolver, run)
+            settings.registry_root, settings.storage_options(), name=table_id, declared=await write_doors.declared_inputs(resolver, run)
         ),
         before_register=grants,
         after_register=partial(grants.parent_as_authorized, ns),
@@ -271,7 +271,7 @@ async def create_governed_table(
     try:
         try:
             response: CreateTableResponse = await run_in_threadpool(create)
-        except fga_deps.ParentChangedError:
+        except object_grants.ParentChangedError:
             # Not a race lost to another create of the name: the table an ExistOk would keep is in a namespace this
             # caller was not judged on ([[LH-585]]).
             raise

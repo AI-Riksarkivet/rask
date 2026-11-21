@@ -396,10 +396,6 @@ class TestTheDoorGatesBeforeItWrites:
         would write into any bucket the catalog can reach, under an admin gate for a different one."""
         monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: WarehouseRecord(id="wh", bucket="tenant", project="acme", root_uri=ROOT))
 
-        async def _allow(*a: Any, **k: Any) -> None:
-            return None
-
-        monkeypatch.setattr(endpoint.fga_deps, "require_can_create_warehouse", _allow)
         seen: list[str] = []
 
         def _probe(root_uri: str, *a: Any, **k: Any) -> list[Any]:

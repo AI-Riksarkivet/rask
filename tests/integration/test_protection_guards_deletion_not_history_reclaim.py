@@ -4,7 +4,7 @@ Lance keeps a version while a tag names it and a branch's files while the branch
 branch is what makes them reclaimable (`lance_docs/lance/guide/tags_and_branches.md:77-83`, `:129-133`), and Lance's
 answer to "keep this" is a tag (`lance_docs/lance/guide/data_evolution.md:270-279`). `version/delete`, tag delete and
 branch delete are therefore history reclaim, like `maintenance/run`, and authorization alone governs them (their rung,
-`can_drop`, is `fga_deps._OWNER_SUFFIX_RELATION`'s): none reads the protection record a drop consults, which is what
+`can_drop`, is `rungs.OWNER_SUFFIX_RELATION`'s): none reads the protection record a drop consults, which is what
 this test pins, with authorization off.
 
 Driven through the real catalog app on a real `dir` namespace. The table is protected through the catalog's own door,

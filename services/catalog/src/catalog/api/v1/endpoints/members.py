@@ -26,8 +26,9 @@ from typing import TYPE_CHECKING, Annotated, Any
 from fastapi import APIRouter, Path, status
 from lance_namespace import ServiceUnavailableError
 
-from catalog.api import announcing, fga_deps
+from catalog.api import announcing
 from catalog.api.announcing import AnnouncerDep
+from catalog.api.authz import decisions, door_gates, grant_authority
 from catalog.api.dependencies import FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
@@ -70,7 +71,7 @@ def _client_or_conflict(client: OpenFgaClient | None, settings: FgaSettings) -> 
     """The FGA client, or a clear refusal. Membership IS tuples — with authz off there is nothing to
     write, and pretending otherwise would report a grant that never happened.
 
-    Its own message rather than ``fga_deps.require_fga``'s pair: this door answers 503 for BOTH legs
+    Its own message rather than ``decisions.require_fga``'s pair: this door answers 503 for BOTH legs
     (off and unwired) on purpose — see the note below — where the access surface answers 406 Unsupported for off.
     """
     if not settings.fga_enabled or client is None:
@@ -89,8 +90,8 @@ async def list_members(project_id: ProjectId, client: FgaClientDep, settings: Se
     here; who is in it is the role's assignees door.
     """
     obj = f"project:{project_id}"
-    await fga_deps.require_relation(client, settings, token, relation="can_read_assignments", obj=obj)
-    if (client := fga_deps.wired(settings, client)) is None:
+    await door_gates.require_relation(client, settings, token, relation="can_read_assignments", obj=obj)
+    if (client := decisions.wired(settings, client)) is None:
         # Authz off (local dev): there are no tuples, and an empty list is the honest answer. Inventing
         # names here would put people in front of someone who never granted them.
         return MemberList(members=[])
@@ -105,7 +106,7 @@ async def grant_member(
     """Grant one tenant rung to one subject — gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).
 
     A role is granted only on its own project: one another project owns is refused 400 (code 13), as every grant door
-    refuses it (:func:`fga_deps.refuse_a_cross_tenant_role_grant`), since that project's security admins decide who is
+    refuses it (:func:`grant_authority.refuse_a_cross_tenant_role_grant`), since that project's security admins decide who is
     in it ([[LH-557]]).
 
     Idempotent: re-granting what someone already holds is a no-op. That is not an optimisation — an
@@ -120,11 +121,11 @@ async def grant_member(
         ConcurrentModificationError: The project's administration changed under both of an ``admin`` grant's reads.
     """
     obj = f"project:{project_id}"
-    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
+    await door_gates.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
     wired = _client_or_conflict(client, settings)
     user = _user_string(payload.user)
     actor = token.subject if token else "system:catalog"
-    await fga_deps.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=settings)
+    await grant_authority.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=settings)
 
     existing = await fga_reads.read_object_tuples(wired, obj)
     tup = fga_writes.ClientTuple(user=user, relation=payload.relation, object=obj)
@@ -162,7 +163,7 @@ async def revoke_member(
     state already holds.
     """
     obj = f"project:{project_id}"
-    await fga_deps.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
+    await door_gates.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
     wired = _client_or_conflict(client, settings)
     user = _user_string(payload.user)
     actor = token.subject if token else "system:catalog"

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from fastapi.concurrency import run_in_threadpool
 
-from catalog.api import fga_deps
+from catalog.api.authz import write_doors
 from catalog.api.dependencies import Resolver
 from catalog.api.security import Caller
 from catalog.core import run_context, version_retention
@@ -51,7 +51,10 @@ async def record_declared_inputs(settings: CatalogStore, resolver: Resolver, run
         OSError: The store refused the record's read or write.
     """
     hook = table_inputs.recorder(
-        settings.registry_root, settings.storage_options(), name=fga_ids.canonical_object_id(segments), declared=await fga_deps.declared_inputs(resolver, run)
+        settings.registry_root,
+        settings.storage_options(),
+        name=fga_ids.canonical_object_id(segments),
+        declared=await write_doors.declared_inputs(resolver, run),
     )
     if hook is not None:
         await run_in_threadpool(hook, table.require_uuid())

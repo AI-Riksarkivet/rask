@@ -2,7 +2,7 @@
 
 [[LH-055]]/[[LH-058]]. A `can_grant_<rung>` in `model.fga` is a promise: this privilege is meant to be
 handed out by someone other than a platform admin. The promise is kept by a DOOR, and the two are
-wired through different lists — `fga_deps._grant_actions` reads `can_grant_*` off the compiled model,
+wired through different lists — `grant_authority.grant_actions` reads `can_grant_*` off the compiled model,
 while `access._GRANTABLE_BASE` is hand-kept. A rung present in the first and absent from the second is
 declared, reachable by owners alone, and refused 400 by the only endpoint that could delegate it.
 

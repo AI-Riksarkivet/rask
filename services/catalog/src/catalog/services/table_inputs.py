@@ -1,7 +1,7 @@
 """The catalog's own record of every table each writing table's commits declared they read ([[LH-541]], ADR 0183).
 
 A run names its inputs in its commit (``rask.inputs``, ADR 0156 C2), and the catalog resolves each to the uuid it names,
-under the committer's grant, before the commit is finalized (``catalog.api.fga_deps.require_declared_inputs``). This
+under the committer's grant, before the commit is finalized (``catalog.api.authz.write_doors.require_declared_inputs``). This
 record keeps what that resolution found: for each writing table, keyed by its uuid, every input uuid its commits declared,
 with when the catalog first recorded it and the version and branch of the input that declaration named. The writing
 commit's own version is not known before a door commits (``tables.commits.commit_stamped`` plans it on the ref's latest version

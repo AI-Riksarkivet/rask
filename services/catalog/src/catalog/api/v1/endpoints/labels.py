@@ -6,7 +6,7 @@ every route.
 - **On a table or namespace**, addressed by name as every governed door is and keyed by the object's uuid:
   ``…/labels/describe`` is a metadata read, and the router asks ``can_get_metadata``; ``…/labels/set`` and
   ``…/labels/remove`` change how the object is classified, and the router asks ``can_label``, the owner's act, as
-  arming protection is (`catalog.api.fga_deps`). Each change is announced as an untargeted control event.
+  arming protection is (`catalog.api.authz`). Each change is announced as an untargeted control event.
 - **On a project**, which the router does not guard, so each door gates itself as the project's other doors do: the
   definitions and the labelled objects are read by a member of the project or the estate admin, and anyone else is
   answered the missing project's 404; a definition is made, evolved and deleted by the project's admin
@@ -34,7 +34,7 @@ from lance_namespace import (
     TableNotFoundError,
 )
 
-from catalog.api import fga_deps
+from catalog.api.authz import decisions, door_gates, hierarchy, objects, visible_pages
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, ResolvedTableDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import CatalogStore, Settings
@@ -109,7 +109,7 @@ async def _describe(settings: CatalogStore, *, kind: LabelScope, segments: Seque
 async def _uuid_now(ns: LanceNamespace, settings: CatalogStore, kind: LabelScope, segments: Sequence[str]) -> str | None:
     """The uuid of the object the name holds now, ``None`` when it holds none."""
     try:
-        return (await fga_deps.standing(ns, settings, kind, list(segments))).uuid
+        return (await objects.standing(ns, settings, kind, list(segments))).uuid
     except (TableNotFoundError, NamespaceNotFoundError):
         return None
 
@@ -206,11 +206,11 @@ async def remove_table_label(
     return await _remove(settings, control, token, body, kind="table", segments=table.segments, uuid=table.require_uuid())
 
 
-async def _namespace(id: str, resolver: Resolver, ns: LanceNamespace) -> fga_deps.GovernedObject:
+async def _namespace(id: str, resolver: Resolver, ns: LanceNamespace) -> objects.GovernedObject:
     segments = parse_identifier(id)
     if len(segments) < 2:
         raise InvalidInputError("labels attach to a namespace inside a warehouse, not to the root or a warehouse")
-    return await fga_deps.identify_namespace(resolver, ns, segments)
+    return await objects.identify_namespace(resolver, ns, segments)
 
 
 @namespace_router.post("/{id}/labels/describe", response_model_exclude_none=True)
@@ -226,7 +226,7 @@ async def set_namespace_label(
 ) -> ObjectLabelsResponse:
     """Attach a label the namespace's project defines; the namespace's labels after. Asked at ``can_label``."""
     namespace = await _namespace(id, resolver, ns)
-    await fga_deps.require_namespace_as_identified(ns, namespace)
+    await hierarchy.require_namespace_as_identified(ns, namespace)
     return await _set(ns, settings, control, token, body, kind="namespace", segments=namespace.segments, uuid=namespace.uuid, location=None)
 
 
@@ -236,7 +236,7 @@ async def remove_namespace_label(
 ) -> ObjectLabelsResponse:
     """Remove a label from the namespace (idempotent). Asked at ``can_label``."""
     namespace = await _namespace(id, resolver, ns)
-    await fga_deps.require_namespace_as_identified(ns, namespace)
+    await hierarchy.require_namespace_as_identified(ns, namespace)
     return await _remove(settings, control, token, body, kind="namespace", segments=namespace.segments, uuid=namespace.uuid)
 
 
@@ -263,7 +263,7 @@ async def _readable_project(id: str, settings: Settings, token: Caller | None, c
     project = _project(id)
     doors = [("can_list_all_projects", settings.fga_root_object), ("member", f"project:{project}")]
     try:
-        await fga_deps.require_any_relation(client, settings, token, doors=doors)
+        await door_gates.require_any_relation(client, settings, token, doors=doors)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project}") from exc
     return await _registered(settings, project)
@@ -272,7 +272,7 @@ async def _readable_project(id: str, settings: Settings, token: Caller | None, c
 async def _administered_project(id: str, settings: Settings, token: Caller | None, client: FgaClientDep) -> str:
     """``id``, for its project's admin; a project the registry does not hold is not found, after the gate."""
     project = _project(id)
-    await fga_deps.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
     return await _registered(settings, project)
 
 
@@ -392,8 +392,8 @@ async def list_labelled_objects(
     async def judged_on(batch: Sequence[ObjectLabelsResponse]) -> list[str | None]:
         return [_object(item.kind, item.uuid) for item in batch]
 
-    page, next_token = await fga_deps.judged_page(
-        fga_deps.authorization(settings, client, token),
+    page, next_token = await visible_pages.judged_page(
+        decisions.authorization(settings, client, token),
         relation="can_get_metadata",
         candidates=candidates,
         objects_of=judged_on,

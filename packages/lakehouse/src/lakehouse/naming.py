@@ -11,7 +11,7 @@ from typing import Final
 #: Namespace spec fixes it: a request naming no delimiter uses ``$`` (``lance_docs/ns_catalog/spec.yaml:2314-2318``), so
 #: no setting moves it ([[LH-526]]). Every parse site splits on it and every producer, pipeline and reader joins with it,
 #: so the ids the catalog answers and the ids every client sends cannot drift apart, and the catalog refuses a request
-#: naming another (``catalog.api.fga_deps.require_request_names``). No name holds it (ADR 0173 §4). It spells a table's catalog id and its lineage
+#: naming another (``catalog.api.authz.request_reads.require_request_names``). No name holds it (ADR 0173 §4). It spells a table's catalog id and its lineage
 #: Dataset name; a table's and a namespace's grants and records are held by their uuids (ADR 0173 §8).
 CATALOG_DELIMITER: Final = "$"
 

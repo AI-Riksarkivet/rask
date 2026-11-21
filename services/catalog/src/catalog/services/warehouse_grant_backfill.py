@@ -27,7 +27,7 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING
 
-from catalog.api import fga_deps
+from catalog.api.authz import warehouse_grants
 from catalog.services import warehouses
 from lakehouse.governed.auth_lifespan import build_fga_client
 
@@ -88,7 +88,7 @@ async def _reconcile(client: OpenFgaClient, settings: Settings) -> tuple[int, in
         warehouse_id, project = record.id, record.project
         seen += 1
         try:
-            written += await fga_deps.converge_warehouse_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=ACTOR)
+            written += await warehouse_grants.converge_warehouse_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=ACTOR)
         except Exception as exc:
             # One unreachable warehouse must not abandon the rest — but it MUST be reported, and the
             # exit code must reflect it. A backfill that half-ran and said nothing is how an estate

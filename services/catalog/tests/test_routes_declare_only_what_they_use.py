@@ -47,9 +47,9 @@ def test_the_task_routes_are_still_authenticated(path: str) -> None:
         ran.append(path)
         raise RuntimeError("authorize ran")
 
-    from catalog.api import fga_deps
+    from catalog.api.authz import route_guard
 
-    app.dependency_overrides[fga_deps.authorize] = _refuse
+    app.dependency_overrides[route_guard.authorize] = _refuse
     app.include_router(api_router)
     with TestClient(app, raise_server_exceptions=False) as client:
         response = client.get(path)

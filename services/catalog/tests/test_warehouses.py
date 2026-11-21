@@ -25,7 +25,8 @@ from openfga_sdk.client import OpenFgaClient
 from pydantic import SecretStr
 from unfiled_announcer import unfiled
 
-from catalog.api import dependencies, fga_deps
+from catalog.api import dependencies
+from catalog.api.authz import door_gates, hierarchy, object_grants, warehouse_grants
 from catalog.api.security import Caller
 from catalog.core.config import Settings
 from catalog.core.vending import ModeBVendor
@@ -115,7 +116,7 @@ def test_gate_fails_closed_on_outage(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(fga_reads, "check", outage)
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(fga_deps.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
+        asyncio.run(door_gates.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
 
 
 _TOKEN = _caller("dex~alice")
@@ -136,8 +137,8 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     # Drive BOTH seeds: together they are the full tuple surface this feature writes — seed_warehouse
     # (owner + the project edge, from warehouse-create) and seed_project_admin (the tenant's admin,
     # minted by POST /management/v1/projects since the bootstrap exception died).
-    asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
-    granted = asyncio.run(fga_deps.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN.subject, project="acme", admin="dex~alice"))
+    asyncio.run(warehouse_grants.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
+    granted = asyncio.run(object_grants.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN.subject, project="acme", admin="dex~alice"))
     assert granted is True  # reported, so create_project only audits a grant that really happened
     assert captured, "the seeds wrote no tuples"
     model = {t["type"]: set(t.get("relations") or {}) for t in fga_model.load_model()["type_definitions"]}
@@ -248,11 +249,11 @@ def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> Non
     identically for every caller, which is why it runs before authz."""
     settings = _fga_settings(control_root=f"file://{tmp_path}")
     with pytest.raises(TableNotFoundError) as exc:
-        asyncio.run(fga_deps.require_project_exists(settings, "ghost"))
+        asyncio.run(hierarchy.require_project_exists(settings, "ghost"))
     assert "POST /management/v1/projects" in str(exc.value)
     # …and an existing record passes untouched.
     seeding.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "x"})
-    asyncio.run(fga_deps.require_project_exists(settings, "acme"))
+    asyncio.run(hierarchy.require_project_exists(settings, "acme"))
 
 
 def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_path: Any, monkeypatch: pytest.MonkeyPatch, openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore

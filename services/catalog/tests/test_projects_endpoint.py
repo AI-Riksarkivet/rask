@@ -29,7 +29,7 @@ from lakehouse.storage.options import StorageOptions
 
 
 def _settings(*, fga_enabled: bool = False) -> Any:
-    # fga_enabled=False: every authorization decision allows (``fga_deps.authorization`` answers None) and
+    # fga_enabled=False: every authorization decision allows (``decisions.authorization`` answers None) and
     # _admins_for degrades to []; the list's own check is asserted with FGA on below. registry_root/storage_options
     # feed the (patched) list_warehouses call.
     return SimpleNamespace(

@@ -7,7 +7,7 @@ callers, so the sending is the catalog's, judged on its own reads. Asked on ``ca
 the rung the trash, clone-ending and idempotency-record doors ask, which only the ``reclaimer`` role opens: no new
 grant. Each finish is recorded on the audit trail, since it sends on the catalog's own signature.
 
-The router guard leaves this path to its handler (``fga_deps._RESOURCES`` names none of it), so the gate is this
+The router guard leaves this path to its handler (``rungs._RESOURCES`` names none of it), so the gate is this
 router's own dependency, as the trash doors' is.
 """
 

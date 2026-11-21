@@ -103,7 +103,7 @@
 	// means unanswered, which is not the same as "not managed": claiming a policy before the read
 	// lands would be as wrong as hiding one.
 	let managed = $state<boolean | null>(null);
-	// Namespace policy set/delete is gated by the catalog on `can_delete` (fga_deps' suffix map), so
+	// Namespace policy set/delete is gated by the catalog on `can_delete` (the owner suffix map in its `authz/rungs.py`), so
 	// that is the rung the button must agree with — not a rung this page invents.
 	const mayEditPolicy = $derived(perms?.can_delete === true);
 	// ONE string, shared by the three gated policy controls and the sentence below them — three copies

@@ -19,7 +19,7 @@ import pyarrow as pa
 import pytest
 from lance_namespace import InvalidInputError, LanceNamespace
 
-from catalog.api import fga_deps
+from catalog.api.authz import hierarchy
 from catalog.api.idempotency import KeyedDoor
 from catalog.api.v1.endpoints import data as ep
 from catalog.core.config import Settings
@@ -39,7 +39,7 @@ def no_round_trips(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     async def _parent(*_a: Any, **_kw: Any) -> None:
         dialled.append("require_parent_exists")
 
-    monkeypatch.setattr(fga_deps, "require_parent_exists", _parent)
+    monkeypatch.setattr(hierarchy, "require_parent_exists", _parent)
     return dialled
 
 

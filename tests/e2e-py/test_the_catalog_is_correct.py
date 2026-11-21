@@ -27,7 +27,7 @@ governance. This module holds both halves on the deployed catalog, through the c
    an external blob base only inside an approved one. Each answers its spec code, or the request's success, and leaves
    what it acts on as it was.
 
-A door's rung is what `catalog.api.fga_deps` asks for there, reduced to the ladder by model.fga: the reads ask
+A door's rung is what `catalog.api.authz` asks for there, reduced to the ladder by model.fga: the reads ask
 `can_get_metadata` or `can_read_data` (reader), the writes `can_write_data` or a create on the parent (writer), and the
 lifecycle, ref-plane and grant doors `can_drop`, `can_deregister`, `can_restore`, `can_create_branch`, a tag rung or a
 grant rung, each of which ownership carries (owner). The label's revoke door asks `can_revoke_grant`, which only the

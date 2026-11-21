@@ -15,7 +15,7 @@ An assignee is a principal or another standing role of the same project; anythin
 rules keep a change of who is in a role from raising anyone's access past what its caller could grant:
 
 * No assignment raises the caller's own access: assigning themselves, or a role they are in, is refused 403 unless they
-  already hold the role (:func:`fga_deps.refuse_self_elevation`, the grant doors' own separation of duties).
+  already hold the role (:func:`grant_authority.refuse_self_elevation`, the grant doors' own separation of duties).
 * While a project's ``admin`` reaches the role, held by it or by a role it is nested beneath however deep, changing who
   is in it asks ``can_grant_admin`` on that project, the rung the members door asks to make an admin, so a security
   admin makes and unmakes no admin through a role ([[LH-597]]). Ending such a role asks it too.
@@ -35,8 +35,9 @@ from fastapi import APIRouter, status
 from lance_namespace import InvalidInputError, NamespaceAlreadyExistsError, PermissionDeniedError, TableNotFoundError
 from starlette.concurrency import run_in_threadpool
 
-from catalog.api import announcing, fga_deps
+from catalog.api import announcing
 from catalog.api.announcing import AnnouncerDep
+from catalog.api.authz import decisions, door_gates, grant_authority
 from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
 from catalog.api.security import CurrentToken, current_subject
 from catalog.api.v1.endpoints.members import ProjectId
@@ -66,12 +67,12 @@ management_router = APIRouter(prefix="/management/v1/projects", tags=["roles"])
 async def _project_gate(*, client: OpenFgaClient | None, settings: Settings, token: Caller | None, project_id: str, relation: str) -> OpenFgaClient:
     """The client, once the caller holds ``relation`` on an existing ``project_id``; else the missing project's 404."""
     try:
-        await fga_deps.require_relation(client, settings, token, relation=relation, obj=f"project:{project_id}")
+        await door_gates.require_relation(client, settings, token, relation=relation, obj=f"project:{project_id}")
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
     if await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project_id) is None:
         raise TableNotFoundError(f"project not found: {project_id}")
-    return fga_deps.require_fga(settings, client, feature="roles")
+    return decisions.require_fga(settings, client, feature="roles")
 
 
 async def _role_gate(
@@ -81,12 +82,12 @@ async def _role_gate(
     the missing role's 404."""
     missing = TableNotFoundError(f"role not found: {role_id}")
     try:
-        await fga_deps.require_relation(client, settings, token, relation=relation, obj=roles.role_object(role_id))
+        await door_gates.require_relation(client, settings, token, relation=relation, obj=roles.role_object(role_id))
     except PermissionDeniedError as exc:
         raise missing from exc
     if (role := await run_in_threadpool(roles.find_role, settings.registry_root, settings.storage_options(), project_id, role_id)) is None:
         raise missing
-    return fga_deps.require_fga(settings, client, feature="roles"), role
+    return decisions.require_fga(settings, client, feature="roles"), role
 
 
 def _announced_actor(token: Caller | None) -> str | None:
@@ -213,7 +214,7 @@ def _admin_grant(*, client: OpenFgaClient, settings: FgaSettings, token: Caller 
     async def permit(projects: list[str]) -> None:
         try:
             for project in projects:
-                await fga_deps.require_relation(client, settings, token, relation="can_grant_admin", obj=project)
+                await door_gates.require_relation(client, settings, token, relation="can_grant_admin", obj=project)
         except PermissionDeniedError as exc:
             raise TableNotFoundError(f"role not found: {role.id}") from exc
 
@@ -247,7 +248,7 @@ async def assign_role(
     user = await _assignee(settings=settings, role=role, raw=body.user)
     obj = roles.role_object(role.id)
     if token is not None:
-        await fga_deps.refuse_self_elevation(wired, user=token.subject, grantee=user, relation=roles.ASSIGNEE, obj=obj)
+        await grant_authority.refuse_self_elevation(wired, user=token.subject, grantee=user, relation=roles.ASSIGNEE, obj=obj)
     actor = current_subject(token)
     tup = fga_writes.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
     told = announcing.grant_announcement(tup, action="grant_added", actor=_announced_actor(token))

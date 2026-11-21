@@ -15,7 +15,7 @@ project's governance changes (one topic, no per-tenant partition). Observing it 
 object (``settings.fga_root_object`` = ``estate:rask``), an owner-tier action, so **authorization
 scope == data scope** — a mere project admin gets a 403 (the #12 fix; the earlier per-project param let any
 project admin read the whole estate). The root being its OWN TYPE is what makes that structural rather than
-a convention: no tenant can own an ``estate:`` object, so the privilege cannot be reached sideways. ``/management/v1/events`` matches no resource prefix in ``fga_deps.authorize`` so
+a convention: no tenant can own an ``estate:`` object, so the privilege cannot be reached sideways. ``/management/v1/events`` matches no resource prefix in ``route_guard.authorize`` so
 the router-wide gate only sets the 401/503 floor; the ``can_observe_events`` decision is made here explicitly.
 A *meaningful* poll (events delivered or a reset) is audited
 (``event_stream_opened``) — never an empty tick, so a 5s-polling console doesn't flood the audit trail.
@@ -29,7 +29,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query, Request
 from lance_namespace import ServiceUnavailableError
 
-from catalog.api import fga_deps
+from catalog.api.authz import door_gates
 from catalog.api.control_lane import STREAM, TOPIC, control_event_in, judge
 from catalog.api.dependencies import FgaClientDep, SettingsDep, app_wire
 from catalog.api.security import CurrentToken
@@ -60,7 +60,7 @@ async def poll_control_events(
     # Estate gate: can_observe_events on the fixed root object (NOT a caller-supplied project → no injectable
     # object id, and authz scope == the estate-wide data scope). 403 for a non-estate-admin, 503 on an FGA
     # outage, no-op when FGA is off.
-    await fga_deps.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
+    await door_gates.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
     events, cursor, reset = await _served(request, settings, since)
     # Audit only a MEANINGFUL poll (events delivered or a reset), NEVER an empty 5s tick — else a polling
     # console floods the #41 audit trail. The gate's own allow/deny audit still records every authorized read.

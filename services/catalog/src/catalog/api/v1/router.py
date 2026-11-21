@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends
 
-from catalog.api.fga_deps import authorize, require_request_names
+from catalog.api.authz.request_reads import require_request_names
+from catalog.api.authz.route_guard import authorize
 from catalog.api.security import authenticate
 from catalog.api.v1.endpoints import (
     access,

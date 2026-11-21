@@ -86,19 +86,6 @@ class _AuditRecorder:
 
 
 @pytest.fixture
-def gate_seen(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    """Stub the estate gate's require_relation, recording what it was asked to check."""
-    seen: dict[str, Any] = {}
-
-    async def _fake_require(_client: Any, _settings: Any, _token: Any, *, relation: str, obj: str) -> None:
-        seen["relation"] = relation
-        seen["obj"] = obj
-
-    monkeypatch.setattr(ep.fga_deps, "require_relation", _fake_require)
-    return seen
-
-
-@pytest.fixture
 def rec(monkeypatch: pytest.MonkeyPatch) -> _AuditRecorder:
     recorder = _AuditRecorder()
     monkeypatch.setattr(ep, "audit", recorder)
@@ -135,7 +122,7 @@ def _read(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> tuple[dict[str, Any
 # ── pagination ────────────────────────────────────────────────────────────────────────────────────────
 
 
-def test_pagination_params_pass_through_and_token_returns(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_pagination_params_pass_through_and_token_returns(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     seen, response = _read(monkeypatch, page_size=25, continuation="tok-prev")
     assert seen["page_size"] == 25 and seen["continuation_token"] == "tok-prev"
     assert response.continuation == "tok-next"
@@ -173,16 +160,14 @@ def _mutate(monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, 
         pytest.param("user:CiQ1c2VyLTESBWxvY2Fs", "user:CiQ1c2VyLTESBWxvY2Fs", id="a-stored-id-naming-no-principal-is-revoked-as-stored"),
     ],
 )
-def test_a_delete_removes_the_tuple_as_the_store_holds_it(
-    gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch, user: str, deleted: str
-) -> None:
+def test_a_delete_removes_the_tuple_as_the_store_holds_it(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch, user: str, deleted: str) -> None:
     """A revoke reaches the tuple it names, including a grant to an id no principal forms ([[LH-063]])."""
     written, _ = _mutate(monkeypatch, AccessTuple(user=user, relation="writer", object=NAMESPACE), write=False)
     assert [tup.user for tup in written] == [deleted]
     assert rec.calls == []  # same as the write path: the library owns the success row
 
 
-def test_write_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_outage_audits_failure_and_raises(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     body = AccessTuple(user="dex~alice", relation="reader", object=TABLE)
     with pytest.raises(ServiceUnavailableError):
         _mutate(monkeypatch, body, write=True, fail=True)
@@ -222,7 +207,7 @@ def _mutate_recording_emission(
     return emitter
 
 
-def test_write_emits_grant_added(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_write_emits_grant_added(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     emitter = _mutate_recording_emission(monkeypatch, AccessTuple(user="dex~alice", relation="reader", object=TABLE), write=True)
     [event] = emitter.events
     assert (event.action, event.object_type, event.object_id) == ("grant_added", "grant", TABLE)
@@ -234,7 +219,7 @@ def test_write_emits_grant_added(gate_seen: dict[str, Any], rec: _AuditRecorder,
     assert rec.calls == []
 
 
-def test_write_rejects_a_derived_can_relation(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_write_rejects_a_derived_can_relation(rec: _AuditRecorder) -> None:
     # can_read_data is DEFINED on table but not directly assignable — OpenFGA would 400 it with the same
     # error class the idempotent-duplicate handling swallows, so it must never leave this process.
     body = AccessTuple(user="dex~alice", relation="can_read_data", object=TABLE)
@@ -242,7 +227,7 @@ def test_write_rejects_a_derived_can_relation(gate_seen: dict[str, Any], rec: _A
         asyncio.run(ep.write_access_tuple(resolver=_RESOLVER, client=_fga_client(), announcer=unfiled(NoopControlEmitter()), token=None, body=body))
 
 
-def test_write_rejects_unknown_type_and_bare_object(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_write_rejects_unknown_type_and_bare_object(rec: _AuditRecorder) -> None:
     for bad in ("gizmo:x", "table", "table:"):
         with pytest.raises(InvalidInputError):
             asyncio.run(
@@ -259,7 +244,7 @@ def test_write_rejects_unknown_type_and_bare_object(gate_seen: dict[str, Any], r
 # ── the model + check surfaces ────────────────────────────────────────────────────────────────────────
 
 
-def test_model_returns_the_checked_in_dsl_and_the_id_the_catalog_checks_against(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_model_returns_the_checked_in_dsl_and_the_id_the_catalog_checks_against(rec: _AuditRecorder) -> None:
     client = SimpleNamespace(get_authorization_model_id=lambda: "01MODEL")
     response = asyncio.run(ep.get_access_model(client=_fga_client(client)))
     assert response.authorization_model_id == "01MODEL"
@@ -280,7 +265,6 @@ def _on(store: Any, call: Callable[[Any], Awaitable[Any]]) -> Any:  # noqa: ANN4
     ("subject", "allowed"), [pytest.param("dex~alice", True, id="the-subject-the-tuple-names"), pytest.param("dex~bob", False, id="another")]
 )
 def test_check_probes_any_defined_relation_with_qualified_subject(
-    gate_seen: dict[str, Any],
     rec: _AuditRecorder,
     openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
     subject: str,
@@ -301,7 +285,7 @@ def test_check_probes_any_defined_relation_with_qualified_subject(
     assert rec.calls == [("access_simulate", "success", {"subject": "dex~root_admin", "resource": NAMESPACE})]
 
 
-def test_check_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_check_rejects_a_phantom_relation(rec: _AuditRecorder) -> None:
     # A relation the compiled model does not define would be an OpenFGA 400 → 503 for the caller; it must
     # be a clean 400 here instead (the test_fga_model_contract posture).
     with pytest.raises(InvalidInputError, match="can_fly"):
@@ -326,9 +310,7 @@ def test_check_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _Audit
 # than one that does not exist.
 
 
-def test_list_objects_qualifies_a_bare_subject_and_says_when_openfga_cut_the_answer(
-    gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_list_objects_qualifies_a_bare_subject_and_says_when_openfga_cut_the_answer(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, Any] = {}
 
     async def _fake(_client: Any, **kwargs: Any) -> Any:
@@ -344,9 +326,8 @@ def test_list_objects_qualifies_a_bare_subject_and_says_when_openfga_cut_the_ans
             body=AccessListObjectsRequest(user="dex~alice", relation="can_read_data", type="table"),
         )
     )
-    # The GATE assertion moved out of this test: it is a router dependency now, so a direct handler
-    # call does not run it and `gate_seen` would stay empty no matter what the route declares.
-    # What remains here is what this test is actually named for.
+    # The estate gate is a router dependency, which a direct handler call does not run: this test holds what it is
+    # named for, and the gate is held where the route runs it.
     # qualify=False with a pre-resolved subject — the same double-prefix guard `check` carries.
     assert seen == {"user": "user:dex~alice", "relation": "can_read_data", "object_type": "table", "qualify": False}
     assert response.objects == [TABLE, OTHER_TABLE]
@@ -357,7 +338,7 @@ def test_list_objects_qualifies_a_bare_subject_and_says_when_openfga_cut_the_ans
     assert rec.calls[0][2]["delivered"] == 2
 
 
-def test_list_objects_rejects_an_unknown_type_and_a_phantom_relation(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_list_objects_rejects_an_unknown_type_and_a_phantom_relation(rec: _AuditRecorder) -> None:
     with pytest.raises(InvalidInputError, match="dragon"):
         asyncio.run(
             ep.list_access_objects(
@@ -378,7 +359,7 @@ def test_list_objects_rejects_an_unknown_type_and_a_phantom_relation(gate_seen: 
         )
 
 
-def test_list_objects_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_objects_outage_audits_failure_and_raises(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     async def _down(_client: Any, **_kwargs: Any) -> list[str]:
         raise ServiceUnavailableError("openfga down")
 
@@ -395,7 +376,7 @@ def test_list_objects_outage_audits_failure_and_raises(gate_seen: dict[str, Any]
     assert rec.calls[0][:2] == ("access_list_objects", "failure")
 
 
-def test_list_users_returns_qualified_subjects_and_flags_truncation(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_users_returns_qualified_subjects_and_flags_truncation(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, Any] = {}
 
     async def _fake(_client: Any, **kwargs: Any) -> list[str]:
@@ -419,7 +400,7 @@ def test_list_users_returns_qualified_subjects_and_flags_truncation(gate_seen: d
     assert rec.calls[0][:2] == ("access_list_users", "success")
 
 
-def test_list_users_passes_a_userset_filter_through(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_users_passes_a_userset_filter_through(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, Any] = {}
 
     async def _fake(_client: Any, **kwargs: Any) -> list[str]:
@@ -441,7 +422,7 @@ def test_list_users_passes_a_userset_filter_through(gate_seen: dict[str, Any], r
     assert response.truncated is False
 
 
-def test_list_users_rejects_a_phantom_subject_filter(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_list_users_rejects_a_phantom_subject_filter(rec: _AuditRecorder) -> None:
     with pytest.raises(InvalidInputError, match="dragon"):
         asyncio.run(
             ep.list_access_users(
@@ -464,7 +445,7 @@ def test_list_users_rejects_a_phantom_subject_filter(gate_seen: dict[str, Any], 
         )
 
 
-def test_expand_returns_the_tree_and_records_the_depth(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_expand_returns_the_tree_and_records_the_depth(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, Any] = {}
 
     async def _fake(_client: Any, **kwargs: Any) -> dict[str, Any]:
@@ -488,7 +469,7 @@ def test_expand_returns_the_tree_and_records_the_depth(gate_seen: dict[str, Any]
     assert rec.calls[0][:2] == ("access_expand", "success")
 
 
-def test_expand_clamps_depth_to_the_library_ceiling(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_expand_clamps_depth_to_the_library_ceiling(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict[str, Any] = {}
 
     async def _fake(_client: Any, **kwargs: Any) -> dict[str, Any]:
@@ -511,7 +492,7 @@ def test_expand_clamps_depth_to_the_library_ceiling(gate_seen: dict[str, Any], r
     assert response.depth == fga_reads.MAX_EXPAND_TREE_DEPTH
 
 
-def test_expand_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_expand_outage_audits_failure_and_raises(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     async def _down(_client: Any, **_kwargs: Any) -> dict[str, Any]:
         raise ServiceUnavailableError("openfga down")
 
@@ -529,7 +510,7 @@ def test_expand_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec:
     assert rec.calls[0][:2] == ("access_expand", "failure")
 
 
-def test_expand_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_expand_rejects_a_phantom_relation(rec: _AuditRecorder) -> None:
     with pytest.raises(InvalidInputError, match="can_fly"):
         asyncio.run(
             ep.expand_access(
@@ -551,7 +532,6 @@ def test_expand_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _Audi
     ],
 )
 def test_simulate_returns_the_delta_not_just_the_verdict(
-    gate_seen: dict[str, Any],
     rec: _AuditRecorder,
     openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
     held: list[tuple[str, str, str]],
@@ -575,7 +555,7 @@ def test_simulate_returns_the_delta_not_just_the_verdict(
     assert rec.calls[0][:2] == ("access_simulate_hypothetical", "success")
 
 
-def test_simulate_rejects_a_hypothesis_it_would_refuse_to_write(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_simulate_rejects_a_hypothesis_it_would_refuse_to_write(rec: _AuditRecorder) -> None:
     """A hypothetical must clear the SAME validation a real write clears.
 
     Simulating a grant this API would refuse to perform describes a world that cannot be reached — a
@@ -599,7 +579,7 @@ def test_simulate_rejects_a_hypothesis_it_would_refuse_to_write(gate_seen: dict[
         )
 
 
-def test_simulate_outage_audits_failure_and_raises(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_simulate_outage_audits_failure_and_raises(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     async def _down(_client: Any, **_kwargs: Any) -> bool:
         raise ServiceUnavailableError("openfga down")
 
@@ -639,7 +619,7 @@ def _write_conditional(monkeypatch: pytest.MonkeyPatch, body: AccessTuple) -> li
     return written
 
 
-def test_a_conditional_grant_reaches_openfga_with_its_condition(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_conditional_grant_reaches_openfga_with_its_condition(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     written = _write_conditional(
         monkeypatch,
         AccessTuple(
@@ -655,7 +635,7 @@ def test_a_conditional_grant_reaches_openfga_with_its_condition(gate_seen: dict[
     assert written[0].condition.context["grant_duration"] == "4h"
 
 
-def test_a_condition_the_rung_does_not_accept_is_a_clean_400(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_a_condition_the_rung_does_not_accept_is_a_clean_400(rec: _AuditRecorder) -> None:
     # `owner` deliberately omits the conditional form. Naming a condition on it must be rejected HERE —
     # reaching OpenFGA earns a 400 that this API's fail-closed handling turns into a 503 for everyone.
     with pytest.raises(InvalidInputError, match="non_expired_grant"):
@@ -675,7 +655,7 @@ def test_a_condition_the_rung_does_not_accept_is_a_clean_400(gate_seen: dict[str
         )
 
 
-def test_an_unknown_condition_is_a_clean_400(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_an_unknown_condition_is_a_clean_400(rec: _AuditRecorder) -> None:
     with pytest.raises(InvalidInputError, match="never_expires"):
         asyncio.run(
             ep.write_access_tuple(
@@ -688,7 +668,7 @@ def test_an_unknown_condition_is_a_clean_400(gate_seen: dict[str, Any], rec: _Au
         )
 
 
-def test_a_condition_missing_a_parameter_is_a_clean_400(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:
+def test_a_condition_missing_a_parameter_is_a_clean_400(rec: _AuditRecorder) -> None:
     # An absent CEL operand does not evaluate false — it ERRORS. Catching it at write time makes the
     # grant fail now, instead of turning every later check on the object into a 503.
     with pytest.raises(InvalidInputError, match="grant_duration"):
@@ -721,7 +701,7 @@ def _clock_pinned_grant() -> AccessTuple:
     )
 
 
-def test_a_caller_supplied_clock_is_refused_on_a_write(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_caller_supplied_clock_is_refused_on_a_write(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     """`current_time` is the CHECK's clock. OpenFGA evaluates a parameter stored on the tuple over the one
     the check sends (pinned in `model.fga.yaml`), so a clock written onto the grant freezes 'now' inside
     the window and the grant never lapses: whoever writes the tuple, not the window, decides its expiry."""
@@ -740,7 +720,7 @@ def test_a_caller_supplied_clock_is_refused_on_a_write(gate_seen: dict[str, Any]
     assert written == []
 
 
-def test_a_simulated_hypothesis_cannot_carry_a_clock_either(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_simulated_hypothesis_cannot_carry_a_clock_either(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     """A contextual tuple is evaluated exactly like a stored one, so a pinned clock would answer "yes" for
     a grant this API refuses to write — the simulation would describe a world that cannot be reached."""
     checks: list[dict[str, Any]] = []
@@ -756,7 +736,7 @@ def test_a_simulated_hypothesis_cannot_carry_a_clock_either(gate_seen: dict[str,
     assert checks == []
 
 
-def test_a_grant_carrying_a_clock_can_still_be_revoked(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_grant_carrying_a_clock_can_still_be_revoked(rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
     """The refusal guards what OpenFGA will EVALUATE. A delete names the tuple by key, and the read door
     echoes a stored condition verbatim — so a pinned grant that reached the store by any other path must
     stay revocable with the very body the Inspector sends back, or the one grant that never expires is

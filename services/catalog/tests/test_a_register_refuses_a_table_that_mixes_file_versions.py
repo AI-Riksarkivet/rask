@@ -195,7 +195,8 @@ class TestThePublicDoor:
         ``compaction-config`` carries a ``lance.compaction.*`` key, which Lance would plan a compaction from in place of the
         table's maintenance policy ([[LH-538]]).
         """
-        from catalog.api import announcing, fga_deps
+        from catalog.api import announcing
+        from catalog.api.authz import object_grants
         from catalog.api.dependencies import get_control_emitter
 
         called: list[str] = []
@@ -222,8 +223,8 @@ class TestThePublicDoor:
         elif case == "unreadable":
             for manifest in (root / "t" / "_versions").iterdir():
                 manifest.write_bytes(b"not a manifest")
-        monkeypatch.setattr(fga_deps, "seed_ownership", _spy("seed"))
-        monkeypatch.setattr(fga_deps, "take_back_seed", _spy("taken back"))
+        monkeypatch.setattr(object_grants, "seed_ownership", _spy("seed"))
+        monkeypatch.setattr(object_grants, "take_back_seed", _spy("taken back"))
         monkeypatch.setattr(announcing, "emit_write_event", _spy("lineage"))
         catalog.app.dependency_overrides[get_control_emitter] = _Control
 

@@ -29,7 +29,7 @@ from __future__ import annotations
 import pytest
 from lance_namespace import InvalidInputError
 
-from catalog.api import fga_deps
+from catalog.api.authz import hierarchy
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH
 
 
@@ -44,6 +44,6 @@ DEEPEST_LEGAL_DEPTH = MAX_NAMESPACE_DEPTH - 1
 
 
 def test_one_level_past_the_ceiling_is_refused() -> None:
-    fga_deps.require_namespace_depth([f"n{i}" for i in range(DEEPEST_LEGAL_DEPTH)])
+    hierarchy.require_namespace_depth([f"n{i}" for i in range(DEEPEST_LEGAL_DEPTH)])
     with pytest.raises(InvalidInputError):
-        fga_deps.require_namespace_depth([f"n{i}" for i in range(DEEPEST_LEGAL_DEPTH + 1)])
+        hierarchy.require_namespace_depth([f"n{i}" for i in range(DEEPEST_LEGAL_DEPTH + 1)])

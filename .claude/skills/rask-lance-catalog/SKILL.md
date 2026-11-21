@@ -57,19 +57,19 @@ Two contracts stack here, and confusing them is how bugs happen:
   destination, the rename answers the name's conflict (409 code 5) with the source put back. A dead rename's fence
   lapses with its claim's `LEASE`. **A rename keeps its table in its warehouse** ([[LH-593]]): a destination naming
   another warehouse, or no namespace of one, is refused 400 by the rename door
-  (`fga_deps.require_rename_within_its_warehouse`, called in `endpoints/tables.py`), since a rename moves a pointer in one directory catalog and never
+  (`hierarchy.require_rename_within_its_warehouse`, called in `endpoints/tables.py`), since a rename moves a pointer in one directory catalog and never
   bytes, so no rename crosses tenants. **A rename into another namespace takes the table's grants along, so it asks
   grant authority** ([[LH-568]]): `can_move` on the table (`manage_grants and can_drop`) in `can_drop`'s place
-  (`fga_deps._rename_relation`, asked by the router) and `can_accept_moved_table` on the namespace it enters in
-  `can_create_table`'s (`fga_deps.require_rename_destination`), so under managed access a writer brings no table in
+  (`rungs.rename_relation`, asked by the router) and `can_accept_moved_table` on the namespace it enters in
+  `can_create_table`'s (`door_gates.require_rename_destination`), so under managed access a writer brings no table in
   and an owner inside takes none out; a rename that keeps its namespace asks `can_drop` on the table and
   `can_create_table` on that namespace. Where the table inherits from moves while the rename holds the claim
-  (`tables.rename.Reparent`, built by `fga_deps.parent_edge_mover`), so the name and the edge have one arbiter. Its
+  (`tables.rename.Reparent`, built by `object_grants.parent_edge_mover`), so the name and the edge have one arbiter. Its
   `parent` edge moves in one OpenFGA Write BEFORE the name; its `child` edge on the source is taken away with it and
   the one on the destination is written only once the name is registered there, because a namespace's removal ends
-  every object its `child` edges name (`fga_deps.end_removed_subtree`) and a table between its two names is in
+  every object its `child` edges name (`object_grants.end_removed_subtree`) and a table between its two names is in
   neither namespace's listing. An undone rename returns the edge before the claim is handed back, and so does a
-  move whose answer OpenFGA lost. The arrival (`fga_deps._arrive_at_destination`) writes the `child` edge while the
+  move whose answer OpenFGA lost. The arrival (`object_grants._arrive_at_destination`) writes the `child` edge while the
   rename still holds the claim fenced ([[LH-586]]), so no rival rename, drop or cascade acts on the table between its
   registration and its edges being whole. A `parent` edge already at the destination is an earlier attempt's and is
   finished by renaming there again, and so is the move of a table found inheriting from the namespace it is named in
@@ -79,9 +79,9 @@ Two contracts stack here, and confusing them is how bugs happen:
   create that keeps a table, or its owner's Overwrite, writes no tuple either, so none puts the readers of the namespace
   a rename left, or died leaving, back on the table. **A table's grants are written before the table** ([[LH-588]]):
   create and declare write them (owner, `parent` and `child`, under the uuid the door minted) once the location's claim
-  records that uuid and before the backend records the table (`fga_deps.GrantsBeforeWrite`, the `before_register` of
+  records that uuid and before the backend records the table (`object_grants.GrantsBeforeWrite`, the `before_register` of
   `tables.creation.declare_table`); register writes them before its native register and again once its claim records the
-  uuid (`fga_deps.seed_before_write`). Every refusal and failed write takes them back (`fga_deps.take_back_seed`), unless
+  uuid (`object_grants.seed_before_write`). Every refusal and failed write takes them back (`object_grants.take_back_seed`), unless
   a table stands under the uuid. A door killed between its grants and its backend write leaves grants alone, which the
   drift repair revokes: the ghost door keeps a table's grants for a held claim only within its `LEASE`, while it is
   fenced, or while its table stands or the trash keeps it (`grant_reconcile.claim_refusal`). Residual: a registration
@@ -147,11 +147,11 @@ Two contracts stack here, and confusing them is how bugs happen:
   as they were. Pinned by `services/catalog/tests/test_a_door_acts_only_on_the_object_its_name_resolved_to.py`, which
   lands a drop and a re-create after the router authorized each door, and, on a handle write and a native read, a
   recoverable drop and a create, and a deregister and a register at the same location. A namespace door reads its
-  namespace through `fga_deps.identify_namespace(resolver, …)`, the uuid the router judged, and asks
-  `fga_deps.require_namespace_as_identified` before it acts (409 code 14 once the name holds another); the same file
+  namespace through `objects.identify_namespace(resolver, …)`, the uuid the router judged, and asks
+  `hierarchy.require_namespace_as_identified` before it acts (409 code 14 once the name holds another); the same file
   races its drop, protection and policy doors, and a cascade raced after that check at its root. A cascade asks again
   as its walk reaches each namespace: the recoverable one compares what it describes before each drop with the uuid it
-  listed, the destroying one re-reads its root before the root's drop. `fga_deps.standing` reads afresh, for a walker
+  listed, the destroying one re-reads its root before the root's drop. `objects.standing` reads afresh, for a walker
   under an authorized container and a door confirming after its write. Residual, stated: the backend drops a namespace
   by name only (`DropNamespaceRequest` has no identity condition, `lance_docs/ns_catalog/spec.yaml:2600`), so a drop
   and a create landing within the one read before a native drop still reach the new namespace: at the Restrict drop
@@ -180,7 +180,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   (`catalog.api.dependencies.Resolver`, `ResolverDep`, which `authorize`, the write judge and `ResolvedTableDep` share),
   so a door acts on the table it authorized. An absent name is refused 403, audited and refused by the name, and only a
   READ door converts a refusal to 404, answering a name the caller cannot see exactly as an absent one, so the answer never
-  depends on whether the name holds an object ([[LH-236]], `fga_deps._refused_read_as_absent`): seeing a namespace is not
+  depends on whether the name holds an object ([[LH-236]], `decisions.refused_read_as_absent`): seeing a namespace is not
   seeing its children, since the model grants `can_get_metadata` upward from any one child. It converts for a caller
   holding `can_get_metadata` on ANY ancestor namespace that stands, a hidden one between them never ending the walk, or on
   an object a recoverable drop trashed at the name or an ancestor's, whatever stands there now ([[LH-536]]: a cascade
@@ -190,9 +190,9 @@ Two contracts stack here, and confusing them is how bugs happen:
   that does not exist, alike. Pinned by
   `services/catalog/tests/test_an_absent_object_is_not_found_rather_than_forbidden.py` on a real OpenFGA. A rename writes no tuple, except
   that a rename into another namespace moves the table's parent and child edges, under the rename's claim
-  (`fga_deps.parent_edge_mover`, [[LH-568]]); a table created again
+  (`object_grants.parent_edge_mover`, [[LH-568]]); a table created again
   under a dropped name is another uuid and inherits nothing; a name holding a space never reaches OpenFGA. Every
-  listing batch-checks its own candidates on their uuids and fills its page (`fga_deps.authorized_page`, [[LH-223]]);
+  listing batch-checks its own candidates on their uuids and fills its page (`visible_pages.authorized_page`, [[LH-223]]);
   only `/management/v1/me` calls `list_objects`, and the estate admin's raw ListObjects explorer. Grant, review and
   access answers carry `object` (the uuid object) and `name`; a control event's `object_id` is the uuid object with
   `object_name` beside it.
@@ -209,7 +209,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   `object_uuids.UnidentifiedObjectError` (code 18) at every door that resolves it. A listing leaves it out and logs
   `listing_left_out_unidentified_object` at ERROR with its name and location, so it never fails the listing for every
   caller. `POST /v1/table/{id}/deregister` on such a table asks `can_deregister_unidentified_table` on the estate root in place of
-  `can_deregister` (`fga_deps._rung_check`) and refuses anyone else with the refusal an absent name gets; the door
+  `can_deregister` (`write_doors._rung_check`) and refuses anyone else with the refusal an absent name gets; the door
   fences the location, detaches the row, releases the claim and announces `table_deregistered` naming it
   `table:<name>` with no `object_uuid`. It emits no lineage marker, since lineage refuses an output no uuid names
   ([[LH-166]]). A namespace that records no uuid has no such door. Measured live 2026-10-24: a rename on helm rev 4
@@ -241,7 +241,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   return plain text.
 - **Identifier:** segments joined by the delimiter `$` — `["a","b","t"]` ↔ `a$b$t`. The root namespace is the
   delimiter itself. `$` is the spec's (`spec.yaml:2314-2318`) and no setting changes it ([[LH-526]]): the router's
-  shape rung (`fga_deps.require_request_names`, between `authenticate` and `authorize`, so 400 before 403) refuses a
+  shape rung (`request_reads.require_request_names`, between `authenticate` and `authorize`, so 400 before 403) refuses a
   `?delimiter` other than `$`, and refuses every segment a naming door is handed (a create, declare, register,
   namespace or view create path id, a rename's destination, a batch's ids) that is not a name: Unicode NFC, 1 to 255
   characters, no `$`, `+`, `/` or control character, no edge whitespace (`identifiers.require_names`, ADR 0173 §4).
@@ -257,17 +257,17 @@ Two contracts stack here, and confusing them is how bugs happen:
   record; any other is its record's `root_uri`, read once per request (`dependencies.ServedWarehouse`; a registry that
   does not answer 503); a first segment naming no warehouse is served from no catalog (`core.namespace.NO_WAREHOUSE`,
   every name absent), so nobody learns which warehouses exist. A deactivated warehouse refuses every operation beneath
-  it 403, told only after the router's permission check passed (`fga_deps.authorize`, then
+  it 403, told only after the router's permission check passed (`route_guard.authorize`, then
   `dependencies.require_active_warehouse`; `Resolver` resolves its names without refusing), so a caller holding
   nothing on it is answered as for any other name. A caller holding a name rather than a request id (`GET /v1/table`, a tick)
   routes through `namespace_for_warehouse`. A one-segment namespace id is the warehouse itself, governed as
   `warehouse:<id>` (`dependencies.warehouse_object`): only its read doors answer (`list`, `table/list`, `describe`,
   `exists`, `access/my-permissions`), and every other namespace door is refused 400 naming
   `/management/v1/warehouses`; a table or view id needs three segments at least, refused 400 otherwise
-  (`fga_deps._require_a_name_inside_a_warehouse`, on the shape rung, so 400 before 403). `GET /v1/namespace/$/list`
+  (`request_reads._require_a_name_inside_a_warehouse`, on the shape rung, so 400 before 403). `GET /v1/namespace/$/list`
   answers the warehouses the caller holds `can_get_metadata` on, the estate's included (`warehouses.served_ids`), and
   `GET /v1/table` walks every warehouse. A rename keeps its table in its warehouse
-  (`fga_deps.require_rename_within_its_warehouse`, 400): a rename moves a pointer in one directory catalog and never
+  (`hierarchy.require_rename_within_its_warehouse`, 400): a rename moves a pointer in one directory catalog and never
   bytes. `MAX_NAMESPACE_DEPTH` is 9 and counts the warehouse: the deepest namespace a door makes has 8 segments, the
   warehouse's included. Each warehouse root's directory catalog holds a row named after the warehouse, carrying a minted
   `rask.uuid` (`warehouses.ensure_catalog_row`), because the `dir` catalog refuses a namespace whose parent has no row
@@ -279,7 +279,7 @@ Two contracts stack here, and confusing them is how bugs happen:
 - **A service-account token is refused when it was minted for longer than an hour** (`RASK_SA_MAX_TOKEN_SECONDS`,
   chart `auth.serviceAccountMaxTokenSeconds`, ADR 0083's amendment, [[LH-585]]): the door verifies offline, so the
   lifetime a token was minted with is how long it outlives its pod and account. A batch names at most 100 tables
-  (`fga_deps.MOST_TABLES_IN_A_BATCH`, 400 at the shape rung).
+  (`rungs.MOST_TABLES_IN_A_BATCH`, 400 at the shape rung).
 - **Identity headers:** `api_key` → `x-api-key`, `auth_token` → `Authorization: Bearer`; arbitrary
   context maps BOTH WAYS through a `header.<name>` context KEY — `{"header.x-trace-id": "abc"}` is
   sent as `x-trace-id: abc` (prefix stripped) and every response header returns as `header.<name>`
@@ -315,13 +315,13 @@ Three layers, each owned in ONE place:
 
 | Layer | Owner |
 | --- | --- |
-| shape (what can exist) | the guards in `catalog/api/fga_deps.py` — `require_parent` (a table must have a namespace; rename destinations too), `_require_a_name_inside_a_warehouse` (a namespace id names a warehouse first and a table or view id has three segments; a one-segment namespace id reaches only the warehouse's read doors), `require_rename_within_its_warehouse`, `require_project_exists` (a warehouse's project must have a registry record — 404 naming `POST /management/v1/projects`), `require_not_protected` (deletion protection — the `force` rule is under Lifecycle) |
+| shape (what can exist) | the guards in `catalog/api/authz/` — `hierarchy.require_parent` (a table must have a namespace; rename destinations too), `request_reads._require_a_name_inside_a_warehouse` (a namespace id names a warehouse first and a table or view id has three segments; a one-segment namespace id reaches only the warehouse's read doors), `hierarchy.require_rename_within_its_warehouse`, `hierarchy.require_project_exists` (a warehouse's project must have a registry record — 404 naming `POST /management/v1/projects`), `hierarchy.require_not_protected` (deletion protection — the `force` rule is under Lifecycle) |
 | who | the FGA model's `can_*` relations (`lakehouse/governed/auth/model.fga`) — the app never invents policy |
 | what is possible NOW | the registries, checked BEFORE the native write: **project records** (`catalog/services/projects.py`, `_projects/<id>.json`), warehouse records (`catalog/services/warehouses.py`, `_warehouses/<id>.json`), each naming its project, bucket and `root_uri`, read by a name's first segment |
 
 **A tenant EXISTS when its registry record does** — not when a warehouse implies it and not when FGA
 holds tuples for it. `POST /management/v1/projects` writes the record AND the `project#admin` tuple (the creator's; a
-machine identity names the person in `admin` and is never admin itself, LH-433, `fga_deps.project_admin_for`; a
+machine identity names the person in `admin` and is never admin itself, LH-433, `object_grants.project_admin_for`; a
 service account's subject is never a person, `is_person_subject`) in
 one operation (gated on `can_create_project` at the estate root: the estate admin or an operator, ADR 0143), which is what stops existence
 and permission drifting apart. **A project always keeps an administrator** ([[LH-434]], [[LH-597]], ADR 0213): who administers a project is every
@@ -348,21 +348,21 @@ emits `principal_deleted` (signed by the catalog), on which a notifier erases wh
 door, and a warehouse-owner cannot ride a create into project admin. **A project is read by the callers its list shows
 it to** ([[LH-587]]): the list answers the estate admin (`can_list_all_projects`) every tenant and anyone else the projects they are a `member`
 of (`projects._visible_projects`), and `GET /management/v1/projects/{id}` decides over the same two doors
-(`fga_deps.require_any_relation`: `can_list_all_projects` on the estate root, or `member` on the project), so the trail
+(`door_gates.require_any_relation`: `can_list_all_projects` on the estate root, or `member` on the project), so the trail
 holds one ALLOW naming the door that opened the read, or a DENY on each for a caller holding neither, who is answered
 the missing project's 404. Pinned by `services/catalog/tests/test_a_project_is_read_by_those_its_list_shows_it_to.py`.
 
 Check order at every create door: **identity (401) → shape (`InvalidInput` 400, the warehouse rule above
 included) → parent exists (404) → authz (403) → conflict (409) → tuples → native write → events** for a table
 ([[LH-588]]), and a namespace's create door writes its owner and `parent` edge before the namespace, under the uuid it
-minted ([[LH-585]], `fga_deps.seed_namespace_before_write`): a seed that fails has written no namespace, a create the
+minted ([[LH-585]], `object_grants.seed_namespace_before_write`): a seed that fails has written no namespace, a create the
 backend refuses or an ExistOk that keeps one takes the grants back (`take_back_unless_namespace_stands`), and a door
 killed between the two leaves an owner and a `parent` edge on a uuid no object holds. The inverse `child` edge, the one
 tuple that shows the parent to whoever holds a rung beneath it, is written only once the namespace stands
 (`name_namespace_child`), so those leftovers grant nothing; no drift repair revokes them (it judges tables).
 **A create lands only in the namespace it was authorized on** ([[LH-585]]): the router authorizes on the parent's uuid
 and the backend records the object by name, so once the row stands each door reads the parent's uuid again
-(`fga_deps.require_parent_as_authorized`: create and declare as `tables.creation.declare_table`'s `after_register`, register
+(`object_grants.require_parent_as_authorized`: create and declare as `tables.creation.declare_table`'s `after_register`, register
 and the namespace door after their native call) and, where a drop and a re-create left another namespace under the
 name, or the parent cannot be read, removes what it recorded and takes its grants back. A changed parent answers 409
 code 14 (`ParentChangedError`, which an ExistOk create never reads as a race it lost); an undo the store refuses
@@ -382,7 +382,7 @@ read-only maintenance gate (`catalog/api/maintenance_mode.py`) refuses writes on
 the ROUTE it matches, never by its path text, since a name can spell a read action (`DELETE /management/v1/projects/list`):
 GET, HEAD and OPTIONS read, DELETE, PUT and PATCH write, and a POST reads only when its route's last literal segment is a
 listed read action (the vend door at the read tier alone); a POST matching no route writes. Through the window the spec
-vend doors vend at most the read tier (`fga_deps.spec_vend_tier`), and every one of the catalog's timers is held: it
+vend doors vend at most the read tier (`write_doors.spec_vend_tier`), and every one of the catalog's timers is held: it
 claims nothing and runs nothing, and the first window after the read-only window does the work (`catalog.api.timers`,
 `lakehouse.timers`). The chart's one `readOnlyWindow` renders the flag into the catalog, maintenance's worker and lineage's relay
 alike ([[LH-572]]). The same classification
@@ -401,7 +401,7 @@ the rule:
   namespace's properties.
 - **What a declaration may say.** `rask.requires_run` takes only `"true"`; `rask.tier` and any other `rask.*` /
   `lineage.*` namespace key are refused 400 (`write_judge.declares_requires_run`).
-- **Every write is judged.** `fga_deps.authorize` hands each non-read `table` / `materialized_view` door and each
+- **Every write is judged.** `route_guard.authorize` hands each non-read `table` / `materialized_view` door and each
   create of one to `write_judge.judge`, with FGA on or off. The judge asks the route's declared rung first, then
   reads the rule, and audits `write_judge` with `requires_run`.
 - **Pinned by tests.** `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and
@@ -410,7 +410,7 @@ the rule:
 - **Under the rule a write names its run** ([[LH-225]], ADR 0156 C2). A write adding data to a table under the rule
   names its run and inputs, and every named input, under the rule or not, must resolve to a table the committer may read (`can_read_data`),
   or the commit is refused 400 code 13 with one sentence for an absent name and an unreadable table
-  (`fga_deps.require_declared_inputs`, ADR 0183 §2); before the commit is finalized the catalog records each input's uuid
+  (`write_doors.require_declared_inputs`, ADR 0183 §2); before the commit is finalized the catalog records each input's uuid
   for the writing table's uuid (`catalog.services.table_inputs`, `_table_inputs/` on the control root, never ended). The
   run is `catalog.core.run_context`: on `create`, `insert` and `merge_insert` it comes from the spec Context headers
   `x-rask-run-id` (a UUID), `x-rask-job-namespace`, `x-rask-job` (all three or none: the run is the commit's OpenLineage
@@ -647,7 +647,7 @@ governing their data. The project-scoped surface is the console's project page, 
   trash record last. Then, one namespace at a time, it detaches every table with `deregister_table` (the bytes stay
   unless `purge_bucket`, and only a purge forgets the base record), drops the namespaces deepest first (the `dir` drop
   is Restrict whatever `behavior` says), and only then ends what each object held, children first, through
-  `fga_deps.end_removed_subtree`: its protection and policy records, then its grants. The grants go last because the
+  `object_grants.end_removed_subtree`: its protection and policy records, then its grants. The grants go last because the
   `child` edge each object left on its parent is what finds it again: a re-issue lists only what still stands, so the
   walk follows the edges as well as the catalog's listing, and ends what an earlier failed attempt left. It skips an
   object with a live trash record, whose records and grants stay for its undrop. Of the tables it listed it ends only
@@ -695,12 +695,12 @@ governing their data. The project-scoped surface is the console's project page, 
   bytes are. **A trash record is keyed by its object's uuid** ([[LH-525]], ADR 0173 §9): the name is free the moment
   its object is dropped, so a table or namespace created there is another uuid and nothing blocks the create. The
   undrop and tasks doors stay addressed by name: `trash.named` finds every record dropped under it, `?uuid=` names
-  one, and the router asks the door's rung on each candidate (`fga_deps._require_trashed`), so a door acts only on,
+  one, and the router asks the door's rung on each candidate (`decisions.require_trashed`), so a door acts only on,
   and lists only, what its caller holds a grant on. Several candidates answer the undrop 409 (code 19) listing each
   uuid and deadline; a live object of another uuid holding the name answers 409 too. A caller who lost the name finds
   the drop on `GET /management/v1/warehouses/{id}/trash` ([[LH-556]]): the route asks `can_get_metadata` on the
   warehouse, its candidates are `warehouses.trash_owned_by`'s, each is judged on its own uuid
-  (`fga_deps.judged_page`), `?namespace=` keeps what was dropped beneath a name, and it pages on name then uuid
+  (`visible_pages.judged_page`), `?namespace=` keeps what was dropped beneath a name, and it pages on name then uuid
   (`trash_doors.listing_key`); every trash door answers `trash_doors.entry`, `expired` read by `TrashRecord.past_deadline`. A trash record is a `lakehouse.records.trash.TrashRecord`: writers build one, `trash.get` and `trash.list_all` answer a record they cannot read as absent and log its key, and `trash.every_record` and `trash.named` raise `UnreadableTrashRecordError`.
   Pinned by `services/catalog/tests/test_a_warehouses_trash_lists_what_its_caller_may_see.py`. A record keeps `uuid`,
   `namespace_uuid` (its namespace's at the drop) and, when a cascade filed it, `cascade` (the dropped namespace's
@@ -745,11 +745,11 @@ governing their data. The project-scoped surface is the console's project page, 
   toggling never creates a table version, and the guard answers even for a corrupted dataset. Set
   via `POST /management/v1/table/{id}/protection` / `/management/v1/namespace/{id}/protection`,
   owner-gated (`protection` maps to `can_set_protection`, the owner rung under its own audit name, in
-  `_OWNER_SUFFIX_RELATION`; the `GET` at the same path asks `can_get_protection`, the owner's too, so the trail never
+  `OWNER_SUFFIX_RELATION`; the `GET` at the same path asks `can_get_protection`, the owner's too, so the trail never
   records a read as an arming: `_READ_AT_A_SET_DOOR`, [[LH-585]]). A route suffix no rung map declares is REFUSED for every caller rather
   than defaulted to a rung — `InternalError` (code 18, 500), audited and logged at ERROR with the path,
   because only a route shipped without its rung reaches it — so a new door ships with its entry in
-  `_OWNER_SUFFIX_RELATION` or `_WRITER_SUFFIX_RELATION` (or a trailing word in
+  `OWNER_SUFFIX_RELATION` or `WRITER_SUFFIX_RELATION` (or a trailing word in
   `read_actions.META_READ_ACTIONS`/`DATA_READ_ACTIONS`, which the read-only window judges by too, and `_MAINTENANCE_ACTIONS`) —
   `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and fails
   on one that has none. **Every control-root record kept for a table or namespace is keyed by its uuid** ([[LH-523]],
@@ -757,8 +757,8 @@ governing their data. The project-scoped surface is the console's project page, 
   maintenance's due record, an erasure obligation and its release (each naming `uuid`/`table_uuid`),
   maintenance's policy cadence stamps and its copy of the table's commit records (`_maintenance_files/`, which
   `file_identities.end` deletes with the records). A door resolves the uuid from the name it is addressed by
-  as the request resolved it (`ResolvedTable.require_uuid`, `fga_deps.identify_namespace`; a deliberate fresh read is
-  `fga_deps.standing`) and refuses `InternalError` for an object that records none,
+  as the request resolved it (`ResolvedTable.require_uuid`, `objects.identify_namespace`; a deliberate fresh read is
+  `objects.standing`) and refuses `InternalError` for an object that records none,
   never reading it as unprotected. A rename moves no record and no grant, only its data directories' claims (and, into
   another namespace, its parent edge); a table created later under a dropped name holds a new uuid and inherits nothing,
   even where an ending was lost. Every door that ends an object (drop, deregister, a cascade, the trash purge) ends that
@@ -794,7 +794,7 @@ governing their data. The project-scoped surface is the console's project page, 
   and the trash each have the pair ([[LH-572]]): `warehouses.every_warehouse` refuses while a record cannot be read (a project delete, the purge's
   sibling guard, a project policy set) where `list_warehouses` skips it, and `trash.every_record` raises where
   `trash.list_all` skips (`trash.named`, an undrop restoring its cascade, `warehouses.trash_owned_by`, a cascade's
-  `fga_deps._trashed_objects`). A record you cannot read may be the one the decision is about. Every such refusal tells
+  `objects.trashed_objects`). A record you cannot read may be the one the decision is about. Every such refusal tells
   an outage from a record (`lakehouse.problems.outage.store_refusal`): a store that did not answer is 503 code 17, which a retry
   may clear; a record that is there and cannot be read as one is 500 code 18, which only writing it again clears. The
   registry reader raises the outage itself, so even a tolerant listing never reads one as a corrupt record.
@@ -935,7 +935,7 @@ governing their data. The project-scoped surface is the console's project page, 
   mode=Overwrite, a namespace's drop, a project's and a warehouse's delete). A rerun is refused as unknown too when the
   name now names another object than the claim captured, and a judge whose read fails (an unreadable trash record) is. A drop, a deregister and a rename keep on
   their claim the object their name resolved to (`Captured`); a resend whose name holds nothing is asked the same rung
-  on that object by the router (`fga_deps._require_rung` → `idempotency.captured_object`), and anything else (no key,
+  on that object by the router (`decisions.require_rung` → `idempotency.captured_object`), and anything else (no key,
   no record, another caller, door, name or request) meets the refusal any missing name gets. A destroying drop and a
   deregister revoke the grants, so their resend is refused 403 as before.
 
@@ -1067,7 +1067,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (`vending.role_session_name`: the subject made readable, ending with a digest of it, so two callers never share a name), and a refused or unanswered exchange answers 503 code 17 (`vending.vend_or_refuse`).
   The catalog holds no store key: its own IO signs with an hour's session of the same token, renewed at half life
   (`lakehouse.storage.store_session`), so a running catalog never needs a restart for its credential.
-  **The spec doors vend the highest tier FGA grants the caller** (ADR 0156 C3, `fga_deps.spec_vend_tier`):
+  **The spec doors vend the highest tier FGA grants the caller** (ADR 0156 C3, `write_doors.spec_vend_tier`):
   `DescribeTable` and `DeclareTable` vend unless the request sets `vend_credentials` false (unset, the spec lets the
   server decide), write on `can_write_data` (judged by the write judge) or on `can_read_data` with `can_maintain` (a
   compaction job's rungs, whose commits `version/create` admits for a compaction alone, ADR 0174, and whose puts can
@@ -1121,7 +1121,7 @@ governing their data. The project-scoped surface is the console's project page, 
 - **A classified column is never vended raw** ([[LH-058]], [[LH-207]]). A label is field metadata `rask.classification`,
   set and cleared only through `update_field_metadata` under `can_classify` (plus `can_apply` on each value). Classifying
   is not writing (ADR 0225): a body that changes `rask.*` keys and nothing else asks `can_classify` in `can_write_data`'s
-  place (the router's `fga_deps._classifies_only`), so a classifier holds no writer rung; any ordinary key or a `replace`
+  place (the router's `write_doors._classifies_only`), so a classifier holds no writer rung; any ordinary key or a `replace`
   asks `can_write_data` too. Both vend
   doors (`/management/v1/table/{id}/credentials`, `DescribeTable(vend_credentials=true)`) answer server-mediated when
   `vending.classified_in_any_ref` finds a label on any field, nested ones included, on main or on any branch: a
@@ -1153,7 +1153,7 @@ governing their data. The project-scoped surface is the console's project page, 
   code 13 a stock client drops as its own malformed commit; only a ref `table_objects.holds_a_version` finds holding no
   committed version follows version 0, and one whose latest committed version does not open answers 500 code 18
   ([[LH-545]], `lance_docs/ns_catalog/namespace/operations/errors.md`). The door admits a writer or a maintainer (`can_create_version`), and the judge
-  asks the operation's own rung (`fga_deps.require_staged_operation`: the writer operations and a table's first version `can_write_data`, restore
+  asks the operation's own rung (`door_gates.require_staged_operation`: the writer operations and a table's first version `can_write_data`, restore
   `can_restore`, rewrite `can_maintain`, an Overwrite after the first version `can_drop` (protection guards a drop, not a write: ADR 0221),
   `Clone` and unknown operations refused); a create at 2.2 with stable row ids and no later change to either;
   reserved schema metadata, the provenance and key columns (the key read by Lance's own parser) and field-level

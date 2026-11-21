@@ -39,6 +39,10 @@ lakehouse = { workspace = true }
 # caller's SQL through the refusal that answers it, and no refusal asks a bound. The table operations
 # (`services.tables`) import one way: the doors' operations (writes, schema changes, a rename) over the commit path,
 # a table's creation, its destruction, its reads and its refs, which share nothing, over what a committed version says.
+# The authorization modules (`api.authz`) import one way: the router's guard over the doors it judges (the write judge,
+# grant authority, a handler's own gates, a listing's visible page, an object's and a warehouse's grants), over the
+# decision asked and audited and the hierarchy's guards, over what a name resolves to and what a request carries, over
+# the rung each door asks.
 [tool.importlinter]
 root_package = "catalog"
 
@@ -57,5 +61,19 @@ layers = [
     "writes | schema | rename",
     "commits | creation | destroy | reads | refs",
     "versions",
+]
+exhaustive = true
+
+[[tool.importlinter.contracts]]
+id = "catalog-authorization-imports-one-way"
+name = "ADR 0224: the catalog's authorization modules import one way, the router's guard over the judged doors over the decisions over the objects and the request over the rungs"
+type = "layers"
+containers = ["catalog.api.authz"]
+layers = [
+    "route_guard",
+    "write_doors | grant_authority | door_gates | visible_pages | object_grants | warehouse_grants",
+    "decisions | hierarchy",
+    "objects | request_reads",
+    "rungs",
 ]
 exhaustive = true

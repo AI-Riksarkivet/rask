@@ -1,6 +1,6 @@
 """A route suffix no rung map declares is REFUSED, and every route the catalog mounts declares one.
 
-`catalog.api.fga_deps.authorize` gates a `{id}` route by the rung its suffix resolves to. A suffix the
+`catalog.api.authz.route_guard.authorize` gates a `{id}` route by the rung its suffix resolves to. A suffix the
 maps do not name has two possible answers, and only one of them is fail-closed. A DEFAULT rung is a
 permission nobody chose: at the writer rung it is one every plain data writer already holds, so a new
 destructive verb ships open to all of them with nothing red, and a new read door refuses its whole
@@ -33,12 +33,13 @@ from lance_namespace import InternalError, LanceNamespace
 from openfga_sdk import OpenFgaClient
 from starlette.types import Message
 
-from catalog.api import fga_deps
+from catalog.api.authz import decisions, grant_authority, route_guard, rungs
 from catalog.api.dependencies import Resolver, get_fga_client
 from catalog.api.security import authenticate
 from catalog.core import write_judge
 from catalog.core.config import Settings, get_settings
 from catalog.services.table_claims import ResolvedTable
+from lakehouse.governed import fga_reads
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -49,7 +50,8 @@ from lakehouse.records.trash import TrashRecord
 
 _ID = "acme$events"
 
-#: Nothing calls a method on it: `fga_reads.check` / `fga_reads.batch_check` are replaced below before it is used.
+#: Nothing calls a method on it: `fga_reads.check` is replaced below before it is used, and a door that asked anything
+#: else of OpenFGA would fail on it.
 _CLIENT = cast("OpenFgaClient", object())
 
 
@@ -106,13 +108,7 @@ def asked(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
         recorded.append((relation, obj))
         return True
 
-    async def batch_check(_client: object, *, user: str, relation: str, objects: list[str], **_: Any) -> dict[str, bool]:
-        del user
-        recorded.extend((relation, obj) for obj in objects)
-        return dict.fromkeys(objects, True)
-
-    monkeypatch.setattr(fga_deps.fga_reads, "check", check)
-    monkeypatch.setattr(fga_deps.fga_reads, "batch_check", batch_check)
+    monkeypatch.setattr(fga_reads, "check", check)
     return recorded
 
 
@@ -150,7 +146,7 @@ class _EveryNameHolds(Resolver):
 
 
 def _authorize(template: str, body: dict[str, object] | None = None, query: str = "") -> None:
-    asyncio.run(fga_deps.authorize(_request(template, body or {}, query), _settings(), _token(), _CLIENT, _EveryNameHolds()))
+    asyncio.run(route_guard.authorize(_request(template, body or {}, query), _settings(), _token(), _CLIENT, _EveryNameHolds()))
 
 
 _UNDECLARED = "a_verb_nobody_declared"
@@ -172,7 +168,7 @@ def test_the_guard_refuses_an_undeclared_door_before_asking_openfga(
     """Through `authorize`, not only the resolver: a guard that caught the refusal and fell back would
     leave a resolver-level assertion green while the route stayed open. The transaction and classification
     rows are here because those doors resolve in their own branches, which never consult
-    `_action_relation`.
+    `action_relation`.
 
     The refusal is a DECISION like every other the guard makes, so it writes the same `audit()` record,
     and its ERROR line names the path and suffix because the 500 body an operator's caller sees is
@@ -188,7 +184,7 @@ def test_the_guard_refuses_an_undeclared_door_before_asking_openfga(
         ("authz", AuditOutcome.FAILURE, "dex~alice", resource, "undeclared_door", _UNDECLARED)
     ], audited
     path = template.replace("{id}", _ID)
-    errors = [r for r in caplog.records if r.name == fga_deps.log.name and r.levelno == logging.ERROR]
+    errors = [r for r in caplog.records if r.name == decisions.log.name and r.levelno == logging.ERROR]
     assert [(r.getMessage(), r.__dict__.get("path"), r.__dict__.get("suffix")) for r in errors] == [("undeclared_door", path, _UNDECLARED)]
 
 
@@ -196,7 +192,7 @@ def test_an_undeclared_door_answers_the_specs_internal_error_on_the_wire(asked: 
     """The status and code a client reads, through the real problem handlers: 500 with code 18, the
     detail redacted like every 5xx, and the endpoint never ran."""
     ran: list[str] = []
-    router = APIRouter(dependencies=[Depends(fga_deps.authorize)])
+    router = APIRouter(dependencies=[Depends(route_guard.authorize)])
 
     @router.post("/v1/table/{id}/a_verb_nobody_declared")
     def undeclared(id: str) -> dict[str, str]:
@@ -242,9 +238,9 @@ def _grant_body(template: str) -> dict[str, object]:
     """The grant doors read the rung from the body, so they need one the model can grant on that type."""
     if not template.endswith(("/access/grant", "/access/revoke")):
         return {}
-    resource = fga_deps._resource_for(router_walk.PARAM.sub("x", template))
+    resource = rungs.resource_for(router_walk.PARAM.sub("x", template))
     assert resource is not None
-    grantable = sorted(fga_deps._grant_actions(fga_deps._FGA_TYPE[resource]))
+    grantable = sorted(grant_authority.grant_actions(rungs.FGA_TYPE[resource]))
     assert grantable, f"{resource} defines no can_grant_* rung, so its grant door can never be authorized"
     return {"relation": grantable[0].removeprefix("can_grant_"), "user": "dex~bob"}
 
@@ -263,7 +259,7 @@ def judged(monkeypatch: pytest.MonkeyPatch) -> list[str]:
             await check(write.rung)
         return write_judge.Judgement(requires_run=False)
 
-    monkeypatch.setattr(fga_deps.write_judge, "judge", judge)
+    monkeypatch.setattr(write_judge, "judge", judge)
     return recorded
 
 
@@ -298,13 +294,13 @@ def test_every_guarded_route_resolves_to_a_declared_rung_and_every_write_reaches
     assert asked, f"{template}?{query} was waved through without a single check"
 
     suffix = template.split("/{id}/", 1)[1]
-    resource = fga_deps._resource_for(router_walk.PARAM.sub("x", template))
+    resource = rungs.resource_for(router_walk.PARAM.sub("x", template))
     if resource not in ("table", "materialized_view") or suffix in ("access/grant", "access/revoke") or (suffix, query) in _READ_DOORS:
         assert judged == [], f"{template}?{query} only reads, yet the write judge decided it"
         return
     assert len(judged) == 1, f"{template}?{query} asks {asked} without the write judge"
     judged.clear()
-    asyncio.run(fga_deps.authorize(_request(template, {}, query), _settings().model_copy(update={"fga_enabled": False}), None, None, _EveryNameHolds()))
+    asyncio.run(route_guard.authorize(_request(template, {}, query), _settings().model_copy(update={"fga_enabled": False}), None, None, _EveryNameHolds()))
     assert len(judged) == 1, f"{template}?{query} skips the write judge with FGA off"
 
 
@@ -331,15 +327,15 @@ def test_a_namespace_door_asks_a_read_rung_only_where_it_is_listed_as_a_read() -
     """[[LH-289]]: the namespace doors the router asks a reader's rung on are exactly the ones listed as reads."""
     asked_as_a_read: set[tuple[str, str]] = set()
     for path, route in router_walk.mounted():
-        if not router_walk.names_a_guarded_object(path) or fga_deps._resource_for(router_walk.PARAM.sub("x", path)) != "namespace":
+        if not router_walk.names_a_guarded_object(path) or rungs.resource_for(router_walk.PARAM.sub("x", path)) != "namespace":
             continue
         suffix = path.split("/{id}/", 1)[1]
         for method in route.methods or ():
             try:
-                relation = fga_deps._action_relation("namespace", suffix, method=method)
+                relation = rungs.action_relation("namespace", suffix, method=method)
             except InternalError:
                 continue
-            if relation in fga_deps._READ_RELATIONS:
+            if relation in rungs.READ_RELATIONS:
                 asked_as_a_read.add((suffix, method))
 
     assert asked_as_a_read == _NAMESPACE_READ_DOORS

@@ -30,7 +30,8 @@ from lance_namespace import (
     UnsupportedOperationError,
 )
 
-from catalog.api import fga_deps, lineage_deps
+from catalog.api import lineage_deps
+from catalog.api.authz import door_gates, write_doors
 from catalog.api.dependencies import (
     DoorTableDep,
     FgaClientDep,
@@ -230,7 +231,7 @@ async def create_table_version(
     author: str | None = None
     created = False
     try:
-        await fga_deps.require_staged_operation(
+        await door_gates.require_staged_operation(
             client, settings, token, segments=segments, location=location, operation=staged.operation, creates=staged.creates
         )
         judge = BaseJudge.from_settings(settings)
@@ -248,13 +249,13 @@ async def create_table_version(
             staged,
             so,
         )
-        declared = await fga_deps.judge_staged_run(
+        declared = await write_doors.judge_staged_run(
             settings, token, client, resolver, ns=table.namespace, segments=segments, run=run, adds_data=verdict.adds_data
         )
         if staged.creates:
             # A later version may change no field's labels (`managed_versions`); the first sets them, as a create does.
             labels = await run_in_threadpool(managed_versions.staged_field_labels, staged, so)
-            await fga_deps.require_classifier_to_set_labels(
+            await door_gates.require_classifier_to_set_labels(
                 client, settings, token, obj=fga_ids.table_object(table.resolved.require_uuid()), label=canonical, labels=labels
             )
         author = caller if caller is not None and table.announces(managed_versions.lineage_operation(staged)) else None
