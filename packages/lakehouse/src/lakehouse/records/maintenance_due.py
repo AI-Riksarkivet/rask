@@ -104,7 +104,7 @@ def _parsed(raw: dict[str, Any] | None) -> DueRecord | None:
 
 
 def write_due(control_root: str, storage_options: StorageOptions, record: DueRecord) -> None:
-    put_record(control_root, storage_options, due_key(record.uuid), record.model_dump(mode="json"))
+    put_record(control_root, storage_options, due_key(record.uuid), record=record.model_dump(mode="json"))
 
 
 def delete_due(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:

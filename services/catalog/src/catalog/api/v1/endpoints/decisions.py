@@ -191,7 +191,7 @@ async def _in_scope(client: OpenFgaClient, settings: FgaSettings, *, caller: Cal
 
 @management_router.post("/check")
 async def decide_check(
-    caller: SignedInCaller, client: WiredFgaClient, settings: SettingsDep, resolver: ResolverDep, body: DecisionCheck
+    *, caller: SignedInCaller, client: WiredFgaClient, settings: SettingsDep, resolver: ResolverDep, body: DecisionCheck
 ) -> DecisionCheckResult:
     """Whether ``user`` holds ``relation`` on each object, and on the table each name names now, inside the caller's scope.
 

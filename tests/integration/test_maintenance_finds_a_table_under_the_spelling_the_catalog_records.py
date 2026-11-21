@@ -178,7 +178,7 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     dropped = estate.recorded(table)
     location = dropped.location
     policy_uuid = estate.policy_uuids[table]
-    policy = maintenance_policies.get_policy(estate.root, estate.key, "table", policy_uuid)
+    policy = maintenance_policies.get_policy(estate.root, estate.key, "table", key=policy_uuid)
     assert policy is not None, "precondition: the drop kept the policy for an undrop"
     # The cadence stamp a pass took while the table stood ([[LH-562]]).
     maintenance_policies.write_state(estate.root, estate.key, policy, table_uuid=policy_uuid, uri=location, at=datetime.now(UTC))
@@ -221,7 +221,7 @@ def test_an_expired_record_reclaims_its_table_under_every_spelling_of_its_locati
     assert trash.named(estate.root, estate.key, table) == [], "the record outlived its purge"
     assert estate.reads(table) == (3, 3), "the purge reached the table created since under the name"
     assert {key: size for key, size in estate.objects().items() if not key.startswith("spelled/")} == standing
-    assert maintenance_policies.get_policy(estate.root, estate.key, "table", policy_uuid) is None, "the policy outlived the table it governed"
+    assert maintenance_policies.get_policy(estate.root, estate.key, "table", key=policy_uuid) is None, "the policy outlived the table it governed"
     stamped = maintenance_policies.read_state(estate.root, estate.key, policy, table_uuid=policy_uuid, uri=location)
     assert stamped is None, "the table's maintenance stamp outlived it"
     registry = base_registry.BaseRegistry(control_root=estate.root, storage_options=estate.key)

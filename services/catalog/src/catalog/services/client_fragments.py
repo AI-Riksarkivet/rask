@@ -156,7 +156,7 @@ def _declares_v2(data_file: DataFile) -> bool:
     return data_file.file_major_version >= 2 or (data_file.file_major_version, data_file.file_minor_version) == (0, 3)
 
 
-def verify_against_footers(location: str, so: StorageOptions, fragments: Sequence[FragmentMetadata], table: lance.LanceDataset) -> None:
+def verify_against_footers(location: str, so: StorageOptions, fragments: Sequence[FragmentMetadata], *, table: lance.LanceDataset) -> None:
     """Refuse a fragment whose data files' footers contradict what it declares.
 
     ``table`` is the version the fragments' declared file versions were judged against. Each file's
@@ -188,7 +188,7 @@ def verify_against_footers(location: str, so: StorageOptions, fragments: Sequenc
     every_field = _format_version(table.data_storage_version) == (2, 0)
     for index, fragment in enumerate(fragments):
         for data_file in fragment.files:
-            _verify_one(index, data_file, footers[data_file.path], fragment.physical_rows, table, every_field=every_field)
+            _verify_one(index, data_file, footers[data_file.path], physical_rows=fragment.physical_rows, table=table, every_field=every_field)
 
 
 def _format_version(version: str) -> tuple[int, int]:
@@ -217,7 +217,7 @@ def _read_footers(location: str, so: StorageOptions, paths: Sequence[str]) -> li
 
 
 def _verify_one(
-    index: int, data_file: DataFile, footer: _FooterMetadata | Exception, physical_rows: int, table: lance.LanceDataset, *, every_field: bool
+    index: int, data_file: DataFile, footer: _FooterMetadata | Exception, *, physical_rows: int, table: lance.LanceDataset, every_field: bool
 ) -> None:
     path = data_file.path
     if isinstance(footer, Exception):
@@ -243,7 +243,7 @@ def _verify_one(
             f"its footer has {columns} columns, so it declares {columns} fields with column_indices {list(range(columns))}; "
             f"it declares fields {data_file.fields} with column_indices {data_file.column_indices}",
         )
-    expected = _fields_the_footer_names(index, path, footer.schema, table, every_field=every_field)
+    expected = _fields_the_footer_names(index, path, footer.schema, table=table, every_field=every_field)
     if data_file.fields != expected:
         raise _refuse(index, path, f"its columns are the table's field ids {expected} in that order, and it declares {data_file.fields}")
 
@@ -298,7 +298,7 @@ def _footer_matches(column: pa.Field, declared: pa.Field) -> bool:
     return pa.types.is_large_list(wanted) and pa.types.is_large_list(found) and _footer_matches(found.value_field, wanted.value_field)
 
 
-def _fields_the_footer_names(index: int, path: str, schema: pa.Schema, table: lance.LanceDataset, *, every_field: bool) -> list[int]:
+def _fields_the_footer_names(index: int, path: str, schema: pa.Schema, *, table: lance.LanceDataset, every_field: bool) -> list[int]:
     """The field ids, in column order, of the table fields this footer's columns are.
 
     Which ids a data file lists is Lance's per-version rule, measured on pylance 12.0.0 with struct,

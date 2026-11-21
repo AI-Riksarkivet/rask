@@ -56,7 +56,13 @@ def ns(tmp_path: Path):
     namespace = connect("dir", {"root": str(tmp_path)})
     namespace.create_namespace(CreateNamespaceRequest(id=["db"]))
     create_table(
-        namespace, StorageOptions(), ["db", "clips"], _blob_table([b"hello-world", b"X" * 100, None, b""]), root=str(tmp_path), mode="create", registry=None
+        namespace,
+        StorageOptions(),
+        ["db", "clips"],
+        table=_blob_table([b"hello-world", b"X" * 100, None, b""]),
+        root=str(tmp_path),
+        mode="create",
+        registry=None,
     )
     return namespace
 
@@ -130,7 +136,7 @@ def test_read_blob_rows_are_positional_after_delete(tmp_path: Path) -> None:
     # delete, positions shift (probed: take_blobs indices stay consistent with count_rows).
     namespace = connect("dir", {"root": str(tmp_path)})
     namespace.create_namespace(CreateNamespaceRequest(id=["db"]))
-    create_table(namespace, StorageOptions(), ["db", "d"], _blob_table([b"first", b"second"]), root=str(tmp_path), mode="create", registry=None)
+    create_table(namespace, StorageOptions(), ["db", "d"], table=_blob_table([b"first", b"second"]), root=str(tmp_path), mode="create", registry=None)
 
     table = _door(namespace, tmp_path, ["db", "d"])
     table.open(StorageOptions()).delete("id == 0")

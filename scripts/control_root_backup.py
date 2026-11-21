@@ -111,7 +111,7 @@ def list_objects(client: Any, bucket: str, prefix: str) -> dict[str, str]:  # no
         token = page.get("NextContinuationToken")
 
 
-def _copy(client: Any, dst_bucket: str, dst_key: str, src_bucket: str, src_key: str, *, if_match: str | None) -> dict[str, Any]:  # noqa: ANN401
+def _copy(client: Any, dst_bucket: str, dst_key: str, *, src_bucket: str, src_key: str, if_match: str | None) -> dict[str, Any]:  # noqa: ANN401
     """Copy one object server-side, only while its ETag is still ``if_match`` when one is named."""
     condition = {} if if_match is None else {"CopySourceIfMatch": f'"{if_match}"'}
     return client.copy_object(Bucket=dst_bucket, Key=dst_key, CopySource={"Bucket": src_bucket, "Key": src_key}, **condition)
@@ -149,12 +149,12 @@ def do_backup(client: Any, *, root: str, dest: str | None, stamp: str) -> dict[s
             # copy is conditional on the listed ETag instead (`x-amz-copy-source-if-match`, which RustFS 1.0.3
             # refuses 412 once the source changed, measured), and a refused one copies the version there now.
             try:
-                response = _copy(client, dst_bucket, _join(run_prefix, relative), src_bucket, key, if_match=listed_etag)
+                response = _copy(client, dst_bucket, _join(run_prefix, relative), src_bucket=src_bucket, src_key=key, if_match=listed_etag)
             except ClientError as exc:
                 if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") != 412:
                     raise
                 raced.append(relative)
-                response = _copy(client, dst_bucket, _join(run_prefix, relative), src_bucket, key, if_match=None)
+                response = _copy(client, dst_bucket, _join(run_prefix, relative), src_bucket=src_bucket, src_key=key, if_match=None)
             # THE COPY'S ETAG, NOT THE LISTING'S. A live control root is written while it is being
             # read — measured 2026-09-14, three records changed between the list and the
             # copy on a single run — so recording the listed value made the manifest describe a

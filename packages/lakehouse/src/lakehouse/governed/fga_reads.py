@@ -573,7 +573,7 @@ async def expand_tree(
     """
     depth_budget = max(1, min(max_depth, MAX_EXPAND_TREE_DEPTH))
 
-    async def _walk(rel: str, target: str, depth: int, path: frozenset[str]) -> dict[str, Any]:
+    async def _walk(rel: str, target: str, depth: int, *, path: frozenset[str]) -> dict[str, Any]:
         key = f"{target}#{rel}"
         # PATH-scoped, never walk-global (SKG-03). A cycle is an `object#relation` that appears on the
         # way to ITSELF; an `object#relation` reached twice down two different branches is a DIAMOND,
@@ -593,18 +593,18 @@ async def expand_tree(
             obj=target,
             retry=retry,
         )
-        await _resolve(node, target, depth, path | {key})
+        await _resolve(node, target, depth, path=path | {key})
         return node
 
-    async def _resolve(node: dict[str, Any], target: str, depth: int, path: frozenset[str]) -> None:
+    async def _resolve(node: dict[str, Any], target: str, depth: int, *, path: frozenset[str]) -> None:
         """Walk the normalised tree in place, expanding every leaf that continues somewhere."""
         for branch in ("union", "intersection"):
             for child in node.get(branch) or []:
-                await _resolve(child, target, depth, path)
+                await _resolve(child, target, depth, path=path)
         if (difference := node.get("difference")) is not None:
             for side in ("base", "subtract"):
                 if (child := difference.get(side)) is not None:
-                    await _resolve(child, target, depth, path)
+                    await _resolve(child, target, depth, path=path)
 
         leaf = node.get("leaf")
         if not leaf:
@@ -623,7 +623,7 @@ async def expand_tree(
             # so the symptom was "the derivation is unavailable" on every relation that resolves
             # through a rung, i.e. all of the interesting ones. Verified against the live store:
             # expand(can_read_data, table:bronze$pages) → {"computed":{"userset":"table:bronze$pages#reader"}}.
-            leaf["expanded"] = [await _walk(_relation_of(computed), _object_of(computed, target), depth + 1, path)]
+            leaf["expanded"] = [await _walk(_relation_of(computed), _object_of(computed, target), depth + 1, path=path)]
             return
         if (ttu := leaf.get("tuple_to_userset")) is not None:
             # `tupleset` arrives as "<object>#<relation>"; the relation half is the edge to follow, and
@@ -637,10 +637,10 @@ async def expand_tree(
             for parent in parents:
                 for computed_relation in ttu.get("computed") or []:
                     # Same normalisation as the `computed` leaf above: these arrive qualified too.
-                    expanded.append(await _walk(_relation_of(computed_relation), parent, depth + 1, path))
+                    expanded.append(await _walk(_relation_of(computed_relation), parent, depth + 1, path=path))
             leaf["expanded"] = expanded
 
-    return await _walk(relation, obj, 1, frozenset())
+    return await _walk(relation, obj, 1, path=frozenset())
 
 
 async def read_changes(

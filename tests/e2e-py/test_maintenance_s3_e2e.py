@@ -208,7 +208,9 @@ def estate(s3: Any, rustfs_store: ThrowawayStore) -> Iterator[Estate]:
         namespace.create_namespace(CreateNamespaceRequest(id=[warehouse, "e2e"], properties={UUID_PROPERTY: str(uuid.uuid4())}))
         namespace.register_table(RegisterTableRequest(id=[warehouse, "e2e", name], location=name))
         built.uuids[uri] = str(uuid.uuid4())
-        location_claims.take(claims, normalise(uri), f"{warehouse}$e2e${name}", [warehouse, "e2e", name], is_gone=lambda _claim: False, uuid=built.uuids[uri])
+        location_claims.take(
+            claims, normalise(uri), f"{warehouse}$e2e${name}", segments=[warehouse, "e2e", name], is_gone=lambda _claim: False, uuid=built.uuids[uri]
+        )
 
     # The warehouse REGISTRY, on the control root — the record shape `catalog/services/warehouses.py` writes, which a pass
     # reads by a table's first segment (`warehouse_records.warehouse_record`). `reg` is active, `deact` quarantined.

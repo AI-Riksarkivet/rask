@@ -63,7 +63,7 @@ def ns(tmp_path: Path) -> LanceNamespace:
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE[:-1], properties=with_minted_uuid(None)))
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
     create_table(
-        namespace, StorageOptions(), TABLE, pa.table({"id": pa.array([1], pa.int64())}), root=root, mode="create", registry=registry, holder="db$alpha"
+        namespace, StorageOptions(), TABLE, table=pa.table({"id": pa.array([1], pa.int64())}), root=root, mode="create", registry=registry, holder="db$alpha"
     )
     for value in range(2, LATEST + 1):
         _append(namespace, value)

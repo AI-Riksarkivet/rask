@@ -211,7 +211,7 @@ _SET_ATTEMPTS: Final = 5
 
 
 def set_policy(
-    control_root: str, storage_options: StorageOptions, kind: PolicyKind, key: str, compose: Callable[[PolicyRecord | None], PolicyRecord]
+    control_root: str, storage_options: StorageOptions, kind: PolicyKind, *, key: str, compose: Callable[[PolicyRecord | None], PolicyRecord]
 ) -> PolicyRecord:
     """Write the record ``compose`` makes of the record stored under ``key`` (:attr:`PolicyRecord.key`); the record written.
 
@@ -234,22 +234,22 @@ def set_policy(
             stored = conditional_records.read_json_at(control_root, storage_options, full_key).stored
         except ValueError:
             record = compose(None)
-            put_record(control_root, storage_options, full_key, record.stored())
+            put_record(control_root, storage_options, full_key, record=record.stored())
             return record
         try:
             if stored is None:
                 record = compose(None)
-                conditional_records.create_json(control_root, storage_options, full_key, record.stored())
+                conditional_records.create_json(control_root, storage_options, full_key, record=record.stored())
             else:
                 record = compose(read(stored.record, at=full_key))
-                conditional_records.replace_json(control_root, storage_options, full_key, record.stored(), etag=stored.etag)
+                conditional_records.replace_json(control_root, storage_options, full_key, record=record.stored(), etag=stored.etag)
         except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
             continue
         return record
     raise conditional_records.RecordChangedError(f"the {kind} policy {key} kept changing across {_SET_ATTEMPTS} attempts")
 
 
-def get_policy(control_root: str, storage_options: StorageOptions, kind: PolicyKind, key: str) -> PolicyRecord | None:
+def get_policy(control_root: str, storage_options: StorageOptions, kind: PolicyKind, *, key: str) -> PolicyRecord | None:
     """The policy record stored under ``key`` (:attr:`PolicyRecord.key`), or ``None`` when none is set.
 
     Raises:
@@ -257,10 +257,10 @@ def get_policy(control_root: str, storage_options: StorageOptions, kind: PolicyK
             a hold, so it is never answered as unset.
         OSError: The store failed the read.
     """
-    return _keyed(control_root, storage_options, kind, key)
+    return _keyed(control_root, storage_options, kind, key=key)
 
 
-def delete_policy(control_root: str, storage_options: StorageOptions, kind: PolicyKind, key: str) -> bool:
+def delete_policy(control_root: str, storage_options: StorageOptions, kind: PolicyKind, *, key: str) -> bool:
     """Remove one policy record; ``False`` when it did not exist (delete is idempotent)."""
     return delete_record(control_root, storage_options, record_key(PREFIX, kind, key))
 
@@ -326,14 +326,14 @@ def governing_policy(
         UnreadablePolicyError: The store failed a read.
     """
     try:
-        if (own := _governing(control_root, storage_options, "table", table_uuid)) is not None:
+        if (own := _governing(control_root, storage_options, "table", key=table_uuid)) is not None:
             return own
         for namespace_uuid in reversed(namespace_uuids):
-            if (nearest := _governing(control_root, storage_options, "namespace", namespace_uuid)) is not None:
+            if (nearest := _governing(control_root, storage_options, "namespace", key=namespace_uuid)) is not None:
                 return nearest
         bucket = split_s3_uri(location)[0] if on_s3(location) else ""
         project = warehouse_records.bucket_project(claims_root, storage_options, bucket) if bucket else None
-        tenant = _governing(control_root, storage_options, "project", project) if project is not None else None
+        tenant = _governing(control_root, storage_options, "project", key=project) if project is not None else None
     except OSError as exc:
         raise UnreadablePolicyError(f"a maintenance policy that may govern the table {table_uuid} could not be read: {exc}") from exc
     except (MalformedPolicyError, ValueError) as exc:
@@ -341,20 +341,20 @@ def governing_policy(
     return tenant if tenant is not None and bucket in tenant.buckets else None
 
 
-def _governing(control_root: str, storage_options: StorageOptions, kind: PolicyKind, key: str) -> PolicyRecord | None:
+def _governing(control_root: str, storage_options: StorageOptions, kind: PolicyKind, *, key: str) -> PolicyRecord | None:
     """The record :func:`_keyed` reads, its settings parsed, for a caller about to act on them.
 
     Raises:
         MalformedPolicyError: The record is no policy of ``kind`` for ``key``, or holds a setting :class:`PolicySettings` refuses.
         OSError: The store failed the read.
     """
-    record = _keyed(control_root, storage_options, kind, key)
+    record = _keyed(control_root, storage_options, kind, key=key)
     if record is not None:
         _ = record.settings
     return record
 
 
-def _keyed(control_root: str, storage_options: StorageOptions, kind: PolicyKind, key: str) -> PolicyRecord | None:
+def _keyed(control_root: str, storage_options: StorageOptions, kind: PolicyKind, *, key: str) -> PolicyRecord | None:
     """The ``kind`` policy record stored under ``key`` (:attr:`PolicyRecord.key`), or ``None`` when none is.
 
     Raises:
@@ -449,7 +449,7 @@ def write_state(control_root: str, storage_options: StorageOptions, record: Poli
     Raises:
         pydantic.ValidationError: ``at`` carries no offset.
     """
-    put_record(control_root, storage_options, cadence_key(table_uuid, uri), CadenceStamp.under(record, at).model_dump(mode="json"))
+    put_record(control_root, storage_options, cadence_key(table_uuid, uri), record=CadenceStamp.under(record, at).model_dump(mode="json"))
 
 
 def end_table_state(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:

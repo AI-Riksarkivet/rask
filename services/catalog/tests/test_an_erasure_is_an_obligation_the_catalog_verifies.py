@@ -76,7 +76,7 @@ def _create(ns: LanceNamespace, root: str, table_id: list[str]) -> None:
         writer.write_table(rows)
     body = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20)
     registry = BaseRegistry(control_root=str(_control(root)), storage_options={})
-    create_table(ns, StorageOptions(), table_id, body, root=root, mode="create", registry=registry, holder="$".join(table_id))
+    create_table(ns, StorageOptions(), table_id, table=body, root=root, mode="create", registry=registry, holder="$".join(table_id))
     open_by_name(ns, StorageOptions(), table_id).create_scalar_index("pii", "BTREE")
 
 
@@ -302,7 +302,7 @@ def _record_edge(root: Path, source: str, derived: str) -> None:
     )
     registry = BaseRegistry(control_root=str(root), storage_options={})
     create_table(
-        ns, StorageOptions(), [*_PROVENANCE.split("$"), EDGES], edge, root=str(root), mode="create", registry=registry, holder=f"{_PROVENANCE}${EDGES}"
+        ns, StorageOptions(), [*_PROVENANCE.split("$"), EDGES], table=edge, root=str(root), mode="create", registry=registry, holder=f"{_PROVENANCE}${EDGES}"
     )
 
 

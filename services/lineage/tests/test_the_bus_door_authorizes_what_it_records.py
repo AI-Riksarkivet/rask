@@ -135,7 +135,7 @@ def _gate(store: Any, event: RunEvent, stored: dict[str, Any] | None, delivered:
             app = FastAPI()
             app.state.decider = OpenFgaDecider(client)
             app.state.provenance = _Feed(stored)
-            await fga_deps.enforce_bus_authz(event, app, _settings(), delivered)
+            await fga_deps.enforce_bus_authz(event, app, _settings(), arrived=delivered)
 
     asyncio.run(gate())
 

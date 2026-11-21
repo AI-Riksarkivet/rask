@@ -58,7 +58,7 @@ def _governed(client: TestClient, tmp_path: Path) -> tuple[Settings, Grants]:
 def _obligation(settings: Settings, table: str, tmp_path: Path, *, deadline: datetime) -> ErasureObligation:
     """An open obligation on ``table``, a table the catalog holds at a location of its own."""
     table_uuid, location = str(uuid4()), f"{tmp_path}/{uuid4()}"
-    location_claims.take(table_claims.claim_store(settings), location, table, parse_identifier(table), is_gone=lambda _claim: False, uuid=table_uuid)
+    location_claims.take(table_claims.claim_store(settings), location, table, segments=parse_identifier(table), is_gone=lambda _claim: False, uuid=table_uuid)
     obligation = ErasureObligation(
         obligation_id=uuid4().hex,
         table=table,

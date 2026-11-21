@@ -385,7 +385,7 @@ class DoorTable:
         Raises:
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
         """
-        file_identities.record(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), committed)
+        file_identities.record(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), committed=committed)
 
     def contract(self) -> contracts.Contract | None:
         """The data contract the table holds (ADR 0212), read off the control root its claim is kept on; ``None`` for a
@@ -406,7 +406,7 @@ class DoorTable:
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
             OSError: The store refused the delete.
         """
-        file_identities.forget(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), transaction_uuid)
+        file_identities.forget(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), transaction_uuid=transaction_uuid)
 
     def announces(self, operation: str) -> bool:
         """Whether the emitter announces a write of ``operation`` on this table: every one but a row write in the provenance
@@ -685,7 +685,7 @@ def kept_in_trash(store: ClaimStore, claim: LocationClaim) -> bool:
 
 
 def take(
-    ns: LanceNamespace, store: ClaimStore, location: str, table: str, segments: list[str], *, previous: str | None = None, token: str | None = None
+    ns: LanceNamespace, store: ClaimStore, location: str, *, table: str, segments: list[str], previous: str | None = None, token: str | None = None
 ) -> LocationClaim:
     """:func:`lakehouse.records.location_claims.take` for a table that already exists, judging a stale holder against this namespace.
 
@@ -695,7 +695,9 @@ def take(
     Raises:
         LocationHeldError: Another table holds the location.
     """
-    return location_claims.take(store, location, table, segments, previous=previous, token=token, is_gone=lambda claim: holder_is_gone(ns, store, claim))
+    return location_claims.take(
+        store, location, table, segments=segments, previous=previous, token=token, is_gone=lambda claim: holder_is_gone(ns, store, claim)
+    )
 
 
 def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, table: str, segments: list[str], table_uuid: str) -> LocationClaim:
@@ -716,14 +718,14 @@ def claim_new_table(ns: LanceNamespace, store: ClaimStore, location: str, *, tab
         store,
         location,
         table,
-        segments,
+        segments=segments,
         uuid=table_uuid,
         is_gone=lambda claim: holder_is_gone(ns, store, claim),
         is_kept=lambda claim: kept_in_trash(store, claim),
     )
 
 
-def require_no_other_holder(ns: LanceNamespace, store: ClaimStore, location: str, table: str) -> None:
+def require_no_other_holder(ns: LanceNamespace, store: ClaimStore, location: str, *, table: str) -> None:
     """Refuse destroying the bytes at ``location`` while its claim names ANOTHER table that still resolves to them.
 
     A destructive drop deletes the location, not the id: when another id holds it — an alias the doors

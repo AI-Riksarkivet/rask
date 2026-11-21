@@ -50,9 +50,9 @@ def live_root(so: StorageOptions) -> str:
 
 def test_registry_create_is_write_once_live(live_root: str, so: StorageOptions) -> None:
     key = f"{PREFIX}/{uuid.uuid4().hex}.json"
-    conditional_records.create_json(live_root, so, key, {"id": "first"})
+    conditional_records.create_json(live_root, so, key, record={"id": "first"})
     with pytest.raises(conditional_records.RecordExistsError):
-        conditional_records.create_json(live_root, so, key, {"id": "second"})
+        conditional_records.create_json(live_root, so, key, record={"id": "second"})
 
 
 def test_registry_create_contended_exactly_one_winner(live_root: str, so: StorageOptions) -> None:
@@ -74,7 +74,7 @@ def test_registry_create_contended_exactly_one_winner(live_root: str, so: Storag
         ) -> None:
             barrier.wait()
             try:
-                conditional_records.create_json(live_root, so, key, {"winner": worker})
+                conditional_records.create_json(live_root, so, key, record={"winner": worker})
                 result = "won"
             except conditional_records.RecordExistsError:
                 result = "lost"

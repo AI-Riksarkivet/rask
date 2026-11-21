@@ -30,7 +30,7 @@ def _paginate_keys(client: S3Client, bucket: str, prefix: str = "") -> Iterator[
                 yield obj["Key"]
 
 
-def iter_keys(client: S3Client, bucket: str, prefix: str = "", suffix: str = "") -> Iterator[str]:
+def iter_keys(client: S3Client, bucket: str, prefix: str = "", *, suffix: str = "") -> Iterator[str]:
     """Yield keys under `bucket`/`prefix`, optionally filtered by case-insensitive `suffix`.
 
     Sync — wrap in `anyio.to_thread.run_sync` if called from an event loop.

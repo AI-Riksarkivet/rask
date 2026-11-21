@@ -164,7 +164,7 @@ async def test_a_store_event_reads_its_tables_claim_under_the_session_in_force(s
     location = f"s3://{store.swept}/{directory}"
     rig = lance_storage_options(store.url, S3KeyPair(access_key_id=store.rig_key, secret_access_key=SecretStr("rig")), "us-east-1")
     claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options=rig)
-    location_claims.take(claims, location, "db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=table_uuid)
+    location_claims.take(claims, location, "db$t", segments=["db", "t"], is_gone=lambda _claim: False, uuid=table_uuid)
     clock = _Clock()
     monkeypatch.setattr(store_session, "SESSIONS", SessionCache(clock=clock))
     identity = settings.web_identity

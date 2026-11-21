@@ -160,7 +160,7 @@ def schedule(control_root: str, storage_options: StorageOptions, record: Release
     Raises:
         RecordExistsError: A release under the same id is already scheduled.
     """
-    create_json(control_root, storage_options, record_key(record.release_id), record.model_dump(mode="json"))
+    create_json(control_root, storage_options, record_key(record.release_id), record=record.model_dump(mode="json"))
 
 
 def scheduled(control_root: str, storage_options: StorageOptions, release_id: str) -> ReleaseRecord | None:
@@ -225,11 +225,11 @@ def _release(
     history = TableHistory(control_root=control_root, storage_options=storage_options, table_uuid=record.table_uuid)
     with history.held(HistoryWork.BRANCH):
         tags, plan = _plan(dataset, record) if record.phase != "recreating" else (record.tags, record.plan)
-        claimed = _mutate(control_root, storage_options, record.release_id, lambda current: _claim(current, now=now, tags=tags, plan=plan))
+        claimed = _mutate(control_root, storage_options, record.release_id, mutate=lambda current: _claim(current, now=now, tags=tags, plan=plan))
         changes: list[RefChange] = []
         if claimed.phase == "deleting":
             changes += _delete(dataset, claimed)
-            claimed = _mutate(control_root, storage_options, record.release_id, lambda current: {**current, "phase": "recreating"})
+            claimed = _mutate(control_root, storage_options, record.release_id, mutate=lambda current: {**current, "phase": "recreating"})
         changes += _recreate(dataset, claimed)
     _finish(control_root, storage_options, record.release_id)
     log.info(
@@ -318,9 +318,9 @@ def _recreate(dataset: _Dataset, record: ReleaseRecord) -> list[RefChange]:
     return changes
 
 
-def _mutate(control_root: str, storage_options: StorageOptions, release_id: str, mutate: Callable[[dict[str, Any]], dict[str, Any]]) -> ReleaseRecord:
+def _mutate(control_root: str, storage_options: StorageOptions, release_id: str, *, mutate: Callable[[dict[str, Any]], dict[str, Any]]) -> ReleaseRecord:
     try:
-        return ReleaseRecord.model_validate(mutate_json(control_root, storage_options, record_key(release_id), mutate))
+        return ReleaseRecord.model_validate(mutate_json(control_root, storage_options, record_key(release_id), mutate=mutate))
     except (RecordChangedError, RecordMissingError) as exc:
         raise _Lost from exc
 
@@ -332,7 +332,7 @@ def _hand_back(control_root: str, storage_options: StorageOptions, release_id: s
         return {**current, "lease_until": now.isoformat(), "last_error": error[:512]}
 
     try:
-        mutate_json(control_root, storage_options, record_key(release_id), _release_lease)
+        mutate_json(control_root, storage_options, record_key(release_id), mutate=_release_lease)
     except Exception as exc:  # noqa: BLE001 — the lease then simply runs out
         log.warning("erasure_release_hand_back_failed", extra={"release": release_id, "error": str(exc)})
 

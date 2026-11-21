@@ -235,7 +235,7 @@ async def create_governed_table(
         overwriting = table_claims.DoorTable(ns, table_claims.claim_store(settings), overwritten, announces=provenance_namespace.announcer(segments, settings))
     operation = OVERWRITE_TABLE if overwrote_existing else CREATE_TABLE
     # The grants of a table this request brings into being are written before the backend records it ([[LH-588]]).
-    grants = object_grants.GrantsBeforeWrite(client, settings, token, resolver, segments=segments)
+    grants = object_grants.GrantsBeforeWrite(client, settings, token, resolver=resolver, segments=segments)
     # [[LH-279]] Where the create records the bases it registers — the catalog's control root, written
     # with the catalog's own credential and never through a vend.
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
@@ -246,7 +246,7 @@ async def create_governed_table(
         ns,
         so,
         segments,
-        table,
+        table=table,
         root=root,
         # An Overwrite of a name the probe found no table under is a create: one made under the name since is refused as
         # the create's own conflict, never overwritten without the `can_drop` asked above ([[LH-530]]).
@@ -310,7 +310,7 @@ async def create_governed_table(
     # response.version = the existing version), and an Overwrite of an existing table wrote the table's
     # provenance fields and metadata over the payload's. The read-back is made for every create, for the
     # commit's own time, the event's `eventTime` ([[LH-497]]). Best-effort either way (failure → []).
-    readback = await run_in_threadpool(versions.read_version_and_schema, str(response.location), so, segments, response.version, None)
+    readback = await run_in_threadpool(versions.read_version_and_schema, str(response.location), so, segments, pin_version=response.version, branch=None)
     schema_fields = readback.schema_fields if mode is CreateMode.EXIST_OK or overwrote_existing else versions.payload_schema_fields(table.schema, segments)
     inputs = await input_refs(run_inputs(run), uuids=uuids)
     # Read through the location the write landed in, so a rename since cannot lend the event another table's uuid.

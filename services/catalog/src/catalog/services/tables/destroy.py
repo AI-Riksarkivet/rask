@@ -62,8 +62,8 @@ def destroy_table(
     ns: LanceNamespace,
     so: StorageOptions,
     segments: list[str],
-    location: str,
     *,
+    location: str,
     estate_roots: Sequence[str],
     table_uuid: str,
     namespace_uuid: str | None,
@@ -117,7 +117,7 @@ def destroy_table(
             removed named another location, whose bytes are left alone. The residue record stands.
     """
     stored, spelled = _table_paths(location)
-    holds_a_dataset = _require_destroyable(location, so, stored, spelled, estate_roots=estate_roots)
+    holds_a_dataset = _require_destroyable(location, so, stored, spelled=spelled, estate_roots=estate_roots)
     table = CATALOG_DELIMITER.join(segments)
     require_no_clone_reading(location, so, table=table)
     directories = _data_directories_of(control, location, table, uuid=table_uuid)
@@ -151,7 +151,7 @@ def destroy_table(
     try:
         if removed is not None and decoded_path(str(removed.location or "")) != decoded_path(location):
             raise InternalError(f"the row removed for {table} named {removed.location!r}, not the location judged")
-        _delete_everything_under(location, so, stored, spelled)
+        _delete_everything_under(location, so, stored, spelled=spelled)
         data_directories.delete_directories(directories, so)
     except Exception as exc:
         raise _bytes_left(table, location, exc, held=residue is not None) from exc
@@ -277,7 +277,7 @@ def require_no_clone_reading(location: str, so: StorageOptions, *, table: str) -
         )
 
 
-def _require_destroyable(location: str, so: StorageOptions, stored: str, spelled: str, *, estate_roots: Sequence[str]) -> bool:
+def _require_destroyable(location: str, so: StorageOptions, stored: str, *, spelled: str, estate_roots: Sequence[str]) -> bool:
     """Refuse a drop whose location is not one table's bytes, before anything changes (:func:`destroy_table`, step 1).
 
     Answers whether the location holds a ``_versions/`` tree: a dataset, rather than nothing or a declaration's marker.
@@ -310,7 +310,7 @@ def _require_destroyable(location: str, so: StorageOptions, stored: str, spelled
     return holds_versions
 
 
-def _delete_everything_under(location: str, so: StorageOptions, stored: str, spelled: str) -> None:
+def _delete_everything_under(location: str, so: StorageOptions, stored: str, *, spelled: str) -> None:
     """Delete every object under ``stored`` and ``spelled``, ``_versions/`` last, then prove none is left (:func:`destroy_table`, step 4).
 
     The table's ``_versions/`` tree goes after every other object, so a delete that stops part-way leaves a location

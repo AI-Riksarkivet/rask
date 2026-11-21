@@ -80,7 +80,7 @@ def test_the_coerced_body_is_held_to_the_cap_where_the_estimate_leaves_off(tmp_p
     branch arm, which reads the coerced body again, would refuse what main accepts."""
     ns = connect("dir", {"root": str(tmp_path)})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
-    create_table(ns, StorageOptions(), ["db", "w"], pa.table({"id": pa.array([0], pa.int64())}), root=str(tmp_path), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["db", "w"], table=pa.table({"id": pa.array([0], pa.int64())}), root=str(tmp_path), mode="create", registry=None)
     rows = pa.table({"id": pa.array(range(100), pa.int32())})
     body, estimate = encode_arrow_stream(rows), bytes_after_cast(rows.column("id"), pa.int64())
     encoded = len(encode_arrow_stream(rows.cast(pa.schema([("id", pa.int64())]))))

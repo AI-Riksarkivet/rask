@@ -53,7 +53,7 @@ def blob_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
         ns,
         StorageOptions(),
         ["lance_catalog", "db", "clips"],
-        _blob_table([b"hello-world", b"X" * 100, b"", None]),
+        table=_blob_table([b"hello-world", b"X" * 100, b"", None]),
         root=str(tmp_path),
         mode="create",
         registry=None,
@@ -183,7 +183,7 @@ def test_get_blob_version_param_over_http(blob_client: TestClient, tmp_path: Pat
     from catalog.services.tables.creation import create_table as recreate
 
     ns = blob_client.app.dependency_overrides[get_namespace]()
-    recreate(ns, StorageOptions(), ["lance_catalog", "db", "clips"], _blob_table([b"replacement"]), root=str(tmp_path), mode="overwrite", registry=None)
+    recreate(ns, StorageOptions(), ["lance_catalog", "db", "clips"], table=_blob_table([b"replacement"]), root=str(tmp_path), mode="overwrite", registry=None)
 
     head = blob_client.get("/management/v1/table/lance_catalog$db$clips/blobs", params={"column": "payload", "row": 0})
     assert head.status_code == 200 and head.content == b"replacement"

@@ -73,7 +73,7 @@ def _created(root: Path) -> LanceNamespace:
     ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1], properties=with_minted_uuid(None)))
     body = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20)
     registry = BaseRegistry(control_root=str(root.parent / "control"), storage_options={})
-    create_table(ns, StorageOptions(), _TABLE_ID, body, root=str(root), mode="create", registry=registry, holder="db$subjects")
+    create_table(ns, StorageOptions(), _TABLE_ID, table=body, root=str(root), mode="create", registry=registry, holder="db$subjects")
     return ns
 
 

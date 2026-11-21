@@ -172,7 +172,7 @@ def update_table(table: table_claims.DoorTable, so: StorageOptions, req: UpdateT
             table,
             so,
             transaction_properties,
-            _answering(
+            plan=_answering(
                 transaction_properties,
                 captured(table, so, lambda handle: handle.update(updates, where=where), branch=req.branch, measure=matched),
                 lambda matched_rows: {"updated_rows": matched_rows or 0},
@@ -195,7 +195,7 @@ def delete_from_table(
             table,
             so,
             _with_answer(transaction_properties, {}),
-            captured(table, so, lambda handle: handle.delete(predicate), branch=req.branch),
+            plan=captured(table, so, lambda handle: handle.delete(predicate), branch=req.branch),
             branch=req.branch,
         )
     return DeleteFromTableResponse(version=version)
@@ -279,8 +279,8 @@ def insert_into_table(
     table: table_claims.DoorTable,
     so: StorageOptions,
     req: InsertIntoTableRequest,
-    data: bytes,
     *,
+    data: bytes,
     max_bytes: int,
     transaction_properties: dict[str, str],
 ) -> InsertIntoTableResponse:
@@ -325,7 +325,7 @@ def insert_into_table(
             # Planned on the latest version and finalized as exactly the next, so a racing insert of the same key is
             # planned again and refused ([[LH-243]]).
             version, _ = commit_stamped(
-                table, so, transaction_properties, lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert"), branch=req.branch
+                table, so, transaction_properties, plan=lambda latest: primary_keys.plan_new_keys(latest, rows, keys, door="insert"), branch=req.branch
             )
         else:
             # An append or overwrite commutes with any racing append, so Lance's own rebase keeps it whole. Lance commits it
@@ -343,7 +343,7 @@ def insert_into_table(
                     lambda transaction_uuid, landed: table.record_author(
                         transaction_uuid,
                         version=landed,
-                        ref=commit_ref_key(table.location, so, table.segments, recorded_branch(req.branch)),
+                        ref=commit_ref_key(table.location, so, table.segments, branch=recorded_branch(req.branch)),
                         author=author,
                         manifest=None,
                     ),
@@ -360,8 +360,8 @@ def merge_insert_into_table(
     table: table_claims.DoorTable,
     so: StorageOptions,
     req: MergeInsertIntoTableRequest,
-    data: bytes,
     *,
+    data: bytes,
     max_bytes: int,
     transaction_properties: dict[str, str],
 ) -> MergeInsertIntoTableResponse:
@@ -405,7 +405,7 @@ def merge_insert_into_table(
             table,
             so,
             transaction_properties,
-            _answering(transaction_properties, lambda latest: _merge_builder(latest, req).execute_uncommitted(rows), _merge_counts),
+            plan=_answering(transaction_properties, lambda latest: _merge_builder(latest, req).execute_uncommitted(rows), _merge_counts),
             branch=req.branch,
         )
     return MergeInsertIntoTableResponse.model_validate({**_merge_counts(stats), "version": version})
@@ -494,7 +494,7 @@ def restore(
         transaction = Transaction(read_version=latest.version, operation=lance.LanceOperation.Restore(restored))
         return transaction, transaction.uuid
 
-    version, transaction_id = commit_stamped(table, so, transaction_properties, plan, branch=req.branch)
+    version, transaction_id = commit_stamped(table, so, transaction_properties, plan=plan, branch=req.branch)
     return RestoreTableResponse(transaction_id=transaction_id), version
 
 
@@ -520,13 +520,13 @@ def drop_index(table: table_claims.DoorTable, so: StorageOptions, name: str, *, 
         raise TableIndexNotFoundError(f"Table index not found: the table holds no index named {name!r}")
     if name in SYSTEM_INDICES:
         raise UnsupportedOperationError(f"System index '{name}' cannot be dropped via this API")
-    version, _ = commit_stamped(table, so, transaction_properties, captured(table, so, lambda handle: handle.drop_index(name), branch=None))
+    version, _ = commit_stamped(table, so, transaction_properties, plan=captured(table, so, lambda handle: handle.drop_index(name), branch=None))
     made = read_transaction(table.open_unchecked(so, version=version), version)
     return DropTableIndexResponse(transaction_id=made.uuid if made is not None else None)
 
 
 def coerce_insert_arrow(
-    table: table_claims.DoorTable, so: StorageOptions, data: bytes, branch: str | None = None, *, max_bytes: int, overwrite: bool = False
+    table: table_claims.DoorTable, so: StorageOptions, data: bytes, *, branch: str | None = None, max_bytes: int, overwrite: bool = False
 ) -> bytes:
     """Align Arrow-IPC insert rows to the table's schema before the append.
 

@@ -154,7 +154,7 @@ def _can_relations(fga_type: str) -> tuple[str, ...]:
 
 
 async def _access_list(
-    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
+    client: OpenFgaClient | None, *, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
 ) -> AccessListResponse:
     client = decisions.require_fga(settings, client, feature="access review")
     segments = parse_identifier(id)
@@ -190,65 +190,73 @@ async def _access_list(
 
 
 @table_router.post("/{id}/access/list")
-async def list_table_access(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessListResponse:
+async def list_table_access(*, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessListResponse:
     """Effective access on the table, per ``can_*`` action — owner-gated by the router (``can_drop``)."""
-    return await _access_list(client, settings, token, resolver, "table", id)
+    return await _access_list(client, settings=settings, token=token, resolver=resolver, fga_type="table", id=id)
 
 
 @namespace_router.post("/{id}/access/list")
-async def list_namespace_access(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessListResponse:
+async def list_namespace_access(*, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessListResponse:
     """Effective access on the namespace, per ``can_*`` action — owner-gated by the router
     (``can_delete``)."""
-    return await _access_list(client, settings, token, resolver, "namespace", id)
+    return await _access_list(client, settings=settings, token=token, resolver=resolver, fga_type="namespace", id=id)
 
 
-async def require_warehouse_review(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
+async def require_warehouse_review(id: str, client: FgaClientDep, settings: SettingsDep, *, token: CurrentToken) -> None:
     """Gate a warehouse's access listing on ``can_read_assignments``, the model's rung for seeing who holds what
     (``manage_grants``, which a project's admin holds through ``can_administer from project``) ([[LH-555]]). A route
     dependency, since the router leaves every warehouse route to its handler."""
     await door_gates.require_relation(client, settings, token, relation="can_read_assignments", obj=f"warehouse:{id}")
 
 
-async def require_warehouse_grant(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
+async def require_warehouse_grant(
+    id: str, *, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep
+) -> None:
     """Gate a warehouse grant as the router gates a table's or a namespace's: ``can_grant_<rung>`` read from the body, and
     no grant that raises the caller's own access ([[LH-555]])."""
     await grant_authority.require_grant_authority(
-        request, client, settings, token, resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=False
+        request, client, settings, token=token, resolver=resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=False
     )
 
 
-async def require_warehouse_revoke(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
+async def require_warehouse_revoke(
+    id: str, *, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep
+) -> None:
     """Gate a warehouse revoke on ``can_revoke_grant``, stricter than any grant ([[LH-555]])."""
     await grant_authority.require_grant_authority(
-        request, client, settings, token, resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=True
+        request, client, settings, token=token, resolver=resolver, fga_type="warehouse", segments=parse_identifier(id), revoking=True
     )
 
 
-async def require_project_review(id: str, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
+async def require_project_review(id: str, client: FgaClientDep, settings: SettingsDep, *, token: CurrentToken) -> None:
     """Gate a project's access listing on ``can_read_assignments``, which its security admin holds ([[LH-563]]). A route
     dependency, since the router leaves every project route to its handler."""
     await door_gates.require_relation(client, settings, token, relation="can_read_assignments", obj=f"project:{id}")
 
 
-async def require_project_grant(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
+async def require_project_grant(id: str, *, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
     """Gate a project grant as a warehouse's is gated: ``can_grant_<rung>`` read from the body, and no grant that raises
     the caller's own access ([[LH-563]])."""
-    await grant_authority.require_grant_authority(request, client, settings, token, resolver, fga_type="project", segments=parse_identifier(id), revoking=False)
+    await grant_authority.require_grant_authority(
+        request, client, settings, token=token, resolver=resolver, fga_type="project", segments=parse_identifier(id), revoking=False
+    )
 
 
-async def require_project_revoke(id: str, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
+async def require_project_revoke(id: str, *, request: Request, client: FgaClientDep, settings: SettingsDep, token: CurrentToken, resolver: ResolverDep) -> None:
     """Gate a project revoke on ``can_revoke_grant``, its security admin's ([[LH-563]])."""
-    await grant_authority.require_grant_authority(request, client, settings, token, resolver, fga_type="project", segments=parse_identifier(id), revoking=True)
+    await grant_authority.require_grant_authority(
+        request, client, settings, token=token, resolver=resolver, fga_type="project", segments=parse_identifier(id), revoking=True
+    )
 
 
 @warehouse_router.post("/{id}/access/list", dependencies=[Depends(require_warehouse_review)])
-async def list_warehouse_access(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessListResponse:
+async def list_warehouse_access(*, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessListResponse:
     """Effective access on the warehouse, per ``can_*`` action, to who may manage its grants ([[LH-555]])."""
-    return await _access_list(client, settings, token, resolver, "warehouse", id)
+    return await _access_list(client, settings=settings, token=token, resolver=resolver, fga_type="warehouse", id=id)
 
 
 @project_router.post("/{id}/access/list", dependencies=[Depends(require_project_review)])
-async def list_project_access(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessListResponse:
+async def list_project_access(*, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessListResponse:
     """Effective access on the project, per ``can_*`` action, to who may see its grants: its security admins ([[LH-563]]).
 
     Lists who may ask the decision door about the project's objects (``can_decide_access``) beside its other actions.
@@ -267,11 +275,12 @@ async def list_project_access(id: str, client: FgaClientDep, settings: SettingsD
     Raises:
         ServiceUnavailableError: OpenFGA did not answer.
     """
-    return await _access_list(client, settings, token, resolver, "project", id)
+    return await _access_list(client, settings=settings, token=token, resolver=resolver, fga_type="project", id=id)
 
 
 async def _access_check(
     client: OpenFgaClient | None,
+    *,
     settings: FgaSettings,
     token: Caller | None,
     resolver: Resolver,
@@ -310,22 +319,22 @@ async def _access_check(
 
 @table_router.post("/{id}/access/check")
 async def check_table_access(
-    id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessCheckRequest
+    *, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessCheckRequest
 ) -> AccessCheckResponse:
     """Simulate 'does <user> hold <relation> on this table?' — owner-gated by the router (``can_drop``)."""
-    return await _access_check(client, settings, token, resolver, "table", id, body)
+    return await _access_check(client, settings=settings, token=token, resolver=resolver, fga_type="table", id=id, body=body)
 
 
 @namespace_router.post("/{id}/access/check")
 async def check_namespace_access(
-    id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessCheckRequest
+    *, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessCheckRequest
 ) -> AccessCheckResponse:
     """Simulate 'does <user> hold <relation> on this namespace?' — owner-gated (``can_delete``)."""
-    return await _access_check(client, settings, token, resolver, "namespace", id, body)
+    return await _access_check(client, settings=settings, token=token, resolver=resolver, fga_type="namespace", id=id, body=body)
 
 
 async def _my_permissions(
-    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
+    client: OpenFgaClient | None, *, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
 ) -> MyPermissionsResponse:
     """Answer every ``can_*`` on this object for the CALLER — the self-view.
 
@@ -371,19 +380,23 @@ async def _my_permissions(
 
 
 @table_router.post("/{id}/access/my-permissions")
-async def my_table_permissions(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> MyPermissionsResponse:
+async def my_table_permissions(*, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> MyPermissionsResponse:
     """What the caller may do on this table — reader-gated by the router (``can_get_metadata``)."""
-    return await _my_permissions(client, settings, token, resolver, "table", id)
+    return await _my_permissions(client, settings=settings, token=token, resolver=resolver, fga_type="table", id=id)
 
 
 @namespace_router.post("/{id}/access/my-permissions")
-async def my_namespace_permissions(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> MyPermissionsResponse:
+async def my_namespace_permissions(
+    *, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken
+) -> MyPermissionsResponse:
     """What the caller may do on this namespace — reader-gated by the router (``can_get_metadata``)."""
-    return await _my_permissions(client, settings, token, resolver, "namespace", id)
+    return await _my_permissions(client, settings=settings, token=token, resolver=resolver, fga_type="namespace", id=id)
 
 
 @warehouse_router.post("/{id}/access/my-permissions")
-async def my_warehouse_permissions(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> MyPermissionsResponse:
+async def my_warehouse_permissions(
+    *, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken
+) -> MyPermissionsResponse:
     """What the caller may do on this warehouse — the self-view the UI needs to render a DISABLED
     action with its reason instead of a button that 403s on click.
 
@@ -397,11 +410,11 @@ async def my_warehouse_permissions(id: str, client: FgaClientDep, settings: Sett
     and gating it at the owner bar would mean only the people who already know the answer could ask.
     """
     await door_gates.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{id}")
-    return await _my_permissions(client, settings, token, resolver, "warehouse", id)
+    return await _my_permissions(client, settings=settings, token=token, resolver=resolver, fga_type="warehouse", id=id)
 
 
 @project_router.post("/{id}/access/my-permissions")
-async def my_project_permissions(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> MyPermissionsResponse:
+async def my_project_permissions(*, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> MyPermissionsResponse:
     """What the caller may do on this project — same self-view, same explicit gate as the warehouse
     rung (``/management/v1/projects/…`` is likewise outside ``_RESOURCES``).
 
@@ -424,11 +437,12 @@ async def my_project_permissions(id: str, client: FgaClientDep, settings: Settin
     and a migration story behind it, which is not something a UI-gating endpoint should drag in.
     """
     await door_gates.require_relation(client, settings, token, relation="member", obj=f"project:{id}")
-    return await _my_permissions(client, settings, token, resolver, "project", id)
+    return await _my_permissions(client, settings=settings, token=token, resolver=resolver, fga_type="project", id=id)
 
 
 async def _access_mutate(
     client: OpenFgaClient | None,
+    *,
     announcer: Announcer,
     settings: Settings,
     token: Caller | None,
@@ -436,7 +450,6 @@ async def _access_mutate(
     fga_type: str,
     id: str,
     body: AccessGrantRequest,
-    *,
     grant: bool,
 ) -> AccessGrantResponse:
     """Grant or revoke one grantable rung to a subject on a table, a namespace, a warehouse, a project or a classification label.
@@ -501,34 +514,37 @@ async def _access_mutate(
 
 @table_router.post("/{id}/access/grant")
 async def grant_table_access(
-    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    *, id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Grant a base rung on the table to a subject — gated PER RUNG by the router
     (``can_grant_<relation>``, read from the body). Granting is its own axis now: a `manage_grants`
     holder may hand out access without holding the data, and a `pass_grants` delegate may hand on only
     what they already hold."""
-    return await _access_mutate(client, announcer, settings, token, resolver, "table", id, body, grant=True)
+    return await _access_mutate(client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="table", id=id, body=body, grant=True)
 
 
 @table_router.post("/{id}/access/revoke")
 async def revoke_table_access(
-    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    *, id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Revoke a base rung on the table from a subject — gated per rung, identically to grant: taking a
     rung away is the same authority as handing it out."""
-    return await _access_mutate(client, announcer, settings, token, resolver, "table", id, body, grant=False)
+    return await _access_mutate(client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="table", id=id, body=body, grant=False)
 
 
 @namespace_router.post("/{id}/access/grant")
 async def grant_namespace_access(
-    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    *, id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Grant a base rung on the namespace to a subject — gated per rung (``can_grant_<relation>``)."""
-    return await _access_mutate(client, announcer, settings, token, resolver, "namespace", id, body, grant=True)
+    return await _access_mutate(
+        client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="namespace", id=id, body=body, grant=True
+    )
 
 
 @warehouse_router.post("/{id}/access/grant", dependencies=[Depends(require_warehouse_grant)])
 async def grant_warehouse_access(
+    *,
     id: str,
     client: FgaClientDep,
     announcer: AnnouncerDep,
@@ -538,11 +554,14 @@ async def grant_warehouse_access(
     body: AccessGrantRequest,
 ) -> AccessGrantResponse:
     """Grant a base rung on the warehouse to a subject, gated by :func:`require_warehouse_grant` ([[LH-555]])."""
-    return await _access_mutate(client, announcer, settings, token, resolver, "warehouse", id, body, grant=True)
+    return await _access_mutate(
+        client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="warehouse", id=id, body=body, grant=True
+    )
 
 
 @warehouse_router.post("/{id}/access/revoke", dependencies=[Depends(require_warehouse_revoke)])
 async def revoke_warehouse_access(
+    *,
     id: str,
     client: FgaClientDep,
     announcer: AnnouncerDep,
@@ -552,11 +571,14 @@ async def revoke_warehouse_access(
     body: AccessGrantRequest,
 ) -> AccessGrantResponse:
     """Revoke a base rung on the warehouse from a subject, gated by :func:`require_warehouse_revoke` ([[LH-555]])."""
-    return await _access_mutate(client, announcer, settings, token, resolver, "warehouse", id, body, grant=False)
+    return await _access_mutate(
+        client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="warehouse", id=id, body=body, grant=False
+    )
 
 
 @project_router.post("/{id}/access/grant", dependencies=[Depends(require_project_grant)])
 async def grant_project_access(
+    *,
     id: str,
     client: FgaClientDep,
     announcer: AnnouncerDep,
@@ -587,11 +609,14 @@ async def grant_project_access(
         InvalidInputError: The rung is no rung this door grants on a project.
         ServiceUnavailableError: OpenFGA did not answer.
     """
-    return await _access_mutate(client, announcer, settings, token, resolver, "project", id, body, grant=True)
+    return await _access_mutate(
+        client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="project", id=id, body=body, grant=True
+    )
 
 
 @project_router.post("/{id}/access/revoke", dependencies=[Depends(require_project_revoke)])
 async def revoke_project_access(
+    *,
     id: str,
     client: FgaClientDep,
     announcer: AnnouncerDep,
@@ -619,20 +644,24 @@ async def revoke_project_access(
         InvalidInputError: The rung is no rung this door grants on a project.
         ServiceUnavailableError: OpenFGA did not answer.
     """
-    return await _access_mutate(client, announcer, settings, token, resolver, "project", id, body, grant=False)
+    return await _access_mutate(
+        client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="project", id=id, body=body, grant=False
+    )
 
 
 @namespace_router.post("/{id}/access/revoke")
 async def revoke_namespace_access(
-    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    *, id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Revoke a base rung on the namespace from a subject — gated per rung, identically to grant."""
-    return await _access_mutate(client, announcer, settings, token, resolver, "namespace", id, body, grant=False)
+    return await _access_mutate(
+        client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="namespace", id=id, body=body, grant=False
+    )
 
 
 @classification_router.post("/{id}/access/grant")
 async def grant_classification_access(
-    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    *, id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Delegate a classification label to a subject — gated per rung by ``can_grant_apply``.
 
@@ -641,25 +670,29 @@ async def grant_classification_access(
     only and the separation is decorative. `model.fga` makes the same argument for `classifier` one
     level along — "a person's grant belongs on the grant door rather than in a deploy".
     """
-    return await _access_mutate(client, announcer, settings, token, resolver, "classification", id, body, grant=True)
+    return await _access_mutate(
+        client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="classification", id=id, body=body, grant=True
+    )
 
 
 @classification_router.post("/{id}/access/revoke")
 async def revoke_classification_access(
-    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
+    *, id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: AccessGrantRequest
 ) -> AccessGrantResponse:
     """Withdraw a classification delegation — ``can_revoke_grant``, stricter than the grant, exactly as
     on table and namespace: taking a rung back is administration, never delegation."""
-    return await _access_mutate(client, announcer, settings, token, resolver, "classification", id, body, grant=False)
+    return await _access_mutate(
+        client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="classification", id=id, body=body, grant=False
+    )
 
 
 @classification_router.post("/{id}/access/my-permissions")
 async def my_classification_permissions(
-    id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken
+    *, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken
 ) -> MyPermissionsResponse:
     """Which classification actions the caller holds on this label — the same self-service read the
     data types carry, and the only way a holder can discover a delegation made to them."""
-    return await _my_permissions(client, settings, token, resolver, "classification", id)
+    return await _my_permissions(client, settings=settings, token=token, resolver=resolver, fga_type="classification", id=id)
 
 
 def _graph_node(node_id: str) -> GraphNode:
@@ -670,7 +703,7 @@ def _graph_node(node_id: str) -> GraphNode:
 
 
 async def _access_graph(
-    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
+    client: OpenFgaClient | None, *, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str
 ) -> AccessGraphResponse:
     """The #81 authorization-graph primitive — one hop of the relationship graph around an object: the
     object, every subject directly granted a rung on it, and its ``parent``/``project`` container edge.
@@ -704,15 +737,15 @@ async def _access_graph(
 
 
 @table_router.post("/{id}/access/graph")
-async def graph_table_access(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessGraphResponse:
+async def graph_table_access(*, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessGraphResponse:
     """One hop of the authorization graph around the table — owner-gated by the router (``can_drop``)."""
-    return await _access_graph(client, settings, token, resolver, "table", id)
+    return await _access_graph(client, settings=settings, token=token, resolver=resolver, fga_type="table", id=id)
 
 
 @namespace_router.post("/{id}/access/graph")
-async def graph_namespace_access(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessGraphResponse:
+async def graph_namespace_access(*, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken) -> AccessGraphResponse:
     """One hop of the authorization graph around the namespace — owner-gated (``can_delete``)."""
-    return await _access_graph(client, settings, token, resolver, "namespace", id)
+    return await _access_graph(client, settings=settings, token=token, resolver=resolver, fga_type="namespace", id=id)
 
 
 # --------------------------------------------------------------------------- #
@@ -726,7 +759,7 @@ async def graph_namespace_access(id: str, client: FgaClientDep, settings: Settin
 _MANAGED_ACCESS_SUBJECT = "user:*"
 
 
-async def _read_managed_access(client: OpenFgaClient | None, settings: FgaSettings, resolver: Resolver, fga_type: str, id: str) -> ManagedAccessResponse:
+async def _read_managed_access(client: OpenFgaClient | None, settings: FgaSettings, resolver: Resolver, *, fga_type: str, id: str) -> ManagedAccessResponse:
     """Is this container managed? The READ half, without which the flag is unusable in a UI.
 
     Reader-tier (``can_get_metadata``, via the suffix map), not the grant bar that SETS it. That is
@@ -746,25 +779,33 @@ async def _read_managed_access(client: OpenFgaClient | None, settings: FgaSettin
 
 
 @namespace_router.post("/{id}/managed-access/describe")
-async def get_namespace_managed_access(id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep) -> ManagedAccessResponse:
+async def get_namespace_managed_access(*, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep) -> ManagedAccessResponse:
     """Whether granting on this namespace is centralized — reader-gated (``can_get_metadata``)."""
-    return await _read_managed_access(client, settings, resolver, "namespace", id)
+    return await _read_managed_access(client, settings, resolver, fga_type="namespace", id=id)
 
 
 @warehouse_router.post("/{id}/managed-access/describe")
 async def get_warehouse_managed_access(
-    id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken
+    *, id: str, client: FgaClientDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken
 ) -> ManagedAccessResponse:
     """The same for a warehouse. Gated EXPLICITLY — `warehouse` is not in ``_RESOURCES``, so
     ``authorize`` returns early and a route added here without this call is ungated."""
     segments = parse_identifier(id)
     obj = f"warehouse:{fga_ids.canonical_object_id(segments)}"
     await door_gates.require_relation(client, settings, token, relation="can_get_metadata", obj=obj)
-    return await _read_managed_access(client, settings, resolver, "warehouse", id)
+    return await _read_managed_access(client, settings, resolver, fga_type="warehouse", id=id)
 
 
 async def _set_managed_access(
-    client: OpenFgaClient | None, announcer: Announcer, settings: FgaSettings, token: Caller | None, resolver: Resolver, fga_type: str, id: str, enabled: bool
+    client: OpenFgaClient | None,
+    *,
+    announcer: Announcer,
+    settings: FgaSettings,
+    token: Caller | None,
+    resolver: Resolver,
+    fga_type: str,
+    id: str,
+    enabled: bool,
 ) -> ManagedAccessResponse:
     """Set or clear the flag, idempotently.
 
@@ -798,7 +839,7 @@ async def _set_managed_access(
 
 @namespace_router.post("/{id}/managed-access/set")
 async def set_namespace_managed_access(
-    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: ManagedAccessRequest
+    *, id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: ManagedAccessRequest
 ) -> ManagedAccessResponse:
     """Centralize granting for this namespace and everything beneath it — gated on
     ``can_set_managed_access`` (which derives from ``manage_grants``).
@@ -808,12 +849,14 @@ async def set_namespace_managed_access(
     already-managed scope the owner's ``manage_grants`` is withdrawn, so they cannot switch it off —
     which is what makes it a policy rather than a suggestion.
     """
-    return await _set_managed_access(client, announcer, settings, token, resolver, "namespace", id, body.enabled)
+    return await _set_managed_access(
+        client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="namespace", id=id, enabled=body.enabled
+    )
 
 
 @warehouse_router.post("/{id}/managed-access/set")
 async def set_warehouse_managed_access(
-    id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: ManagedAccessRequest
+    *, id: str, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, resolver: ResolverDep, token: CurrentToken, body: ManagedAccessRequest
 ) -> ManagedAccessResponse:
     """The same, for a whole warehouse — the scope root, so this governs every stage and table in it,
     **and the warehouse itself**.
@@ -839,7 +882,9 @@ async def set_warehouse_managed_access(
     segments = parse_identifier(id)
     obj = f"warehouse:{fga_ids.canonical_object_id(segments)}"
     await door_gates.require_relation(client, settings, token, relation="can_set_managed_access", obj=obj)
-    return await _set_managed_access(client, announcer, settings, token, resolver, "warehouse", id, body.enabled)
+    return await _set_managed_access(
+        client, announcer=announcer, settings=settings, token=token, resolver=resolver, fga_type="warehouse", id=id, enabled=body.enabled
+    )
 
 
 # The v1 aggregator includes one ``router`` per module — the table + namespace routers are stitched here.

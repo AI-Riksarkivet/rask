@@ -28,6 +28,7 @@ router = APIRouter(prefix="/tables", tags=["query"], dependencies=[Depends(requi
 
 @router.get("/{name}/derived")
 async def get_derived(
+    *,
     name: str,
     provenance: ProvenanceDep,
     names: NamesDep,

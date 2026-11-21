@@ -47,6 +47,7 @@ management_router = APIRouter(prefix="/management/v1/events", tags=["events"])
 
 @management_router.get("")
 async def poll_control_events(
+    *,
     request: Request,
     settings: SettingsDep,
     token: CurrentToken,
@@ -93,7 +94,7 @@ async def _served(request: Request, settings: Settings, since: int) -> tuple[lis
         carried = control_event_in(message)
         if carried is not None:
             arrived, event = carried
-            verdict = await judge(request.app, settings, arrived, event)
+            verdict = await judge(request.app, settings, arrived, event=event)
             if verdict.retry:
                 break
             if verdict.act:

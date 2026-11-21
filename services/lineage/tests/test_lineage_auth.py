@@ -143,14 +143,21 @@ def test_authenticate_enabled_verifies_token() -> None:
 
 def test_gate_unwired_client_fails_closed() -> None:
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(fga_deps.require_metadata_access("a$b", _request(), _settings(**_FULL_AUTH), _token(), NO_CATALOG_NAMES, None))
+        asyncio.run(
+            fga_deps.require_metadata_access("a$b", request=_request(), settings=_settings(**_FULL_AUTH), token=_token(), names=NO_CATALOG_NAMES, bearer=None)
+        )
 
 
 def test_gate_unauthenticated_raises() -> None:
     with pytest.raises(UnauthenticatedError):
         asyncio.run(
             fga_deps.require_metadata_access(
-                "a$b", _request(decider=OpenFgaDecider(cast("Any", object()))), _settings(**_FULL_AUTH), None, NO_CATALOG_NAMES, None
+                "a$b",
+                request=_request(decider=OpenFgaDecider(cast("Any", object()))),
+                settings=_settings(**_FULL_AUTH),
+                token=None,
+                names=NO_CATALOG_NAMES,
+                bearer=None,
             )
         )
 
@@ -161,7 +168,9 @@ def test_gate_denies_without_permission(openfga_store: Any) -> None:  # noqa: AN
     names = _Names()
 
     def gate(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the gate's coroutine
-        return fga_deps.require_metadata_access("a$b", _request(decider=decider), _settings(**_FULL_AUTH), _token(), cast(CatalogNames, names), "tok")
+        return fga_deps.require_metadata_access(
+            "a$b", request=_request(decider=decider), settings=_settings(**_FULL_AUTH), token=_token(), names=cast(CatalogNames, names), bearer="tok"
+        )
 
     openfga_store.write((fga_ids.user_object("dex~bob"), "owner", _object("a$b")))
     with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on table:a\$b"):
@@ -257,7 +266,7 @@ def test_get_events_hides_dataset_less_events_when_governed(openfga_store: Any) 
 
     def read(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the door's coroutine
         flt = fga_deps.DatasetFilter(_request(decider=decider), settings, _token())
-        return get_events(cast(ProvenanceStore, repo), flt, settings, names=NO_CATALOG_NAMES, bearer=None)
+        return get_events(provenance=cast(ProvenanceStore, repo), datasets=flt, settings=settings, names=NO_CATALOG_NAMES, bearer=None)
 
     result = decided(openfga_store, read)
     assert result.events == []  # dataset-less event is hidden under governance
@@ -354,7 +363,7 @@ def test_a_sparse_page_reads_its_window_in_three_reads_at_most_the_next_beside_a
     repo.events = [EventRecord(seq=seq, outputs=["t"], inputs=[], table_uuids=[_uuid(table(seq))], event={}) for seq in range(200, 0, -1)]
     flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
 
-    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=limit, names=NO_CATALOG_NAMES, bearer=None))
+    page = asyncio.run(get_events(provenance=cast(ProvenanceStore, repo), datasets=flt, settings=settings, limit=limit, names=NO_CATALOG_NAMES, bearer=None))
 
     assert ([e.seq for e in page.events], page.next_cursor) == (sorted(visible_at, reverse=True), cursor)
     assert repo.log == log
@@ -372,17 +381,19 @@ def test_get_events_cursor_and_fetch_width(monkeypatch: pytest.MonkeyPatch) -> N
         EventRecord(seq=5, outputs=["a"], inputs=[], event={}),
         EventRecord(seq=4, outputs=["a"], inputs=[], event={}),
     ]
-    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=2, names=NO_CATALOG_NAMES, bearer=None))
+    page = asyncio.run(get_events(provenance=cast(ProvenanceStore, repo), datasets=flt, settings=settings, limit=2, names=NO_CATALOG_NAMES, bearer=None))
     assert repo.windows[-1] == {"after": None, "since": None, "summary": False}
     assert [e.seq for e in page.events] == [5, 4] and page.next_cursor == 4  # full page → continue
 
     repo.events = [EventRecord(seq=3, outputs=["a"], inputs=[], event={})]
-    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, after=4, limit=2, names=NO_CATALOG_NAMES, bearer=None))
+    page = asyncio.run(
+        get_events(provenance=cast(ProvenanceStore, repo), datasets=flt, settings=settings, after=4, limit=2, names=NO_CATALOG_NAMES, bearer=None)
+    )
     assert repo.windows[-1] == {"after": 4, "since": None, "summary": False}
     assert [e.seq for e in page.events] == [3] and page.next_cursor is None  # short page → exhausted
 
     # summary rides through to the store's read untouched
-    asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, summary=True, names=NO_CATALOG_NAMES, bearer=None))
+    asyncio.run(get_events(provenance=cast(ProvenanceStore, repo), datasets=flt, settings=settings, summary=True, names=NO_CATALOG_NAMES, bearer=None))
     assert repo.windows[-1]["summary"] is True
 
 
@@ -393,7 +404,13 @@ def test_ingest_handler_binds_verified_author() -> None:
     event = _event(claimed_author="attacker")
     asyncio.run(
         ingest_event(
-            event.model_dump(by_alias=True), _request(), cast(ProvenanceStore, repo), _settings(), _token("real-user"), names=NO_CATALOG_NAMES, bearer=None
+            body=event.model_dump(by_alias=True),
+            request=_request(),
+            provenance=cast(ProvenanceStore, repo),
+            settings=_settings(),
+            token=_token("real-user"),
+            names=NO_CATALOG_NAMES,
+            bearer=None,
         )
     )
     assert repo.recorded is not None and repo.recorded.author == "dex~real-user"  # body claim overridden
@@ -404,7 +421,17 @@ def test_ingest_handler_keeps_body_author_when_oidc_off() -> None:
 
     repo = _FakeStore()
     event = _event(claimed_author="claimed")
-    asyncio.run(ingest_event(event.model_dump(by_alias=True), _request(), cast(ProvenanceStore, repo), _settings(), None, names=NO_CATALOG_NAMES, bearer=None))
+    asyncio.run(
+        ingest_event(
+            body=event.model_dump(by_alias=True),
+            request=_request(),
+            provenance=cast(ProvenanceStore, repo),
+            settings=_settings(),
+            token=None,
+            names=NO_CATALOG_NAMES,
+            bearer=None,
+        )
+    )
     assert repo.recorded is not None and repo.recorded.author == "claimed"
 
 
@@ -416,7 +443,7 @@ def test_ingest_handler_keeps_body_author_when_oidc_off() -> None:
 
 def test_output_authz_unwired_client_fails_closed() -> None:
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(fga_deps.enforce_output_authz(_event(outputs=["a$b"]), _request().app, _settings(**_FULL_AUTH), _token()))
+        asyncio.run(fga_deps.enforce_output_authz(_event(outputs=["a$b"]), _request().app, _settings(**_FULL_AUTH), token=_token()))
 
 
 def test_output_authz_output_less_still_requires_auth() -> None:
@@ -425,7 +452,9 @@ def test_output_authz_output_less_still_requires_auth() -> None:
     # unauthenticated caller could record a forged inputs-only run in the governed feed.
     with pytest.raises(UnauthenticatedError):
         asyncio.run(
-            fga_deps.enforce_output_authz(_event(inputs=["a$b"]), _request(decider=OpenFgaDecider(cast("Any", object()))).app, _settings(**_FULL_AUTH), None)
+            fga_deps.enforce_output_authz(
+                _event(inputs=["a$b"]), _request(decider=OpenFgaDecider(cast("Any", object()))).app, _settings(**_FULL_AUTH), token=None
+            )
         )
 
 
@@ -479,7 +508,7 @@ def test_enforce_output_authz_bounds_a_service_principal_by_its_own_rung(
     def authorize(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the gate's coroutine
         # The feed lineage's lifespan always wires, here one holding no run, so the event founds its run.
         app = _request(decider=decider, provenance=_FakeStore()).app
-        return fga_deps.enforce_output_authz(_service_run(), app, _settings(**_FULL_AUTH), security.ServicePrincipal.for_account(_SERVICE_ACCOUNT))
+        return fga_deps.enforce_output_authz(_service_run(), app, _settings(**_FULL_AUTH), token=security.ServicePrincipal.for_account(_SERVICE_ACCOUNT))
 
     with outcome:
         decided(openfga_store, authorize)
@@ -550,6 +579,6 @@ def test_get_events_reports_the_feed_FLOOR_so_a_consumer_can_see_what_it_lost() 
     flt = fga_deps.DatasetFilter(_request(), settings, None)
     repo.events = [EventRecord(seq=9000, outputs=["a"], inputs=[], event={})]
 
-    page = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, limit=2, names=NO_CATALOG_NAMES, bearer=None))
+    page = asyncio.run(get_events(provenance=cast(ProvenanceStore, repo), datasets=flt, settings=settings, limit=2, names=NO_CATALOG_NAMES, bearer=None))
 
     assert page.oldest_seq == 8999

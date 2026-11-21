@@ -77,7 +77,7 @@ def add_columns(
             table,
             so,
             transaction_properties,
-            captured(table, so, lambda handle: handle.add_columns(transforms), branch=req.branch),
+            plan=captured(table, so, lambda handle: handle.add_columns(transforms), branch=req.branch),
             branch=req.branch,
             opened=dataset,
         )
@@ -117,7 +117,7 @@ def alter_columns(
 
     with column_op("alter_columns", schema.names):
         version, _ = commit_stamped(
-            table, so, transaction_properties, captured(table, so, alter, branch=req.branch), branch=req.branch, opened=dataset, keeps_labels=True
+            table, so, transaction_properties, plan=captured(table, so, alter, branch=req.branch), branch=req.branch, opened=dataset, keeps_labels=True
         )
     return AlterTableAlterColumnsResponse(version=version)
 
@@ -134,7 +134,7 @@ def drop_columns(
             table,
             so,
             transaction_properties,
-            captured(table, so, lambda handle: handle.drop_columns(columns), branch=req.branch),
+            plan=captured(table, so, lambda handle: handle.drop_columns(columns), branch=req.branch),
             branch=req.branch,
             opened=dataset,
             keeps_labels=True,
@@ -189,7 +189,7 @@ def update_schema_metadata(
     commit rather than whatever a reopen finds. Committed with ``transaction_properties`` ([[LH-497]]).
     """
     version, _ = commit_stamped(
-        table, so, transaction_properties, captured(table, so, lambda handle: handle.update_schema_metadata(values), branch=branch), branch=branch
+        table, so, transaction_properties, plan=captured(table, so, lambda handle: handle.update_schema_metadata(values), branch=branch), branch=branch
     )
     committed = table.open_unchecked(so, version=version, branch=recorded_branch(branch))
     return user_schema_metadata(committed.schema), version
@@ -199,8 +199,8 @@ def update_field_metadata(
     table: table_claims.DoorTable,
     so: StorageOptions,
     updates: list[dict[str, Any]],
-    branch: str | None = None,
     *,
+    branch: str | None = None,
     transaction_properties: dict[str, str],
 ) -> UpdateFieldMetadataResponse:
     """Merge or replace each entry's field metadata, committed as one version with ``transaction_properties`` ([[LH-497]]).
@@ -233,7 +233,7 @@ def update_field_metadata(
             table,
             so,
             transaction_properties,
-            captured(table, so, lambda handle: _apply_field_metadata(handle, field_updates, replacing=replacing), branch=branch),
+            plan=captured(table, so, lambda handle: _apply_field_metadata(handle, field_updates, replacing=replacing), branch=branch),
             branch=branch,
             opened=dataset,
         )

@@ -373,7 +373,9 @@ class TestTheDoorGatesBeforeItWrites:
             async def _asked() -> str:
                 async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
                     try:
-                        await endpoint.validate_warehouse_credentials("wh", settings, _token(), client, _Vendor(credentials=None))
+                        await endpoint.validate_warehouse_credentials(
+                            warehouse_id="wh", settings=settings, token=_token(), client=client, vendor=_Vendor(credentials=None)
+                        )
                     except TableNotFoundError as refused:
                         return str(refused)
                     return "probed"
@@ -404,7 +406,9 @@ class TestTheDoorGatesBeforeItWrites:
 
         monkeypatch.setattr(endpoint, "_run_scope_probe", _probe)
 
-        report = await endpoint.validate_warehouse_credentials("wh", self._settings(), _token(), None, _Vendor(credentials=None))
+        report = await endpoint.validate_warehouse_credentials(
+            warehouse_id="wh", settings=self._settings(), token=_token(), client=None, vendor=_Vendor(credentials=None)
+        )
 
         assert seen == [ROOT]
         assert report.enforced is None, "a probe that ran no checks proved nothing, and must not read as healthy"

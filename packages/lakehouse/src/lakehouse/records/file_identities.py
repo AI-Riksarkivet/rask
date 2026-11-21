@@ -111,7 +111,7 @@ def _copy_key(table_uuid: str) -> str:
     return f"{COPY_PREFIX}/{table_uuid}.json"
 
 
-def as_stored(table_root: str, storage_options: StorageOptions, transaction_uuid: str, paths: Sequence[str]) -> CommittedFiles:
+def as_stored(table_root: str, storage_options: StorageOptions, transaction_uuid: str, *, paths: Sequence[str]) -> CommittedFiles:
     """The files at ``paths`` under ``table_root`` (the store's own spelling of it) as the store holds them now.
 
     A path the store does not hold is left out: ``version/create`` refuses a commit naming one, and an object nobody
@@ -125,10 +125,10 @@ def as_stored(table_root: str, storage_options: StorageOptions, transaction_uuid
     return CommittedFiles(transaction_uuid=transaction_uuid, files=files)
 
 
-def record(control_root: str, storage_options: StorageOptions, table_uuid: str, committed: CommittedFiles) -> None:
+def record(control_root: str, storage_options: StorageOptions, table_uuid: str, *, committed: CommittedFiles) -> None:
     """Record what one commit of the table ``table_uuid`` added; nothing for a commit that added no file."""
     if committed.files:
-        put_record(control_root, storage_options, _key(table_uuid, committed.transaction_uuid), committed.model_dump())
+        put_record(control_root, storage_options, _key(table_uuid, committed.transaction_uuid), record=committed.model_dump())
 
 
 def recorded_and_copied(control_root: str, storage_options: StorageOptions, table_uuid: str) -> list[CommittedFiles]:
@@ -163,11 +163,11 @@ def recorded_and_copied(control_root: str, storage_options: StorageOptions, tabl
             copied = _CopiedRecord(size=size, committed=committed)
         records[transaction_uuid] = copied
     if records != copy.records:
-        _write_copy(control_root, storage_options, table_uuid, _RecordCopy(records=records), over=etag)
+        _write_copy(control_root, storage_options, table_uuid, copy=_RecordCopy(records=records), over=etag)
     return [copied.committed for copied in records.values()]
 
 
-def _write_copy(control_root: str, storage_options: StorageOptions, table_uuid: str, copy: _RecordCopy, *, over: str | None) -> None:
+def _write_copy(control_root: str, storage_options: StorageOptions, table_uuid: str, *, copy: _RecordCopy, over: str | None) -> None:
     """Write ``copy`` over the copy read with the ETag ``over``, or where none stands when ``over`` is ``None``; a lost
     condition writes nothing. A copy created where none stood is deleted again once the table's records are gone.
 
@@ -179,9 +179,9 @@ def _write_copy(control_root: str, storage_options: StorageOptions, table_uuid: 
     key = _copy_key(table_uuid)
     try:
         if over is not None:
-            replace_json(control_root, storage_options, key, copy.model_dump(mode="json"), etag=over)
+            replace_json(control_root, storage_options, key, record=copy.model_dump(mode="json"), etag=over)
             return
-        create_json(control_root, storage_options, key, copy.model_dump(mode="json"))
+        create_json(control_root, storage_options, key, record=copy.model_dump(mode="json"))
     except (RecordChangedError, RecordExistsError):
         log.info("file_identities_copy_moved", extra={"table_uuid": table_uuid})
         return
@@ -249,7 +249,7 @@ def _read_record(control_root: str, storage_options: StorageOptions, key: str) -
         return None
 
 
-def forget(control_root: str, storage_options: StorageOptions, table_uuid: str, transaction_uuid: str) -> None:
+def forget(control_root: str, storage_options: StorageOptions, table_uuid: str, *, transaction_uuid: str) -> None:
     """Delete one commit's record: once no retained version names its files and the store holds none of them, or once the
     commit is proven never to land, when no version names them whatever the store still holds ([[LH-564]])."""
     delete_record(control_root, storage_options, _key(table_uuid, transaction_uuid))

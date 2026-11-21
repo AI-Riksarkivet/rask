@@ -136,7 +136,7 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     # The signers' published keys, read from the secret store under this process's login when an event is verified
     # (`lineage.services.signature`). Built per start, before the first delivery or request can ask for it.
     app.state.published_keys = store_published_keys()
-    _take_deliveries(app, settings, bus, loops)
+    _take_deliveries(app, settings, bus, loops=loops)
     # The forwarder's client, and only when a graph backend is configured: one connection pool per process.
     app.state.forward_client = httpx.AsyncClient(timeout=settings.forward_timeout_seconds) if settings.forward_url else None
     if app.state.forward_client is not None:
@@ -149,7 +149,7 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     start_relay(app, settings, loops)
 
 
-def _take_deliveries(app: FastAPI, settings: LineageSettings, bus: Bus | None, loops: Supervisor) -> None:
+def _take_deliveries(app: FastAPI, settings: LineageSettings, bus: Bus | None, *, loops: Supervisor) -> None:
     """Pull lineage's consumer on a loop of ``loops`` for as long as the process runs, where a bus is named. Started once
     the feed and the gate a delivery is handled with are on ``app.state``, and stopped with the other loops, before
     either is released."""

@@ -166,7 +166,7 @@ def listing(settings: CatalogStore) -> list[CloneEnding]:
     return sorted(endings, key=lambda ending: ending.filed_at)
 
 
-def finish(ns: LanceNamespace, settings: CatalogStore, digest: str, filing: str, *, token: str) -> FinishOutcome:
+def finish(ns: LanceNamespace, settings: CatalogStore, digest: str, *, filing: str, token: str) -> FinishOutcome:
     """Finish the ending ``filing`` filed under ``digest``: release what its door named and remove it, on the claim this
     finish read and fenced (the module's docstring has each case).
 
@@ -188,7 +188,7 @@ def finish(ns: LanceNamespace, settings: CatalogStore, digest: str, filing: str,
         raise InvalidTableStateError("another finish is acting on the ending")
     try:
         clone_ending_records.mark(claims, found, token=token)
-        outcome = _finished(ns, settings, claims, found, token=token)
+        outcome = _finished(ns, settings, claims, found=found, token=token)
     except clone_ending_records.EndingChangedError as exc:
         raise ConcurrentModificationError(f"the ending changed while it was being finished: {exc}") from exc
     except location_claims.ClaimChangedError as exc:
@@ -206,7 +206,7 @@ def finish(ns: LanceNamespace, settings: CatalogStore, digest: str, filing: str,
 
 
 def _finished(
-    ns: LanceNamespace, settings: CatalogStore, claims: location_claims.ClaimStore, found: clone_ending_records.EndingRead, *, token: str
+    ns: LanceNamespace, settings: CatalogStore, claims: location_claims.ClaimStore, *, found: clone_ending_records.EndingRead, token: str
 ) -> FinishOutcome:
     """Release what the ending ``found`` names on the claim read here, fenced for this finish, and remove the ending last.
 

@@ -332,7 +332,7 @@ _ROUNDS: Final = 3
 
 
 def keep(
-    control_root: str, storage_options: StorageOptions, table_uuid: str, contract: Contract, *, document: Mapping[str, Any], actor: str | None
+    control_root: str, storage_options: StorageOptions, table_uuid: str, *, contract: Contract, document: Mapping[str, Any], actor: str | None
 ) -> ContractRecord:
     """Record ``contract`` as the table's, kept as the ``document`` it was read from so a read answers what was set, over
     the one standing only as :func:`require_evolves` allows. The store arbitrates: the first contract is a put-if-absent,
@@ -352,13 +352,13 @@ def keep(
     key = _key(table_uuid)
     for _ in range(_ROUNDS):
         try:
-            create_json(control_root, storage_options, key, body)
+            create_json(control_root, storage_options, key, record=body)
         except RecordExistsError:
             pass
         else:
             return record
         try:
-            mutate_json(control_root, storage_options, key, _over)
+            mutate_json(control_root, storage_options, key, mutate=_over)
         except RecordMissingError:
             continue
         return record
@@ -387,12 +387,12 @@ def standing(control_root: str, storage_options: StorageOptions, table_uuid: str
         return None
 
 
-def restore(control_root: str, storage_options: StorageOptions, table_uuid: str, record: ContractRecord | None) -> None:
+def restore(control_root: str, storage_options: StorageOptions, table_uuid: str, *, record: ContractRecord | None) -> None:
     """Put the table's contract back to ``record``, the one a refused set replaced; none removes it."""
     if record is None:
         forget(control_root, storage_options, table_uuid)
     else:
-        put_record(control_root, storage_options, _key(table_uuid), record.model_dump(mode="json"))
+        put_record(control_root, storage_options, _key(table_uuid), record=record.model_dump(mode="json"))
 
 
 def forget(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:

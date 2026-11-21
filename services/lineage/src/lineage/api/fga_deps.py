@@ -204,7 +204,7 @@ def _denied(event: str, *, subject: str, relation: str, resources: Sequence[str]
     log.info(event, extra={"relation": relation, "objects": list(resources)})
 
 
-async def _require_relation(relation: str, obj: str | None, label: str, request: Request, settings: FgaSettings, token: Caller | None) -> None:
+async def _require_relation(relation: str, obj: str | None, *, label: str, request: Request, settings: FgaSettings, token: Caller | None) -> None:
     """The one fail-closed authz ladder every per-``{name}`` gate shares (audit 2026-07-16: it had
     grown four near-copies). No-op when FGA is off; unwired client → 503; unauthenticated → 401;
     deny → 403, also for a name that resolved to no object (``obj`` is ``None``), named by ``label`` either way;
@@ -242,7 +242,7 @@ async def require_event_feed_reader(request: Request, settings: FgaSettings, tok
     The same fail-closed ladder as every other gate here: FGA off → no-op; unwired client → 503;
     unauthenticated → 401; deny → 403; an OpenFGA outage inside `check` → 503, never allow.
     """
-    await _require_estate_rung(_EVENT_FEED_RELATION, request, settings, token)
+    await _require_estate_rung(_EVENT_FEED_RELATION, request, settings, token=token)
 
 
 async def require_parks_reader(request: Request, settings: SettingsDep, token: CurrentToken) -> None:
@@ -251,7 +251,7 @@ async def require_parks_reader(request: Request, settings: SettingsDep, token: C
     The parks are every tenant's refused deliveries, so reading them is the estate admin's. The ladder is
     :func:`require_event_feed_reader`'s.
     """
-    await _require_estate_rung(_READ_PARKS_RELATION, request, settings, token)
+    await _require_estate_rung(_READ_PARKS_RELATION, request, settings, token=token)
 
 
 async def require_parks_replayer(request: Request, settings: SettingsDep, token: CurrentToken) -> None:
@@ -261,10 +261,10 @@ async def require_parks_replayer(request: Request, settings: SettingsDep, token:
     caller's own data, and a verb of its own beside the read: a replay writes to the feed. The ladder is
     :func:`require_event_feed_reader`'s.
     """
-    await _require_estate_rung(_REPLAY_PARKS_RELATION, request, settings, token)
+    await _require_estate_rung(_REPLAY_PARKS_RELATION, request, settings, token=token)
 
 
-async def _require_estate_rung(relation: str, request: Request, settings: FgaSettings, token: Caller | None) -> None:
+async def _require_estate_rung(relation: str, request: Request, settings: FgaSettings, *, token: Caller | None) -> None:
     if not settings.fga_enabled:
         return
     decider = getattr(request.app.state, "decider", None)
@@ -278,14 +278,16 @@ async def _require_estate_rung(relation: str, request: Request, settings: FgaSet
         raise PermissionDeniedError(f"{relation} required on {obj}")
 
 
-async def require_metadata_access(name: str, request: Request, settings: SettingsDep, token: CurrentToken, names: NamesDep, bearer: BearerDep) -> None:
+async def require_metadata_access(name: str, *, request: Request, settings: SettingsDep, token: CurrentToken, names: NamesDep, bearer: BearerDep) -> None:
     """Gate a dataset read on OpenFGA ``can_get_metadata`` on the table ``name`` names now — the same metadata-read
     permission the catalog requires to describe that table, asked about the uuid the catalog resolves the name to as
     the caller ([[LH-524]]). A name the caller may not see resolves to nothing and is refused alike."""
     if not settings.fga_enabled:
         return
     uuid = (await names.table(name, bearer=bearer)).table_uuid
-    await _require_relation("can_get_metadata", fga_ids.table_object(uuid) if uuid else None, f"table:{name}", request, settings, token)
+    await _require_relation(
+        "can_get_metadata", fga_ids.table_object(uuid) if uuid else None, label=f"table:{name}", request=request, settings=settings, token=token
+    )
 
 
 def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None:
@@ -329,7 +331,7 @@ class _StampedAuthor:
         self.subject = subject
 
 
-async def enforce_bus_authz(event: RunEvent | DatasetEvent, app: FastAPI, settings: LineageSettings, arrived: Mapping[str, Any]) -> frozenset[str]:
+async def enforce_bus_authz(event: RunEvent | DatasetEvent, app: FastAPI, settings: LineageSettings, *, arrived: Mapping[str, Any]) -> frozenset[str]:
     """Output-scoped authz for an event delivered from the BUS, as the subject the producer stamped (§ E2).
 
     Returns what :func:`enforce_output_authz` returns, the tables the event's datasets alias, for the feed row's scope;
@@ -394,7 +396,7 @@ async def enforce_bus_authz(event: RunEvent | DatasetEvent, app: FastAPI, settin
             event,
             app,
             settings,
-            _StampedAuthor(subject),
+            token=_StampedAuthor(subject),
             relations=relations_for_operation(event.operation),
             signed_by=verified,
         )
@@ -595,8 +597,8 @@ async def enforce_output_authz(
     event: RunEvent | DatasetEvent,
     app: FastAPI,
     settings: LineageSettings,
-    token: Caller | None,
     *,
+    token: Caller | None,
     relations: tuple[str, ...] = _WRITE_RELATIONS,
     signed_by: VerifiedSignature | None = None,
     names_vouched_by: VerifiedSignature | None = None,
@@ -801,6 +803,7 @@ async def governed[T](
     datasets: DatasetFilter,
     fga_enabled: bool,
     items: list[T],
+    *,
     refs: Callable[[T], Governed],
 ) -> list[T]:
     """Drop items the caller may not see: any naming a table the caller may not read, or a governed table recorded

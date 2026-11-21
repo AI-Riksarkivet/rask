@@ -264,7 +264,7 @@ def read_changes(
             f"the change window on table {label} spans {end - begin_version} versions and one request follows at most "
             f"{MOST_VERSIONS_IN_A_CHANGE_WINDOW}: ask with end_version={begin_version + MOST_VERSIONS_IN_A_CHANGE_WINDOW}, then from there"
         )
-    spans = _window_spans(dataset, begin_version, end, branch)
+    spans = _window_spans(dataset, begin_version, end, branch=branch)
     if begin_version > 0:
         _require_followable_window(spans, table=label)
     if kind == "deleted":
@@ -303,7 +303,7 @@ class _WindowSpan(BaseModel):
     high: int
 
 
-def _window_spans(dataset: lance.LanceDataset, begin: int, end: int, branch: str | None) -> list[_WindowSpan]:
+def _window_spans(dataset: lance.LanceDataset, begin: int, end: int, *, branch: str | None) -> list[_WindowSpan]:
     """``(begin, end]`` split by the ref that committed each version, newest first.
 
     A branch's own versions start above its `parent_version`; everything at or below it is its parent's

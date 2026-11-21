@@ -186,7 +186,7 @@ def set_warehouse_protection(
 
     key = _warehouse_key(warehouse_id)
     try:
-        return _record(mutate_json(control_root, storage_options, key, protect), path=key)
+        return _record(mutate_json(control_root, storage_options, key, mutate=protect), path=key)
     except (RecordMissingError, WarehouseProjectConflict):
         return None
 
@@ -199,7 +199,7 @@ def set_warehouse_manager(control_root: str, storage_options: StorageOptions, wa
     """
     key = _warehouse_key(warehouse_id)
     try:
-        return _record(mutate_json(control_root, storage_options, key, lambda record: with_manager(record, manager)), path=key)
+        return _record(mutate_json(control_root, storage_options, key, mutate=lambda record: with_manager(record, manager)), path=key)
     except RecordMissingError:
         return None
 
@@ -275,7 +275,7 @@ def upsert_warehouse(
         return merged
 
     key = _warehouse_key(wanted.id)
-    replaced, written = exchange_json(control_root, storage_options, key, merge)
+    replaced, written = exchange_json(control_root, storage_options, key, mutate=merge)
     return _record(replaced, path=key), _record(written, path=key)
 
 
@@ -286,7 +286,7 @@ def create_warehouse_record(control_root: str, storage_options: StorageOptions, 
     re-reads and re-applies its guards against the WINNER's record (the cross-project takeover
     guard's read may predate the rival's write; this refusal is what closes that window).
     """
-    create_json(control_root, storage_options, _warehouse_key(record.id), record.stored())
+    create_json(control_root, storage_options, _warehouse_key(record.id), record=record.stored())
 
 
 def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> WarehouseRecord | None:
@@ -410,7 +410,7 @@ def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: 
     key = f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json"
     payload = {"bucket": bucket, "project": project, "warehouse_id": warehouse_id}
     try:
-        create_json(control_root, storage_options, key, payload)
+        create_json(control_root, storage_options, key, record=payload)
     except RecordExistsError:
         # VALIDATED rather than compared raw, the rule every singular read of this registry follows: on
         # a record nobody can parse the comparison merely fails, which would refuse the create (right)
@@ -459,7 +459,7 @@ def project_of(control_root: str, storage_options: StorageOptions, warehouse_id:
     return record.project if record is not None else None
 
 
-def set_warehouse_status(control_root: str, storage_options: StorageOptions, warehouse_id: str, status: str) -> WarehouseRecord | None:
+def set_warehouse_status(control_root: str, storage_options: StorageOptions, warehouse_id: str, *, status: str) -> WarehouseRecord | None:
     """Flip a warehouse's ``status`` (deactivate/activate) and persist it. Returns the updated record, or
     ``None`` if the warehouse does not exist.
 
@@ -477,7 +477,7 @@ def set_warehouse_status(control_root: str, storage_options: StorageOptions, war
     """
     key = _warehouse_key(warehouse_id)
     try:
-        return _record(mutate_json(control_root, storage_options, key, lambda record: {**record, "status": status}), path=key)
+        return _record(mutate_json(control_root, storage_options, key, mutate=lambda record: {**record, "status": status}), path=key)
     except RecordMissingError:
         return None
 

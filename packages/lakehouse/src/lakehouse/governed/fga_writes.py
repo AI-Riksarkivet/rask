@@ -100,7 +100,7 @@ TupleOrigin = Literal[
 ]
 
 
-def _audit_tuples(action: AuditAction, tuples: list[ClientTuple], actor: str, origin: TupleOrigin, **extra: str) -> None:
+def _audit_tuples(action: AuditAction, tuples: list[ClientTuple], actor: str, *, origin: TupleOrigin, **extra: str) -> None:
     """One audit row PER TUPLE, emitted from inside the write path.
 
     This lives here rather than at the call sites because coverage by convention does not hold: of the
@@ -162,7 +162,7 @@ async def write_tuples(
     )
     # A duplicate IS the post-condition holding, so it is audited like any other success —
     # otherwise re-running a seed silently erases the provenance of tuples that are present.
-    _audit_tuples(AuditAction.ACCESS_TUPLE_WRITE, tuples, actor, origin)
+    _audit_tuples(AuditAction.ACCESS_TUPLE_WRITE, tuples, actor, origin=origin)
 
 
 async def grant_on_create(
@@ -325,8 +325,8 @@ async def delete_tuples(
         # grant standing while the trail said it was gone. The absent row keeps the attempt visible
         # (an auditor must be able to tell "never attempted" from "attempted, already gone") without
         # asserting a removal that did not happen.
-        _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, removed, actor, origin)
-        _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, absent, actor, origin, reason="tuple_absent")
+        _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, removed, actor, origin=origin)
+        _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, absent, actor, origin=origin, reason="tuple_absent")
     return removed
 
 
@@ -393,8 +393,8 @@ async def commit_unless_changed(
             return False
         log.error("openfga_write_unavailable", exc_info=True)
         raise ServiceUnavailableError("authorization service unavailable") from exc
-    _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, deletes, actor, origin)
-    _audit_tuples(AuditAction.ACCESS_TUPLE_WRITE, writes, actor, origin)
+    _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, deletes, actor, origin=origin)
+    _audit_tuples(AuditAction.ACCESS_TUPLE_WRITE, writes, actor, origin=origin)
     return True
 
 

@@ -175,7 +175,7 @@ def record_key(obligation_id: str) -> str:
 
 def record(control_root: str, storage_options: StorageOptions, obligation: ErasureObligation) -> None:
     """Write ``obligation`` where the doors find it; raises when the store does not take it."""
-    create_json(control_root, storage_options, record_key(obligation.obligation_id), obligation.model_dump(mode="json"))
+    create_json(control_root, storage_options, record_key(obligation.obligation_id), record=obligation.model_dump(mode="json"))
 
 
 def read(control_root: str, storage_options: StorageOptions, obligation_id: str) -> ErasureObligation:
@@ -240,7 +240,7 @@ def _reaches(obligation: ErasureObligation, source: str, by_id: dict[str, Erasur
     return False
 
 
-def list_late_derived(control_root: str, storage_options: StorageOptions, obligation_id: str, late: Sequence[str]) -> list[str]:
+def list_late_derived(control_root: str, storage_options: StorageOptions, obligation_id: str, *, late: Sequence[str]) -> list[str]:
     """List each of ``late`` on the released obligation ``obligation_id`` as a late derived table; answer those it did not
     list already.
 
@@ -257,7 +257,7 @@ def list_late_derived(control_root: str, storage_options: StorageOptions, obliga
         return standing.model_copy(update={"late_derived": [*standing.late_derived, *added]}).model_dump(mode="json")
 
     try:
-        mutate_json(control_root, storage_options, record_key(obligation_id), listing)
+        mutate_json(control_root, storage_options, record_key(obligation_id), mutate=listing)
     except RecordMissingError as exc:
         raise InvalidTableStateError(f"no erasure obligation {obligation_id} is recorded") from exc
     return added
@@ -287,7 +287,7 @@ def settle(control_root: str, storage_options: StorageOptions, obligation_id: st
         InvalidTableStateError: The obligation is no longer recorded.
     """
     try:
-        return ErasureObligation.model_validate(mutate_json(control_root, storage_options, record_key(obligation_id), _settling(report, now)))
+        return ErasureObligation.model_validate(mutate_json(control_root, storage_options, record_key(obligation_id), mutate=_settling(report, now)))
     except RecordMissingError as exc:
         raise InvalidTableStateError(f"no erasure obligation {obligation_id} is recorded") from exc
 

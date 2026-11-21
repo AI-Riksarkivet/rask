@@ -233,7 +233,7 @@ def test_the_audit_queues_what_neither_a_schedule_nor_the_queue_holds(tmp_path: 
     names = ("scheduled", "queued", "lost", "trashed", "released", "undated")
     tables = {name: (str(uuid4()), f"{tmp_path}/{name}") for name in names}
     for name, (table_uuid, location) in tables.items():
-        location_claims.take(claims, location, f"db${name}", ["db", name], is_gone=lambda _claim: False, uuid=table_uuid)
+        location_claims.take(claims, location, f"db${name}", segments=["db", name], is_gone=lambda _claim: False, uuid=table_uuid)
     trashed_uuid, trashed_at = tables["trashed"]
     namespace_uuid = str(uuid4())
     released = trash.make_record("db$released", uuid=tables["released"][0], location=tables["released"][1], dropped_by=None, grace_days=7)
@@ -278,7 +278,7 @@ def _three_tables_no_task_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr(audit, "reconcile", _Reconciler())
     claims = location_claims.ClaimStore(control_root=str(tmp_path), storage_options=StorageOptions())
     for name in ("a", "b", "c"):
-        location_claims.take(claims, f"{tmp_path}/{name}", f"db${name}", ["db", name], is_gone=lambda _claim: False, uuid=str(uuid4()))
+        location_claims.take(claims, f"{tmp_path}/{name}", f"db${name}", segments=["db", name], is_gone=lambda _claim: False, uuid=str(uuid4()))
     return _settings(orphan_check_enabled=False).model_copy(update={"control_root": str(tmp_path)})
 
 

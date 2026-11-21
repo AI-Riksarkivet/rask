@@ -218,7 +218,7 @@ def test_a_door_raced_by_a_drop_and_a_re_create_acts_on_no_other_table(
     else:
 
         async def _authorize_then_race(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
-            await route_guard.authorize(request, settings, token, injected, resolver)
+            await route_guard.authorize(request, settings, token, injected=injected, resolver=resolver)
             await run_in_threadpool(_drop_and_create_again)
 
         app.dependency_overrides[route_guard.authorize] = _authorize_then_race
@@ -296,7 +296,7 @@ def test_a_namespace_door_raced_by_a_drop_and_a_re_create_acts_on_no_other_names
         made.append(_namespace_as_alice_made_it(catalog))
 
     async def _authorize_then_race(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
-        await route_guard.authorize(request, settings, token, injected, resolver)
+        await route_guard.authorize(request, settings, token, injected=injected, resolver=resolver)
         await run_in_threadpool(_drop_and_create_again)
 
     if race == "door":

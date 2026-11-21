@@ -44,7 +44,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
         namespace,
         StorageOptions(),
         TABLE_ID,
-        pa.table({"id": pa.array([1], pa.int64())}, schema=SCHEMA),
+        table=pa.table({"id": pa.array([1], pa.int64())}, schema=SCHEMA),
         root=str(tmp_path / "data"),
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),

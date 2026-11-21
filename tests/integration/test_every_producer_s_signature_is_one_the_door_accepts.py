@@ -121,7 +121,7 @@ async def _drive(event: dict[str, Any], settings: LineageSettings, client: Any =
     # The feed lineage's lifespan always wires, which the door reads when it refuses.
     app.state.provenance = _EmptyFeed()
     parsed = parse_event(json.loads(json.dumps(event)))
-    await fga_deps.enforce_bus_authz(parsed, app, settings, event)
+    await fga_deps.enforce_bus_authz(parsed, app, settings, arrived=event)
 
 
 @pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), [pytest.param(*p, id=p[0]) for p in PRODUCERS])

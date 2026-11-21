@@ -113,10 +113,10 @@ def is_protected(record: Mapping[str, Any]) -> bool:
 
 def set_protection(control_root: str, storage_options: StorageOptions, record: ProtectionRecord) -> None:
     """Persist one protection record, keyed by the object's ``uuid`` (overwrite — setting is idempotent)."""
-    put_record(control_root, storage_options, record_key(PREFIX, record.kind, record.uuid), record.stored())
+    put_record(control_root, storage_options, record_key(PREFIX, record.kind, record.uuid), record=record.stored())
 
 
-def get_protection(control_root: str, storage_options: StorageOptions, kind: ProtectedKind, uuid: str) -> ProtectionRecord | None:
+def get_protection(control_root: str, storage_options: StorageOptions, kind: ProtectedKind, *, uuid: str) -> ProtectionRecord | None:
     """The protection record for the object ``uuid`` names, or ``None`` when none is filed, which means UNPROTECTED:
     protection is an opt-in the owner set, not a default the store's availability grants.
 
@@ -136,6 +136,6 @@ def get_protection(control_root: str, storage_options: StorageOptions, kind: Pro
         raise UnreadableProtectionRecordError(f"the protection record at {key} cannot be read: {detail}") from exc
 
 
-def clear_protection(control_root: str, storage_options: StorageOptions, kind: ProtectedKind, uuid: str) -> bool:
+def clear_protection(control_root: str, storage_options: StorageOptions, kind: ProtectedKind, *, uuid: str) -> bool:
     """Remove one protection record; ``True`` if one existed."""
     return delete_record(control_root, storage_options, record_key(PREFIX, kind, uuid))

@@ -205,7 +205,7 @@ def mark_registered_heads(settings: CatalogStore, so: StorageOptions, *, locatio
     try:
         heads = _registered_heads(location, so)
         if heads:
-            commit_records.write_marks(settings.registry_root, settings.storage_options(), table_uuid, commit_records.CommitMarks(refs=heads))
+            commit_records.write_marks(settings.registry_root, settings.storage_options(), table_uuid, marks=commit_records.CommitMarks(refs=heads))
     except (OSError, ValueError) as exc:
         log.warning("registered_heads_unmarked", extra={"location": location, "error": str(exc)[:300]})
         raise ServiceUnavailableError(f"the heads of the dataset at {location!r} could not be read and marked, so it was not registered") from exc
@@ -288,7 +288,7 @@ def scan_ref(
     forget: list[Commit] = []
     confirmed = mark
     contiguous = True
-    for version, handle in _versions_after(location, so, branch, mark):
+    for version, handle in _versions_after(location, so, branch, mark=mark):
         when = stamped.get(version)
         if when is None:
             raise ReconcileReadError(f"version {version} of {location} on {branch or 'main'} has no manifest the store lists")
@@ -306,7 +306,7 @@ def scan_ref(
             pass
         elif commit.operation in _AUTHORED_UNANNOUNCED:
             record = record_of(commit.transaction_uuid, version, key)
-            if _signed_for(record, ref_location, so, version) is None and authenticates:
+            if _signed_for(record, ref_location, so, version=version) is None and authenticates:
                 unauthored.append(version)
             if record is not None:
                 forget.append(commit)
@@ -314,7 +314,7 @@ def scan_ref(
             forget.append(commit)
         else:
             record = record_of(commit.transaction_uuid, version, key)
-            author = _signed_for(record, ref_location, so, version)
+            author = _signed_for(record, ref_location, so, version=version)
             if author is None and authenticates:
                 unauthored.append(version)
                 if record is not None:
@@ -335,7 +335,7 @@ def scan_ref(
     )
 
 
-def _signed_for(record: commit_records.CommitAuthor | None, ref_location: str, so: StorageOptions, version: int) -> str | None:
+def _signed_for(record: commit_records.CommitAuthor | None, ref_location: str, so: StorageOptions, *, version: int) -> str | None:
     """The author a re-announcement of ``version`` is signed for: the one ``record`` names, when the record was read off the
     landed version or names the manifest committed there; ``None`` otherwise, a version put past every door under another
     commit's transaction uuid included.
@@ -350,7 +350,7 @@ def _signed_for(record: commit_records.CommitAuthor | None, ref_location: str, s
     return record.author
 
 
-def _versions_after(location: str, so: StorageOptions, branch: str | None, mark: int | None) -> Iterator[tuple[int, lance.LanceDataset]]:
+def _versions_after(location: str, so: StorageOptions, branch: str | None, *, mark: int | None) -> Iterator[tuple[int, lance.LanceDataset]]:
     """Each retained version of ``branch`` after ``mark``, oldest first, opened.
 
     The retained versions are the ref's own listing: a version cleanup reclaimed is not in it, so it is skipped, and a
@@ -523,15 +523,15 @@ def reconcile_table(
             unreadable.append(commit_records.ref_key(branch, identifier))
     kept: dict[str, int] = {}
     for scan in scans:
-        mark = _forgotten_up_to(scan, control, control_so, table_uuid)
+        mark = _forgotten_up_to(scan, control, control_so, table_uuid=table_uuid)
         if mark is not None:
             kept[commit_records.ref_key(scan.branch, scan.branch_identifier)] = mark
     if any(marks.refs.get(key) != value for key, value in kept.items()):
-        commit_records.write_marks(control, control_so, table_uuid, commit_records.CommitMarks(refs={**marks.refs, **kept}))
+        commit_records.write_marks(control, control_so, table_uuid, marks=commit_records.CommitMarks(refs={**marks.refs, **kept}))
     return TableReconcile(scans=tuple(scans), unreadable=tuple(unreadable))
 
 
-def _forgotten_up_to(scan: RefScan, control: str, control_so: StorageOptions, table_uuid: str) -> int | None:
+def _forgotten_up_to(scan: RefScan, control: str, control_so: StorageOptions, *, table_uuid: str) -> int | None:
     """Forget the recorded author of each commit ``scan`` confirmed on the feed; answer the ref's mark, held below the
     first version whose record the store refused to delete, so the next pass reads that version and forgets it then."""
     mark = scan.mark

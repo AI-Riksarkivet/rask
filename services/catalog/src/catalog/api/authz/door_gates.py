@@ -100,8 +100,8 @@ async def require_rename_destination(
     client: OpenFgaClient | None,
     settings: FgaSettings,
     token: Caller | None,
-    resolver: Resolver,
     *,
+    resolver: Resolver,
     source: list[str],
     destination: list[str],
 ) -> None:

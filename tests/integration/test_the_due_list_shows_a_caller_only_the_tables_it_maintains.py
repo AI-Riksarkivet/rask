@@ -56,7 +56,7 @@ def _governed(client: TestClient, tmp_path: Path) -> tuple[Settings, Grants]:
 def _recorded(settings: Settings, table: str, tmp_path: Path) -> DueRecord:
     """A due record for ``table``, a table the catalog holds at a location of its own."""
     table_uuid, location = str(uuid4()), f"{tmp_path}/{uuid4()}"
-    location_claims.take(table_claims.claim_store(settings), location, table, parse_identifier(table), is_gone=lambda _claim: False, uuid=table_uuid)
+    location_claims.take(table_claims.claim_store(settings), location, table, segments=parse_identifier(table), is_gone=lambda _claim: False, uuid=table_uuid)
     record = DueRecord(table=table, uuid=table_uuid, location=location, version=6, compaction=DUE, evaluated_at=datetime.now(UTC))
     write_due(settings.registry_root, settings.storage_options(), record)
     return record

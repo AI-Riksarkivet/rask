@@ -556,7 +556,7 @@ class Bus:
         client: Client | None = None
         while True:
             client = await self._connection(after=client)
-            await self._pulled(client, lane, handle, park)
+            await self._pulled(client, lane, handle, park=park)
 
     async def follow(self, stream: str, subject: str, handle: Follow) -> None:
         """Hand every message published on ``subject`` from now on to ``handle``, one at a time and in the stream's
@@ -586,7 +586,7 @@ class Bus:
                 return client
             await asyncio.sleep(_NEXT_CONNECTION_SECONDS)
 
-    async def _pulled(self, client: Client, lane: Lane, handle: Handle, park: Park) -> None:
+    async def _pulled(self, client: Client, lane: Lane, handle: Handle, *, park: Park) -> None:
         """Pull ``lane``'s consumer on ``client`` until that connection has closed for good."""
         handling: set[asyncio.Task[None]] = set()
         consumer = _Pull(client, lane)
@@ -598,7 +598,7 @@ class Bus:
                     continue
                 msg = await consumer.next()
                 if msg is not None:
-                    handling.add(asyncio.create_task(_settled(msg, lane, handle, park), name=f"bus-delivery-{lane.consumer}"))
+                    handling.add(asyncio.create_task(_settled(msg, lane, handle, park=park), name=f"bus-delivery-{lane.consumer}"))
         finally:
             for task in handling:
                 task.cancel()
@@ -827,14 +827,14 @@ def processing(subject: str, envelope: Mapping[str, object], *, consumer: str | 
             record_processing(attributes, perf_counter() - started)
 
 
-async def _settled(msg: Msg, lane: Lane, handle: Handle, park: Park) -> None:
+async def _settled(msg: Msg, lane: Lane, handle: Handle, *, park: Park) -> None:
     """Handle one message of ``lane`` as a span of the trace it was published under, and tell the bus how it was
     settled. A settle the bus does not take is said, and the message comes again after the consumer's ack wait.
     Cancelled, the message is handed back at once."""
     delivery = _delivery_of(msg)
     with processing(delivery.subject, delivery.envelope() or {}, consumer=lane.consumer) as span:
         try:
-            settlement = await judged(delivery, lane, handle, park)
+            settlement = await judged(delivery, lane, handle, park=park)
         except asyncio.CancelledError:
             await _handed_back(msg)
             raise

@@ -67,7 +67,7 @@ def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_stag
     repo = _Repo()
     app = cast("Any", SimpleNamespace(state=SimpleNamespace(published_keys=store_published_keys())))
 
-    outcome = asyncio.run(relay._drain_outbox(app, cast("Any", repo), settings, StorageOptions(), None))
+    outcome = asyncio.run(relay._drain_outbox(app, cast("Any", repo), settings, opts=StorageOptions(), publisher=None))
 
     assert (outcome.drained, outcome.refused) == (1, 0), f"the staged event never drained: {outcome}, refused for {repo.refusals}"
     assert repo.ingested == [RUN_ID]

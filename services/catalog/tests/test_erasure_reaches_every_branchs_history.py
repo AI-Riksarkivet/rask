@@ -495,7 +495,7 @@ def test_the_holder_walk_asks_each_version_once(start: tuple[str | None, int], f
 
     history = _Everywhere()
 
-    held = module._holders(start, cast("Any", history), forks, {})
+    held = module._holders(start, cast("Any", history), forks, tags={})
 
     assert (held.branches, len(history.asked)) == (branches, len(set(history.asked)))
 

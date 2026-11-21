@@ -70,7 +70,7 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     """Main at v1..v6 and ``work`` at v2..v6, with one tag and one child branch pinning each ref."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(ns, StorageOptions(), TABLE_ID, _rows(0), root=str(tmp_path / "data"), mode="create", registry=_registry(tmp_path), holder="db$rows")
+    create_table(ns, StorageOptions(), TABLE_ID, table=_rows(0), root=str(tmp_path / "data"), mode="create", registry=_registry(tmp_path), holder="db$rows")
     open_by_name(ns, StorageOptions(), TABLE_ID).insert(_rows(1))
     open_by_name(ns, StorageOptions(), TABLE_ID).create_branch(BRANCH, 2)
     for i in range(2, 6):

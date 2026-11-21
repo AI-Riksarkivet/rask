@@ -179,7 +179,7 @@ async def tick(app: FastAPI, settings: LineageSettings) -> RelayReport:
     report = RelayReport()
     if settings.outbox_uri:
         try:
-            outcome = await _drain_outbox(app, provenance, settings, storage_options(settings), publisher)
+            outcome = await _drain_outbox(app, provenance, settings, opts=storage_options(settings), publisher=publisher)
             report.outbox_drained, report.outbox_stranded, report.outbox_refused = outcome.drained, outcome.stranded, outcome.refused
             report.outbox_refusals_recorded = outcome.recorded
         except Exception as exc:
@@ -204,7 +204,7 @@ async def tick(app: FastAPI, settings: LineageSettings) -> RelayReport:
 
 
 async def _drain_outbox(
-    app: FastAPI, provenance: ProvenanceStore, settings: LineageSettings, opts: StorageOptions, publisher: Bus | None = None
+    app: FastAPI, provenance: ProvenanceStore, settings: LineageSettings, *, opts: StorageOptions, publisher: Bus | None = None
 ) -> DrainOutcome:
     """Re-ingest + delete every staged lineage event (#4) — the full-event recovery half of the outbox.
 
@@ -262,7 +262,7 @@ async def _drain_outbox(
             # so a stager refused at the bus could stage instead. It authorizes AS the subject the producer
             # stamped, over THE STAGED BYTES (the signature covers what the producer wrote).
             arrived = staged_copy.data
-            aliased = await enforce_bus_authz(event, app, settings, arrived)
+            aliased = await enforce_bus_authz(event, app, settings, arrived=arrived)
             await provenance.record(event, aliased=aliased)
             # RE-PUBLISH, then drop. Recording alone repairs the feed and leaves every SUBSCRIBER unaware:
             # maintenance's arrival consumer and a notifier on the bus hear of a recovered event only this way.

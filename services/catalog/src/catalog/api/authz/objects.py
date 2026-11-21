@@ -131,7 +131,7 @@ async def trashed_at_or_above(resolver: Resolver, fga_type: str, segments: list[
     return objects
 
 
-async def listed_object(resolver: Resolver, kind: Literal["table", "namespace"], name: str, segments: list[str]) -> str | None:
+async def listed_object(resolver: Resolver, kind: Literal["table", "namespace"], name: str, *, segments: list[str]) -> str | None:
     """The FGA object a listing's candidate ``name`` resolves to; ``None`` for one that names nothing or records no uuid."""
     try:
         return await resolver.object(kind, segments)
@@ -172,7 +172,7 @@ async def identify_namespace(resolver: Resolver, ns: LanceNamespace, segments: l
     return GovernedObject(kind="namespace", segments=segments, uuid=uuid)
 
 
-async def standing(ns: LanceNamespace, settings: CatalogStore, kind: Literal["table", "namespace"], segments: list[str]) -> GovernedObject:
+async def standing(ns: LanceNamespace, settings: CatalogStore, kind: Literal["table", "namespace"], *, segments: list[str]) -> GovernedObject:
     """The object ``segments`` names now, read afresh: for a walker enumerating what lies under the container its
     request was authorized on, and for a door confirming after it acted that the name still holds its object. A door
     acting on the object its request names reads it as the request resolved it: :func:`identify_namespace`, or
@@ -200,7 +200,7 @@ def owned_object(resource: str, uuid: str) -> str:
     return fga_ids.object_of("table" if resource == "table" else "namespace", uuid)
 
 
-async def parent_object_of(resolver: Resolver, settings: FgaSettings, resource: str, segments: list[str]) -> str | None:
+async def parent_object_of(resolver: Resolver, settings: FgaSettings, resource: str, *, segments: list[str]) -> str | None:
     """The object a just-created child's ``parent`` edge names: the object its parent's name is governed as
     (:meth:`Resolver.object`), ``warehouse:<id>`` for a name directly in a warehouse and the parent namespace's uuid
     object below it ([[LH-593]]).
@@ -222,7 +222,7 @@ async def parent_object_of(resolver: Resolver, settings: FgaSettings, resource: 
 
 async def namespace_parent(resolver: Resolver, settings: FgaSettings, segments: list[str]) -> str:
     """:func:`parent_object_of` for a namespace, which always names one: its warehouse, or the namespace above it."""
-    parent = await parent_object_of(resolver, settings, "namespace", segments)
+    parent = await parent_object_of(resolver, settings, "namespace", segments=segments)
     if parent is None:
         raise NamespaceNotFoundError(f"namespace not found: {segments[:-1]}")
     return parent

@@ -62,7 +62,7 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
         real_ns,
         StorageOptions(),
         ["db", "props_at_create"],
-        _table(),
+        table=_table(),
         root=str(tmp_path),
         properties={"owner": "team-a", "tier": "gold"},
         registry=None,
@@ -84,6 +84,6 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
 
 def test_creating_without_properties_writes_no_metadata(real_ns: LanceNamespace, tmp_path: Path) -> None:
     """A create that names nothing must not invent a key — the boundary the merge could get wrong."""
-    created = creation.create_table(real_ns, StorageOptions(), ["db", "no_props"], _table(), root=str(tmp_path), registry=None)
+    created = creation.create_table(real_ns, StorageOptions(), ["db", "no_props"], table=_table(), root=str(tmp_path), registry=None)
 
     assert schema.user_schema_metadata(lance.dataset(str(created.location)).schema) == {}

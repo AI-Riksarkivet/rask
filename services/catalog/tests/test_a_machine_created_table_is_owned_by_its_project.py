@@ -61,7 +61,7 @@ def test_a_SERVICE_creating_a_table_is_not_granted_owner(openfga_store: Any) -> 
     async def _create() -> bool:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
             await object_grants.seed_ownership(
-                client, _settings(), service, NamedResolver(), resource="table", segments=["acme-silver", "features"], uuid=_TABLE_UUID
+                client, _settings(), service, resolver=NamedResolver(), resource="table", segments=["acme-silver", "features"], uuid=_TABLE_UUID
             )
             return await fga_reads.check(client, user=service.subject, relation="can_drop", obj=f"table:{_TABLE_UUID}")
 

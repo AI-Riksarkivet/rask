@@ -122,7 +122,7 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
         ns,
         StorageOptions(),
         ["db", "subjects"],
-        read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
+        table=read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
         root=str(tmp_path / "data"),
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),

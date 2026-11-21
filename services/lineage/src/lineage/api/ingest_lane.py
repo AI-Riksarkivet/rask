@@ -100,7 +100,7 @@ class IngestLane:
         return self._app.state.provenance
 
     async def _authorize(self, parsed: RunEvent | DatasetEvent, arrived: Mapping[str, Any]) -> frozenset[str]:
-        return await enforce_bus_authz(parsed, self._app, self._settings, arrived)
+        return await enforce_bus_authz(parsed, self._app, self._settings, arrived=arrived)
 
 
 async def park(provenance: ProvenanceStore, envelope: Mapping[str, Any] | None, reason: str) -> None:

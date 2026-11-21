@@ -39,6 +39,7 @@ spec_router = APIRouter(prefix="/v1/table", tags=["branch"])
 
 @spec_router.post("/{id}/branches/list", response_model_exclude_none=True)
 def list_table_branches(
+    *,
     id: str,
     table: DoorTableDep,
     so: StorageOptionsDep,
@@ -52,6 +53,7 @@ def list_table_branches(
 
 @spec_router.post("/{id}/branches/create", response_model_exclude_none=True)
 async def create_table_branch(
+    *,
     id: str,
     body: CreateTableBranchRequest,
     table: DoorTableDep,
@@ -124,6 +126,7 @@ def _recorded_parent(table: DoorTable, so: StorageOptions, body: CreateTableBran
 
 @spec_router.post("/{id}/branches/delete", response_model_exclude_none=True)
 async def delete_table_branch(
+    *,
     id: str,
     body: DeleteTableBranchRequest,
     table: DoorTableDep,
@@ -147,13 +150,13 @@ async def delete_table_branch(
     try:
         removed = await run_in_threadpool(refs.delete_branch, table, so, body)
     except refs.BranchDeleteStoppedError as stopped:
-        await _announce_removed(control, table, segments, token, stopped.removed)
+        await _announce_removed(control, table, segments, token=token, removed=stopped.removed)
         raise
-    await _announce_removed(control, table, segments, token, removed)
+    await _announce_removed(control, table, segments, token=token, removed=removed)
     return DeleteTableBranchResponse()
 
 
-async def _announce_removed(control: ControlEmitter, table: DoorTable, segments: list[str], token: Caller | None, removed: list[refs.RemovedBranch]) -> None:
+async def _announce_removed(control: ControlEmitter, table: DoorTable, segments: list[str], *, token: Caller | None, removed: list[refs.RemovedBranch]) -> None:
     """One ``table_branch_deleted`` per branch removed, AFTER its delete: each names the incarnation it was, which the
     name alone does not, since it also names whatever branch is created under it next."""
     for branch in removed:

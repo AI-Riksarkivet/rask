@@ -144,7 +144,7 @@ def reclaim(rustfs_store: ThrowawayStore) -> _Reclaim:
         f"_policies/state/{table_uuid}/cadence-x.json",
         record_key("_protection", "table", other_uuid),
     ):
-        put_record(control_root, own, key, {"kept": "until the reclaim"})
+        put_record(control_root, own, key, record={"kept": "until the reclaim"})
     scope = ReclaimScope(location=location)
     issued = _sts(rustfs_store, parent, secret).assume_role(
         RoleArn="arn:aws:iam::123456789012:role/reclaim",

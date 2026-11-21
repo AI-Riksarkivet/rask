@@ -101,7 +101,7 @@ def control_event_in(delivery: Delivery) -> tuple[dict[str, Any], CatalogControl
     return (data if isinstance(data, dict) else {}), event
 
 
-async def judge(app: FastAPI, settings: SignatureDoorSettings, arrived: dict[str, Any], event: CatalogControlEvent) -> DoorVerdict:
+async def judge(app: FastAPI, settings: SignatureDoorSettings, arrived: dict[str, Any], *, event: CatalogControlEvent) -> DoorVerdict:
     """The control doors' verdict on ``event``, judged over ``arrived``: the event's data exactly as delivered, since a
     model dump grows the fields a schema defaults, and the signer signed what it wrote. ``retry`` when the keys the
     signature is checked against could not be read."""
@@ -137,7 +137,7 @@ class ControlLane:
             return
         arrived, event = carried
         logged = {"event_id": bounded(event.event_id), "action": event.action}
-        verdict = await judge(self._app, self._settings, arrived, event)
+        verdict = await judge(self._app, self._settings, arrived, event=event)
         if verdict.retry:
             verdict = await self._judged_once_keys_answer(arrived, event, logged)
         self._counted(verdict, arrived, logged)
@@ -156,7 +156,7 @@ class ControlLane:
         try:
             for _ in range(_KEY_READS - 1):
                 await asyncio.sleep(_KEY_READ_SECONDS)
-                verdict = await judge(self._app, self._settings, arrived, event)
+                verdict = await judge(self._app, self._settings, arrived, event=event)
                 if not verdict.retry:
                     return verdict
         finally:

@@ -133,7 +133,7 @@ def watch_released(settings: Settings, ns: LanceNamespace | None, so: StorageOpt
     for obligation in released:
         derivation = _Derivation.walk(records, edges, sources={obligation.table_uuid, obligation.table})
         late = _late(settings, so, derivation, obligation=obligation, obligations=obligations, claimed=claimed)
-        if late and (added := erasure_obligations.list_late_derived(settings.registry_root, settings.storage_options(), obligation.obligation_id, late)):
+        if late and (added := erasure_obligations.list_late_derived(settings.registry_root, settings.storage_options(), obligation.obligation_id, late=late)):
             found.append(LateDerived(obligation_id=obligation.obligation_id, tables=added))
     return found
 

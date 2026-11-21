@@ -279,7 +279,7 @@ def claim(
         claimed = _Claimed(state="in_flight", binding=binding, digest=digest, attempt=attempt, claimed_at=found.at, captured=captured, intent=None)
         if stored is None:
             try:
-                conditional_records.create_json(root_uri, storage_options, record_key, claimed.model_dump(mode="json"))
+                conditional_records.create_json(root_uri, storage_options, record_key, record=claimed.model_dump(mode="json"))
             except conditional_records.RecordExistsError:
                 continue
             return None
@@ -299,7 +299,7 @@ def claim(
         # A lapsed attempt's capture and intent are kept: they are what the next takeover judges, should this one be lost too.
         kept = claimed.model_copy(update={"captured": current.captured or captured, "intent": current.intent if lapsed else None})
         try:
-            conditional_records.replace_json(root_uri, storage_options, record_key, kept.model_dump(mode="json"), etag=stored.etag)
+            conditional_records.replace_json(root_uri, storage_options, record_key, record=kept.model_dump(mode="json"), etag=stored.etag)
         except conditional_records.RecordChangedError:
             continue
         # A released key was given back before its attempt wrote anything; a lapsed one may have written.
@@ -323,7 +323,7 @@ def intend(root_uri: str, storage_options: StorageOptions, *, scope: str, key: s
     if stored is None or not isinstance(current, _Claimed) or current.state != "in_flight" or current.attempt != attempt:
         raise InFlightError(f"idempotency key {key!r} is no longer held by this attempt")
     updated = current.model_copy(update={"intent": intent}).model_dump(mode="json")
-    conditional_records.replace_json(root_uri, storage_options, record_key, updated, etag=stored.etag)
+    conditional_records.replace_json(root_uri, storage_options, record_key, record=updated, etag=stored.etag)
 
 
 def captured_for(root_uri: str, storage_options: StorageOptions, *, scope: str, key: str, endpoint: str, name: str, digest: str) -> Captured | None:
@@ -366,7 +366,7 @@ def release(root_uri: str, storage_options: StorageOptions, *, scope: str, key: 
         return
     try:
         conditional_records.replace_json(
-            root_uri, storage_options, record_key, current.model_copy(update={"state": "released"}).model_dump(mode="json"), etag=stored.etag
+            root_uri, storage_options, record_key, record=current.model_copy(update={"state": "released"}).model_dump(mode="json"), etag=stored.etag
         )
     except conditional_records.RecordChangedError:
         return
@@ -395,7 +395,7 @@ def record_outcome(root_uri: str, storage_options: StorageOptions, *, scope: str
             return
         answered = _Answered(state="done", binding=current.binding, digest=current.digest, status=status, body=body, captured=current.captured)
         try:
-            conditional_records.replace_json(root_uri, storage_options, record_key, answered.model_dump(mode="json"), etag=stored.etag)
+            conditional_records.replace_json(root_uri, storage_options, record_key, record=answered.model_dump(mode="json"), etag=stored.etag)
         except conditional_records.RecordChangedError:
             continue
         return
@@ -457,7 +457,7 @@ def _reclaim_listed(root_uri: str, storage_options: StorageOptions, path: str, *
         return "kept"
     mark = _Reclaiming(state="reclaiming", at=found.at).model_dump(mode="json")
     try:
-        conditional_records.replace_json(root_uri, storage_options, record_key, mark, etag=stored.etag)
+        conditional_records.replace_json(root_uri, storage_options, record_key, record=mark, etag=stored.etag)
     except conditional_records.RecordChangedError:
         return "kept"
     stored_objects.delete_object(root_uri, storage_options, record_key)

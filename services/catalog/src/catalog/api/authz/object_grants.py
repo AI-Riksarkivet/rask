@@ -111,8 +111,8 @@ async def seed_ownership(
     client: OpenFgaClient | None,
     settings: FgaSettings,
     token: Caller | None,
-    resolver: Resolver,
     *,
+    resolver: Resolver,
     resource: str,
     segments: list[str],
     uuid: str,
@@ -154,12 +154,12 @@ async def seed_ownership(
         obj=owned_object(resource, uuid),
         actor=token.subject,
         origin="create",
-        parent_object=await parent_object_of(resolver, settings, resource, segments),
+        parent_object=await parent_object_of(resolver, settings, resource, segments=segments),
     )
 
 
 async def seed_before_write(
-    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, resolver: Resolver, segments: list[str], uuid: str
 ) -> None:
     """:func:`seed_ownership` for the table ``uuid`` its door minted and is about to write: its grants stand before the
     table does ([[LH-588]]), so no table stands without them.
@@ -169,14 +169,14 @@ async def seed_before_write(
     that fails is taken back before its error is raised, so a grant whose answer OpenFGA lost leaves nothing either.
     """
     try:
-        await seed_ownership(client, settings, token, resolver, resource="table", segments=segments, uuid=uuid)
+        await seed_ownership(client, settings, token, resolver=resolver, resource="table", segments=segments, uuid=uuid)
     except Exception:
         await take_back_seed(client, settings, token, segments=segments, uuid=uuid, reason="grant_failed")
         raise
 
 
 async def seed_namespace_before_write(
-    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, resolver: Resolver, segments: list[str], uuid: str
 ) -> None:
     """Grant the creator ``owner`` of the namespace ``uuid`` its door minted and is about to write, and the ``parent``
     edge it inherits through, so no namespace stands without them ([[LH-585]]).
@@ -206,7 +206,7 @@ async def seed_namespace_before_write(
 
 
 async def name_namespace_child(
-    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, *, segments: list[str], uuid: str
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, resolver: Resolver, segments: list[str], uuid: str
 ) -> None:
     """Name the namespace ``uuid`` a child of its parent, now that it stands there: the end of its create.
 
@@ -246,7 +246,7 @@ async def take_back_seed(
 
 
 async def take_back_unless_namespace_stands(
-    ns: LanceNamespace, client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, segments: list[str], uuid: str, reason: str
+    ns: LanceNamespace, client: OpenFgaClient | None, settings: FgaSettings, *, token: Caller | None, segments: list[str], uuid: str, reason: str
 ) -> None:
     """Take back the grants written for the namespace ``uuid``, whose create door is failing or kept another namespace,
     unless the namespace stands under ``segments``: a create whose answer the store lost may have landed, and a namespace
@@ -298,7 +298,7 @@ async def undo_a_create_whose_parent_is_unread(
 
 
 async def require_parent_as_authorized(
-    ns: LanceNamespace, settings: FgaSettings, client: OpenFgaClient | None, resolver: Resolver, *, resource: str, segments: list[str]
+    ns: LanceNamespace, settings: FgaSettings, client: OpenFgaClient | None, *, resolver: Resolver, resource: str, segments: list[str]
 ) -> None:
     """Refuse a create whose parent namespace is not the one the request was authorized on, asked once the backend
     has recorded the new object ([[LH-585]]).
@@ -364,7 +364,7 @@ class GrantsBeforeWrite:
     table lives. :meth:`parent_as_authorized` is the door's ``after_register``.
     """
 
-    def __init__(self, client: OpenFgaClient | None, settings: Settings, token: Caller | None, resolver: Resolver, *, segments: list[str]) -> None:
+    def __init__(self, client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, resolver: Resolver, segments: list[str]) -> None:
         self._client = client
         self._settings = settings
         self._token = token
@@ -375,13 +375,15 @@ class GrantsBeforeWrite:
         self._location: str | None = None
 
     def __call__(self, uuid: str, location: str) -> None:
-        anyio.from_thread.run(partial(seed_before_write, self._client, self._settings, self._token, self._resolver, segments=self._segments, uuid=uuid))
+        anyio.from_thread.run(
+            partial(seed_before_write, self._client, self._settings, self._token, resolver=self._resolver, segments=self._segments, uuid=uuid)
+        )
         self.uuid, self._location = uuid, location
 
     def parent_as_authorized(self, ns: LanceNamespace) -> None:
         """:func:`require_parent_as_authorized` for the table, from the backend write's worker thread."""
         anyio.from_thread.run(
-            partial(require_parent_as_authorized, ns, self._settings, self._client, self._resolver, resource="table", segments=self._segments)
+            partial(require_parent_as_authorized, ns, self._settings, self._client, resolver=self._resolver, resource="table", segments=self._segments)
         )
 
     async def take_back(self, *, reason: str) -> None:
@@ -506,7 +508,7 @@ async def _return_to_source(authz: Authorization, *, obj: str, source: str, dest
 
 
 async def parent_edge_mover(
-    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, *, obj: str, source: list[str], destination: list[str]
+    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, resolver: Resolver, obj: str, source: list[str], destination: list[str]
 ) -> rename.Reparent | None:
     """How a rename of table ``source`` to ``destination`` takes ``obj``'s parent edge along, or ``None`` when it has
     none to take: the rename keeps its namespace, or FGA is off (:func:`authorization`).
@@ -525,8 +527,8 @@ async def parent_edge_mover(
     """
     if not moves_namespace(source, destination) or (authz := authorization(settings, client, token)) is None:
         return None
-    left = await parent_object_of(resolver, settings, "table", source)
-    entered = await parent_object_of(resolver, settings, "table", destination)
+    left = await parent_object_of(resolver, settings, "table", segments=source)
+    entered = await parent_object_of(resolver, settings, "table", segments=destination)
     if left is None or entered is None:
         return None
     loop = asyncio.get_running_loop()
@@ -672,7 +674,7 @@ async def end_removed_subtree(
                     async for count in end(held.user):
                         yield count
         kind, _, uuid = obj.partition(":")
-        await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, uuid)
+        await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, uuid=uuid)
         yield await revoke_removed_object(client, settings, obj, token=token)
 
     children_first = sorted(removed, key=lambda item: (item.kind == "namespace", -len(item.segments)))

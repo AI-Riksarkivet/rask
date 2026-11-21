@@ -397,7 +397,7 @@ def test_a_tick_corrects_a_declared_warehouse_that_drifted(estate: Estate) -> No
     """The drift is planted on the record itself, as nothing but a write past the doors can make it."""
     _declared_acme(estate)
     settings = estate.client.app.state.settings
-    warehouses.set_warehouse_status(settings.registry_root, settings.storage_options(), "acme", "deactivated")
+    warehouses.set_warehouse_status(settings.registry_root, settings.storage_options(), "acme", status="deactivated")
 
     answer = estate.tick()
 
@@ -452,7 +452,7 @@ def test_a_project_whose_record_cannot_be_read_keeps_the_admins_git_recorded_for
     says the grants could not be converged."""
     _released_acme(estate)
     settings = estate.client.app.state.settings
-    seeding.put_record(settings.registry_root, settings.storage_options(), f"{control_prefixes.PROJECTS}/acme.json", {"id": ["not", "text"]})
+    seeding.put_record(settings.registry_root, settings.storage_options(), f"{control_prefixes.PROJECTS}/acme.json", record={"id": ["not", "text"]})
 
     answer = estate.tick()
 

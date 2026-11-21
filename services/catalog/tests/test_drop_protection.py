@@ -90,7 +90,7 @@ def _stand(settings: Settings, *tables: str) -> None:
     store = table_claims.claim_store(settings)
     for canonical in tables:
         segments = canonical.split("$")
-        location_claims.take(store, _location(segments), canonical, segments, is_gone=lambda _claim: False, uuid=_uuid(canonical))
+        location_claims.take(store, _location(segments), canonical, segments=segments, is_gone=lambda _claim: False, uuid=_uuid(canonical))
 
 
 class _RecordingNamespace:
@@ -140,14 +140,14 @@ def test_protection_roundtrip_and_absence_means_unprotected(tmp_path: Any) -> No
     settings = _settings(tmp_path)
     so = settings.storage_options()
     pages = _uuid("bronze$pages")
-    assert protection.get_protection(settings.registry_root, so, "table", pages) is None
+    assert protection.get_protection(settings.registry_root, so, "table", uuid=pages) is None
     _protect(settings, "table", "bronze$pages")
-    record = protection.get_protection(settings.registry_root, so, "table", pages)
+    record = protection.get_protection(settings.registry_root, so, "table", uuid=pages)
     assert record is not None and (record.protected, record.stored()["protected"]) == (True, "true")
-    assert protection.get_protection(settings.registry_root, so, "table", "bronze$pages") is None, "a record is keyed by the uuid, never the name"
-    assert protection.clear_protection(settings.registry_root, so, "table", pages) is True
-    assert protection.get_protection(settings.registry_root, so, "table", pages) is None
-    assert protection.clear_protection(settings.registry_root, so, "table", pages) is False
+    assert protection.get_protection(settings.registry_root, so, "table", uuid="bronze$pages") is None, "a record is keyed by the uuid, never the name"
+    assert protection.clear_protection(settings.registry_root, so, "table", uuid=pages) is True
+    assert protection.get_protection(settings.registry_root, so, "table", uuid=pages) is None
+    assert protection.clear_protection(settings.registry_root, so, "table", uuid=pages) is False
 
 
 @pytest.mark.parametrize(("flag", "armed"), [("TRUE", True), (True, True), ("False", False)], ids=["text-in-capitals", "a-json-true", "false"])
@@ -179,7 +179,7 @@ def test_kinds_do_not_collide(tmp_path: Any) -> None:
     settings = _settings(tmp_path)
     so = settings.storage_options()
     _protect(settings, "table", "bronze")
-    assert protection.get_protection(settings.registry_root, so, "namespace", _uuid("bronze")) is None
+    assert protection.get_protection(settings.registry_root, so, "namespace", uuid=_uuid("bronze")) is None
 
 
 # ---------------------------------------------------------------- the guard contract
@@ -264,7 +264,7 @@ def test_force_drops_a_protected_table_and_the_record_dies_with_it(tmp_path: Any
     ns: Any = _RecordingNamespace()
     _drop_table(settings, ns, force=True)
     assert ns.calls == ["deregister_table"]
-    assert protection.get_protection(settings.registry_root, so, "table", _uuid("bronze$pages")) is None, "the record must die with its table"
+    assert protection.get_protection(settings.registry_root, so, "table", uuid=_uuid("bronze$pages")) is None, "the record must die with its table"
 
 
 def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
@@ -336,7 +336,7 @@ def test_the_protection_door_sets_and_clears_the_record(tmp_path: Any) -> None:
         )
     )
     assert result.protected is True
-    armed = protection.get_protection(settings.registry_root, so, "table", _uuid("bronze$pages"))
+    armed = protection.get_protection(settings.registry_root, so, "table", uuid=_uuid("bronze$pages"))
     assert armed is not None and armed.set_by == "anonymous"
     result = asyncio.run(
         t_ep.set_table_protection(
@@ -349,7 +349,7 @@ def test_the_protection_door_sets_and_clears_the_record(tmp_path: Any) -> None:
         )
     )
     assert result.protected is False
-    assert protection.get_protection(settings.registry_root, so, "table", _uuid("bronze$pages")) is None
+    assert protection.get_protection(settings.registry_root, so, "table", uuid=_uuid("bronze$pages")) is None
 
 
 # ---------------------------------------------------------------- #75 trash / undrop
@@ -806,5 +806,5 @@ def test_the_protection_flag_is_READABLE_on_both_rungs(tmp_path: Any) -> None:
     protection.set_protection(
         settings.registry_root, so, protection.ProtectionRecord(kind="namespace", id="bronze", uuid=_uuid("bronze"), protected=True, set_by="user:bob")
     )
-    ns_read = asyncio.run(n_ep.get_namespace_protection("bronze", ns=ns, settings=settings, resolver=door_resolver(settings)))
+    ns_read = asyncio.run(n_ep.get_namespace_protection(id="bronze", ns=ns, settings=settings, resolver=door_resolver(settings)))
     assert (ns_read.protected, ns_read.set_by) == (True, "user:bob")

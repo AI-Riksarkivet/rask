@@ -355,7 +355,7 @@ def _made_natively(root: Path, table: list[str]) -> None:
 
     location = str(namespace.describe_table(DescribeTableRequest(id=table)).location)
     store = location_claims.ClaimStore(control_root=get_settings().registry_root, storage_options={})
-    location_claims.take(store, location, "$".join(table), table, is_gone=lambda _claim: False, uuid=str(uuid.uuid4()))
+    location_claims.take(store, location, "$".join(table), segments=table, is_gone=lambda _claim: False, uuid=str(uuid.uuid4()))
 
 
 def _version(root: Path, table: list[str]) -> int | None:

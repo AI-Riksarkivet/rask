@@ -148,6 +148,7 @@ def _collect_descendants(ns: LanceNamespace, segments: list[str]) -> list[tuple[
 
 @spec_router.post("/{id}/create", response_model_exclude_none=True)
 async def create_namespace(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
@@ -187,12 +188,12 @@ async def create_namespace(
     # the kept namespace's own, and an Overwrite's replacement is a new namespace with a new one.
     req.properties = with_minted_uuid(req.properties)
     minted = req.properties[UUID_PROPERTY]
-    await _judge_run_rule_declaration(ns, settings, token, client, segments, declared=declared, overwrite=create_mode is CreateMode.OVERWRITE)
+    await _judge_run_rule_declaration(ns, settings, token, client=client, segments=segments, declared=declared, overwrite=create_mode is CreateMode.OVERWRITE)
     # The namespace's owner and its `parent` edge are written under the uuid minted above BEFORE the backend records it
     # ([[LH-585]], `object_grants.seed_namespace_before_write`), so a seed that fails has nothing to undo and no namespace
     # stands without them. They name the minted uuid, so they reach no namespace the request only finds standing: an
     # ExistOk that keeps one, or a create the backend refuses, takes them back.
-    await object_grants.seed_namespace_before_write(client, settings, token, resolver, segments=segments, uuid=minted)
+    await object_grants.seed_namespace_before_write(client, settings, token, resolver=resolver, segments=segments, uuid=minted)
     # RACE-FREE BY CATCHING RATHER THAN PRE-CHECKING. An `exists?` read followed by a create leaves a
     # window in which another caller creates the namespace; the backend's own refusal is the only
     # answer that cannot be stale.
@@ -200,11 +201,14 @@ async def create_namespace(
         if create_mode is CreateMode.EXIST_OK:
             response, kept_existing = await create_or_keep_namespace(ns, segments, req)
         elif create_mode is CreateMode.OVERWRITE:
-            response, kept_existing = await _create_or_replace_empty_namespace(ns, settings, token, client, resolver, segments, req), False
+            response, kept_existing = (
+                await _create_or_replace_empty_namespace(ns, settings=settings, token=token, client=client, resolver=resolver, segments=segments, req=req),
+                False,
+            )
         else:
             response, kept_existing = await run_in_threadpool(native.call, ns, "create_namespace", req), False
     except Exception:
-        await object_grants.take_back_unless_namespace_stands(ns, client, settings, token, segments=segments, uuid=minted, reason="not_written")
+        await object_grants.take_back_unless_namespace_stands(ns, client, settings, token=token, segments=segments, uuid=minted, reason="not_written")
         raise
     if kept_existing:
         # NOT ON THE `ExistOk` KEEP PATH, for the grants and for the ANNOUNCEMENT alike: the namespace kept is another
@@ -224,14 +228,14 @@ async def create_namespace(
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
 
     try:
-        await object_grants.require_parent_as_authorized(ns, settings, client, resolver, resource="namespace", segments=segments)
+        await object_grants.require_parent_as_authorized(ns, settings, client, resolver=resolver, resource="namespace", segments=segments)
     except Exception:
         # A Restrict drop, which removes the namespace only while it holds nothing, so the undo destroys nobody's data.
         await object_grants.undo_a_create_whose_parent_is_unread(
             client, settings, token, resource="namespace", segments=segments, uuid=minted, undo=_undo_create, remedy="drop it before retrying"
         )
         raise
-    await object_grants.name_namespace_child(client, settings, token, resolver, segments=segments, uuid=minted)
+    await object_grants.name_namespace_child(client, settings, token, resolver=resolver, segments=segments, uuid=minted)
     await emit_control(
         control,
         action="namespace_created",
@@ -334,9 +338,9 @@ async def _judge_run_rule_declaration(
     ns: LanceNamespace,
     settings: Settings,
     token: Caller | None,
+    *,
     client: OpenFgaClient | None,
     segments: list[str],
-    *,
     declared: bool,
     overwrite: bool,
 ) -> None:
@@ -360,6 +364,7 @@ async def _judge_run_rule_declaration(
 
 async def _create_or_replace_empty_namespace(
     ns: LanceNamespace,
+    *,
     settings: Settings,
     token: Caller | None,
     client: OpenFgaClient | None,
@@ -406,6 +411,7 @@ async def _create_or_replace_empty_namespace(
 
 @spec_router.get("/{id}/list", response_model_exclude_none=True)
 async def list_namespaces(
+    *,
     id: str,
     ns: NamespaceDep,
     settings: SettingsDep,
@@ -474,9 +480,9 @@ async def _trash_subtree(
     ns: LanceNamespace,
     settings: CatalogStore,
     token: Caller | None,
+    *,
     segments: list[str],
     descendants: list[objects.GovernedObject],
-    *,
     own: ControlUuids,
     grace_days: float,
 ) -> list[objects.GovernedObject]:
@@ -669,7 +675,7 @@ async def _destroy_subtree(
         with suppress(TableNotFoundError):
             doomed: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=item.segments))
             if doomed.location:
-                await run_in_threadpool(table_claims.require_no_other_holder, ns, claims, doomed.location, fga_ids.canonical_object_id(item.segments))
+                await run_in_threadpool(table_claims.require_no_other_holder, ns, claims, doomed.location, table=fga_ids.canonical_object_id(item.segments))
                 located[tuple(item.segments)] = doomed.location
     carried = {
         key: await run_in_threadpool(partial(destroy.clone_readers, location, storage_options, table=fga_ids.canonical_object_id(list(key))))
@@ -758,7 +764,7 @@ async def _destroy_listed_table(
                 ns,
                 storage_options,
                 child,
-                fenced.location,
+                location=fenced.location,
                 estate_roots=estate_roots,
                 table_uuid=item.uuid,
                 namespace_uuid=namespace_uuid,
@@ -796,7 +802,9 @@ async def _identify(ns: LanceNamespace, settings: CatalogStore, descendants: lis
     does not grow with the subtree. Enumeration order is kept, so a refusal names the FIRST protected descendant.
     """
     return list(
-        await asyncio.gather(*(objects.standing(ns, settings, "table" if resource == "table" else "namespace", child) for resource, child in descendants))
+        await asyncio.gather(
+            *(objects.standing(ns, settings, "table" if resource == "table" else "namespace", segments=child) for resource, child in descendants)
+        )
     )
 
 
@@ -816,6 +824,7 @@ async def _require_descendants_unprotected(settings: CatalogStore, descendants: 
 
 @spec_router.post("/{id}/drop", response_model_exclude_none=True)
 async def drop_namespace(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
@@ -957,7 +966,13 @@ async def drop_namespace(
             # The cascade's records are keyed by the uuid the door identified the namespace by, not the best-effort read its
             # announcements name it by, which answers ``None`` on a failed describe.
             detached = await _trash_subtree(
-                ns, settings, token, segments, descendants, own=ControlUuids(object_uuid=dropped.uuid, namespace_uuid=own.namespace_uuid), grace_days=grace
+                ns,
+                settings,
+                token,
+                segments=segments,
+                descendants=descendants,
+                own=ControlUuids(object_uuid=dropped.uuid, namespace_uuid=own.namespace_uuid),
+                grace_days=grace,
             )
             removed_tables.update(tuple(item.segments) for item in detached)
             # Long running, as the spec reads a `transaction_id`: the subtree's bytes are deleted later, by the purge, and
@@ -995,10 +1010,10 @@ async def drop_namespace(
         # clears its namespace's here, and its DESCENDANTS' only under force=true (an unforced cascade already proved none
         # exist); every other drop ends them below, with the rest of what each removed object holds.
         if recoverable:
-            await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "namespace", dropped.uuid)
+            await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "namespace", uuid=dropped.uuid)
         if recoverable and force:
             for item in removed:
-                await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), item.kind, item.uuid)
+                await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), item.kind, uuid=item.uuid)
         # RECORD THE DELETION OF EVERY TABLE THIS CASCADE DETACHED, exactly as the single-table door does (a `drop_table`
         # event per table); a destroyed subtree announced each table as it went. A follower of the feed learns a table
         # is gone only from these events ([[LH-144]]), so a table nothing records stays indistinguishable from a live
@@ -1046,6 +1061,7 @@ async def namespace_tasks(
 
 @management_router.post("/{id}/undrop", response_model_exclude_none=True)
 async def undrop_namespace(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
@@ -1202,7 +1218,7 @@ async def _reregister_tables(ns: LanceNamespace, settings: CatalogStore, table_r
             # The cascade kept each location's claim for its trashed id; another holder means another
             # table now resolves to these bytes, as at the table door ([[LH-204]]).
             try:
-                kept = await run_in_threadpool(table_claims.take, ns, table_claims.claim_store(settings), location, t_id, t_segments)
+                kept = await run_in_threadpool(table_claims.take, ns, table_claims.claim_store(settings), location, table=t_id, segments=t_segments)
             except location_claims.LocationHeldError as held:
                 log.warning("undrop_refused_held_location", extra={"table": t_id, "location": held.claim.location, "holder": held.claim.table})
                 raise InvalidTableStateError(f"cannot undrop table {t_id}: its location is now held by another table") from None
@@ -1220,7 +1236,7 @@ async def _reregister_tables(ns: LanceNamespace, settings: CatalogStore, table_r
 
 
 @management_router.get("/{id}/protection", response_model_exclude_none=True)
-async def get_namespace_protection(id: str, ns: NamespaceDep, settings: SettingsDep, resolver: ResolverDep) -> ProtectionResponse:
+async def get_namespace_protection(*, id: str, ns: NamespaceDep, settings: SettingsDep, resolver: ResolverDep) -> ProtectionResponse:
     """Read the namespace's deletion-protection flag (#123) — the table door's read, one rung up."""
     segments = parse_identifier(id)
     canonical = fga_ids.canonical_object_id(segments)
@@ -1231,6 +1247,7 @@ async def get_namespace_protection(id: str, ns: NamespaceDep, settings: Settings
 
 @management_router.post("/{id}/protection", response_model_exclude_none=True)
 async def set_namespace_protection(
+    *,
     id: str,
     body: SetProtectionRequest,
     ns: NamespaceDep,
@@ -1253,7 +1270,7 @@ async def set_namespace_protection(
         )
         await run_in_threadpool(protection.set_protection, settings.registry_root, so, record)
     else:
-        await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "namespace", namespace.uuid)
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "namespace", uuid=namespace.uuid)
     await emit_control(
         control,
         action="namespace_protected" if body.protected else "namespace_unprotected",
@@ -1280,6 +1297,7 @@ def namespace_exists(id: str, ns: NamespaceDep, body: NamespaceExistsRequest | N
 
 @spec_router.get("/{id}/table/list", response_model_exclude_none=True)
 async def list_tables(
+    *,
     id: str,
     ns: NamespaceDep,
     settings: SettingsDep,

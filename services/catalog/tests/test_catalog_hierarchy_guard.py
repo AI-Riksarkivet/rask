@@ -58,7 +58,7 @@ def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
     """
     settings = Settings.model_validate({"LANCE_S3_ACCESS_KEY_ID": "k", "LANCE_S3_SECRET_ACCESS_KEY": "s"})
     for segments in (["orphan"], ["bronze", "pages"], ["acme", "silver", "features"]):
-        would_orphan = asyncio.run(objects.parent_object_of(NamedResolver(), settings, "table", segments)) is None
+        would_orphan = asyncio.run(objects.parent_object_of(NamedResolver(), settings, "table", segments=segments)) is None
         refused = False
         try:
             hierarchy.require_parent("table", segments)

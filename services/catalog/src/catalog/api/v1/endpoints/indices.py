@@ -77,6 +77,7 @@ def create_scalar_index(id: str, body: CreateTableIndexRequest) -> CreateTableSc
 
 @spec_router.post("/{id}/index/list", response_model_exclude_none=True)
 def list_table_indices(
+    *,
     id: str,
     table: DoorTableDep,
     limit: ListLimit,
@@ -111,6 +112,7 @@ def list_table_indices(
 
 @spec_router.post("/{id}/index/{index_name}/stats", response_model_exclude_none=True)
 def describe_table_index_stats(
+    *,
     id: str,
     index_name: str,
     table: DoorTableDep,
@@ -139,6 +141,7 @@ def describe_table_index_stats(
 
 @spec_router.post("/{id}/index/{index_name}/drop", response_model_exclude_none=True)
 async def drop_table_index(
+    *,
     id: str,
     index_name: str,
     table: DoorTableDep,

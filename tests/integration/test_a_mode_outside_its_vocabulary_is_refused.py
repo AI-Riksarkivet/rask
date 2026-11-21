@@ -199,7 +199,7 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
     having parsed first: handed the raw value, pylance's `insert` answers a bare ValueError, which is a 500."""
     ns = connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
-    create_table(ns, StorageOptions(), ["db", "t"], _id_table(), root=str(tmp_path / "data"), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["db", "t"], table=_id_table(), root=str(tmp_path / "data"), mode="create", registry=None)
     table = door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"], announces=lambda _operation: True)
     if branch is not None:
         table.open(StorageOptions()).create_branch(branch, None)
@@ -209,7 +209,7 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
             table,
             StorageOptions(),
             InsertIntoTableRequest(id=["db", "t"], mode="Appnd", branch=branch),
-            _rows(5),
+            data=_rows(5),
             max_bytes=_BODY_LIMIT,
             transaction_properties={},
         )

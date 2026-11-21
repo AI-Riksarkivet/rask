@@ -72,6 +72,7 @@ management_router = APIRouter(prefix="/management/v1/table", tags=["version-mana
 
 @management_router.get("/{id}/history", response_model_exclude_none=True)
 async def table_history(
+    *,
     id: str,
     table: DoorTableDep,
     so: StorageOptionsDep,
@@ -146,6 +147,7 @@ def batch_commit_tables(body: BatchCommitTablesRequest) -> BatchCommitTablesResp
 
 @spec_router.post("/{id}/version/list", response_model_exclude_none=True)
 def list_table_versions(
+    *,
     id: str,
     table: DoorTableDep,
     so: StorageOptionsDep,
@@ -192,6 +194,7 @@ def list_table_versions(
 
 @spec_router.post("/{id}/version/create", response_model_exclude_none=True)
 async def create_table_version(
+    *,
     id: str,
     body: CreateTableVersionRequest,
     table: DoorTableDep,
@@ -250,7 +253,7 @@ async def create_table_version(
             so,
         )
         declared = await write_doors.judge_staged_run(
-            settings, token, client, resolver, ns=table.namespace, segments=segments, run=run, adds_data=verdict.adds_data
+            settings, token, client, resolver=resolver, ns=table.namespace, segments=segments, run=run, adds_data=verdict.adds_data
         )
         if staged.creates:
             # A later version may change no field's labels (`managed_versions`); the first sets them, as a create does.
@@ -288,7 +291,7 @@ async def create_table_version(
         # Waited out here, in the event loop, so a stock writer waiting holds no request thread; a turn handed to another stock
         # writer is not waited out, since this writer races it as Lance's own backoff spreads them ([[LH-259]]).
         kept = await table.wait_for_turn_in_loop(ref.branch, mine=writer.token if writer is not None else None, handed=False)
-        response = await run_in_threadpool(partial(managed_versions.finalize, writer=writer, kept=kept), table, staged, body, so)
+        response = await run_in_threadpool(partial(managed_versions.finalize, writer=writer, kept=kept), table, staged, body, so=so)
     except Exception:
         # Only the request that created the record deletes it: a retry sharing the transaction relies on its twin's. A
         # cancelled request is left out too, since its finalize may still land in the thread it runs in.
@@ -322,6 +325,7 @@ async def create_table_version(
 
 @spec_router.post("/{id}/version/describe", response_model_exclude_none=True)
 def describe_table_version(
+    *,
     id: str,
     table: DoorTableDep,
     so: StorageOptionsDep,
@@ -346,6 +350,7 @@ def describe_table_version(
 
 @spec_router.post("/{id}/version/delete", response_model_exclude_none=True)
 async def batch_delete_table_versions(
+    *,
     id: str,
     body: BatchDeleteTableVersionsRequest,
     table: DoorTableDep,

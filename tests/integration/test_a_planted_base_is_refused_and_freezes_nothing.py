@@ -764,7 +764,9 @@ def test_a_destroying_cascade_releases_only_the_claim_of_the_table_it_identified
     def _forget_then_the_same_name_takes_the_location(registry: base_registry.BaseRegistry, at: str, *, uuid: str | None) -> bool:
         forgotten = real_forget(registry, at, uuid=uuid)
         taken.append(str(_uuid4()))
-        location_claims.take(_claims(estate), at, "lance_catalog$scratch$t", ["lance_catalog", "scratch", "t"], is_gone=lambda _claim: True, uuid=taken[0])
+        location_claims.take(
+            _claims(estate), at, "lance_catalog$scratch$t", segments=["lance_catalog", "scratch", "t"], is_gone=lambda _claim: True, uuid=taken[0]
+        )
         return forgotten
 
     monkeypatch.setattr(base_registry, "forget_base_record", _forget_then_the_same_name_takes_the_location)
@@ -791,7 +793,9 @@ def test_a_finish_releases_nothing_when_the_clones_claim_moved_after_its_read(es
         found = real_read(store, location)
         if not taken:
             taken.append(str(uuid.uuid4()))
-            location_claims.take(store, location, "lance_catalog$db$silver", ["lance_catalog", "db", "silver"], is_gone=lambda _claim: True, uuid=taken[0])
+            location_claims.take(
+                store, location, "lance_catalog$db$silver", segments=["lance_catalog", "db", "silver"], is_gone=lambda _claim: True, uuid=taken[0]
+            )
         return found
 
     monkeypatch.setattr(location_claims, "read", _read_then_a_registration_takes_the_location)
@@ -822,7 +826,7 @@ def test_a_finish_leaves_the_ending_of_a_clone_its_door_is_still_ending(estate: 
             file_the_ending()
             ((digest, filing),) = clone_ending_records.standing(_claims(estate))
             try:
-                clone_endings_door.finish(ns, settings, digest, filing, token=uuid.uuid4().hex)
+                clone_endings_door.finish(ns, settings, digest, filing=filing, token=uuid.uuid4().hex)
             except InvalidTableStateError as refused:
                 during.append(str(refused))
 
@@ -954,7 +958,7 @@ def _marked_by_another_finish(estate: _Estate, _monkeypatch: pytest.MonkeyPatch)
     assert found is not None
     filed_earlier = found.ending.model_copy(update={"filed_at": found.at - timedelta(hours=1)})
     key = f"{clone_ending_records.PREFIX}/{digest}/{filing}.json"
-    conditional_records.replace_json(estate.root, estate.key, key, filed_earlier.model_dump(mode="json"), etag=found.etag)
+    conditional_records.replace_json(estate.root, estate.key, key, record=filed_earlier.model_dump(mode="json"), etag=found.etag)
     again = clone_ending_records.read(_claims(estate), digest, filing)
     assert again is not None
     clone_ending_records.mark(_claims(estate), again, token=uuid.uuid4().hex)
@@ -1186,7 +1190,7 @@ def test_a_location_whose_holder_is_gone_is_registered_under_another_name(estate
     uri = f"{estate.root}/left"
     lance.write_dataset(_MINE, uri, storage_options=estate.key.in_clear(), data_storage_version="2.2", enable_stable_row_ids=True)
     claims = location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key)
-    location_claims.take(claims, uri, "lance_catalog$db$gone", ["lance_catalog", "db", "gone"], is_gone=lambda _claim: True, uuid=str(uuid.uuid4()))
+    location_claims.take(claims, uri, "lance_catalog$db$gone", segments=["lance_catalog", "db", "gone"], is_gone=lambda _claim: True, uuid=str(uuid.uuid4()))
     monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
 
     registered = estate.client.post("/v1/table/lance_catalog$db$found/register", json={"location": "left"})

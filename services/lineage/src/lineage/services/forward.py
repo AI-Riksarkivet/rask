@@ -96,7 +96,7 @@ async def _authorization(settings: LineageForward) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
 
 
-async def _send(window: FeedWindow, settings: LineageForward, client: httpx.AsyncClient, url: str, mark: int) -> tuple[int, ForwardOutcome]:
+async def _send(window: FeedWindow, settings: LineageForward, client: httpx.AsyncClient, *, url: str, mark: int) -> tuple[int, ForwardOutcome]:
     """POST up to ``forward_batch`` events of ``window``, the feed after ``mark``, a page at a time.
 
     Returns the seq of the last event the backend answered, which the cursor may move to, and what was sent.
@@ -141,7 +141,7 @@ async def forward(provenance: ProvenanceStore, settings: LineageForward, client:
         window = await provenance.window(since=mark)
     elif bounds is not None and mark and bounds[0] > mark + 1:
         log.error("lineage_forward_pruned_before_forwarded", extra={"cursor": mark, "oldest_seq": bounds[0]})
-    reached, outcome = await _send(window, settings, client, url, mark)
+    reached, outcome = await _send(window, settings, client, url=url, mark=mark)
     if reached > mark:
         await provenance.advance_cursor(name, reached)
     metrics.record_forwarded(forwarded=outcome.forwarded, refused=outcome.refused, stalled=outcome.stalled is not None)

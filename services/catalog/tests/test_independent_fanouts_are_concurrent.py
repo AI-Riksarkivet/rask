@@ -115,7 +115,7 @@ def test_the_trash_subtree_describes_every_table_concurrently(tmp_path: Path, mo
         # Each table holds its location's claim under its uuid, as the door that made it left it: the cascade detaches
         # a table only under the claim its name resolves to.
         location_claims.take(
-            claims, f"s3://bkt/{item.segments[-1]}.lance", "$".join(item.segments), item.segments, is_gone=lambda _claim: False, uuid=item.uuid
+            claims, f"s3://bkt/{item.segments[-1]}.lance", "$".join(item.segments), segments=item.segments, is_gone=lambda _claim: False, uuid=item.uuid
         )
 
     own = ControlUuids(object_uuid=str(uuid4()))
@@ -130,7 +130,7 @@ def test_the_trash_subtree_describes_every_table_concurrently(tmp_path: Path, mo
     monkeypatch.setattr(n_ep.native, "call", native_call)
     monkeypatch.setattr(n_ep.trash, "put", lambda *_a, **_kw: None)
 
-    asyncio.run(n_ep._trash_subtree(cast("LanceNamespace", object()), settings, None, ["bronze"], descendants, own=own, grace_days=7))
+    asyncio.run(n_ep._trash_subtree(cast("LanceNamespace", object()), settings, None, segments=["bronze"], descendants=descendants, own=own, grace_days=7))
 
     assert tracker.total == 8, f"only {tracker.total} describes for 8 descendant tables"
     assert tracker.peak > 1, "the recoverable cascade describes its descendants one at a time"

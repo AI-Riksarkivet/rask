@@ -63,7 +63,7 @@ def raise_listing_floor(table: table_claims.DoorTable, so: StorageOptions, *, tr
     """
     raised_at = time.time()
     version, _ = commits.commit_stamped(
-        table, so, transaction_properties, commits.captured(table, so, lambda handle: handle.update_config({FLOOR_KEY: str(raised_at)}), branch=None)
+        table, so, transaction_properties, plan=commits.captured(table, so, lambda handle: handle.update_config({FLOOR_KEY: str(raised_at)}), branch=None)
     )
     log.info("listing_floor_raised", extra={"table": table.segments, "version": version, "raised_at": raised_at})
     return version, raised_at

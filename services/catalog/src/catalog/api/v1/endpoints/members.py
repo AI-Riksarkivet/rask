@@ -83,7 +83,7 @@ def _client_or_conflict(client: OpenFgaClient | None, settings: FgaSettings) -> 
 
 
 @management_router.get("/{project_id}/members")
-async def list_members(project_id: ProjectId, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> MemberList:
+async def list_members(*, project_id: ProjectId, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> MemberList:
     """Who holds which rung directly on this tenant — gated on ``can_read_assignments``.
 
     DIRECT grants only. A person who holds a rung through a role is not listed: the role is, and it is revoked
@@ -101,7 +101,7 @@ async def list_members(project_id: ProjectId, client: FgaClientDep, settings: Se
 
 @management_router.put("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def grant_member(
-    project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
+    *, project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> MemberList:
     """Grant one tenant rung to one subject — gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).
 
@@ -150,7 +150,7 @@ async def grant_member(
 
 @management_router.delete("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def revoke_member(
-    project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
+    *, project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> MemberList:
     """Revoke one tenant rung — gated identically to granting it.
 

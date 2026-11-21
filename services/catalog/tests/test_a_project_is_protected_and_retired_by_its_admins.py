@@ -159,7 +159,7 @@ def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force
     else:
         assert (answer.status_code, answer.headers["content-type"], answer.json()["code"], answer.json()["detail"]) == answered
     assert estate.client.get(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(ADMIN)).status_code == read_after
-    assert (maintenance_policies.get_policy(root, so, "project", PROJECT) is not None) is left_behind
+    assert (maintenance_policies.get_policy(root, so, "project", key=PROJECT) is not None) is left_behind
     stored = [info for info in fs.get_file_info(pafs.FileSelector(definitions, allow_not_found=True)) if info.type == pafs.FileType.File]
     assert bool(stored) is left_behind
     if not left_behind:

@@ -59,6 +59,7 @@ def read_version_and_schema(
     location: str,
     so: StorageOptions,
     table_id: list[str],
+    *,
     pin_version: int | None,
     branch: str | None,
 ) -> CommitReadback:
@@ -168,7 +169,7 @@ def committed_version(table: table_claims.DoorTable, so: StorageOptions, transac
     return None
 
 
-def branch_identifier(location: str, so: StorageOptions, table_id: list[str], branch: str | None) -> str | None:
+def branch_identifier(location: str, so: StorageOptions, table_id: list[str], *, branch: str | None) -> str | None:
     """The identifier of the CURRENT incarnation of ``branch`` of the table at ``location``, or ``None`` for main or when unreadable.
 
     pylance 12's ``branches.list()`` carries ``branch_identifier``, the version mapping stored in
@@ -195,7 +196,7 @@ def branch_identifier(location: str, so: StorageOptions, table_id: list[str], br
 BRANCH_IDENTIFIER_KEY: Final = "branch_identifier"
 
 
-def tag_event_ref(location: str, so: StorageOptions, table_id: list[str], branch: str | None) -> dict[str, str]:
+def tag_event_ref(location: str, so: StorageOptions, table_id: list[str], *, branch: str | None) -> dict[str, str]:
     """The ref a tag pins on the table at ``location``, for a tag event's ``extra``: nothing for main, else the branch and
     its identifier.
 
@@ -206,7 +207,7 @@ def tag_event_ref(location: str, so: StorageOptions, table_id: list[str], branch
     ref = recorded_branch(branch)
     if ref is None:
         return {}
-    identifier = branch_identifier(location, so, table_id, ref)
+    identifier = branch_identifier(location, so, table_id, branch=ref)
     return {"branch": ref, **({BRANCH_IDENTIFIER_KEY: identifier} if identifier is not None else {})}
 
 
@@ -236,7 +237,7 @@ def payload_schema_fields(schema: pa.Schema, table_id: list[str]) -> SchemaField
         return []
 
 
-def commit_ref_key(location: str, so: StorageOptions, table_id: list[str], branch: str | None) -> str:
+def commit_ref_key(location: str, so: StorageOptions, table_id: list[str], *, branch: str | None) -> str:
     """The key the commit reconciler reads ``branch`` (``None`` = main) of the table at ``location`` by
     (:func:`commit_records.ref_key`): ``""`` for main, else the branch and its current incarnation, read off the table's
     branch listing as a pass reads it.

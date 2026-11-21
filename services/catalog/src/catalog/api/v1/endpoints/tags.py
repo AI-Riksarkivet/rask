@@ -47,7 +47,7 @@ def _refuse_a_catalog_tag(tag: str) -> None:
 
 
 @spec_router.post("/{id}/tags/list", response_model_exclude_none=True)
-def list_table_tags(id: str, table: DoorTableDep, so: StorageOptionsDep, limit: ListLimit, page_token: str | None = None) -> ListTableTagsResponse:
+def list_table_tags(*, id: str, table: DoorTableDep, so: StorageOptionsDep, limit: ListLimit, page_token: str | None = None) -> ListTableTagsResponse:
     """List the table's tags, a page at a time — wraps lance_namespace ListTableTags."""
     req = ListTableTagsRequest(id=parse_identifier(id), page_token=page_token, limit=limit)
     return refs.list_tags(table, so, req)
@@ -55,6 +55,7 @@ def list_table_tags(id: str, table: DoorTableDep, so: StorageOptionsDep, limit: 
 
 @spec_router.post("/{id}/tags/create", response_model_exclude_none=True)
 async def create_table_tag(
+    *,
     id: str,
     body: CreateTableTagRequest,
     table: DoorTableDep,
@@ -83,13 +84,13 @@ async def create_table_tag(
         object_id=fga_ids.table_object(table.resolved.require_uuid()),
         object_name=fga_ids.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
-        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, body.branch)},
+        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, branch=body.branch)},
     )
     return response
 
 
 @spec_router.post("/{id}/tags/version", response_model_exclude_none=True)
-def get_table_tag_version(id: str, body: GetTableTagVersionRequest, table: DoorTableDep, so: StorageOptionsDep) -> GetTableTagVersionResponse:
+def get_table_tag_version(*, id: str, body: GetTableTagVersionRequest, table: DoorTableDep, so: StorageOptionsDep) -> GetTableTagVersionResponse:
     """Resolve which table version a tag points to — wraps lance_namespace GetTableTagVersion."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
     return refs.get_tag_version(table, so, body)
@@ -97,6 +98,7 @@ def get_table_tag_version(id: str, body: GetTableTagVersionRequest, table: DoorT
 
 @spec_router.post("/{id}/tags/update", response_model_exclude_none=True)
 async def update_table_tag(
+    *,
     id: str,
     body: UpdateTableTagRequest,
     table: DoorTableDep,
@@ -122,13 +124,14 @@ async def update_table_tag(
         object_id=fga_ids.table_object(table.resolved.require_uuid()),
         object_name=fga_ids.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
-        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, body.branch)},
+        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, branch=body.branch)},
     )
     return response
 
 
 @spec_router.post("/{id}/tags/delete", response_model_exclude_none=True)
 async def delete_table_tag(
+    *,
     id: str,
     body: DeleteTableTagRequest,
     table: DoorTableDep,
@@ -159,7 +162,7 @@ async def delete_table_tag(
         actor=f"user:{token.subject}" if token is not None else None,
         extra={
             "tag": body.tag,
-            **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, pinned.branch if pinned is not None else None),
+            **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, branch=pinned.branch if pinned is not None else None),
         },
     )
     return response

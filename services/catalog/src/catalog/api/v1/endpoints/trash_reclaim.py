@@ -50,6 +50,7 @@ management_router = APIRouter(prefix="/management/v1/trash", tags=["trash-reclai
 
 @management_router.post("/{kind}/{uuid}/release")
 async def release_trash(
+    *,
     kind: TrashKind,
     uuid: str,
     resolver: ResolverDep,
@@ -99,7 +100,15 @@ async def release_trash(
 
 @management_router.post("/{kind}/{uuid}/credentials", response_model_exclude_none=True)
 async def vend_reclaim_credentials(
-    kind: TrashKind, uuid: str, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, subject: CurrentSubject, vendor: VendorDep, clock: ClockDep
+    *,
+    kind: TrashKind,
+    uuid: str,
+    resolver: ResolverDep,
+    settings: SettingsDep,
+    token: CurrentToken,
+    subject: CurrentSubject,
+    vendor: VendorDep,
+    clock: ClockDep,
 ) -> CredentialResponse:
     """Vend the session that deletes one trashed table's bytes: every object at its location, in both spellings, and in
     its own data directories, and nothing on the control root.
@@ -134,7 +143,7 @@ async def vend_reclaim_credentials(
 
 @management_router.delete("/{kind}/{uuid}")
 async def end_trash(
-    kind: TrashKind, uuid: str, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, clock: ClockDep
+    *, kind: TrashKind, uuid: str, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, clock: ClockDep
 ) -> TrashEndResponse:
     """End a trash record whose object holds no byte: revoke the grants it still holds, end the records it keeps under
     its uuid, a table's claim and base record, and the record last.
@@ -160,7 +169,7 @@ async def end_trash(
 
 
 @management_router.post("/{kind}/{uuid}/refusals")
-async def note_trash_refusal(kind: TrashKind, uuid: str, body: TrashRefusalRequest, settings: SettingsDep) -> TrashRefusalResponse:
+async def note_trash_refusal(*, kind: TrashKind, uuid: str, body: TrashRefusalRequest, settings: SettingsDep) -> TrashRefusalResponse:
     """Note maintenance's own refusal of a trash record, so a record refused tick after tick sorts behind the ones that
     move. Bookkeeping the catalog never judges on."""
     await run_in_threadpool(trash_reclaim.read_record, settings, kind, uuid)

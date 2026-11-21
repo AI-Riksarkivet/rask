@@ -97,9 +97,9 @@ def record(control_root: str, storage_options: StorageOptions, table_uuid: str, 
         updated = TableInputs(table_uuid=table_uuid, name=name, inputs={**current.inputs, **added}).model_dump(mode="json")
         try:
             if read.stored is None:
-                create_json(control_root, storage_options, key, updated)
+                create_json(control_root, storage_options, key, record=updated)
             else:
-                replace_json(control_root, storage_options, key, updated, etag=read.stored.etag)
+                replace_json(control_root, storage_options, key, record=updated, etag=read.stored.etag)
         except (RecordExistsError, RecordChangedError):
             continue
         return

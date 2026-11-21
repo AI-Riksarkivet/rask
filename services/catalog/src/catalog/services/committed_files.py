@@ -74,7 +74,7 @@ def added(
         *_listed(root, so, listed),
         transaction_file(branch, read_version, transaction_uuid),
     ]
-    return file_identities.as_stored(root, so, transaction_uuid, paths)
+    return file_identities.as_stored(root, so, transaction_uuid, paths=paths)
 
 
 def table_root(table_location: str) -> str:

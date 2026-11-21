@@ -91,6 +91,7 @@ TableOwnersDep = Annotated[TableOwners, Depends(get_table_owners)]
 
 @table_router.post("/{id}/erasure", status_code=202)
 async def erase_subject(
+    *,
     id: str,
     body: ErasureRequest,
     table: DoorTableDep,
@@ -169,6 +170,7 @@ async def erase_subject(
 
 @table_router.post("/{id}/erasure/{obligation_id}/verify")
 async def verify_erasure(
+    *,
     id: str,
     obligation_id: str,
     body: ErasureVerifyRequest,
@@ -233,7 +235,7 @@ async def verify_erasure(
     # the tag and the ref it pinned, beside the obligation whose verification dropped it. AFTER the drops, so a tag still
     # standing is never announced gone.
     for dropped in report.untagged:
-        pinned = await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, dropped.branch)
+        pinned = await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, branch=dropped.branch)
         await emit_control(
             control,
             action="table_tag_deleted",
@@ -265,6 +267,7 @@ async def verify_erasure(
 
 @obligations_router.get("")
 async def list_erasure_obligations(
+    *,
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,

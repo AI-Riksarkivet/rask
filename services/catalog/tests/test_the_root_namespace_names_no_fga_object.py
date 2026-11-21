@@ -76,7 +76,9 @@ def _drive(path: str, object_id: str) -> None:
     # CAST, the idiom `test_the_bus_door_authorizes_what_it_records` uses: the stand-ins carry exactly
     # the attributes the guard reads, and constructing a real Request/Settings/OpenFgaClient would drag
     # a whole app and a live store into a test about one composed object id. The caller is a real one.
-    asyncio.run(route_guard.authorize(cast(Any, _Request(path, object_id)), cast(Any, _Settings()), _CALLER, cast(Any, object()), NamedResolver()))
+    asyncio.run(
+        route_guard.authorize(cast(Any, _Request(path, object_id)), cast(Any, _Settings()), _CALLER, injected=cast(Any, object()), resolver=NamedResolver())
+    )
 
 
 @pytest.mark.parametrize("held", [pytest.param(None, id="a-caller-holding-nothing-is-refused"), pytest.param("reader", id="a-reader-is-admitted")])
@@ -89,7 +91,7 @@ def test_a_named_namespace_is_still_checked(openfga_store: Any, held: str | None
 
     async def _authorized() -> None:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
-            await route_guard.authorize(request, cast(Any, _Settings()), _CALLER, client, NamedResolver())
+            await route_guard.authorize(request, cast(Any, _Settings()), _CALLER, injected=client, resolver=NamedResolver())
 
     with pytest.raises(PermissionDeniedError) if held is None else nullcontext():
         asyncio.run(_authorized())

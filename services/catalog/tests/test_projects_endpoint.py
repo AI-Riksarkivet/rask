@@ -64,7 +64,7 @@ def _list(settings: Any, *, token: Any = None, client: Any = None) -> list[ep.Pr
 
 
 def _get(project_id: str, settings: Any, *, token: Any = None, client: Any = None) -> ep.ProjectResponse:
-    return asyncio.run(ep.get_project(project_id, settings=settings, token=token, client=client))
+    return asyncio.run(ep.get_project(project_id=project_id, settings=settings, token=token, client=client))
 
 
 # ── grouping: registry records → derived tenants ─────────────────────────────────────────────────────

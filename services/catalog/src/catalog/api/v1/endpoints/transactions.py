@@ -21,7 +21,7 @@ spec_router = APIRouter(prefix="/v1/transaction", tags=["transaction"])
 
 @spec_router.post("/{id}/describe", response_model_exclude_none=True)
 async def describe_transaction(
-    id: str, door: TransactionTableDep, resolver: ResolverDep, body: DescribeTransactionRequest | None = None
+    *, id: str, door: TransactionTableDep, resolver: ResolverDep, body: DescribeTransactionRequest | None = None
 ) -> DescribeTransactionResponse:
     """Report the status of transaction ``id`` of the table it names, read by the backend's ``describe_transaction`` on that table.
 

@@ -209,7 +209,7 @@ def recorded_grants(control_root: str, storage_options: StorageOptions) -> set[G
 def record_grant(control_root: str, storage_options: StorageOptions, grant: GrantTuple) -> None:
     """Record ``grant`` as the declaration's, before its tuple is written; one already recorded stays as it is."""
     try:
-        create_json(control_root, storage_options, _grant_key(grant), grant.model_dump())
+        create_json(control_root, storage_options, _grant_key(grant), record=grant.model_dump())
     except RecordExistsError:
         return
 

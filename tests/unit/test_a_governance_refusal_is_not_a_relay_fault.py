@@ -98,7 +98,7 @@ def _settings(uri: str) -> Any:  # noqa: ANN401 — a stand-in for the drain's s
 
 def _drive(uri: str) -> Any:  # noqa: ANN401 — DrainOutcome
     app = cast("Any", SimpleNamespace(state=SimpleNamespace()))
-    return asyncio.run(relay._drain_outbox(app, cast("Any", _Repo()), _settings(uri), StorageOptions()))
+    return asyncio.run(relay._drain_outbox(app, cast("Any", _Repo()), _settings(uri), opts=StorageOptions()))
 
 
 def _governed_settings(outbox_uri: str) -> LineageSettings:
@@ -150,7 +150,7 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
             return set()
 
     app = cast("Any", SimpleNamespace(state=SimpleNamespace()))
-    outcome = asyncio.run(relay._drain_outbox(app, cast("Any", _OrderRepo()), _governed_settings(uri), StorageOptions()))
+    outcome = asyncio.run(relay._drain_outbox(app, cast("Any", _OrderRepo()), _governed_settings(uri), opts=StorageOptions()))
 
     assert (outcome.refused, outcome.stranded, outcome.drained) == (1, 0, 0), (
         f"a refusal must land on its OWN counter; folding it into `stranded` reports a relay fault that is not happening: {outcome}"

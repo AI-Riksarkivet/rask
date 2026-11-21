@@ -417,7 +417,7 @@ def verify(
     branches = listed or {}
     # 0. WHAT NO STEP BELOW REACHES, read before anything is reclaimed: the payloads and data files the subject's rows
     #    name under a base outside the table, and the MemWAL shards beside it. Each is a `held` surface.
-    _record_held(report, dataset, [*branches, None], predicate, storage_options)
+    _record_held(report, dataset, [*branches, None], predicate=predicate, storage_options=storage_options)
 
     # 1. EVERY HEAD, ON BYTES, and its index segments proved while the job's `CreateIndex` transactions are retained.
     clean, proved = _judge_heads(report, dataset, branches, predicate=predicate, trusted=trusted)
@@ -539,7 +539,7 @@ def _judge_head(report: ErasureReport, history: _History, listing: _StorageListi
         log.warning("erasure_head_unread", extra={"table": report.table, "ref": _label(ref), "error": str(exc)})
         report.surfaces.append(SurfaceResult(surface=delete, outcome="failed", detail=f"the head could not be read: {exc}"))
         return None
-    verdict = _probe((ref, head), history, predicate, listing)
+    verdict = _probe((ref, head), history, predicate, listing=listing)
     if verdict in {_Verdict.ANSWERS, _Verdict.UNREADABLE}:
         report.surfaces.append(SurfaceResult(surface=delete, outcome="failed", detail=_owed((ref, head), verdict)))
         report.surfaces.extend(SurfaceResult(surface=surface, outcome="skipped", detail=_UNJUDGED) for surface in (compact, index))
@@ -689,10 +689,10 @@ def _verify(report: ErasureReport, history: _History, *, first_listing: Mapping[
     found.tags_unlisted = listed_tags is None
     tags = listed_tags or {}
     report.surfaces.extend(
-        SurfaceResult(surface=f"dangling:{name}", outcome="dangling", detail=_dangling_detail(_holders(_parse(name), history, forks, tags)))
+        SurfaceResult(surface=f"dangling:{name}", outcome="dangling", detail=_dangling_detail(_holders(_parse(name), history, forks, tags=tags)))
         for name in found.dangling
     )
-    account = _account(found.residual, found.hidden, found.indexed, history, forks, tags)
+    account = _account(residual=found.residual, hidden=found.hidden, indexed=found.indexed, history=history, forks=forks, tags=tags)
     account.unforked = sorted(name for name, fork in current.items() if fork is None) if found.residual else []
     report.pinned_by, report.held_by_retention = account.pins, account.held_by_retention
     if found.residual or found.unlisted or found.relist_failed or found.tags_unlisted:
@@ -798,7 +798,7 @@ def _versions_still_matching(history: _History, refs: Sequence[str | None], pred
             continue
         for version in versions:
             name = _name((ref, version))
-            verdict = _probe((ref, version), history, predicate, listing)
+            verdict = _probe((ref, version), history, predicate, listing=listing)
             if verdict is _Verdict.DANGLING:
                 found.dangling.append(name)
             elif verdict is not _Verdict.CLEAN:
@@ -812,7 +812,7 @@ def _versions_still_matching(history: _History, refs: Sequence[str | None], pred
     return found
 
 
-def _probe(reference: _Reference, history: _History, predicate: str, listing: _StorageListing) -> _Verdict:
+def _probe(reference: _Reference, history: _History, predicate: str, *, listing: _StorageListing) -> _Verdict:
     """Whether one version holds the subject, read whole first and fragment by fragment if that fails, then
     whether its index segments are proved free of it (:func:`_unproved_segments`)."""
     try:
@@ -833,7 +833,7 @@ def _probe(reference: _Reference, history: _History, predicate: str, listing: _S
         log.warning("erasure_verify_failed", extra={"reference": _name(reference), "error": str(exc)})
     if verdict is None:
         try:
-            verdict = _probe_fragments(handle, reference[1], predicate, listing)
+            verdict = _probe_fragments(handle, reference[1], predicate, listing=listing)
         except Exception as exc:  # noqa: BLE001
             log.warning("erasure_verify_fragments_failed", extra={"reference": _name(reference), "error": str(exc)})
             return _Verdict.UNREADABLE
@@ -890,7 +890,7 @@ def _unproved_segments(handle: _Dataset, history: _History, listing: _StorageLis
     return sorted(unproved)
 
 
-def _probe_fragments(handle: _Dataset, version: int, predicate: str, listing: _StorageListing) -> _Verdict:
+def _probe_fragments(handle: _Dataset, version: int, predicate: str, *, listing: _StorageListing) -> _Verdict:
     """A version that cannot be read whole, judged by its fragments.
 
     A fragment that reads is counted. One that does not holds nothing only when storage no longer has
@@ -1041,7 +1041,7 @@ class _Holders(BaseModel):
 
 
 def _holders(
-    reference: _Reference, history: _History, forks: Mapping[str, _Reference], tags: Mapping[str, _Reference | None], walked: set[_Reference] | None = None
+    reference: _Reference, history: _History, forks: Mapping[str, _Reference], *, tags: Mapping[str, _Reference | None], walked: set[_Reference] | None = None
 ) -> _Holders:
     """What keeps ``reference`` listed: the retention window, a tag, or a branch cut from it that still
     references its data files.
@@ -1088,7 +1088,7 @@ def _holders(
             if step == head:
                 held.branches.add(child)
             elif (child, step) not in walked:
-                held.absorb(_holders((child, step), history, forks, tags, walked))
+                held.absorb(_holders((child, step), history, forks, tags=tags, walked=walked))
     return held
 
 
@@ -1129,6 +1129,7 @@ class _Account(BaseModel):
 
 
 def _account(
+    *,
     residual: Sequence[str],
     hidden: Collection[str],
     indexed: Collection[str],
@@ -1157,7 +1158,7 @@ def _account(
         if is_head:
             (account.unrewritten_heads if name in hidden else account.unindexed_heads if name in indexed else account.heads).append(name)
             continue
-        held = _holders(reference, history, forks, tags)
+        held = _holders(reference, history, forks, tags=tags)
         named |= held.tags
         doomed |= held.branches
         if held.window:
@@ -1293,7 +1294,7 @@ def _segments(handle: _Dataset) -> dict[str, tuple[int | None, frozenset[int]]]:
     }
 
 
-def _record_held(report: ErasureReport, dataset: _Dataset, refs: Sequence[str | None], predicate: str, storage_options: StorageOptions) -> None:
+def _record_held(report: ErasureReport, dataset: _Dataset, refs: Sequence[str | None], *, predicate: str, storage_options: StorageOptions) -> None:
     """Step 0: record a `held` surface for every place outside the table's own files the subject's bytes sit.
 
     Read from EVERY retained version of every ref, deleted rows included, before anything is reclaimed: the

@@ -70,7 +70,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
         namespace,
         StorageOptions(),
         TABLE_ID,
-        pa.table({"id": pa.array([1, 2, 3], pa.int64())}, schema=SCHEMA),
+        table=pa.table({"id": pa.array([1, 2, 3], pa.int64())}, schema=SCHEMA),
         root=str(tmp_path / "data"),
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),
@@ -307,7 +307,7 @@ def test_a_commit_lands_while_insert_appends_in_a_tight_loop_and_every_append_la
     answers none after the one planned on."""
     seeded = pa.table({"id": pa.array([0], pa.int64()), "v": pa.array([0], pa.int64()), "w": pa.array([0], pa.int64())})
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
-    create_table(ns, StorageOptions(), APPENDED_TO, seeded, root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(APPENDED_TO))
+    create_table(ns, StorageOptions(), APPENDED_TO, table=seeded, root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(APPENDED_TO))
     stop = threading.Event()
     appended: list[int] = []
     failed: list[BaseException] = []
@@ -320,7 +320,7 @@ def test_a_commit_lands_while_insert_appends_in_a_tight_loop_and_every_append_la
                     writer,
                     StorageOptions(),
                     InsertIntoTableRequest(id=APPENDED_TO, mode="append"),
-                    _ipc(_row(row)),
+                    data=_ipc(_row(row)),
                     max_bytes=1 << 20,
                     transaction_properties=STAMP,
                 )

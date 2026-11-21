@@ -105,9 +105,9 @@ def estate(moto_url: str) -> Iterator[StorageOptions]:
     namespace.create_namespace(CreateNamespaceRequest(id=[WAREHOUSE, "db"], properties={"rask.uuid": NAMESPACE_UUID}))
     namespace.register_table(RegisterTableRequest(id=[WAREHOUSE, "db", "t"], location=LOCATION))
     claims = location_claims.ClaimStore(control_root=ROOT, storage_options=options)
-    location_claims.take(claims, URI, TABLE, [WAREHOUSE, "db", "t"], is_gone=lambda _claim: False, uuid=LOCATION)
+    location_claims.take(claims, URI, TABLE, segments=[WAREHOUSE, "db", "t"], is_gone=lambda _claim: False, uuid=LOCATION)
     namespace.register_table(RegisterTableRequest(id=[WAREHOUSE, "db", "b"], location=BRANCHED_UUID))
-    location_claims.take(claims, BRANCHED, f"{WAREHOUSE}$db$b", [WAREHOUSE, "db", "b"], is_gone=lambda _claim: False, uuid=BRANCHED_UUID)
+    location_claims.take(claims, BRANCHED, f"{WAREHOUSE}$db$b", segments=[WAREHOUSE, "db", "b"], is_gone=lambda _claim: False, uuid=BRANCHED_UUID)
     policy = {"kind": "table", "id": TABLE, "uuid": LOCATION, "compact_enabled": True, "retain_versions": 2, "target_rows_per_fragment": 1000}
     seeding.put_policy(ROOT, options, policy)
     seeding.put_policy(ROOT, options, {"kind": "project", "id": "acme", "buckets": [BUCKET], "retain_versions": 1})
@@ -244,7 +244,7 @@ def test_a_declared_table_waits_for_its_first_commit_and_asks_no_vend(estate: St
     nothing more and asks for no credential, and waits for the recheck, since the first commit's event queues its pass."""
     declared = f"{ROOT}/{DECLARED_UUID}"
     claims = location_claims.ClaimStore(control_root=ROOT, storage_options=estate)
-    location_claims.take(claims, declared, f"{WAREHOUSE}$db$declared", [WAREHOUSE, "db", "declared"], is_gone=lambda _claim: False, uuid=DECLARED_UUID)
+    location_claims.take(claims, declared, f"{WAREHOUSE}$db$declared", segments=[WAREHOUSE, "db", "declared"], is_gone=lambda _claim: False, uuid=DECLARED_UUID)
     asked: list[str] = []
     before = datetime.now(UTC)
 

@@ -103,7 +103,7 @@ def forget(control_root: str, write_options: StorageOptions, *, table_uuid: str,
         OSError: The store refused, or could not be reached for, a delete.
     """
     for transaction_uuid in reclaimed:
-        file_identities.forget(control_root, write_options, table_uuid, transaction_uuid)
+        file_identities.forget(control_root, write_options, table_uuid, transaction_uuid=transaction_uuid)
 
 
 def _named_by_a_retained_version(table: lance.LanceDataset, table_root: str, paths: Iterable[str]) -> set[str]:

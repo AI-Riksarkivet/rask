@@ -103,7 +103,7 @@ async def _defined(settings: CatalogStore, project: str) -> dict[str, LabelDefin
 
 async def _describe(settings: CatalogStore, *, kind: LabelScope, segments: Sequence[str], uuid: str) -> ObjectLabelsResponse:
     """The object's labels, and the labels its project defines for its kind, which its owner may attach."""
-    attachment = await run_in_threadpool(object_labels.attachment_of, settings.registry_root, settings.storage_options(), kind, uuid)
+    attachment = await run_in_threadpool(object_labels.attachment_of, settings.registry_root, settings.storage_options(), kind, object_uuid=uuid)
     defined = await _defined(settings, await _project_of(settings, segments))
     return ObjectLabelsResponse(
         kind=kind,
@@ -114,10 +114,10 @@ async def _describe(settings: CatalogStore, *, kind: LabelScope, segments: Seque
     )
 
 
-async def _uuid_now(ns: LanceNamespace, settings: CatalogStore, kind: LabelScope, segments: Sequence[str]) -> str | None:
+async def _uuid_now(ns: LanceNamespace, settings: CatalogStore, kind: LabelScope, *, segments: Sequence[str]) -> str | None:
     """The uuid of the object the name holds now, ``None`` when it holds none."""
     try:
-        return (await objects.standing(ns, settings, kind, list(segments))).uuid
+        return (await objects.standing(ns, settings, kind, segments=list(segments))).uuid
     except (TableNotFoundError, NamespaceNotFoundError):
         return None
 
@@ -126,9 +126,9 @@ async def _set(
     ns: LanceNamespace,
     settings: Settings,
     control: ControlEmitter,
+    *,
     token: Caller | None,
     body: SetLabelRequest,
-    *,
     kind: LabelScope,
     segments: Sequence[str],
     uuid: str,
@@ -142,7 +142,7 @@ async def _set(
     """
     project = await _project_of(settings, segments)
     so = settings.storage_options()
-    defined = await run_in_threadpool(object_labels.definition, settings.registry_root, so, project, object_labels.require_name(body.name))
+    defined = await run_in_threadpool(object_labels.definition, settings.registry_root, so, project, name=object_labels.require_name(body.name))
     if defined is None:
         raise InvalidInputError(f"project {project!r} defines no label {body.name!r}; its admin defines it first")
     value = object_labels.judged_value(defined, kind=kind, value=body.value)
@@ -152,8 +152,8 @@ async def _set(
         await run_in_threadpool(object_labels.attach, settings.registry_root, so, base, defined=defined, value=value)
     except conditional_records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"the labels of {canonical} kept changing; set the label again") from exc
-    if await _uuid_now(ns, settings, kind, segments) != uuid:
-        await run_in_threadpool(object_labels.forget, settings.registry_root, so, kind, uuid)
+    if await _uuid_now(ns, settings, kind, segments=segments) != uuid:
+        await run_in_threadpool(object_labels.forget, settings.registry_root, so, kind, object_uuid=uuid)
         raise TableNotFoundError(f"{kind} not found: {canonical}")
     await emit_control(
         control,
@@ -168,13 +168,13 @@ async def _set(
 
 
 async def _remove(
-    settings: Settings, control: ControlEmitter, token: Caller | None, body: RemoveLabelRequest, *, kind: LabelScope, segments: Sequence[str], uuid: str
+    settings: Settings, control: ControlEmitter, token: Caller | None, *, body: RemoveLabelRequest, kind: LabelScope, segments: Sequence[str], uuid: str
 ) -> ObjectLabelsResponse:
     """Remove ``body``'s label from the object (idempotent), and announce a removal that took a label off."""
     canonical = fga_ids.canonical_object_id(list(segments))
     try:
         removed = await run_in_threadpool(
-            object_labels.detach, settings.registry_root, settings.storage_options(), kind, uuid, name=body.name, actor=_actor(token)
+            object_labels.detach, settings.registry_root, settings.storage_options(), kind, object_uuid=uuid, name=body.name, actor=_actor(token)
         )
     except conditional_records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"the labels of {canonical} kept changing; remove the label again") from exc
@@ -199,19 +199,21 @@ async def describe_table_labels(id: str, table: ResolvedTableDep, settings: Sett
 
 @table_router.post("/{id}/labels/set", response_model_exclude_none=True)
 async def set_table_label(
-    id: str, body: SetLabelRequest, ns: NamespaceDep, table: ResolvedTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep
+    *, id: str, body: SetLabelRequest, ns: NamespaceDep, table: ResolvedTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep
 ) -> ObjectLabelsResponse:
     """Attach a label the table's project defines, or change the value it carries; the table's labels after. Asked at
     ``can_label``, the table owner's."""
-    return await _set(ns, settings, control, token, body, kind="table", segments=table.segments, uuid=table.require_uuid(), location=str(table.location))
+    return await _set(
+        ns, settings, control, token=token, body=body, kind="table", segments=table.segments, uuid=table.require_uuid(), location=str(table.location)
+    )
 
 
 @table_router.post("/{id}/labels/remove", response_model_exclude_none=True)
 async def remove_table_label(
-    id: str, body: RemoveLabelRequest, table: ResolvedTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep
+    *, id: str, body: RemoveLabelRequest, table: ResolvedTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep
 ) -> ObjectLabelsResponse:
     """Remove a label from the table (idempotent); the table's labels after. Asked at ``can_label``."""
-    return await _remove(settings, control, token, body, kind="table", segments=table.segments, uuid=table.require_uuid())
+    return await _remove(settings, control, token, body=body, kind="table", segments=table.segments, uuid=table.require_uuid())
 
 
 async def _namespace(id: str, resolver: Resolver, ns: LanceNamespace) -> objects.GovernedObject:
@@ -222,7 +224,7 @@ async def _namespace(id: str, resolver: Resolver, ns: LanceNamespace) -> objects
 
 
 @namespace_router.post("/{id}/labels/describe", response_model_exclude_none=True)
-async def describe_namespace_labels(id: str, ns: NamespaceDep, settings: SettingsDep, resolver: ResolverDep) -> ObjectLabelsResponse:
+async def describe_namespace_labels(*, id: str, ns: NamespaceDep, settings: SettingsDep, resolver: ResolverDep) -> ObjectLabelsResponse:
     """The labels the namespace carries. Read at ``can_get_metadata``."""
     namespace = await _namespace(id, resolver, ns)
     return await _describe(settings, kind="namespace", segments=namespace.segments, uuid=namespace.uuid)
@@ -230,22 +232,22 @@ async def describe_namespace_labels(id: str, ns: NamespaceDep, settings: Setting
 
 @namespace_router.post("/{id}/labels/set", response_model_exclude_none=True)
 async def set_namespace_label(
-    id: str, body: SetLabelRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
+    *, id: str, body: SetLabelRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
 ) -> ObjectLabelsResponse:
     """Attach a label the namespace's project defines; the namespace's labels after. Asked at ``can_label``."""
     namespace = await _namespace(id, resolver, ns)
     await hierarchy.require_namespace_as_identified(ns, namespace)
-    return await _set(ns, settings, control, token, body, kind="namespace", segments=namespace.segments, uuid=namespace.uuid, location=None)
+    return await _set(ns, settings, control, token=token, body=body, kind="namespace", segments=namespace.segments, uuid=namespace.uuid, location=None)
 
 
 @namespace_router.post("/{id}/labels/remove", response_model_exclude_none=True)
 async def remove_namespace_label(
-    id: str, body: RemoveLabelRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
+    *, id: str, body: RemoveLabelRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
 ) -> ObjectLabelsResponse:
     """Remove a label from the namespace (idempotent). Asked at ``can_label``."""
     namespace = await _namespace(id, resolver, ns)
     await hierarchy.require_namespace_as_identified(ns, namespace)
-    return await _remove(settings, control, token, body, kind="namespace", segments=namespace.segments, uuid=namespace.uuid)
+    return await _remove(settings, control, token, body=body, kind="namespace", segments=namespace.segments, uuid=namespace.uuid)
 
 
 def _project(id: str) -> str:
@@ -265,7 +267,7 @@ async def _registered(settings: CatalogStore, project: str) -> str:
     return project
 
 
-async def _readable_project(id: str, settings: Settings, token: Caller | None, client: FgaClientDep) -> str:
+async def _readable_project(id: str, settings: Settings, token: Caller | None, *, client: FgaClientDep) -> str:
     """``id``, for a caller its project list shows the project to: a member, or the estate admin. Anyone else, and a
     project the registry does not hold, is answered the missing project's 404 ([[LH-587]])."""
     project = _project(id)
@@ -277,7 +279,7 @@ async def _readable_project(id: str, settings: Settings, token: Caller | None, c
     return await _registered(settings, project)
 
 
-async def _administered_project(id: str, settings: Settings, token: Caller | None, client: FgaClientDep) -> str:
+async def _administered_project(id: str, settings: Settings, token: Caller | None, *, client: FgaClientDep) -> str:
     """``id``, for its project's admin; a project the registry does not hold is not found, after the gate."""
     project = _project(id)
     await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
@@ -305,20 +307,20 @@ async def _standing(settings: CatalogStore, found: Sequence[Attachment]) -> list
 
 
 @projects_router.get("/{id}/labels", response_model_exclude_none=True)
-async def list_label_definitions(id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[LabelDefinition]:
+async def list_label_definitions(*, id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[LabelDefinition]:
     """Every label the project defines, by name, for a member of it or the estate admin."""
-    project = await _readable_project(id, settings, token, client)
+    project = await _readable_project(id, settings, token, client=client)
     return await run_in_threadpool(object_labels.definitions, settings.registry_root, settings.storage_options(), project)
 
 
 @projects_router.post("/{id}/labels/define", response_model_exclude_none=True)
 async def define_label(
-    id: str, body: LabelDefinitionRequest, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, control: ControlEmitterDep
+    *, id: str, body: LabelDefinitionRequest, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, control: ControlEmitterDep
 ) -> LabelDefinition:
     """Define a label, or evolve the definition its name holds: its scope and allowed values only grow and its kind
     never changes, so every label already attached stays valid. A definition applied again as it stands announces
     nothing. The project's admin's act."""
-    project = await _administered_project(id, settings, token, client)
+    project = await _administered_project(id, settings, token, client=client)
     asked = object_labels.proposed(
         project=project,
         name=body.name,
@@ -347,14 +349,14 @@ async def define_label(
 
 @projects_router.post("/{id}/labels/{name}/delete", response_model_exclude_none=True)
 async def delete_label_definition(
-    id: str, name: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, control: ControlEmitterDep
+    *, id: str, name: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, control: ControlEmitterDep
 ) -> LabelDefinition:
     """Delete a label the project defines, once no standing object of the project carries it (409 otherwise, naming
     each as it is named now). An object in the trash does not hold the definition: restored after the delete, it shows
     no such label. The project's admin's act."""
-    project = await _administered_project(id, settings, token, client)
+    project = await _administered_project(id, settings, token, client=client)
     root, so = settings.registry_root, settings.storage_options()
-    deleted = await run_in_threadpool(object_labels.definition, root, so, project, object_labels.require_name(name))
+    deleted = await run_in_threadpool(object_labels.definition, root, so, project, name=object_labels.require_name(name))
     if deleted is None:
         raise TableNotFoundError(f"label not found: {name}")
     carried = sorted(named for _, named in await _standing(settings, await run_in_threadpool(object_labels.carriers, root, so, deleted)))
@@ -374,6 +376,7 @@ async def delete_label_definition(
 
 @projects_router.get("/{id}/labels/objects", response_model_exclude_none=True)
 async def list_labelled_objects(
+    *,
     id: str,
     settings: SettingsDep,
     token: CurrentToken,
@@ -385,7 +388,7 @@ async def list_labelled_objects(
     """The project's labelled tables and namespaces the caller may see (``can_get_metadata`` on each, judged on its
     uuid), each named as it is named now, with the labels whose definition stands. An object that is gone or in the
     trash is listed to nobody. Paged in the order of the objects' kinds and uuids."""
-    project = await _readable_project(id, settings, token, client)
+    project = await _readable_project(id, settings, token, client=client)
     so = settings.storage_options()
     defined = await _defined(settings, project)
     found = await run_in_threadpool(object_labels.attachments, settings.registry_root, so, project=project)

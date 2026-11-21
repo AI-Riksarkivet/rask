@@ -412,9 +412,9 @@ class TableTurns(BaseModel):
             held = CommitTurns(uuid=self.table_uuid, turns=[*turns, mine]).model_dump(mode="json")
             try:
                 if read.stored is None:
-                    conditional_records.create_json(self.control_root, self.storage_options, self.key, held)
+                    conditional_records.create_json(self.control_root, self.storage_options, self.key, record=held)
                 else:
-                    conditional_records.replace_json(self.control_root, self.storage_options, self.key, held, etag=read.stored.etag)
+                    conditional_records.replace_json(self.control_root, self.storage_options, self.key, record=held, etag=read.stored.etag)
             except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
                 continue
             _SHARED_READS.forget(self._shared)
@@ -453,7 +453,7 @@ class TableTurns(BaseModel):
                     return
                 kept = CommitTurns(uuid=self.table_uuid, turns=[turn for turn in turns if turn.token != token]).model_dump(mode="json")
                 try:
-                    conditional_records.replace_json(self.control_root, self.storage_options, self.key, kept, etag=read.stored.etag)
+                    conditional_records.replace_json(self.control_root, self.storage_options, self.key, record=kept, etag=read.stored.etag)
                 except conditional_records.RecordChangedError:
                     continue
                 _SHARED_READS.forget(self._shared)

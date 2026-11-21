@@ -48,7 +48,7 @@ def _stub_create(calls: list[dict[str, Any]]) -> Any:
     def fake(*_a: Any, **k: Any) -> CreateTableResponse:
         calls.append(k)
         location_claims.take(
-            table_claims.claim_store(_settings()), "s3://x", "lance_catalog$db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=str(uuid4())
+            table_claims.claim_store(_settings()), "s3://x", "lance_catalog$db$t", segments=["db", "t"], is_gone=lambda _claim: False, uuid=str(uuid4())
         )
         return CreateTableResponse(location="s3://x", version=1)
 

@@ -139,7 +139,7 @@ async def write_door(request: Request) -> write_judge.Write | None:
 
 
 async def require_declared_inputs(
-    settings: FgaSettings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver, run: run_context.RunContext
+    run: run_context.RunContext, settings: FgaSettings, token: Caller | None, *, injected: OpenFgaClient | None, resolver: Resolver
 ) -> dict[str, run_context.RunInput]:
     """Each input ``run`` declares, by the uuid of the table it names now, once each names a table the committer may read
     (ADR 0183 §2).
@@ -153,7 +153,7 @@ async def require_declared_inputs(
         InvalidInputError: An input names no table, or one the committer may not read.
         UnauthenticatedError: FGA is on and nobody is signed in.
     """
-    check = _rung_check(settings, token, injected, resolver)
+    check = _rung_check(settings, token, injected, resolver=resolver)
     if check is not None:
         for entry in run.inputs:
             try:
@@ -193,7 +193,7 @@ def _unreadable_input(entry: run_context.RunInput) -> InvalidInputError:
     )
 
 
-def _rung_check(settings: FgaSettings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver) -> write_judge.RungCheck | None:
+def _rung_check(settings: FgaSettings, token: Caller | None, injected: OpenFgaClient | None, *, resolver: Resolver) -> write_judge.RungCheck | None:
     """The write judge's rung check, asked through :func:`require_rung`; ``None`` with FGA off, when every rung allows.
 
     Raises:
@@ -241,10 +241,10 @@ async def _require_estate_admin_for_unidentified(client: OpenFgaClient, *, user:
 
 
 async def judge_write(
-    request: Request, settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver, write: write_judge.Write
+    request: Request, *, settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver, write: write_judge.Write
 ) -> None:
     """Hand ``write`` to the write judge, with the rung asked through :func:`require_rung` when FGA is on."""
-    check = _rung_check(settings, token, injected, resolver)
+    check = _rung_check(settings, token, injected, resolver=resolver)
 
     async def namespace(warehouse_id: str) -> LanceNamespace:
         return await namespace_for_warehouse(request, settings, warehouse_id)
@@ -253,7 +253,7 @@ async def judge_write(
         write,
         caller=token.subject if token is not None else None,
         check=check,
-        inputs=partial(require_declared_inputs, settings, token, injected, resolver),
+        inputs=partial(require_declared_inputs, settings=settings, token=token, injected=injected, resolver=resolver),
         namespace=namespace,
     )
 
@@ -262,8 +262,8 @@ async def judge_staged_run(
     settings: FgaSettings,
     token: Caller | None,
     injected: OpenFgaClient | None,
-    resolver: Resolver,
     *,
+    resolver: Resolver,
     ns: LanceNamespace,
     segments: Sequence[str],
     run: run_context.RunContext | None,
@@ -284,7 +284,7 @@ async def judge_staged_run(
     declared: dict[str, run_context.RunInput] = {}
 
     async def inputs(named: run_context.RunContext) -> None:
-        declared.update(await require_declared_inputs(settings, token, injected, resolver, named))
+        declared.update(await require_declared_inputs(named, settings, token, injected=injected, resolver=resolver))
 
     # The stock client's door asks the rule directly, so its decision is audited here as the catalog's own doors' is in
     # `write_judge.judge`: every decision under the run rule leaves a record, whichever door took the write.
@@ -319,7 +319,7 @@ async def _granted_vend_tier(client: OpenFgaClient, subject: str, obj: str) -> L
 
 
 async def spec_vend_tier(
-    settings: Settings, token: Caller | None, injected: OpenFgaClient | None, ns: LanceNamespace, segments: Sequence[str], *, table_uuid: str, door: str
+    settings: Settings, token: Caller | None, injected: OpenFgaClient | None, *, ns: LanceNamespace, segments: Sequence[str], table_uuid: str, door: str
 ) -> Literal["read", "write"] | None:
     """The highest tier a spec door (``describe``, ``declare``) vends the caller on table ``segments`` (ADR 0156 C3).
 

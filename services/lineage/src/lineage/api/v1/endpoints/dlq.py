@@ -93,6 +93,7 @@ def _audited(event: RunEvent | DatasetEvent, key: str) -> str:
 
 @router.get("")
 async def list_dlq(
+    *,
     settings: SettingsDep,
     token: CurrentToken,
     datasets: FilterDep,
@@ -123,7 +124,7 @@ async def list_dlq(
     events = [
         (_summary(run_id, event_json), next(scopes) if event is not None else Governed()) for (run_id, event_json), event in zip(staged, parsed, strict=True)
     ]
-    visible = await governed(datasets, settings.fga_enabled, events, lambda pair: pair[1])
+    visible = await governed(datasets, settings.fga_enabled, events, refs=lambda pair: pair[1])
     return DlqBacklog(depth=depth, oldest_age_seconds=oldest_age, events=[summary for summary, _ in visible], limit=limit)
 
 
@@ -138,6 +139,7 @@ def _parsed(event_json: str) -> tuple[RunEvent | DatasetEvent, dict[str, Any]] |
 
 @router.post("/{run_id}/replay")
 async def replay_dlq(
+    *,
     run_id: str,
     request: Request,
     provenance: ProvenanceDep,
@@ -194,8 +196,8 @@ async def replay_dlq(
     # door's, over the operator: a caller may only replay what they could have written in the first place.
     arrived = staged.data
     # The operator's rungs are asked whoever signed; what the catalog attests is only the names its event uses.
-    aliased = await enforce_bus_authz(event, request.app, settings, arrived) | await enforce_output_authz(
-        event, request.app, settings, token, names_vouched_by=signature
+    aliased = await enforce_bus_authz(event, request.app, settings, arrived=arrived) | await enforce_output_authz(
+        event, request.app, settings, token=token, names_vouched_by=signature
     )
     await provenance.record(event, aliased=aliased)  # idempotent: every row under its key
     # BEFORE the drop: the staged object is the only copy the relay could still re-publish. The feed is
@@ -223,7 +225,7 @@ async def list_parked(provenance: ProvenanceDep) -> ParkedRuns:
 
 
 @router.post("/parked/{run_id}/replay", dependencies=[Depends(require_parks_replayer)])
-async def replay_parked(run_id: str, request: Request, provenance: ProvenanceDep, settings: SettingsDep, token: CurrentToken) -> DlqReplayResponse:
+async def replay_parked(*, run_id: str, request: Request, provenance: ProvenanceDep, settings: SettingsDep, token: CurrentToken) -> DlqReplayResponse:
     """Re-present the events of ``run_id`` lineage's park kept, from the bus or the outbox, once their cause is fixed ([[LH-148]]).
 
     Each kept CloudEvent goes through the ingest lane's own handling (``handle_cloud_event`` under
@@ -248,7 +250,7 @@ async def replay_parked(run_id: str, request: Request, provenance: ProvenanceDep
         raise TransactionNotFoundError(f"no parked lineage delivery is kept for run {run_id}")
     answers = [
         await handle_cloud_event(
-            provenance, delivery.cloud_event, lambda parsed, arrived: enforce_bus_authz(parsed, request.app, settings, arrived), door=Door.DEAD_LETTER
+            provenance, delivery.cloud_event, lambda parsed, arrived: enforce_bus_authz(parsed, request.app, settings, arrived=arrived), door=Door.DEAD_LETTER
         )
         for delivery in kept
     ]

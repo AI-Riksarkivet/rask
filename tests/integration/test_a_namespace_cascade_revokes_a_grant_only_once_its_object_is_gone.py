@@ -120,7 +120,9 @@ def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroy
     )
     assert {obj: held - kept for obj, held in governed.naming(governed_objects).items() if held - kept} == {}, "a grant outlived the object it was on"
     settings = get_settings()
-    left = [table for table in tables if maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "table", uuids[table]) is not None]
+    left = [
+        table for table in tables if maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "table", key=uuids[table]) is not None
+    ]
     assert left == [], "a policy outlived the table it was on"
     claims = location_claims.ClaimStore(control_root=settings.registry_root, storage_options=settings.storage_options())
     assert {table: location_claims.holder(claims, location) for table, location in locations.items()} == dict.fromkeys(tables), (

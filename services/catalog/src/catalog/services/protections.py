@@ -17,6 +17,6 @@ def read(settings: CatalogStore, kind: ProtectedKind, uuid: str) -> ProtectionRe
         OSError: The store failed the read.
     """
     try:
-        return protection.get_protection(settings.registry_root, settings.storage_options(), kind, uuid)
+        return protection.get_protection(settings.registry_root, settings.storage_options(), kind, uuid=uuid)
     except protection.UnreadableProtectionRecordError as exc:
         raise InternalError(str(exc)) from exc

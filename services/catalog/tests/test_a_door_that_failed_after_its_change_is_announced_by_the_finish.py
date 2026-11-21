@@ -477,7 +477,7 @@ def test_a_filing_whose_evidence_the_catalog_cannot_read_exactly_is_removed_unre
     filed["announcements"][0]["evidence"]["held"] = False
     settings = get_settings()
     key = f"{announcement_intents.PREFIX}/{'a' * 32}/{'b' * 32}.json"
-    conditional_records.create_json(settings.registry_root, settings.storage_options(), key, filed)
+    conditional_records.create_json(settings.registry_root, settings.storage_options(), key, record=filed)
     lanes.events.clear()
     caplog.set_level(logging.ERROR)
 
@@ -522,7 +522,7 @@ def _lapse_the_fence_on(location: str) -> None:
     assert found is not None and found.claim.fence is not None, "the drop fenced the claim before it ended"
     fence = found.claim.fence.model_copy(update={"at": found.claim.fence.at - 2 * location_claims.LEASE})
     lapsed = found.claim.model_copy(update={"fence": fence}).model_dump(mode="json")
-    conditional_records.replace_json(settings.registry_root, settings.storage_options(), location_claims.claim_key(location), lapsed, etag=found.etag)
+    conditional_records.replace_json(settings.registry_root, settings.storage_options(), location_claims.claim_key(location), record=lapsed, etag=found.etag)
 
 
 def _filed_ids(filing: Any) -> tuple[list[str], list[str]]:  # noqa: ANN401 — announcement_intents.Standing
@@ -686,7 +686,7 @@ def test_a_recoverable_drop_that_stalled_past_its_fence_acts_only_while_it_holds
         found = location_claims.read(table_claims.claim_store(settings), record.location)
         assert found is not None and found.claim.fence is not None
         taken = found.claim.model_copy(update={"fence": found.claim.fence.model_copy(update={"token": "f" * 32})}).model_dump(mode="json")
-        conditional_records.replace_json(root, so, location_claims.claim_key(record.location), taken, etag=found.etag)
+        conditional_records.replace_json(root, so, location_claims.claim_key(record.location), record=taken, etag=found.etag)
         other.append(record.model_copy(update={"drop": "f" * 32}))
         theirs.append(other[0])
 

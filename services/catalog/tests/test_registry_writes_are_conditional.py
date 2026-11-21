@@ -76,8 +76,8 @@ def test_a_deactivate_that_lands_INSIDE_the_write_window_is_not_overwritten(cont
         if fired["n"] == 0:
             fired["n"] = 1
             # t1 — the operator quarantines the warehouse, in the window this request opened.
-            warehouses.set_warehouse_status(root, so, "acme-wh", "deactivated")
-        real_replace(root, so, key, record, etag=etag)
+            warehouses.set_warehouse_status(root, so, "acme-wh", status="deactivated")
+        real_replace(root, so, key, record=record, etag=etag)
 
     monkeypatch.setattr(rec, "_replace_json", racing_replace)
 
@@ -145,7 +145,7 @@ def test_sustained_contention_surfaces_as_an_error_rather_than_a_silent_last_wri
         return {**record, "status": "active"}
 
     with pytest.raises(RecordChangedError):
-        warehouses.mutate_json(control_root, StorageOptions(), "_warehouses/acme-wh.json", always_moves, attempts=3)
+        warehouses.mutate_json(control_root, StorageOptions(), "_warehouses/acme-wh.json", mutate=always_moves, attempts=3)
     assert calls["n"] == 3, "the retry bound is not being honoured"
 
 
@@ -182,8 +182,8 @@ def test_a_protection_arm_that_lands_mid_recreate_is_not_reverted(control_root: 
         if fired["n"] == 0:
             fired["n"] = 1
             # An admin arms deletion protection through its door's write, inside the window this request opened.
-            projects.set_project_protection(root, so, "acme", ProtectionChange(protected=True, by="user:dex~anna"))
-        real_replace(root, so, key, record, etag=etag)
+            projects.set_project_protection(root, so, "acme", change=ProtectionChange(protected=True, by="user:dex~anna"))
+        real_replace(root, so, key, record=record, etag=etag)
 
     monkeypatch.setattr(rec, "_replace_json", racing_replace)
 

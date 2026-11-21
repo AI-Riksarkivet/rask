@@ -165,11 +165,11 @@ def test_a_doors_take_beaten_to_the_record_by_another_replica_waits_out_that_tur
 
     def _create(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, Any]) -> None:
         _beaten("create_json")
-        create(root_uri, storage_options, key, record)
+        create(root_uri, storage_options, key, record=record)
 
     def _replace(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, Any], *, etag: str) -> None:
         _beaten("replace_json")
-        replace(root_uri, storage_options, key, record, etag=etag)
+        replace(root_uri, storage_options, key, record=record, etag=etag)
 
     monkeypatch.setattr(conditional_records, "create_json", _create)
     monkeypatch.setattr(conditional_records, "replace_json", _replace)

@@ -58,7 +58,7 @@ class RecordExistsError(Exception):
     """Create refused: the key already exists — the STORE said so, not a possibly-stale read."""
 
 
-def create_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, Any]) -> None:
+def create_json(root_uri: str, storage_options: StorageOptions, key: str, *, record: dict[str, Any]) -> None:
     """Write ``record`` as JSON at ``<root_uri>/<key>`` iff the key does not exist.
 
     Raises :class:`RecordExistsError` when the key is already present (the lost-race signal), and
@@ -209,8 +209,8 @@ def mutate_json(
     root_uri: str,
     storage_options: StorageOptions,
     key: str,
-    mutate: Callable[[dict[str, Any]], dict[str, Any]],
     *,
+    mutate: Callable[[dict[str, Any]], dict[str, Any]],
     attempts: int = _MUTATE_ATTEMPTS,
 ) -> dict[str, Any]:
     """Read ``key``, apply ``mutate``, write it back only if nobody else wrote in between.
@@ -232,15 +232,15 @@ def mutate_json(
     Raises :class:`RecordMissingError` if the key is absent, and :class:`RecordChangedError` if
     ``attempts`` rounds all lose the race.
     """
-    return exchange_json(root_uri, storage_options, key, mutate, attempts=attempts)[1]
+    return exchange_json(root_uri, storage_options, key, mutate=mutate, attempts=attempts)[1]
 
 
 def exchange_json(
     root_uri: str,
     storage_options: StorageOptions,
     key: str,
-    mutate: Callable[[dict[str, Any]], dict[str, Any]],
     *,
+    mutate: Callable[[dict[str, Any]], dict[str, Any]],
     attempts: int = _MUTATE_ATTEMPTS,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Apply ``mutate`` to ``key`` as :func:`mutate_json` does, and also return the record the write replaced.
@@ -269,14 +269,14 @@ def exchange_json(
         record, etag = current
         updated = mutate(dict(record))
         try:
-            _replace_json(root_uri, storage_options, key, updated, etag=etag)
+            _replace_json(root_uri, storage_options, key, record=updated, etag=etag)
         except RecordChangedError:
             continue  # somebody else wrote; re-read and re-apply to THEIR record
         return record, updated
     raise RecordChangedError(f"record {key!r} under {root_uri!r} kept changing across {attempts} attempts")
 
 
-def replace_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, Any], *, etag: str) -> None:
+def replace_json(root_uri: str, storage_options: StorageOptions, key: str, *, record: dict[str, Any], etag: str) -> None:
     """Overwrite ``key`` with ``record`` iff the record there is still the one read with ``etag``, once and never retried.
 
     For a writer that judged the record at an EARLIER read and must act on that judgement or not at all (a door
@@ -287,10 +287,10 @@ def replace_json(root_uri: str, storage_options: StorageOptions, key: str, recor
     Raises:
         RecordChangedError: The record changed since that read.
     """
-    _replace_json(root_uri, storage_options, key, record, etag=etag)
+    _replace_json(root_uri, storage_options, key, record=record, etag=etag)
 
 
-def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, record: dict[str, Any], *, etag: str) -> None:
+def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, *, record: dict[str, Any], etag: str) -> None:
     """Overwrite ``key`` iff its current ETag is ``etag``. Raises :class:`RecordChangedError` if not.
 
     Private because the read and the write must not be separable by a caller: handing out a bare

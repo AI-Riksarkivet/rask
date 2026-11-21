@@ -53,7 +53,7 @@ def make_key(state: Path) -> None:
     (state / "issuer.pem").write_bytes(key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()))
 
 
-def serve(port: int, public: str, issuer: str, state: Path) -> None:
+def serve(port: int, public: str, issuer: str, *, state: Path) -> None:
     """Serve the discovery document and the key set until killed."""
     numbers = _key(state).public_key().public_numbers()
     documents = {
@@ -80,7 +80,7 @@ def serve(port: int, public: str, issuer: str, state: Path) -> None:
     http.server.ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
 
 
-def mint(state: Path, issuer: str, subject: str, audience: str, ttl: int, out: Path) -> None:
+def mint(state: Path, *, issuer: str, subject: str, audience: str, ttl: int, out: Path) -> None:
     """Write a token ``issuer`` signs for ``subject`` at ``audience``, living ``ttl`` seconds, in the claims k3s projects."""
     now = int(time.time())
     namespace, name = subject.split(":")[2:4]
@@ -130,9 +130,9 @@ def main() -> None:
         case "key":
             make_key(args.state)
         case "serve":
-            serve(args.port, args.public, args.issuer, args.state)
+            serve(args.port, args.public, args.issuer, state=args.state)
         case "mint":
-            mint(args.state, args.issuer, args.subject, args.audience, args.ttl, args.out)
+            mint(args.state, issuer=args.issuer, subject=args.subject, audience=args.audience, ttl=args.ttl, out=args.out)
         case "policy":
             print(policy(args.component, sys.stdin.read()))
 

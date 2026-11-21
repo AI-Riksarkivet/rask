@@ -172,14 +172,14 @@ def define(control_root: str, storage_options: StorageOptions, asked: LabelDefin
     # A definition deleted between the refused create and the evolution is created on the next round.
     for _ in range(_ROUNDS):
         try:
-            create_json(control_root, storage_options, key, asked.model_dump(mode="json"))
+            create_json(control_root, storage_options, key, record=asked.model_dump(mode="json"))
         except RecordExistsError:
             pass
         else:
             return asked, True
         try:
             replaced, written = exchange_json(
-                control_root, storage_options, key, lambda current: _evolved(_parsed(current, key=key), asked).model_dump(mode="json")
+                control_root, storage_options, key, mutate=lambda current: _evolved(_parsed(current, key=key), asked).model_dump(mode="json")
             )
         except RecordMissingError:
             continue
@@ -194,7 +194,7 @@ def _parsed(record: Mapping[str, Any], *, key: str) -> LabelDefinition:
         raise InternalError(f"the label definition at {key} cannot be read as one; write it again") from exc
 
 
-def definition(control_root: str, storage_options: StorageOptions, project: str, name: str) -> LabelDefinition | None:
+def definition(control_root: str, storage_options: StorageOptions, project: str, *, name: str) -> LabelDefinition | None:
     """The definition ``project`` holds under ``name``, or ``None``.
 
     Raises:
@@ -291,7 +291,7 @@ def _attachment(record: Mapping[str, Any], *, key: str) -> Attachment:
         raise InternalError(f"the labels record at {key} cannot be read as one; write the labels again") from exc
 
 
-def attachment_of(control_root: str, storage_options: StorageOptions, kind: LabelScope, object_uuid: str) -> Attachment | None:
+def attachment_of(control_root: str, storage_options: StorageOptions, kind: LabelScope, *, object_uuid: str) -> Attachment | None:
     """The attachment record of the object ``object_uuid``, or ``None`` when it was never labelled.
 
     Raises:
@@ -347,24 +347,24 @@ def attach(
     # A record ended between the refused create and the write is created on the next round.
     for _ in range(_ROUNDS):
         try:
-            create_json(control_root, storage_options, key, _with({}))
+            create_json(control_root, storage_options, key, record=_with({}))
             return
         except RecordExistsError:
             pass
         try:
-            mutate_json(control_root, storage_options, key, _with)
+            mutate_json(control_root, storage_options, key, mutate=_with)
             return
         except RecordMissingError:
             continue
     raise RecordChangedError(key)
 
 
-def forget(control_root: str, storage_options: StorageOptions, kind: LabelScope, object_uuid: str) -> None:
+def forget(control_root: str, storage_options: StorageOptions, kind: LabelScope, *, object_uuid: str) -> None:
     """Delete the attachment record of an object that ended while a label was being attached to it."""
     delete_record(control_root, storage_options, _attachment_key(kind, object_uuid))
 
 
-def detach(control_root: str, storage_options: StorageOptions, kind: LabelScope, object_uuid: str, *, name: str, actor: str | None) -> bool:
+def detach(control_root: str, storage_options: StorageOptions, kind: LabelScope, *, object_uuid: str, name: str, actor: str | None) -> bool:
     """Remove the label ``name`` from the object ``object_uuid``; whether it carried it.
 
     The record stays when its last label goes, holding none: deleting it could remove a label another request attached
@@ -384,7 +384,7 @@ def detach(control_root: str, storage_options: StorageOptions, kind: LabelScope,
         return attachment.model_copy(update={**kept, "set_by": actor}).model_dump(mode="json")
 
     try:
-        mutate_json(control_root, storage_options, key, _without)
+        mutate_json(control_root, storage_options, key, mutate=_without)
     except RecordMissingError:
         return False
     return True

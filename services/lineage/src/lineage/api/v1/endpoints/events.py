@@ -249,7 +249,7 @@ async def _visible_page(
         if len(visible) >= limit or not left:
             await _finish(ahead)
             break
-        want = _next_chunk(limit, len(records), len(visible), left, reads)
+        want = _next_chunk(limit, len(records), len(visible), left=left, reads=reads)
         reads += 1
         if ahead is None:
             read = await window.take(want)
@@ -266,7 +266,7 @@ async def _visible_page(
     return records, visible
 
 
-def _next_chunk(limit: int, read: int, visible: int, left: int, reads: int) -> int:
+def _next_chunk(limit: int, read: int, visible: int, *, left: int, reads: int) -> int:
     """How many of the ``left`` rows of its window a page reads next, after ``reads`` reads of ``read`` rows of which
     ``visible`` were visible: the rest of them on its last read, and before it eight times the rows read while none was
     visible, else four times the rows the visible share says the page still needs."""
@@ -305,6 +305,7 @@ def _forward_cursor(returned: list[EventRecord], records: list[EventRecord], *, 
 
 @router.get("/events/projection")
 async def get_events_projection(
+    *,
     request: Request,
     provenance: ProvenanceDep,
     settings: SettingsDep,
@@ -356,6 +357,7 @@ async def get_events_projection(
 
 @router.get("/events")
 async def get_events(
+    *,
     provenance: ProvenanceDep,
     datasets: FilterDep,
     settings: SettingsDep,
@@ -414,7 +416,7 @@ async def get_events(
         return governs[record.seq]
 
     async def judge(read: list[EventRecord]) -> list[EventRecord]:
-        return await governed(datasets, settings.fga_enabled, [record for record in read if scope.names(record)], governed_by)
+        return await governed(datasets, settings.fga_enabled, [record for record in read if scope.names(record)], refs=governed_by)
 
     def undecided(read: list[EventRecord]) -> int:
         return datasets.undecided(obj for record in read if scope.names(record) for obj in governed_by(record).objects)

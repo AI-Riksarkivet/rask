@@ -324,8 +324,8 @@ async def _claim(
     registry_root: str,
     storage_options: StorageOptions,
     scope: str,
-    key: str,
     *,
+    key: str,
     binding: idempotency_records.KeyBinding,
     digest: str,
     captured: idempotency_records.Captured | None,
@@ -449,12 +449,12 @@ class KeyedDoor(BaseModel):
         key = self.key.lower()
         binding = idempotency_records.KeyBinding(endpoint=f"{self.endpoint}{qualifier}", target=target)
         return await _claim(
-            self.registry_root, self.storage_options, self.scope, key, binding=binding, digest=await _digest_of(self._request), captured=captured
+            self.registry_root, self.storage_options, self.scope, key=key, binding=binding, digest=await _digest_of(self._request), captured=captured
         )
 
 
 async def keyed_door(
-    request: Request, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken, idempotency_key: IdempotencyKeyHeader = None
+    request: Request, settings: SettingsDep, so: StorageOptionsDep, *, token: CurrentToken, idempotency_key: IdempotencyKeyHeader = None
 ) -> AsyncIterator[KeyedDoor]:
     """The door's :class:`KeyedDoor`; a refusal the door raises after its claim gives the claim back ([[LH-487]]).
 

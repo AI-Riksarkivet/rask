@@ -173,13 +173,13 @@ async def test_a_renamed_tables_writes_pass_lineages_checks(
             return None
 
     app = _lineage_app(decider)
-    await enforce_bus_authz(RunEvent.model_validate(write), app, settings, write)
+    await enforce_bus_authz(RunEvent.model_validate(write), app, settings, arrived=write)
     await stamp_resolved_uuids(outside, cast(CatalogNames, _Catalog()), bearer="pipeline-token")
-    await enforce_output_authz(outside, app, settings, caller)
+    await enforce_output_authz(outside, app, settings, token=caller)
     catalog = event_signer(CATALOG)
     secret_store.hold(f"signing-public-{CATALOG}", {"keys": catalog.public})
     announced = catalog.sign(_announced_rename(renamed), on_behalf_of=PIPELINE)
     assert announced["dataset"]["facets"]["lifecycleStateChange"]["previousIdentifier"] == {"namespace": CATALOG_NAMESPACE, "name": "lance_catalog$acme$t"}
     app.state.published_keys = store_published_keys()
     signed = LineageSettings.model_validate({**auth, "signing": Signing(signers=frozenset({CATALOG}), delegators=frozenset({CATALOG}))})
-    await enforce_bus_authz(parse_event(announced), app, signed, announced)
+    await enforce_bus_authz(parse_event(announced), app, signed, arrived=announced)

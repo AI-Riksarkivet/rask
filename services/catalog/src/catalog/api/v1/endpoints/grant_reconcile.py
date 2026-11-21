@@ -53,7 +53,7 @@ async def grant_census(settings: SettingsDep, client: FgaClientDep) -> GrantCens
 
 @management_router.post("/ghosts/revoke")
 async def revoke_ghost_grants(
-    body: GhostRevokeRequest, request: Request, settings: SettingsDep, client: FgaClientDep, token: CurrentToken
+    *, body: GhostRevokeRequest, request: Request, settings: SettingsDep, client: FgaClientDep, token: CurrentToken
 ) -> GhostRevokeResponse:
     """Revoke every grant on each object no registry names, as a drift report found them.
 
@@ -91,7 +91,7 @@ async def _claim_refusal(request: Request, settings: Settings, claim: location_c
 
 
 @management_router.post("/tenancy/rebuild")
-async def rebuild_warehouse_tenancy(body: TenancyRebuildRequest, settings: SettingsDep, client: FgaClientDep, token: CurrentToken) -> TenancyRebuildResponse:
+async def rebuild_warehouse_tenancy(*, body: TenancyRebuildRequest, settings: SettingsDep, client: FgaClientDep, token: CurrentToken) -> TenancyRebuildResponse:
     """Write each warehouse's tenancy edge, ``project:<p> project warehouse:<id>``, as its registry record names it.
 
     A structural edge confers nothing on its own, so rebuilding it re-grants no one; a warehouse whose record names no

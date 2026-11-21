@@ -34,7 +34,9 @@ def _claimed(control_root: Path, descendants: list[GovernedObject]) -> ClaimStor
     claims = ClaimStore(control_root=str(control_root))
     for item in descendants:
         if item.kind == "table":
-            location_claims.take(claims, _location(item.segments), "$".join(item.segments), item.segments, is_gone=lambda _claim: False, uuid=item.uuid)
+            location_claims.take(
+                claims, _location(item.segments), "$".join(item.segments), segments=item.segments, is_gone=lambda _claim: False, uuid=item.uuid
+            )
     return claims
 
 

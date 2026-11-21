@@ -589,7 +589,7 @@ class Admitted(BaseModel):
     ending: clone_ending_records.CloneEnding | None = None
 
 
-def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], relative: str, context: RegistrationContext) -> RegistrationVerdict:
+def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: list[str], *, relative: str, context: RegistrationContext) -> RegistrationVerdict:
     """Judge the dataset a registration just attached ([[LH-279]]); it writes nothing.
 
     In order: the location the backend RESOLVED, under the root of the table's own warehouse; no other

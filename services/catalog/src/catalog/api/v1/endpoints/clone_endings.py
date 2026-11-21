@@ -49,7 +49,7 @@ async def list_clone_endings(settings: SettingsDep) -> CloneEndingsResponse:
 
 @management_router.post("/{digest}/{filing}/finish")
 async def finish_clone_ending(
-    digest: DigestPath, filing: FilingPath, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken
+    *, digest: DigestPath, filing: FilingPath, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken
 ) -> CloneEndingFinishResponse:
     """Release what the door that ended a registered clone named (its tag on each source, its base record where its bytes
     went, its location's claim, fenced while the finish acts), and remove the ending last.
@@ -61,7 +61,7 @@ async def finish_clone_ending(
     """
     subject = token.subject if token is not None else None
     try:
-        outcome = await run_in_threadpool(clone_endings.finish, ns, settings, digest, filing, token=uuid4().hex)
+        outcome = await run_in_threadpool(clone_endings.finish, ns, settings, digest, filing=filing, token=uuid4().hex)
     except LanceNamespaceError as refused:
         audit(AuditAction.CLONE_ENDING_FINISH, AuditOutcome.FAILURE, subject=subject, resource=f"clone_ending:{digest}/{filing}", reason=str(refused)[:300])
         raise

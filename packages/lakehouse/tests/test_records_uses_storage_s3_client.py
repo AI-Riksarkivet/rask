@@ -72,7 +72,7 @@ _SO = StorageOptions.from_flat(
 def test_create_json_builds_its_client_through_the_storage_seam(seam: tuple[_RecordingClient, list[tuple[Any, dict[str, Any]]]]) -> None:
     client, built = seam
 
-    conditional_records.create_json("s3://ctrl/prefix", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
+    conditional_records.create_json("s3://ctrl/prefix", _SO, "_warehouses/wh-a.json", record={"id": "wh-a"})
 
     assert built, "create_json did not build its client via storage.client.s3_client"
     endpoint, kwargs = built[0]
@@ -84,7 +84,7 @@ def test_create_json_builds_its_client_through_the_storage_seam(seam: tuple[_Rec
 def test_mutate_json_builds_its_client_through_the_storage_seam(seam: tuple[_RecordingClient, list[tuple[Any, dict[str, Any]]]]) -> None:
     client, built = seam
 
-    conditional_records.mutate_json("s3://ctrl/prefix", _SO, "_warehouses/wh-a.json", lambda r: {**r, "status": "deactivated"}, attempts=1)
+    conditional_records.mutate_json("s3://ctrl/prefix", _SO, "_warehouses/wh-a.json", mutate=lambda r: {**r, "status": "deactivated"}, attempts=1)
 
     assert built, "mutate_json did not build its client via storage.client.s3_client"
     assert all(kwargs == {"key_pair": _SO.key_pair, "region": "eu-north-1"} for _endpoint, kwargs in built)
@@ -100,7 +100,7 @@ def test_a_storage_options_without_a_region_still_reaches_the_seam(seam: tuple[_
         "s3://ctrl",
         StorageOptions.from_flat({"endpoint": "http://rf:9000", "access_key_id": "ak", "secret_access_key": "sk"}),
         "_projects/acme.json",
-        {"id": "acme"},
+        record={"id": "acme"},
     )
 
     assert built[0][1]["region"] == "us-east-1"

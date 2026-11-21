@@ -146,7 +146,7 @@ class _EveryNameHolds(Resolver):
 
 
 def _authorize(template: str, body: dict[str, object] | None = None, query: str = "") -> None:
-    asyncio.run(route_guard.authorize(_request(template, body or {}, query), _settings(), _token(), _CLIENT, _EveryNameHolds()))
+    asyncio.run(route_guard.authorize(_request(template, body or {}, query), _settings(), _token(), injected=_CLIENT, resolver=_EveryNameHolds()))
 
 
 _UNDECLARED = "a_verb_nobody_declared"
@@ -300,7 +300,11 @@ def test_every_guarded_route_resolves_to_a_declared_rung_and_every_write_reaches
         return
     assert len(judged) == 1, f"{template}?{query} asks {asked} without the write judge"
     judged.clear()
-    asyncio.run(route_guard.authorize(_request(template, {}, query), _settings().model_copy(update={"fga_enabled": False}), None, None, _EveryNameHolds()))
+    asyncio.run(
+        route_guard.authorize(
+            _request(template, {}, query), _settings().model_copy(update={"fga_enabled": False}), None, injected=None, resolver=_EveryNameHolds()
+        )
+    )
     assert len(judged) == 1, f"{template}?{query} skips the write judge with FGA off"
 
 

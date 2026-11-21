@@ -199,8 +199,8 @@ def _refuse_what_its_bytes_cannot_carry(data: bytes, messages: Iterable[tuple[by
             if inflated > max_bytes:
                 raise ArrowBodyTooLargeError(f"the body inflates to at least {inflated:,} bytes, over the {max_bytes:,}-byte limit on a body")
         ceiling = _VALUES_PER_BYTE * inflated
-        rows = _scalar(metadata, batch, 0, "<q")
-        nodes = [_read(metadata, "<q", at) for at in _vector(metadata, batch, 1, _FIELD_NODE_WIDTH)]
+        rows = _scalar(metadata, batch, 0, fmt="<q")
+        nodes = [_read(metadata, "<q", at) for at in _vector(metadata, batch, 1, width=_FIELD_NODE_WIDTH)]
         for field, count in ((-1, rows), *enumerate(nodes)):
             if count < 0:
                 raise ArrowBodyError(f"a batch declares a negative count ({count})")
@@ -215,7 +215,7 @@ def _refuse_what_its_bytes_cannot_carry(data: bytes, messages: Iterable[tuple[by
 def _growth_on_inflating(metadata: bytes, batch: int, body: memoryview) -> int:
     """How many bytes a compressed batch's buffers gain as they are inflated, read from their length prefixes."""
     growth = 0
-    for at in _vector(metadata, batch, 2, _BUFFER_WIDTH):
+    for at in _vector(metadata, batch, 2, width=_BUFFER_WIDTH):
         offset, stored = _read(metadata, "<q", at), _read(metadata, "<q", at + 8)
         if stored == 0:
             continue
@@ -253,7 +253,7 @@ def _file_messages(data: bytes) -> Iterator[tuple[bytes, pa.Buffer | None]]:
         raise ArrowBodyError("the file's footer lies outside the file")
     footer = data[end - size : end]
     root = _read(footer, "<I", 0)
-    dictionaries, records = (list(_vector(footer, root, slot, _BLOCK_WIDTH)) for slot in (2, 3))
+    dictionaries, records = (list(_vector(footer, root, slot, width=_BLOCK_WIDTH)) for slot in (2, 3))
     if len(records) != batches:
         raise ArrowBodyError(f"the file's footer names {len(records)} batches here and {batches} to the reader")
     whole = pa.py_buffer(data)
@@ -268,13 +268,13 @@ def _file_messages(data: bytes) -> Iterator[tuple[bytes, pa.Buffer | None]]:
 def _batch_in(metadata: bytes) -> tuple[int | None, int] | None:
     """The record batch a message carries, as its dictionary id (None for a record batch) and the table's position."""
     message = _read(metadata, "<I", 0)
-    kind, header = _scalar(metadata, message, 1, "<B"), _offset(metadata, message, 2)
+    kind, header = _scalar(metadata, message, 1, fmt="<B"), _offset(metadata, message, 2)
     if header is None:
         return None
     if kind == _RECORD_BATCH:
         return None, header
     if kind == _DICTIONARY_BATCH and (data := _offset(metadata, header, 1)) is not None:
-        return _scalar(metadata, header, 0, "<q"), data
+        return _scalar(metadata, header, 0, fmt="<q"), data
     return None
 
 
@@ -295,7 +295,7 @@ def _field_at(buffer: bytes, table: int, slot: int) -> int | None:
     return table + relative if relative else None
 
 
-def _scalar(buffer: bytes, table: int, slot: int, fmt: str) -> int:
+def _scalar(buffer: bytes, table: int, slot: int, *, fmt: str) -> int:
     """A scalar field; every one read here defaults to zero when absent (Message.fbs)."""
     at = _field_at(buffer, table, slot)
     return 0 if at is None else _read(buffer, fmt, at)
@@ -306,7 +306,7 @@ def _offset(buffer: bytes, table: int, slot: int) -> int | None:
     return None if at is None else at + _read(buffer, "<I", at)
 
 
-def _vector(buffer: bytes, table: int, slot: int, width: int) -> range:
+def _vector(buffer: bytes, table: int, slot: int, *, width: int) -> range:
     """The positions of a vector's ``width``-byte elements, checked to lie inside ``buffer`` as a whole."""
     start = _offset(buffer, table, slot)
     if start is None:

@@ -140,7 +140,7 @@ def token(state: Path, sub: str = CATALOG, *, aud: str = AUDIENCE, ttl: int = 60
     return jwt.encode(claims, _key(state, key), algorithm="RS256", headers={"kid": "measure"})
 
 
-def admin(endpoint: str, method: str, path: str, params: dict[str, str], body: bytes = b"") -> tuple[int, str]:
+def admin(endpoint: str, method: str, path: str, *, params: dict[str, str], body: bytes = b"") -> tuple[int, str]:
     req = AWSRequest(method=method, url=f"{endpoint}{path}", params=params, data=body)
     S3SigV4Auth(Credentials(*_root()), "s3", REGION).add_auth(req)
     prepared = req.prepare()
@@ -160,7 +160,7 @@ def s3(endpoint: str, creds: Session) -> S3Client:
     )
 
 
-def exchange(endpoint: str, web_token: str, policy: Policy | None = None, duration: int = 900) -> Session:
+def exchange(endpoint: str, web_token: str, policy: Policy | None = None, *, duration: int = 900) -> Session:
     sts = boto3.client("sts", endpoint_url=endpoint, region_name=REGION, config=Config(signature_version=UNSIGNED, retries={"max_attempts": 1}))
     kwargs: dict[str, object] = {
         "RoleArn": "arn:aws:iam::000000000000:role/vend",
@@ -244,7 +244,7 @@ def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
             }
         ],
     }
-    status, text = admin(endpoint, "PUT", "/rustfs/admin/v3/add-canned-policy", {"name": CATALOG}, json.dumps(canned).encode())
+    status, text = admin(endpoint, "PUT", "/rustfs/admin/v3/add-canned-policy", params={"name": CATALOG}, body=json.dumps(canned).encode())
     record(status == 200, "a canned policy named by the catalog's ServiceAccount subject (colons) is created", f"{status} {text}")
 
     with_none = refused(lambda: exchange(endpoint, token(state)))
@@ -329,8 +329,8 @@ def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
     record(issuer != "issued", "a token from another issuer is refused", issuer)
 
     user = json.dumps({"secretKey": secrets.token_urlsafe(30), "status": "enabled"}).encode()
-    status, _ = admin(endpoint, "PUT", "/rustfs/admin/v3/add-user", {"accessKey": "rask-catalog"}, user)
-    status_list, listed = admin(endpoint, "GET", "/rustfs/admin/v3/list-users", {})
+    status, _ = admin(endpoint, "PUT", "/rustfs/admin/v3/add-user", params={"accessKey": "rask-catalog"}, body=user)
+    status_list, listed = admin(endpoint, "GET", "/rustfs/admin/v3/list-users", params={})
     record(
         status == 200 and status_list == 200 and "rask-catalog" in listed,
         "list-users answers plain JSON naming a regular user",
@@ -341,8 +341,8 @@ def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
         "list-users names no STS session",
         "sessions absent" if write.access_key_id not in listed else "a session is listed",
     )
-    removed, _ = admin(endpoint, "DELETE", "/rustfs/admin/v3/remove-user", {"accessKey": "rask-catalog"})
-    again, text = admin(endpoint, "DELETE", "/rustfs/admin/v3/remove-user", {"accessKey": "rask-catalog"})
+    removed, _ = admin(endpoint, "DELETE", "/rustfs/admin/v3/remove-user", params={"accessKey": "rask-catalog"})
+    again, text = admin(endpoint, "DELETE", "/rustfs/admin/v3/remove-user", params={"accessKey": "rask-catalog"})
     record(removed == 200 and again == 404, "remove-user removes a user, then answers 404 for it", f"{removed}, then {again} {text[:80]}")
 
     failed = [r for r in RESULTS if not r[0]]

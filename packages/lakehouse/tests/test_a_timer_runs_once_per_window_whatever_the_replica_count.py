@@ -121,7 +121,7 @@ async def test_a_claim_of_the_next_window_by_a_store_clock_a_little_ahead_is_lef
     period = 600
     following = datetime.fromtimestamp((datetime.now(UTC).timestamp() // period + 1) * period, UTC).isoformat()
     claim = {"timer": "relay", "window": following, "claimed_at": following, "by": "pod-2"}
-    conditional_records.create_json(str(tmp_path), StorageOptions(), claim_key("relay"), claim)
+    conditional_records.create_json(str(tmp_path), StorageOptions(), claim_key("relay"), record=claim)
 
     turn = await _replica(tmp_path, ran, holder="pod-1", period=period).turn()
 
@@ -140,7 +140,7 @@ async def test_a_claim_dated_more_than_a_period_after_the_stores_own_time_is_cla
         str(tmp_path),
         StorageOptions(),
         claim_key("relay"),
-        {"timer": "relay", "window": ahead, "claimed_at": ahead, "by": "a-clock-ahead"},
+        record={"timer": "relay", "window": ahead, "claimed_at": ahead, "by": "a-clock-ahead"},
     )
 
     turn = await _replica(tmp_path, ran, holder="pod-1", period=600).turn()

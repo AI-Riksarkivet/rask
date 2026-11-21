@@ -126,7 +126,7 @@ def record_author(
     record = CommitAuthor(author=author, transaction_uuid=transaction_uuid, ref=ref, version=version, manifest=manifest)
     key = _author_key(table_uuid, transaction_uuid, version)
     try:
-        conditional_records.create_json(control_root, storage_options, key, record.model_dump())
+        conditional_records.create_json(control_root, storage_options, key, record=record.model_dump())
     except conditional_records.RecordExistsError:
         recorded = _read(control_root, storage_options, key)
         if recorded is None or (recorded.author, recorded.ref) != (author, ref):
@@ -230,7 +230,7 @@ def read_marks(control_root: str, storage_options: StorageOptions, table_uuid: s
         return CommitMarks()
 
 
-def write_marks(control_root: str, storage_options: StorageOptions, table_uuid: str, marks: CommitMarks) -> None:
+def write_marks(control_root: str, storage_options: StorageOptions, table_uuid: str, *, marks: CommitMarks) -> None:
     """Replace the table's marks. Two passes racing may write a lower mark over a higher one, which costs a re-read of
     versions already announced and never skips one: every mark a pass writes is one it verified."""
-    put_record(control_root, storage_options, record_key(MARKS_PREFIX, "table", table_uuid), marks.model_dump())
+    put_record(control_root, storage_options, record_key(MARKS_PREFIX, "table", table_uuid), record=marks.model_dump())

@@ -49,10 +49,10 @@ def test_a_table_ended_inside_a_pass_keeps_no_copy_of_its_records(moto_url: str,
     control = f"s3://{bucket}"
     options: StorageOptions = lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
     table = str(uuid.uuid4())
-    file_identities.record(control, options, table, _committed(str(uuid.uuid4())))
+    file_identities.record(control, options, table, committed=_committed(str(uuid.uuid4())))
     if copied_before:
         file_identities.recorded_and_copied(control, options, table)
-        file_identities.record(control, options, table, _committed(str(uuid.uuid4())))
+        file_identities.record(control, options, table, committed=_committed(str(uuid.uuid4())))
     read = file_identities._read_record
 
     def _ended_once_read(control_root: str, storage_options: StorageOptions, key: str) -> file_identities.CommittedFiles | None:

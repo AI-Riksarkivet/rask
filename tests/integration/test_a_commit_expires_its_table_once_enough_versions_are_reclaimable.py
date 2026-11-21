@@ -108,7 +108,7 @@ def _table_with(
     described = str(namespace.describe_table(DescribeTableRequest(id=TABLE.split("$"))).location)
     table_uuid = str(uuid.uuid4())
     claims = location_claims.ClaimStore(control_root=root, storage_options=options)
-    location_claims.take(claims, described, TABLE, list[str](TABLE.split("$")), is_gone=lambda _claim: False, uuid=table_uuid)
+    location_claims.take(claims, described, TABLE, segments=list[str](TABLE.split("$")), is_gone=lambda _claim: False, uuid=table_uuid)
     if policy is not None:
         seeding.put_policy(root, options, {"kind": "table", "id": TABLE, "uuid": table_uuid, **policy})
     return TableTask(uuid=table_uuid, location=described)

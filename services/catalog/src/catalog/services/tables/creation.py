@@ -363,8 +363,8 @@ def create_table(
     ns: LanceNamespace,
     so: StorageOptions,
     segments: list[str],
-    table: pa.Table,
     *,
+    table: pa.Table,
     root: str,
     mode: str | CreateMode | None = None,
     properties: dict[str, str] | None = None,
@@ -474,7 +474,7 @@ def create_table(
                 properties=properties,
                 transaction_properties=transaction_properties,
             )
-            _record_written(registry, existing, so, dataset, author=recorded_author)
+            _record_written(registry, existing, so, written=dataset, author=recorded_author)
             return CreateTableResponse(location=existing, version=dataset.version)
         if normalized is CreateMode.EXIST_OK:  # keep it untouched, just report its current version
             return _kept_at(existing, so)
@@ -488,14 +488,14 @@ def create_table(
         if overwriting is not None:
             overwriting.require_held()
         if registry is not None:
-            table_claims.take(ns, _claim_store(registry), existing, holder, segments)
+            table_claims.take(ns, _claim_store(registry), existing, table=holder, segments=segments)
         return _write_blob_into(
             ns,
             _named_by_its_uuid(table, existing, registry),
-            existing,
-            so,
-            segments,
-            properties,
+            location=existing,
+            so=so,
+            segments=segments,
+            properties=properties,
             external_blob_bases=external_blob_bases,
             data_bases=data_bases,
             registry=registry,
@@ -518,10 +518,10 @@ def create_table(
     return _write_blob_into(
         ns,
         _named_by_its_uuid(table, location, registry),
-        location,
-        so,
-        segments,
-        properties,
+        location=location,
+        so=so,
+        segments=segments,
+        properties=properties,
         external_blob_bases=external_blob_bases,
         data_bases=data_bases,
         registry=registry,
@@ -552,7 +552,7 @@ def _claimed_uuid(registry: base_registry.BaseRegistry, location: str) -> str:
     return claim.claim.uuid
 
 
-def _record_written(registry: base_registry.BaseRegistry | None, location: str, so: StorageOptions, written: lance.LanceDataset, *, author: str | None) -> None:
+def _record_written(registry: base_registry.BaseRegistry | None, location: str, so: StorageOptions, *, written: lance.LanceDataset, author: str | None) -> None:
     """Record what the create door's write added ([[LH-419]]) and the author it was made for (ADR 0187), under the uuid the
     location's claim records; nothing for a caller outside governance. ``write_dataset`` writes and commits in one call, so
     both are recorded once it lands (:func:`committed_files.record_landed`, :func:`commit_authors.record_landed`)."""
@@ -569,7 +569,7 @@ def _record_written(registry: base_registry.BaseRegistry | None, location: str, 
         return uuids[0]
 
     def record_files(committed: file_identities.CommittedFiles) -> None:
-        file_identities.record(registry.control_root, registry.storage_options, table_uuid(), committed)
+        file_identities.record(registry.control_root, registry.storage_options, table_uuid(), committed=committed)
 
     def record_author(transaction_uuid: str, version: int) -> None:
         if author is not None:
@@ -611,11 +611,11 @@ def _claim_store(registry: base_registry.BaseRegistry) -> location_claims.ClaimS
 def _write_blob_into(
     ns: LanceNamespace,
     table: pa.Table,
+    *,
     location: str,
     so: StorageOptions,
     segments: list[str],
     properties: dict[str, str] | None,
-    *,
     external_blob_bases: list[str],
     data_bases: list[str] | None = None,
     registry: base_registry.BaseRegistry | None,
@@ -696,7 +696,7 @@ def _write_blob_into(
                 raise InvalidInputError(f"the table's schema holds a type Lance does not store: {clean_lance_message(str(exc))}") from exc
             raise
         raise InternalError("the table's first write panicked in Lance; the create was rolled back and may be retried") from exc
-    _record_written(registry, location, so, dataset, author=recorded_author)
+    _record_written(registry, location, so, written=dataset, author=recorded_author)
     return CreateTableResponse(location=location, version=dataset.version)
 
 

@@ -80,7 +80,7 @@ def test_schema_has_blob_and_blob_field_names() -> None:
 def test_create_table_writes_blob_at_2_2_and_roundtrips(tmp_path: Path) -> None:
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "db")
-    resp = create_table(ns, StorageOptions(), ["db", "clips"], _blob_table(), root=str(tmp_path), mode="create", registry=None)
+    resp = create_table(ns, StorageOptions(), ["db", "clips"], table=_blob_table(), root=str(tmp_path), mode="create", registry=None)
 
     assert resp.location
     dataset = _open(ns, ["db", "clips"])
@@ -107,7 +107,7 @@ def test_create_table_writes_plain_schema_at_2_2_with_stable_row_ids(tmp_path: P
     monkeypatch.setattr(lance, "write_dataset", _spy)
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "db")
-    create_table(ns, StorageOptions(), ["db", "plain"], pa.table({"id": [1, 2, 3]}), root=str(tmp_path), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["db", "plain"], table=pa.table({"id": [1, 2, 3]}), root=str(tmp_path), mode="create", registry=None)
 
     dataset = _open(ns, ["db", "plain"])
     assert passed == ["2.2"], f"the create door must pin the version, not inherit pylance's default: {passed}"
@@ -119,8 +119,8 @@ def test_create_table_writes_plain_schema_at_2_2_with_stable_row_ids(tmp_path: P
 def test_overwrite_replaces_existing_blob_table(tmp_path: Path) -> None:
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "db")
-    create_table(ns, StorageOptions(), ["db", "o1"], _blob_table([b"a", b"b", b"c"]), root=str(tmp_path), mode="create", registry=None)
-    resp = create_table(ns, StorageOptions(), ["db", "o1"], _blob_table([b"z"]), root=str(tmp_path), mode="overwrite", registry=None)
+    create_table(ns, StorageOptions(), ["db", "o1"], table=_blob_table([b"a", b"b", b"c"]), root=str(tmp_path), mode="create", registry=None)
+    resp = create_table(ns, StorageOptions(), ["db", "o1"], table=_blob_table([b"z"]), root=str(tmp_path), mode="overwrite", registry=None)
 
     dataset = _open(ns, ["db", "o1"])
     assert dataset.count_rows() == 1  # replaced 3 rows with 1
@@ -131,8 +131,8 @@ def test_overwrite_replaces_existing_blob_table(tmp_path: Path) -> None:
 def test_exist_ok_keeps_existing_blob_table(tmp_path: Path) -> None:
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "db")
-    create_table(ns, StorageOptions(), ["db", "e1"], _blob_table([b"a", b"b"]), root=str(tmp_path), mode="create", registry=None)
-    second = create_table(ns, StorageOptions(), ["db", "e1"], _blob_table([b"z"]), root=str(tmp_path), mode="exist_ok", registry=None)
+    create_table(ns, StorageOptions(), ["db", "e1"], table=_blob_table([b"a", b"b"]), root=str(tmp_path), mode="create", registry=None)
+    second = create_table(ns, StorageOptions(), ["db", "e1"], table=_blob_table([b"z"]), root=str(tmp_path), mode="exist_ok", registry=None)
 
     # ExistOk keeps the existing table untouched — the 1-row payload is NOT written over the original 2.
     assert second.location
@@ -151,7 +151,7 @@ def test_exist_ok_on_declared_only_table_writes_instead_of_500(tmp_path: Path) -
     _declare_namespace(ns, "db")
     ns.declare_table(DeclareTableRequest(id=["db", "d1"]))
 
-    resp = create_table(ns, StorageOptions(), ["db", "d1"], _blob_table([b"first"]), root=str(tmp_path), mode="exist_ok", registry=None)
+    resp = create_table(ns, StorageOptions(), ["db", "d1"], table=_blob_table([b"first"]), root=str(tmp_path), mode="exist_ok", registry=None)
 
     assert resp.location
     dataset = _open(ns, ["db", "d1"])
@@ -191,7 +191,7 @@ def test_a_create_whose_write_and_rollback_both_fail_answers_the_write_and_logs_
             cast("LanceNamespace", _DropRefused(real)),
             StorageOptions(),
             ["db", "plain"],
-            pa.table({"id": [1]}),
+            table=pa.table({"id": [1]}),
             root=str(tmp_path),
             mode="create",
             registry=None,
@@ -225,7 +225,7 @@ def test_rename_rejects_a_blank_name_and_keeps_the_source(tmp_path: Path) -> Non
 
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "db")
-    create_table(ns, StorageOptions(), ["db", "keep"], _blob_table([b"x"]), root=str(tmp_path), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["db", "keep"], table=_blob_table([b"x"]), root=str(tmp_path), mode="create", registry=None)
 
     for blank in ("", "   "):
         with pytest.raises(InvalidInputError):
@@ -233,7 +233,7 @@ def test_rename_rejects_a_blank_name_and_keeps_the_source(tmp_path: Path) -> Non
                 ns,
                 table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["db", "keep"]),
                 blank,
-                None,
+                new_namespace_id=None,
                 so=StorageOptions(),
                 claims=ClaimStore(control_root=str(tmp_path)),
                 root=str(tmp_path),
@@ -246,14 +246,14 @@ def test_rename_onto_itself_is_rejected(tmp_path: Path) -> None:
 
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "db")
-    create_table(ns, StorageOptions(), ["db", "same"], _blob_table([b"x"]), root=str(tmp_path), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["db", "same"], table=_blob_table([b"x"]), root=str(tmp_path), mode="create", registry=None)
 
     with pytest.raises(InvalidInputError):
         rename_table(
             ns,
             table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["db", "same"]),
             "same",
-            None,
+            new_namespace_id=None,
             so=StorageOptions(),
             claims=ClaimStore(control_root=str(tmp_path)),
             root=str(tmp_path),
@@ -268,7 +268,7 @@ def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> N
 
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "media")
-    create_table(ns, StorageOptions(), ["media", "src"], _blob_table([b"x"]), root=str(tmp_path), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["media", "src"], table=_blob_table([b"x"]), root=str(tmp_path), mode="create", registry=None)
     ns.declare_table(DeclareTableRequest(id=["media", "stub"]))  # declared-but-unwritten destination
 
     with pytest.raises(TableAlreadyExistsError):
@@ -276,7 +276,7 @@ def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> N
             ns,
             table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["media", "src"]),
             "stub",
-            None,
+            new_namespace_id=None,
             so=StorageOptions(),
             claims=ClaimStore(control_root=str(tmp_path)),
             root=str(tmp_path),
@@ -302,7 +302,7 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
 
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "media")
-    create_table(ns, StorageOptions(), ["media", "a"], _blob_table([b"x", b"y"]), root=str(tmp_path), mode="create", registry=None)
+    create_table(ns, StorageOptions(), ["media", "a"], table=_blob_table([b"x", b"y"]), root=str(tmp_path), mode="create", registry=None)
     source = ns.describe_table(DescribeTableRequest(id=["media", "a"])).location
 
     def _fails(request: DeregisterTableRequest) -> None:
@@ -316,7 +316,7 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
             ns,
             table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["media", "a"]),
             "b",
-            None,
+            new_namespace_id=None,
             so=StorageOptions(),
             claims=ClaimStore(control_root=str(tmp_path)),
             root=str(tmp_path),
@@ -333,7 +333,7 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
             ns,
             table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["media", "a"]),
             "c",
-            None,
+            new_namespace_id=None,
             so=StorageOptions(),
             claims=ClaimStore(control_root=str(tmp_path)),
             root=str(tmp_path),

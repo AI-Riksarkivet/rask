@@ -121,7 +121,7 @@ def test_backlog_reports_depth_and_oldest_age(tmp_path: Any) -> None:
     uri = _uri(tmp_path)
     assert outbox.backlog(uri, StorageOptions()) == (0, 0.0)  # empty must report 0, not go stale
     for i in range(3):
-        outbox.stage_event(uri, StorageOptions(), f"run-{i}", "{}")
+        outbox.stage_event(uri, StorageOptions(), f"run-{i}", event_json="{}")
     depth, age = outbox.backlog(uri, StorageOptions())
     assert depth == 3
     assert age >= 0.0  # a real, non-negative age for the OLDEST staged event
@@ -132,7 +132,7 @@ def test_list_events_is_bounded_and_oldest_first(tmp_path: Any) -> None:
     # what the outbox exists to survive — could OOM/stall the tick. Cap it, oldest-first so nothing starves.
     uri = _uri(tmp_path)
     for i in range(5):
-        outbox.stage_event(uri, StorageOptions(), f"run-{i}", "{}")
+        outbox.stage_event(uri, StorageOptions(), f"run-{i}", event_json="{}")
         time.sleep(0.01)  # distinct mtimes so "oldest first" is actually assertable
 
     first_two = [rid for rid, _ in outbox.list_events(uri, StorageOptions(), limit=2)]

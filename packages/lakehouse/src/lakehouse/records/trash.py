@@ -336,7 +336,7 @@ def mark_released(control_root: str, storage_options: StorageOptions, uuid: str,
         return record.model_copy(update={"released_at": record.released_at or at}).stored()
 
     try:
-        mutate_json(control_root, storage_options, filed, _released)
+        mutate_json(control_root, storage_options, filed, mutate=_released)
     except RecordMissingError:
         return False
     return True
@@ -350,7 +350,7 @@ def put(control_root: str, storage_options: StorageOptions, record: TrashRecord)
     """
     if record.uuid is None:
         raise ValueError(f"a trash record is filed under its object's uuid, and the record of {record.id!r} names none")
-    put_record(control_root, storage_options, key(record.uuid, kind=record.kind), record.stored())
+    put_record(control_root, storage_options, key(record.uuid, kind=record.kind), record=record.stored())
 
 
 def stamp_detached(control_root: str, storage_options: StorageOptions, record: TrashRecord, *, refile: bool = False) -> bool:
@@ -372,12 +372,12 @@ def stamp_detached(control_root: str, storage_options: StorageOptions, record: T
         if found is None:
             if not refile:
                 return False
-            create_json(control_root, storage_options, at, record.model_copy(update={"detached": True}).stored())
+            create_json(control_root, storage_options, at, record=record.model_copy(update={"detached": True}).stored())
             return True
         kept = _own(found[0], record, at=at)
         if kept is None or kept.detached:
             return kept is not None
-        replace_json(control_root, storage_options, at, kept.model_copy(update={"detached": True}).stored(), etag=found[1])
+        replace_json(control_root, storage_options, at, record=kept.model_copy(update={"detached": True}).stored(), etag=found[1])
     except (RecordChangedError, RecordExistsError):
         return False
     return True
@@ -486,7 +486,7 @@ def end(control_root: str, storage_options: StorageOptions, record: TrashRecord,
         UnreadableBaseRecordError: The table's base record exists and cannot be read.
         botocore.exceptions.ClientError: The store refused a read or a write.
     """
-    object_records.end_object_records(control_root, storage_options, kind, uuid)
+    object_records.end_object_records(control_root, storage_options, kind, uuid=uuid)
     if record.location:
         # The base record first: forgetting it deletes the tag a clone holds on each source, and one the store will not
         # delete must leave the location held, or a clone registered there next would hold a tag of the same name.
@@ -536,7 +536,7 @@ def note_refusal(
         return record.model_copy(update={"attempts": (record.attempts or 0) + 1, "last_refusal": Refusal(at=at, reason=reason)}).stored()
 
     try:
-        updated = mutate_json(control_root, storage_options, filed, _refused)
+        updated = mutate_json(control_root, storage_options, filed, mutate=_refused)
     except (RecordMissingError, RecordChangedError, UnreadableTrashRecordError) as exc:
         log.warning("trash_refusal_not_recorded", extra={"kind": kind, "uuid": uuid, "reason": str(exc)})
         return None

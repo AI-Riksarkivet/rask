@@ -566,7 +566,7 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
     _mk_projects(client, "acme")
     assert client.post("/management/v1/warehouses", json={"id": "wh-conv", "project": "acme"}).status_code == 200
     root = f"file://{tmp_path}"
-    wh_svc.set_warehouse_status(root, StorageOptions(), "wh-conv", "deactivated")
+    wh_svc.set_warehouse_status(root, StorageOptions(), "wh-conv", status="deactivated")
 
     real_get = wh_svc.get_warehouse
     reads = {"n": 0}

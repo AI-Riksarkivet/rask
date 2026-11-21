@@ -231,6 +231,7 @@ async def _write_project_record(settings: CatalogStore, so: StorageOptions, reco
 
 @management_router.post("", response_model_exclude_none=True)
 async def create_project(
+    *,
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,
@@ -315,7 +316,7 @@ async def establish_project(
     return record
 
 
-async def _visible_projects(client: OpenFgaClient | None, settings: FgaSettings, token: CurrentToken, candidates: list[str]) -> set[str] | None:
+async def _visible_projects(client: OpenFgaClient | None, settings: FgaSettings, token: CurrentToken, *, candidates: list[str]) -> set[str] | None:
     """Which of ``candidates`` (the registry's project ids) this caller may list, or ``None`` for every tenant.
 
     ``None`` for the estate admin, and with FGA off, as for every gate. Otherwise the candidates are batch-checked on
@@ -352,7 +353,7 @@ async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaC
     ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable — the registry
     facts still serve; the visibility decision itself fails closed (``_visible_projects``)."""
     tenants = await _load_tenants(settings)
-    visible = await _visible_projects(client, settings, token, sorted(tenants))
+    visible = await _visible_projects(client, settings, token, candidates=sorted(tenants))
     # The per-project admins lookups run CONCURRENTLY: sequential awaits would stack N × the per-call
     # budget on a slow OpenFGA (a brownout, not an outage) and blow past the caller's request deadline;
     # gathered, the worst case is ONE _ADMINS_TIMEOUT_SECONDS regardless of tenant count (each call
@@ -363,7 +364,7 @@ async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaC
 
 
 @management_router.get("/{project_id}")
-async def get_project(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectResponse:
+async def get_project(*, project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectResponse:
     """One tenant, in the list's shape, for the callers the list shows it to: the estate admin, or a member of it.
 
     Anyone else is answered the missing project's 404, so the door tells no caller which project ids exist (the rule
@@ -382,7 +383,7 @@ async def get_project(project_id: str, settings: SettingsDep, token: CurrentToke
     return tenant.response(await _admins_for(client, settings, project_id))
 
 
-async def administered_project(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectRecord:
+async def administered_project(project_id: str, settings: SettingsDep, token: CurrentToken, *, client: FgaClientDep) -> ProjectRecord:
     """The record of ``project_id``, for a caller who administers it (``project:<id>#can_administer``).
 
     The record is read first, since the gate is on the tenant it names. NO EXISTENCE ORACLE (audit #4, the rule the
@@ -418,7 +419,7 @@ async def administered_project(project_id: str, settings: SettingsDep, token: Cu
     return record
 
 
-async def project_to_delete(project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectRecord:
+async def project_to_delete(project_id: str, settings: SettingsDep, token: CurrentToken, *, client: FgaClientDep) -> ProjectRecord:
     """The record of ``project_id``, for its delete: a caller who administers it starts one, and once one has started,
     the caller who started it, an admin it has not reached, or the estate's owner finishes it ([[LH-576]]).
 
@@ -480,6 +481,7 @@ def project_its_doors_delete(project_id: str, record: Annotated[ProjectRecord, D
 
 @management_router.post("/{project_id}/protection", response_model_exclude_none=True, dependencies=[Depends(project_its_doors_protect)])
 async def set_project_protection(
+    *,
     project_id: str,
     body: SetProtectionRequest,
     settings: SettingsDep,
@@ -523,7 +525,7 @@ async def protect_project(settings: CatalogStore, control: ControlEmitter, proje
     Raises:
         TableNotFoundError: The project's record is gone.
     """
-    if await run_in_threadpool(project_registry.set_project_protection, settings.registry_root, settings.storage_options(), project_id, change) is None:
+    if await run_in_threadpool(project_registry.set_project_protection, settings.registry_root, settings.storage_options(), project_id, change=change) is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     log.info("project_protection_set", extra={"project": project_id, "protected": change.protected})
     await emit_control(
@@ -535,7 +537,7 @@ async def protect_project(settings: CatalogStore, control: ControlEmitter, proje
     )
 
 
-async def _start_delete(project_id: str, record: ProjectRecord, settings: CatalogStore, token: CurrentToken, *, force: bool) -> None:
+async def _start_delete(project_id: str, record: ProjectRecord, settings: CatalogStore, *, token: CurrentToken, force: bool) -> None:
     """Judge a delete's start, its protection and the project's emptiness, and record it on the project's record.
 
     Raises:
@@ -565,6 +567,7 @@ async def _start_delete(project_id: str, record: ProjectRecord, settings: Catalo
 
 @management_router.delete("/{project_id}")
 async def delete_project(
+    *,
     project_id: str,
     keyed: idem.KeyedDoorDep,
     settings: SettingsDep,
@@ -627,12 +630,12 @@ async def delete_project(
     converge = await keyed.begin(target=f"project:{project_id}", takeover="unknown")
     if converge.replay is not None:
         return DeleteProjectResponse.model_validate(converge.replay.body)
-    record = project_its_doors_delete(project_id, await project_to_delete(project_id, settings, token, client), token)
+    record = project_its_doors_delete(project_id, await project_to_delete(project_id, settings, token, client=client), token)
     so = settings.storage_options()
     # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
     authz = decisions.wired(settings, client)
     if not record.is_being_deleted:
-        await _start_delete(project_id, record, settings, token, force=force)
+        await _start_delete(project_id, record, settings, token=token, force=force)
     # The caller who retired the tenant, in the two spellings `establish_project` names its author by: the subject the
     # audit trail and the revoked tuples' writer name, and the actor its control events name. `system:catalog` is the
     # honest writer on an auth-off stack, where there genuinely is no principal, never a stand-in for one we failed to thread.
@@ -669,7 +672,7 @@ async def delete_project(
         # record goes.
         # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant,
         # and a policy kept for the id would govern that tenant's buckets as soon as it named them.
-        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", project_id)
+        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", key=project_id)
         # Its label definitions too, for the same reason (ADR 0211). No object of it carries one by now: every object
         # lay in a warehouse of it, and each ended its labels as it went.
         await run_in_threadpool(object_labels.end_definitions, settings.registry_root, so, project_id)

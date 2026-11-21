@@ -62,7 +62,9 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
-    create_table(namespace, StorageOptions(), TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(TABLE_ID))
+    create_table(
+        namespace, StorageOptions(), TABLE_ID, table=_rows(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(TABLE_ID)
+    )
     open_by_name(namespace, StorageOptions(), TABLE_ID).create_branch(BRANCH, None)
     return namespace
 
@@ -81,13 +83,13 @@ def test_both_paths_report_the_same_shape_for_the_same_payload(table: DoorTable)
     below carry which side was wrong, which is the only thing the extra test bought.
     """
     main = insert_into_table(
-        table, StorageOptions(), InsertIntoTableRequest(id=TABLE_ID, mode="append"), _ipc(_rows(20)), max_bytes=_BODY_LIMIT, transaction_properties={}
+        table, StorageOptions(), InsertIntoTableRequest(id=TABLE_ID, mode="append"), data=_ipc(_rows(20)), max_bytes=_BODY_LIMIT, transaction_properties={}
     )
     branched = insert_into_table(
         table,
         StorageOptions(),
         InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH),
-        _ipc(_rows(30)),
+        data=_ipc(_rows(30)),
         max_bytes=_BODY_LIMIT,
         transaction_properties={},
     )

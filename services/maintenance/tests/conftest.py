@@ -82,7 +82,7 @@ def maintain_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callable[..
         settings = settings.model_copy(update={"control_root": str(tmp_path / "control")})
         segments = table_id.split(CATALOG_DELIMITER)
         claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options=settings.storage_options())
-        location_claims.take(claims, normalise(uri), table_id, segments, is_gone=lambda _claim: False, uuid=str(uuid4()))
+        location_claims.take(claims, normalise(uri), table_id, segments=segments, is_gone=lambda _claim: False, uuid=str(uuid4()))
         namespaces = {CATALOG_DELIMITER.join(segments[:depth]): str(uuid4()) for depth in range(1, len(segments))}
         ids = TableIds(by_location={normalise(uri): table_id}, namespace_uuids=namespaces)
         readings = table_pass.PassReadings(

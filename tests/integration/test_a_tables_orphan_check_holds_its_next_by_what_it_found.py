@@ -188,7 +188,7 @@ def _table(
         described = str(namespace.describe_table(DescribeTableRequest(id=segments)).location)
     table_uuid = str(uuid.uuid4())
     claims = location_claims.ClaimStore(control_root=control or root, storage_options=options)
-    location_claims.take(claims, described, "$".join(segments), segments, is_gone=lambda _claim: False, uuid=table_uuid)
+    location_claims.take(claims, described, "$".join(segments), segments=segments, is_gone=lambda _claim: False, uuid=table_uuid)
     return Task(kind="orphans", uuid=uuid_ or table_uuid, location=described)
 
 
@@ -309,7 +309,7 @@ def _in_a_deactivated_warehouse_in_a_configured_bucket(*, bucket: str, store: St
         f"s3://{bucket}",
         store,
         "_warehouses/wh-gone.json",
-        {"id": "wh-gone", "bucket": bucket, "root_uri": f"s3://{bucket}", "project": "acme", "status": "deactivated"},
+        record={"id": "wh-gone", "bucket": bucket, "root_uri": f"s3://{bucket}", "project": "acme", "status": "deactivated"},
     )
     return _table(bucket=bucket, options=store, warehouse="wh-gone")
 

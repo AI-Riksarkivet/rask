@@ -181,6 +181,7 @@ def _branch_checkout_error(
     dataset: lance.LanceDataset,
     table_id: list[str],
     branch: str,
+    *,
     version: int | None,
     exc: Exception,
 ) -> Exception:
@@ -309,7 +310,7 @@ def _open_ref(location: str, storage_options: StorageOptions, table_id: list[str
     try:
         return open_location(location, storage_options, version=version, branch=branch)
     except (ValueError, OSError) as exc:
-        error = _branch_checkout_error(main, table_id, branch, version, exc)
+        error = _branch_checkout_error(main, table_id, branch, version=version, exc=exc)
         if error is exc:
             raise
         raise error from exc

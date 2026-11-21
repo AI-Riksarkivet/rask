@@ -74,7 +74,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
     registry = BaseRegistry(control_root=str(control), storage_options={})
     for table_id in TABLES:
         rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
-        create_table(ns, StorageOptions(), table_id, rows, root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(table_id))
+        create_table(ns, StorageOptions(), table_id, table=rows, root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(table_id))
 
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))

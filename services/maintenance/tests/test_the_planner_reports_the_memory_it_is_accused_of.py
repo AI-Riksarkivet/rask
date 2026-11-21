@@ -40,7 +40,7 @@ def test_the_pass_line_reports_every_reading(tmp_path: Path, monkeypatch: pytest
     lance.write_dataset(pa.table({"n": pa.array([1, 2], pa.int64())}), uri)
     uuid = str(uuid4())
     claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options={})
-    location_claims.take(claims, normalise(uri), "db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=uuid)
+    location_claims.take(claims, normalise(uri), "db$t", segments=["db", "t"], is_gone=lambda _claim: False, uuid=uuid)
     named = TableIds(by_location={normalise(uri): "db$t"}, namespace_uuids={"db": str(uuid4())})
     monkeypatch.setattr(table_pass, "table_ids_of", lambda *_a, **_k: named)
 

@@ -110,6 +110,7 @@ management_router = APIRouter(prefix="/management/v1/table", tags=["data-managem
 
 @spec_router.post("/{id}/create", response_model_exclude_none=True)
 async def create_table(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
@@ -219,6 +220,7 @@ async def create_table(
 # same 400 `InvalidInput` as missing bounds instead of FastAPI's 422.
 @spec_router.post("/{id}/insert", response_model_exclude_none=True)
 async def insert_into_table(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     table: DoorTableDep,
@@ -256,7 +258,7 @@ async def insert_into_table(
     # browser infers float64 for every JS number) can append to int64 columns — else the append 500s on
     # the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.
     data = await run_in_threadpool(
-        writes.coerce_insert_arrow, table, so, data, branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
+        writes.coerce_insert_arrow, table, so, data, branch=branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
     )
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
     # After every shape refusal, so a malformed body claims no key. The claim binds the mode too, so the key on another
@@ -276,7 +278,7 @@ async def insert_into_table(
             table,
             so,
             req,
-            data,
+            data=data,
             max_bytes=settings.max_body_bytes,
             transaction_properties=_keyed_stamp(
                 converge, lineage_deps.door_stamp(token, OVERWRITE_TABLE if insert_mode is InsertMode.OVERWRITE else INSERT, run)
@@ -360,6 +362,7 @@ MergeKeyQuery = Annotated[
 
 @spec_router.post("/{id}/merge_insert", response_model_exclude_none=True)
 async def merge_insert_into_table(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     table: DoorTableDep,
@@ -419,7 +422,7 @@ async def merge_insert_into_table(
             table,
             so,
             req,
-            data,
+            data=data,
             max_bytes=settings.max_body_bytes,
             transaction_properties=_keyed_stamp(converge, lineage_deps.door_stamp(token, MERGE_INSERT, run)),
         )
@@ -446,6 +449,7 @@ async def merge_insert_into_table(
 
 @spec_router.post("/{id}/update", response_model_exclude_none=True)
 async def update_table(
+    *,
     id: str,
     body: UpdateTableRequest,
     keyed: idem.KeyedDoorDep,
@@ -496,6 +500,7 @@ async def update_table(
 
 @spec_router.post("/{id}/delete", response_model_exclude_none=True)
 async def delete_from_table(
+    *,
     id: str,
     body: DeleteFromTableRequest,
     keyed: idem.KeyedDoorDep,
@@ -597,6 +602,7 @@ _BLOB_RESPONSES: Final[dict[int | str, dict[str, object]]] = {
 
 @management_router.get("/{id}/blobs", responses=_BLOB_RESPONSES, response_class=OctetStreamResponse)
 async def read_table_blob(
+    *,
     id: str,
     table: DoorTableDep,
     so: StorageOptionsDep,
@@ -699,7 +705,14 @@ def _reader(token: Caller | None) -> str:
     response_class=ArrowFileResponse,
 )
 def query_table(
-    id: str, body: QueryTableRequest, table: DoorTableDep, data_ns: DataNamespaceDep, settings: SettingsDep, so: StorageOptionsDep, token: CurrentToken = None
+    *,
+    id: str,
+    body: QueryTableRequest,
+    table: DoorTableDep,
+    data_ns: DataNamespaceDep,
+    settings: SettingsDep,
+    so: StorageOptionsDep,
+    token: CurrentToken = None,
 ) -> Response:
     """Run a query and return matching rows as an Arrow-IPC file — wraps ``query_table``.
 
@@ -728,7 +741,7 @@ def query_table(
 
 
 @management_router.post("/{id}/changes", responses=_serves(ARROW_FILE), response_class=ArrowFileResponse)
-def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
+def table_changes(*, id: str, body: TableChangesRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
     """Rows that changed in ``(begin_version, end_version]`` — Arrow-IPC, like ``query``.
 
     Answers the change data feed `lance_docs/lance/format/table/row_id_lineage.md:426-454` documents, from one snapshot at
@@ -773,6 +786,7 @@ def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: S
 
 @spec_router.post("/{id}/count_rows")
 def count_table_rows(
+    *,
     id: str,
     table: DoorTableDep,
     data_ns: DataNamespaceDep,
@@ -800,7 +814,9 @@ def count_table_rows(
 
 
 @spec_router.post("/{id}/explain_plan")
-def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken = None) -> Response:
+def explain_table_query_plan(
+    *, id: str, body: ExplainTableQueryPlanRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken = None
+) -> Response:
     """Return the logical query plan — ``explain_table_query_plan``; plain text, served once the name still resolves to the door's location."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
     # BOTH CHANNELS. `ExplainTableQueryPlanRequest` nests the whole query, so a branch can arrive at
@@ -830,6 +846,7 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table:
 
 @spec_router.post("/{id}/analyze_plan")
 def analyze_table_query_plan(
+    *,
     id: str,
     body: AnalyzeTableQueryPlanRequest,
     table: DoorTableDep,

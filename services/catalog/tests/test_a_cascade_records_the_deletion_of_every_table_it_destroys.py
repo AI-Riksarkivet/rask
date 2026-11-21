@@ -70,7 +70,9 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     namespace.create_namespace(CreateNamespaceRequest(id=[NS], properties=with_minted_uuid(None)))
     registry = BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
     for table_id in TABLES:
-        create_table(namespace, StorageOptions(), table_id, _table(), root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(table_id))
+        create_table(
+            namespace, StorageOptions(), table_id, table=_table(), root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(table_id)
+        )
     return namespace
 
 

@@ -121,7 +121,7 @@ def file(store: ClaimStore, intent: EndingIntent, *, filing: str) -> CloneEnding
     """
     at = conditional_records.read_json_at(store.control_root, store.storage_options, _key(digest_of(intent.location), filing)).at
     ending = CloneEnding(**intent.model_dump(), filing=filing, filed_at=at)
-    conditional_records.create_json(store.control_root, store.storage_options, _key(ending.digest, filing), ending.model_dump(mode="json"))
+    conditional_records.create_json(store.control_root, store.storage_options, _key(ending.digest, filing), record=ending.model_dump(mode="json"))
     return ending
 
 
@@ -178,7 +178,7 @@ def mark(store: ClaimStore, read_as: EndingRead, *, token: str) -> None:
     marked = read_as.ending.model_copy(update={"finishing": EndingMark(token=token, at=read_as.at)})
     try:
         conditional_records.replace_json(
-            store.control_root, store.storage_options, _key(marked.digest, marked.filing), marked.model_dump(mode="json"), etag=read_as.etag
+            store.control_root, store.storage_options, _key(marked.digest, marked.filing), record=marked.model_dump(mode="json"), etag=read_as.etag
         )
     except conditional_records.RecordChangedError:
         raise EndingChangedError(f"the ending {marked.digest}/{marked.filing} changed since it was read") from None

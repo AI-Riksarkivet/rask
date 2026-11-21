@@ -85,7 +85,7 @@ async def _role_gate(
         await door_gates.require_relation(client, settings, token, relation=relation, obj=roles.role_object(role_id))
     except PermissionDeniedError as exc:
         raise missing from exc
-    if (role := await run_in_threadpool(roles.find_role, settings.registry_root, settings.storage_options(), project_id, role_id)) is None:
+    if (role := await run_in_threadpool(roles.find_role, settings.registry_root, settings.storage_options(), project_id, role_id=role_id)) is None:
         raise missing
     return decisions.require_fga(settings, client, feature="roles"), role
 
@@ -101,7 +101,7 @@ async def _assignees(client: OpenFgaClient, role_id: uuid.UUID) -> list[str]:
 
 @management_router.post("/{project_id}/roles", status_code=status.HTTP_201_CREATED)
 async def create_role(
-    project_id: ProjectId, body: RoleCreateRequest, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
+    *, project_id: ProjectId, body: RoleCreateRequest, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
 ) -> Role:
     """Mint a role in the project, gated on ``can_create_role``: its ``project`` edge, then its record.
 
@@ -144,7 +144,7 @@ async def create_role(
 
 
 @management_router.get("/{project_id}/roles")
-async def list_roles(project_id: ProjectId, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> RoleList:
+async def list_roles(*, project_id: ProjectId, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> RoleList:
     """The project's standing roles, ordered by name, gated on ``can_list_roles``; a role's assignees are its own read."""
     await _project_gate(client=client, settings=settings, token=token, project_id=project_id, relation="can_list_roles")
     records = await run_in_threadpool(roles.list_roles, settings.registry_root, settings.storage_options(), project_id)
@@ -152,7 +152,7 @@ async def list_roles(project_id: ProjectId, client: FgaClientDep, settings: Sett
 
 
 @management_router.get("/{project_id}/roles/{role_id}")
-async def get_role(project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> Role:
+async def get_role(*, project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> Role:
     """One role and its direct assignees, gated on the role's ``can_read``."""
     wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_read")
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))
@@ -160,7 +160,7 @@ async def get_role(project_id: ProjectId, role_id: uuid.UUID, client: FgaClientD
 
 @management_router.delete("/{project_id}/roles/{role_id}")
 async def delete_role(
-    project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
+    *, project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> RoleDeleted:
     """End a role, gated on its ``can_delete``, and on the project's ``can_grant_admin`` while the project's ``admin``
     reaches the role: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).
@@ -202,7 +202,7 @@ async def _assignee(*, settings: CatalogStore, role: RoleRecord, raw: str) -> st
     nested_id = nested.removeprefix("role:")
     if nested_id == str(role.id):
         raise InvalidInputError(f"role {role.name!r} cannot be its own assignee")
-    if await run_in_threadpool(roles.find_role, settings.registry_root, settings.storage_options(), role.project, nested_id) is None:
+    if await run_in_threadpool(roles.find_role, settings.registry_root, settings.storage_options(), role.project, role_id=nested_id) is None:
         raise InvalidInputError(f"{raw!r} is not a role of project {role.project!r}")
     return user
 
@@ -223,6 +223,7 @@ def _admin_grant(*, client: OpenFgaClient, settings: FgaSettings, token: Caller 
 
 @management_router.put("/{project_id}/roles/{role_id}/assignees")
 async def assign_role(
+    *,
     project_id: ProjectId,
     role_id: uuid.UUID,
     body: AssigneeRequest,
@@ -262,6 +263,7 @@ async def assign_role(
 
 @management_router.delete("/{project_id}/roles/{role_id}/assignees")
 async def unassign_role(
+    *,
     project_id: ProjectId,
     role_id: uuid.UUID,
     body: AssigneeRequest,

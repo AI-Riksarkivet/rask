@@ -327,7 +327,7 @@ class Announcer:
             case RecordHeld(key=key):
                 return not await self._absent(lambda root, so: conditional_records.read_json(root, so, key))
             case RoleEnded(project=project, role=role):
-                return await self._absent(lambda root, so: roles.find_role(root, so, project, role))
+                return await self._absent(lambda root, so: roles.find_role(root, so, project, role_id=role))
             case TrashedUnder(uuid=uuid, attempt=drop):
                 return await self._drop_landed(uuid, drop, withdrawing=withdrawing)
 
@@ -591,7 +591,7 @@ def _grant_change(t: fga_writes.ClientTuple, *, action: GrantAction, actor: str 
 
 
 def get_announcer(
-    request: Request, settings: SettingsDep, client: FgaClientDep, resolver: ResolverDep, control: ControlEmitterDep, uuids: ObjectUuidsDep
+    request: Request, *, settings: SettingsDep, client: FgaClientDep, resolver: ResolverDep, control: ControlEmitterDep, uuids: ObjectUuidsDep
 ) -> Announcer:
     """This request's :class:`Announcer`. Its lineage emitter is the app's own, unbound to the request: a marker carries the
     originator its filing request claimed, whichever request sends it. The headers are read off the request, so no door

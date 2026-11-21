@@ -77,7 +77,7 @@ def _settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **declared: str) 
 
 def _stored(root: str, options: StorageOptions, namespace_uuid: str) -> dict[str, Any]:
     """The namespace's policy record as the registry stores it."""
-    held = maintenance_policies.get_policy(root, options, "namespace", namespace_uuid)
+    held = maintenance_policies.get_policy(root, options, "namespace", key=namespace_uuid)
     assert held is not None
     return held.stored()
 
@@ -110,7 +110,7 @@ def test_a_boot_takes_back_an_own_accounts_writer_it_no_longer_declares_and_keep
 
     _booted(settings, openfga_store)
 
-    policy = maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "namespace", namespace_uuid)
+    policy = maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "namespace", key=namespace_uuid)
     assert policy is not None and (policy.settings.retain_versions, policy.settings.retention_days) == (20, None), policy
     held: dict[str, set[str]] = {}
     for user, relation, obj in openfga_store.tuples():
@@ -134,7 +134,7 @@ def test_a_boot_that_declares_a_retention_keeps_a_hold_set_through_the_policy_do
 
     _booted(declared, openfga_store)
 
-    assert maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) == seeding.policy({**held, "retain_versions": 30})
+    assert maintenance_policies.get_policy(root, options, "namespace", key=namespace_uuid) == seeding.policy({**held, "retain_versions": 30})
 
 
 @pytest.mark.parametrize(
@@ -160,7 +160,7 @@ def test_a_boot_that_declares_no_retention_removes_only_the_policy_it_wrote(
 
     _booted(_settings(tmp_path, monkeypatch), openfga_store)
 
-    assert maintenance_policies.get_policy(root, options, "namespace", namespace_uuid) == (seeding.policy(record) if stands else None)
+    assert maintenance_policies.get_policy(root, options, "namespace", key=namespace_uuid) == (seeding.policy(record) if stands else None)
 
 
 def test_a_boot_that_declares_no_retention_leaves_a_policy_it_cannot_read(
@@ -178,4 +178,4 @@ def test_a_boot_that_declares_no_retention_leaves_a_policy_it_cannot_read(
     _booted(_settings(tmp_path, monkeypatch), openfga_store)
 
     with pytest.raises(maintenance_policies.MalformedPolicyError):
-        maintenance_policies.get_policy(root, options, "namespace", namespace_uuid)
+        maintenance_policies.get_policy(root, options, "namespace", key=namespace_uuid)

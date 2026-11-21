@@ -189,11 +189,11 @@ def _feed_location(settings: CatalogLineageSettings, ns: LanceNamespace) -> str 
 
 
 async def _announce(
-    emitter: LineageEmitter, request: Request, settings: Settings, so: StorageOptions, table: _LiveTable, commit: commit_reconcile.Commit
+    emitter: LineageEmitter, *, request: Request, settings: Settings, so: StorageOptions, table: _LiveTable, commit: commit_reconcile.Commit
 ) -> None:
     """Announce ``commit`` as its door announced it, for the author the catalog recorded authorizing it, in the trace of the
     request that made it (ADR 0209), and audit the announcement."""
-    readback = await run_in_threadpool(versions.read_version_and_schema, table.location, so, table.segments, commit.version, commit.branch)
+    readback = await run_in_threadpool(versions.read_version_and_schema, table.location, so, table.segments, pin_version=commit.version, branch=commit.branch)
     with continuing(commit.traceparent):
         await emit_write_event(
             emitter,
@@ -268,7 +268,7 @@ async def tick(ctx: Tick) -> CommitReconcileTick:
             unreadable += len(found.unreadable)
         for scan in found.scans:
             for commit in scan.missing:
-                await _announce(emitter, request, settings, so, table, commit)
+                await _announce(emitter, request=request, settings=settings, so=so, table=table, commit=commit)
                 _reannounced.add(1, {"lance.catalog.operation": commit.operation})
                 log.warning(
                     "commit_reannounced",

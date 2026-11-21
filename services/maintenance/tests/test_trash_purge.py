@@ -143,7 +143,7 @@ class _Estate:
         canonical = "$".join(segments)
         minted = str(uuid4()) if uuid is None else uuid
         claims = location_claims.ClaimStore(control_root=self.control_root)
-        location_claims.take(claims, location, canonical, list(segments), is_gone=lambda _claim: False, uuid=minted or None)
+        location_claims.take(claims, location, canonical, segments=list(segments), is_gone=lambda _claim: False, uuid=minted or None)
         self.put_record(
             canonical, uuid=minted, location=location, grace_days=grace_days, dropped_at=dropped_at, namespace_uuid=namespace_uuid, released=released
         )

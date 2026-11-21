@@ -53,7 +53,7 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
-async def authorize_transaction(client: OpenFgaClient, resolver: Resolver, segments: list[str], suffix: str, *, token: Caller) -> None:
+async def authorize_transaction(client: OpenFgaClient, resolver: Resolver, segments: list[str], *, suffix: str, token: Caller) -> None:
     """Authorize a transaction door on the table its id names (``<table id>$<transaction>``, [[LH-221]]).
 
     Describing a transaction reads the table's metadata (``can_get_metadata``) and altering one would write the table
@@ -140,7 +140,7 @@ async def authorize_batch(request: Request, client: OpenFgaClient, resolver: Res
         raise PermissionDeniedError(f"permission denied on {', '.join(sorted(denied))}")
 
 
-async def authorize(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
+async def authorize(request: Request, settings: SettingsDep, token: CurrentToken, *, injected: FgaClientDep, resolver: ResolverDep) -> None:
     """Enforce the caller's permission for this route, then the quarantine of the warehouse its ``{id}`` begins with.
 
     In that order: a deactivated warehouse suspends every operation beneath it, and that it is deactivated is told
@@ -150,7 +150,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     Raises:
         PermissionDeniedError: The caller may not act here, or may and the warehouse is deactivated.
     """
-    await _decide(request, settings, token, injected, resolver)
+    await _decide(request, settings, token, injected=injected, resolver=resolver)
     object_id = request.path_params.get("id")
     # A classification's id is a label, in no warehouse.
     if object_id is None or resource_for(route_path(request.scope)) in (None, "classification"):
@@ -159,7 +159,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
         await resolver.require_active_warehouse(segments[0])
 
 
-async def _decide(request: Request, settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver) -> None:
+async def _decide(request: Request, settings: Settings, token: Caller | None, *, injected: OpenFgaClient | None, resolver: Resolver) -> None:
     """The caller's permission for this route: the write judge decides every write door, with FGA on
     or off, and OpenFGA every other door (a no-op when FGA is off).
 
@@ -167,7 +167,7 @@ async def _decide(request: Request, settings: Settings, token: Caller | None, in
     (ADR 0173 §8, [[LH-524]]), through ``resolver``, which the door then reads the same resolution from.
     """
     if (write := await write_door(request)) is not None:
-        await judge_write(request, settings, token, injected, resolver, write)
+        await judge_write(request, settings=settings, token=token, injected=injected, resolver=resolver, write=write)
         return
     if not settings.fga_enabled:
         return
@@ -210,7 +210,7 @@ async def _decide(request: Request, settings: Settings, token: Caller | None, in
         if suffix not in TRANSACTION_SUFFIXES:
             record_undeclared(path, "transaction", suffix, user=token.subject, obj=addressed_object("transaction", segments))
             raise undeclared_door("transaction", suffix)
-        await authorize_transaction(client, resolver, segments, suffix, token=token)
+        await authorize_transaction(client, resolver, segments, suffix=suffix, token=token)
         return
 
     # THE ROOT NAMES NO OBJECT, and composing one is a 500 rather than a decision. lance-ns encodes

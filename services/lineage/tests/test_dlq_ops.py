@@ -140,7 +140,7 @@ def _stage(settings: LineageSettings, run_id: str, body: str) -> None:
         staged = json.dumps(lineage_envelope(json.loads(body)).as_wire())
     except ValueError:
         staged = body
-    outbox.stage_event(settings.outbox_uri, storage_options(settings), run_id, staged)
+    outbox.stage_event(settings.outbox_uri, storage_options(settings), run_id, event_json=staged)
 
 
 # --------------------------------------------------------------------------- #
@@ -169,14 +169,14 @@ def test_list_surfaces_a_poison_object(tmp_path: Path) -> None:
 
 def test_list_empty_when_no_outbox_configured() -> None:
     s = LineageSettings.model_validate({})  # outbox_uri = ""
-    out = asyncio.run(dlq.list_dlq(s, None, _filter(_request(), s, None), limit=100))
+    out = asyncio.run(dlq.list_dlq(settings=s, token=None, datasets=_filter(_request(), s, None), limit=100))
     assert out.depth == 0 and out.events == []
 
 
 def test_list_fails_closed_without_a_token_when_fga_on(tmp_path: Path) -> None:
     s = _settings(tmp_path, **_FULL_AUTH)
     with pytest.raises(UnauthenticatedError):
-        asyncio.run(dlq.list_dlq(s, None, _filter(_request(decider=OpenFgaDecider(cast("Any", object()))), s, None), limit=100))
+        asyncio.run(dlq.list_dlq(settings=s, token=None, datasets=_filter(_request(decider=OpenFgaDecider(cast("Any", object()))), s, None), limit=100))
 
 
 def test_list_filters_events_to_visible_datasets(tmp_path: Path, openfga_store: Any) -> None:  # noqa: ANN401
@@ -186,7 +186,7 @@ def test_list_filters_events_to_visible_datasets(tmp_path: Path, openfga_store: 
     token = _token()
 
     async def listed(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the door's answer
-        return await dlq.list_dlq(s, token, _filter(_request(decider=decider), s, token), limit=100)
+        return await dlq.list_dlq(settings=s, token=token, datasets=_filter(_request(decider=decider), s, token), limit=100)
 
     out = decided(_held(openfga_store, ("alice", "reader", "mine")), listed)
     assert out.depth == 2  # raw health signal unfiltered
@@ -202,7 +202,9 @@ def _replay(s: LineageSettings, run_id: str, repo: Any, token: Any = None, decid
     decider = decider if decider is not None else OpenFgaDecider(cast("Any", object()))
     flt = _filter(_request(decider=decider), s, token)
     # The door's feed is the one lineage's lifespan wires on its app, which the run-author check reads.
-    return dlq.replay_dlq(run_id, _request(decider=decider, provenance=repo), repo, s, token, flt, None)
+    return dlq.replay_dlq(
+        run_id=run_id, request=_request(decider=decider, provenance=repo), provenance=repo, settings=s, token=token, datasets=flt, publisher=None
+    )
 
 
 def test_replay_reingests_and_drops(tmp_path: Path) -> None:
@@ -268,7 +270,7 @@ def test_replay_seen_but_not_writable_is_403(tmp_path: Path, openfga_store: Any)
 
 def list_dlq_off(settings: LineageSettings) -> Any:
     """list_dlq with FGA off (governed is pass-through) — the common view driver."""
-    return dlq.list_dlq(settings, None, _filter(_request(), settings, None), limit=100)
+    return dlq.list_dlq(settings=settings, token=None, datasets=_filter(_request(), settings, None), limit=100)
 
 
 # --------------------------------------------------------------------------- #

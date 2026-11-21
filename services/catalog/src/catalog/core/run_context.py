@@ -105,7 +105,7 @@ class RunContext(BaseModel):
         return stamped
 
 
-def _parse(run_id: str | None, job_namespace: str | None, job: str | None, inputs: str | None, *, where: str) -> RunContext | None:
+def _parse(run_id: str | None, job_namespace: str | None, job: str | None, *, inputs: str | None, where: str) -> RunContext | None:
     if run_id is None:
         if job_namespace is not None or job is not None or inputs is not None:
             raise InvalidInputError(f"{where} names a job or inputs but no run id")
@@ -132,7 +132,7 @@ def from_headers(headers: Mapping[str, str]) -> RunContext | None:
             job's namespace and name, or one of them is malformed.
     """
     return _parse(
-        headers.get(RUN_ID_HEADER), headers.get(JOB_NAMESPACE_HEADER), headers.get(JOB_HEADER), headers.get(INPUTS_HEADER), where="the request's Context"
+        headers.get(RUN_ID_HEADER), headers.get(JOB_NAMESPACE_HEADER), headers.get(JOB_HEADER), inputs=headers.get(INPUTS_HEADER), where="the request's Context"
     )
 
 
@@ -151,7 +151,7 @@ def from_properties(properties: Mapping[str, str] | None) -> RunContext | None:
         properties.get(RUN_ID_PROPERTY),
         properties.get(JOB_NAMESPACE_PROPERTY),
         properties.get(JOB_PROPERTY),
-        properties.get(INPUTS_PROPERTY),
+        inputs=properties.get(INPUTS_PROPERTY),
         where="the commit's transaction properties",
     )
 

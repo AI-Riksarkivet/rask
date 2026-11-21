@@ -120,11 +120,11 @@ class _Tenant:
         real = object_records.end_object_records
         failed: list[str] = []
 
-        def end_object_records(control_root: str, storage_options: StorageOptions, kind: str, object_uuid: str) -> list[str]:
+        def end_object_records(control_root: str, storage_options: StorageOptions, kind: str, *, uuid: str) -> list[str]:
             if not failed:
-                failed.append(object_uuid)
+                failed.append(uuid)
                 raise OSError("the control root did not answer")
-            return real(control_root, storage_options, kind, object_uuid)
+            return real(control_root, storage_options, kind, uuid=uuid)
 
         self.monkeypatch.setattr(object_records, "end_object_records", end_object_records)
 
@@ -169,7 +169,7 @@ class _Tenant:
     def has_policy(self, table: str) -> bool:
         """Whether the policy :meth:`set_policy` set on ``table`` still stands, read under the uuid it is kept by."""
         settings = get_settings()
-        return maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "table", self.policy_uuids[table]) is not None
+        return maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "table", key=self.policy_uuids[table]) is not None
 
     def present(self, objects: list[str]) -> list[str]:
         """Those of ``objects`` the catalog still serves, each asked through its own door."""
@@ -622,7 +622,7 @@ def test_a_cascade_releases_only_the_claim_of_the_table_it_identified(tenant: _T
     def _release_then_the_same_name_takes_the_location(registry: base_registry.BaseRegistry, at: str, *, uuid: str | None) -> list[str]:
         released = real_release(registry, at, uuid=uuid)
         taken.append(str(_uuid4()))
-        location_claims.take(claims, at, "acme-wh$bronze$t", [WAREHOUSE, "bronze", "t"], is_gone=lambda _claim: True, uuid=taken[0])
+        location_claims.take(claims, at, "acme-wh$bronze$t", segments=[WAREHOUSE, "bronze", "t"], is_gone=lambda _claim: True, uuid=taken[0])
         return released
 
     tenant.monkeypatch.setattr(base_registry, "release_clone_sources", _release_then_the_same_name_takes_the_location)

@@ -38,7 +38,7 @@ def test_a_policy_record_that_is_no_object_is_refused_by_its_key_and_never_read_
     key.write_text(json.dumps(["not", "a", "record"]))
 
     with pytest.raises(MalformedPolicyError, match=key.name):
-        get_policy(str(tmp_path), StorageOptions(), "table", _TABLE_UUID)
+        get_policy(str(tmp_path), StorageOptions(), "table", key=_TABLE_UUID)
 
 
 def test_the_record_key_shape_is_unchanged_by_the_de_duplication() -> None:

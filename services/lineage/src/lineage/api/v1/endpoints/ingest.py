@@ -104,6 +104,7 @@ _EVENT_BODY = {
 
 @router.post("/lineage", status_code=201, openapi_extra=_EVENT_BODY)
 async def ingest_event(
+    *,
     body: Annotated[dict[str, Any], Body()],
     request: Request,
     provenance: ProvenanceDep,
@@ -171,7 +172,7 @@ async def ingest_event(
         decider = getattr(request.app.state, "decider", None) if settings.fga_enabled else None
         await stamp_resolved_uuids(event, names, bearer=bearer, decider=decider, subject=token.subject if token else None)
         # What the catalog answered the event's locations and symlinks name scopes its feed row for every reader ([[LH-598]]).
-        aliased = await enforce_output_authz(event, request.app, settings, token)
+        aliased = await enforce_output_authz(event, request.app, settings, token=token)
         started = time.perf_counter()
         # The edges, then the feed row, each keyed: a failure answers an error, the producer retries, and the
         # retry lands what is missing and nothing twice (see `ProvenanceStore.record`). Its own refusal of a run

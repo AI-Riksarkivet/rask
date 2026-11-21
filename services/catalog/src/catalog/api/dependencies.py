@@ -468,7 +468,7 @@ def _door_table(ns: LanceNamespace, settings: Settings, resolved: ResolvedTable)
 DoorTableDep = Annotated[DoorTable, Depends(get_door_table)]
 
 
-async def get_transaction_table(ns: NamespaceDep, settings: SettingsDep, resolver: ResolverDep, request: Request) -> DoorTable:
+async def get_transaction_table(ns: NamespaceDep, settings: SettingsDep, resolver: ResolverDep, *, request: Request) -> DoorTable:
     """The table the request's transaction ``{id}`` (``<table id>$<transaction>``) names, as its door acts on it ([[LH-221]]).
 
     The resolution the router's authorization read, as for every table door.
@@ -620,7 +620,7 @@ class ObjectUuids:
         if resolved.location is None:
             return None
         # `tables.versions.branch_identifier` reads best-effort and answers None on any failure, so this raises nothing.
-        return await run_in_threadpool(versions.branch_identifier, resolved.location, self._settings.storage_options(plane="data"), segments, branch)
+        return await run_in_threadpool(versions.branch_identifier, resolved.location, self._settings.storage_options(plane="data"), segments, branch=branch)
 
     async def namespace(self, segments: list[str]) -> ControlUuids:
         """A namespace's uuid and its parent namespace's."""

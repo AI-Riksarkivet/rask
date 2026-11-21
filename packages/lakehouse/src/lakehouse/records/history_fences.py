@@ -168,9 +168,9 @@ class TableHistory(BaseModel):
             fence = HistoryFence(uuid=self.table_uuid, holders=[*holders, mine]).model_dump(mode="json")
             try:
                 if read.stored is None:
-                    conditional_records.create_json(self.control_root, self.storage_options, self.key, fence)
+                    conditional_records.create_json(self.control_root, self.storage_options, self.key, record=fence)
                 else:
-                    conditional_records.replace_json(self.control_root, self.storage_options, self.key, fence, etag=read.stored.etag)
+                    conditional_records.replace_json(self.control_root, self.storage_options, self.key, record=fence, etag=read.stored.etag)
             except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
                 continue
             return mine.token
@@ -193,7 +193,9 @@ class TableHistory(BaseModel):
                     log.error("history_fence_outlived", extra={"table_uuid": self.table_uuid, "work": mine.work, "held_since": mine.taken_at.isoformat()})
                 kept = fence.model_copy(update={"holders": [holder for holder in fence.holders if holder.token != token and holder.expires_at > now]})
                 try:
-                    conditional_records.replace_json(self.control_root, self.storage_options, self.key, kept.model_dump(mode="json"), etag=read.stored.etag)
+                    conditional_records.replace_json(
+                        self.control_root, self.storage_options, self.key, record=kept.model_dump(mode="json"), etag=read.stored.etag
+                    )
                 except conditional_records.RecordChangedError:
                     continue
                 return
@@ -225,7 +227,9 @@ class TableHistory(BaseModel):
             others = [holder for holder in live if holder.token != token]
             renewed = fence.model_copy(update={"holders": [*others, mine.model_copy(update={"expires_at": now + HOLD})]})
             try:
-                conditional_records.replace_json(self.control_root, self.storage_options, self.key, renewed.model_dump(mode="json"), etag=read.stored.etag)
+                conditional_records.replace_json(
+                    self.control_root, self.storage_options, self.key, record=renewed.model_dump(mode="json"), etag=read.stored.etag
+                )
             except conditional_records.RecordChangedError:
                 continue
             return True

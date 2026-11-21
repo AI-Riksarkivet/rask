@@ -71,7 +71,7 @@ def _base() -> pa.Table:
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(namespace, StorageOptions(), TABLE_ID, _base(), root=str(tmp_path / "data"), mode="create", registry=None)
+    create_table(namespace, StorageOptions(), TABLE_ID, table=_base(), root=str(tmp_path / "data"), mode="create", registry=None)
     open_by_name(namespace, StorageOptions(), TABLE_ID).create_branch(BRANCH, None)
     return namespace
 
@@ -86,7 +86,7 @@ def _code(table: DoorTable, *, branch: str | None, on: str, payload: pa.Table) -
     """Drive merge_insert and return the spec code it answered, or None if it did not fail."""
     request = MergeInsertIntoTableRequest(id=TABLE_ID, on=[on], when_matched_update_all=True, branch=branch)
     try:
-        merge_insert_into_table(table, StorageOptions(), request, _ipc(payload), max_bytes=_BODY_LIMIT, transaction_properties={})
+        merge_insert_into_table(table, StorageOptions(), request, data=_ipc(payload), max_bytes=_BODY_LIMIT, transaction_properties={})
     except Exception as exc:  # noqa: BLE001 — the CODE is the subject; the class is only how it carries one
         return getattr(exc, "code", None)
     return None

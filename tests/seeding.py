@@ -20,7 +20,7 @@ def put_warehouse(control_root: str, storage_options: StorageOptions, record: di
     """Hold ``record`` as the warehouse ``record["id"]``'s registry record, at the root of its bucket where it names no
     root, as the door that registers a warehouse writes one."""
     rooted = {"root_uri": f"s3://{record['bucket']}", **record} if "bucket" in record else record
-    put_record(control_root, storage_options, f"{control_prefixes.WAREHOUSES}/{record['id']}.json", rooted)
+    put_record(control_root, storage_options, f"{control_prefixes.WAREHOUSES}/{record['id']}.json", record=rooted)
 
 
 def warehouse(record: dict[str, str]) -> WarehouseRecord:
@@ -32,7 +32,7 @@ def warehouse(record: dict[str, str]) -> WarehouseRecord:
 
 def put_project(control_root: str, storage_options: StorageOptions, record: dict[str, str]) -> None:
     """Hold ``record`` as the project ``record["id"]``'s registry record."""
-    put_record(control_root, storage_options, f"{control_prefixes.PROJECTS}/{record['id']}.json", record)
+    put_record(control_root, storage_options, f"{control_prefixes.PROJECTS}/{record['id']}.json", record=record)
 
 
 def policy(record: dict[str, Any] | maintenance_policies.PolicyRecord) -> maintenance_policies.PolicyRecord:
@@ -46,7 +46,7 @@ def put_policy(control_root: str, storage_options: StorageOptions, record: dict[
     if isinstance(record, maintenance_policies.PolicyRecord):
         record = record.stored()
     keyed_by = "uuid" if record["kind"] in ("table", "namespace") else "id"
-    put_record(control_root, storage_options, record_key(maintenance_policies.PREFIX, record["kind"], str(record[keyed_by])), record)
+    put_record(control_root, storage_options, record_key(maintenance_policies.PREFIX, record["kind"], str(record[keyed_by])), record=record)
 
 
 def put_cadence_stamp(
@@ -55,14 +55,14 @@ def put_cadence_stamp(
     """Hold ``at`` as the cadence stamp of the dataset ``uri`` under the policy ``record``, whatever ``at`` spells: a
     stamp maintenance's own writer would refuse to write."""
     stamp = maintenance_policies.CadenceStamp.under(policy(record), datetime.now(UTC)).model_dump(mode="json")
-    put_record(control_root, storage_options, maintenance_policies.cadence_key(table_uuid, uri), {**stamp, "last_maintained_at": at})
+    put_record(control_root, storage_options, maintenance_policies.cadence_key(table_uuid, uri), record={**stamp, "last_maintained_at": at})
 
 
 def put_trash(control_root: str, storage_options: StorageOptions, record: dict[str, Any]) -> None:
     """Hold ``record`` as a trash record under the uuid it names, whatever it holds: one no drop would file, such as a
     record naming no uuid, is filed under the empty one."""
     key = trash.key(str(record.get("uuid") or ""), kind="namespace" if record.get("kind") == "namespace" else "table")
-    put_record(control_root, storage_options, key, record)
+    put_record(control_root, storage_options, key, record=record)
 
 
 def read_due(control_root: str, storage_options: StorageOptions, table_uuid: str) -> DueRecord | None:

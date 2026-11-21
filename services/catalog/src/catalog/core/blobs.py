@@ -80,10 +80,10 @@ def blob_descriptors(value: object, field: pa.Field) -> Iterator[tuple[str, tupl
     container, a null blob and one whose ``kind`` is null hold none (`lance_docs/lance/format/table/blob.md`
     § Null Descriptors).
     """
-    yield from _descriptors(value, field, field.name, (field.name,))
+    yield from _descriptors(value, field, field.name, names=(field.name,))
 
 
-def _descriptors(value: object, field: pa.Field, path: str, names: tuple[str, ...]) -> Iterator[tuple[str, tuple[str, ...], dict[str, object]]]:
+def _descriptors(value: object, field: pa.Field, path: str, *, names: tuple[str, ...]) -> Iterator[tuple[str, tuple[str, ...], dict[str, object]]]:
     if value is None:
         return
     if is_blob_field(field):
@@ -95,12 +95,12 @@ def _descriptors(value: object, field: pa.Field, path: str, names: tuple[str, ..
         struct = cast(dict[str, object], value)
         for child in nested_fields(field):
             if holds_blob(child):
-                yield from _descriptors(struct.get(child.name), child, f"{path}.{child.name}", (*names, child.name))
+                yield from _descriptors(struct.get(child.name), child, f"{path}.{child.name}", names=(*names, child.name))
         return
     (item,) = nested_fields(field) or (None,)
     if item is not None:
         for position, element in enumerate(cast(list[object], value)):
-            yield from _descriptors(element, item, f"{path}[{position}]", (*names, item.name))
+            yield from _descriptors(element, item, f"{path}[{position}]", names=(*names, item.name))
 
 
 def schema_has_blob(schema: pa.Schema) -> bool:

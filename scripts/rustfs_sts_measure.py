@@ -68,7 +68,7 @@ def s3(ak: str, sk: str, token: str | None = None) -> S3Client:
     return boto3.client("s3", endpoint_url=ENDPOINT, aws_access_key_id=ak, aws_secret_access_key=sk, aws_session_token=token, region_name=REGION, config=CFG)
 
 
-def admin(method: str, path: str, params: dict[str, str], body: bytes = b"") -> tuple[int, str]:
+def admin(method: str, path: str, params: dict[str, str], *, body: bytes = b"") -> tuple[int, str]:
     req = AWSRequest(method=method, url=f"{ENDPOINT}{path}", params=params, data=body)
     S3SigV4Auth(Credentials(*ROOT), "s3", REGION).add_auth(req)
     prepared = req.prepare()
@@ -128,9 +128,9 @@ def scoped_user_and_read_session() -> bool:
             }
         ],
     }
-    seen = admin("PUT", "/rustfs/admin/v3/add-canned-policy", {"name": "catalog"}, json.dumps(catalog_policy).encode())
+    seen = admin("PUT", "/rustfs/admin/v3/add-canned-policy", {"name": "catalog"}, body=json.dumps(catalog_policy).encode())
     record(seen[0] == 200, "admin: create canned policy `catalog` (no sts statement)", f"{seen[0]} {seen[1]}")
-    seen = admin("PUT", "/rustfs/admin/v3/add-user", {"accessKey": "catalog"}, json.dumps({"secretKey": CATALOG_SECRET, "status": "enabled"}).encode())
+    seen = admin("PUT", "/rustfs/admin/v3/add-user", {"accessKey": "catalog"}, body=json.dumps({"secretKey": CATALOG_SECRET, "status": "enabled"}).encode())
     record(seen[0] == 200, "admin: add user `catalog`", f"{seen[0]} {seen[1]}")
     seen = admin("PUT", "/rustfs/admin/v3/set-user-or-group-policy", {"policyName": "catalog", "userOrGroup": "catalog", "isGroup": "false"})
     record(seen[0] == 200, "admin: attach `catalog` to user `catalog`", f"{seen[0]} {seen[1]}")
@@ -250,7 +250,7 @@ def write_session() -> None:
         {"endpoint": ENDPOINT, "aws_access_key_id": "catalog", "aws_secret_access_key": CATALOG_SECRET, "region": REGION, "allow_http": "true"}
     )
     try:
-        put_record("s3://tenant-a", own, "_protection/x.json", {"k": "v"})
+        put_record("s3://tenant-a", own, "_protection/x.json", record={"k": "v"})
         back = get_record("s3://tenant-a", own, "_protection/x.json", event="measure")
         record(back == {"k": "v"}, "pyarrow's record-store write (multipart) with the scoped user's own pair, read back", f"read {back}")
     except Exception as exc:
@@ -259,7 +259,7 @@ def write_session() -> None:
     # s3:ListBucket (`rustfs@1.0.3:rustfs/src/storage/access.rs:2955-2960`), so a prefix-scoped session is refused it:
     # a vended credential writes through Lance's object_store, which never asks.
     try:
-        put_record("s3://tenant-a/t1", StorageOptions.from_flat(options), "_protection/x.json", {"k": "v"})
+        put_record("s3://tenant-a/t1", StorageOptions.from_flat(options), "_protection/x.json", record={"k": "v"})
         record(False, "a prefix-scoped write session is refused pyarrow's HeadBucket on the bucket root", "the write succeeded")
     except OSError as exc:
         record("ACCESS_DENIED" in str(exc), "a prefix-scoped write session is refused pyarrow's HeadBucket on the bucket root", f"{str(exc)[:120]}")
@@ -279,8 +279,8 @@ def who_may_assume() -> None:
             {"Effect": "Deny", "Action": ["sts:AssumeRole"], "Resource": ["*"]},
         ],
     }
-    admin("PUT", "/rustfs/admin/v3/add-canned-policy", {"name": "no-assume"}, json.dumps(deny_policy).encode())
-    admin("PUT", "/rustfs/admin/v3/add-user", {"accessKey": "noassume"}, json.dumps({"secretKey": "noassume-secret-1", "status": "enabled"}).encode())
+    admin("PUT", "/rustfs/admin/v3/add-canned-policy", {"name": "no-assume"}, body=json.dumps(deny_policy).encode())
+    admin("PUT", "/rustfs/admin/v3/add-user", {"accessKey": "noassume"}, body=json.dumps({"secretKey": "noassume-secret-1", "status": "enabled"}).encode())
     admin("PUT", "/rustfs/admin/v3/set-user-or-group-policy", {"policyName": "no-assume", "userOrGroup": "noassume", "isGroup": "false"})
     try:
         assume("noassume", "noassume-secret-1", None)

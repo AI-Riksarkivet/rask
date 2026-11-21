@@ -120,19 +120,19 @@ def keep_declared_retention(settings: Settings, *, canonical: str, namespace_uui
             root,
             options,
             "namespace",
-            namespace_uuid,
-            lambda stored: declared if stored is None else PolicyRecord.model_validate({**stored.stored(), "retain_versions": retain}),
+            key=namespace_uuid,
+            compose=lambda stored: declared if stored is None else PolicyRecord.model_validate({**stored.stored(), "retain_versions": retain}),
         )
         return
     try:
-        held = maintenance_policies.get_policy(root, options, "namespace", namespace_uuid)
+        held = maintenance_policies.get_policy(root, options, "namespace", key=namespace_uuid)
     except maintenance_policies.MalformedPolicyError as exc:
         # Not the policy this step wrote, so not its to remove; the policy door replaces it.
         log.warning("provenance_policy_unreadable", extra={"namespace": canonical, "error": str(exc)[:300]})
         return
     retain = held.stored().get("retain_versions") if held is not None else None
     if isinstance(retain, int) and held == _declared_policy(retain, canonical=canonical, namespace_uuid=namespace_uuid):
-        maintenance_policies.delete_policy(root, options, "namespace", namespace_uuid)
+        maintenance_policies.delete_policy(root, options, "namespace", key=namespace_uuid)
 
 
 async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, client: OpenFgaClient | None) -> bool:

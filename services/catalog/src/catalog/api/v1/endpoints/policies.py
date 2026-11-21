@@ -81,8 +81,8 @@ def _record(
     kind: PolicyKind,
     canonical_id: str,
     body: PolicyRequest,
-    existing: PolicyRecord | None,
     *,
+    existing: PolicyRecord | None,
     uuid: str | None,
     location: str | None = None,
     buckets: list[str] | None = None,
@@ -110,7 +110,7 @@ def _record(
     return PolicyRecord.model_validate({**merged, "kind": kind, "id": canonical_id, "uuid": uuid, "location": location, "buckets": buckets or []})
 
 
-async def _set(settings: CatalogStore, kind: PolicyKind, key: str, compose: Callable[[PolicyRecord | None], PolicyRecord]) -> PolicyRecord:
+async def _set(settings: CatalogStore, kind: PolicyKind, key: str, *, compose: Callable[[PolicyRecord | None], PolicyRecord]) -> PolicyRecord:
     """Write the record ``compose`` merges onto the one stored, conditional on that record (`policies.set_policy`), once
     for all three rungs; the record written.
 
@@ -118,7 +118,7 @@ async def _set(settings: CatalogStore, kind: PolicyKind, key: str, compose: Call
         ConcurrentModificationError: The record kept changing under the set (409, code 14).
     """
     try:
-        return await run_in_threadpool(policies.set_policy, settings.registry_root, settings.storage_options(), kind, key, compose)
+        return await run_in_threadpool(policies.set_policy, settings.registry_root, settings.storage_options(), kind, key=key, compose=compose)
     except conditional_records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"the {kind} policy kept changing while it was set; set it again") from exc
     except policies.MalformedPolicyError as exc:
@@ -137,7 +137,7 @@ async def _describe(settings: CatalogStore, *, kind: PolicyKind, key: str, canon
     never reaches it ([[LH-589]]).
     """
     try:
-        record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), kind, key)
+        record = await run_in_threadpool(policies.get_policy, settings.registry_root, settings.storage_options(), kind, key=key)
     except policies.MalformedPolicyError as exc:
         raise InternalError(f"{exc}; delete the policy, then set it") from exc
     if record is None:
@@ -146,9 +146,9 @@ async def _describe(settings: CatalogStore, *, kind: PolicyKind, key: str, canon
     return _response(record.model_copy(update={"id": canonical}))
 
 
-async def _delete(settings: CatalogStore, control: ControlEmitter, token: Caller | None, kind: PolicyKind, *, key: str, canonical: str) -> PolicyDeleteResponse:
+async def _delete(settings: CatalogStore, control: ControlEmitter, token: Caller | None, *, kind: PolicyKind, key: str, canonical: str) -> PolicyDeleteResponse:
     """Remove one policy (idempotent), log it and announce it — once for all three rungs."""
-    await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, key)
+    await run_in_threadpool(policies.delete_policy, settings.registry_root, settings.storage_options(), kind, key=key)
     log.info("maintenance_policy_deleted", extra={"kind": kind, "id": canonical})
     await emit_control(
         control,
@@ -165,6 +165,7 @@ async def _delete(settings: CatalogStore, control: ControlEmitter, token: Caller
 
 @table_router.post("/{id}/policy/set", response_model_exclude_none=True)
 async def set_table_policy(
+    *,
     id: str,
     body: PolicyRequest,
     table: ResolvedTableDep,
@@ -176,7 +177,9 @@ async def set_table_policy(
     canonical = fga_ids.canonical_object_id(table.segments)
     table_uuid = table.require_uuid()
     # The location beside the uuid, so a listing names the table as it is named now (`table_claims.names_now`).
-    record = await _set(settings, "table", table_uuid, lambda stored: _record("table", canonical, body, stored, uuid=table_uuid, location=str(table.location)))
+    record = await _set(
+        settings, "table", table_uuid, compose=lambda stored: _record("table", canonical, body, existing=stored, uuid=table_uuid, location=str(table.location))
+    )
     log.info("maintenance_policy_set", extra={"kind": "table", "id": canonical})
     await emit_control(
         control,
@@ -198,21 +201,25 @@ async def describe_table_policy(id: str, table: ResolvedTableDep, settings: Sett
 
 
 @table_router.post("/{id}/policy/delete", response_model_exclude_none=True)
-async def delete_table_policy(id: str, table: ResolvedTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
+async def delete_table_policy(
+    *, id: str, table: ResolvedTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep
+) -> PolicyDeleteResponse:
     """Remove the table's maintenance policy (idempotent) — owner-gated by the router."""
-    return await _delete(settings, control, token, "table", key=table.require_uuid(), canonical=fga_ids.canonical_object_id(table.segments))
+    return await _delete(settings, control, token, kind="table", key=table.require_uuid(), canonical=fga_ids.canonical_object_id(table.segments))
 
 
 @namespace_router.post("/{id}/policy/set", response_model_exclude_none=True)
 async def set_namespace_policy(
-    id: str, body: PolicyRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
+    *, id: str, body: PolicyRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
 ) -> PolicyResponse:
     """Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth, unless
     a table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``)."""
     namespace = await _namespace(id, resolver, ns)
     await hierarchy.require_namespace_as_identified(ns, namespace)
     canonical = fga_ids.canonical_object_id(namespace.segments)
-    record = await _set(settings, "namespace", namespace.uuid, lambda stored: _record("namespace", canonical, body, stored, uuid=namespace.uuid))
+    record = await _set(
+        settings, "namespace", namespace.uuid, compose=lambda stored: _record("namespace", canonical, body, existing=stored, uuid=namespace.uuid)
+    )
     log.info("maintenance_policy_set", extra={"kind": "namespace", "id": canonical})
     await emit_control(
         control,
@@ -227,7 +234,7 @@ async def set_namespace_policy(
 
 
 @namespace_router.post("/{id}/policy/describe", response_model_exclude_none=True)
-async def describe_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep, resolver: ResolverDep) -> PolicyResponse | PolicyUnset:
+async def describe_namespace_policy(*, id: str, ns: NamespaceDep, settings: SettingsDep, resolver: ResolverDep) -> PolicyResponse | PolicyUnset:
     """The namespace's maintenance policy (reader-gated), or ``set: false`` when none is set."""
     namespace = await _namespace(id, resolver, ns)
     return await _describe(settings, kind="namespace", key=namespace.uuid, canonical=fga_ids.canonical_object_id(namespace.segments), uuid=namespace.uuid)
@@ -235,12 +242,12 @@ async def describe_namespace_policy(id: str, ns: NamespaceDep, settings: Setting
 
 @namespace_router.post("/{id}/policy/delete", response_model_exclude_none=True)
 async def delete_namespace_policy(
-    id: str, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
+    *, id: str, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
 ) -> PolicyDeleteResponse:
     """Remove the namespace's maintenance policy (idempotent) — owner-gated by the router."""
     namespace = await _namespace(id, resolver, ns)
     await hierarchy.require_namespace_as_identified(ns, namespace)
-    return await _delete(settings, control, token, "namespace", key=namespace.uuid, canonical=fga_ids.canonical_object_id(namespace.segments))
+    return await _delete(settings, control, token, kind="namespace", key=namespace.uuid, canonical=fga_ids.canonical_object_id(namespace.segments))
 
 
 async def _namespace(id: str, resolver: Resolver, ns: LanceNamespace) -> objects.GovernedObject:
@@ -259,6 +266,7 @@ def _validated_project(id: str) -> str:
 
 @project_router.post("/{id}/policy/set", response_model_exclude_none=True)
 async def set_project_policy(
+    *,
     id: str,
     body: PolicyRequest,
     settings: SettingsDep,
@@ -301,7 +309,7 @@ async def set_project_policy(
                 "contested; refusing to set a policy over another tenant's data (fix the warehouse "
                 "records first)"
             )
-    record = await _set(settings, "project", project, lambda stored: _record("project", project, body, stored, uuid=None, buckets=buckets))
+    record = await _set(settings, "project", project, compose=lambda stored: _record("project", project, body, existing=stored, uuid=None, buckets=buckets))
     log.info("maintenance_policy_set", extra={"kind": "project", "id": project})
     await emit_control(
         control,
@@ -315,7 +323,7 @@ async def set_project_policy(
 
 
 @project_router.post("/{id}/policy/describe", response_model_exclude_none=True)
-async def describe_project_policy(id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> PolicyResponse | PolicyUnset:
+async def describe_project_policy(*, id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> PolicyResponse | PolicyUnset:
     """The project's maintenance policy — admin-gated like set/delete (``project`` defines no
     reader-tier relation) — or ``set: false`` when none is set; a project the registry does not know is not found."""
     project = _validated_project(id)
@@ -327,11 +335,13 @@ async def describe_project_policy(id: str, settings: SettingsDep, token: Current
 
 
 @project_router.post("/{id}/policy/delete", response_model_exclude_none=True)
-async def delete_project_policy(id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, control: ControlEmitterDep) -> PolicyDeleteResponse:
+async def delete_project_policy(
+    *, id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, control: ControlEmitterDep
+) -> PolicyDeleteResponse:
     """Remove the project's maintenance policy (idempotent) — admin-gated."""
     project = _validated_project(id)
     await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    return await _delete(settings, control, token, "project", key=project, canonical=project)
+    return await _delete(settings, control, token, kind="project", key=project, canonical=project)
 
 
 def _named_now(settings: CatalogStore, records: list[PolicyRecord]) -> list[PolicyRecord]:
@@ -367,7 +377,7 @@ def _scoped_to_project(record: PolicyRecord, *, warehouse_ids: frozenset[str], p
 
 
 @projects_router.get("/{id}/policies", response_model_exclude_none=True)
-async def list_project_policies(id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectPoliciesResponse:
+async def list_project_policies(*, id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectPoliciesResponse:
     """Every maintenance policy governing data inside this project (#65) — the tenant-scoped VIEW.
 
     Admin-gated on ``project:<id>#can_administer``, exactly like ``describe_project_policy``: the trio

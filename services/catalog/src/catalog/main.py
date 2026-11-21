@@ -346,7 +346,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # backfill's reasons: lineage retries its tables until the namespace exists, so a slow OpenFGA or store must not
     # delay this catalog's readiness. A name under the estate's warehouse is absent until the row is there.
     loops.start("estate-namespaces", partial(_ensure_estate_namespaces, app))
-    _follow_control_events(app, settings, bus, loops)
+    _follow_control_events(app, settings, bus, loops=loops)
     # What `/readyz` answers, read in the background so the probe never waits on a dependency or a request thread
     # (`lakehouse.process.health`, ADR 0203). The store and OpenFGA gate: no door serves without them. The bus is reported only,
     # since every announcement it carries is staged in an outbox first. The namespace this catalog serves is a fact
@@ -363,7 +363,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     start_timers(app, settings, loops)
 
 
-def _follow_control_events(app: FastAPI, settings: Settings, bus: Bus | None, loops: Supervisor) -> None:
+def _follow_control_events(app: FastAPI, settings: Settings, bus: Bus | None, *, loops: Supervisor) -> None:
     """Follow the control topic on a loop of ``loops``, judging and counting each event, where control eventing is on
     (`catalog.api.control_lane`): the lane runs under the emitter's own gate, so a control-off deployment follows
     nothing. Stopped with the other loops."""

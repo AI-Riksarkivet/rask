@@ -47,7 +47,7 @@ OBJECT_RECORD_PREFIXES: Final = (
 )
 
 
-def end_object_records(control_root: str, storage_options: StorageOptions, kind: str, uuid: str) -> list[str]:
+def end_object_records(control_root: str, storage_options: StorageOptions, kind: str, *, uuid: str) -> list[str]:
     """Delete every record the object ``uuid`` names holds, and return the prefixes of the records that existed.
 
     A table also holds one record per stock commit whose author the catalog recorded (:mod:`commit_records`), one per

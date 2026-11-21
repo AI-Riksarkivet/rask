@@ -150,7 +150,7 @@ class _Converger:
             ids = warehouse_doors.validated_ids(self._settings, body)
             await hierarchy.require_project_exists(self._settings, declared.project)
             record = await warehouse_doors.establish_warehouse(
-                self._request, self._settings, body, ids, client=self._client, control=self._control, vendor=self._vendor, author=DECLARATION, owner=None
+                self._request, self._settings, body, ids=ids, client=self._client, control=self._control, vendor=self._vendor, author=DECLARATION, owner=None
             )
             if record.managed_by != GIT:
                 await run_in_threadpool(warehouses.set_warehouse_manager, self._root, self._so, declared.id, manager=GIT)
@@ -337,7 +337,9 @@ async def tick(ctx: Tick) -> ConvergeTick:
         return ConvergeTick(failed=["declaration"])
     client = get_fga_client(request)
     # A door's announcer, for a change no caller made: the tick's scope carries no originator and no bearer.
-    announcer = get_announcer(request, settings, client, Resolver(request, settings), ctx.control, ObjectUuids(request, settings))
+    announcer = get_announcer(
+        request, settings=settings, client=client, resolver=Resolver(request, settings), control=ctx.control, uuids=ObjectUuids(request, settings)
+    )
     converged = await _Converger(request, settings, client=client, control=ctx.control, announcer=announcer, vendor=get_vendor(request)).run(declared)
     if converged.converged or converged.released or converged.grants_written or converged.grants_revoked or converged.failed:
         log.info("declaration_converged", extra=converged.model_dump())

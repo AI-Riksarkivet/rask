@@ -58,7 +58,7 @@ def _governed(uri: str, table: str, settings: MaintenanceSettings, monkeypatch: 
     ``__manifest`` the pass reads."""
     uuid = str(uuid4())
     claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options={})
-    location_claims.take(claims, normalise(uri), table, table.split("$"), is_gone=lambda _claim: False, uuid=uuid)
+    location_claims.take(claims, normalise(uri), table, segments=table.split("$"), is_gone=lambda _claim: False, uuid=uuid)
     named = TableIds(by_location={normalise(uri): table}, namespace_uuids={"db": str(uuid4())})
     monkeypatch.setattr(table_pass, "table_ids_of", lambda *_a, **_k: named)
     return TableTask(uuid=uuid, location=uri)

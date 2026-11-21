@@ -45,7 +45,7 @@ def _statements(policy: dict[str, object]) -> list[dict[str, object]]:
 
 
 def _base_resources(*bases: str, sanctioned: tuple[str, ...] = SANCTIONED) -> list[str]:
-    policy = build_session_policy(BUCKET, PREFIX, "read", bases, sanctioned_bases=sanctioned)
+    policy = build_session_policy(BUCKET, PREFIX, "read", bases=bases, sanctioned_bases=sanctioned)
     return [str(s.get("Resource")) for s in _statements(policy) if str(s["Sid"]).startswith("BaseObjects")]
 
 
@@ -89,7 +89,7 @@ def test_a_base_at_a_bucket_root_is_refused(base: str) -> None:
     System), so raising cannot narrow a real table, and a malformed base is worth an operator's attention.
     """
     with pytest.raises(ValueError):
-        build_session_policy(BUCKET, PREFIX, "read", (base,))
+        build_session_policy(BUCKET, PREFIX, "read", bases=(base,))
 
 
 def test_a_tables_directory_beneath_a_sanctioned_base_is_granted_and_the_base_itself_is_not() -> None:
@@ -111,6 +111,6 @@ def test_the_dropped_base_does_not_renumber_the_ones_that_survive() -> None:
     `BaseObjects0`, which would read as a missing statement to anyone diffing a rendered policy."""
     resources = _base_resources("s3://other-bucket/nope", "s3://data-bases/acme/t-1")
     assert resources == ["arn:aws:s3:::data-bases/acme/t-1/*"]
-    policy = build_session_policy(BUCKET, PREFIX, "read", ("s3://other-bucket/nope", "s3://data-bases/acme/t-1"), sanctioned_bases=SANCTIONED)
+    policy = build_session_policy(BUCKET, PREFIX, "read", bases=("s3://other-bucket/nope", "s3://data-bases/acme/t-1"), sanctioned_bases=SANCTIONED)
     base_sids = sorted(str(s["Sid"]) for s in _statements(policy) if "Base" in str(s["Sid"]))
     assert base_sids == ["BaseObjects0", "ListBase0"], f"surviving bases must be numbered from zero, got {base_sids}"

@@ -259,6 +259,7 @@ def authorization(settings: FgaSettings, client: OpenFgaClient | None, token: Ca
 async def refused_read_as_absent(
     client: OpenFgaClient,
     resolver: Resolver,
+    *,
     token: Caller,
     fga_type: str,
     denied: str,

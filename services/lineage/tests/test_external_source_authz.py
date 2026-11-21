@@ -164,9 +164,9 @@ async def test_a_GOVERNED_input_the_caller_cannot_see_is_STILL_refused(settings:
 
     async with app_with({}) as app:
         with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: gold\$catalog"):
-            await enforce_output_authz(event, app, settings, _PIPELINE)
+            await enforce_output_authz(event, app, settings, token=_PIPELINE)
     async with app_with({"gold$catalog": "reader"}) as app:
-        await enforce_output_authz(event, app, settings, _PIPELINE)
+        await enforce_output_authz(event, app, settings, token=_PIPELINE)
 
 
 @pytest.mark.anyio
@@ -183,7 +183,7 @@ async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settin
     event = _event(inputs=[forged])
 
     async with app_with({}) as app:
-        await enforce_output_authz(event, app, settings, _PIPELINE)
+        await enforce_output_authz(event, app, settings, token=_PIPELINE)
 
     # ASSERTED ON THE IDENTITY KEY the edges use, never on `(forged.namespace, forged.name)` against a literal,
     # which is unconditionally true and cannot fail.
@@ -200,9 +200,9 @@ async def test_OUTPUTS_are_never_exempted(settings: LineageSettings, app_with: A
     located = _dataset("s3://lake", EXTERNAL_NAME)
 
     async with app_with({GOVERNED: "writer"}, {f"s3://lake/{EXTERNAL_NAME}": _uuid(GOVERNED)}) as app:
-        await enforce_output_authz(_event(outputs=[located]), app, settings, _PIPELINE)
+        await enforce_output_authz(_event(outputs=[located]), app, settings, token=_PIPELINE)
         with pytest.raises(PermissionDeniedError, match="can_write_data"):
-            await enforce_output_authz(_event(outputs=[located, _dataset(EXTERNAL_NS, EXTERNAL_NAME)]), app, settings, _PIPELINE)
+            await enforce_output_authz(_event(outputs=[located, _dataset(EXTERNAL_NS, EXTERNAL_NAME)]), app, settings, token=_PIPELINE)
 
 
 @pytest.mark.anyio
@@ -212,9 +212,9 @@ async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_externa
 
     async with app_with({}) as app:
         with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: bind86-bronze\$pages$"):
-            await enforce_output_authz(event, app, settings, _PIPELINE)
+            await enforce_output_authz(event, app, settings, token=_PIPELINE)
     async with app_with({GOVERNED: "reader"}) as app:
-        await enforce_output_authz(event, app, settings, _PIPELINE)
+        await enforce_output_authz(event, app, settings, token=_PIPELINE)
 
 
 @pytest.mark.parametrize(
@@ -364,7 +364,7 @@ async def test_a_GOVERNED_column_upstream_is_AUTHORIZED_not_written_blind(settin
 
     async with app_with({"mine$table": "writer"}) as app:  # write on the sandbox only
         with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: bind86-bronze\$pages"):
-            await enforce_output_authz(event, app, settings, _PIPELINE)
+            await enforce_output_authz(event, app, settings, token=_PIPELINE)
 
 
 @pytest.mark.anyio
@@ -374,7 +374,7 @@ async def test_a_column_upstream_the_caller_CAN_see_passes(settings: LineageSett
     event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "gold", GOVERNED, inputs=[_table_payload("gold", GOVERNED)])
 
     async with app_with({"mine$table": "writer", GOVERNED: "reader"}) as app:
-        await enforce_output_authz(event, app, settings, _PIPELINE)
+        await enforce_output_authz(event, app, settings, token=_PIPELINE)
 
 
 @pytest.mark.anyio
@@ -385,4 +385,4 @@ async def test_an_EXTERNAL_column_upstream_stays_exempt(settings: LineageSetting
     event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "s3://raw", "gold$catalog")
 
     async with app_with({"mine$table": "writer"}) as app:
-        await enforce_output_authz(event, app, settings, _PIPELINE)
+        await enforce_output_authz(event, app, settings, token=_PIPELINE)

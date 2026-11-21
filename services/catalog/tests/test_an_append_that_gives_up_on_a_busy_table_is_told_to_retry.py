@@ -48,7 +48,7 @@ def test_an_append_lance_gives_up_on_is_answered_as_a_conflict_to_retry(tmp_path
         namespace,
         StorageOptions(),
         TABLE_ID,
-        pa.table({"id": pa.array([1], pa.int64())}),
+        table=pa.table({"id": pa.array([1], pa.int64())}),
         root=str(tmp_path / "data"),
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),
@@ -66,7 +66,7 @@ def test_an_append_lance_gives_up_on_is_answered_as_a_conflict_to_retry(tmp_path
             table,
             StorageOptions(),
             InsertIntoTableRequest(id=TABLE_ID, mode="append"),
-            _ipc(pa.table({"id": pa.array([2], pa.int64())})),
+            data=_ipc(pa.table({"id": pa.array([2], pa.int64())})),
             max_bytes=1 << 20,
             transaction_properties={},
         )

@@ -120,7 +120,7 @@ class BusDouble(Bus):
             TimeoutError: The service started no consumer of that name.
         """
         lane, handle, park = self._consumers[await self._started(self._consumers, consumer)]
-        return await judged(self._delivery(envelope, subject=subject, attempt=attempt), lane, handle, park)
+        return await judged(self._delivery(envelope, subject=subject, attempt=attempt), lane, handle, park=park)
 
     async def lane_of(self, consumer: str) -> Lane:
         """The lane the service consumes ``consumer`` with: the numbers it asked the bus to settle its deliveries by.

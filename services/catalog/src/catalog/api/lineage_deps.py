@@ -100,8 +100,8 @@ async def emit_measured_write(
     """
     # A request may spell main by name; the event records main as no ref at all, as Lance does.
     ref = version_retention.recorded_branch(branch)
-    readback = await run_in_threadpool(versions.read_version_and_schema, location, so, segments, pin_version, ref)
-    identifier = await run_in_threadpool(versions.branch_identifier, location, so, segments, ref) if ref is not None else None
+    readback = await run_in_threadpool(versions.read_version_and_schema, location, so, segments, pin_version=pin_version, branch=ref)
+    identifier = await run_in_threadpool(versions.branch_identifier, location, so, segments, branch=ref) if ref is not None else None
     await emit_write_event(
         emitter,
         segments,

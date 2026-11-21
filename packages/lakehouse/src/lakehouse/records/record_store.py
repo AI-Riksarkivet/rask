@@ -71,7 +71,7 @@ def record_key(prefix: str, kind: str, canonical_id: str) -> str:
     return f"{prefix}/{record_name(kind, canonical_id)}"
 
 
-def put_record(control_root: str, storage_options: StorageOptions, key: str, record: dict[str, Any]) -> None:
+def put_record(control_root: str, storage_options: StorageOptions, key: str, *, record: dict[str, Any]) -> None:
     """Write one record — an overwrite, so every registry's set is idempotent.
 
     On S3 by its key alone, through the object client: pyarrow's ``create_dir`` puts every parent of the key as a

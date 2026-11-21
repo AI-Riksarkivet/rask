@@ -243,7 +243,7 @@ def _drain(settings: LineageSettings, repo: _Repo, publisher: BusDouble, store: 
     async def _once(request: Any) -> relay.DrainOutcome:  # noqa: ANN401 — the stand-in request
         # The feed lineage's lifespan wires on its app, the one the relay hands the drain.
         request.app.state.provenance = repo
-        return await relay._drain_outbox(request.app, cast("Any", repo), settings, StorageOptions(), publisher)
+        return await relay._drain_outbox(request.app, cast("Any", repo), settings, opts=StorageOptions(), publisher=publisher)
 
     if store is None:
         return asyncio.run(_once(_request()))
@@ -269,7 +269,7 @@ def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:
     return run_id
 
 
-async def _admit(*_args: object) -> frozenset[str]:
+async def _admit(_event: object, _app: object, _settings: object, *, arrived: object) -> frozenset[str]:
     """The gate admits: what is under test is the drain's handling after it, not the gate's decision."""
     return frozenset()
 
@@ -432,7 +432,7 @@ def _refusing(key: str, settings: LineageSettings) -> Any:  # noqa: ANN401 — t
     assert refused_json is not None
     refused_doc = json.loads(refused_json[1])["data"]
 
-    async def gate(_event: object, _app: object, _settings: object, arrived: dict[str, Any]) -> frozenset[str]:
+    async def gate(_event: object, _app: object, _settings: object, *, arrived: dict[str, Any]) -> frozenset[str]:
         if arrived == refused_doc:
             raise PermissionDeniedError("can_write_data required")
         return frozenset()
@@ -549,7 +549,15 @@ def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
     with pytest.raises(PermissionDeniedError) as refused:
         _decided(
             openfga_store,
-            lambda request: dlq.replay_dlq(key, request, cast("Any", repo), settings, operator, fga_deps.DatasetFilter(request, settings, operator), publisher),
+            lambda request: dlq.replay_dlq(
+                run_id=key,
+                request=request,
+                provenance=cast("Any", repo),
+                settings=settings,
+                token=operator,
+                datasets=fga_deps.DatasetFilter(request, settings, operator),
+                publisher=publisher,
+            ),
         )
 
     assert isinstance(refused.value, UnverifiedEventError) is unsigned, f"the refusal came from the wrong gate: {refused.value!r}"
@@ -563,7 +571,17 @@ def test_the_dlq_replay_re_publishes_the_staged_event_to_the_lineage_topic(tmp_p
     key, staged_json = _stage_a_create(settings, catalog)
     publisher = BusDouble()
 
-    out = asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", _Repo()), settings, None, fga_deps.DatasetFilter(_request(), settings, None), publisher))
+    out = asyncio.run(
+        dlq.replay_dlq(
+            run_id=key,
+            request=_request(),
+            provenance=cast("Any", _Repo()),
+            settings=settings,
+            token=None,
+            datasets=fga_deps.DatasetFilter(_request(), settings, None),
+            publisher=publisher,
+        )
+    )
 
     assert out.status == "replayed"
     assert publisher.events == [json.loads(staged_json)], "subscribers never hear of a replayed create; the re-publish must carry the staged event"
@@ -578,13 +596,13 @@ def test_a_replay_whose_publish_fails_leaves_the_object_for_the_relay(tmp_path: 
     with pytest.raises(ServiceUnavailableError, match="re-announcing it failed"):
         asyncio.run(
             dlq.replay_dlq(
-                key,
-                _request(),
-                cast("Any", _Repo()),
-                settings,
-                None,
-                fga_deps.DatasetFilter(_request(), settings, None),
-                BusDouble(failing=BusUnavailableError("this process is not connected to the bus")),
+                run_id=key,
+                request=_request(),
+                provenance=cast("Any", _Repo()),
+                settings=settings,
+                token=None,
+                datasets=fga_deps.DatasetFilter(_request(), settings, None),
+                publisher=BusDouble(failing=BusUnavailableError("this process is not connected to the bus")),
             )
         )
 
@@ -597,7 +615,7 @@ def test_the_dlq_view_lists_bytes_no_parser_accepts_as_poison(tmp_path: Path, bo
     key, _ = _stage_a_create(settings, catalog)
     hostile = _stage_hostile_first(settings, body)
 
-    backlog = asyncio.run(dlq.list_dlq(settings, None, fga_deps.DatasetFilter(_request(), settings, None), limit=100))
+    backlog = asyncio.run(dlq.list_dlq(settings=settings, token=None, datasets=fga_deps.DatasetFilter(_request(), settings, None), limit=100))
 
     assert [(e.run_id, e.parseable) for e in backlog.events] == [(hostile, False), (key, True)], f"the view does not show the poison: {backlog.events}"
 
@@ -612,7 +630,11 @@ def test_the_dlq_replay_answers_bytes_no_parser_accepts_as_poison(tmp_path: Path
     flt = fga_deps.DatasetFilter(_request(), settings, None)
 
     with pytest.raises(answer):
-        asyncio.run(dlq.replay_dlq(hostile, _request(), cast("Any", _Repo()), settings, None, flt, BusDouble()))
+        asyncio.run(
+            dlq.replay_dlq(
+                run_id=hostile, request=_request(), provenance=cast("Any", _Repo()), settings=settings, token=None, datasets=flt, publisher=BusDouble()
+            )
+        )
 
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is not None, "a poison replay must leave the object for the relay"
 
@@ -629,11 +651,21 @@ def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_repl
     monkeypatch.setattr(dlq.audit, "audit", lambda action, outcome, **_kw: audited.append((action, outcome)))
     repo, publisher = _Repo(), BusDouble()
 
-    backlog = _decided(openfga_store, lambda request: dlq.list_dlq(settings, stranger, fga_deps.DatasetFilter(request, settings, stranger), limit=100))
+    backlog = _decided(
+        openfga_store, lambda request: dlq.list_dlq(settings=settings, token=stranger, datasets=fga_deps.DatasetFilter(request, settings, stranger), limit=100)
+    )
     with pytest.raises(TransactionNotFoundError, match=f"no staged lineage event for run {key}"):
         _decided(
             openfga_store,
-            lambda request: dlq.replay_dlq(key, request, cast("Any", repo), settings, stranger, fga_deps.DatasetFilter(request, settings, stranger), publisher),
+            lambda request: dlq.replay_dlq(
+                run_id=key,
+                request=request,
+                provenance=cast("Any", repo),
+                settings=settings,
+                token=stranger,
+                datasets=fga_deps.DatasetFilter(request, settings, stranger),
+                publisher=publisher,
+            ),
         )
 
     assert backlog.events == [], f"the view lists a create for a table the caller cannot see: {backlog.events}"
@@ -659,7 +691,17 @@ def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -
     [(key, _)] = list(outbox.list_events(settings.outbox_uri, StorageOptions()))
     publisher = BusDouble()
 
-    out = asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", _Repo()), settings, None, fga_deps.DatasetFilter(_request(), settings, None), publisher))
+    out = asyncio.run(
+        dlq.replay_dlq(
+            run_id=key,
+            request=_request(),
+            provenance=cast("Any", _Repo()),
+            settings=settings,
+            token=None,
+            datasets=fga_deps.DatasetFilter(_request(), settings, None),
+            publisher=publisher,
+        )
+    )
 
     assert out.status == "replayed"
     assert publisher.events == [event], "a replayed run never reaches the lineage topic"

@@ -40,7 +40,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
         namespace,
         StorageOptions(),
         TABLE_ID,
-        pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": pa.array([0, 0, 0], pa.int64())}, schema=SCHEMA),
+        table=pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": pa.array([0, 0, 0], pa.int64())}, schema=SCHEMA),
         root=str(tmp_path / "data"),
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),
@@ -73,7 +73,7 @@ def test_a_delete_planned_on_a_version_another_writer_passed_plans_again_and_lan
         table,
         StorageOptions(),
         {**STAMP, "rask.operation": "delete"},
-        captured(table, StorageOptions(), lambda handle: handle.delete("id = 1"), branch=None),
+        plan=captured(table, StorageOptions(), lambda handle: handle.delete("id = 1"), branch=None),
         opened=opened,
     )
 

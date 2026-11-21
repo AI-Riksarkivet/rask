@@ -102,7 +102,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     root = str(tmp_path / "data")
     namespace = connect("dir", {"root": root})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    create_table(namespace, StorageOptions(), TABLE_ID, _table([1, 2, 3]), root=root, mode="create", registry=None)
+    create_table(namespace, StorageOptions(), TABLE_ID, table=_table([1, 2, 3]), root=root, mode="create", registry=None)
     dataset = open_by_name(namespace, StorageOptions(), TABLE_ID)
     dataset.tags.create(LIVE_TAG, 1)
     dataset.create_branch(LIVE_BRANCH, None)

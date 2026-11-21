@@ -288,8 +288,8 @@ def _taken(
     current: LocationClaim,
     location: str,
     table: str,
-    segments: list[str],
     *,
+    segments: list[str],
     is_gone: Callable[[LocationClaim], bool],
     previous: str | None,
     token: str | None,
@@ -329,8 +329,8 @@ def take(
     store: ClaimStore,
     location: str,
     table: str,
-    segments: list[str],
     *,
+    segments: list[str],
     is_gone: Callable[[LocationClaim], bool],
     previous: str | None = None,
     token: str | None = None,
@@ -370,23 +370,23 @@ def take(
         if found.stored is None:
             fresh = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), uuid=uuid, claimed_at=found.at, token=token)
             try:
-                conditional_records.create_json(store.control_root, store.storage_options, key, fresh.model_dump(mode="json"))
+                conditional_records.create_json(store.control_root, store.storage_options, key, record=fresh.model_dump(mode="json"))
             except conditional_records.RecordExistsError:
                 continue
             return fresh
         current = LocationClaim.model_validate(found.stored.record)
-        held = _taken(current, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=uuid, is_kept=is_kept, now=found.at)
+        held = _taken(current, location, table, segments=segments, is_gone=is_gone, previous=previous, token=token, uuid=uuid, is_kept=is_kept, now=found.at)
         if held is current:
             return current
         try:
-            conditional_records.replace_json(store.control_root, store.storage_options, key, held.model_dump(mode="json"), etag=found.stored.etag)
+            conditional_records.replace_json(store.control_root, store.storage_options, key, record=held.model_dump(mode="json"), etag=found.stored.etag)
         except conditional_records.RecordChangedError:
             continue
         return held
     raise conditional_records.RecordChangedError(f"the claim on {decoded_path(location)!r} kept changing across {_TAKE_ATTEMPTS} attempts")
 
 
-def _write_over(store: ClaimStore, location: str, read_as: ClaimRead | None, claim: LocationClaim) -> None:
+def _write_over(store: ClaimStore, location: str, read_as: ClaimRead | None, *, claim: LocationClaim) -> None:
     """Write ``claim`` on ``location`` only while its record is still what ``read_as`` found: absent, or that ETag.
 
     Raises:
@@ -395,9 +395,9 @@ def _write_over(store: ClaimStore, location: str, read_as: ClaimRead | None, cla
     key, body = claim_key(location), claim.model_dump(mode="json")
     try:
         if read_as is None:
-            conditional_records.create_json(store.control_root, store.storage_options, key, body)
+            conditional_records.create_json(store.control_root, store.storage_options, key, record=body)
         else:
-            conditional_records.replace_json(store.control_root, store.storage_options, key, body, etag=read_as.etag)
+            conditional_records.replace_json(store.control_root, store.storage_options, key, record=body, etag=read_as.etag)
     except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
         raise ClaimChangedError(f"the claim on {decoded_path(location)!r} changed since it was read") from None
 
@@ -432,10 +432,10 @@ def hand_over(
         held = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), claimed_at=now, token=token)
     else:
         held = _taken(
-            read_as.claim, location, table, segments, is_gone=is_gone, previous=previous, token=token, uuid=None, is_kept=lambda _claim: False, now=now
+            read_as.claim, location, table, segments=segments, is_gone=is_gone, previous=previous, token=token, uuid=None, is_kept=lambda _claim: False, now=now
         )
     fenced = held.model_copy(update={"fence": ClaimFence(token=token, at=now)})
-    _write_over(store, location, read_as, fenced)
+    _write_over(store, location, read_as, claim=fenced)
     return fenced
 
 
@@ -467,7 +467,7 @@ def fence(
         raise LocationHeldError(current)
     else:
         fenced = LocationClaim(location=decoded_path(location), table=table, segments=list(segments), uuid=current.uuid, claimed_at=now, fence=mark)
-    _write_over(store, location, read_as, fenced)
+    _write_over(store, location, read_as, claim=fenced)
 
 
 def lift_fence(store: ClaimStore, location: str, token: str) -> None:
@@ -484,7 +484,7 @@ def lift_fence(store: ClaimStore, location: str, token: str) -> None:
         return current.model_copy(update={"fence": None}).model_dump(mode="json")
 
     try:
-        conditional_records.mutate_json(store.control_root, store.storage_options, claim_key(location), _lifted)
+        conditional_records.mutate_json(store.control_root, store.storage_options, claim_key(location), mutate=_lifted)
     except (conditional_records.RecordMissingError, _NotHeld):
         return
 
@@ -529,7 +529,7 @@ def _release_where(store: ClaimStore, location: str, owned: Callable[[LocationCl
             return False
         released = current.model_copy(update={"released_at": found.at}).model_dump(mode="json")
         try:
-            conditional_records.replace_json(store.control_root, store.storage_options, key, released, etag=found.stored.etag)
+            conditional_records.replace_json(store.control_root, store.storage_options, key, record=released, etag=found.stored.etag)
         except conditional_records.RecordChangedError:
             continue
         return True
@@ -592,7 +592,7 @@ def take_directory(store: ClaimStore, directory: str, claimant: DirectoryClaiman
         )
         if found.stored is None:
             try:
-                conditional_records.create_json(store.control_root, store.storage_options, key, mine.model_dump(mode="json"))
+                conditional_records.create_json(store.control_root, store.storage_options, key, record=mine.model_dump(mode="json"))
             except conditional_records.RecordExistsError:
                 continue
             return mine
@@ -602,7 +602,7 @@ def take_directory(store: ClaimStore, directory: str, claimant: DirectoryClaiman
         if current.released_at is None and (current.within_lease(found.at) or directory_holder_stands(store, current)):
             raise LocationHeldError(current)
         try:
-            conditional_records.replace_json(store.control_root, store.storage_options, key, mine.model_dump(mode="json"), etag=found.stored.etag)
+            conditional_records.replace_json(store.control_root, store.storage_options, key, record=mine.model_dump(mode="json"), etag=found.stored.etag)
         except conditional_records.RecordChangedError:
             continue
         return mine

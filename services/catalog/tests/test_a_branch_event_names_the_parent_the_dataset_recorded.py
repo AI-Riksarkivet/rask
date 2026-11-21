@@ -74,7 +74,9 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, a runtime-only type
     # With its location's claim recording the table's uuid on the control root, as the create door takes it: the
     # event names the table by that uuid (ADR 0173 §8).
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
-    created = create_table(namespace, StorageOptions(), TABLE, _table(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder=TABLE_PATH)
+    created = create_table(
+        namespace, StorageOptions(), TABLE, table=_table(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder=TABLE_PATH
+    )
     # A SECOND VERSION, so "the parent is main's current version" is a number the request could not
     # have guessed and a null could not stand in for. With one version, 1 and "unset" are too close
     # to tell apart in a failure message.

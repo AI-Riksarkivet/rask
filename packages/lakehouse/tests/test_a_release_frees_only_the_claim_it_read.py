@@ -40,7 +40,7 @@ def _resolves(_claim: LocationClaim) -> bool:
 
 def test_a_release_leaves_the_claim_a_hand_over_wrote_after_its_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = ClaimStore(control_root=str(tmp_path))
-    location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves)
+    location_claims.take(store, LOCATION, "ns$x", segments=["ns", "x"], is_gone=_resolves)
     read = conditional_records.read_json_at
     handed_over: list[str] = []
 
@@ -48,7 +48,7 @@ def test_a_release_leaves_the_claim_a_hand_over_wrote_after_its_read(tmp_path: P
         found = read(root_uri, storage_options, key)
         if not handed_over:
             handed_over.append(key)
-            location_claims.take(store, LOCATION, "ns$y", ["ns", "y"], previous="ns$x", is_gone=_resolves)
+            location_claims.take(store, LOCATION, "ns$y", segments=["ns", "y"], previous="ns$x", is_gone=_resolves)
         return found
 
     monkeypatch.setattr(conditional_records, "read_json_at", _read_then_hand_over)
@@ -60,27 +60,27 @@ def test_a_release_leaves_the_claim_a_hand_over_wrote_after_its_read(tmp_path: P
     current = location_claims.holder(store, LOCATION)
     assert current is not None and (current.table, current.segments) == ("ns$y", ["ns", "y"])
     with pytest.raises(LocationHeldError):
-        location_claims.take(store, LOCATION, "ns$z", ["ns", "z"], is_gone=_resolves)
+        location_claims.take(store, LOCATION, "ns$z", segments=["ns", "z"], is_gone=_resolves)
 
 
 def test_a_release_by_the_holder_frees_the_location_for_another_table(tmp_path: Path) -> None:
     store = ClaimStore(control_root=str(tmp_path))
-    location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves)
+    location_claims.take(store, LOCATION, "ns$x", segments=["ns", "x"], is_gone=_resolves)
 
     released = location_claims.release(store, LOCATION, "ns$x")
 
     assert released is True
     assert location_claims.holder(store, LOCATION) is None
-    location_claims.take(store, LOCATION, "ns$z", ["ns", "z"], is_gone=_resolves)
+    location_claims.take(store, LOCATION, "ns$z", segments=["ns", "z"], is_gone=_resolves)
     current = location_claims.holder(store, LOCATION)
     assert current is not None and current.table == "ns$z"
 
 
 def test_a_new_table_under_a_name_whose_release_was_lost_is_given_its_own_uuid(tmp_path: Path) -> None:
     store = ClaimStore(control_root=str(tmp_path))
-    location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves, uuid=ENDED)
+    location_claims.take(store, LOCATION, "ns$x", segments=["ns", "x"], is_gone=_resolves, uuid=ENDED)
 
-    taken = location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves, uuid=MINTED)
+    taken = location_claims.take(store, LOCATION, "ns$x", segments=["ns", "x"], is_gone=_resolves, uuid=MINTED)
 
     held = location_claims.holder(store, LOCATION)
     assert (taken.uuid, held.uuid if held is not None else None) == (MINTED, MINTED), "the new table took the ended table's uuid"
@@ -90,7 +90,7 @@ def test_a_release_naming_its_uuid_leaves_a_claim_the_same_name_took_since(tmp_p
     """A release naming the uuid it owns the claim for frees only that claim: the same name registered again at the
     location since holds the claim under a uuid of its own, and keeps it."""
     store = ClaimStore(control_root=str(tmp_path))
-    location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves, uuid=MINTED)
+    location_claims.take(store, LOCATION, "ns$x", segments=["ns", "x"], is_gone=_resolves, uuid=MINTED)
 
     refused = location_claims.release(store, LOCATION, "ns$x", uuid=ENDED)
     owned = location_claims.release(store, LOCATION, "ns$x", uuid=MINTED)
@@ -102,7 +102,7 @@ def test_a_record_that_is_no_claim_is_left_out_of_the_held_claims_and_said(tmp_p
     """The listing feeds sweeps that must go on past one bad record, and the warning is all that says a location's
     record went unread."""
     store = ClaimStore(control_root=str(tmp_path))
-    location_claims.take(store, LOCATION, "ns$x", ["ns", "x"], is_gone=_resolves)
+    location_claims.take(store, LOCATION, "ns$x", segments=["ns", "x"], is_gone=_resolves)
     stray = tmp_path / location_claims.claim_key("s3://lance-catalog/stray")
     stray.write_text('{"location": "lance-catalog/stray"}')
 

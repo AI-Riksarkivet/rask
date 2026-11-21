@@ -110,12 +110,12 @@ def affordable_cache_bytes(metadata_cache_bytes: int, index_cache_bytes: int, *,
         return metadata_cache_bytes, index_cache_bytes
     scale = budget / requested
     metadata, index = int(metadata_cache_bytes * scale), int(index_cache_bytes * scale)
-    _log_clamp(requested, metadata + index, budget, fraction)
+    _log_clamp(requested, metadata + index, budget, fraction=fraction)
     return metadata, index
 
 
 @cache
-def _log_clamp(requested: int, granted: int, budget: int, fraction: float) -> None:
+def _log_clamp(requested: int, granted: int, budget: int, *, fraction: float) -> None:
     """Say once, per distinct outcome, that a configured cache was reduced to fit its container.
 
     A clamp nobody can see is indistinguishable from a setting nobody applied: an operator who

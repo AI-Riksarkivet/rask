@@ -1303,7 +1303,12 @@ class _StoreEvents:
 
     def claim(self, table: str, *, readable: bool) -> None:
         location_claims.take(
-            self.claims, f"s3://b/{table}", f"lance_catalog$db${table}", ["lance_catalog", "db", table], is_gone=lambda _claim: False, uuid=_uuid_of(table)
+            self.claims,
+            f"s3://b/{table}",
+            f"lance_catalog$db${table}",
+            segments=["lance_catalog", "db", table],
+            is_gone=lambda _claim: False,
+            uuid=_uuid_of(table),
         )
         if not readable:
             key = self.control / location_claims.claim_key(f"s3://b/{table}")
@@ -1313,7 +1318,12 @@ class _StoreEvents:
     def make_readable(self, table: str) -> None:
         (self.control / location_claims.claim_key(f"s3://b/{table}")).rmdir()
         location_claims.take(
-            self.claims, f"s3://b/{table}", f"lance_catalog$db${table}", ["lance_catalog", "db", table], is_gone=lambda _claim: False, uuid=_uuid_of(table)
+            self.claims,
+            f"s3://b/{table}",
+            f"lance_catalog$db${table}",
+            segments=["lance_catalog", "db", table],
+            is_gone=lambda _claim: False,
+            uuid=_uuid_of(table),
         )
 
     async def deliver(self, body: bytes) -> None:

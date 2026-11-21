@@ -50,13 +50,13 @@ def test_registry_round_trips_and_lists(tmp_path: Path) -> None:
     seeding.put_policy(root, StorageOptions(), _policy(retention_days=7))
     seeding.put_policy(root, StorageOptions(), _policy(kind="namespace", id_="silver", uuid="ns-silver"))
 
-    stored = mp.get_policy(root, StorageOptions(), "table", TABLE_UUID)
+    stored = mp.get_policy(root, StorageOptions(), "table", key=TABLE_UUID)
     assert stored is not None and stored.stored()["retention_days"] == 7
-    assert mp.get_policy(root, StorageOptions(), "table", "db$t") is None, "a table's record is keyed by its uuid, never its name"
+    assert mp.get_policy(root, StorageOptions(), "table", key="db$t") is None, "a table's record is keyed by its uuid, never its name"
     assert len(mp.list_policies(root, StorageOptions())) == 2
 
-    assert mp.delete_policy(root, StorageOptions(), "table", TABLE_UUID) is True
-    assert mp.delete_policy(root, StorageOptions(), "table", TABLE_UUID) is False  # idempotent
+    assert mp.delete_policy(root, StorageOptions(), "table", key=TABLE_UUID) is True
+    assert mp.delete_policy(root, StorageOptions(), "table", key=TABLE_UUID) is False  # idempotent
     assert len(mp.list_policies(root, StorageOptions())) == 1
 
 
@@ -121,12 +121,12 @@ def test_project_policy_round_trips_and_lists(tmp_path: Path) -> None:
     # registry round-trip AND list_policies' validation — the sweep only ever sees what list returns.
     root = str(tmp_path)
     seeding.put_policy(root, StorageOptions(), _project_policy(retention_days=90))
-    stored = mp.get_policy(root, StorageOptions(), "project", "acme")
+    stored = mp.get_policy(root, StorageOptions(), "project", key="acme")
     assert stored is not None and stored.buckets == ["acme-wh"]
     listed = mp.list_policies(root, StorageOptions())
     assert len(listed) == 1 and listed[0].kind == "project"
-    assert mp.delete_policy(root, StorageOptions(), "project", "acme") is True
-    assert mp.delete_policy(root, StorageOptions(), "project", "acme") is False  # idempotent
+    assert mp.delete_policy(root, StorageOptions(), "project", key="acme") is True
+    assert mp.delete_policy(root, StorageOptions(), "project", key="acme") is False  # idempotent
 
 
 def test_list_policies_rejects_a_bucketless_project_record(tmp_path: Path) -> None:
@@ -251,11 +251,11 @@ def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: A
     from catalog.api.v1.endpoints.policies import _record
     from catalog.schemas import PolicyRequest
 
-    stored = _record("table", "bronze$pages", PolicyRequest(scan_batch_size=64, cleanup_enabled=False), None, uuid=TABLE_UUID)
+    stored = _record("table", "bronze$pages", PolicyRequest(scan_batch_size=64, cleanup_enabled=False), existing=None, uuid=TABLE_UUID)
     assert stored.stored()["scan_batch_size"] == 64
 
     # A later save that only flips compaction off — exactly what the form sends.
-    updated = _record("table", "bronze$pages", PolicyRequest(compact_enabled=False), stored, uuid=TABLE_UUID)
+    updated = _record("table", "bronze$pages", PolicyRequest(compact_enabled=False), existing=stored, uuid=TABLE_UUID)
 
     assert updated.stored()["compact_enabled"] is False, "the field the caller DID set must apply"
     assert updated.stored()["scan_batch_size"] == 64, "the memory bound was silently cleared"

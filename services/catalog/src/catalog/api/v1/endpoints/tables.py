@@ -181,6 +181,7 @@ async def _tables_of_every_warehouse(request: Request, settings: Settings) -> li
 
 @spec_router.get("", response_model_exclude_none=True)
 async def list_all_tables(
+    *,
     request: Request,
     settings: SettingsDep,
     so: StorageOptionsDep,
@@ -296,7 +297,7 @@ async def _vend_on_spec_door(
         bases = await run_in_threadpool(_vendable_bases, location, settings, so)
         if bases is None or isinstance(vendor, ModeBVendor):
             return None
-        tier = await write_doors.spec_vend_tier(settings, token, client, ns, segments, table_uuid=table_uuid, door=door)
+        tier = await write_doors.spec_vend_tier(settings, token, client, ns=ns, segments=segments, table_uuid=table_uuid, door=door)
         if tier is None:
             if asked:
                 raise PermissionDeniedError(f"can_read_data required on table:{fga_ids.canonical_object_id(segments)} to vend credentials")
@@ -318,6 +319,7 @@ async def _vend_on_spec_door(
 # service is two things to keep in step.
 @spec_router.post("/{id}/declare", response_model_exclude_none=True)
 async def declare_table(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
@@ -366,7 +368,7 @@ async def declare_table(
     # The table's uuid is minted with its location's claim, before anything grants or announces it (ADR 0173 §2, §5),
     # and its grants are written once the claim records it, before the backend records the table ([[LH-588]]).
     table_uuid = str(uuid4())
-    grants = object_grants.GrantsBeforeWrite(client, settings, token, resolver, segments=segments)
+    grants = object_grants.GrantsBeforeWrite(client, settings, token, resolver=resolver, segments=segments)
     try:
         location = await run_in_threadpool(
             partial(
@@ -400,14 +402,30 @@ async def declare_table(
     # Versionless (no data yet): records who declared it + the reserved location, and keys the CREATED edge
     # (declare_table ∈ lineage _CREATE_OPS). Reconcile fills the real version once data lands at the URI.
     declared = _marker(
-        announcer, token, named, segments, operation=DECLARE_TABLE, uuids=await uuids.table(segments, location=location, uuid=table_uuid), source_uri=location
+        announcer,
+        token,
+        named,
+        segments=segments,
+        operation=DECLARE_TABLE,
+        uuids=await uuids.table(segments, location=location, uuid=table_uuid),
+        source_uri=location,
     )
     declared_event = _table_event(token, named, action="table_declared", table_uuid=table_uuid, name=canonical, extra={"location": location})
     async with _filed_or_undone(
         announcer, door="declare_table", target=fga_ids.table_object(table_uuid), announcements=[declared, declared_event], undo=_take_back_declare
     ) as filing:
         response = await _vended_declaration(
-            ns, so, segments, req, location=location, table_uuid=table_uuid, undo=_undo_declare, settings=settings, vendor=vendor, token=token, client=client
+            ns,
+            so,
+            segments,
+            req=req,
+            location=location,
+            table_uuid=table_uuid,
+            undo=_undo_declare,
+            settings=settings,
+            vendor=vendor,
+            token=token,
+            client=client,
         )
         await filing.send(declared)
         await filing.send(declared_event)
@@ -421,8 +439,8 @@ async def _vended_declaration(
     ns: LanceNamespace,
     so: StorageOptions,
     segments: list[str],
-    req: DeclareTableRequest,
     *,
+    req: DeclareTableRequest,
     location: str,
     table_uuid: str,
     undo: Callable[[], Awaitable[None]],
@@ -464,8 +482,8 @@ def _marker(
     announcer: Announcer,
     token: Caller | None,
     evidence: Evidence,
-    segments: list[str],
     *,
+    segments: list[str],
     operation: str,
     uuids: DatasetUuids,
     source_uri: str | None = None,
@@ -552,6 +570,7 @@ def _refuse_a_branch_describe_cannot_honour(branch: str | None, *, named_by: str
 
 @spec_router.post("/{id}/describe", response_model_exclude_none=True)
 async def describe_table(
+    *,
     id: str,
     table: DoorTableDep,
     settings: SettingsDep,
@@ -774,7 +793,7 @@ def _load_detailed_metadata(response: DescribeTableResponse, dataset: lance.Lanc
 #: bytes `null`, which a strict client reads as a JSON document where the contract promised none.
 #: `response_class=Response` is what makes FastAPI emit nothing; `status_code=200` alone does not.
 @spec_router.post("/{id}/exists", status_code=200, response_class=Response)
-def table_exists(id: str, table: DoorTableDep, so: StorageOptionsDep, body: TableExistsRequest | None = None) -> Response:
+def table_exists(*, id: str, table: DoorTableDep, so: StorageOptionsDep, body: TableExistsRequest | None = None) -> Response:
     """Check the table at ``id`` exists via ``table_exists`` — 200 if present (spec 0.9), else error.
 
     The answer is about the table the request resolved, so it stands only while the name still resolves there ([[LH-530]]).
@@ -791,6 +810,7 @@ def table_exists(id: str, table: DoorTableDep, so: StorageOptionsDep, body: Tabl
 
 @spec_router.post("/{id}/drop", response_model_exclude_none=True)
 async def drop_table(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
@@ -846,7 +866,7 @@ async def drop_table(
         if drop is not None
         else Unregistered(segments=segments, uuid=table_uuid, location=table.location or "", trashed=False)
     )
-    dropped = _marker(announcer, token, landed, segments, operation=DROP_TABLE, uuids=known)
+    dropped = _marker(announcer, token, landed, segments=segments, operation=DROP_TABLE, uuids=known)
     dropped_event = _table_event(token, landed, action="table_dropped", table_uuid=table_uuid, name=canonical, extra={"recoverable": trashed}, named_by=known)
     if drop is not None:
         await converge.intend([landed], DropTableResponse(transaction_id=fga_ids.canonical_object_id([*segments, table_uuid])))
@@ -869,7 +889,7 @@ async def drop_table(
 
 
 async def _stamp_the_drop(
-    ns: LanceNamespace, settings: CatalogStore, record: trash.TrashRecord, fenced: table_claims.DoorFence, *, segments: list[str]
+    ns: LanceNamespace, settings: CatalogStore, record: trash.TrashRecord, *, fenced: table_claims.DoorFence, segments: list[str]
 ) -> bool:
     """Stamp the trash record a recoverable drop filed as detached, once the detach returned and while the drop still holds
     its fence (`table_claims.holds_fence`); whether the fence is to be lifted.
@@ -896,7 +916,7 @@ async def _stamp_the_drop(
             return False
         refiled = (
             kept is None
-            and not await run_in_threadpool(_still_registered, ns, claims, record, segments)
+            and not await run_in_threadpool(_still_registered, ns, claims, record, segments=segments)
             and await run_in_threadpool(partial(trash.stamp_detached, root, so, record, refile=True))
         )
         if refiled:
@@ -913,7 +933,7 @@ async def _stamp_the_drop(
 
 
 async def _settle_a_failed_drop(
-    ns: LanceNamespace, settings: CatalogStore, record: trash.TrashRecord, fenced: table_claims.DoorFence, *, segments: list[str], detached: bool
+    ns: LanceNamespace, settings: CatalogStore, record: trash.TrashRecord, *, fenced: table_claims.DoorFence, segments: list[str], detached: bool
 ) -> None:
     """Settle, on evidence only and only while the drop holds its fence, the trash record it filed before it failed,
     then lift the fence.
@@ -930,7 +950,7 @@ async def _settle_a_failed_drop(
             settled = False
         elif detached:
             settled = await run_in_threadpool(partial(trash.stamp_detached, root, so, record, refile=True))
-        elif await run_in_threadpool(_still_registered, ns, claims, record, segments):
+        elif await run_in_threadpool(_still_registered, ns, claims, record, segments=segments):
             settled = await run_in_threadpool(partial(trash.withdraw, root, so, record, claims=claims, token=fenced.token, margin=location_claims.DOOR_MARGIN))
         else:
             settled = False
@@ -941,7 +961,7 @@ async def _settle_a_failed_drop(
         await run_in_threadpool(table_claims.lift_fence, claims, fenced)
 
 
-def _still_registered(ns: LanceNamespace, claims: location_claims.ClaimStore, record: trash.TrashRecord, segments: list[str]) -> bool:
+def _still_registered(ns: LanceNamespace, claims: location_claims.ClaimStore, record: trash.TrashRecord, *, segments: list[str]) -> bool:
     """Whether the table ``record`` keeps resolves at ``segments``, or at the name its location's claim names now."""
     names = [segments]
     if (found := location_claims.read(claims, record.location)) is not None and found.claim.uuid == record.uuid and found.claim.segments != segments:
@@ -1036,7 +1056,7 @@ async def _drop(
                 raise _lost_turn(canonical)
             await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
             detached = True
-            stamped = await _stamp_the_drop(ns, settings, record, fenced, segments=segments)
+            stamped = await _stamp_the_drop(ns, settings, record, fenced=fenced, segments=segments)
             # The bytes are deleted later, by the purge, so the spec's answer is a transaction id to track the deletion
             # by (`spec.yaml` DropTableRequest): `<table id>$<its uuid>`, which DescribeTransaction answers from the record.
             response = DropTableResponse(transaction_id=fga_ids.canonical_object_id([*segments, table_uuid]))
@@ -1060,7 +1080,7 @@ async def _drop(
                     ns,
                     so,
                     segments,
-                    location,
+                    location=location,
                     estate_roots=(settings.registry_root, settings.root),
                     table_uuid=table_uuid,
                     namespace_uuid=known.namespace_uuid,
@@ -1081,10 +1101,10 @@ async def _drop(
         # before a failure is settled under the fence, which stays where it could not be. A destroying drop whose row
         # went ends a stale record the table carried, as a deregister does.
         if filed is not None:
-            await _settle_a_failed_drop(ns, settings, filed, fenced, segments=segments, detached=detached)
+            await _settle_a_failed_drop(ns, settings, filed, fenced=fenced, segments=segments, detached=detached)
         else:
             if not trashed:
-                await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table, segments=segments)
+                await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table=table, segments=segments)
             await run_in_threadpool(table_claims.lift_fence, claims, fenced)
         raise
     if trashed:
@@ -1096,7 +1116,7 @@ async def _drop(
         # [[LH-279]] The base record goes with the bytes: left behind, it would sanction its bases for the next
         # table registered at this location. The location's claim goes too ([[LH-204]]), and the clone's ending last. A
         # declared-only table has no residue record to overwrite a stale one, so that goes first, under the fence.
-        await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table, segments=segments)
+        await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table=table, segments=segments)
         await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, uuid=table_uuid))
         await run_in_threadpool(partial(location_claims.release, claims, location, canonical, uuid=table_uuid))
         if ending is not None:
@@ -1106,14 +1126,15 @@ async def _drop(
     # as it keeps its grants, and the trash purge ends both. Its protection goes now, because the drop it guarded has
     # happened.
     if not trashed:
-        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
+        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", uuid=table_uuid)
     else:
-        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", table_uuid)
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, settings.storage_options(), "table", uuid=table_uuid)
     return response
 
 
 @spec_router.post("/{id}/deregister", response_model_exclude_none=True)
 async def deregister_table(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
@@ -1151,7 +1172,7 @@ async def deregister_table(
     segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
     canonical = fga_ids.canonical_object_id(segments)
     if table.location is not None and table.uuid is None:
-        response = await _deregister_unidentified(ns, settings, table, control, token, segments=segments)
+        response = await _deregister_unidentified(ns, settings, table, control=control, token=token, segments=segments)
         await converge.remember(200, response)
         return response
     await hierarchy.require_table_unprotected(settings, table, force=force)
@@ -1162,12 +1183,12 @@ async def deregister_table(
     # satisfies it too, and this door's event goes out as well, under its own ids: a dead deregister followed by another's
     # destroying drop is told as a deregister.
     gone = Unregistered(segments=segments, uuid=table_uuid, location=table.location or "", trashed=False)
-    detached = _marker(announcer, token, gone, segments, operation=DEREGISTER_TABLE, uuids=known)
+    detached = _marker(announcer, token, gone, segments=segments, operation=DEREGISTER_TABLE, uuids=known)
     detached_event = _table_event(token, gone, action="table_deregistered", table_uuid=table_uuid, name=canonical, extra={}, named_by=known)
     async with announcer.announcing(door="deregister_table", target=fga_ids.table_object(table_uuid), announcements=[detached, detached_event]) as filing:
         response = await _detach(ns, settings, table, segments=segments)
         # The table leaves governance, so what was kept for it under its uuid goes.
-        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
+        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", uuid=table_uuid)
         # Record the detach as lineage — asymmetric with drop (which deletes data), deregister only detaches, so without
         # this marker the feed reads it as a still-live, never-touched table. Versionless (no data was written), sent
         # BEFORE the revoke, so a revoke that fails ends the request with the marker already published. Lineage admits a
@@ -1200,10 +1221,10 @@ async def _detach(ns: LanceNamespace, settings: CatalogStore, table: ResolvedTab
         response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
     except Exception:
         # A detach whose answer was lost may have landed: the stale record goes where the row is gone.
-        await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table, segments=segments)
+        await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table=table, segments=segments)
         await run_in_threadpool(table_claims.lift_fence, claims, fenced)
         raise
-    await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table, segments=segments)
+    await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table=table, segments=segments)
     # The detached bytes are nobody's now, so the version a clone among them was promised on its sources goes (ADR 0198
     # §1), and then the id's claim on them ([[LH-204]]): the base record stays, for the bytes it describes. The tags go
     # first, while the fence still holds the location, so no clone registered there meanwhile can hold a tag of the same
@@ -1223,7 +1244,7 @@ async def _detach(ns: LanceNamespace, settings: CatalogStore, table: ResolvedTab
     return response
 
 
-def _end_stale_trash_record(ns: LanceNamespace, settings: CatalogStore, fenced: table_claims.DoorFence, table: ResolvedTable, *, segments: list[str]) -> None:
+def _end_stale_trash_record(ns: LanceNamespace, settings: CatalogStore, fenced: table_claims.DoorFence, *, table: ResolvedTable, segments: list[str]) -> None:
     """End a trash record the table carried while live, once a door that retires it out of governance (a deregister, a
     destroying drop) has removed its row, and only while that door holds its fence. Logged, never raised: the door's own
     answer stands.
@@ -1241,14 +1262,14 @@ def _end_stale_trash_record(ns: LanceNamespace, settings: CatalogStore, fenced: 
     root, so, claims = settings.registry_root, settings.storage_options(), table_claims.claim_store(settings)
     try:
         kept = trash.get(root, so, table.uuid)
-        if kept is not None and not kept.is_residue and not _still_registered(ns, claims, kept, segments) and table_claims.holds_fence(claims, fenced):
+        if kept is not None and not kept.is_residue and not _still_registered(ns, claims, kept, segments=segments) and table_claims.holds_fence(claims, fenced):
             trash.clear(root, so, table.uuid)
     except Exception as exc:  # noqa: BLE001 — the door's answer stands; a record left is reported, not raised
         log.error("stale_trash_record_kept", extra={"uuid": table.uuid, "error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
 async def _deregister_unidentified(
-    ns: LanceNamespace, settings: Settings, table: ResolvedTable, control: ControlEmitter, token: Caller | None, *, segments: list[str]
+    ns: LanceNamespace, settings: Settings, table: ResolvedTable, *, control: ControlEmitter, token: Caller | None, segments: list[str]
 ) -> DeregisterTableResponse:
     """Detach a table whose location carries no claim recording a uuid, and announce it ([[LH-534]]).
 
@@ -1315,6 +1336,7 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
 
 @spec_router.post("/{id}/register", response_model_exclude_none=True)
 async def register_table(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     body: RegisterTableRequest,
@@ -1424,7 +1446,7 @@ async def register_table(
     # written before the backend records the table so it never stands without them ([[LH-588]]). A request that
     # registers nothing takes them back: a refused registration changes nobody's access ([[LH-586]]).
     table_uuid = str(uuid4())
-    await object_grants.seed_before_write(client, settings, token, resolver, segments=segments, uuid=table_uuid)
+    await object_grants.seed_before_write(client, settings, token, resolver=resolver, segments=segments, uuid=table_uuid)
     try:
         response: RegisterTableResponse = await run_in_threadpool(native.call, ns, "register_table", body)
     except TableAlreadyExistsError:
@@ -1532,7 +1554,7 @@ async def register_table(
     # dropped and created again since the router authorized this request is another namespace, and the registration
     # is detached before anything is claimed, marked or announced for it.
     try:
-        await object_grants.require_parent_as_authorized(ns, settings, client, resolver, resource="table", segments=segments)
+        await object_grants.require_parent_as_authorized(ns, settings, client, resolver=resolver, resource="table", segments=segments)
     except Exception:
         await object_grants.undo_a_create_whose_parent_is_unread(
             client,
@@ -1553,7 +1575,7 @@ async def register_table(
         # Only the claim this registration took, under the uuid it minted: a take refused (another request's fence) took
         # none, and the claim standing there is another table's under the same name.
         await run_in_threadpool(partial(location_claims.release, claims, claimed_location, canonical, uuid=table_uuid))
-        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", table_uuid)
+        await run_in_threadpool(object_records.end_object_records, settings.registry_root, settings.storage_options(), "table", uuid=table_uuid)
 
     async def _detach() -> None:
         await _deregister()
@@ -1583,7 +1605,7 @@ async def register_table(
         # Holding the claim, so of this registration and the finish of an ending at the location, the second sees the first
         # (ADR 0198 §1): the clone that ended here may hold tags of the very names this one would take.
         await run_in_threadpool(clone_endings.refuse_registration_while_ending, claims, claimed_location)
-        verdict = await run_in_threadpool(table_bases.judge_registered_table, ns, so, segments, body.location, context)
+        verdict = await run_in_threadpool(table_bases.judge_registered_table, ns, so, segments, relative=body.location, context=context)
         # The sources judged on the registered dataset are the ones its caller was asked for: one that differs (the source
         # changed hands meanwhile) was asked of no one, and is refused as one the caller may not tag.
         if unasked := [source for source in verdict.sources if source.table_uuid not in asked]:
@@ -1628,7 +1650,13 @@ async def register_table(
     # Versionless + source_uri=the attached location (register_table ∈ _CREATE_OPS, so the feed records it as a
     # create). The registered table already holds data at some version, which this marker does not name.
     registered = _marker(
-        announcer, token, named, segments, operation=REGISTER_TABLE, uuids=await uuids.table(segments, location=location, uuid=table_uuid), source_uri=location
+        announcer,
+        token,
+        named,
+        segments=segments,
+        operation=REGISTER_TABLE,
+        uuids=await uuids.table(segments, location=location, uuid=table_uuid),
+        source_uri=location,
     )
     registered_event = _table_event(token, named, action="table_registered", table_uuid=table_uuid, name=canonical, extra={"location": location})
     async with _filed_or_undone(
@@ -1638,7 +1666,7 @@ async def register_table(
         # drift repair revokes grants no claim records, and the claim is taken only after the backend resolved the
         # location, so a repair landing between the two would have left the table without them.
         try:
-            await object_grants.seed_ownership(client, settings, token, resolver, resource="table", segments=segments, uuid=table_uuid)
+            await object_grants.seed_ownership(client, settings, token, resolver=resolver, resource="table", segments=segments, uuid=table_uuid)
         except Exception:
             await object_grants.undo_then_take_back(client, settings, token, segments=segments, uuid=table_uuid, undo=_undo_register, reason="grant_failed")
             raise
@@ -1718,6 +1746,7 @@ async def table_tasks(
 
 @management_router.post("/{id}/undrop", response_model_exclude_none=True)
 async def undrop_table(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
@@ -1774,7 +1803,13 @@ async def undrop_table(
     body = RegisterTableRequest(id=segments, location=table_objects.relative_location(location, root=root))
     named = NameResolves(segments=segments, uuid=record_uuid)
     restored = _marker(
-        announcer, token, named, segments, operation=REGISTER_TABLE, uuids=await uuids.table(segments, location=location, uuid=record_uuid), source_uri=location
+        announcer,
+        token,
+        named,
+        segments=segments,
+        operation=REGISTER_TABLE,
+        uuids=await uuids.table(segments, location=location, uuid=record_uuid),
+        source_uri=location,
     )
     restored_event = _table_event(token, named, action="table_undropped", table_uuid=record_uuid, name=canonical, extra={})
     async with announcer.announcing(door="undrop_table", target=fga_ids.table_object(record_uuid), announcements=[restored, restored_event]) as filing:
@@ -1782,7 +1817,7 @@ async def undrop_table(
         # existing hold; another holder means another table now resolves to these bytes, and re-attaching
         # this id would put two live ids on one dataset.
         try:
-            kept = await run_in_threadpool(table_claims.take, ns, table_claims.claim_store(settings), location, canonical, segments)
+            kept = await run_in_threadpool(table_claims.take, ns, table_claims.claim_store(settings), location, table=canonical, segments=segments)
         except location_claims.LocationFencedError as fenced:
             if fenced.claim.uuid != record_uuid:
                 raise InvalidTableStateError(f"cannot undrop {canonical}: its location is now held by another table") from None
@@ -1828,6 +1863,7 @@ async def undrop_table(
 
 @management_router.post("/{id}/protection", response_model_exclude_none=True)
 async def set_table_protection(
+    *,
     id: str,
     body: SetProtectionRequest,
     table: ResolvedTableDep,
@@ -1853,7 +1889,7 @@ async def set_table_protection(
         )
         await run_in_threadpool(protection.set_protection, settings.registry_root, so, record)
     else:
-        await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "table", table_uuid)
+        await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "table", uuid=table_uuid)
     await emit_control(
         control,
         action="table_protected" if body.protected else "table_unprotected",
@@ -1868,6 +1904,7 @@ async def set_table_protection(
 
 @spec_router.post("/{id}/rename", response_model_exclude_none=True)
 async def rename_table(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     body: RenameTableRequest,
@@ -1934,11 +1971,11 @@ async def rename_table(
     await hierarchy.require_parent_exists(ns, "table", new_segments)
     # A rename mints a name in the destination's namespace, so the caller must be one who may put a table there, asked
     # BEFORE the (destructive, relocating) rename. (authorize already asked the source's rung.)
-    await door_gates.require_rename_destination(client, settings, token, resolver, source=segments, destination=new_segments)
+    await door_gates.require_rename_destination(client, settings, token, resolver=resolver, source=segments, destination=new_segments)
     renamed = fga_ids.table_object(table.require_uuid())
     # A rename moves no grant ([[LH-524]]): every grant is held by the table's uuid, which the rename keeps. Into
     # another namespace its parent and child edges move with it, and those are all it writes in OpenFGA.
-    reparent = await object_grants.parent_edge_mover(client, settings, token, resolver, obj=renamed, source=segments, destination=new_segments)
+    reparent = await object_grants.parent_edge_mover(client, settings, token, resolver=resolver, obj=renamed, source=segments, destination=new_segments)
     # A rename keeps the table's uuid (ADR 0173 §2): the event and the control event name the one the door resolved, and
     # its location, which a rename keeps (`tables.rename.rename_table`). Both are filed before the rename, which landed once
     # the destination's name resolves to the table ([[LH-576]]).
@@ -1946,7 +1983,9 @@ async def rename_table(
     named = NameResolves(segments=new_segments, uuid=table.require_uuid())
     # Versionless: the version history moved with the pointer, and the event names none of it. The location rides it so
     # the table's symlink is the one its earlier events named.
-    moved = _marker(announcer, token, named, new_segments, operation=RENAME_TABLE, uuids=destination_ids, source_uri=table.location, renamed_from=segments)
+    moved = _marker(
+        announcer, token, named, segments=new_segments, operation=RENAME_TABLE, uuids=destination_ids, source_uri=table.location, renamed_from=segments
+    )
     moved_event = _table_event(
         token,
         named,
@@ -1963,7 +2002,7 @@ async def rename_table(
                 ns,
                 table,
                 body.new_table_name,
-                body.new_namespace_id,
+                new_namespace_id=body.new_namespace_id,
                 so=so,
                 claims=table_claims.claim_store(settings),
                 root=root,
@@ -1979,6 +2018,7 @@ async def rename_table(
 
 @spec_router.post("/{id}/restore", response_model_exclude_none=True)
 async def restore_table(
+    *,
     id: str,
     keyed: idem.KeyedDoorDep,
     body: RestoreTableRequest,
@@ -2025,6 +2065,7 @@ async def restore_table(
 
 @spec_router.post("/{id}/stats", response_model_exclude_none=True)
 def get_table_stats(
+    *,
     id: str,
     table: DoorTableDep,
     so: StorageOptionsDep,

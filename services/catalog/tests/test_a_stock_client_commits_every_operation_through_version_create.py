@@ -2127,18 +2127,22 @@ def test_a_table_already_breaking_its_contract_is_not_frozen_and_an_unreadable_c
     uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
     key = record_key(control_prefixes.CONTRACTS, "table", uuid)
     breached = _with_v({"name": "v", "physicalType": "int32"}, "1.0.0")
-    put_record(settings.registry_root, settings.storage_options(), key, {"table_uuid": uuid, "document": breached, "set_at": "2026-11-16T00:00:00Z"})
+    put_record(settings.registry_root, settings.storage_options(), key, record={"table_uuid": uuid, "document": breached, "set_at": "2026-11-16T00:00:00Z"})
 
     lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
     assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "m", "expression": "id + 1"}]}) == (200, None)
     assert _answered(served, f"{table}/drop_columns", {"columns": ["v"]}) == (409, 19)
     assert _opened(stock).version == 3
 
-    put_record(settings.registry_root, settings.storage_options(), key, {"table_uuid": uuid, "document": {"kind": "x"}, "set_at": "2026-11-16T00:00:00Z"})
+    put_record(
+        settings.registry_root, settings.storage_options(), key, record={"table_uuid": uuid, "document": {"kind": "x"}, "set_at": "2026-11-16T00:00:00Z"}
+    )
     assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "k", "expression": "id + 2"}]}) == (500, 18)
     assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).status_code == 500
     assert _answered(served, f"{_CONTRACT_DOOR}/set", _CONTRACT) == (200, None)
-    put_record(settings.registry_root, settings.storage_options(), key, {"table_uuid": uuid, "document": {"kind": "x"}, "set_at": "2026-11-16T00:00:00Z"})
+    put_record(
+        settings.registry_root, settings.storage_options(), key, record={"table_uuid": uuid, "document": {"kind": "x"}, "set_at": "2026-11-16T00:00:00Z"}
+    )
     assert _answered(served, f"{_CONTRACT_DOOR}/delete") == (200, None)
     assert _answered(served, f"{table}/add_columns", {"new_columns": [{"name": "k", "expression": "id + 2"}]}) == (200, None)
 

@@ -174,7 +174,7 @@ async def test_a_write_naming_no_uuid_is_passed_as_its_locations_claim_names_it(
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"}).model_copy(update={"control_root": str(tmp_path / "control")})
     claims = location_claims.ClaimStore(control_root=settings.resolved_control_root, storage_options=settings.storage_options())
     claimed = str(uuid4())
-    location_claims.take(claims, URI, "db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=claimed)
+    location_claims.take(claims, URI, "db$t", segments=["db", "t"], is_gone=lambda _claim: False, uuid=claimed)
 
     answered = await Arrivals(settings, _queue(queue)).hold_task(_body(_event("insert", uri=uri, uuid=None)))
 

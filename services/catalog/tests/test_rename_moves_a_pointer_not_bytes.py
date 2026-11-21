@@ -71,7 +71,13 @@ def test_renaming_ACROSS_namespaces_still_moves_no_bytes(tmp_path: Path) -> None
     source = _written(ns, ["ns1", "old"])
 
     new_segments, location = rename.rename_table(
-        ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]), "moved", ["ns2"], so=StorageOptions(), claims=_claims(tmp_path), root=str(tmp_path)
+        ns,
+        table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]),
+        "moved",
+        new_namespace_id=["ns2"],
+        so=StorageOptions(),
+        claims=_claims(tmp_path),
+        root=str(tmp_path),
     )
 
     assert new_segments == ["ns2", "moved"]
@@ -91,7 +97,13 @@ def test_a_V1_ROOT_table_is_REFUSED_rather_than_copied(tmp_path: Path) -> None:
 
     with pytest.raises(InvalidInputError, match="(?i)root"):
         rename.rename_table(
-            ns, table_claims.resolve(ns, _claims(tmp_path), ["roottable"]), "renamed", None, so=StorageOptions(), claims=_claims(tmp_path), root=str(tmp_path)
+            ns,
+            table_claims.resolve(ns, _claims(tmp_path), ["roottable"]),
+            "renamed",
+            new_namespace_id=None,
+            so=StorageOptions(),
+            claims=_claims(tmp_path),
+            root=str(tmp_path),
         )
 
 
@@ -123,7 +135,7 @@ def test_a_FAILED_registration_puts_the_source_back(tmp_path: Path) -> None:
                 ns,
                 table_claims.resolve(ns, _claims(tmp_path), ["ns1", "keepme"]),
                 "newname",
-                None,
+                new_namespace_id=None,
                 so=StorageOptions(),
                 claims=_claims(tmp_path),
                 root=str(tmp_path),
@@ -157,7 +169,13 @@ def test_a_BRANCHED_table_renames_because_nothing_moves(tmp_path: Path) -> None:
     before = lance.dataset(source).branches.list()
 
     new_segments, location = rename.rename_table(
-        ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "branched"]), "renamed", None, so=StorageOptions(), claims=_claims(tmp_path), root=str(tmp_path)
+        ns,
+        table_claims.resolve(ns, _claims(tmp_path), ["ns1", "branched"]),
+        "renamed",
+        new_namespace_id=None,
+        so=StorageOptions(),
+        claims=_claims(tmp_path),
+        root=str(tmp_path),
     )
 
     assert new_segments == ["ns1", "renamed"]

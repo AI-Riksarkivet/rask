@@ -249,9 +249,9 @@ class Timer:
         claim = _Claim(timer=self.name, window=window, claimed_at=read.at, by=self._holder).model_dump(mode="json")
         try:
             if read.stored is None:
-                conditional_records.create_json(self._root, options, key, claim)
+                conditional_records.create_json(self._root, options, key, record=claim)
             else:
-                conditional_records.replace_json(self._root, options, key, claim, etag=read.stored.etag)
+                conditional_records.replace_json(self._root, options, key, record=claim, etag=read.stored.etag)
         except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
             if denied is not None:
                 # The record exists and this identity may not read it: a fault to say, never another replica's window.

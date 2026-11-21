@@ -132,7 +132,7 @@ def claim_described(client: TestClient, fake_ns: MagicMock) -> Callable[[str], s
     def _claim(table: str) -> str:
         minted = str(uuid4())
         location = fake_ns.describe_table.return_value.location
-        location_claims.take(table_claims.claim_store(get_settings()), location, table, table.split("$"), is_gone=lambda _claim: False, uuid=minted)
+        location_claims.take(table_claims.claim_store(get_settings()), location, table, segments=table.split("$"), is_gone=lambda _claim: False, uuid=minted)
         return minted
 
     return _claim

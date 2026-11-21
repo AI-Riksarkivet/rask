@@ -572,7 +572,7 @@ def _table(root: Path, first: pa.Table, *more: pa.Table) -> LanceNamespace:
         writer.write_table(first)
     body = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT)
     registry = base_registry.BaseRegistry(control_root=str(_control(root)))
-    create_table(ns, StorageOptions(), _TABLE_ID, body, root=str(root), mode="create", registry=registry, holder="$".join(_TABLE_ID))
+    create_table(ns, StorageOptions(), _TABLE_ID, table=body, root=str(root), mode="create", registry=registry, holder="$".join(_TABLE_ID))
     for batch in more:
         open_by_name(ns, StorageOptions(), _TABLE_ID).insert(batch)
     return ns
@@ -698,7 +698,7 @@ def _created(root: Path, table: Callable[[Path], pa.Table], *, external: bool) -
         ns,
         StorageOptions(),
         _TABLE_ID,
-        payload,
+        table=payload,
         root=str(root),
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(_control(root))),

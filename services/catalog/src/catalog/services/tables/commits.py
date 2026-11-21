@@ -76,7 +76,7 @@ _RETRY_WAIT_SECONDS: Final = 0.05
 _RETRY_WAIT_CAP_SECONDS: Final = 0.4
 
 
-def _turn_for_the_next_attempt(table: table_claims.DoorTable, ref: str | None, held: ExitStack, turn: str | None, attempt: int) -> str | None:
+def _turn_for_the_next_attempt(table: table_claims.DoorTable, ref: str | None, held: ExitStack, *, turn: str | None, attempt: int) -> str | None:
     """The ref's commit turn the attempt after the lost attempt ``attempt`` plans under: the one the commit holds, else one it
     takes now, held until ``held`` closes. A commit whose take lost to the turn record's other writers plans again without one,
     after a wait; after its last attempt a commit takes nothing and waits for nothing."""
@@ -94,8 +94,8 @@ def commit_stamped[T](
     table: table_claims.DoorTable,
     so: StorageOptions,
     properties: dict[str, str],
-    plan: Callable[[lance.LanceDataset], tuple[Transaction, T]],
     *,
+    plan: Callable[[lance.LanceDataset], tuple[Transaction, T]],
     branch: str | None = None,
     opened: lance.LanceDataset | None = None,
     keeps_labels: bool = False,
@@ -155,7 +155,7 @@ def commit_stamped[T](
             try:
                 transaction, measured = plan(dataset)
             except _PlannedOnAStaleVersion:
-                turn = _turn_for_the_next_attempt(table, ref, held, turn, attempt)
+                turn = _turn_for_the_next_attempt(table, ref, held, turn=turn, attempt=attempt)
                 continue
             stamped = replace(transaction, read_version=dataset.version, transaction_properties={**(transaction.transaction_properties or {}), **properties})
             detached = lance.LanceDataset.commit(dataset, stamped, detached=True)
@@ -195,7 +195,7 @@ def commit_stamped[T](
                     # BEFORE THE FINALIZE: the reconciler signs a re-announcement only for the author recorded for exactly
                     # these bytes (ADR 0187), which the backend moves into the version slot unchanged, under the ref's
                     # incarnation as this attempt reads it.
-                    ref_key = commit_ref_key(table.location, so, table_id, ref)
+                    ref_key = commit_ref_key(table.location, so, table_id, branch=ref)
                     table.record_author(stamped.uuid, version=version, ref=ref_key, author=author, manifest=judged)
                 finalizing = True
                 try:
@@ -214,15 +214,15 @@ def commit_stamped[T](
                     if author is not None:
                         _forget_unlanded_author(table, so, stamped.uuid, location=location, version=version, judged=judged)
                     if landed != _AMBIGUOUS_VERSION:
-                        _discard_unlanded_attempt(table, so, stamped, wrote, branch=ref, recorded=recorded)
-                    turn = _turn_for_the_next_attempt(table, ref, held, turn, attempt)
+                        _discard_unlanded_attempt(table, so, stamped, wrote=wrote, branch=ref, recorded=recorded)
+                    turn = _turn_for_the_next_attempt(table, ref, held, turn=turn, attempt=attempt)
                     continue
             except BaseException:
                 discard_detached_manifest(location, so, finalize_id)
                 if not finalizing:
                     if wrote is None:
-                        wrote = _read_attempt_files(table, so, dataset, detached, stamped, branch=ref)
-                    _discard_unlanded_attempt(table, so, stamped, wrote, branch=ref, recorded=recorded)
+                        wrote = _read_attempt_files(table, so, dataset, after=detached, transaction=stamped, branch=ref)
+                    _discard_unlanded_attempt(table, so, stamped, wrote=wrote, branch=ref, recorded=recorded)
                 raise
             finally:
                 discard_detached_manifest(location, so, detached.version)
@@ -234,8 +234,8 @@ def _discard_unlanded_attempt(
     table: table_claims.DoorTable,
     so: StorageOptions,
     transaction: Transaction,
-    wrote: file_identities.CommittedFiles | None,
     *,
+    wrote: file_identities.CommittedFiles | None,
     branch: str | None,
     recorded: bool,
 ) -> None:
@@ -262,7 +262,7 @@ def _discard_unlanded_attempt(
 
 
 def _read_attempt_files(
-    table: table_claims.DoorTable, so: StorageOptions, before: lance.LanceDataset, after: lance.LanceDataset, transaction: Transaction, *, branch: str | None
+    table: table_claims.DoorTable, so: StorageOptions, before: lance.LanceDataset, *, after: lance.LanceDataset, transaction: Transaction, branch: str | None
 ) -> file_identities.CommittedFiles | None:
     """What a refused attempt added, read on its way out; ``None`` when the store does not answer, which leaves the files it
     wrote but its transaction file to Lance's rule rather than replace the refusal."""

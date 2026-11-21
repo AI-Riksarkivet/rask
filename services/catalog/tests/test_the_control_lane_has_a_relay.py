@@ -306,7 +306,7 @@ async def test_a_poison_object_is_dropped_rather_than_wedging_the_drain(tmp_path
     objects: a publish refused on every tick would hold the whole lane at them. So is an envelope naming a trace that is no
     W3C traceparent, which a relay would otherwise publish its copy in (ADR 0209)."""
     uri = f"file://{tmp_path}/control-outbox"
-    outbox.stage_event(uri, StorageOptions(), "poison", body)
+    outbox.stage_event(uri, StorageOptions(), "poison", event_json=body)
     _staged_before_everything_else(tmp_path, "poison")
     await _stage(uri, _published_event())
 
@@ -328,7 +328,7 @@ async def _a_delivered_event(uri: str) -> tuple[str, list[str]]:
 
 async def _a_poison_object(uri: str) -> tuple[str, list[str]]:
     """Stage an object the relay retires unpublished; answers its staged key and the event ids it publishes for it, none."""
-    outbox.stage_event(uri, StorageOptions(), "poison", "{'this': not json}")
+    outbox.stage_event(uri, StorageOptions(), "poison", event_json="{'this': not json}")
     return "poison", []
 
 

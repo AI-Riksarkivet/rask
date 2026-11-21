@@ -150,6 +150,7 @@ spec_router = APIRouter(prefix="/v1/table", tags=["columns"])
 
 @spec_router.post("/{id}/add_columns", response_model_exclude_none=True)
 async def add_columns(
+    *,
     id: str,
     body: AlterTableAddColumnsRequest,
     table: DoorTableDep,
@@ -183,6 +184,7 @@ async def add_columns(
 
 @spec_router.post("/{id}/alter_columns", response_model_exclude_none=True)
 async def alter_columns(
+    *,
     id: str,
     body: AlterTableAlterColumnsRequest,
     table: DoorTableDep,
@@ -213,6 +215,7 @@ async def alter_columns(
 
 @spec_router.post("/{id}/drop_columns", response_model_exclude_none=True)
 async def drop_columns(
+    *,
     id: str,
     body: AlterTableDropColumnsRequest,
     table: DoorTableDep,
@@ -246,7 +249,7 @@ async def drop_columns(
 # missing `status_code` would go unnoticed until a backend arrived and silently answered 200.
 @spec_router.post("/{id}/backfill_column", response_model_exclude_none=True, status_code=202)
 def backfill_column(
-    id: str, body: AlterTableBackfillColumnsRequest, table: DoorTableDep, data_ns: DataNamespaceDep, so: StorageOptionsDep
+    *, id: str, body: AlterTableBackfillColumnsRequest, table: DoorTableDep, data_ns: DataNamespaceDep, so: StorageOptionsDep
 ) -> AlterTableBackfillColumnsResponse:
     """Backfill values into columns via the native driver — wraps ``alter_table_backfill_columns``.
 
@@ -262,6 +265,7 @@ def backfill_column(
 
 @spec_router.post("/{id}/update_field_metadata", response_model_exclude_none=True)
 async def update_field_metadata(
+    *,
     id: str,
     body: UpdateFieldMetadataRequest,
     table: DoorTableDep,
@@ -285,7 +289,14 @@ async def update_field_metadata(
     await _require_classifier_for_governance_keys(client, settings, token, table=table.resolved, updates=updates)
     try:
         response = await run_in_threadpool(
-            partial(schema.update_field_metadata, table, so, updates, body.branch, transaction_properties=lineage_deps.door_stamp(token, UPDATE_FIELD_METADATA))
+            partial(
+                schema.update_field_metadata,
+                table,
+                so,
+                updates,
+                branch=body.branch,
+                transaction_properties=lineage_deps.door_stamp(token, UPDATE_FIELD_METADATA),
+            )
         )
     except TableColumnNotFoundError:
         if await _sees_the_schema(client, settings, token, table=table.resolved):
@@ -308,6 +319,7 @@ async def update_field_metadata(
 
 @spec_router.post("/{id}/schema_metadata/update")
 async def update_table_schema_metadata(
+    *,
     id: str,
     body: dict[str, Any],
     table: DoorTableDep,

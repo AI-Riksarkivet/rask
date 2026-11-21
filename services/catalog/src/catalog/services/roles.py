@@ -71,7 +71,7 @@ def create_role_record(control_root: str, storage_options: StorageOptions, recor
     """
     key, body = _key(record.project, record.name), StoredRole(**record.model_dump()).model_dump(mode="json")
     try:
-        create_json(control_root, storage_options, key, body)
+        create_json(control_root, storage_options, key, record=body)
         return
     except RecordExistsError:
         pass
@@ -79,7 +79,7 @@ def create_role_record(control_root: str, storage_options: StorageOptions, recor
     if stored is None or StoredRole.model_validate(stored[0]).ended_at is None:
         raise RecordExistsError(key)
     try:
-        replace_json(control_root, storage_options, key, body, etag=stored[1])
+        replace_json(control_root, storage_options, key, record=body, etag=stored[1])
     except RecordChangedError as exc:
         raise RecordExistsError(key) from exc
 
@@ -137,7 +137,7 @@ def every_role(control_root: str, storage_options: StorageOptions, project: str)
     return roles
 
 
-def find_role(control_root: str, storage_options: StorageOptions, project: str, role_id: uuid.UUID | str) -> RoleRecord | None:
+def find_role(control_root: str, storage_options: StorageOptions, project: str, *, role_id: uuid.UUID | str) -> RoleRecord | None:
     """The standing role ``role_id`` of ``project``, or ``None`` when the project holds none of that id."""
     return next((role for role in list_roles(control_root, storage_options, project) if str(role.id) == str(role_id)), None)
 
@@ -166,7 +166,7 @@ def end_role_record(control_root: str, storage_options: StorageOptions, record: 
             return
         ended = standing.model_copy(update={"ended_at": datetime.now(UTC)})
         try:
-            replace_json(control_root, storage_options, key, ended.model_dump(mode="json"), etag=stored[1])
+            replace_json(control_root, storage_options, key, record=ended.model_dump(mode="json"), etag=stored[1])
         except RecordChangedError:
             continue
         return

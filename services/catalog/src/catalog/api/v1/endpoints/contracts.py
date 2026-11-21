@@ -87,6 +87,7 @@ async def describe_table_contract(id: str, table: DoorTableDep, settings: Settin
 
 @management_router.post("/{id}/contract/set")
 async def set_table_contract(
+    *,
     id: str,
     document: Annotated[dict[str, Any], Body()],
     table: DoorTableDep,
@@ -109,7 +110,7 @@ async def set_table_contract(
     root, control_so = settings.registry_root, settings.storage_options()
     replaced = await run_in_threadpool(_standing, settings, table)
     try:
-        record = await run_in_threadpool(partial(contracts.keep, root, control_so, uuid, contract, document=document, actor=_actor(token)))
+        record = await run_in_threadpool(partial(contracts.keep, root, control_so, uuid, contract=contract, document=document, actor=_actor(token)))
     except (conditional_records.RecordChangedError, conditional_records.RecordMissingError) as exc:
         raise ConcurrentModificationError(f"the contract of {fga_ids.canonical_object_id(table.segments)} kept changing; set it again") from exc
     try:
@@ -118,7 +119,7 @@ async def set_table_contract(
         # violation no later commit is refused for (`contracts.require_kept`), which `describe` and the table show.
         await run_in_threadpool(_require_described, table, so, contract)
     except BaseException:
-        await run_in_threadpool(contracts.restore, root, control_so, uuid, replaced)
+        await run_in_threadpool(contracts.restore, root, control_so, uuid, record=replaced)
         raise
     await emit_control(
         control,
@@ -133,7 +134,7 @@ async def set_table_contract(
 
 
 @management_router.post("/{id}/contract/delete")
-async def delete_table_contract(id: str, table: DoorTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> ContractResponse:
+async def delete_table_contract(*, id: str, table: DoorTableDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> ContractResponse:
     """Delete the table's data contract (idempotent): its commits are held to no contract after. Asked at
     ``can_set_contract``."""
     uuid = table.resolved.require_uuid()

@@ -56,8 +56,8 @@ def _gone(_claim: LocationClaim) -> bool:
 
 def _claim_taken_then_taken_over(storage_options: StorageOptions) -> Callable[[], object]:
     claims = ClaimStore(control_root=f"s3://{BUCKET}/control", storage_options=storage_options)
-    location_claims.take(claims, LOCATION, "ns$first", ["ns", "first"], is_gone=_gone, uuid=TABLE_UUID)
-    return lambda: location_claims.take(claims, LOCATION, "ns$second", ["ns", "second"], is_gone=_gone)
+    location_claims.take(claims, LOCATION, "ns$first", segments=["ns", "first"], is_gone=_gone, uuid=TABLE_UUID)
+    return lambda: location_claims.take(claims, LOCATION, "ns$second", segments=["ns", "second"], is_gone=_gone)
 
 
 def _hold_taken_then_another_kind(storage_options: StorageOptions) -> Callable[[], object]:

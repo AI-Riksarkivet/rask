@@ -129,20 +129,20 @@ class AdminClient:
 
     def put(self, operation: str, query: dict[str, str], body: bytes) -> None:
         """PUT one admin operation; raise `ProvisionError` on a refusal, retry a 5xx a bounded number of times."""
-        self._call("PUT", operation, query, body)
+        self._call("PUT", operation, query, body=body)
 
     def get(self, operation: str) -> dict[str, object]:
         """GET one admin listing, a JSON object keyed by name."""
-        listing = json.loads(self._call("GET", operation, {}, b""))
+        listing = json.loads(self._call("GET", operation, {}, body=b""))
         if not isinstance(listing, dict):
             raise ProvisionError(f"{operation} answered {type(listing).__name__}, not an object keyed by name")
         return listing
 
     def delete(self, operation: str, query: dict[str, str]) -> None:
         """DELETE one admin object; one already gone (404) is the outcome asked for."""
-        self._call("DELETE", operation, query, b"", absent_ok=True)
+        self._call("DELETE", operation, query, body=b"", absent_ok=True)
 
-    def _call(self, method: str, operation: str, query: dict[str, str], body: bytes, *, absent_ok: bool = False) -> bytes:
+    def _call(self, method: str, operation: str, query: dict[str, str], *, body: bytes, absent_ok: bool = False) -> bytes:
         from botocore.auth import S3SigV4Auth
         from botocore.awsrequest import AWSRequest
 

@@ -156,8 +156,8 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         ns,
         so,
         segments,
-        data,
         *,
+        table,
         root,
         mode=None,
         properties=None,
@@ -670,11 +670,11 @@ def test_a_policy_set_merges_onto_the_record_it_replaces(
             landed.append(meanwhile)
             settings = get_settings()
             if meanwhile == "set":
-                record = real_record(kind, canonical, policy_doors.PolicyRequest(scan_batch_size=64), existing, uuid=uuid)
+                record = real_record(kind, canonical, policy_doors.PolicyRequest(scan_batch_size=64), existing=existing, uuid=uuid)
                 seeding.put_policy(settings.registry_root, settings.storage_options(), record.stored())
             else:
-                maintenance_policies.delete_policy(settings.registry_root, settings.storage_options(), kind, str(uuid))
-        return real_record(kind, canonical, body, existing, uuid=uuid)
+                maintenance_policies.delete_policy(settings.registry_root, settings.storage_options(), kind, key=str(uuid))
+        return real_record(kind, canonical, body, existing=existing, uuid=uuid)
 
     monkeypatch.setattr(policy_doors, "_record", _another_request_lands)
 
@@ -854,7 +854,7 @@ def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestCl
     seeding.put_warehouse(s.registry_root, so, {"id": "wh-z", "bucket": "other-wh", "project": "other", "status": "active"})
     renamed, location = str(uuid4()), f"s3://acme-wh/{uuid4()}"
     # The rename handed the table's claim, and the uuid it records, to the table's new name.
-    location_claims.take(table_claims.claim_store(s), location, "wh-a$db$u", ["wh-a", "db", "u"], is_gone=lambda _claim: False, uuid=renamed)
+    location_claims.take(table_claims.claim_store(s), location, "wh-a$db$u", segments=["wh-a", "db", "u"], is_gone=lambda _claim: False, uuid=renamed)
     seeding.put_policy(s.registry_root, so, {"kind": "table", "id": "wh-a$db$t", "uuid": renamed, "location": location, "retention_days": 7})
     seeding.put_policy(s.registry_root, so, {"kind": "table", "id": "wh-z$rival$t", "uuid": str(uuid4()), "retention_days": 1})
 
@@ -894,7 +894,9 @@ def test_project_policies_list_includes_a_deactivated_warehouses_bucket(client: 
     so = s.storage_options()
     seeding.put_warehouse(s.registry_root, so, {"id": "wh-old", "bucket": "acme-old", "project": "acme", "status": "deactivated"})
     table_uuid, location = str(uuid4()), f"s3://acme-old/{uuid4()}"
-    location_claims.take(table_claims.claim_store(s), location, "wh-old$arch$t", ["wh-old", "arch", "t"], is_gone=lambda _claim: False, uuid=table_uuid)
+    location_claims.take(
+        table_claims.claim_store(s), location, "wh-old$arch$t", segments=["wh-old", "arch", "t"], is_gone=lambda _claim: False, uuid=table_uuid
+    )
     seeding.put_policy(s.registry_root, so, {"kind": "table", "id": "wh-old$arch$t", "uuid": table_uuid, "location": location, "compact_enabled": False})
 
     body = _list_policies_for(client, "acme")

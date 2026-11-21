@@ -87,14 +87,21 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 # annotations (`from __future__ import annotations`; measured on ruff 0.15.13 and 0.16.0), which is 56
 # of the 78 route modules on 2026-09-29, so it guards only the other 22. T20 refuses a `print` in library and service
 # code, where a diagnostic is a log record carrying its trace; the scripts and tests trees are exempt below.
-extend-select = ["TID251", "FAST001", "T20"]
+# PLR0917 holds a function's shape to the writing-python references (anti-patterns F1): more than three positional
+# parameters is the signal, and the fix is keyword-only parameters. PLR0913 stays off: it counts keyword-only parameters
+# too, and keyword-only is the fix. A FastAPI handler's parameters are keyword-only, since FastAPI resolves them by name.
+# The tests trees are exempt below: a test's parameters are fixtures pytest injects by name.
+extend-select = ["TID251", "FAST001", "T20", "PLR0917"]
+
+[tool.ruff.lint.pylint]
+max-positional-args = 3
 
 [tool.ruff.lint.per-file-ignores]
 # Tests legitimately hardcode fixture credentials (S105/S106/S107), drive live endpoints without a
 # client timeout (S113), and use tmp paths (S108) — that is what a fixture IS. rask already exempted
 # S101/ANN2xx here; the lance-ns suites needed the rest of the same family. TID251 is exempt in the
 # tests and scripts trees because both sit outside the platform seams the banned-api rules guard.
-"**/tests/**" = ["TID251", "T20", "S101", "S105", "S106", "S107", "S108", "S113", "ANN201", "ANN202", "ANN401", "S608", "S607", "S603", "RUF001"]
+"**/tests/**" = ["PLR0917", "TID251", "T20", "S101", "S105", "S106", "S107", "S108", "S113", "ANN201", "ANN202", "ANN401", "S608", "S607", "S603", "RUF001"]
 # The media pipeline shells out to ffmpeg/ffprobe with LIST-form argv (never shell=True), which is
 # the safe form S603 cannot distinguish from an unsafe one. Scoped to the two trees that decode
 # media rather than silenced globally.
@@ -148,7 +155,7 @@ extend-select = ["TID251", "FAST001", "T20"]
 # nothing while implying the subtree needed suppressing. Deleted 2026-08-22 rather than narrowed.
 # `obs.py` measured identically and went the same way 2026-09-10.
 "scripts/gen_openapi.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
-"tests/**" = ["TID251", "A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501", "S101", "S105", "S106", "S107", "S108", "S113", "S603", "S607"]
+"tests/**" = ["PLR0917", "TID251", "A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501", "S101", "S105", "S106", "S107", "S108", "S113", "S603", "S607"]
 "scripts/**" = ["TID251", "T20"]  # a script's output is what it prints
 ".docker/*.py" = ["T20"]  # the image build's gates report on stdout
 ".claude/hooks/*.py" = ["T20"]  # a hook answers its caller on stdout

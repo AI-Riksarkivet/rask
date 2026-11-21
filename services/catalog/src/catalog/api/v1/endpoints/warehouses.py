@@ -153,6 +153,7 @@ def _delete_profile_fields(profile: DeleteProfile | None) -> dict[str, str]:
 
 @management_router.post("", response_model_exclude_none=True)
 async def create_warehouse(
+    *,
     request: Request,
     settings: SettingsDep,
     token: CurrentToken,
@@ -176,7 +177,7 @@ async def create_warehouse(
     # A declaration naming the warehouse's deletion protection asks what the protection door asks ([[LH-548]]).
     if body.protected is not None:
         await _require_project_admin(client, settings, token, project=project)
-    record = await establish_warehouse(request, settings, body, ids, client=client, control=control, vendor=vendor, author=author_of(token), owner=token)
+    record = await establish_warehouse(request, settings, body, ids=ids, client=client, control=control, vendor=vendor, author=author_of(token), owner=token)
     return WarehouseResponse.model_validate(record.stored())
 
 
@@ -210,8 +211,8 @@ async def establish_warehouse(
     request: Request,
     settings: Settings,
     body: CreateWarehouseRequest,
-    ids: WarehouseIds,
     *,
+    ids: WarehouseIds,
     client: OpenFgaClient | None,
     control: ControlEmitter,
     vendor: CredentialVendor,
@@ -485,7 +486,7 @@ async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: Fg
 
 
 @management_router.get("/{warehouse_id}", response_model_exclude_none=True)
-async def get_warehouse(warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> WarehouseResponse:
+async def get_warehouse(*, warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> WarehouseResponse:
     """One warehouse record — reader-gated on ``warehouse:<id>`` (fail-closed on an OpenFGA outage)."""
     await door_gates.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
     record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
@@ -496,6 +497,7 @@ async def get_warehouse(warehouse_id: str, settings: SettingsDep, token: Current
 
 @management_router.get("/{warehouse_id}/trash", response_model_exclude_none=True)
 async def list_warehouse_trash(
+    *,
     warehouse_id: str,
     settings: SettingsDep,
     token: CurrentToken,
@@ -584,7 +586,7 @@ async def change_warehouse_status(
     Raises:
         TableNotFoundError: The warehouse's record is gone.
     """
-    updated = await run_in_threadpool(warehouses.set_warehouse_status, settings.registry_root, settings.storage_options(), warehouse_id, status)
+    updated = await run_in_threadpool(warehouses.set_warehouse_status, settings.registry_root, settings.storage_options(), warehouse_id, status=status)
     if updated is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     log.info("warehouse_status_changed", extra={"warehouse": warehouse_id, "status": status})
@@ -601,6 +603,7 @@ async def change_warehouse_status(
 
 @management_router.post("/{warehouse_id}/deactivate", response_model_exclude_none=True)
 async def deactivate_warehouse(
+    *,
     warehouse_id: str,
     settings: SettingsDep,
     token: CurrentToken,
@@ -615,6 +618,7 @@ async def deactivate_warehouse(
 
 @management_router.post("/{warehouse_id}/activate", response_model_exclude_none=True)
 async def activate_warehouse(
+    *,
     warehouse_id: str,
     settings: SettingsDep,
     token: CurrentToken,
@@ -632,7 +636,7 @@ async def _require_project_admin(client: OpenFgaClient | None, settings: FgaSett
     await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
 
 
-async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> WarehouseRecord:
+async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token: CurrentToken, *, client: FgaClientDep) -> WarehouseRecord:
     """The record of ``warehouse_id``, for a caller who administers its project (:func:`_require_project_admin`).
 
     The record is read first, since the gate is on the warehouse's own project and never on one the caller names. NO
@@ -684,6 +688,7 @@ DoorManagedWarehouseDep = Annotated[WarehouseRecord, Depends(warehouse_its_doors
 
 @management_router.post("/{warehouse_id}/protection", response_model_exclude_none=True)
 async def set_warehouse_protection(
+    *,
     warehouse_id: str,
     body: SetProtectionRequest,
     record: DoorManagedWarehouseDep,
@@ -814,7 +819,7 @@ async def _cascade_subtrees(ns: LanceNamespace, settings: CatalogStore, held: li
     for name in held:
         segments = parse_identifier(name)
         try:
-            namespace = await objects.standing(ns, settings, "namespace", segments)
+            namespace = await objects.standing(ns, settings, "namespace", segments=segments)
             listed = await run_in_threadpool(namespaces_api._collect_descendants, ns, segments)  # noqa: SLF001 — one walker, deliberately
         except NamespaceNotFoundError:
             subtrees.append(_NamespaceSubtree(segments=segments, uuid=None, descendants=[]))
@@ -958,7 +963,7 @@ async def _forget_trashed(settings: CatalogStore, entry: TrashRecord, *, purge: 
     await run_in_threadpool(partial(trash.end, settings.registry_root, so, entry, kind=entry.kind, uuid=uuid))
 
 
-def _require_bucket_purgeable(settings: Settings, records: list[WarehouseRecord], record: WarehouseRecord, warehouse_id: str) -> None:
+def _require_bucket_purgeable(settings: Settings, records: list[WarehouseRecord], record: WarehouseRecord, *, warehouse_id: str) -> None:
     """Refuse a ``?purge_bucket=true`` that would destroy bytes this warehouse does not solely own.
 
     ``create_warehouse`` carries two bucket-claim guards, and NEITHER of them survives into the destroy
@@ -1003,6 +1008,7 @@ def _a_refusal(exc: BaseException) -> bool:
 
 @management_router.delete("/{warehouse_id}")
 async def delete_warehouse(
+    *,
     warehouse_id: str,
     keyed: idem.KeyedDoorDep,
     request: Request,
@@ -1065,7 +1071,7 @@ async def delete_warehouse(
     converge = await keyed.begin(target=f"warehouse:{warehouse_id}", takeover="unknown")
     if converge.replay is not None:
         return DeleteWarehouseResponse.model_validate(converge.replay.body)
-    record = warehouse_its_doors_manage(warehouse_id, await administered_warehouse(warehouse_id, settings, token, client), token)
+    record = warehouse_its_doors_manage(warehouse_id, await administered_warehouse(warehouse_id, settings, token, client=client), token)
     so = settings.storage_options()
     project = record.project
     # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
@@ -1089,7 +1095,7 @@ async def delete_warehouse(
         # cascade, so a refusal still costs nothing — the bottom-up rule applies to the bytes too. Read whole: a record
         # that cannot be read may be a sibling's claim on this bucket ([[LH-572]]).
         records = await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so)
-        _require_bucket_purgeable(settings, records, record, warehouse_id)
+        _require_bucket_purgeable(settings, records, record, warehouse_id=warehouse_id)
 
     # [[LH-205]] The cascade opens the warehouse's store and the purge empties a bucket through the
     # ESTATE's client, so for a record naming another store the one would sign toward that host with the
@@ -1288,6 +1294,7 @@ async def delete_warehouse(
 
 @management_router.post("/{warehouse_id}/validate", response_model_exclude_none=True)
 async def validate_warehouse_credentials(
+    *,
     warehouse_id: str,
     settings: SettingsDep,
     token: CurrentToken,

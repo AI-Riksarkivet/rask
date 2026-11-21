@@ -51,7 +51,7 @@ async def authorized_page(
     """
 
     async def resolved(batch: Sequence[tuple[str, Sequence[str]]]) -> list[str | None]:
-        return list(await asyncio.gather(*(listed_object(resolver, kind, name, list(segments)) for name, segments in batch)))
+        return list(await asyncio.gather(*(listed_object(resolver, kind, name, segments=list(segments)) for name, segments in batch)))
 
     page, token = await judged_page(
         authz,

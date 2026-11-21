@@ -286,6 +286,7 @@ management_router = APIRouter(prefix="/management/v1/access", tags=["access"], d
 
 @management_router.get("/tuples")
 async def read_access_tuples(
+    *,
     client: EstateFgaClient,
     resolver: ResolverDep,
     settings: SettingsDep,
@@ -399,7 +400,7 @@ def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga_writes.
     return tup
 
 
-async def _mutate_tuple(client: OpenFgaClient, announcer: Announcer, token: Caller | None, body: AccessTuple, *, write: bool) -> AccessTuple:
+async def _mutate_tuple(client: OpenFgaClient, announcer: Announcer, token: Caller | None, *, body: AccessTuple, write: bool) -> AccessTuple:
     tup = _validated_write_tuple(body, evaluated=write)
     actor = token.subject if token else "anonymous"
     event = AuditAction.ACCESS_TUPLE_WRITE if write else AuditAction.ACCESS_TUPLE_DELETE
@@ -430,7 +431,7 @@ async def _mutate_tuple(client: OpenFgaClient, announcer: Announcer, token: Call
 
 
 @management_router.post("/tuples")
-async def write_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
+async def write_access_tuple(*, client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: AccessTuple) -> AccessTuple:
     """Write ONE raw tuple (idempotent — a duplicate write is success), echoing the tuple as stored.
 
     Only a directly-assignable relation the compiled model defines on the object's type is accepted (a
@@ -439,12 +440,12 @@ async def write_access_tuple(client: EstateFgaClient, announcer: AnnouncerDep, r
     named by its name is written on its uuid object (:func:`_held_object`), the one every decision reads.
     """
     held = body.model_copy(update={"object": await _held_object(resolver, body.object)})
-    return await _mutate_tuple(client, announcer, token, held, write=True)
+    return await _mutate_tuple(client, announcer, token, body=held, write=True)
 
 
 @management_router.delete("/tuples")
 async def delete_access_tuple(
-    client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: NamedAccessTuple
+    *, client: EstateFgaClient, announcer: AnnouncerDep, resolver: ResolverDep, token: CurrentToken, body: NamedAccessTuple
 ) -> AccessTuple:
     """Delete ONE raw tuple (idempotent — an already-absent tuple is success), echoing the tuple removed.
 
@@ -454,7 +455,7 @@ async def delete_access_tuple(
     decides what is revoked.
     """
     held = AccessTuple(user=body.user, relation=body.relation, object=await _held_object(resolver, body.object), condition=body.condition)
-    return await _mutate_tuple(client, announcer, token, held, write=False)
+    return await _mutate_tuple(client, announcer, token, body=held, write=False)
 
 
 @management_router.get("/model")
@@ -474,7 +475,9 @@ async def get_access_model(client: EstateFgaClient) -> AccessModelResponse:
 
 
 @management_router.post("/check")
-async def check_access(client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessCheckBody) -> AccessCheckResult:
+async def check_access(
+    *, client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessCheckBody
+) -> AccessCheckResult:
     """One ``(user, relation, object)`` OpenFGA Check over ANY model type — the estate-wide extension of
     the per-object ``…/access/check`` playground (#68), which stays as-is for table/namespace owners.
 
@@ -513,7 +516,9 @@ def _validated_relation(obj_or_type: str, relation: str) -> str:
 
 
 @management_router.post("/list-objects")
-async def list_access_objects(client: EstateFgaClient, settings: SettingsDep, token: CurrentToken, body: AccessListObjectsRequest) -> AccessListObjectsResponse:
+async def list_access_objects(
+    *, client: EstateFgaClient, settings: SettingsDep, token: CurrentToken, body: AccessListObjectsRequest
+) -> AccessListObjectsResponse:
     """ "What can this subject reach?" — every ``type`` object on which ``user`` holds ``relation``.
 
     The forward half of a who-reaches-what view, and the answer ``GET /tuples`` structurally cannot give: Read needs
@@ -552,7 +557,7 @@ async def list_access_objects(client: EstateFgaClient, settings: SettingsDep, to
 
 @management_router.post("/list-users")
 async def list_access_users(
-    client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessListUsersRequest
+    *, client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessListUsersRequest
 ) -> AccessListUsersResponse:
     """ "Who can do this?" — every subject holding ``relation`` on ``object``, effective access included.
 
@@ -596,7 +601,7 @@ async def list_access_users(
 
 @management_router.post("/expand")
 async def expand_access(
-    client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessExpandRequest
+    *, client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessExpandRequest
 ) -> AccessExpandResponse:
     """WHY a relation resolves — the userset tree, optionally followed through the cascade.
 
@@ -634,7 +639,7 @@ async def expand_access(
 
 @management_router.post("/simulate")
 async def simulate_access(
-    client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessSimulateRequest
+    *, client: EstateFgaClient, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, body: AccessSimulateRequest
 ) -> AccessSimulateResult:
     """ "Would this grant do what I think?" — a Check evaluated as if ``hypothetical`` existed.
 
@@ -719,7 +724,7 @@ def _refuse_a_principal_git_declares(key: str, naming: list[fga_writes.ClientTup
 
 @management_router.delete("/principals/{principal:path}")
 async def delete_principal(
-    principal: PrincipalPath, client: EstateFgaClient, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
+    *, principal: PrincipalPath, client: EstateFgaClient, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
 ) -> PrincipalDeleted:
     """Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).
 

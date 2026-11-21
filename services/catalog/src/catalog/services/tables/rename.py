@@ -54,8 +54,8 @@ def rename_table(
     ns: LanceNamespace,
     source: table_claims.ResolvedTable,
     new_table_name: str,
-    new_namespace_id: list[str] | None,
     *,
+    new_namespace_id: list[str] | None,
     so: StorageOptions,
     claims: location_claims.ClaimStore,
     root: str,
@@ -191,7 +191,7 @@ def rename_table(
             except Exception as exc:
                 log.error("rename_parent_not_put_back", extra={"source": source_id, "destination": dest_id, "error": str(exc)[:300]}, exc_info=True)
         try:
-            table_claims.take(ns, claims, source_uri, source_id, segments, previous=dest_id, token=fenced.token)
+            table_claims.take(ns, claims, source_uri, table=source_id, segments=segments, previous=dest_id, token=fenced.token)
         except Exception as exc:
             log.error("rename_claim_not_handed_back", extra={"source": source_id, "location": source_uri, "error": str(exc)[:300]})
 

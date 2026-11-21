@@ -272,7 +272,7 @@ def file(control_root: str, storage_options: StorageOptions, *, door: str, targe
     """
     key = f"{_directory(target)}/{uuid4().hex}.json"
     conditional_records.create_json(
-        control_root, storage_options, key, Intent(door=door, target=target, announcements=list(announcements)).model_dump(mode="json")
+        control_root, storage_options, key, record=Intent(door=door, target=target, announcements=list(announcements)).model_dump(mode="json")
     )
     return key
 

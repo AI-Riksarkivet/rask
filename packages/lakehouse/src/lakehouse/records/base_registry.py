@@ -290,7 +290,7 @@ def claim_bases(registry: BaseRegistry, location: str, entries: Sequence[Recorde
     key = record_key_for(location)
     for _ in range(_CLAIM_ATTEMPTS):
         try:
-            conditional_records.create_json(registry.control_root, registry.storage_options, key, wanted.model_dump(mode="json"))
+            conditional_records.create_json(registry.control_root, registry.storage_options, key, record=wanted.model_dump(mode="json"))
         except conditional_records.RecordExistsError:
             pass
         else:
@@ -330,7 +330,7 @@ def _add_missing(registry: BaseRegistry, key: str, wanted: BaseRecord) -> list[R
         kept = [entry for entry in record.entries if entry.identity not in replaced]
         return BaseRecord(location=record.location, entries=[*kept, *added]).model_dump(mode="json")
 
-    conditional_records.mutate_json(registry.control_root, registry.storage_options, key, _add)
+    conditional_records.mutate_json(registry.control_root, registry.storage_options, key, mutate=_add)
     return added
 
 
@@ -354,7 +354,7 @@ def release_claim(registry: BaseRegistry, claim: BaseClaim) -> None:
         return BaseRecord(location=record.location, entries=[entry for entry in record.entries if entry.identity not in removed]).model_dump(mode="json")
 
     try:
-        conditional_records.mutate_json(registry.control_root, registry.storage_options, key, _remove)
+        conditional_records.mutate_json(registry.control_root, registry.storage_options, key, mutate=_remove)
     except conditional_records.RecordMissingError:
         return
 

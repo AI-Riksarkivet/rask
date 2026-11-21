@@ -104,10 +104,10 @@ def upsert_project(control_root: str, storage_options: StorageOptions, wanted: P
         return merged
 
     key = record_key(wanted.id)
-    return _record(mutate_json(control_root, storage_options, key, merge), path=key)
+    return _record(mutate_json(control_root, storage_options, key, mutate=merge), path=key)
 
 
-def set_project_protection(control_root: str, storage_options: StorageOptions, project_id: str, change: ProtectionChange) -> ProjectRecord | None:
+def set_project_protection(control_root: str, storage_options: StorageOptions, project_id: str, *, change: ProtectionChange) -> ProjectRecord | None:
     """Apply ``change`` to project ``project_id``'s record, conditional on its ETag ([[LH-549]]).
 
     Every other field is the record's as it stands at the write (``mutate_json``).
@@ -124,7 +124,7 @@ def set_project_protection(control_root: str, storage_options: StorageOptions, p
     """
     key = record_key(project_id)
     try:
-        return _record(mutate_json(control_root, storage_options, key, lambda record: with_protection(record, change)), path=key)
+        return _record(mutate_json(control_root, storage_options, key, mutate=lambda record: with_protection(record, change)), path=key)
     except RecordMissingError:
         return None
 
@@ -137,7 +137,7 @@ def set_project_manager(control_root: str, storage_options: StorageOptions, proj
     """
     key = record_key(project_id)
     try:
-        return _record(mutate_json(control_root, storage_options, key, lambda record: with_manager(record, manager)), path=key)
+        return _record(mutate_json(control_root, storage_options, key, mutate=lambda record: with_manager(record, manager)), path=key)
     except RecordMissingError:
         return None
 
@@ -149,7 +149,7 @@ def create_project_record(control_root: str, storage_options: StorageOptions, re
     re-reads and converges on the winner's identity fields (``created_at``/``created_by``), exactly
     like the sequential idempotent re-POST path.
     """
-    create_json(control_root, storage_options, record_key(record.id), record.stored())
+    create_json(control_root, storage_options, record_key(record.id), record=record.stored())
 
 
 def record_key(project_id: str) -> str:
@@ -188,7 +188,7 @@ def mark_deleting(control_root: str, storage_options: StorageOptions, project_id
     key = record_key(project_id)
     try:
         return _record(
-            mutate_json(control_root, storage_options, key, lambda record: record if record.get(DELETING_BY) else {**record, DELETING_BY: by}), path=key
+            mutate_json(control_root, storage_options, key, mutate=lambda record: record if record.get(DELETING_BY) else {**record, DELETING_BY: by}), path=key
         )
     except RecordMissingError:
         return None

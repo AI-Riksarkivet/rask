@@ -59,7 +59,7 @@ def _run(
     token = (
         PersonPrincipal(principal=Principal(idp_id="dex", subject=sub), claims=IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1)) if token_present else None
     )
-    resp = asyncio.run(access._my_permissions(client, settings, token, NamedResolver(), fga_type, ident))
+    resp = asyncio.run(access._my_permissions(client, settings=settings, token=token, resolver=NamedResolver(), fga_type=fga_type, id=ident))
     return resp, asked
 
 

@@ -195,7 +195,7 @@ def _latest_version(location: str, so: StorageOptions) -> int:
         return 0
 
 
-def _write(location: str, so: StorageOptions, name: str, body: bytes) -> None:
+def _write(location: str, so: StorageOptions, name: str, *, body: bytes) -> None:
     fs, base = table_objects.dataset_fs(location, so)
     with fs.open_output_stream(f"{base.rstrip('/')}/_versions/{name}") as sink:
         sink.write(body)
@@ -252,8 +252,8 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         raise InvalidInputError(f"commit refused: no staged manifest is at {request.manifest_path}") from exc
     stated = manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.VERSION_FIELD)
     detached_id, finalize_id = manifest_bytes.detached_id(), manifest_bytes.detached_id()
-    _write(location, so, manifest_names.detached_name(detached_id), manifest_bytes.with_manifest_version(manifest, detached_id))
-    _write(location, so, manifest_names.detached_name(finalize_id), manifest)
+    _write(location, so, manifest_names.detached_name(detached_id), body=manifest_bytes.with_manifest_version(manifest, detached_id))
+    _write(location, so, manifest_names.detached_name(finalize_id), body=manifest)
     try:
         transaction = read_transaction(
             open_dataset(location, version=detached_id, storage_options=so.in_clear() or None, session=shared_lance_session()), detached_id
@@ -505,7 +505,7 @@ def _refuse_forged_files(version: _Judged) -> None:
     table_objects.verify_fragment_data_files(
         location, so, [{"files": [{"path": data_file.path, "file_size_bytes": data_file.file_size_bytes}]} for _, data_file in added]
     )
-    client_fragments.verify_against_footers(location, so, list(owners.values()), version.proposed)
+    client_fragments.verify_against_footers(location, so, list(owners.values()), table=version.proposed)
 
 
 def _refuse_unverified_blobs(version: _Judged, external_bases: Sequence[base_registry.RecordedBase]) -> None:
@@ -999,8 +999,8 @@ def finalize(
     table: table_claims.DoorTable,
     staged: StagedVersion,
     request: CreateTableVersionRequest,
-    so: StorageOptions,
     *,
+    so: StorageOptions,
     writer: commit_turns.Writer | None,
     kept: bool,
 ) -> CreateTableVersionResponse:

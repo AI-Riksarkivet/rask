@@ -56,7 +56,7 @@ def protected_refs(cluster_images: Iterable[str], pins_text: str) -> set[tuple[s
     return out
 
 
-def tags_to_drop(repo: str, created_by_tag: Mapping[str, str], protected: set[tuple[str, str]], keep: int) -> list[str]:
+def tags_to_drop(repo: str, created_by_tag: Mapping[str, str], protected: set[tuple[str, str]], *, keep: int) -> list[str]:
     """The tags this reclaim may delete for one repository, oldest first.
 
     Ordered by the image's own creation time out of its config blob, because a registry exposes no push
@@ -71,7 +71,7 @@ def tags_to_drop(repo: str, created_by_tag: Mapping[str, str], protected: set[tu
 
 def plan(repos: Mapping[str, Mapping[str, str]], protected: set[tuple[str, str]], keep: int) -> list[tuple[str, str]]:
     """Every `(repository, tag)` the reclaim may delete, across every repository."""
-    return [(repo, tag) for repo, created in repos.items() for tag in tags_to_drop(repo, created, protected, keep)]
+    return [(repo, tag) for repo, created in repos.items() for tag in tags_to_drop(repo, created, protected, keep=keep)]
 
 
 def parse_cluster_images(blobs: Sequence[str]) -> list[str]:

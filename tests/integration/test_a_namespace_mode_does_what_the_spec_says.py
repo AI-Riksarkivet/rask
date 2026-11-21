@@ -124,7 +124,7 @@ def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership_and_a_new_uu
     policy = governed.client.post(f"/management/v1/namespace/{WAREHOUSE}$ghost/policy/describe")
     assert (policy.status_code, policy.json()) == (200, {"kind": "namespace", "id": f"{WAREHOUSE}$ghost", "uuid": properties["rask.uuid"], "set": False})
     assert _naming(governed, new) == {(governed.person("bob"), "owner", new), *{tuple(new if part == old else part for part in edge) for edge in edges}}
-    assert maintenance_policies.get_policy(str(tmp_path), StorageOptions(), "namespace", replaced) is None
+    assert maintenance_policies.get_policy(str(tmp_path), StorageOptions(), "namespace", key=replaced) is None
 
 
 @pytest.mark.parametrize(("mode", "status"), [pytest.param("ExistOk", 200, id="exist-ok-keeps-it"), pytest.param("Create", 409, id="create-conflicts")])

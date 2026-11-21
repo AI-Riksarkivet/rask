@@ -94,7 +94,7 @@ def _settings() -> SimpleNamespace:
 def _door(location: str) -> DoorTable:
     """The table the door resolved ``ns$t`` to: its location, whose claim records the table's uuid, on a control root beside it."""
     store = ClaimStore(control_root=str(Path(location).parent / "control"))
-    location_claims.take(store, location, "ns$t", ["ns", "t"], is_gone=lambda _claim: False, uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
+    location_claims.take(store, location, "ns$t", segments=["ns", "t"], is_gone=lambda _claim: False, uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
     resolved = ResolvedTable(segments=["ns", "t"], location=location, claim=location_claims.read(store, location))
     return DoorTable(cast("Any", _Namespace(location)), store, resolved, announces=lambda _operation: True)
 

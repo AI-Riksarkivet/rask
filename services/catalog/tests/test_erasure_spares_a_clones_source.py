@@ -60,7 +60,7 @@ def namespace(tmp_path: Path) -> LanceNamespace:
         ns,
         StorageOptions(),
         ["db", "subjects"],
-        read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
+        table=read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
         root=str(tmp_path / "data"),
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control")),

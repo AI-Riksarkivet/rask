@@ -67,7 +67,7 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
-    create_table(ns, StorageOptions(), TABLE_ID, _rows(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder="db$rows")
+    create_table(ns, StorageOptions(), TABLE_ID, table=_rows(1), root=str(tmp_path / "data"), mode="create", registry=registry, holder="db$rows")
     open_by_name(ns, StorageOptions(), TABLE_ID).insert(_rows(1, start=1))
     lance.write_dataset(_rows(1, start=2), str(open_by_name(ns, StorageOptions(), TABLE_ID).uri), mode="overwrite")
     open_by_name(ns, StorageOptions(), TABLE_ID).create_branch(BRANCH, None)

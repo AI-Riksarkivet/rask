@@ -78,7 +78,7 @@ def left_staged(failure: Exception) -> bool:
     return isinstance(failure, UnpublishedEventError) and failure.staged
 
 
-def stage_event(outbox_uri: str, storage_options: StorageOptions, key: str, event_json: str) -> None:
+def stage_event(outbox_uri: str, storage_options: StorageOptions, key: str, *, event_json: str) -> None:
     """Persist the event JSON at ``<outbox_uri>/<key>.json``. The key is the event's own, its envelope's id
     (`lakehouse.events.cloud_events`): the event's identity and its state together, so a run's COMPLETE cannot
     truncate its own FAIL, and a redelivery of the SAME event re-stages the same object. Blocking
@@ -118,7 +118,7 @@ def stage_event(outbox_uri: str, storage_options: StorageOptions, key: str, even
 def stage_envelope(outbox_uri: str, storage_options: StorageOptions, envelope: CloudEvent) -> None:
     """Stage ``envelope`` under its id, as the bus would carry it: the event as ``data``, and the trace it names.
     Blocking IO; callers threadpool it."""
-    stage_event(outbox_uri, storage_options, envelope.id, json.dumps(envelope.as_wire()))
+    stage_event(outbox_uri, storage_options, envelope.id, event_json=json.dumps(envelope.as_wire()))
 
 
 def staged_envelope(record: str) -> CloudEvent:

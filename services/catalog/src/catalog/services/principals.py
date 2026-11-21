@@ -43,7 +43,7 @@ def record_deletion(control_root: str, storage_options: StorageOptions, principa
         deleted_by=deleted_by,
     )
     try:
-        create_json(control_root, storage_options, record_key(principal), record.model_dump(mode="json"))
+        create_json(control_root, storage_options, record_key(principal), record=record.model_dump(mode="json"))
     except RecordExistsError:
         existing = read_record(control_root, storage_options, principal)
         if existing is None:

@@ -78,7 +78,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
         namespace,
         StorageOptions(),
         TABLE_ID,
-        pa.table({"id": pa.array([1], pa.int64()), "s": pa.array(["a"])}, schema=MAIN_SCHEMA),
+        table=pa.table({"id": pa.array([1], pa.int64()), "s": pa.array(["a"])}, schema=MAIN_SCHEMA),
         root=str(tmp_path / "data"),
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),
@@ -103,7 +103,7 @@ def test_a_branch_insert_lands_the_branch_only_column(ns, table: DoorTable) -> N
     data = coerce_insert_arrow(table, StorageOptions(), _ipc(payload), branch=BRANCH, max_bytes=_BODY_LIMIT)
 
     insert_into_table(
-        table, StorageOptions(), InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), data, max_bytes=_BODY_LIMIT, transaction_properties={}
+        table, StorageOptions(), InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), data=data, max_bytes=_BODY_LIMIT, transaction_properties={}
     )
 
     written = open_by_name(ns, StorageOptions(), TABLE_ID, branch=BRANCH).to_table().to_pydict()

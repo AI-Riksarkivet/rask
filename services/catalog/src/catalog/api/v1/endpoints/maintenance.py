@@ -50,6 +50,7 @@ due_router = APIRouter(prefix="/management/v1/maintenance", tags=["maintenance"]
 
 @table_router.post("/{id}/maintenance/preview")
 async def preview_maintenance(
+    *,
     id: str,
     body: GcRequest,
     table: DoorTableDep,
@@ -80,6 +81,7 @@ async def preview_maintenance(
 
 @table_router.post("/{id}/maintenance/run")
 async def run_maintenance(
+    *,
     id: str,
     body: GcRequest,
     table: DoorTableDep,
@@ -111,6 +113,7 @@ async def run_maintenance(
 
 @table_router.post("/{id}/maintenance/disarm")
 async def disarm_commit_path_cleanup(
+    *,
     id: str,
     table: DoorTableDep,
     so: StorageOptionsDep,
@@ -126,7 +129,7 @@ async def disarm_commit_path_cleanup(
 
 
 @table_router.post("/{id}/maintenance/floor")
-async def raise_listing_floor(id: str, body: FloorRaiseRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken) -> FloorRaised:
+async def raise_listing_floor(*, id: str, body: FloorRaiseRequest, table: DoorTableDep, so: StorageOptionsDep, token: CurrentToken) -> FloorRaised:
     """Commit the listing-floor stamp ``rask.maintenance.floor_raised_at`` on main: a version that changes no row, so the
     table's next cleanup can drop the manifests beneath it and with them the floor Lance lists its transaction and
     deletion files above ([[LH-094]]).
@@ -142,6 +145,7 @@ async def raise_listing_floor(id: str, body: FloorRaiseRequest, table: DoorTable
 
 @due_router.get("/due")
 async def list_due_maintenance(
+    *,
     settings: SettingsDep,
     token: CurrentToken,
     client: FgaClientDep,

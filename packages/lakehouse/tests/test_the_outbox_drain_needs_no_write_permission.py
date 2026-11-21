@@ -104,7 +104,7 @@ def test_staging_an_s3_event_issues_ONLY_a_put(monkeypatch: pytest.MonkeyPatch) 
     client = _RecordingS3()
     monkeypatch.setattr("lakehouse.storage.client.s3_client", lambda *_a, **_kw: client)
 
-    outbox.stage_event("s3://lance-catalog/_lineage_outbox", StorageOptions.from_flat(_KEYED), "run-9@COMPLETE", '{"eventType": "COMPLETE"}')
+    outbox.stage_event("s3://lance-catalog/_lineage_outbox", StorageOptions.from_flat(_KEYED), "run-9@COMPLETE", event_json='{"eventType": "COMPLETE"}')
 
     assert [name for name, _ in client.calls] == ["put_object"], f"the stage path made {client.calls}"
     _, kw = client.calls[0]
@@ -135,7 +135,7 @@ def test_the_stage_signs_with_the_whole_key_pair_in_either_spelling(monkeypatch:
         return _RecordingS3()
 
     monkeypatch.setattr("lakehouse.storage.client.s3_client", _factory)
-    outbox.stage_event("s3://lance-catalog/_lineage_outbox", StorageOptions.from_flat(options), "run-8", '{"eventType": "FAIL"}')
+    outbox.stage_event("s3://lance-catalog/_lineage_outbox", StorageOptions.from_flat(options), "run-8", event_json='{"eventType": "FAIL"}')
 
     pair = seen.get("key_pair")
     assert isinstance(pair, S3KeyPair), f"the {spelling} key pair never reached the client: {seen}"

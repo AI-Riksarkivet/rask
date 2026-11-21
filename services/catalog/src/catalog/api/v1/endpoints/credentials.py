@@ -65,7 +65,7 @@ async def _ancestor_uuids(resolver: Resolver, segments: list[str]) -> list[str]:
     return uuids
 
 
-async def require_reclaimable_history(request: Request, table: DoorTableDep, resolver: ResolverDep, settings: SettingsDep) -> None:
+async def require_reclaimable_history(request: Request, table: DoorTableDep, resolver: ResolverDep, *, settings: SettingsDep) -> None:
     """Refuse the maintain tier for a table whose maintenance policy keeps its whole history ([[XC-084]]).
 
     That tier deletes and puts anywhere in the table, and a session policy cannot refuse a put over an existing manifest,
@@ -110,6 +110,7 @@ async def require_reclaimable_history(request: Request, table: DoorTableDep, res
 
 @management_router.post("/{id}/credentials", response_model_exclude_none=True, dependencies=[Depends(require_reclaimable_history)])
 async def vend_credentials(
+    *,
     id: str,
     table: DoorTableDep,
     settings: SettingsDep,

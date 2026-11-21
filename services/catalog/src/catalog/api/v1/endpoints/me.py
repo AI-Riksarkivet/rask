@@ -66,7 +66,7 @@ def _claim(token: Caller, name: str) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-async def _estate_standing(client: OpenFgaClient, settings: FgaSettings, sub: str, relation: str, deadline: float) -> bool:
+async def _estate_standing(client: OpenFgaClient, settings: FgaSettings, sub: str, *, relation: str, deadline: float) -> bool:
     """Whether the caller holds ``relation`` on the fixed root object, or ``False`` when OpenFGA cannot say.
 
     Display-only (gates nothing here), so it is not audited and degrades to ``False`` on an OpenFGA
@@ -81,7 +81,7 @@ async def _estate_standing(client: OpenFgaClient, settings: FgaSettings, sub: st
         return False
 
 
-async def _project_ids(client: OpenFgaClient, sub: str, relation: str, deadline: float) -> list[str]:
+async def _project_ids(client: OpenFgaClient, sub: str, relation: str, *, deadline: float) -> list[str]:
     """The project ids the caller holds ``relation`` on, via ``fga_reads.list_objects`` (#51) — sorted.
 
     Degrades to ``[]`` PER RELATION on an outage or budget expiry (never 5xxes the endpoint): a missing
@@ -115,10 +115,10 @@ async def get_me(settings: SettingsDep, token: CurrentToken, client: FgaClientDe
     # One shared deadline across the four sequential lookups — admin BEFORE member, so the stronger
     # role wins the dedupe below and a budget expiry costs the weaker list first.
     deadline = asyncio.get_running_loop().time() + _LOOKUP_BUDGET_SECONDS
-    estate_admin = await _estate_standing(client, settings, token.subject, "can_administer_estate", deadline)
-    can_create_project = await _estate_standing(client, settings, token.subject, "can_create_project", deadline)
-    admin_ids = await _project_ids(client, token.subject, "can_administer", deadline)
-    member_ids = await _project_ids(client, token.subject, "member", deadline)
+    estate_admin = await _estate_standing(client, settings, token.subject, relation="can_administer_estate", deadline=deadline)
+    can_create_project = await _estate_standing(client, settings, token.subject, relation="can_create_project", deadline=deadline)
+    admin_ids = await _project_ids(client, token.subject, "can_administer", deadline=deadline)
+    member_ids = await _project_ids(client, token.subject, "member", deadline=deadline)
     # The model folds admins into members (`member: ... or admin`), so every admin project also shows up
     # in the member list — keep the admin row, drop the duplicate.
     projects = [MeProject(project=p, role="admin") for p in admin_ids]

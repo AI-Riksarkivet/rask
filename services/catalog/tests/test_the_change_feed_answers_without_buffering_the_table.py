@@ -37,7 +37,7 @@ def namespace(tmp_path: Path) -> LanceNamespace:
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))
     create_table(
-        ns, StorageOptions(), ["db", "t"], pa.table({"id": pa.array(range(_ROWS), pa.int64())}), root=str(tmp_path / "data"), mode="create", registry=None
+        ns, StorageOptions(), ["db", "t"], table=pa.table({"id": pa.array(range(_ROWS), pa.int64())}), root=str(tmp_path / "data"), mode="create", registry=None
     )
     return ns
 

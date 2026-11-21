@@ -59,7 +59,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": root})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
-    create_table(namespace, StorageOptions(), TABLE_ID, _table([1, 2, 3], "main"), root=root, mode="create", registry=registry, holder="$".join(TABLE_ID))
+    create_table(namespace, StorageOptions(), TABLE_ID, table=_table([1, 2, 3], "main"), root=root, mode="create", registry=registry, holder="$".join(TABLE_ID))
     dataset = open_by_name(namespace, StorageOptions(), TABLE_ID)
     dataset.create_branch(BRANCH) if hasattr(dataset, "create_branch") else pytest.skip("pylance has no branch API here")
     return namespace

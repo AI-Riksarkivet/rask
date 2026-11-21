@@ -172,7 +172,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
 
     token = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
     for suffix in ("describe", "alter"):
-        asyncio.run(route_guard.authorize_transaction(_CLIENT, NamedResolver(), ["acme-wh", "db1", "t", "txn1"], suffix, token=token))
+        asyncio.run(route_guard.authorize_transaction(_CLIENT, NamedResolver(), ["acme-wh", "db1", "t", "txn1"], suffix=suffix, token=token))
 
     body = {
         "entries": [{"id": ["acme-wh", "db1", "users"]}],
@@ -189,7 +189,9 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     for destination in (["acme-wh", "db1", "renamed"], ["acme-wh", "db2", "child"]):
         pairs.add(("table", rungs.rename_relation(["acme-wh", "db1", "child"], destination)))
         asyncio.run(
-            door_gates.require_rename_destination(_CLIENT, settings, token, NamedResolver(), source=["acme-wh", "db1", "child"], destination=destination)
+            door_gates.require_rename_destination(
+                _CLIENT, settings, token, resolver=NamedResolver(), source=["acme-wh", "db1", "child"], destination=destination
+            )
         )
 
     pairs.update(checked)

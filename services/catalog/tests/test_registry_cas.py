@@ -35,9 +35,9 @@ from lakehouse.storage.options import StorageOptions
 
 def test_create_json_local_bare_path_root(tmp_path: Any) -> None:
     # control_root may be a bare local path (no file:// scheme) in dev — same exclusivity.
-    conditional_records.create_json(str(tmp_path), StorageOptions(), "_projects/acme.json", {"id": "acme"})
+    conditional_records.create_json(str(tmp_path), StorageOptions(), "_projects/acme.json", record={"id": "acme"})
     with pytest.raises(conditional_records.RecordExistsError):
-        conditional_records.create_json(str(tmp_path), StorageOptions(), "_projects/acme.json", {"id": "acme"})
+        conditional_records.create_json(str(tmp_path), StorageOptions(), "_projects/acme.json", record={"id": "acme"})
 
 
 # --------------------------------------------------------------------------- #
@@ -75,7 +75,7 @@ def test_create_json_s3_412_maps_to_record_exists(monkeypatch: pytest.MonkeyPatc
     client.put_object.side_effect = _client_error("PreconditionFailed", 412)
     monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(conditional_records.RecordExistsError):
-        conditional_records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
+        conditional_records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", record={"id": "wh-a"})
 
 
 def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -85,4 +85,4 @@ def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.Monkey
     client.put_object.side_effect = _client_error("AccessDenied", 403)
     monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(ClientError):
-        conditional_records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
+        conditional_records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", record={"id": "wh-a"})
