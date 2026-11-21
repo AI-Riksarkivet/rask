@@ -325,7 +325,7 @@ def test_a_retiring_door_that_failed_before_its_change_announces_nothing_of_a_ta
 ) -> None:
     """A drop, a deregister or a cascade whose detach of a table failed left the table live, and its filing standing. A
     rename since moves the table to another name, alive: the finish tells nobody it was dropped or deregistered."""
-    from catalog.services import native
+    from catalog.core import native
 
     catalog, lanes = estate
     arranged(catalog)
@@ -383,7 +383,7 @@ def test_a_deregister_of_a_table_a_stale_trash_record_names_is_announced_and_kee
     since, and the release maintenance's audit asks for meanwhile waits for the finish without rewriting the record. One
     whose detach landed and whose answer was lost, and one that answered, end the record, so no purge takes the bytes the
     deregister keeps. A record stamped in the filing's own second counts as written since it, which loses the event."""
-    from catalog.services import native
+    from catalog.core import native
     from lakehouse.records import trash
 
     catalog, lanes = estate
@@ -551,7 +551,8 @@ def test_a_recoverable_drop_that_stopped_is_announced_only_where_it_detached_the
     the drop filed is taken back, so the live table is not kept in the trash (where maintenance passes it by). One whose
     process ended after the detach and before the stamp dropped the table: it is announced once, as filed, by the finish,
     before which its grants are not released, or by the undrop that restores it, which waits for the drop's fence."""
-    from catalog.services import announcement_intents, native
+    from catalog.core import native
+    from catalog.services import announcement_intents
     from lakehouse.records import trash
 
     catalog, lanes = estate
@@ -640,7 +641,8 @@ def test_a_recoverable_drop_that_stalled_past_its_fence_acts_only_while_it_holds
     One that lost its fence to another drop does not detach, and touches no record: the other drop's stands. One whose
     detach returned after the fence lapsed, the finish having told the drop and an undrop restored the table meanwhile,
     files nothing: the live table is kept by no trash record, and the drop and the undrop are each told once."""
-    from catalog.services import native, table_claims
+    from catalog.core import native
+    from catalog.services import table_claims
     from lakehouse.records import location_claims, trash
     from lakehouse.storage import conditional_records
 

@@ -39,6 +39,7 @@ from catalog.api.v1.endpoints import erasure as door
 from catalog.core import base_judge
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
+from catalog.services import warehouses
 from catalog.services.erasure import ErasureReport, ref_heads, verify
 from catalog.services.tables.creation import create_table
 from catalog.services.tables.writes import read_arrow_body
@@ -856,7 +857,7 @@ def test_no_object_under_the_table_root_holds_the_identifier_or_the_report_names
     root = tmp_path / "data"
     predicate = f"pii = '{_IDENTIFIER}'"
     settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(_control(root)))
-    base_judge.install(partial(base_judge.BaseJudge.from_settings, settings))
+    base_judge.install(partial(base_judge.BaseJudge.from_settings, settings, bucket_claim=warehouses.bucket_claim))
     try:
         namespace = build(root)
         # Finding nothing after the erasure is evidence only where the oracle found the identifier before it.

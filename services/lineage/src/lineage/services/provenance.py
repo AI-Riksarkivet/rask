@@ -15,7 +15,7 @@ A follower reading ``seq > since`` therefore never misses a row that commits aft
 
 A ROW IS WRITTEN ONCE. Each table declares an unenforced primary key and is written with an insert-only
 merge on it, which the catalog runs on Lance's own enforcement: a redelivered event lands no second row, and
-two racing deliveries of one event land it once (``catalog.services.primary_keys``). The feed keeps one row
+two racing deliveries of one event land it once (``catalog.core.primary_keys``). The feed keeps one row
 per terminal state of a run, one per arrival of a non-terminal state, and one per static change.
 
 A BURST IS ONE COMMIT PER TABLE ([[LH-533]]). Every commit is a Lance version and a fragment that each later open and

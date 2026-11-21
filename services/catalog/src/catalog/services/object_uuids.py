@@ -14,7 +14,7 @@ from typing import Literal
 
 from lance_namespace import DescribeNamespaceRequest, DescribeTableRequest, InternalError, LanceNamespace, NamespaceNotFoundError
 
-from catalog.services import native
+from catalog.core import native
 from lakehouse.events.control_events import ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.naming import uuid_of

@@ -39,7 +39,7 @@ def test_the_native_seam_names_the_operation_and_really_emits() -> None:
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-    from catalog.services import native
+    from catalog.core import native
 
     exporter = InMemorySpanExporter()
     provider = TracerProvider()

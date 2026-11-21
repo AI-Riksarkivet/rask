@@ -12,7 +12,7 @@ What each ODCS field becomes:
   nullability included, so the rows are held to it by Lance itself; the catalog holds the schema to it.
 - ``primaryKey: true`` is a field of Lance's unenforced primary key (`lance_docs/lance/format/table/index.md`
   § Unenforced Primary Key), which Lance fixes once set and whose repeats every commit is already refused for
-  (`catalog.services.primary_keys`). ``unique`` is accepted only on such a field.
+  (`catalog.core.primary_keys`). ``unique`` is accepted only on such a field.
 - ``physicalType`` is the column's Arrow type as pyarrow spells it (``int64``, ``string``, ``timestamp[us, tz=UTC]``).
   A property with nested ``properties`` is a struct, judged child by child. ``logicalType``, where stated, is held to
   the family that type belongs to (``integer`` for ``int64``), so it is no claim the catalog leaves unchecked.
@@ -42,7 +42,7 @@ import pyarrow as pa
 from lance_namespace import InternalError, InvalidInputError, InvalidTableStateError, UnsupportedOperationError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
-from catalog.services import primary_keys
+from catalog.core import primary_keys
 from lakehouse.problems.outage import store_refusal
 from lakehouse.records import control_prefixes
 from lakehouse.records.record_store import delete_record, put_record, read_record, record_key

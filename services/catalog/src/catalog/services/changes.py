@@ -61,22 +61,14 @@ selects may collapse them; this module may not, because a consumer applying both
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Final, Literal
+from typing import Final
 
 import lance
 from lance import LanceOperation
 from lance_namespace import InvalidInputError, InvalidTableStateError
 
+from catalog.schemas import ChangeKind
 
-#: The three questions a consumer can ask of a version window.
-#:
-#: `deleted` IS NOT LIKE THE OTHER TWO, and the asymmetry is the whole reason it is called out here.
-#: The version columns describe rows the table STILL HAS, so `inserted` and `updated` are scan
-#: predicates over them — while a deleted row is gone from the scan entirely and no predicate can name
-#: it. Lance answers that question from the TRANSACTION range instead
-#: (`DatasetDelta.get_deleted_row_ids()`, which streams a single `_rowid` column), so the door branches
-#: on the kind rather than composing one filter for all three.
-ChangeKind = Literal["inserted", "updated", "deleted"]
 
 #: The two version columns Lance maintains per row. Named once: a typo in either is not an error, it is
 #: an unresolved column at scan time, and the message names the column rather than the feature.

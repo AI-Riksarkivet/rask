@@ -17,8 +17,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from catalog.services.changes import ChangeKind
-from catalog.services.object_labels import LabelDefinition, LabelKind, LabelScope
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.lancekit.features import TableFileFormat
 from lakehouse.records.maintenance_due import CompactionDue, IndexDue
@@ -964,6 +962,29 @@ class ProtectionResponse(BaseModel):
     set_by: str | None = None
 
 
+type LabelKind = Literal["marker", "free_text", "enumerated"]
+type LabelScope = Literal["namespace", "table"]
+
+
+class LabelDefinition(BaseModel):
+    """One label a project defines."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    #: Minted at the first definition, kept while the name is defined.
+    uuid: str
+    project: str
+    name: str
+    description: str | None = None
+    #: The object kinds the label may be attached to.
+    scope: list[LabelScope] = Field(min_length=1)
+    kind: LabelKind
+    #: The values an ``enumerated`` label may hold; ``None`` for the other kinds.
+    allowed_values: list[str] | None = None
+    defined_by: str | None = None
+    defined_at: str
+
+
 class LabelDefinitionRequest(RequestBody):
     """A label a project defines, or the definition its name holds, evolved (ADR 0211).
 
@@ -1233,6 +1254,17 @@ class DeleteProjectResponse(BaseModel):
 
     project: str
     tuples_revoked: int
+
+
+#: The three questions a consumer can ask of a version window.
+#:
+#: `deleted` IS NOT LIKE THE OTHER TWO, and the asymmetry is the whole reason it is called out here.
+#: The version columns describe rows the table STILL HAS, so `inserted` and `updated` are scan
+#: predicates over them — while a deleted row is gone from the scan entirely and no predicate can name
+#: it. Lance answers that question from the TRANSACTION range instead
+#: (`DatasetDelta.get_deleted_row_ids()`, which streams a single `_rowid` column), so the door branches
+#: on the kind rather than composing one filter for all three.
+ChangeKind = Literal["inserted", "updated", "deleted"]
 
 
 class TableChangesRequest(RequestBody):

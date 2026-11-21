@@ -732,7 +732,7 @@ Flat modules rather than a `governed/fga/` subpackage: the prefix keeps each cal
 
 `lakehouse.events.openlineage_schemas`, named in the events section above, was deleted by XC-219 (`90debb0f5`): the client's conversions it carried had no production caller, and the names production uses (`PRODUCER`, `TERMINAL_STATES`, the parent run facet's models) live in `lakehouse.events.openlineage`. The events contract named there was tightened by the process group to services only.
 
-## The services' layers: lineage and maintenance (2026-11-21)
+## The services' layers: lineage, maintenance and the catalog (2026-11-21)
 
 Each service holds its own direction in its own `pyproject.toml` under `[tool.importlinter]`, which `make lint-imports`
 finds by grep after `.importlinter`. Each is one `layers` contract over the service's top-level modules with
@@ -743,6 +743,7 @@ import graph already had (grimp, function-local imports included), not the templ
 | --- | --- | --- |
 | lineage | `lineage-imports-down-its-layers` | `main`, `api`, `services`, `models \| schemas`, `core` |
 | maintenance | `maintenance-imports-down-its-layers` | `worker`, `runtime`, `services`, `core` |
+| catalog | `catalog-imports-down-its-layers` | `main`, `api`, `services`, `schemas`, `core` |
 
 The models sit above `core` because a model derives a dataset's identity from `core.sources`, which reads the settings;
 the models and the schemas import neither each other. Lineage had one upward edge, `lineage.core.metrics` importing the
@@ -750,3 +751,22 @@ four refusal types (`UnauthoredRunError`, `ForeignRunError`, `UngovernedOutputEr
 `lineage.models` to count each one's outcome. They are refusals, not models, and every layer raises or counts them, so they
 moved to `lineage.core.refusals` and their importers moved with them. Maintenance had none. A planted
 `from lineage.models import Dataset` in `lineage.core.metrics` breaks the lineage contract.
+
+The catalog's contract came with #805, once `services.tables` and `api.authz` held the data plane and the
+authorization. Measured on `ed084503d`, twelve imports went the wrong way, and each was cut where its target belongs:
+
+- `catalog.services.table_create` (the governed create's sequence, which takes the request's caller and resolver and
+  asks the authorization's guards) and `catalog.services.warehouse_grant_backfill` (a boot-time converge run from
+  `main`, beside `api.declaration_converge`) are doors' work, so they moved to `catalog.api`.
+- `catalog.services.native` (the backend namespace's call seam) and `catalog.services.primary_keys` (a table's key
+  rule) import nothing of the catalog and are asked by `core.write_judge` and `core.provenance_guard`, so they moved to
+  `catalog.core`.
+- `ChangeKind`, `LabelKind`, `LabelScope` and `LabelDefinition` are types `catalog.schemas` answers with and a service
+  reads, so they moved from `services.changes` and `services.object_labels` to `catalog.schemas`.
+- `core.base_judge` read a bucket's claim through `catalog.services.warehouses`, function-locally. The read is now
+  handed in: `BaseJudge.from_settings` and `GovernedStorage.from_settings` take `bucket_claim`, and each caller (the
+  lifespan and the doors, all in `main` or `api`) passes `warehouses.bucket_claim`, the function the local import
+  called.
+
+A planted `import catalog.services.object_labels` in `catalog.schemas` breaks the catalog contract, and so does an
+unlisted top-level module.

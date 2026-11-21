@@ -33,8 +33,8 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError
 
+from catalog.core import native
 from catalog.core.config import get_settings
-from catalog.services import native
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga_writes
 from lakehouse.records import location_claims

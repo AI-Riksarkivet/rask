@@ -63,9 +63,9 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
 
     Guards the regression where one axis is derived differently from the other: the captures below would diverge.
     """
+    from catalog.api import table_create
     from catalog.api.idempotency import KeyedDoor
     from catalog.api.v1.endpoints import data
-    from catalog.services import table_create
 
     stamped: dict[str, Any] = {}
     written: dict[str, pa.Table] = {}

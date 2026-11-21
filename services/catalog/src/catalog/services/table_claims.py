@@ -34,10 +34,11 @@ from lance_namespace import (
 )
 from pydantic import BaseModel
 
+from catalog.core import native
 from catalog.core.config import CatalogStore
 from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.core.version_retention import recorded_branch
-from catalog.services import contracts, native
+from catalog.services import contracts
 from catalog.services.object_uuids import UnidentifiedObjectError
 from lakehouse.governed import fga_ids
 from lakehouse.lancekit.base_refs import decoded_path

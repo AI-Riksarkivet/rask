@@ -41,7 +41,7 @@ from typing import Final
 import pyarrow as pa
 from lance_namespace import InvalidInputError
 
-from catalog.services import primary_keys
+from catalog.core import primary_keys
 from lakehouse.naming import PLATFORM_PREFIX
 
 

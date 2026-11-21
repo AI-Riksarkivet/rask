@@ -26,8 +26,8 @@ from lance_namespace import (
     NamespaceNotFoundError,
 )
 
+from catalog.core import native
 from catalog.core.identifiers import warehouse_of, with_minted_uuid
-from catalog.services import native
 from catalog.services.control_records import (
     BucketClaimRecord,
     ProtectionChange,

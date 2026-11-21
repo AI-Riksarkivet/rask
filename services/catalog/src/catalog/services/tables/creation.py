@@ -28,14 +28,14 @@ from lance_namespace import (
 )
 from pydantic import BaseModel
 
-from catalog.core import encoding, provenance_guard
+from catalog.core import encoding, native, primary_keys, provenance_guard
 from catalog.core.config import shared_lance_session
 from catalog.core.lance_refusals import clean_lance_message
 from catalog.core.modes import CreateMode
 from catalog.core.namespace import disarm_commit_path_cleanup
 from catalog.core.provenance_stamp import declare_dataset_id
 from catalog.core.table_objects import RESERVED_MARKER, dataset_fs, delete_table_object, holds_a_version
-from catalog.services import commit_authors, committed_files, contracts, native, primary_keys, table_bases, table_claims
+from catalog.services import commit_authors, committed_files, contracts, table_bases, table_claims
 from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.lancekit.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base_path_refs
 from lakehouse.lancekit.lance_session import open_dataset

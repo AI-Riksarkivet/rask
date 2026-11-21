@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from catalog.core.lance_refusals import caller_sql, raise_if_store_outage
 from catalog.core.query_bounds import refuse_an_unbounded_boolean_chain
 from catalog.core.version_retention import recorded_branch
+from catalog.schemas import ChangeKind
 from catalog.services import changes, table_claims
 from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.storage.options import StorageOptions
@@ -200,7 +201,7 @@ def read_changes(
     *,
     begin_version: int,
     end_version: int | None,
-    kind: changes.ChangeKind,
+    kind: ChangeKind,
     columns: list[str] | None = None,
     branch: str | None = None,
 ) -> tuple[int, Iterator[bytes]]:

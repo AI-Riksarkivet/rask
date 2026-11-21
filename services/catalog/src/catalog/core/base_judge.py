@@ -13,8 +13,8 @@ THE JUDGE IS DEPLOYMENT CONFIGURATION, installed once by the lifespan: the contr
 on. ``LANCE_EXTERNAL_BLOB_BASES`` approves each external base for named warehouses, which is asked where a base
 is admitted (a create naming one, a registration) and recorded there ([[LH-410]]); the doors that read or vend
 judge by the record alone, so a base inside an approved entry that no door admitted has no standing. A door that
-holds ``Settings`` builds its own through :meth:`BaseJudge.from_settings` — the same constructor — and the
-dataset seam in :mod:`catalog.core.namespace`, which takes no settings, builds the installed one. A dataset
+holds ``Settings`` builds its own through :meth:`BaseJudge.from_settings` — the same constructor, handed the warehouse
+records' bucket-claim read — and the dataset seam in :mod:`catalog.core.namespace`, which takes no settings, builds the installed one. A dataset
 declaring only bases inside its own root is answered without either.
 """
 
@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Sequence
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import InvalidTableStateError, ServiceUnavailableError
@@ -36,6 +36,7 @@ from lakehouse.records import base_registry
 
 if TYPE_CHECKING:
     from catalog.core.config import Settings
+    from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -43,6 +44,16 @@ log = logging.getLogger(__name__)
 #: How many refused bases a refusal names. A plant is one base; the bound keeps a manifest carrying
 #: thousands from turning one error body into a listing of them.
 _NAMED_BASES = 10
+
+
+class BucketClaimRead(Protocol):
+    """Who owns ``bucket`` on the control root, ``None`` when nobody has claimed it: the warehouse records' read.
+
+    Handed in by whoever builds the judge, because the warehouse records live in ``catalog.services``, a layer above
+    this one.
+    """
+
+    def __call__(self, control_root: str, storage_options: StorageOptions, *, bucket: str) -> dict[str, str] | None: ...
 
 
 class GovernedStorage(BaseModel):
@@ -63,18 +74,15 @@ class GovernedStorage(BaseModel):
         return base_refs.store_of(base) == "s3" and self.governed_bucket(base.partition("://")[2].split("/", 1)[0])
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> GovernedStorage:
+    def from_settings(cls, settings: Settings, *, bucket_claim: BucketClaimRead) -> GovernedStorage:
         return cls(
             roots=[settings.root, settings.registry_root],
-            governed_bucket=partial(_governed_bucket, settings),
+            governed_bucket=partial(_governed_bucket, settings, bucket_claim),
         )
 
 
-def _governed_bucket(settings: Settings, bucket: str) -> bool:
-    # The claim read lives with the warehouse records in `catalog.services`, which imports this module.
-    from catalog.services import warehouses
-
-    return bucket in settings.reserved_bucket_set or warehouses.bucket_claim(settings.registry_root, settings.storage_options(), bucket=bucket) is not None
+def _governed_bucket(settings: Settings, bucket_claim: BucketClaimRead, bucket: str) -> bool:
+    return bucket in settings.reserved_bucket_set or bucket_claim(settings.registry_root, settings.storage_options(), bucket=bucket) is not None
 
 
 class BaseJudge(BaseModel):
@@ -107,7 +115,7 @@ class BaseJudge(BaseModel):
             raise ServiceUnavailableError("the store holding a table's base record did not answer, so its declared bases were not judged") from exc
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> BaseJudge:
+    def from_settings(cls, settings: Settings, *, bucket_claim: BucketClaimRead) -> BaseJudge:
         """The judge a catalog configured by ``settings`` answers with — the lifespan's and every door's."""
         return cls(
             registry=base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options()),
@@ -115,7 +123,7 @@ class BaseJudge(BaseModel):
             # asked where a base is admitted (a create naming one, a registration), which records it. A base no record
             # holds is one no door admitted, whatever approved entry it lies inside.
             configured=[],
-            governed=GovernedStorage.from_settings(settings),
+            governed=GovernedStorage.from_settings(settings, bucket_claim=bucket_claim),
         )
 
     def judge(self, location: str, refs: Sequence[BasePathRef]) -> list[base_registry.BaseJudgement]:

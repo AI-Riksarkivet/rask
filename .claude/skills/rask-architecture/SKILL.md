@@ -97,8 +97,8 @@ caller is judged from the headers before FastAPI reads a body.
 A client is an outside tool on the public API and builds its own app (owner, 2026-11-07). The lance services keep the `fastapi` skill's `api/v1/endpoints/` + `core/` + `services/` layout; the factory owns
 the boot, not the layout. A service's direction is a `layers` contract in its own `pyproject.toml` (`[tool.importlinter]`,
 `exhaustive`; `make lint-imports` runs `.importlinter`, then every member pyproject that declares one, found by grep):
-lineage `main` > `api` > `services` > `models | schemas` > `core`, maintenance `worker` > `runtime` > `services` > `core`
-(ADR 0224). A new top-level module names its layer there, and a type two layers share lives in the lower one. A subpackage
+lineage `main` > `api` > `services` > `models | schemas` > `core`, maintenance `worker` > `runtime` > `services` > `core`,
+the catalog `main` > `api` > `services` > `schemas` > `core` (ADR 0224). A new top-level module names its layer there, and a type two layers share lives in the lower one. A subpackage
 that holds one module per job (the catalog's `services.tables` and `api.authz`) keeps its own order in a `containers`
 contract beside it, and its `__init__` re-exports nothing: a caller imports the module that defines the name. A `main.py` that opens
 its own `app = FastAPI(...)` is the exception to justify, not the norm: copied boots drift, and one once lost its

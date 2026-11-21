@@ -67,6 +67,7 @@ from catalog.api.dependencies import (
 from catalog.api.pagination import ListLimit
 from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken
 from catalog.api.v1.endpoints import namespaces as namespaces_api
+from catalog.core import native
 from catalog.core.config import CatalogStorageSettings, CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import DEREGISTER_TABLE
@@ -81,7 +82,7 @@ from catalog.schemas import (
     TrashListing,
     WarehouseResponse,
 )
-from catalog.services import clone_endings, native, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, Unregistered
 from catalog.services.control_records import ProtectionChange, with_protection
 from catalog.services.tables import destroy

@@ -33,7 +33,7 @@ from lance_namespace_urllib3_client.models import QueryTableRequestColumns
 from pydantic import BaseModel, StringConstraints
 
 from catalog.api import idempotency as idem
-from catalog.api import lineage_deps
+from catalog.api import lineage_deps, table_create
 from catalog.api.authz import door_gates
 from catalog.api.dependencies import (
     ControlEmitterDep,
@@ -59,7 +59,7 @@ from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.run_context import IDEMPOTENCY_KEY_PROPERTY
 from catalog.core.serialization import dump
 from catalog.schemas import TableChangesRequest
-from catalog.services import blob_serving, table_create
+from catalog.services import blob_serving
 from catalog.services.table_claims import DoorTable
 from catalog.services.tables import reads, writes
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE

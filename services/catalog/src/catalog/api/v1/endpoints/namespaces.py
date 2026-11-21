@@ -57,7 +57,7 @@ from catalog.api.dependencies import (
 from catalog.api.pagination import ListLimit
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import table_objects, write_judge
+from catalog.core import native, table_objects, write_judge
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, UUID_PROPERTY, parse_identifier, reconcile_body_id, with_minted_uuid
@@ -70,7 +70,7 @@ from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.core.pagination import paginate
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import clone_endings, native, object_uuids, protections, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, object_uuids, protections, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves, Unregistered
 from catalog.services.clone_ending_records import CloneEnding
 from catalog.services.tables import destroy

@@ -70,7 +70,7 @@ from catalog.api.dependencies import (
 from catalog.api.pagination import ListLimit
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken
-from catalog.core import json_arrow, provenance_guard, table_objects
+from catalog.core import json_arrow, native, provenance_guard, table_objects
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.formats import refuse_properties_kept_nowhere, reject_unsupported_properties
@@ -98,7 +98,7 @@ from catalog.core.vending import (
     vend_or_refuse,
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import clone_endings, commit_reconcile, native, protections, table_bases, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, commit_reconcile, protections, table_bases, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, Evidence, NameResolves, TrashedUnder, Unregistered
 from catalog.services.clone_ending_records import CloneEnding
 from catalog.services.table_claims import DoorTable, ResolvedTable
@@ -235,7 +235,7 @@ def _vendable_bases(location: str, settings: Settings, so: StorageOptions) -> Ve
         InvalidTableStateError: A base the catalog did not sanction, refused rather than read through ([[LH-279]]).
     """
     facts = dataset_facts(location, so)
-    bases = require_vendable_bases(location, facts, BaseJudge.from_settings(settings))
+    bases = require_vendable_bases(location, facts, BaseJudge.from_settings(settings, bucket_claim=warehouses.bucket_claim))
     if facts.classified or unsanctioned_bases(location, bases.bases, settings.multibase_data_base_list):
         return None
     return bases
@@ -1382,7 +1382,7 @@ async def register_table(
         # What a declared base may be admitted inside: the entries approved for this table's warehouse ([[LH-410]]).
         configured=settings.external_blob_bases_for(parse_identifier(id)[0]),
         data_allowlist=settings.multibase_data_base_list,
-        governed=GovernedStorage.from_settings(settings),
+        governed=GovernedStorage.from_settings(settings, bucket_claim=warehouses.bucket_claim),
         holder=fga_ids.canonical_object_id(parse_identifier(id)),
     )
     body.location = table_bases.require_registrable_location(

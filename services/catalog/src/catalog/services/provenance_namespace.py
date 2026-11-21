@@ -45,11 +45,12 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import CreateNamespaceRequest, LanceNamespace, NamespaceAlreadyExistsError
 from openfga_sdk import OpenFgaClient
 
+from catalog.core import native
 from catalog.core.config import CatalogLineageSettings, Settings
 from catalog.core.identifiers import parse_identifier, with_minted_uuid
 from catalog.core.lineage_emit import COMPACT_TABLE
 from catalog.schemas import PolicyRequest
-from catalog.services import native, object_uuids
+from catalog.services import object_uuids
 from lakehouse.governed import fga_ids, fga_writes
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.records import maintenance_policies, protection

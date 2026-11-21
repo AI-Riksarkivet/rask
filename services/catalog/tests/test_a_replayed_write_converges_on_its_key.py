@@ -228,8 +228,9 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
     is not answered as done), and is refused as of unknown outcome where a second run would apply again (a restore) or the
     evidence cannot be read."""
     from catalog.api import idempotency as keyed_doors
+    from catalog.core import native
     from catalog.core.config import get_settings
-    from catalog.services import idempotency_records, native, table_claims
+    from catalog.services import idempotency_records, table_claims
     from catalog.services.tables import creation
     from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
     from lakehouse.records import trash

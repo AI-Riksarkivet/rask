@@ -19,9 +19,11 @@ from lance_namespace import (
 )
 
 from catalog.api.authz.objects import GovernedObject
+from catalog.core import native
 from catalog.core.config import CatalogStore
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH
-from catalog.services import native, object_uuids, protections
+from catalog.services import object_uuids, protections
+from catalog.services import projects as project_registry
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.governed import fga_ids
 from lakehouse.naming import CATALOG_DELIMITER
@@ -270,8 +272,6 @@ async def require_project_exists(settings: CatalogStore, project: str) -> None:
     Raises the same ``TableNotFoundError`` (spec code 4 → HTTP 404 problem body) the project detail
     route already answers for an unknown tenant, so one client error path covers both.
     """
-    from catalog.services import projects as project_registry
-
     record = await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project)
     if record is None:
         raise TableNotFoundError(

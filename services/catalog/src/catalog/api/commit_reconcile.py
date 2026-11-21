@@ -38,10 +38,11 @@ from pydantic import BaseModel, Field
 from catalog.api.dependencies import ObjectUuids, app_wire, estate_namespace, namespace_for_table
 from catalog.api.signing_gate import commit_ids_of
 from catalog.api.ticks import Tick
+from catalog.core import native
 from catalog.core.config import CatalogLineageSettings, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import LineageEmitter, emit_write_event, run_inputs
-from catalog.services import commit_reconcile, erasure_derived, native, table_claims
+from catalog.services import commit_reconcile, erasure_derived, table_claims
 from catalog.services.tables import versions
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids

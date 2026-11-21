@@ -40,6 +40,7 @@ from catalog.core.vending import (
 )
 from catalog.core.version_retention import recorded_branch
 from catalog.schemas import CredentialResponse, VendedCredentials
+from catalog.services import warehouses
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.records import maintenance_policies
@@ -162,7 +163,7 @@ async def vend_credentials(
         # [[LH-279]] A BASE NOTHING SANCTIONED REFUSES THE VEND, before the classification answer below can
         # route it anywhere: a writer can plant any root in its manifest, and a credential granting READ on
         # it — or a server-mediated read through it — hands over another table's bytes. 409, not a fallback.
-        bases = await run_in_threadpool(require_vendable_bases, location, facts, BaseJudge.from_settings(settings))
+        bases = await run_in_threadpool(require_vendable_bases, location, facts, BaseJudge.from_settings(settings, bucket_claim=warehouses.bucket_claim))
     except Exception:
         await run_in_threadpool(table.require_held)
         raise

@@ -39,10 +39,18 @@ from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceD
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
-from catalog.schemas import LabelDefinitionRequest, LabelledObjectsResponse, ObjectLabelsResponse, RemoveLabelRequest, SetLabelRequest
+from catalog.schemas import (
+    LabelDefinition,
+    LabelDefinitionRequest,
+    LabelledObjectsResponse,
+    LabelScope,
+    ObjectLabelsResponse,
+    RemoveLabelRequest,
+    SetLabelRequest,
+)
 from catalog.services import object_labels, table_claims, warehouses
 from catalog.services import projects as project_registry
-from catalog.services.object_labels import Attachment, LabelDefinition, LabelScope
+from catalog.services.object_labels import Attachment
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import ControlAction
 from lakehouse.governed import fga_ids

@@ -32,11 +32,12 @@ import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from hashlib import blake2s
-from typing import Any, Final, Literal
+from typing import Any, Final
 
 from lance_namespace import InternalError, InvalidInputError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from catalog.schemas import LabelDefinition, LabelKind, LabelScope
 from lakehouse.naming import PLATFORM_PREFIX
 from lakehouse.problems.outage import store_refusal
 from lakehouse.records import control_prefixes
@@ -48,9 +49,6 @@ from lakehouse.storage.stored_objects import list_under
 
 log = logging.getLogger(__name__)
 
-type LabelKind = Literal["marker", "free_text", "enumerated"]
-type LabelScope = Literal["namespace", "table"]
-
 #: A label's name: lower case, so two spellings of one name cannot both be defined; a `.` may group names
 #: (`pii.contact`). `rask` and names under it are the platform's.
 NAME_RE: Final = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}(\.[a-z0-9][a-z0-9_-]{0,62}){0,3}$")
@@ -58,25 +56,6 @@ NAME_RE: Final = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}(\.[a-z0-9][a-z0-9_-]{0,6
 VALUE_MAX: Final = 256
 #: How often a write is tried again when the record it found went missing under it.
 _ROUNDS: Final = 3
-
-
-class LabelDefinition(BaseModel):
-    """One label a project defines."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    #: Minted at the first definition, kept while the name is defined.
-    uuid: str
-    project: str
-    name: str
-    description: str | None = None
-    #: The object kinds the label may be attached to.
-    scope: list[LabelScope] = Field(min_length=1)
-    kind: LabelKind
-    #: The values an ``enumerated`` label may hold; ``None`` for the other kinds.
-    allowed_values: list[str] | None = None
-    defined_by: str | None = None
-    defined_at: str
 
 
 class Attachment(BaseModel):

@@ -25,9 +25,9 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import DescribeNamespaceRequest, InternalError, InvalidInputError, LanceNamespace, NamespaceNotFoundError, UnsupportedOperationError
 from pydantic import BaseModel, ConfigDict
 
+from catalog.core import native
 from catalog.core.provenance_guard import RESERVED_METADATA_PREFIXES, is_reserved_key
 from catalog.core.run_context import INPUTS_HEADER, INPUTS_PROPERTY, RUN_ID_HEADER, RUN_ID_PROPERTY, RunContext
-from catalog.services import native
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
 

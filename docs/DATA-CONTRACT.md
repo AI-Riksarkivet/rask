@@ -67,7 +67,7 @@ curl -X POST "$CATALOG/management/v1/table/acme\$sales\$orders/contract/set" \
   nullability included, so Lance holds the rows to it and the catalog holds the schema to it.
 - `primaryKey: true` is a field of Lance's unenforced primary key, which is fixed once set
   (`lance_docs/lance/format/table/index.md` § Unenforced Primary Key). The catalog already refuses a commit that
-  repeats a key value (`catalog/services/primary_keys.py`).
+  repeats a key value (`catalog/core/primary_keys.py`).
 
 **What a set refuses.**
 

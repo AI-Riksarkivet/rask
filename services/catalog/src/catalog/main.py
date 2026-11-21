@@ -108,7 +108,7 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
 
 async def _backfill_warehouse_grants(app: FastAPI) -> None:
     """Run the warehouse-grant backfill, reporting rather than raising. See its call site for why."""
-    from catalog.services.warehouse_grant_backfill import backfill
+    from catalog.api.warehouse_grant_backfill import backfill
 
     try:
         seen, written, failures = await backfill(app.state.settings)
@@ -250,7 +250,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # register doors write each table's base record to. Installed
     # as the settings it is built from, so each read signs its record reads with the pair in force, and
     # cleared at shutdown so nothing in this process outlives the app that configured it.
-    base_judge.install(partial(base_judge.BaseJudge.from_settings, settings))
+    base_judge.install(partial(base_judge.BaseJudge.from_settings, settings, bucket_claim=warehouses.bucket_claim))
     stack.callback(base_judge.install, None)
     # THIS PROCESS'S ONE CONNECTION TO THE BUS ([[XC-199]]), as the catalog's own bus user, which both emitters and the
     # control relay publish on (`lakehouse.events.bus`). A loop of `loops` connects it behind the start and keeps it, so the

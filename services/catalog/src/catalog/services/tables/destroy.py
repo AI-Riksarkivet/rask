@@ -22,8 +22,8 @@ from lance_namespace import (
     TableNotFoundError,
 )
 
+from catalog.core import native
 from catalog.core.table_objects import RESERVED_MARKER, dataset_fs
-from catalog.services import native
 from lakehouse.lancekit.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.problems.ns_errors import PartiallyApplied

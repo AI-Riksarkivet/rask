@@ -28,7 +28,8 @@ from lance_namespace import ConcurrentModificationError, ServiceUnavailableError
 from catalog.api.authz import route_guard
 from catalog.api.dependencies import FgaClientDep, ResolverDep, SettingsDep
 from catalog.api.security import CurrentToken
-from catalog.services import native, table_claims
+from catalog.core import native
+from catalog.services import table_claims
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.records import location_claims
 

@@ -34,14 +34,14 @@ from lance_namespace import (
     TableVersionNotFoundError,
 )
 
-from catalog.core import encoding, manifest_bytes
+from catalog.core import encoding, manifest_bytes, primary_keys
 from catalog.core.config import shared_lance_session
 from catalog.core.namespace import disarm_commit_path_cleanup
 from catalog.core.run_context import AUTHOR_PROPERTY, OPERATION_PROPERTY
 from catalog.core.table_objects import dataset_fs, delete_table_object, discard_detached_manifest, object_store_path
 from catalog.core.vending import classified_columns, labelled_fields
 from catalog.core.version_retention import recorded_branch
-from catalog.services import committed_files, contracts, primary_keys, table_claims
+from catalog.services import committed_files, contracts, table_claims
 from catalog.services.object_uuids import UnidentifiedObjectError
 from catalog.services.tables.versions import commit_ref_key
 from lakehouse.lancekit import branch_layout, manifest_names

@@ -40,7 +40,7 @@ from catalog.api.authz.rungs import (
     resource_for,
     route_suffix,
 )
-from catalog.api.dependencies import Resolver
+from catalog.api.dependencies import Resolver, namespace_for_warehouse
 from catalog.api.route_path import route_path
 from catalog.api.security import Caller
 from catalog.core import run_context, vending, write_judge
@@ -245,8 +245,6 @@ async def judge_write(
 ) -> None:
     """Hand ``write`` to the write judge, with the rung asked through :func:`require_rung` when FGA is on."""
     check = _rung_check(settings, token, injected, resolver)
-    # Imported HERE rather than at module scope: `dependencies` imports this module for its guards.
-    from catalog.api.dependencies import namespace_for_warehouse
 
     async def namespace(warehouse_id: str) -> LanceNamespace:
         return await namespace_for_warehouse(request, settings, warehouse_id)

@@ -37,9 +37,10 @@ from lance_namespace import ConcurrentModificationError, LanceNamespace, TableNo
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientWriteRequest
 
+from catalog.core import native
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import BusEmitter
-from catalog.services import clone_ending_records, native
+from catalog.services import clone_ending_records
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.naming import UUID_PROPERTY

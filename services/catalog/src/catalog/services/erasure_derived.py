@@ -55,9 +55,10 @@ import lance
 from lance_namespace import DescribeTableRequest, LanceNamespace, NamespaceNotFoundError, TableNotFoundError
 from pydantic import BaseModel, ConfigDict
 
+from catalog.core import native
 from catalog.core.config import CatalogLineageSettings, CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
-from catalog.services import erasure_obligations, native, table_claims, table_inputs
+from catalog.services import erasure_obligations, table_claims, table_inputs
 from catalog.services.erasure import OPEN_OUTCOMES, SurfaceResult, derived_key, derived_surface
 from catalog.services.erasure_obligations import ErasureObligation
 from lakehouse import derived_tables

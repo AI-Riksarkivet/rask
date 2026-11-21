@@ -38,12 +38,12 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, InstanceOf
 
-from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard, table_objects
+from catalog.core import encoding, formats, lineage_emit, manifest_bytes, primary_keys, provenance_guard, table_objects
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.namespace import overlapping_segments
 from catalog.core.vending import labelled_fields
-from catalog.services import client_fragments, committed_files, contracts, maintenance, primary_keys, row_digests, table_claims
+from catalog.services import client_fragments, committed_files, contracts, maintenance, row_digests, table_claims
 from catalog.services.tables import commits, versions
 from lakehouse.lancekit import features, manifest_names
 from lakehouse.lancekit.auto_cleanup import AUTO_CLEANUP_PREFIX

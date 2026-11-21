@@ -111,8 +111,8 @@ maintenance import it:
 | `services/catalog/src/catalog/api/authz/` | **Authz**, one module per job — `route_guard.authorize` (router-level pre-op `can_*` check) **and** `object_grants.seed_ownership` (post-create grant). The op→`can_*` map (`rungs`) is the only policy logic in the app. |
 | `packages/lakehouse/src/lakehouse/governed/fga_*.py` | The shared OpenFGA seam, one module per job: `fga_reads` (`check`/`batch_check`/`list_objects`/`list_users`/`expand_tree`/tuple reads), `fga_writes` (`write_tuples`/`grant_on_create`/revokes/edge moves, audited per tuple), `fga_ids` (user and object ids), `fga_model` (the model as data, `hierarchy_edge_tuples`), `fga_resilience` (retry, circuit, fail-closed), `fga_provision` (store, model, client) |
 | `packages/lakehouse/src/lakehouse/governed/auth/model.fga` / `model.json` / `model.fga.yaml` | The authorization **model** (DSL, the JSON the app loads, and the model tests) — the model owns the privilege math |
-| `services/catalog/src/catalog/api/v1/endpoints/*` | Thin HTTP handlers → `services.native`/`services.tables` for the backend, `object_grants.seed_ownership` for grants |
-| `services/catalog/src/catalog/services/native.py`, `tables/` | Call pylance (run in a threadpool — it's blocking) |
+| `services/catalog/src/catalog/api/v1/endpoints/*` | Thin HTTP handlers → `core.native`/`services.tables` for the backend, `object_grants.seed_ownership` for grants |
+| `services/catalog/src/catalog/core/native.py`, `tables/` | Call pylance (run in a threadpool — it's blocking) |
 | `services/catalog/src/catalog/core/config.py` | `pydantic-settings` (env-driven config) |
 
 ---

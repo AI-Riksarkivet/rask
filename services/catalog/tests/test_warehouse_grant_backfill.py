@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import pytest
 
+from catalog.api import warehouse_grant_backfill
 from catalog.api.authz import warehouse_grants
 from catalog.core.config import Settings
-from catalog.services import warehouse_grant_backfill
 from lakehouse.governed import fga_provision, fga_resilience
 from lakehouse.records.warehouse_records import WarehouseRecord
 

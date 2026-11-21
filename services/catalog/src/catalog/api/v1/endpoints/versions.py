@@ -46,7 +46,7 @@ from catalog.api.security import CurrentToken
 from catalog.core import run_context, version_retention
 from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.services import maintenance, managed_versions, table_inputs
+from catalog.services import maintenance, managed_versions, table_inputs, warehouses
 from catalog.services.table_claims import DoorTable
 from catalog.services.tables import versions
 from lakehouse.governed import fga_ids
@@ -234,7 +234,7 @@ async def create_table_version(
         await door_gates.require_staged_operation(
             client, settings, token, segments=segments, location=location, operation=staged.operation, creates=staged.creates
         )
-        judge = BaseJudge.from_settings(settings)
+        judge = BaseJudge.from_settings(settings, bucket_claim=warehouses.bucket_claim)
         record = await run_in_threadpool(judge.read_record, location)
         run = run_context.from_properties(staged.properties)
         run_context.require_caller_authored(staged.properties, caller=token.subject if token is not None else None)

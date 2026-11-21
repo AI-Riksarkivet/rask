@@ -51,8 +51,9 @@ from lance_namespace import InvalidInputError, InvalidTableStateError, LanceName
 from pydantic import SecretStr
 
 import lakehouse.storage.client as storage_client
+from catalog.core import native
 from catalog.core.config import get_settings
-from catalog.services import clone_ending_records, native, table_bases
+from catalog.services import clone_ending_records, table_bases
 from catalog.services import clone_endings as clone_endings_door
 from catalog.services.tables import destroy
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream

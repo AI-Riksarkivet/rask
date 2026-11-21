@@ -34,7 +34,14 @@ packages = ["src/catalog"]
 [tool.uv.sources]
 lakehouse = { workspace = true }
 
-# The catalog's import contracts, run by `make lint-imports` (ADR 0224). Lance's failures read as the spec's refusals
+# The catalog's import contracts, run by `make lint-imports` (ADR 0224). The service's layers: the app (`main`)
+# assembles the doors and the lifespan; the doors (`api`: the routes, the authorization, the request's dependencies,
+# the control lane, the governed create's sequence and the boot-time converges) call the services; the services (the
+# table operations, the registries and records under the control root, erasure, maintenance, the reconcilers) read and
+# answer with the request and response models (`schemas`, with the types a service shares with them); and those stand
+# on `core`, the settings, the identifiers, the backend namespace, the write judge, the vending and base judges, and how
+# Lance's failures read. Each layer imports only those below it, function-local imports included. `exhaustive` makes a
+# new top-level module name its layer here before the contract passes. Lance's failures read as the spec's refusals
 # (`core.lance_refusals`) are the floor a caller's expression is bounded on (`core.query_bounds`): the bound reads a
 # caller's SQL through the refusal that answers it, and no refusal asks a bound. The table operations
 # (`services.tables`) import one way: the doors' operations (writes, schema changes, a rename) over the commit path,
@@ -45,6 +52,14 @@ lakehouse = { workspace = true }
 # the rung each door asks.
 [tool.importlinter]
 root_package = "catalog"
+
+[[tool.importlinter.contracts]]
+id = "catalog-imports-down-its-layers"
+name = "ADR 0224: the catalog imports down its layers, main over api over services over schemas over core"
+type = "layers"
+containers = ["catalog"]
+layers = ["main", "api", "services", "schemas", "core"]
+exhaustive = true
 
 [[tool.importlinter.contracts]]
 id = "catalog-lance-refusals-are-the-floor"

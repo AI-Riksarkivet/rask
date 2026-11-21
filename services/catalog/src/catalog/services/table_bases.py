@@ -34,14 +34,14 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, ConfigDict, Field
 
-from catalog.core import blobs, formats
+from catalog.core import blobs, formats, native
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import is_spelled_as_a_uuid
 from catalog.core.namespace import registered_dataset_facts
 from catalog.core.run_context import RunInput
 from catalog.core.vending import IAM_POLICY_SYNTAX
-from catalog.services import clone_ending_records, native, table_inputs
+from catalog.services import clone_ending_records, table_inputs
 from lakehouse.governed import fga_ids
 from lakehouse.lancekit.base_refs import decoded_segments, location_in_store, location_within, names_a_location, normalise, store_of
 from lakehouse.lancekit.features import FLAG_MIXED_DATA_FILE_VERSIONS, BasePathRef

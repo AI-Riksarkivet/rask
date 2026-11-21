@@ -12,8 +12,8 @@ from lance_namespace import (
 )
 
 from catalog.api.dependencies import DataNamespaceDep, NamespaceDep
+from catalog.core import native
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.services import native
 
 
 spec_router = APIRouter(prefix="/v1/materialized_view", tags=["materialized_view"])

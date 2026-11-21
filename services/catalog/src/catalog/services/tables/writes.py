@@ -35,14 +35,14 @@ from lance_namespace import (
 )
 from pydantic import BaseModel
 
-from catalog.core import formats, provenance_guard
+from catalog.core import formats, primary_keys, provenance_guard
 from catalog.core.lance_refusals import caller_sql, write_schema_errors
 from catalog.core.modes import InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup
 from catalog.core.query_bounds import refuse_an_unbounded_boolean_chain
 from catalog.core.run_context import AUTHOR_PROPERTY, IDEMPOTENCY_ANSWER_PROPERTY, IDEMPOTENCY_KEY_PROPERTY, OPERATION_PROPERTY
 from catalog.core.version_retention import recorded_branch
-from catalog.services import commit_authors, committed_files, primary_keys, table_claims
+from catalog.services import commit_authors, committed_files, table_claims
 from catalog.services.cast_size import bytes_after_cast
 from catalog.services.tables.commits import captured, commit_stamped
 from catalog.services.tables.versions import commit_ref_key
@@ -302,7 +302,7 @@ def insert_into_table(
 
     On a table declaring a primary key, rows repeating a key among themselves are refused, and an append
     lands through Lance's `merge_insert(...).when_matched_fail().when_not_matched_insert_all()`, refused
-    when the table holds one of its keys as it commits ([[LH-243]], :mod:`catalog.services.primary_keys`).
+    when the table holds one of its keys as it commits ([[LH-243]], :mod:`catalog.core.primary_keys`).
 
     ``transaction_properties`` (the door's stamp, :mod:`catalog.core.run_context`) ride the commit, on any ref: a keyed
     append is finalized on the ref it planned on (:func:`commit_stamped`), and Lance's own insert takes them.

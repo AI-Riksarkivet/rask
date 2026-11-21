@@ -30,9 +30,8 @@ took it from everyone else), and its provenance (``provenance_guard.keep_provena
 survives as the owner-tier ``can_drop`` gate: the tip's schema and rows are replaced. Its protection is not asked:
 protection guards the table's drop, and an overwrite keeps the table and every earlier version (ADR 0221).
 
-It imports ``catalog.api.authz`` for the authorization seam, exactly as
-``catalog.services.warehouse_grant_backfill`` already does: the guards are the estate's one implementation and
-re-deriving them here would be the weakened duplicate the audit keeps finding elsewhere.
+It is a door's sequence, so it lives with the doors and asks ``catalog.api.authz``'s guards: they are the estate's one
+implementation, and re-deriving them here would be the weakened duplicate the audit keeps finding elsewhere.
 """
 
 from __future__ import annotations
@@ -58,7 +57,7 @@ from pydantic import BaseModel
 from catalog.api.authz import door_gates, hierarchy, object_grants, write_doors
 from catalog.api.dependencies import Resolver
 from catalog.api.security import Caller
-from catalog.core import encoding, provenance_guard, run_context
+from catalog.core import encoding, native, provenance_guard, run_context
 from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
@@ -67,7 +66,7 @@ from catalog.core.lineage_emit import CREATE_TABLE, OVERWRITE_TABLE, LineageEmit
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
-from catalog.services import native, provenance_namespace, table_bases, table_claims, table_inputs
+from catalog.services import provenance_namespace, table_bases, table_claims, table_inputs, warehouses
 from catalog.services.tables import creation, versions
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga_ids
@@ -202,7 +201,7 @@ async def create_governed_table(
         table.schema,
         approved=settings.external_blob_bases_for(parse_identifier(id)[0]),
         warehouse=parse_identifier(id)[0],
-        governed=GovernedStorage.from_settings(settings),
+        governed=GovernedStorage.from_settings(settings, bucket_claim=warehouses.bucket_claim),
     )
     segments = parse_identifier(id)
     table_id = fga_ids.canonical_object_id(segments)
