@@ -97,7 +97,7 @@ from catalog.core.vending import (
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import clone_endings, commit_reconcile, dataplane, native, protections, table_bases, table_claims, trash_doors, warehouses
-from catalog.services.announcement_intents import Announcement, ControlMessage, Evidence, NameResolves, TrashedUnder
+from catalog.services.announcement_intents import Announcement, ControlMessage, Evidence, NameResolves, TrashedUnder, Unregistered
 from catalog.services.clone_ending_records import CloneEnding
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse.events.control_emit import ControlEmitter, emit_control
@@ -393,7 +393,7 @@ async def declare_table(
     # What the declaration announces is filed once the location the backend describes it at is known, before its
     # ownership is seeded, so a door failing after that still announces it, and a store refusing the filing takes the
     # declaration back ([[LH-576]]). It landed while the name resolves to the table.
-    named = NameResolves(segments=segments, uuid=table_uuid, held=True)
+    named = NameResolves(segments=segments, uuid=table_uuid)
     # Versionless (no data yet): records who declared it + the reserved location, and keys the CREATED edge
     # (declare_table ∈ lineage _CREATE_OPS). Reconcile fills the real version once data lands at the URI.
     declared = _marker(
@@ -831,11 +831,18 @@ async def drop_table(
     # What the drop announces is filed before anything changes, so a door failing after the drop still announces it
     # ([[LH-576]]). A recoverable drop mints its own id, files its trash record under it and stamps that record once its
     # detach returned: it landed when this drop's record is stamped, or shows it detached the table (`TrashedUnder`), and
-    # its keyed resend is answered from the same proof. A destroying drop landed when the name no longer resolves to this
-    # table; it leaves nothing of the attempt and intends nothing, so its takeover runs again: the name holds nothing and
-    # the run refuses 404, or it still names this table, which the first never dropped.
+    # its keyed resend is answered from the same proof. A destroying drop landed when the table is registered under no
+    # name and no recoverable drop's record keeps it (`Unregistered`): a rename since a drop that never reached it keeps it
+    # registered. It leaves nothing of the attempt and intends nothing, so its takeover runs again: the name holds nothing
+    # and the run refuses 404, or it still names this table, which the first never dropped. Its limit:
+    # the store cannot tell which actor retired a table, so another's deregister or destroying drop after this door died
+    # satisfies it too, and this door's event goes out as well, under its own ids.
     drop = uuid4().hex if trashed else None
-    landed: Evidence = TrashedUnder(uuid=table_uuid, attempt=drop) if drop is not None else NameResolves(segments=segments, uuid=table_uuid, held=False)
+    landed: Evidence = (
+        TrashedUnder(uuid=table_uuid, attempt=drop)
+        if drop is not None
+        else Unregistered(segments=segments, uuid=table_uuid, location=table.location or "", trashed=False)
+    )
     dropped = _marker(announcer, token, landed, segments, operation=DROP_TABLE, uuids=known)
     dropped_event = _table_event(token, landed, action="table_dropped", table_uuid=table_uuid, name=canonical, extra={"recoverable": trashed}, named_by=known)
     if drop is not None:
@@ -1063,15 +1070,18 @@ async def _drop(
     except dataplane.TableBytesLeftError:
         # The row is gone and bytes remain: the claim stays held, kept by the residue record once the fence lapses, and the
         # grants stay. The trash purge reclaims the objects; the drop's announcements wait in the door's filing, which the
-        # finish sends, since the name no longer resolves to the table ([[LH-576]]).
+        # finish sends, since the table is registered under no name ([[LH-576]]).
         raise
     except Exception:
         # An ending filed before a failure stays: a describe cannot tell whether the row the failure followed is still
         # the clone's, and the finish judges it on its own reads once the claim's lease has passed. A trash record filed
-        # before a failure is settled under the fence, which stays where it could not be.
+        # before a failure is settled under the fence, which stays where it could not be. A destroying drop whose row
+        # went ends a stale record the table carried, as a deregister does.
         if filed is not None:
             await _settle_a_failed_drop(ns, settings, filed, fenced, segments=segments, detached=detached)
         else:
+            if not trashed:
+                await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table, segments=segments)
             await run_in_threadpool(table_claims.lift_fence, claims, fenced)
         raise
     if trashed:
@@ -1081,7 +1091,9 @@ async def _drop(
             await run_in_threadpool(table_claims.lift_fence, claims, fenced)
     else:
         # [[LH-279]] The base record goes with the bytes: left behind, it would sanction its bases for the next
-        # table registered at this location. The location's claim goes too ([[LH-204]]), and the clone's ending last.
+        # table registered at this location. The location's claim goes too ([[LH-204]]), and the clone's ending last. A
+        # declared-only table has no residue record to overwrite a stale one, so that goes first, under the fence.
+        await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table, segments=segments)
         await run_in_threadpool(partial(base_registry.forget_base_record, registry, location, uuid=table_uuid))
         await run_in_threadpool(partial(location_claims.release, claims, location, canonical, uuid=table_uuid))
         if ending is not None:
@@ -1142,7 +1154,11 @@ async def deregister_table(
     await fga_deps.require_table_unprotected(settings, table, force=force)
     table_uuid = table.require_uuid()
     known = await uuids.table(segments, uuid=table.uuid)
-    gone = NameResolves(segments=segments, uuid=table_uuid, held=False)
+    # It landed once the table is registered under no name and no record filed since keeps it (`Unregistered`). Its limit:
+    # the store cannot tell which actor retired a table, so another's deregister or destroying drop after this door died
+    # satisfies it too, and this door's event goes out as well, under its own ids: a dead deregister followed by another's
+    # destroying drop is told as a deregister.
+    gone = Unregistered(segments=segments, uuid=table_uuid, location=table.location or "", trashed=False)
     detached = _marker(announcer, token, gone, segments, operation=DEREGISTER_TABLE, uuids=known)
     detached_event = _table_event(token, gone, action="table_deregistered", table_uuid=table_uuid, name=canonical, extra={}, named_by=known)
     async with announcer.announcing(door="deregister_table", target=fga_ids.table_object(table_uuid), announcements=[detached, detached_event]) as filing:
@@ -1180,8 +1196,11 @@ async def _detach(ns: LanceNamespace, settings: CatalogStore, table: ResolvedTab
         )
         response: DeregisterTableResponse = await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
     except Exception:
+        # A detach whose answer was lost may have landed: the stale record goes where the row is gone.
+        await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table, segments=segments)
         await run_in_threadpool(table_claims.lift_fence, claims, fenced)
         raise
+    await run_in_threadpool(_end_stale_trash_record, ns, settings, fenced, table, segments=segments)
     # The detached bytes are nobody's now, so the version a clone among them was promised on its sources goes (ADR 0198
     # §1), and then the id's claim on them ([[LH-204]]): the base record stays, for the bytes it describes. The tags go
     # first, while the fence still holds the location, so no clone registered there meanwhile can hold a tag of the same
@@ -1199,6 +1218,30 @@ async def _detach(ns: LanceNamespace, settings: CatalogStore, table: ResolvedTab
     if ending is not None:
         await run_in_threadpool(clone_endings.clear_ending, claims, ending)
     return response
+
+
+def _end_stale_trash_record(ns: LanceNamespace, settings: CatalogStore, fenced: table_claims.DoorFence, table: ResolvedTable, *, segments: list[str]) -> None:
+    """End a trash record the table carried while live, once a door that retires it out of governance (a deregister, a
+    destroying drop) has removed its row, and only while that door holds its fence. Logged, never raised: the door's own
+    answer stands.
+
+    The fence found the table registered, so a record of its uuid is stale: one an undrop left that ended before
+    clearing it, or one a recoverable cascade filed and failed to detach after. Left once the row is gone, nothing
+    resolves to its location, so the purge would delete the bytes a deregister keeps and the release revoke the grants.
+    The row is judged gone as the drop judges it (`_still_registered`: at this name or the one its claim names), so a
+    detach whose answer was lost ends the record where it landed and touches nothing where it did not. No drop files a
+    record past the fence, so none can land between the read and the delete. A residue record is a destroying drop's,
+    and is that drop's to clear.
+    """
+    if table.uuid is None:
+        return
+    root, so, claims = settings.registry_root, settings.storage_options(), table_claims.claim_store(settings)
+    try:
+        kept = trash.get(root, so, table.uuid)
+        if kept is not None and not kept.is_residue and not _still_registered(ns, claims, kept, segments) and table_claims.holds_fence(claims, fenced):
+            trash.clear(root, so, table.uuid)
+    except Exception as exc:  # noqa: BLE001 — the door's answer stands; a record left is reported, not raised
+        log.error("stale_trash_record_kept", extra={"uuid": table.uuid, "error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
 async def _deregister_unidentified(
@@ -1576,7 +1619,7 @@ async def register_table(
     async def _take_back_register() -> None:
         await fga_deps.undo_then_take_back(client, settings, token, segments=segments, uuid=table_uuid, undo=_undo_register, reason="not_announced")
 
-    named = NameResolves(segments=segments, uuid=table_uuid, held=True)
+    named = NameResolves(segments=segments, uuid=table_uuid)
     # RESOLVED, not echoed — `response.location` is the caller's own relative path, which names nothing a
     # reader of the feed can open; the flag judgement above already resolved it.
     # Versionless + source_uri=the attached location (register_table ∈ _CREATE_OPS, so the feed records it as a
@@ -1726,7 +1769,7 @@ async def undrop_table(
     # connection's root, where its bytes are ([[LH-517]]). The absolute URL stays on the record for an operator.
     location = record.location
     body = RegisterTableRequest(id=segments, location=dataplane.relative_location(location, root=root))
-    named = NameResolves(segments=segments, uuid=record_uuid, held=True)
+    named = NameResolves(segments=segments, uuid=record_uuid)
     restored = _marker(
         announcer, token, named, segments, operation=REGISTER_TABLE, uuids=await uuids.table(segments, location=location, uuid=record_uuid), source_uri=location
     )
@@ -1897,7 +1940,7 @@ async def rename_table(
     # its location, which a rename keeps (`dataplane.rename_table`). Both are filed before the rename, which landed once
     # the destination's name resolves to the table ([[LH-576]]).
     destination_ids = await uuids.table(new_segments, uuid=table.uuid)
-    named = NameResolves(segments=new_segments, uuid=table.require_uuid(), held=True)
+    named = NameResolves(segments=new_segments, uuid=table.require_uuid())
     # Versionless: the version history moved with the pointer, and the event names none of it. The location rides it so
     # the table's symlink is the one its earlier events named.
     moved = _marker(announcer, token, named, new_segments, operation=RENAME_TABLE, uuids=destination_ids, source_uri=table.location, renamed_from=segments)

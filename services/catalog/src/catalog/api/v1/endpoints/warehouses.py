@@ -82,7 +82,7 @@ from catalog.schemas import (
     WarehouseResponse,
 )
 from catalog.services import clone_endings, dataplane, native, table_claims, trash_doors, warehouses
-from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, RecordGone
+from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, Unregistered
 from catalog.services.control_records import ProtectionChange, with_protection
 from catalog.services.vend_probe import (
     CAS_CHECK,
@@ -1106,14 +1106,17 @@ async def delete_warehouse(
         await _require_no_outside_clones(ns_conn, settings, subtrees=subtrees, trashed=trashed)
     # What landed, recorded as each step lands, so a failure part-way reports it rather than what was planned.
     # What the delete announces is filed before it changes anything, so a delete that fails part-way still announces what
-    # it did once the store shows it ([[LH-576]]): a deregister marker per table it means to detach, landed once the
-    # table's name names it no longer, and `warehouse_deleted`, landed once the warehouse's record is gone.
+    # it did once the store shows it ([[LH-576]]): a deregister marker per table it means to detach, landed once that
+    # table is registered under no name and kept by no trash record (`Unregistered`), and `warehouse_deleted`, landed once
+    # the warehouse's record is gone. Its limit:
+    # the store cannot tell which actor retired a table, so another's deregister or destroying drop after this door died
+    # satisfies it too, and this door's event goes out as well, under its own ids.
     detached: dict[tuple[str, ...], Announcement] = {}
     for subtree in subtrees:
         for item in subtree.descendants:
             if item.kind == "table":
                 detached[tuple(item.segments)] = Announcement(
-                    evidence=NameResolves(segments=item.segments, uuid=item.uuid, held=False),
+                    evidence=Unregistered(segments=item.segments, uuid=item.uuid, location=item.location, trashed=False),
                     message=announcer.marker(
                         item.segments,
                         author=token.subject if token is not None else None,

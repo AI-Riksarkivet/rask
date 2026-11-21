@@ -24,6 +24,7 @@ from announcement_filings import age_filings
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import EmitFields
+from catalog.services import announcement_intents
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.control_events import CatalogControlEvent
 
@@ -179,14 +180,38 @@ def _nested(catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCa
     assert made.status_code == 200, made.text
 
 
+def _in_a_warehouse(catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """acme's warehouse ``wh-a`` on the catalog's own root, holding ``wh-a$db$t``."""
+    import lance_namespace
+
+    from catalog.services import warehouses
+    from lakehouse.records.warehouse_records import WarehouseRecord
+
+    settings = get_settings()
+    record = {"id": "wh-a", "bucket": "wh-a", "root_uri": settings.root, "project": "acme", "status": "active", "created_at": "2026-11-20T00:00:00+00:00"}
+    warehouses.create_warehouse_record(settings.registry_root, settings.storage_options(), WarehouseRecord.model_validate(record))
+    warehouses.ensure_catalog_row(lance_namespace.connect("dir", {"root": settings.root}), "wh-a")
+    catalog.store.write(("project:acme", "project", "warehouse:wh-a"))
+    made = catalog.client.post("/v1/namespace/wh-a$db/create", json={}, headers=catalog.bearer(ADMIN))
+    assert made.status_code == 200, made.text
+    made = catalog.client.post("/v1/table/wh-a$db$t/create", content=_ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    assert made.status_code == 200, made.text
+
+
+_CASCADE = {"behavior": "Cascade"}
+
+
 @pytest.mark.parametrize(
-    ("arranged", "path", "body", "operation", "named", "told", "unlanded"),
+    ("arranged", "door", "body", "kept", "operation", "named", "told", "unlanded"),
     [
-        pytest.param(_declared, "/v1/table/lance_catalog$db$t/declare", {}, "declare_table", "lance_catalog$db$t", "table_declared", 0, id="declare"),
+        pytest.param(
+            _declared, "POST /v1/table/lance_catalog$db$t/declare", {}, False, "declare_table", "lance_catalog$db$t", "table_declared", 0, id="declare"
+        ),
         pytest.param(
             _written_outside,
-            "/v1/table/lance_catalog$db$t/register",
+            "POST /v1/table/lance_catalog$db$t/register",
             {"location": "outside/t"},
+            False,
             "register_table",
             "lance_catalog$db$t",
             "table_registered",
@@ -194,42 +219,281 @@ def _nested(catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCa
             id="register",
         ),
         pytest.param(
-            _created, "/v1/table/lance_catalog$db$t/rename", {"new_table_name": "u"}, "rename_table", "lance_catalog$db$u", "table_renamed", 0, id="rename"
+            _created,
+            "POST /v1/table/lance_catalog$db$t/rename",
+            {"new_table_name": "u"},
+            False,
+            "rename_table",
+            "lance_catalog$db$u",
+            "table_renamed",
+            0,
+            id="rename",
         ),
-        pytest.param(_created, "/v1/table/lance_catalog$db$t/drop", {}, "drop_table", "lance_catalog$db$t", "table_dropped", 0, id="drop"),
+        pytest.param(_created, "POST /v1/table/lance_catalog$db$t/drop", {}, False, "drop_table", "lance_catalog$db$t", "table_dropped", 0, id="drop"),
+        pytest.param(
+            _created,
+            "POST /v1/table/lance_catalog$db$t/deregister",
+            {},
+            False,
+            "deregister_table",
+            "lance_catalog$db$t",
+            "table_deregistered",
+            0,
+            id="deregister",
+        ),
         # Stopped at its one table's marker, a cascade has dropped that table and not yet its namespace.
         pytest.param(
-            _nested, "/v1/namespace/lance_catalog$db$sub/drop", {"behavior": "Cascade"}, "drop_table", "lance_catalog$db$sub$t", None, 1, id="namespace-cascade"
+            _nested, "POST /v1/namespace/lance_catalog$db$sub/drop", _CASCADE, False, "drop_table", "lance_catalog$db$sub$t", None, 1, id="namespace-cascade"
+        ),
+        # A cascade into the trash has detached the whole subtree, its namespace included, before its first marker.
+        pytest.param(
+            _nested, "POST /v1/namespace/lance_catalog$db$sub/drop", _CASCADE, True, "drop_table", "lance_catalog$db$sub$t", None, 0, id="trashing-cascade"
+        ),
+        # Stopped at its one table's marker, a warehouse's delete has detached that table and not yet removed its record.
+        pytest.param(
+            _in_a_warehouse, "DELETE /management/v1/warehouses/wh-a?cascade=true", {}, False, "deregister_table", "wh-a$db$t", None, 1, id="warehouse-cascade"
         ),
     ],
 )
 def test_a_tables_lifecycle_door_that_stopped_after_its_change_is_announced_by_the_finish(
     estate: tuple[Any, _Lanes],
+    request: pytest.FixtureRequest,
     arranged: Callable[[Any], None],
-    path: str,
+    door: str,
     body: dict[str, Any],
+    kept: bool,
     operation: str,
     named: str,
     told: str | None,
     unlanded: int,
 ) -> None:
-    """A table declared, registered, renamed or dropped, on its own or by its namespace's cascade, by a door that stopped
-    before announcing it reaches lineage as the run the door would have recorded, and the control plane as the event the
-    door would have sent, once; what the door had not done yet is announced by nobody."""
+    """A table declared, registered, renamed, dropped or deregistered, on its own or by its namespace's cascade (into the
+    trash, where the estate ``kept`` drops, or not) or its warehouse's, by a door that stopped before announcing it
+    reaches lineage as the run the door would have recorded, and the control plane as the event the door would have
+    sent, once; what the door had not done yet is announced by nobody."""
     catalog, lanes = estate
+    if kept:
+        request.getfixturevalue("kept_by_the_trash")
     arranged(catalog)
     lanes.markers.clear()
     lanes.events.clear()
+    method, path = door.split(" ", 1)
 
-    status = _stopped_after_its_change(catalog, lanes, "POST", path, body)
+    status = _stopped_after_its_change(catalog, lanes, method, path, body)
     attempted = list(lanes.markers)
+    settings = get_settings()
+    (filing,) = announcement_intents.standing(settings.registry_root, settings.storage_options()).filings
+    events, _times = _filed_ids(filing)
 
     sent = 2 - unlanded
-    assert (status, _finish(catalog)) == (None, {"finished": 1, "sent": sent, "unlanded": unlanded, "young": 0, "failed": 0, "left": 0})
+    # A warehouse's delete answers a failure part-way itself, 503 naming what landed; every other door stopped.
+    answered = 503 if method == "DELETE" else None
+    assert (status, _finish(catalog)) == (answered, {"finished": 1, "sent": sent, "unlanded": unlanded, "young": 0, "failed": 0, "left": 0})
     assert [marker[:2] for marker in attempted] == [(operation, named)]
     assert lanes.markers == attempted * 2, "the finish's marker is another run than the one the door filed"
     expected = [(told, named, f"table:{attempted[0][3]}")] if told is not None else []
-    assert [(event.action, event.object_name, event.object_id) for event in lanes.events] == expected
+    assert [(event.action, event.object_name, event.object_id) for event in lanes.events if event.object_type == "table"] == expected
+    # The door stopped at its one marker, so every control event is the finish's, each under an id the door filed.
+    told_ids = [event.event_id for event in lanes.events]
+    assert (len(told_ids), set(told_ids) <= set(events)) == (sent - 1, True), "the finish sent a control event under an id its door never filed"
+
+
+@pytest.mark.parametrize(
+    ("arranged", "door", "body", "table", "moved"),
+    [
+        pytest.param(_created, "POST /v1/table/lance_catalog$db$t/drop", {}, "lance_catalog$db$t", {"new_table_name": "m"}, id="destroying-drop"),
+        pytest.param(_created, "POST /v1/table/lance_catalog$db$t/deregister", {}, "lance_catalog$db$t", {"new_table_name": "m"}, id="deregister"),
+        pytest.param(
+            _nested,
+            "POST /v1/namespace/lance_catalog$db$sub/drop",
+            {"behavior": "Cascade"},
+            "lance_catalog$db$sub$t",
+            {"new_namespace_id": ["lance_catalog", "db"], "new_table_name": "m"},
+            id="namespace-cascade",
+        ),
+        pytest.param(_in_a_warehouse, "DELETE /management/v1/warehouses/wh-a?cascade=true", {}, "wh-a$db$t", {"new_table_name": "m"}, id="warehouse-cascade"),
+    ],
+)
+def test_a_retiring_door_that_failed_before_its_change_announces_nothing_of_a_table_renamed_since(
+    estate: tuple[Any, _Lanes],
+    monkeypatch: pytest.MonkeyPatch,
+    arranged: Callable[[Any], None],
+    door: str,
+    body: dict[str, Any],
+    table: str,
+    moved: dict[str, Any],
+) -> None:
+    """A drop, a deregister or a cascade whose detach of a table failed left the table live, and its filing standing. A
+    rename since moves the table to another name, alive: the finish tells nobody it was dropped or deregistered."""
+    from catalog.services import native
+
+    catalog, lanes = estate
+    arranged(catalog)
+    detach = native.call
+
+    def refused(ns: Any, op: str, request: object) -> object:  # noqa: ANN401 — a LanceNamespace
+        if op == "deregister_table":
+            raise RuntimeError("the backend refused the detach")
+        return detach(ns, op, request)
+
+    method, path = door.split(" ", 1)
+    with monkeypatch.context() as during:
+        during.setattr(native, "call", refused)
+        with contextlib.suppress(RuntimeError):  # the test client raises what the door raised, or is answered 500
+            catalog.client.request(method, path, json=body, headers=catalog.bearer(ADMIN))
+    renamed = catalog.client.post(f"/v1/table/{table}/rename", json=moved, headers=catalog.bearer(ADMIN))
+    assert renamed.status_code == 200, renamed.text
+    lanes.markers.clear()
+    lanes.events.clear()
+    age_filings()
+
+    finished = _finish(catalog)
+
+    retired = {"drop_table", "deregister_table", "table_dropped", "table_deregistered"}
+    told = [marker[:2] for marker in lanes.markers if marker[0] in retired] + [(e.action, e.object_name) for e in lanes.events if e.action in retired]
+    assert (finished["sent"], told) == (0, []), f"a table renamed alive was announced retired: {told}"
+    at = [*moved.get("new_namespace_id", table.split("$")[:-1]), moved["new_table_name"]]
+    described = catalog.client.post(f"/v1/table/{'$'.join(at)}/describe", json={}, headers=catalog.bearer(ADMIN))
+    assert described.status_code == 200, described.text
+
+
+def _path_of(key: str) -> str:
+    """Where the object at ``key`` lives on the catalog's local control root."""
+    from lakehouse.storage.objectfs import fs_and_base
+
+    settings = get_settings()
+    _fs, base = fs_and_base(settings.registry_root, settings.storage_options())
+    return f"{base}/{key}"
+
+
+def _stamp(key: str, at: float) -> None:
+    """Stamp the object at ``key`` as the store last wrote it at ``at`` (seconds since the epoch)."""
+    import os
+
+    os.utime(_path_of(key), (at, at))
+
+
+@pytest.mark.parametrize("ended", ["it-ended-after-its-detach", "its-detach-answer-was-lost", "it-answered", "its-record-was-stamped-in-the-filings-second"])
+def test_a_deregister_of_a_table_a_stale_trash_record_names_is_announced_and_keeps_its_bytes(
+    kept_by_the_trash: None, estate: tuple[Any, _Lanes], monkeypatch: pytest.MonkeyPatch, ended: str
+) -> None:
+    """An undrop that ended between its register and clearing the trash record leaves a live table the trash still
+    names, past its deadline. A deregister of it whose detach landed and whose process ended is announced by the finish,
+    once, under the ids it filed: the record was written before the deregister filed, so it is no drop of the table
+    since, and the release maintenance's audit asks for meanwhile waits for the finish without rewriting the record. One
+    whose detach landed and whose answer was lost, and one that answered, end the record, so no purge takes the bytes the
+    deregister keeps. A record stamped in the filing's own second counts as written since it, which loses the event."""
+    from catalog.services import native
+    from lakehouse.records import trash
+
+    catalog, lanes = estate
+    _created(catalog)
+    described = catalog.client.post("/v1/table/lance_catalog$db$t/describe", json={}, headers=catalog.bearer(ADMIN)).json()
+    uuid, location = described["properties"]["rask.uuid"], described["location"]
+    assert catalog.client.post("/v1/table/lance_catalog$db$t/drop", headers=catalog.bearer(ADMIN)).status_code == 200
+    with monkeypatch.context() as during:
+        during.setattr(trash, "clear", _ended)
+        with contextlib.suppress(_Ended):
+            catalog.client.post("/management/v1/table/lance_catalog$db$t/undrop", json={}, headers=catalog.bearer(ADMIN))
+    settings = get_settings()
+    root, so = settings.registry_root, settings.storage_options()
+    stale = trash.get(root, so, uuid)
+    assert stale is not None, "the undrop that ended left no record on the live table"
+    trash.put(root, so, stale.model_copy(update={"expires_at": "2000-01-01T00:00:00+00:00"}))
+    age_filings()
+    _finish(catalog)
+    lanes.markers.clear()
+    lanes.events.clear()
+    detach = native.call
+    stopped: BaseException = _Ended() if ended.startswith(("it-ended", "its-record")) else RuntimeError("the detach's answer was lost")
+
+    def detached_then_stopped(ns: Any, op: str, request: object) -> object:  # noqa: ANN401 — a LanceNamespace
+        answer = detach(ns, op, request)
+        if op == "deregister_table":
+            raise stopped
+        return answer
+
+    with monkeypatch.context() as during:
+        if ended != "it-answered":
+            during.setattr(native, "call", detached_then_stopped)
+        status: int | None = None
+        with contextlib.suppress(RuntimeError):  # the test client raises what the door raised, or is answered 500
+            status = catalog.client.post("/v1/table/lance_catalog$db$t/deregister", json={}, headers=catalog.bearer(ADMIN)).status_code
+    assert status == {"it-answered": 200, "its-detach-answer-was-lost": None}.get(ended, 500)
+    if ended == "it-answered":
+        assert not trash.keeps(root, so, uuid), "a deregistered table is still named by a trash record, which a purge reclaims"
+        assert lance.dataset(location).count_rows() == 2, "the deregister did not keep the bytes"
+        return
+    (filing,) = announcement_intents.standing(root, so).filings
+    events, times = _filed_ids(filing)
+    if isinstance(stopped, _Ended):  # a process that ended lifted no fence
+        _lapse_the_fence_on(location)
+    age_filings()
+    # The record was written before the deregister filed, as the store's stamps order them.
+    filed_at = int(filing.filed_at.timestamp()) - 2 * announcement_intents.LEASE.total_seconds()
+    if trash.keeps(root, so, uuid):
+        _stamp(trash.key(uuid), filed_at - 3600 if ended != "its-record-was-stamped-in-the-filings-second" else filed_at + 0.1)
+    _stamp(filing.key, filed_at + 0.6)
+    if ended == "it-ended-after-its-detach":
+        with open(_path_of(trash.key(uuid)), "rb") as before:
+            kept = before.read()
+        waited = catalog.client.post(f"/management/v1/trash/table/{uuid}/release", json={}, headers=catalog.bearer(RECLAIMER))
+        assert (waited.status_code, waited.json().get("code")) == (409, 19), waited.text
+        with open(_path_of(trash.key(uuid)), "rb") as after:
+            assert after.read() == kept, "the release's wait for the finish rewrote the record"
+    if ended == "its-detach-answer-was-lost":
+        assert not trash.keeps(root, so, uuid), "a deregister whose detach landed left the stale record for the purge"
+
+    finished = _finish(catalog)
+
+    told = [(event.action, event.event_id) for event in lanes.events]
+    markers = [(marker[0], marker[2]) for marker in lanes.markers]
+    if ended == "its-record-was-stamped-in-the-filings-second":
+        assert (finished["sent"], finished["unlanded"], told) == (0, 2, []), "a record stamped in the filing's second was ordered before it"
+        return
+    assert (finished["sent"], told, markers) == (2, [("table_deregistered", events[0])], [("deregister_table", times[0])])
+    assert lance.dataset(location).count_rows() == 2
+
+
+def test_a_filing_whose_evidence_the_catalog_cannot_read_exactly_is_removed_unread(estate: tuple[Any, _Lanes], caplog: pytest.LogCaptureFixture) -> None:
+    """A filing whose evidence carries a field the catalog does not know (a name's ``held`` from an earlier shape) is never
+    judged: read as the evidence it resembles, a deregister that never reached its live table would be announced. Within
+    its lease it is left standing as young, since a door running another version of the code may have filed it; past it
+    the finish removes it unread, sends nothing of it and says so once, and the next finish finds nothing of it."""
+    import logging
+
+    from catalog.services.announcement_intents import Announcement, ControlMessage, Intent, NameResolves
+    from lakehouse.storage import conditional_records
+
+    catalog, lanes = estate
+    _created(catalog)
+    uuid = catalog.client.post("/v1/table/lance_catalog$db$t/describe", json={}, headers=catalog.bearer(ADMIN)).json()["properties"]["rask.uuid"]
+    event = CatalogControlEvent(action="table_deregistered", object_type="table", object_id=f"table:{uuid}", object_name="lance_catalog$db$t")
+    filed = Intent(
+        door="deregister_table",
+        target=f"table:{uuid}",
+        announcements=[Announcement(evidence=NameResolves(segments=["lance_catalog", "db", "t"], uuid=uuid), message=ControlMessage(event=event))],
+    ).model_dump(mode="json")
+    filed["announcements"][0]["evidence"]["held"] = False
+    settings = get_settings()
+    key = f"{announcement_intents.PREFIX}/{'a' * 32}/{'b' * 32}.json"
+    conditional_records.create_json(settings.registry_root, settings.storage_options(), key, filed)
+    lanes.events.clear()
+    caplog.set_level(logging.ERROR)
+
+    young = _finish(catalog)
+
+    assert (young["young"], young["failed"], young["sent"], [e.action for e in lanes.events]) == (1, 0, 0, [])
+    assert conditional_records.read_json(settings.registry_root, settings.storage_options(), key) is not None, "a young unreadable filing was removed"
+    assert [record.getMessage() for record in caplog.records if record.levelno >= logging.ERROR] == []
+    age_filings()
+
+    finished = _finish(catalog)
+
+    assert (finished["failed"], finished["sent"], [e.action for e in lanes.events]) == (0, 0, [])
+    assert conditional_records.read_json(settings.registry_root, settings.storage_options(), key) is None, "the unreadable filing still stands"
+    assert [record.getMessage() for record in caplog.records].count("announcement_intent_unreadable") == 1
+    assert _finish(catalog) == {"finished": 0, "sent": 0, "unlanded": 0, "young": 0, "failed": 0, "left": 0}
 
 
 @pytest.fixture

@@ -487,7 +487,8 @@ def release_trash(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor) 
     Raises:
         VendingNotDirect: No catalog door is configured.
         MaintenanceDenied: The door refused: this identity holds no reclaim rung (403), or the record's deadline has not
-            settled or a live object holds it again (409 code 19, noted on the record).
+            settled or a live object holds it again (409 code 19, noted on the record), or a door's filing on the object
+            stands unsent (409 code 19, a wait for the catalog's finish, which writes no note).
         TableNotGoverned: No trash record holds the uuid.
         VendUndecided: The door could not be asked or decided nothing.
     """

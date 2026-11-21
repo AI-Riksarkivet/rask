@@ -177,8 +177,10 @@ named the table by its id.
   location claim's `LEASE`), and the finish is asked by maintenance's audit (`@hourly`, `MAINTENANCE_AUDIT_SCHEDULE`),
   as the events the door built: a marker's run id and a control event's `event_id` are the ones the door
   would have sent, so a copy that did go out lands one row; the namespace and warehouse cascades file theirs the same
-  way. A follower that must not miss a table coming or going still reads `ListTables` and `DescribeTable` as the truth,
-  and the marker as its cue.
+  way. A drop's or a deregister's announcement is finished once the table is registered under no name, and the store
+  cannot tell who retired it: when such a door died and another request then deregistered or destroyed the same table,
+  both announcements go out, under different ids, and the dead door's names its own verb. A follower that must not miss
+  a table coming or going still reads `ListTables` and `DescribeTable` as the truth, and the marker as its cue.
 - An event the outbox drain or the reconciler recovers takes a new, larger seq, so it can arrive after events for later
   commits. Order the writes of one table by `rask_lance.version`, not by `seq`.
 - The feed keeps rows for `services.lineage.eventsRetentionDays` of arrival time (default 7), and longer for a row the

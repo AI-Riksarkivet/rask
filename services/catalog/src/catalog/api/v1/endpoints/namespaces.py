@@ -68,7 +68,7 @@ from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import clone_endings, dataplane, native, protections, table_claims, trash_doors, warehouses
-from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves
+from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves, Unregistered
 from catalog.services.clone_ending_records import CloneEnding
 from lakehouse.events.control_emit import emit_control
 from lakehouse.events.control_events import CatalogControlEvent, ControlUuids
@@ -901,11 +901,16 @@ async def drop_namespace(
     # The tables this cascade removes itself. A listed table that left before its turn ([[LH-586]]: a drop of its own,
     # or a rename that carried it out alive) is not among them, so no step below announces, tracks or ends it.
     # What the drop announces is filed before it removes anything, so a drop that fails after removing something still
-    # announces it ([[LH-576]]): a drop marker per table it means to remove, each landed once the table's name names it no
-    # longer, and its own `namespace_dropped`, landed once the namespace's name names it no longer.
+    # announces it ([[LH-576]]): a drop marker per table it means to remove, each landed once that table is registered
+    # under no name and the trash keeps it as this drop keeps it (`Unregistered`), and its own `namespace_dropped`, landed
+    # once the namespace's name names it no longer. Its limits:
+    # the store cannot tell which actor retired a table, so another's deregister or destroying drop after this door died
+    # satisfies it too, and this door's event goes out as well, under its own ids.
+    # And a recoverable cascade files a table's trash record before its detach (`_trash_listed_table`) and has no stamp
+    # to tell the two apart, so one failing between them leaves a record on a live table.
     dropped_tables = {
         tuple(item.segments): Announcement(
-            evidence=NameResolves(segments=item.segments, uuid=item.uuid, held=False),
+            evidence=Unregistered(segments=item.segments, uuid=item.uuid, location=item.location, trashed=recoverable),
             message=announcer.marker(
                 item.segments,
                 author=token.subject if token is not None else None,
@@ -1097,7 +1102,7 @@ async def undrop_namespace(
             raise InternalError(f"the trash record of table {t_rec.id!r} keeps no uuid, so its restore cannot be announced")
         t_segments = parse_identifier(t_rec.id)
         restored_tables[t_rec.id] = Announcement(
-            evidence=NameResolves(segments=t_segments, uuid=t_rec.uuid, held=True),
+            evidence=NameResolves(segments=t_segments, uuid=t_rec.uuid),
             message=announcer.marker(
                 t_segments,
                 author=author,

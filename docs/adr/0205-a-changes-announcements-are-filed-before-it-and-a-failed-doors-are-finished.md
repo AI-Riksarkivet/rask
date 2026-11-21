@@ -111,3 +111,27 @@ What the store shows is the evidence of a landed change:
 - **The http lineage transport cannot carry a finish's markers.** It forwards the caller's bearer, and a finish sends
   without one, which lineage's http door refuses. The chart runs the `dapr` transport (`LANCE_LINEAGE_TRANSPORT`), on
   which the catalog signs.
+
+## 2026-11-20: the evidence of a retiring door
+
+The Decision's "a name resolving to the table's uuid or no longer" is superseded for the doors that retire a table: a
+destroying drop, a deregister, and each table of the namespace cascade and of the warehouse delete file `Unregistered`,
+landed once the table's uuid is registered under no name (it resolves neither at the door's name nor at the name its
+location's claim holds it under), and the trash keeps it, by a record the store stamped no earlier than the filing
+(the record's last write, in whole seconds, a tie counting as written since),
+exactly where the door trashes (a recoverable cascade). The name alone was no evidence: a door that failed before its
+change, followed by a rename, left the name free with the table alive under its new name, and the finish announced a
+drop or a deregister that never happened. The recoverable drop already judged its own stamp (`TrashedUnder`). Two limits
+stay. The store cannot tell which actor retired a table, so after a door died, another actor's deregister or destroying
+drop satisfies its evidence and its event goes out too, under its own ids (a dead deregister then another's destroying
+drop yields a `table_deregistered` for a table that was dropped). And the recoverable cascade files each table's trash
+record before its detach and has no stamp, so one that fails between the two leaves a record on a live table. A filing
+that does not parse as one with evidence the code reads exactly (a field it does not know, such as an earlier shape's `held`)
+is never judged: the finish sends nothing of it, removes it once it has stood past its lease (a door running another
+version of the code may have filed it), and leaves an ERROR line
+(`announcement_intent_unreadable`, its key and the store's stamp) and a counter
+(`catalog.announcement_intents.unreadable`, alerted by `CatalogAnnouncementFilingRemovedUnread`). The trash release's
+wait for a standing filing notes nothing on the trash record, since a note would restamp it. A deregister and a
+destroying drop end a stale trash record of the table they retire, under their fence, where the table resolves nowhere.
+A door whose pod ends after its detach leaves such a record standing, after which a release revokes the grants and an
+opted-in purge can take bytes the deregister kept, as before this change.

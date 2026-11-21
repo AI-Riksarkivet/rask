@@ -512,7 +512,8 @@ the rule:
   The catalog refuses an announced write while it holds no commit id key (`api/signing_gate.py`). A table's lifecycle markers (declare, register, rename (one `RENAME`
   dataset change naming the old id as `previousIdentifier`, ADR 0191),
   drop, deregister) are filed before their change, with the control event each door sends, and a door that fails after its change has them sent by the catalog's finish (`POST /management/v1/announcement-intents/finish`, asked by maintenance's hourly audit), under the run id and event id the door built (ADR 0205, [[LH-576]]); the namespace and warehouse cascades file theirs the same way. Pinned by
-  `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`.
+  `tests/integration/test_a_commit_whose_announcement_was_lost_is_announced_once.py`. A destroying drop, a deregister and each table of a cascade are judged landed by `Unregistered`, never by the name alone: the table's uuid resolves neither at the door's name nor at the name its location's claim holds it under (a rename hands the claim over, so a table renamed since a door that never reached it is no retire), and the trash keeps it, by a record the store stamped no earlier than the filing, exactly where the door trashes (a recoverable cascade); a deregister ends a stale record its live table carried, under its fence; a filing whose evidence carries an unknown field is never judged: the finish removes it unread once past its lease (`announcement_intent_unreadable`, `catalog.announcement_intents.unreadable`); the trash release's wait for a standing filing notes nothing on the record; a claim that changed or carries a live fence while judged leaves the filing for the next pass. Pinned by
+  `services/catalog/tests/test_a_door_that_failed_after_its_change_is_announced_by_the_finish.py`.
 
 ## The declaration: the catalog converges what git declares ([[XC-213]], ADR 0206)
 

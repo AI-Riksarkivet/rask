@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -44,6 +44,7 @@ from catalog.services.announcement_intents import (
     TrashedUnder,
     TupleGone,
     TupleHeld,
+    Unregistered,
 )
 from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent
@@ -62,8 +63,14 @@ _left_standing = _meter.create_counter(
     "catalog.announcement_intents.left",
     unit="{filing}",
     description="Filings a finish left standing, by why: `young` (its door may still be at work), `at_work` (a door is "
-    "acting on the table a recoverable drop filed for) or `failed` (judging it raised, logged as "
+    "acting on the table a drop, a deregister or a cascade filed for) or `failed` (judging it raised, logged as "
     "`announcement_intent_unjudged` with its key).",
+)
+_unreadable = _meter.create_counter(
+    "catalog.announcement_intents.unreadable",
+    unit="{filing}",
+    description="Filings a finish removed unread: no filing with evidence this catalog reads exactly, so never judgeable "
+    "and nothing of them sent; each is logged as `announcement_intent_unreadable` with its key and the store's stamp.",
 )
 _oldest_standing = _meter.create_gauge(
     "catalog.announcement_intents.oldest",
@@ -78,16 +85,21 @@ _oldest_standing = _meter.create_gauge(
 _oldest_left = [0.0]
 
 
-def _left(filing: Standing, reason: str) -> None:
-    """Count ``filing`` left standing for ``reason``, and keep its age where it is the pass's oldest so far."""
+def _left(age: timedelta, reason: str) -> None:
+    """Count a filing of ``age`` left standing for ``reason``, and keep its age where it is the pass's oldest so far."""
     _left_standing.add(1, {"lance.catalog.reason": reason})
-    _oldest_left[0] = max(_oldest_left[0], filing.age.total_seconds())
+    _oldest_left[0] = max(_oldest_left[0], age.total_seconds())
+
+
+def _second(at: datetime) -> datetime:
+    return at.replace(microsecond=0)
 
 
 def _create_left_series() -> None:
     """Create every reason's series at 0, so the first filing left for one is an increase."""
     for reason in ("young", "at_work", "failed"):
         _left_standing.add(0, {"lance.catalog.reason": reason})
+    _unreadable.add(0)
 
 
 type GrantAction = Literal["grant_added", "grant_revoked"]
@@ -96,8 +108,8 @@ type TupleKey = tuple[str, str, str]
 
 
 class DropAtWorkError(Exception):
-    """A door is acting on the table a recoverable drop filed for, or the drop's own fence still stands, so whether the
-    drop detached it is not yet the store's to tell: its filing stands for a later judgement."""
+    """A door is acting on the table a drop, a deregister or a cascade filed for, or a recoverable drop's own fence still
+    stands, so whether that door retired it is not yet the store's to tell: its filing stands for a later judgement."""
 
 
 class WithdrawalLeftError(DropAtWorkError):
@@ -201,7 +213,8 @@ class Announcer:
             if not filing.young:
                 try:
                     # Judged without withdrawing a drop's trash record: that fences the claim this door has read.
-                    left.append((filing, [a for a in filing.intent.announcements if await self.landed(a.evidence, withdrawing=False)]))
+                    landed = [a for a in filing.intent.announcements if await self.landed(a.evidence, withdrawing=False, filed_at=filing.filed_at)]
+                    left.append((filing, landed))
                 except WithdrawalLeftError:
                     continue
                 except DropAtWorkError as at_work:
@@ -233,16 +246,33 @@ class Announcer:
         _create_left_series()
         if after is None:  # a pass begins: what it reports is the oldest filing it leaves standing
             _oldest_left[0] = 0.0
+        for key, filed_at, age in read.unread:
+            # Within its lease an unread filing waits: a door still running under another version of the code (a rolling
+            # upgrade) may have filed it, and may yet send it and settle it itself.
+            if age < announcement_intents.LEASE:
+                done.young += 1
+                continue
+            # REMOVED UNREAD. A filing this code cannot read exactly (`announcement_intents._Evidence`) can never be
+            # judged by it, so it announces nothing; left, it would stand for good and keep the standing-filing alert
+            # firing. The ERROR line and the counter are its trace, without its body, which can name principals. A
+            # filing is written once, create-if-absent under a key of its own, so nothing rewrites it between the read
+            # and the delete.
+            log.error("announcement_intent_unreadable", extra={"key": key, "filed_at": filed_at.isoformat()})
+            try:
+                await run_in_threadpool(announcement_intents.settle, root, so, key)
+            except OSError as exc:
+                raise store_refusal(exc, reading=f"removing the unreadable filing {key}", so="nothing of it was sent") from exc
+            _unreadable.add(1)
         for filing in read.filings:
             if filing.young:
                 done.young += 1
-                _left(filing, "young")
+                _left(filing.age, "young")
                 continue
             try:
-                landed = [announcement for announcement in filing.intent.announcements if await self.landed(announcement.evidence)]
+                landed = [a for a in filing.intent.announcements if await self.landed(a.evidence, filed_at=filing.filed_at)]
             except DropAtWorkError:
                 done.young += 1
-                _left(filing, "at_work")
+                _left(filing.age, "at_work")
                 continue
             except ServiceUnavailableError:
                 raise
@@ -254,7 +284,7 @@ class Announcer:
                     extra={"key": filing.key, "door": filing.intent.door, "target": filing.intent.target, "error": type(exc).__name__},
                 )
                 done.failed += 1
-                _left(filing, "failed")
+                _left(filing.age, "failed")
                 continue
             done.unlanded += len(filing.intent.announcements) - len(landed)
             for announcement in landed:
@@ -268,14 +298,15 @@ class Announcer:
         _oldest_standing.set(_oldest_left[0])
         return done
 
-    async def landed(self, evidence: Evidence, *, withdrawing: bool = True) -> bool:
+    async def landed(self, evidence: Evidence, *, withdrawing: bool = True, filed_at: datetime | None = None) -> bool:
         """Whether the store shows the change ``evidence`` names landed. A recoverable drop judged not to have detached its
-        table has its trash record withdrawn (:meth:`_drop_landed`), unless ``withdrawing`` is off.
+        table has its trash record withdrawn (:meth:`_drop_landed`), unless ``withdrawing`` is off. ``filed_at`` is the
+        store's stamp on the filing the evidence came from, which a trash record written since is told by.
 
         Raises:
             ServiceUnavailableError: The store or OpenFGA did not answer.
             trash.UnreadableTrashRecordError: A trash record is filed and is none, so it shows neither outcome.
-            DropAtWorkError: A recoverable drop's outcome cannot be told yet.
+            DropAtWorkError: A drop's, a deregister's or a cascade's outcome cannot be told yet.
         """
         match evidence:
             case TupleGone() | TupleHeld():
@@ -285,8 +316,9 @@ class Announcer:
                 return bool(held) if isinstance(evidence, TupleHeld) else not held
             case NameResolves():
                 resolved = await self._resolver.table(evidence.segments)
-                names_it = resolved.location is not None and resolved.uuid == evidence.uuid
-                return names_it if evidence.held else not names_it
+                return resolved.location is not None and resolved.uuid == evidence.uuid
+            case Unregistered():
+                return await self._unregistered(evidence, filed_at=filed_at)
             case NamespaceResolves():
                 names_it = await self._resolver.namespace_uuid(evidence.segments) == evidence.uuid
                 return names_it if evidence.held else not names_it
@@ -335,6 +367,45 @@ class Announcer:
                 raise DropAtWorkError(f"the trash record of table {uuid} changed while it was judged")
             return True
         return await self._withdrawn(record, second, withdrawing=withdrawing)
+
+    async def _unregistered(self, evidence: Unregistered, *, filed_at: datetime | None) -> bool:
+        """Whether the table ``evidence`` names is registered under no name, and kept by the trash, by a record written no
+        earlier than ``filed_at``, only where its door retires a table into it.
+
+        The record is ordered against the filing by the store's own stamps on both, never by a pod's clock (``dropped_at``
+        is the dropping pod's): a record written before the filing is a stale one a live table carried, which neither
+        shows nor refutes this door's retire. The stamp is the record's last write, so a stale record rewritten since
+        the filing reads as written since; the trash release's wait for the finish notes nothing on it for that reason.
+        With no ``filed_at`` every record counts.
+
+        The claim on its location is read, the door's name and the name the claim holds the table under resolved, and
+        the claim read again unchanged: a rename hands the claim over, fenced, before its destination is registered, so
+        a claim that changed or carries a fence within its lease shows a door at work, and nothing is told yet.
+
+        Raises:
+            DropAtWorkError: A door is acting on the table's location.
+        """
+        store = table_claims.claim_store(self._settings)
+        first = await self._read(partial(location_claims.read, store, evidence.location))
+        names = [evidence.segments]
+        if first is not None and first.claim.uuid == evidence.uuid and first.claim.released_at is None and first.claim.segments != evidence.segments:
+            names.append(first.claim.segments)
+        for name in names:
+            resolved = await self._resolver.table_now(name)
+            if resolved.location is not None and resolved.uuid == evidence.uuid:
+                return False
+        second = await self._read(partial(location_claims.read, store, evidence.location))
+        now = await self._read(partial(location_claims.store_now, store, evidence.location))
+        if (first.etag if first else None) != (second.etag if second else None) or (second is not None and second.claim.fenced_against(None, now)):
+            raise DropAtWorkError(f"a door is at work on table {evidence.uuid}")
+        at = trash.key(evidence.uuid)
+        stored = (await self._read(partial(conditional_records.read_json_at, store.control_root, store.storage_options, at))).stored
+        kept = trash.read(stored.record, at=at) if stored is not None else None
+        # Whole seconds on both sides: a GET answers the record's stamp to the second, a listing the filing's finer, so a
+        # record written in the filing's own second would otherwise sort before it. A tie counts as written since: that
+        # can lose a dead door's event, never send a false one.
+        since = stored is not None and kept is not None and not kept.is_residue and (filed_at is None or _second(stored.modified) >= _second(filed_at))
+        return since == evidence.trashed
 
     async def _withdrawn(self, record: trash.TrashRecord, claim: location_claims.ClaimRead | None, *, withdrawing: bool) -> bool:
         """Withdraw ``record``, which a drop that never detached its table filed, under a fence on ``claim`` taken as read;

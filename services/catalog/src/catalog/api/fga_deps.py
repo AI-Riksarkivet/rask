@@ -1997,6 +1997,8 @@ class GovernedObject(BaseModel):
     kind: Literal["table", "namespace"]
     segments: list[str]
     uuid: str
+    #: A table's location as its name resolved; empty for a namespace, which has none.
+    location: str = ""
 
     def fga_object(self) -> str:
         """The FGA object its grants are held by: ``table:<uuid>`` or ``namespace:<uuid>`` ([[LH-524]])."""
@@ -2013,7 +2015,7 @@ async def identify(ns: LanceNamespace, settings: CatalogStore, kind: Literal["ta
     """
     if kind == "table":
         resolved = await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(settings), segments)
-        return GovernedObject(kind=kind, segments=segments, uuid=resolved.require_uuid())
+        return GovernedObject(kind=kind, segments=segments, uuid=resolved.require_uuid(), location=resolved.location or "")
     return GovernedObject(kind=kind, segments=segments, uuid=await run_in_threadpool(object_uuids.require_namespace_uuid, ns, segments))
 
 

@@ -321,7 +321,26 @@ tests:
               service: catalog
             exp_annotations:
               summary: "A catalog announcement filing has stood unsent for over three hours"
-              description: "A door's filed announcements have stood unsent for over three hours, past the lease and the hourly audit that settle every filing whose change can be judged. While it stands, the change it announces (a table's drop among them) is told to nobody, and a trashed object it names is neither released nor purged. Read the catalog's `announcement_intent_unjudged` log for the filing's key, door and target, and the `catalog.announcement_intents.left` counter's reason: `failed` is a judgement that raised (an unreadable trash record or claim), `at_work` a drop whose table a door keeps acting on. The value is the oldest filing the last finish pass left standing, as the replica that served it reported it. Runbook: docs/runbooks/RUNBOOK-oncall.md"
+              description: "A door's filed announcements have stood unsent for over three hours, past the lease and the hourly audit that settle every filing whose change can be judged. Two causes keep one standing, read off the `catalog.announcement_intents.left` counter's reason: `failed`, a judgement that keeps raising on a trash record or a location claim it cannot read (the catalog's `announcement_intent_unjudged` log names the filing's key, door, target and error), and `at_work`, a drop whose table a door keeps acting on. While it stands, the change it announces (a table's drop among them) is told to nobody, and a trashed object it names is neither released nor purged. The value is the oldest filing the last finish pass left standing, as the replica that served it reported it. Runbook: docs/runbooks/RUNBOOK-oncall.md"
+
+  # 9b-3. A finish removes one filing unread at minute 10 → fires while the hour's increase holds it.
+  - interval: 1m
+    input_series:
+      - series: 'catalog_announcement_intents_unreadable_total{service_name="catalog"}'
+        values: "0x10 1+0x30"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: CatalogAnnouncementFilingRemovedUnread
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: CatalogAnnouncementFilingRemovedUnread
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: catalog
+            exp_annotations:
+              summary: "The catalog removed an announcement filing it could not read"
+              description: "The catalog's finish removed a filing it could not read as one: its evidence is no kind this catalog knows exactly (an earlier shape, or a corrupt object), so it could never be judged and nothing of it was sent. The announcement it held is lost; the catalog's `announcement_intent_unreadable` log names the filing's key and when the store wrote it, and `ListTables` and `DescribeTable` remain the truth for what changed. Runbook: docs/runbooks/RUNBOOK-oncall.md"
 
   # 9c. The worker's lane handing announcements back on every scrape for >15m → MaintenanceArrivalLaneRetrying fires.
   - interval: 1m

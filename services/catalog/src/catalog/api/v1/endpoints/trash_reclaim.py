@@ -70,12 +70,13 @@ async def release_trash(
     """
     try:
         record = await run_in_threadpool(trash_reclaim.read_record, settings, kind, uuid)
+        # A wait for the finish, not a judgement of the record, so nothing is noted on it: the finish orders a record
+        # against a filing by the store's stamp of the record's last write, and a note written now would read as a drop
+        # of the table since the filing, which loses a dead deregister's announcement.
+        if (waiting := await _unannounced_refusal(settings, kind=kind, uuid=uuid)) is not None:
+            raise InvalidTableStateError(waiting)
         claim = await run_in_threadpool(trash_reclaim.location_claim, settings, record)
-        if (
-            reason := trash_reclaim.release_refusal(record, now=clock())
-            or await _unannounced_refusal(settings, kind=kind, uuid=uuid)
-            or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)
-        ) is not None:
+        if (reason := trash_reclaim.release_refusal(record, now=clock()) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
             raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
         obj = fga_ids.object_of(kind, uuid)
         held = await fga_reads.read_object_tuples(wired, obj) if (wired := fga_deps.wired(settings, client)) is not None else []
