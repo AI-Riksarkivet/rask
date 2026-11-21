@@ -1,6 +1,6 @@
 """ONE vocabulary for what a failed Lance commit MEANS, shared by every lakehouse plane that has to answer it.
 
-The catalog's data plane maps the verdict to `lance_namespace` errors (`catalog/services/dataplane.py`), and
+The catalog's data plane maps the verdict to `lance_namespace` errors (`catalog/services/tables/commits.py`), and
 `lakehouse.problems.outage` reads it to tell a lost commit from a store that did not answer. What is shared is the
 VERDICT: a caller raises its own error type, so each maps the verdict itself.
 

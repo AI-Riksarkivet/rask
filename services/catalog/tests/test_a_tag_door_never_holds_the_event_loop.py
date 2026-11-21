@@ -23,7 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings
-from catalog.services import dataplane
+from catalog.services.tables import refs
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
@@ -79,7 +79,7 @@ def test_liveness_answers_while_a_tag_doors_store_call_is_held(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, store_call: str, door: str, body: dict[str, Any]
 ) -> None:
     entered, release = threading.Event(), threading.Event()
-    monkeypatch.setattr(dataplane, store_call, _held(getattr(dataplane, store_call), entered, release))
+    monkeypatch.setattr(refs, store_call, _held(getattr(refs, store_call), entered, release))
     asking = ThreadPoolExecutor(max_workers=2)
     try:
         tagging = asking.submit(client.post, f"{TABLE}/{door}", json=body)

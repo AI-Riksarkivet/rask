@@ -1,7 +1,7 @@
 """The segments on a store that hold the estate's own state, never a table's bytes ([[LH-532]]): each spelled here once.
 
 One set, read by every plane that judges a path: the catalog's destructive drop refuses a location crossing one
-(``catalog.services.dataplane``), the maintenance purge refuses a trash record whose location crosses one
+(``catalog.services.tables.destroy``), the maintenance purge refuses a trash record whose location crosses one
 (``maintenance.services.purge``), and discovery never descends into one (``maintenance.services.discovery``). A
 location crossing a control prefix names a record store, an outbox, a staging area or a backup, so a delete there
 destroys the estate's own registries, and a walk into one costs round trips and records coverage gaps that block the

@@ -20,7 +20,7 @@ import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, LanceNamespace, connect
 
-from catalog.services import dataplane
+from catalog.services.tables import creation, schema
 from lakehouse.storage.options import StorageOptions
 
 
@@ -58,7 +58,7 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
     it ([[LH-503]]): the properties ride the commit that carries the writer's run, so no version of a governed create
     names neither its run nor its author."""
     run = {"rask.run_id": "run-7", "rask.author": "dex~ana"}
-    created = dataplane.create_table(
+    created = creation.create_table(
         real_ns,
         StorageOptions(),
         ["db", "props_at_create"],
@@ -69,7 +69,7 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
         transaction_properties=run,
     )
 
-    stored = dataplane.user_schema_metadata(lance.dataset(str(created.location)).schema)
+    stored = schema.user_schema_metadata(lance.dataset(str(created.location)).schema)
 
     assert stored.get("owner") == "team-a", f"the property never reached the dataset: {stored}"
     assert stored.get("tier") == "gold", f"the property never reached the dataset: {stored}"
@@ -84,6 +84,6 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
 
 def test_creating_without_properties_writes_no_metadata(real_ns: LanceNamespace, tmp_path: Path) -> None:
     """A create that names nothing must not invent a key — the boundary the merge could get wrong."""
-    created = dataplane.create_table(real_ns, StorageOptions(), ["db", "no_props"], _table(), root=str(tmp_path), registry=None)
+    created = creation.create_table(real_ns, StorageOptions(), ["db", "no_props"], _table(), root=str(tmp_path), registry=None)
 
-    assert dataplane.user_schema_metadata(lance.dataset(str(created.location)).schema) == {}
+    assert schema.user_schema_metadata(lance.dataset(str(created.location)).schema) == {}

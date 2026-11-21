@@ -40,7 +40,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from catalog.services.dataplane import recorded_branch
+from catalog.core.version_retention import recorded_branch
 from catalog.services.erasure import Pin
 from lakehouse.records import control_prefixes
 from lakehouse.records.history_fences import HistoryFencedError, HistoryWork, TableHistory

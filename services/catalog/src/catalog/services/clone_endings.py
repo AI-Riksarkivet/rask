@@ -3,7 +3,7 @@
 Every door that ends a registered clone (deregister, a destructive drop, a namespace's destroying cascade and a warehouse
 cascade) files the clone's ending before its row goes (:func:`file_ending`), naming what the clone holds: its tag on
 each source its base record names, and its location's claim. A destructive drop and a destroying cascade file it
-through ``dataplane.destroy_table``'s ``before_removal``, once every judgement of the drop has passed, so a refusal files
+through ``tables.destroy.destroy_table``'s ``before_removal``, once every judgement of the drop has passed, so a refusal files
 nothing; a deregister and a warehouse cascade file it before they change anything. The door releases the holds as
 before and removes the ending last (:func:`clear_ending`). A door whose native call failed leaves the ending, whatever
 the failure: a describe cannot tell the clone's row from one the same name registered at the location since, so no door

@@ -23,12 +23,13 @@ from fastapi.concurrency import run_in_threadpool
 from catalog.api import fga_deps
 from catalog.api.dependencies import Resolver
 from catalog.api.security import Caller
-from catalog.core import run_context
+from catalog.core import run_context, version_retention
 from catalog.core.config import CatalogStore
 from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_event, run_inputs
 from catalog.core.run_context import RunContext
-from catalog.services import dataplane, table_inputs
+from catalog.services import table_inputs
 from catalog.services.table_claims import ResolvedTable
+from catalog.services.tables import versions
 from lakehouse.governed import fga_ids
 from lakehouse.storage.options import StorageOptions
 
@@ -75,7 +76,7 @@ async def emit_measured_write(
     ``pin_version`` is the version the write COMMITTED. REQUIRED, with no default, so every door states
     which commit it made: a reopen cannot answer that, because under concurrent writes the latest snapshot
     is another writer's commit. A door whose response names no version resolves one with
-    ``dataplane.committed_version`` from its ``transaction_id``; ``None`` means the commit could not be
+    ``tables.versions.committed_version`` from its ``transaction_id``; ``None`` means the commit could not be
     identified, and the event is versionless.
 
     ``branch`` is the ref the write COMMITTED TO (``None`` = main), required for the same reason: a branch
@@ -95,9 +96,9 @@ async def emit_measured_write(
     ``uuids`` reads the table's uuid from the claim at the location the read-back opened, the table the write landed in.
     """
     # A request may spell main by name; the event records main as no ref at all, as Lance does.
-    ref = dataplane.recorded_branch(branch)
-    readback = await run_in_threadpool(dataplane.read_version_and_schema, location, so, segments, pin_version, ref)
-    identifier = await run_in_threadpool(dataplane.branch_identifier, location, so, segments, ref) if ref is not None else None
+    ref = version_retention.recorded_branch(branch)
+    readback = await run_in_threadpool(versions.read_version_and_schema, location, so, segments, pin_version, ref)
+    identifier = await run_in_threadpool(versions.branch_identifier, location, so, segments, ref) if ref is not None else None
     await emit_write_event(
         emitter,
         segments,

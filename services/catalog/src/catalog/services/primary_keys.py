@@ -19,7 +19,7 @@ twice: within the rows the write carries, and against the rows the table holds w
 - Every commit is judged before its finalize by :func:`refuse_repeats_in_version`: the rows of the version's new
   fragments within themselves and against the rows it carries over. ``version/create`` judges a client-staged version
   this way (``catalog.services.managed_versions``), and so does every catalog door's commit
-  (``catalog.services.dataplane.commit_stamped``, [[LH-540]]): a ``/merge_insert`` whose ``on`` is not the key, or holds
+  (``catalog.services.tables.commits.commit_stamped``, [[LH-540]]): a ``/merge_insert`` whose ``on`` is not the key, or holds
   more than the key, inserts every source row its fields leave unmatched, whatever key that row carries, and an
   ``/update`` may set a key column. The ``/insert`` merge runs on a scalar index on the key where one exists (Lance plans
   the join on the scalar-index path).

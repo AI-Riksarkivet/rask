@@ -108,7 +108,7 @@ export type GcRunResult = components['schemas']['GcRunResult'];
 // #113 the commit log — `GET /management/v1/table/{id}/history?limit=N`, read out of the FORMAT (Lance's transaction
 // log joined to `versions()`). The row shape is field-driven, not fixed: `version` / `timestamp` /
 // `operation` always, then whichever of the transaction's own detail fields that operation carries
-// (`dataplane._TXN_DETAIL_FIELDS`), list-valued ones collapsed to a count. Measured against the real dir
+// (`tables.versions._TXN_DETAIL_FIELDS`), list-valued ones collapsed to a count. Measured against the real dir
 // backend: an `Overwrite` has NO `predicate` key at all (absent, not null), so this is a LOOSE object and
 // the renderer works off the keys present — a per-operation switch would mislabel the operations Lance
 // adds next. `additionalProperties: true` is all the generated types say, hence a hand-written schema.

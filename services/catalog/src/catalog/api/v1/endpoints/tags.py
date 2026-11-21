@@ -22,7 +22,7 @@ from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, StorageOpt
 from catalog.api.pagination import ListLimit
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.services import dataplane
+from catalog.services.tables import refs, versions
 from lakehouse.events.control_emit import emit_control
 from lakehouse.governed import fga_ids
 from lakehouse.records import clone_sources
@@ -50,7 +50,7 @@ def _refuse_a_catalog_tag(tag: str) -> None:
 def list_table_tags(id: str, table: DoorTableDep, so: StorageOptionsDep, limit: ListLimit, page_token: str | None = None) -> ListTableTagsResponse:
     """List the table's tags, a page at a time — wraps lance_namespace ListTableTags."""
     req = ListTableTagsRequest(id=parse_identifier(id), page_token=page_token, limit=limit)
-    return dataplane.list_tags(table, so, req)
+    return refs.list_tags(table, so, req)
 
 
 @spec_router.post("/{id}/tags/create", response_model_exclude_none=True)
@@ -74,7 +74,7 @@ async def create_table_tag(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     _refuse_a_catalog_tag(body.tag)
-    response = await run_in_threadpool(dataplane.create_tag, table, so, body)
+    response = await run_in_threadpool(refs.create_tag, table, so, body)
     # AFTER the data-plane call — a change that did not happen is never announced.
     await emit_control(
         control,
@@ -83,7 +83,7 @@ async def create_table_tag(
         object_id=fga_ids.table_object(table.resolved.require_uuid()),
         object_name=fga_ids.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
-        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(dataplane.tag_event_ref, table.location, so, segments, body.branch)},
+        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, body.branch)},
     )
     return response
 
@@ -92,7 +92,7 @@ async def create_table_tag(
 def get_table_tag_version(id: str, body: GetTableTagVersionRequest, table: DoorTableDep, so: StorageOptionsDep) -> GetTableTagVersionResponse:
     """Resolve which table version a tag points to — wraps lance_namespace GetTableTagVersion."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
-    return dataplane.get_tag_version(table, so, body)
+    return refs.get_tag_version(table, so, body)
 
 
 @spec_router.post("/{id}/tags/update", response_model_exclude_none=True)
@@ -113,7 +113,7 @@ async def update_table_tag(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     _refuse_a_catalog_tag(body.tag)
-    response = await run_in_threadpool(dataplane.update_tag, table, so, body)
+    response = await run_in_threadpool(refs.update_tag, table, so, body)
     # AFTER the data-plane call — a change that did not happen is never announced.
     await emit_control(
         control,
@@ -122,7 +122,7 @@ async def update_table_tag(
         object_id=fga_ids.table_object(table.resolved.require_uuid()),
         object_name=fga_ids.canonical_object_id(segments),
         actor=f"user:{token.subject}" if token is not None else None,
-        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(dataplane.tag_event_ref, table.location, so, segments, body.branch)},
+        extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, body.branch)},
     )
     return response
 
@@ -146,9 +146,9 @@ async def delete_table_tag(
     body.id = reconcile_body_id(segments, body.id)
     _refuse_a_catalog_tag(body.tag)
     # The ref the tag pinned, read while the tag still exists: after the delete nothing records it.
-    listed = await run_in_threadpool(dataplane.list_tags, table, so, ListTableTagsRequest(id=segments))
+    listed = await run_in_threadpool(refs.list_tags, table, so, ListTableTagsRequest(id=segments))
     pinned = (listed.tags or {}).get(body.tag)
-    response = await run_in_threadpool(dataplane.delete_tag, table, so, body)
+    response = await run_in_threadpool(refs.delete_tag, table, so, body)
     # AFTER the data-plane call — a change that did not happen is never announced.
     await emit_control(
         control,
@@ -159,7 +159,7 @@ async def delete_table_tag(
         actor=f"user:{token.subject}" if token is not None else None,
         extra={
             "tag": body.tag,
-            **await run_in_threadpool(dataplane.tag_event_ref, table.location, so, segments, pinned.branch if pinned is not None else None),
+            **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, pinned.branch if pinned is not None else None),
         },
     )
     return response

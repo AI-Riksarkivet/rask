@@ -1,6 +1,6 @@
 """#3-B — the multi-base data-base ALLOWLIST gate over the create endpoint (integration).
 
-Reuses the shared ``client`` fixture (mocked namespace backend) and stubs ``dataplane.create_table`` so no
+Reuses the shared ``client`` fixture (mocked namespace backend) and stubs ``tables.creation.create_table`` so no
 real Lance write happens — the point is the governance decision: an off-allowlist ``data_base`` is a 400
 BEFORE any write; an on-allowlist one is threaded through to the write path.
 """
@@ -18,7 +18,8 @@ from fastapi.testclient import TestClient
 from lance_namespace import CreateTableResponse
 
 from catalog.core.config import Settings, get_settings
-from catalog.services import dataplane, table_claims
+from catalog.services import table_claims
+from catalog.services.tables import creation
 from lakehouse.records import location_claims
 
 
@@ -38,7 +39,7 @@ def _settings() -> Settings:
 
 
 def _stub_create(calls: list[dict[str, Any]]) -> Any:
-    """A dataplane.create_table stub that records its kwargs (so no real Lance write happens).
+    """A tables.creation.create_table stub that records its kwargs (so no real Lance write happens).
 
     It claims the location it answers with a minted uuid, as the real create does before it writes: the create door
     seeds the table's grants on the uuid that claim records (ADR 0173 §6).
@@ -57,7 +58,7 @@ def _stub_create(calls: list[dict[str, Any]]) -> Any:
 def test_on_allowlist_data_base_threaded_through(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     client.app.dependency_overrides[get_settings] = _settings
     calls: list[dict[str, Any]] = []
-    monkeypatch.setattr(dataplane, "create_table", _stub_create(calls))
+    monkeypatch.setattr(creation, "create_table", _stub_create(calls))
     r = client.post(
         "/v1/table/lance_catalog$db$t/create?data_base=s3://ok-bucket",
         content=_arrow(),

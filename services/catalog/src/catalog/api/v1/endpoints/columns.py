@@ -58,8 +58,8 @@ from catalog.core.lineage_emit import (
     UPDATE_FIELD_METADATA,
     UPDATE_SCHEMA_METADATA,
 )
-from catalog.services import dataplane
 from catalog.services.table_claims import ResolvedTable
+from catalog.services.tables import schema
 from lakehouse.governed import fga_ids
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import PLATFORM_PREFIX
@@ -95,7 +95,7 @@ async def _require_classifier_for_governance_keys(
 
     A DELETE COUNTS, AND IT HAS THREE SPELLINGS. `update_field_metadata` signals key removal with a
     `None` value — but `UpdateFieldMetadataEntry` carries a third field beside `path` and `metadata`,
-    and `dataplane.update_field_metadata` honours it for that entry's field
+    and `tables.schema.update_field_metadata` honours it for that entry's field
     (`dataset.update_field_metadata(..., replace=True)`), whose pylance docstring reads
     "completely replace all metadata for the specified fields".
 
@@ -165,7 +165,7 @@ async def add_columns(
     body.id = reconcile_body_id(segments, body.id)
     expressions = [column.expression for column in body.new_columns or [] if column.expression]
     await fga_deps.require_classifier_to_copy_a_label(client, settings, token, table=table, so=so, branch=body.branch, expressions=expressions)
-    response = await run_in_threadpool(partial(dataplane.add_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, ADD_COLUMNS)))
+    response = await run_in_threadpool(partial(schema.add_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, ADD_COLUMNS)))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -195,7 +195,7 @@ async def alter_columns(
     emits an ALTER_COLUMNS event with the post-evolution schema, so renames and re-types reach the feed."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = await run_in_threadpool(partial(dataplane.alter_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, ALTER_COLUMNS)))
+    response = await run_in_threadpool(partial(schema.alter_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, ALTER_COLUMNS)))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -225,7 +225,7 @@ async def drop_columns(
     event with the reduced schema, so the feed records the version without the dropped columns."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = await run_in_threadpool(partial(dataplane.drop_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, DROP_COLUMNS)))
+    response = await run_in_threadpool(partial(schema.drop_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, DROP_COLUMNS)))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -284,9 +284,7 @@ async def update_field_metadata(
     await _require_classifier_for_governance_keys(client, settings, token, table=table.resolved, updates=updates)
     try:
         response = await run_in_threadpool(
-            partial(
-                dataplane.update_field_metadata, table, so, updates, body.branch, transaction_properties=lineage_deps.door_stamp(token, UPDATE_FIELD_METADATA)
-            )
+            partial(schema.update_field_metadata, table, so, updates, body.branch, transaction_properties=lineage_deps.door_stamp(token, UPDATE_FIELD_METADATA))
         )
     except TableColumnNotFoundError:
         if await _sees_the_schema(client, settings, token, table=table.resolved):
@@ -374,9 +372,7 @@ async def update_table_schema_metadata(
     # null-free body rewrote MAIN's properties and answered 200 (verified live 2026-08-31 against the object store),
     # while the handle is opened on the ref it is given.
     updated, committed = await run_in_threadpool(
-        partial(
-            dataplane.update_schema_metadata, table, so, values, branch=branch, transaction_properties=lineage_deps.door_stamp(token, UPDATE_SCHEMA_METADATA)
-        )
+        partial(schema.update_schema_metadata, table, so, values, branch=branch, transaction_properties=lineage_deps.door_stamp(token, UPDATE_SCHEMA_METADATA))
     )
     response = UpdateTableSchemaMetadataResponse(metadata=updated)
     await lineage_deps.emit_measured_write(

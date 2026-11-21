@@ -44,9 +44,10 @@ from catalog.core.config import CatalogMaintenanceSettings, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import disarm_every_ref
 from catalog.schemas import ErasureRequest, ErasureVerifyRequest
-from catalog.services import dataplane, erasure, erasure_derived, erasure_obligations, erasure_release, table_claims
+from catalog.services import erasure, erasure_derived, erasure_obligations, erasure_release, table_claims
 from catalog.services.erasure import ErasureReport, PinRelease, SurfaceResult
 from catalog.services.erasure_obligations import ErasureObligation, ErasureObligations, ErasureObligationView, ErasureVerification
+from catalog.services.tables import versions
 from lakehouse import derived_tables
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga_ids, fga_reads
@@ -232,7 +233,7 @@ async def verify_erasure(
     # the tag and the ref it pinned, beside the obligation whose verification dropped it. AFTER the drops, so a tag still
     # standing is never announced gone.
     for dropped in report.untagged:
-        pinned = await run_in_threadpool(dataplane.tag_event_ref, table.location, so, segments, dropped.branch)
+        pinned = await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, dropped.branch)
         await emit_control(
             control,
             action="table_tag_deleted",

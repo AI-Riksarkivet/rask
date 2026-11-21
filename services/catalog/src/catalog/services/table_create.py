@@ -8,7 +8,7 @@ The steps, and the order, are exactly what the door ran, because the ORDER is th
 
 1. shape guards that cost nothing (wildcards, the multi-base allowlist, ``properties`` as a map of
    strings, the LANCE-ONLY format rule) — :func:`parse_create_shape` — and the body read as an Arrow IPC stream
-   (``dataplane.read_arrow_body``). The door runs both before its idempotency claim, so a request that
+   (``tables.writes.read_arrow_body``). The door runs both before its idempotency claim, so a request that
    is invalid on its face never pays for a lookup (catalog-api-19) and never holds a key;
 2. the parent-exists and live-trash guards — round trips, still strictly BEFORE the write;
 3. the #21 lineage stamp into the decoded table's schema metadata;
@@ -67,7 +67,8 @@ from catalog.core.lineage_emit import CREATE_TABLE, OVERWRITE_TABLE, LineageEmit
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
-from catalog.services import dataplane, native, provenance_namespace, table_bases, table_claims, table_inputs
+from catalog.services import native, provenance_namespace, table_bases, table_claims, table_inputs
+from catalog.services.tables import creation, versions
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga_ids
 from lakehouse.records import base_registry
@@ -173,11 +174,11 @@ async def create_governed_table(
     """Create a Lance table from an Arrow-IPC stream, governed end to end.
 
     ``root`` is the root ``ns`` is rooted at, where a table this request brings into being is declared under its
-    uuid (``dataplane.declare_table``, ADR 0173 §5).
+    uuid (``tables.creation.declare_table``, ADR 0173 §5).
 
     ``mode``, ``shape`` and ``table`` arrive PARSED ONCE, by the door, which refuses a malformed one
     before its idempotency claim (``CreateMode.parse``, :func:`parse_create_shape`,
-    ``dataplane.read_arrow_body``); four decisions below turn on
+    ``tables.writes.read_arrow_body``); four decisions below turn on
     the mode: the pre-existence guards, the schema read-back and the announcements. ``run`` is the run the request's Context names, which the write judge already judged: it is stamped
     into the commit and its inputs become the event's inputs.
     """
@@ -239,10 +240,10 @@ async def create_governed_table(
     # [[LH-279]] Where the create records the bases it registers — the catalog's control root, written
     # with the catalog's own credential and never through a vend.
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
-    # ``dataplane.create_table`` picks the write path by schema off the event loop: a blob-v2 column needs
+    # ``tables.creation.create_table`` picks the write path by schema off the event loop: a blob-v2 column needs
     # file format 2.2 (native create pins 2.1 and rejects it) → a direct 2.2 write; else → native create. (§9)
     create = partial(
-        dataplane.create_table,
+        creation.create_table,
         ns,
         so,
         segments,
@@ -280,7 +281,7 @@ async def create_governed_table(
             # the table to exist, so the loser answers it as kept, and as kept it writes nothing and keeps no grant. A
             # winner still between its declaration and its first write holds no version yet, and the conflict stands: a
             # retry finds the table written.
-            if mode is not CreateMode.EXIST_OK or (kept := await run_in_threadpool(dataplane.kept_table, ns, so, segments)) is None:
+            if mode is not CreateMode.EXIST_OK or (kept := await run_in_threadpool(creation.kept_table, ns, so, segments)) is None:
                 raise
             response, existok_kept_existing = kept, True
     except Exception:
@@ -310,8 +311,8 @@ async def create_governed_table(
     # response.version = the existing version), and an Overwrite of an existing table wrote the table's
     # provenance fields and metadata over the payload's. The read-back is made for every create, for the
     # commit's own time, the event's `eventTime` ([[LH-497]]). Best-effort either way (failure → []).
-    readback = await run_in_threadpool(dataplane.read_version_and_schema, str(response.location), so, segments, response.version, None)
-    schema_fields = readback.schema_fields if mode is CreateMode.EXIST_OK or overwrote_existing else dataplane.payload_schema_fields(table.schema, segments)
+    readback = await run_in_threadpool(versions.read_version_and_schema, str(response.location), so, segments, response.version, None)
+    schema_fields = readback.schema_fields if mode is CreateMode.EXIST_OK or overwrote_existing else versions.payload_schema_fields(table.schema, segments)
     inputs = await input_refs(run_inputs(run), uuids=uuids)
     # Read through the location the write landed in, so a rename since cannot lend the event another table's uuid.
     table_uuids = await uuids.table(segments, location=response.location)

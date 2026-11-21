@@ -1,6 +1,6 @@
 """The credential-less blob serving path: RFC 9110 HTTP read semantics over one Lance blob payload.
 
-The catalog's data plane (``dataplane.py``) speaks pylance — open a dataset, mutate it, commit,
+The catalog's data plane (``catalog.services.tables``) speaks pylance — open a dataset, mutate it, commit,
 read schema. This module speaks HTTP: byte ranges and their clamping, suffix ranges, ``If-Range``
 validators, strong ETags, satisfiability, and a bounded streaming window sized for a response body.
 It changes when the spec's read is refined or a client's resume behaviour must be honoured, not when

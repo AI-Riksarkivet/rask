@@ -92,7 +92,7 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
     # The write is faked, so no claim records its uuid; the uuid the seed is handed is not an axis compared here.
     monkeypatch.setattr(table_create.table_claims, "uuid_at", lambda *_a: "0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
     monkeypatch.setattr(table_create, "build_lineage_metadata", _build_meta)
-    monkeypatch.setattr(table_create.dataplane, "create_table", _facade_create)
+    monkeypatch.setattr(table_create.creation, "create_table", _facade_create)
 
     emitter = _RecordingEmitter()
     asyncio.run(
@@ -126,7 +126,7 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
     # emitter names every dataset under ([[LH-553]]).
     assert stamped["namespace"] == _DATASETS
     # ...and both coordinates are on the table handed to the write, not only computed. `lineage.dataset_id` is the
-    # table's uuid, which the write stamps once it has claimed the location (`dataplane.create_table`).
+    # table's uuid, which the write stamps once it has claimed the location (`tables.creation.create_table`).
     metadata = written["table"].schema.metadata or {}
     assert metadata.get(b"lineage.namespace") == _DATASETS.encode()
     # The WROTE edge's schema facet is read off the table written.

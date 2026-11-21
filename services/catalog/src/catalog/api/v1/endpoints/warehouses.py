@@ -81,9 +81,10 @@ from catalog.schemas import (
     TrashListing,
     WarehouseResponse,
 )
-from catalog.services import clone_endings, dataplane, native, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, native, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, Unregistered
 from catalog.services.control_records import ProtectionChange, with_protection
+from catalog.services.tables import destroy
 from catalog.services.vend_probe import (
     CAS_CHECK,
     CAS_RESERVE,
@@ -927,7 +928,7 @@ async def _require_no_outside_clones(
     for entry in trashed:
         if location := entry.location:
             located[f"{entry.id}@{entry.uuid}"] = location
-    carried = {name: await run_in_threadpool(partial(dataplane.clone_readers, location, so, table=name)) for name, location in located.items()}
+    carried = {name: await run_in_threadpool(partial(destroy.clone_readers, location, so, table=name)) for name, location in located.items()}
     try:
         clone_sources.destroy_order({name: clone_sources.tag_of(location) for name, location in located.items()}, carried)
     except clone_sources.ReadFromOutsideError as exc:

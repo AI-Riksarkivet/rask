@@ -26,7 +26,7 @@ from lance_namespace import CreateNamespaceRequest, TableNotFoundError, connect
 from tables_by_name import open_by_name
 
 from catalog.core.namespace import open_resolved_dataset
-from catalog.services.dataplane import create_table
+from catalog.services.tables.creation import create_table
 from lakehouse.storage.options import StorageOptions
 
 

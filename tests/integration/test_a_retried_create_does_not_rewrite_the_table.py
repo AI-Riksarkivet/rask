@@ -16,9 +16,12 @@ from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
+
+from catalog.core.run_context import IDEMPOTENCY_ANSWER_PROPERTY
 
 
 if TYPE_CHECKING:
@@ -379,7 +382,8 @@ class TestARetriedTableWriteCommitsOnce:
         an image that stamped only the key made) is answered from what its transaction holds, never a fault. A takeover
         sent with another request is refused by the claim the lost attempt left, which keeps that attempt's digest."""
         from catalog.api import idempotency as keyed_doors
-        from catalog.services import dataplane, idempotency_records
+        from catalog.services import idempotency_records
+        from catalog.services.tables import writes
 
         write = _TABLE_WRITES[door]
         tid = "lance_catalog$db$lost"
@@ -393,11 +397,14 @@ class TestARetriedTableWriteCommitsOnce:
         with monkeypatch.context() as during:
             during.setattr(keyed_doors.Converge, "remember", lost)
             if resent == "key-only":
-                during.setattr(dataplane, "_with_answer", lambda properties, _answer: properties)
-                during.setattr(dataplane, "_answering", lambda _properties, plan, _answer: plan)
+                during.setattr(writes, "_with_answer", lambda properties, _answer: properties)
+                during.setattr(writes, "_answering", lambda _properties, plan, _answer: plan)
             with pytest.raises(RuntimeError, match="the pod ended"):
                 write.send(real_ns_client, tid, keyed)
         landed = _table_rows(real_ns_client, tid)
+        if resent == "key-only":
+            lapsed = lance.dataset(_versions(real_ns_client, tid)["location"]).read_transaction(before + 1)
+            assert lapsed is not None and IDEMPOTENCY_ANSWER_PROPERTY not in (lapsed.transaction_properties or {}), "the commit must carry its key alone"
         monkeypatch.setattr(keyed_doors.idempotency_records, "claim", partial(idempotency_records.claim, lease=timedelta(0)))
         again = write.send(real_ns_client, tid, keyed, other=resent == "other-request")
 

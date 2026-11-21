@@ -50,7 +50,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import encoding, formats, lance_refusals, provenance_guard, query_bounds
+from catalog.core import encoding, formats, lance_refusals, provenance_guard, query_bounds, version_retention
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE
@@ -58,8 +58,9 @@ from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.run_context import IDEMPOTENCY_KEY_PROPERTY
 from catalog.core.serialization import dump
 from catalog.schemas import TableChangesRequest
-from catalog.services import blob_serving, dataplane, table_create
+from catalog.services import blob_serving, table_create
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables import reads, writes
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import audit_read
@@ -170,7 +171,7 @@ async def create_table(
     )
     # The body is shape too, read off the loop. The table read here is the one written, so the payload
     # is decoded once.
-    table = await run_in_threadpool(dataplane.read_arrow_body, data, max_bytes=settings.max_body_bytes)
+    table = await run_in_threadpool(writes.read_arrow_body, data, max_bytes=settings.max_body_bytes)
     # The payload's schema metadata becomes the table's, so a reserved key in it is a forged claim
     # whether or not the lineage stamp would later overwrite it ([[LH-208]]).
     provenance_guard.refuse_reserved_keys((table.schema.metadata or {}).keys(), door="create payload")
@@ -254,7 +255,7 @@ async def insert_into_table(
     # browser infers float64 for every JS number) can append to int64 columns — else the append 500s on
     # the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.
     data = await run_in_threadpool(
-        dataplane.coerce_insert_arrow, table, so, data, branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
+        writes.coerce_insert_arrow, table, so, data, branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
     )
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
     # After every shape refusal, so a malformed body claims no key. The claim binds the mode too, so the key on another
@@ -267,10 +268,10 @@ async def insert_into_table(
     await lineage_deps.record_declared_inputs(settings, resolver, run, table=table.resolved, segments=segments)
     # A held commit turn is waited out here, in the event loop, so a writer waiting on it holds no request thread
     # ([[LH-259]]); the insert asks again right before Lance commits it.
-    await table.wait_for_turn_in_loop(dataplane.recorded_branch(branch))
+    await table.wait_for_turn_in_loop(version_retention.recorded_branch(branch))
     response: InsertIntoTableResponse = await run_in_threadpool(
         partial(
-            dataplane.insert_into_table,
+            writes.insert_into_table,
             table,
             so,
             req,
@@ -320,16 +321,18 @@ async def _keyed_table_write[R: BaseModel](
     the rule :mod:`catalog.api.idempotency` states. The claim binds the door, the ref and the table, so the key on another
     of them is refused ([[LH-576]]), and keeps the request's digest, so the key sent with another request is refused too. The answer is the first attempt's when it recorded one, or, when this attempt took the
     key over from one lost unanswered past its lease, the answer that attempt's commit carries beside the key
-    (:func:`dataplane.committed_under_key`), recorded now; ``None`` means the door writes, stamping :func:`_keyed_stamp`.
+    (:func:`tables.writes.committed_under_key`), recorded now; ``None`` means the door writes, stamping :func:`_keyed_stamp`.
     """
     moded = "" if mode is None else f" mode={mode}"
-    converge = await keyed.begin_write(target=fga_ids.canonical_object_id(segments), qualifier=f"{moded} branch={dataplane.recorded_branch(branch) or ''}")
+    converge = await keyed.begin_write(
+        target=fga_ids.canonical_object_id(segments), qualifier=f"{moded} branch={version_retention.recorded_branch(branch) or ''}"
+    )
     if converge.replay is not None:
         return converge, answer.model_validate(converge.replay.body)
     if converge.taken_over_since is None or converge.mark is None:
         return converge, None
     landed = await run_in_threadpool(
-        partial(dataplane.committed_under_key, table, so, branch=branch, mark=converge.mark, since=converge.taken_over_since, answer=answer)
+        partial(writes.committed_under_key, table, so, branch=branch, mark=converge.mark, since=converge.taken_over_since, answer=answer)
     )
     if landed is not None:
         await converge.remember(200, landed)
@@ -392,7 +395,7 @@ async def merge_insert_into_table(
     segments = parse_identifier(id)
     if timeout is not None:
         # The catalog plans and commits the merge itself, under the table's commit turn and its own attempt budget
-        # (`dataplane.commit_stamped`), so a timeout the caller names would bound nothing the merge waits on.
+        # (`tables.commits.commit_stamped`), so a timeout the caller names would bound nothing the merge waits on.
         raise UnsupportedOperationError("timeout cannot be served: the catalog commits a merge under its own commit turn and attempt budget; omit it")
     req = MergeInsertIntoTableRequest(
         id=segments,
@@ -411,7 +414,7 @@ async def merge_insert_into_table(
     await lineage_deps.record_declared_inputs(settings, resolver, run, table=table.resolved, segments=segments)
     response: MergeInsertIntoTableResponse = await run_in_threadpool(
         partial(
-            dataplane.merge_insert_into_table,
+            writes.merge_insert_into_table,
             table,
             so,
             req,
@@ -471,7 +474,7 @@ async def update_table(
     if answered is not None:
         return answered
     response: UpdateTableResponse = await run_in_threadpool(
-        partial(dataplane.update_table, table, so, body, transaction_properties=_keyed_stamp(converge, lineage_deps.door_stamp(token, UPDATE)))
+        partial(writes.update_table, table, so, body, transaction_properties=_keyed_stamp(converge, lineage_deps.door_stamp(token, UPDATE)))
     )
     await converge.remember(200, response)
     await lineage_deps.emit_measured_write(
@@ -513,7 +516,7 @@ async def delete_from_table(
     if answered is not None:
         return answered
     response: DeleteFromTableResponse = await run_in_threadpool(
-        partial(dataplane.delete_from_table, table, so, body, transaction_properties=_keyed_stamp(converge, lineage_deps.door_stamp(token, DELETE)))
+        partial(writes.delete_from_table, table, so, body, transaction_properties=_keyed_stamp(converge, lineage_deps.door_stamp(token, DELETE)))
     )
     await converge.remember(200, response)
     # A row-delete doesn't change columns, but the event at this new version still carries the
@@ -703,7 +706,7 @@ def query_table(
     door opened ([[LH-530]]).
     """
     body.id = reconcile_body_id(parse_identifier(id), body.id)
-    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="query_table")
+    reads.refuse_a_branch_this_door_cannot_honour(body.branch, door="query_table")
     query_bounds.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     # PINNED TO THE VERSION WHOSE BASES WERE JUDGED ([[LH-279]]): the native query opens the table inside
     # Rust, where a planted base answered with another table's rows (lh279 m2).
@@ -729,7 +732,7 @@ def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: S
 
     Answers the change data feed `lance_docs/lance/format/table/row_id_lineage.md:426-454` documents, from one snapshot at
     the window's end, and refuses a window the version columns cannot describe; the rules and the
-    consumer contract live in `catalog.services.changes`, the read in `dataplane.read_changes`.
+    consumer contract live in `catalog.services.changes`, the read in `tables.reads.read_changes`.
 
     A CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like
     one (§ J1), because following every row a table ever received is the most disclosing read
@@ -748,7 +751,7 @@ def table_changes(id: str, body: TableChangesRequest, table: DoorTableDep, so: S
     # ONE CALL FOR ALL THREE KINDS: the window is one snapshot, opened at its end, and `deleted` is
     # answered from the transaction range on that same handle rather than from a scan — learning which
     # rows a table LOST is as disclosing as learning which it gained, so it is audited identically.
-    end, data = dataplane.read_changes(
+    end, data = reads.read_changes(
         table, so, begin_version=body.begin_version, end_version=body.end_version, kind=body.kind, columns=body.columns, branch=body.branch
     )
     audit_read(subject=_reader(token), resource=id, version=end, columns=body.columns, change_kind=body.kind)
@@ -778,7 +781,7 @@ def count_table_rows(
 ) -> Response:
     """Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
 
-    Routed through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It
+    Routed through `tables.reads` rather than straight to `native.call` so that `branch` is honoured. It
     was not: the parameter reached the upstream implementation, which answered from main regardless,
     so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
     """
@@ -788,7 +791,7 @@ def count_table_rows(
     # transparently as a bare number for the REST namespace." It answered `text/plain` and survived
     # only by accident — a bare number happens to parse as JSON — while its two siblings below, whose
     # payload is a STRING, did not.
-    counted = dataplane.count_rows(table, so, req, data_ns=data_ns)
+    counted = reads.count_rows(table, so, req, data_ns=data_ns)
     # A COUNT IS A READ. It answers a question about the rows without returning them, and a subject that
     # can count is a subject that can probe — so it belongs in the same log as a query (§ J1).
     audit_read(subject=_reader(token), resource=id, version=counted.version)
@@ -804,8 +807,8 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table:
     # main's plan with a 200 for a branch that had never been created. A guard that covers one of two
     # channels reads as a guard while being none. Each channel is judged on its own, since `main` in one says nothing
     # about the branch the other names ([[LH-547]]).
-    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="explain_table_query_plan")
-    dataplane.refuse_a_branch_this_door_cannot_honour(body.query.branch if body.query else None, door="explain_table_query_plan")
+    reads.refuse_a_branch_this_door_cannot_honour(body.branch, door="explain_table_query_plan")
+    reads.refuse_a_branch_this_door_cannot_honour(body.query.branch if body.query else None, door="explain_table_query_plan")
     query_bounds.refuse_an_unbounded_boolean_chain(body.query.filter if body.query else None, field="query.filter")
     judged = int(table.open(so, version=body.query.version if body.query else None).version)
     if body.query is not None:
@@ -836,7 +839,7 @@ def analyze_table_query_plan(
 ) -> Response:
     """Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text, served once the name still resolves to the door's location."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
-    dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="analyze_table_query_plan")
+    reads.refuse_a_branch_this_door_cannot_honour(body.branch, door="analyze_table_query_plan")
     query_bounds.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     # ANALYZE RUNS THE QUERY to report its metrics, so it spends what `/query` would and takes its bound.
     judged = table.open(so, version=body.version)

@@ -23,7 +23,7 @@ from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from catalog.api.dependencies import get_namespace, get_settings, get_storage_options
 from catalog.api.v1.endpoints import data as door
 from catalog.core.config import Settings
-from catalog.services.dataplane import create_table
+from catalog.services.tables.creation import create_table
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.storage.options import StorageOptions
 

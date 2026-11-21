@@ -35,7 +35,8 @@ import pyarrow.ipc as ipc
 import pytest
 from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, InvalidInputError, connect
 
-from catalog.services.dataplane import create_table, insert_into_table
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.writes import insert_into_table
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table
@@ -194,7 +195,7 @@ def test_the_refusal_is_a_shape_answer_ahead_of_every_lookup(real_ns_client: Tes
 
 @pytest.mark.parametrize("branch", ["work"], ids=["branch"])
 def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str | None) -> None:
-    """`dataplane.insert_into_table` is a seam of its own, so its branch arm must not depend on the door
+    """`tables.writes.insert_into_table` is a seam of its own, so its branch arm must not depend on the door
     having parsed first: handed the raw value, pylance's `insert` answers a bare ValueError, which is a 500."""
     ns = connect("dir", {"root": str(tmp_path / "data")})
     ns.create_namespace(CreateNamespaceRequest(id=["db"]))

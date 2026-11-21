@@ -50,7 +50,8 @@ from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
 
 from catalog.core import manifest_bytes
-from catalog.services import dataplane, table_claims
+from catalog.services import table_claims
+from catalog.services.tables import commits
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_reads, fga_writes
@@ -353,7 +354,7 @@ def test_append_delete_merge_insert_update_and_restore_each_commit_through_versi
             settings.registry_root, settings.storage_options(), table_uuid, transaction_uuid=transaction.uuid, version=version, ref=""
         )
         assert record is not None, version
-        signed.append((record.author, record.manifest == dataplane.committed_manifest_digest(restored.uri, StorageOptions(), version)))
+        signed.append((record.author, record.manifest == commits.committed_manifest_digest(restored.uri, StorageOptions(), version)))
     assert signed == [("dex~alice", True)] * 6
 
 
@@ -1313,7 +1314,7 @@ def test_a_commit_whose_answer_is_lost_lands_once_and_the_client_gets_its_versio
     table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
     record = commit_records.recorded(settings.registry_root, settings.storage_options(), table_uuid, transaction_uuid=transaction.uuid, version=2, ref="")
     assert record is not None
-    assert (record.author, record.manifest) == ("dex~alice", dataplane.committed_manifest_digest(table.uri, StorageOptions(), 2))
+    assert (record.author, record.manifest) == ("dex~alice", commits.committed_manifest_digest(table.uri, StorageOptions(), 2))
 
 
 def test_a_commit_whose_author_record_cannot_be_read_is_neither_announced_nor_counted_unauthored(served: Served) -> None:

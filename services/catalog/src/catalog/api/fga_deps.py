@@ -62,8 +62,9 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core import run_context, vending, write_judge
 from catalog.core.config import CatalogAuthzSettings, CatalogLineageSettings, CatalogStore, Settings
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, parse_identifier, rename_destination, require_names, transaction_table
-from catalog.services import dataplane, native, object_uuids, protections, table_claims, warehouses
+from catalog.services import native, object_uuids, protections, table_claims, warehouses
 from catalog.services.table_claims import ResolvedTable
+from catalog.services.tables import commits, creation, rename
 from lakehouse.governed import fga_ids, fga_model, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.machine_identity import ServicePrincipal
@@ -2482,7 +2483,7 @@ async def undo_then_take_back(
 
 
 class GrantsBeforeWrite:
-    """The ``before_register`` a create or declare door hands :func:`dataplane.declare_table`: called on the backend
+    """The ``before_register`` a create or declare door hands :func:`tables.creation.declare_table`: called on the backend
     write's worker thread with the uuid the declaration minted and claimed and the location it claimed, it writes the
     table's grants on the request's event loop (:func:`seed_before_write`) and remembers whose they are and where that
     table lives. :meth:`parent_as_authorized` is the door's ``after_register``.
@@ -2523,7 +2524,7 @@ class GrantsBeforeWrite:
         """Take back the grants written for a table that does not stand, its door having failed. One that stands, its
         door having failed after the backend recorded it and its undo having failed too, keeps them, so it never stands
         without them."""
-        if self._location is None or await run_in_threadpool(dataplane.stands_at, ns, self._segments, self._location):
+        if self._location is None or await run_in_threadpool(creation.stands_at, ns, self._segments, self._location):
             return
         await self.take_back(reason="not_written")
 
@@ -2703,12 +2704,12 @@ async def _return_to_source(authz: Authorization, *, obj: str, source: str, dest
 
 async def parent_edge_mover(
     client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, resolver: Resolver, *, obj: str, source: list[str], destination: list[str]
-) -> dataplane.Reparent | None:
+) -> rename.Reparent | None:
     """How a rename of table ``source`` to ``destination`` takes ``obj``'s parent edge along, or ``None`` when it has
     none to take: the rename keeps its namespace, or FGA is off (:func:`authorization`).
 
     A rename into another namespace moves its table while it holds the location's claim, in a thread
-    (``dataplane.rename_table``), and its parent edge moves there too, so the name and where the table inherits from
+    (``tables.rename.rename_table``), and its parent edge moves there too, so the name and where the table inherits from
     change under one arbiter: until the destination is registered no other rename moves this table's edge, and an
     undone rename has returned the edge before the claim is free ([[LH-568]]). The arrival runs once the name is
     registered, while the rename still holds the claim fenced (:func:`_arrive_at_destination`). Each step runs on the
@@ -2730,7 +2731,7 @@ async def parent_edge_mover(
     def waited(step: Callable[[], Coroutine[Any, Any, None]]) -> Callable[[], None]:
         return lambda: asyncio.run_coroutine_threadsafe(step(), loop).result()
 
-    return dataplane.Reparent(
+    return rename.Reparent(
         leave=waited(partial(_leave_source, authz, obj=obj, source=left, destination=entered)),
         arrive=waited(partial(_arrive_at_destination, authz, obj=obj, destination=entered)),
         put_back=waited(partial(_return_to_source, authz, obj=obj, source=left, destination=entered)),
@@ -3100,7 +3101,7 @@ async def require_classifier_to_copy_a_label(
         return
     dataset = await run_in_threadpool(partial(table.open, so, branch=branch))
     try:
-        read = await run_in_threadpool(dataplane.expressions_reading_a_label, dataset, list(expressions))
+        read = await run_in_threadpool(commits.expressions_reading_a_label, dataset, list(expressions))
     except OSError:
         # Labels that cannot be read are not "no labels": the copy is judged as reading one.
         log.warning("copy_labels_unreadable", exc_info=True)

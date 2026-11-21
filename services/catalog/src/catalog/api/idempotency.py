@@ -16,7 +16,7 @@ row writes' is :meth:`KeyedDoor.begin_write` (`endpoints.data._keyed_table_write
 and `tests/integration/test_a_retried_create_does_not_rewrite_the_table.py` holds the roster.
 
 AN ANSWER LOST AFTER THE CHANGE (`catalog.services.idempotency_records` § what a takeover judges). The four row writes
-answer a takeover from the commit their key stamped (`dataplane.committed_under_key`). Every other door declares to
+answer a takeover from the commit their key stamped (`tables.writes.committed_under_key`). Every other door declares to
 :meth:`KeyedDoor.begin` how a resend takes over from an attempt lost unanswered (:data:`Takeover`), and none may leave
 it out. A JUDGED door records what it intends with :meth:`Converge.intend` before it changes anything, and the takeover
 is answered from that intent where the store shows its evidence, and runs where it does not or nothing was intended. A

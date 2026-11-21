@@ -2,7 +2,7 @@
 
 Every catalog commit records them before its version is announced (``lakehouse.records.file_identities``), and
 maintenance's sweep reads each one again: ``version/create`` reads them before it judges a stock commit's files, a door's
-stamped commit (``dataplane.commit_stamped``) before its finalize, and a write Lance commits in one call (the create
+stamped commit (``tables.commits.commit_stamped``) before its finalize, and a write Lance commits in one call (the create
 door's ``write_dataset``, an unkeyed ``/insert``) just after it lands (:func:`record_landed`).
 
 What a version adds against the version it follows on the same ref, each a file a writer's vend may put over

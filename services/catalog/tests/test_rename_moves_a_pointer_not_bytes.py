@@ -36,7 +36,8 @@ from lance_namespace import (
     connect,
 )
 
-from catalog.services import dataplane, table_claims
+from catalog.services import table_claims
+from catalog.services.tables import rename
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 
@@ -69,7 +70,7 @@ def test_renaming_ACROSS_namespaces_still_moves_no_bytes(tmp_path: Path) -> None
     ns.create_namespace(CreateNamespaceRequest(id=["ns2"]))
     source = _written(ns, ["ns1", "old"])
 
-    new_segments, location = dataplane.rename_table(
+    new_segments, location = rename.rename_table(
         ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]), "moved", ["ns2"], so=StorageOptions(), claims=_claims(tmp_path), root=str(tmp_path)
     )
 
@@ -89,7 +90,7 @@ def test_a_V1_ROOT_table_is_REFUSED_rather_than_copied(tmp_path: Path) -> None:
     _written(ns, ["roottable"])
 
     with pytest.raises(InvalidInputError, match="(?i)root"):
-        dataplane.rename_table(
+        rename.rename_table(
             ns, table_claims.resolve(ns, _claims(tmp_path), ["roottable"]), "renamed", None, so=StorageOptions(), claims=_claims(tmp_path), root=str(tmp_path)
         )
 
@@ -118,7 +119,7 @@ def test_a_FAILED_registration_puts_the_source_back(tmp_path: Path) -> None:
     ns.register_table = _explode_on_the_destination
     try:
         with pytest.raises(RuntimeError, match="register refused"):
-            dataplane.rename_table(
+            rename.rename_table(
                 ns,
                 table_claims.resolve(ns, _claims(tmp_path), ["ns1", "keepme"]),
                 "newname",
@@ -155,7 +156,7 @@ def test_a_BRANCHED_table_renames_because_nothing_moves(tmp_path: Path) -> None:
     dataset.create_branch("b1")
     before = lance.dataset(source).branches.list()
 
-    new_segments, location = dataplane.rename_table(
+    new_segments, location = rename.rename_table(
         ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "branched"]), "renamed", None, so=StorageOptions(), claims=_claims(tmp_path), root=str(tmp_path)
     )
 

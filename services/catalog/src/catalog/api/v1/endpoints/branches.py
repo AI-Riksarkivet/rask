@@ -25,8 +25,8 @@ from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, StorageOpt
 from catalog.api.pagination import ListLimit
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables import refs, versions
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga_ids
 from lakehouse.storage.options import StorageOptions
@@ -47,7 +47,7 @@ def list_table_branches(
 ) -> ListTableBranchesResponse:
     """List a table's Git-like branches (paginated) — wraps the pylance ``list_branches`` data-plane op."""
     req = ListTableBranchesRequest(id=parse_identifier(id), page_token=page_token, limit=limit)
-    return dataplane.list_branches(table, so, req)
+    return refs.list_branches(table, so, req)
 
 
 @spec_router.post("/{id}/branches/create", response_model_exclude_none=True)
@@ -69,7 +69,7 @@ async def create_table_branch(
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    response = await run_in_threadpool(dataplane.create_branch, table, so, body)
+    response = await run_in_threadpool(refs.create_branch, table, so, body)
     # AFTER the data-plane call, never before — the rule `namespaces.py` states: a change that did not
     # happen is never announced, so a refused create emits nothing.
     await emit_control(
@@ -104,7 +104,7 @@ def _recorded_parent(table: DoorTable, so: StorageOptions, body: CreateTableBran
     this estate — ingest's publish delta range — and `extra` has no schema to keep the two apart.
     """
     try:
-        listed = dataplane.list_branches(table, so, ListTableBranchesRequest(id=body.id))
+        listed = refs.list_branches(table, so, ListTableBranchesRequest(id=body.id))
         entry = (listed.branches or {}).get(body.name)
     except Exception:  # noqa: BLE001 — an announcement must survive an unreadable parent
         log.warning("branch_parent_unreadable", extra={"branch": body.name})
@@ -117,8 +117,8 @@ def _recorded_parent(table: DoorTable, so: StorageOptions, body: CreateTableBran
     recorded: dict[str, Any] = {"parent_branch": entry.parent_branch, "parent_version": entry.parent_version}
     # WHICH INCARNATION was created: a branch deleted and created again under the same name restarts its
     # version numbering, so a consumer keyed on the name alone cannot tell the two apart.
-    if (identifier := (entry.metadata or {}).get(dataplane.BRANCH_IDENTIFIER_KEY)) is not None:
-        recorded[dataplane.BRANCH_IDENTIFIER_KEY] = identifier
+    if (identifier := (entry.metadata or {}).get(versions.BRANCH_IDENTIFIER_KEY)) is not None:
+        recorded[versions.BRANCH_IDENTIFIER_KEY] = identifier
     return recorded
 
 
@@ -145,17 +145,15 @@ async def delete_table_branch(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     try:
-        removed = await run_in_threadpool(dataplane.delete_branch, table, so, body)
-    except dataplane.BranchDeleteStoppedError as stopped:
+        removed = await run_in_threadpool(refs.delete_branch, table, so, body)
+    except refs.BranchDeleteStoppedError as stopped:
         await _announce_removed(control, table, segments, token, stopped.removed)
         raise
     await _announce_removed(control, table, segments, token, removed)
     return DeleteTableBranchResponse()
 
 
-async def _announce_removed(
-    control: ControlEmitter, table: DoorTable, segments: list[str], token: Caller | None, removed: list[dataplane.RemovedBranch]
-) -> None:
+async def _announce_removed(control: ControlEmitter, table: DoorTable, segments: list[str], token: Caller | None, removed: list[refs.RemovedBranch]) -> None:
     """One ``table_branch_deleted`` per branch removed, AFTER its delete: each names the incarnation it was, which the
     name alone does not, since it also names whatever branch is created under it next."""
     for branch in removed:
@@ -166,5 +164,5 @@ async def _announce_removed(
             object_id=fga_ids.table_object(table.resolved.require_uuid()),
             object_name=fga_ids.canonical_object_id(segments),
             actor=f"user:{token.subject}" if token is not None else None,
-            extra={"branch": branch.name, **({dataplane.BRANCH_IDENTIFIER_KEY: branch.identifier} if branch.identifier is not None else {})},
+            extra={"branch": branch.name, **({versions.BRANCH_IDENTIFIER_KEY: branch.identifier} if branch.identifier is not None else {})},
         )

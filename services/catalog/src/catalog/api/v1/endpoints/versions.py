@@ -42,11 +42,12 @@ from catalog.api.dependencies import (
 )
 from catalog.api.pagination import ListLimit, paginate_versions
 from catalog.api.security import CurrentToken
-from catalog.core import run_context
+from catalog.core import run_context, version_retention
 from catalog.core.base_judge import BaseJudge
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.services import dataplane, maintenance, managed_versions, table_inputs
+from catalog.services import maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables import versions
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.lancekit import branch_layout
@@ -114,7 +115,7 @@ async def table_history(
     ``limit`` bounds the per-version transaction reads — a table with 10k versions must not turn a UI page
     into 10k object-store round trips.
     """
-    rows = await run_in_threadpool(dataplane.table_history, table, so, limit)
+    rows = await run_in_threadpool(versions.table_history, table, so, limit)
     return {"table": id, "versions": rows}
 
 
@@ -175,7 +176,7 @@ def list_table_versions(
         branch=branch,
     )
     # The backend reports a branch the table lacks as a missing table; opening the ref answers the spec's 22 ([[LH-406]]).
-    table.open_unchecked(so, branch=dataplane.recorded_branch(branch))
+    table.open_unchecked(so, branch=version_retention.recorded_branch(branch))
     answer = table.read_natively("list_table_versions", req)
     rows = list(answer.versions or [])
     by_version = {row.version: row for row in rows}
@@ -219,7 +220,7 @@ async def create_table_version(
     location = table.location
     canonical = fga_ids.canonical_object_id(segments)
     caller = token.subject if token is not None else None
-    ref = await run_in_threadpool(managed_versions.commit_ref, location, so, dataplane.recorded_branch(body.branch))
+    ref = await run_in_threadpool(managed_versions.commit_ref, location, so, version_retention.recorded_branch(body.branch))
     try:
         staged = await run_in_threadpool(managed_versions.stage, ref, so, body)
     except managed_versions.VersionTakenError as exc:
@@ -337,7 +338,7 @@ def describe_table_version(
     req.id = reconcile_body_id(parse_identifier(id), req.id)
     if version is not None:
         req.version = version
-    table.open_unchecked(so, branch=dataplane.recorded_branch(req.branch))
+    table.open_unchecked(so, branch=version_retention.recorded_branch(req.branch))
     described = table.read_natively("describe_table_version", req)
     return described
 

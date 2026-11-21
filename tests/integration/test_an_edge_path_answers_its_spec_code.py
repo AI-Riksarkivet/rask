@@ -30,7 +30,7 @@ import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
-from catalog.services import dataplane
+from catalog.services.tables import creation
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -200,14 +200,14 @@ def test_a_branch_overwrite_reports_the_rows_it_wrote(client: TestClient) -> Non
 
 def test_an_existok_create_that_loses_the_race_keeps_the_winners_table(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     """Both creates find no table at the probe; the winner lands between the loser's probe and its declaration."""
-    declare = dataplane.declare_table
+    declare = creation.declare_table
 
     def declared_after_the_winner(*args: Any, **kwargs: Any) -> str:  # noqa: ANN401 — passed through to declare_table
-        monkeypatch.setattr(dataplane, "declare_table", declare)
+        monkeypatch.setattr(creation, "declare_table", declare)
         assert client.post("/v1/table/lance_catalog$g$race/create?mode=ExistOk", content=_rows(2), headers=ARROW).status_code == 200
         return declare(*args, **kwargs)
 
-    monkeypatch.setattr(dataplane, "declare_table", declared_after_the_winner)
+    monkeypatch.setattr(creation, "declare_table", declared_after_the_winner)
 
     lost = client.post("/v1/table/lance_catalog$g$race/create?mode=ExistOk", content=_rows(7), headers=ARROW)
 
@@ -220,14 +220,14 @@ class _Panic(BaseException):
 
 
 def test_a_panic_in_the_first_write_answers_500_and_leaves_the_name_free(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    write = dataplane._write_blob
+    write = creation._write_blob
 
     def panics(*args: Any, **kwargs: Any) -> object:  # noqa: ANN401 — the write's own signature
         raise _Panic("not yet implemented")
 
-    monkeypatch.setattr(dataplane, "_write_blob", panics)
+    monkeypatch.setattr(creation, "_write_blob", panics)
     panicked = TestClient(client.app, raise_server_exceptions=False).post("/v1/table/lance_catalog$g$p/create", content=_rows(), headers=ARROW)
-    monkeypatch.setattr(dataplane, "_write_blob", write)
+    monkeypatch.setattr(creation, "_write_blob", write)
 
     assert (panicked.status_code, panicked.json()["code"]) == (500, 18), panicked.text
     assert client.post("/v1/table/lance_catalog$g$p/create", content=_rows(), headers=ARROW).status_code == 200, "the panicked create left its name declared"

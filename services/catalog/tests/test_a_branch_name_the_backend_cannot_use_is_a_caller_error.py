@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 from lance_namespace import TableBranchAlreadyExistsError
 
-from catalog.services.dataplane import refuse_a_branch_name_the_backend_cannot_use
+from catalog.services.tables.refs import refuse_a_branch_name_the_backend_cannot_use
 
 
 def test_the_reserved_main_ref_cannot_be_created() -> None:

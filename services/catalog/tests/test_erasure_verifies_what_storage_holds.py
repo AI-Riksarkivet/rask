@@ -39,8 +39,9 @@ from catalog.api.v1.endpoints import erasure as door
 from catalog.core import base_judge
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
-from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import ErasureReport, ref_heads, verify
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.writes import read_arrow_body
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records import base_registry

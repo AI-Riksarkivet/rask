@@ -4,7 +4,7 @@ The lakehouse builds no index (ADR 0162). ``create_index`` and ``create_scalar_i
 ``Unsupported`` (406) naming the bring-your-own path: a build reads a whole column, so it runs on the caller's
 compute, and pylance commits it through ``version/create``, which judges it like any other commit. A drop bumps the
 Lance version without changing data or columns, so it emits a best-effort versioned lineage ``WROTE`` event
-(``drop_index``) naming the version its transaction committed (``dataplane.committed_version``).
+(``drop_index``) naming the version its transaction committed (``tables.versions.committed_version``).
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ from catalog.api.pagination import ListLimit, page_limit
 from catalog.api.security import CurrentToken
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DROP_INDEX
-from catalog.services import dataplane
+from catalog.services.tables import reads, versions, writes
 
 
 log = logging.getLogger(__name__)
@@ -104,7 +104,7 @@ def list_table_indices(
         limit = page_limit(body.limit) if "limit" in sent else limit
         branch = body.branch if "branch" in sent else branch
     req = ListTableIndicesRequest(id=segments, page_token=page_token, limit=limit, branch=branch, version=body.version if body else None)
-    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="list_table_indices")
+    reads.refuse_a_branch_this_door_cannot_honour(branch, door="list_table_indices")
     listed = table.read_natively("list_table_indices", req)
     return listed
 
@@ -132,7 +132,7 @@ def describe_table_index_stats(
     if body is not None and "branch" in body.model_fields_set:
         branch = body.branch
     req = DescribeTableIndexStatsRequest(id=segments, index_name=index_name, branch=branch, version=body.version if body else None)
-    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="describe_table_index_stats")
+    reads.refuse_a_branch_this_door_cannot_honour(branch, door="describe_table_index_stats")
     stats = table.read_natively("describe_table_index_stats", req)
     return stats
 
@@ -168,14 +168,14 @@ async def drop_table_index(
 
     Refused BEFORE the drop, because the whole point is that the drop would otherwise succeed against the wrong
     object. The drop is Lance's own on the handle opened at the door's location, committed with the door's stamp
-    ([[LH-497]], `dataplane.drop_index`), with the `dir` backend's own refusals of a system index and a missing one.
+    ([[LH-497]], `tables.writes.drop_index`), with the `dir` backend's own refusals of a system index and a missing one.
     """
     segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
     index_name = _index_named(index_name, body.index_name if body else None)
     if body is not None and "branch" in body.model_fields_set:
         branch = body.branch
-    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="drop_table_index")
-    response = await run_in_threadpool(partial(dataplane.drop_index, table, so, index_name, transaction_properties=lineage_deps.door_stamp(token, DROP_INDEX)))
+    reads.refuse_a_branch_this_door_cannot_honour(branch, door="drop_table_index")
+    response = await run_in_threadpool(partial(writes.drop_index, table, so, index_name, transaction_properties=lineage_deps.door_stamp(token, DROP_INDEX)))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
@@ -184,7 +184,7 @@ async def drop_table_index(
         token=token,
         operation=DROP_INDEX,
         uuids=uuids,
-        pin_version=await run_in_threadpool(partial(dataplane.committed_version, table, so, response.transaction_id, branch=None)),
+        pin_version=await run_in_threadpool(partial(versions.committed_version, table, so, response.transaction_id, branch=None)),
         # Main only: this door refuses a branch before the build.
         branch=None,
     )

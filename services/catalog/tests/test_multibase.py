@@ -1,6 +1,6 @@
 """#3-B — Lance multi-base DATA distribution (unit).
 
-The write path (`dataplane._write_blob`) is the only place multi-base touches Lance, so patch
+The write path (`tables.creation._write_blob`) is the only place multi-base touches Lance, so patch
 `lance.write_dataset` and assert the base wiring (initial_bases + target_bases) — and,
 critically, that the #5a invariant (2.2 + stable-row-ids) SURVIVES multi-base. Config allowlist parsing
 mirrors the external-blob-bases property.
@@ -16,7 +16,7 @@ import pyarrow as pa
 import pytest
 from lance_namespace import InvalidInputError
 
-from catalog.services import dataplane
+from catalog.services.tables import creation
 from lakehouse.storage.options import StorageOptions
 
 
@@ -40,13 +40,13 @@ def _capture_write() -> tuple[dict[str, Any], Any]:
 def test_write_threads_data_bases_into_write_dataset() -> None:
     captured, fake_write = _capture_write()
     with patch.object(lance, "write_dataset", fake_write):
-        dataplane._write_blob(
+        creation._write_blob(
             _table(),
             "s3://root/tbl",
             _SO,
             mode="create",
             external_blob_bases=[],
-            data_bases=dataplane.table_data_bases(["s3://b1", "s3://b2/data"], "t-1"),
+            data_bases=creation.table_data_bases(["s3://b1", "s3://b2/data"], "t-1"),
         )
     # [[LH-252]] each base registers the TABLE'S OWN directory beneath it, never the approved base itself
     assert [base.path for base in captured["initial_bases"]] == ["s3://b1/t-1", "s3://b2/data/t-1"]
@@ -59,13 +59,13 @@ def test_write_threads_data_bases_into_write_dataset() -> None:
 def test_external_and_data_bases_compose() -> None:
     captured, fake_write = _capture_write()
     with patch.object(lance, "write_dataset", fake_write):
-        dataplane._write_blob(
+        creation._write_blob(
             _table(),
             "s3://root/tbl",
             _SO,
             mode="create",
             external_blob_bases=["s3://media"],
-            data_bases=dataplane.table_data_bases(["s3://b1"], "t-1"),
+            data_bases=creation.table_data_bases(["s3://b1"], "t-1"),
         )
     assert len(captured["initial_bases"]) == 2  # external-blob base + data base both registered
     assert captured["target_bases"] == ["b1"]  # only the DATA base is a write target
@@ -77,13 +77,13 @@ def test_overwrite_registers_none_but_targets_when_resupplied() -> None:
     # concentrating the new fragments in the primary root.
     captured, fake_write = _capture_write()
     with patch.object(lance, "write_dataset", fake_write):
-        dataplane._write_blob(
+        creation._write_blob(
             _table(),
             "s3://root/tbl",
             _SO,
             mode="overwrite",
             external_blob_bases=[],
-            data_bases=[dataplane.DataBase(path="s3://b1/t-1", name="b1")],
+            data_bases=[creation.DataBase(path="s3://b1/t-1", name="b1")],
         )
     assert captured["initial_bases"] is None  # registration is create-only (pylance rejects re-register)
     assert captured["target_bases"] == ["b1"]  # ...but the write still targets the registered base
@@ -93,12 +93,12 @@ def test_colliding_data_base_names_rejected() -> None:
     # audit F2: two DISTINCT approved URIs that collapse to the same lossy _base_name must be rejected loudly,
     # not silently misroute fragments (one base becomes unaddressable / target resolution ambiguous).
     with pytest.raises(InvalidInputError):
-        dataplane.table_data_bases(["s3://bkt/a/c", "s3://bkt/a-c"], "t-1")  # both → base name "bkt-a-c"
+        creation.table_data_bases(["s3://bkt/a/c", "s3://bkt/a-c"], "t-1")  # both → base name "bkt-a-c"
 
 
 def test_duplicate_data_base_is_deduped() -> None:
     # audit F2: a repeated base must not double-register / double-target the round-robin.
-    assert dataplane.table_data_bases(["s3://b1", "s3://b1"], "t-1") == [dataplane.DataBase(path="s3://b1/t-1", name="b1")]
+    assert creation.table_data_bases(["s3://b1", "s3://b1"], "t-1") == [creation.DataBase(path="s3://b1/t-1", name="b1")]
 
 
 def test_the_vend_door_reads_a_real_multibase_manifest_and_decides_on_its_bases(tmp_path: Any) -> None:

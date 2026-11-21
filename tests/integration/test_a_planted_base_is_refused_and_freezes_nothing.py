@@ -52,8 +52,9 @@ from pydantic import SecretStr
 
 import lakehouse.storage.client as storage_client
 from catalog.core.config import get_settings
-from catalog.services import clone_ending_records, dataplane, native, table_bases
+from catalog.services import clone_ending_records, native, table_bases
 from catalog.services import clone_endings as clone_endings_door
+from catalog.services.tables import destroy
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.lancekit.base_refs import normalise
@@ -693,7 +694,7 @@ def test_a_door_refused_before_its_row_would_go_files_no_ending(estate: _Estate,
     assert estate.client.post("/v1/namespace/lance_catalog$clones/create", json={}).status_code == 200
     bronze, clone = _registered_clone(estate, table)
     if "namespace" in path:
-        monkeypatch.setattr(dataplane, "require_no_clone_reading", _a_judgement_refusing_the_drop)
+        monkeypatch.setattr(destroy, "require_no_clone_reading", _a_judgement_refusing_the_drop)
     else:
         silver = estate.open(clone)
         silver.shallow_clone(f"{estate.root}/gold", silver.version, storage_options=estate.key.in_clear())
@@ -810,7 +811,7 @@ def test_a_finish_leaves_the_ending_of_a_clone_its_door_is_still_ending(estate: 
     bronze, clone = _registered_clone(estate)
     monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
     settings = get_settings()
-    real_destroy, real_delete = dataplane.destroy_table, clone_sources.delete_tag
+    real_destroy, real_delete = destroy.destroy_table, clone_sources.delete_tag
     during: list[str] = []
 
     def _destroy_with_a_finish_inside(ns: LanceNamespace, *args: Any, **kwargs: Any) -> object:  # noqa: ANN401 — destroy_table's own arguments, passed on
@@ -827,7 +828,7 @@ def test_a_finish_leaves_the_ending_of_a_clone_its_door_is_still_ending(estate: 
         kwargs["before_removal"] = _file_then_finish
         return real_destroy(ns, *args, **kwargs)
 
-    monkeypatch.setattr(dataplane, "destroy_table", _destroy_with_a_finish_inside)
+    monkeypatch.setattr(destroy, "destroy_table", _destroy_with_a_finish_inside)
     monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
     assert _ended_by(estate, "/v1/table/lance_catalog$db$silver/drop", {"purge": "true"}) == 500
     monkeypatch.setattr(clone_sources, "delete_tag", real_delete)

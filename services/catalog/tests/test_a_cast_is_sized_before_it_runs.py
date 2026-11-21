@@ -15,7 +15,8 @@ import pytest
 from lance_namespace import CreateNamespaceRequest, InvalidInputError, connect
 
 from catalog.services.cast_size import bytes_after_cast
-from catalog.services.dataplane import coerce_insert_arrow, create_table
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.writes import coerce_insert_arrow
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions

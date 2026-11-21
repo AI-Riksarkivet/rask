@@ -222,7 +222,7 @@ export const fetchTableDetail = query(
 					policy,
 					// #78 format is a fixed property of this catalog: it stores Lance datasets ONLY
 					// (columnar, self-describing, versioned), pinned to storage format 2.2 at create
-					// (dataplane.py data_storage_version="2.2"). Surfaced so the one supported format is
+					// (services/tables/creation.py data_storage_version="2.2"). Surfaced so the one supported format is
 					// discoverable, and the create path 400s a client that tries to select another.
 					format: { name: 'Lance', storage_version: '2.2' },
 				} as TableDetail,

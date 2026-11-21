@@ -305,9 +305,9 @@ class _Died(BaseException):
 def _a_rename_into_managed_dies_as_it_reaches_the_backend(scene: _Scene) -> None:
     """Leave ``open$t`` as a rename into ``managed`` leaves it when its process dies between moving the parent edge
     and its first backend call: named in ``open``, inheriting from ``managed``, its claim handed to a name nothing holds."""
-    from catalog.services import dataplane
+    from catalog.services.tables import rename as table_rename
 
-    rename = dataplane.rename_table
+    rename = table_rename.rename_table
 
     def _die() -> None:
         raise _Died
@@ -320,7 +320,7 @@ def _a_rename_into_managed_dies_as_it_reaches_the_backend(scene: _Scene) -> None
         except _Died:
             raise ServiceUnavailableError("the catalog serving the rename died") from None
 
-    scene.monkeypatch.setattr(dataplane, "rename_table", _until_it_dies)
+    scene.monkeypatch.setattr(table_rename, "rename_table", _until_it_dies)
     _land_before(scene, "deregister_table", _die)
     died = _move(scene.estate, "lance_catalog$open$t", "lance_catalog$managed")
     assert died.status_code == 503, died.text
@@ -467,9 +467,9 @@ def _it_inherits_from_nowhere(scene: _Scene) -> set[tuple[str, str, str]]:
 def _a_create_lands_first(scene: _Scene) -> set[tuple[str, str, str]]:
     """alice creates ``open$r`` between bob's probe of that name and his declaration of it, as a racing create lands, so
     bob's create finds her table standing and keeps it. It lacks nothing."""
-    from catalog.services import dataplane
+    from catalog.services.tables import creation
 
-    declare, pending = dataplane.declare_table, [True]
+    declare, pending = creation.declare_table, [True]
 
     def _declared_after_the_winner(*args: Any, **kwargs: Any) -> object:
         # Disarmed before the winner sends anything: its own create declares through this too.
@@ -478,7 +478,7 @@ def _a_create_lands_first(scene: _Scene) -> set[tuple[str, str, str]]:
             _create_table(scene.estate, "lance_catalog$open$r")
         return declare(*args, **kwargs)
 
-    scene.monkeypatch.setattr(dataplane, "declare_table", _declared_after_the_winner)
+    scene.monkeypatch.setattr(creation, "declare_table", _declared_after_the_winner)
     return set()
 
 

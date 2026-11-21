@@ -25,8 +25,9 @@ from catalog.core.lineage_emit import LineageEmitter, OriginatorBoundEmitter, is
 from catalog.core.namespace import NO_WAREHOUSE, NamespaceConnections
 from catalog.core.run_context import RunContext
 from catalog.core.vending import CredentialVendor
-from catalog.services import dataplane, object_uuids, provenance_namespace, table_claims, warehouses
+from catalog.services import object_uuids, provenance_namespace, table_claims, warehouses
 from catalog.services.table_claims import DoorTable, ResolvedTable
+from catalog.services.tables import versions
 from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
@@ -618,8 +619,8 @@ class ObjectUuids:
             return None
         if resolved.location is None:
             return None
-        # `dataplane.branch_identifier` reads best-effort and answers None on any failure, so this raises nothing.
-        return await run_in_threadpool(dataplane.branch_identifier, resolved.location, self._settings.storage_options(plane="data"), segments, branch)
+        # `tables.versions.branch_identifier` reads best-effort and answers None on any failure, so this raises nothing.
+        return await run_in_threadpool(versions.branch_identifier, resolved.location, self._settings.storage_options(plane="data"), segments, branch)
 
     async def namespace(self, segments: list[str]) -> ControlUuids:
         """A namespace's uuid and its parent namespace's."""

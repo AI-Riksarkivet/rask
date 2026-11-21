@@ -22,7 +22,7 @@ keys whenever the plan names no option (`lance_docs/lance/format/table/table_con
 plan of 25 fragments is empty under ``lance.compaction.max_source_fragments=2``), so a writer holding them would steer
 or silence the plan maintenance makes from the table's maintenance policy. ``version/create`` refuses a commit carrying
 one (``catalog.services.managed_versions``), the register door a dataset carrying one (``table_bases``), the restore door
-a version carrying one (``dataplane``), and this guard refuses one a door would only have echoed.
+a version carrying one (``catalog.services.tables.writes``), and this guard refuses one a door would only have echoed.
 """
 
 from __future__ import annotations

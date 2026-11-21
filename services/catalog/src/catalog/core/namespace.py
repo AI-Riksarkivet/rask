@@ -299,7 +299,7 @@ def _open_ref(location: str, storage_options: StorageOptions, table_id: list[str
     A named branch is a whole parallel dataset under ``tree/{branch}/`` with its own version history, and
     ``lance.dataset(uri)`` opens ONLY main, so a branch is reached through
     ``checkout_version((branch, version))`` — pylance's own branch reference, the same tuple form
-    ``dataplane._tag_reference`` uses — and the handle it returns is WRITABLE: schema evolution through
+    ``tables.refs._tag_reference`` uses — and the handle it returns is WRITABLE: schema evolution through
     it commits to the branch and leaves main at its version. ``version`` pins within whichever ref is
     selected (branch-local numbering when a branch is named).
     """

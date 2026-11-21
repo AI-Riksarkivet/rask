@@ -69,9 +69,10 @@ from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.core.pagination import paginate
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import clone_endings, dataplane, native, object_uuids, protections, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, native, object_uuids, protections, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves, Unregistered
 from catalog.services.clone_ending_records import CloneEnding
+from catalog.services.tables import destroy
 from lakehouse.events.control_emit import emit_control
 from lakehouse.events.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
@@ -631,7 +632,7 @@ async def _destroy_subtree(
     sweep) were unreachable code on that backend.
 
     The fix is the same shape as `_trash_subtree`'s, minus the trash records: tables first (each one's bytes are
-    deleted at the location it is described at, by `dataplane.destroy_table`, [[LH-532]] — this is the destructive
+    deleted at the location it is described at, by `tables.destroy.destroy_table`, [[LH-532]] — this is the destructive
     path by definition), then namespaces
     deepest-first so each is empty when its own drop runs, then the cascaded root. Not atomic, and
     deliberately so: a mid-loop failure leaves a SMALLER subtree that the same call can finish on a
@@ -670,7 +671,7 @@ async def _destroy_subtree(
                 await run_in_threadpool(table_claims.require_no_other_holder, ns, claims, doomed.location, fga_ids.canonical_object_id(item.segments))
                 located[tuple(item.segments)] = doomed.location
     carried = {
-        key: await run_in_threadpool(partial(dataplane.clone_readers, location, storage_options, table=fga_ids.canonical_object_id(list(key))))
+        key: await run_in_threadpool(partial(destroy.clone_readers, location, storage_options, table=fga_ids.canonical_object_id(list(key))))
         for key, location in located.items()
     }
     try:
@@ -752,7 +753,7 @@ async def _destroy_listed_table(
     try:
         await run_in_threadpool(
             partial(
-                dataplane.destroy_table,
+                destroy.destroy_table,
                 ns,
                 storage_options,
                 child,
@@ -765,7 +766,7 @@ async def _destroy_listed_table(
                 before_removal=_file_the_ending,
             )
         )
-    except dataplane.TableBytesLeftError:
+    except destroy.TableBytesLeftError:
         raise
     except TableNotFoundError:
         # The row went by a hand the fence does not bind, so the table is not this cascade's to announce or end. An

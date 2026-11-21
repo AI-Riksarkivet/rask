@@ -41,8 +41,9 @@ from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import erasure_release, table_claims
-from catalog.services.dataplane import create_table, read_arrow_body
 from catalog.services.erasure import Pin
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.writes import read_arrow_body
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken

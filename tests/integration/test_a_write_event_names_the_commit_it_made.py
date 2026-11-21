@@ -39,7 +39,7 @@ from lance.dataset import Branches
 from lance_namespace import connect
 
 from catalog.core.lineage_emit import make_emitter
-from catalog.services import dataplane
+from catalog.services.tables import versions
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.storage.options import StorageOptions
 from lineage.models import parse_event
@@ -291,7 +291,7 @@ def test_a_branch_lookup_that_walks_past_the_branch_point_finds_nothing_and_rais
     from catalog.services import table_claims
 
     table = door_table(ns, table_claims.claim_store(get_settings()), ["lance_catalog", "lh214", "t"], announces=lambda _operation: True)
-    assert dataplane.committed_version(table, StorageOptions(), "00000000-0000-0000-0000-000000000000", branch=BRANCH) is None
+    assert versions.committed_version(table, StorageOptions(), "00000000-0000-0000-0000-000000000000", branch=BRANCH) is None
 
 
 def test_every_event_names_the_table_and_its_namespace_by_their_uuids(real_ns_client: TestClient, bus: BusDouble, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -604,7 +604,7 @@ def delete_location(location: str, storage_options: StorageOptions) -> tuple[int
     it is spelled as may hold the reservation marker and nothing else. The listings that sum the bytes double as the
     existence probes, and an already-empty path deletes nothing (a crash between the delete and the record clear re-runs
     the whole record). Every object goes BY KEY, ``_versions/`` last, as the catalog's destructive drop deletes
-    (``catalog.services.dataplane._delete_everything_under``): the reclaim session reaches the location alone, and
+    (``catalog.services.tables.destroy._delete_everything_under``): the reclaim session reaches the location alone, and
     pyarrow's directory delete puts the location's parent back as a marker outside it (measured on pyarrow 25.0.0). A
     store's refusal propagates as ``OSError``, so a purge is never reported over bytes that are still there.
 
@@ -625,7 +625,7 @@ def delete_location(location: str, storage_options: StorageOptions) -> tuple[int
 
 def _remove_emptied_directories(location: str, storage_options: StorageOptions, *places: str) -> None:
     """A local root keeps the directories its objects were deleted from, which an object store holds none of: they go too,
-    as the catalog's destructive drop removes them (``catalog.services.dataplane._delete_everything_under``)."""
+    as the catalog's destructive drop removes them (``catalog.services.tables.destroy._delete_everything_under``)."""
     fs, _ = fs_and_base(location, storage_options)
     for place in dict.fromkeys(places):
         with suppress(FileNotFoundError):

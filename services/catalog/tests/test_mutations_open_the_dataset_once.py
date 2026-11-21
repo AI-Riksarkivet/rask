@@ -12,7 +12,7 @@ a number the handle it already held was carrying. Measured against pylance: ``de
 ``add_columns``, ``alter_columns``, ``drop_columns`` and ``update_field_metadata`` all mutate their
 dataset object IN PLACE, so ``dataset.version`` after the call IS the committed version.
 
-Each op now commits stamped ([[LH-497]], ``dataplane.commit_stamped``), which answers the version it finalized, and
+Each op now commits stamped ([[LH-497]], ``tables.commits.commit_stamped``), which answers the version it finalized, and
 plans its first attempt on the handle the door opened, so the door's checked open is still the only one.
 
 Counted, not read: the opens are tallied through the real ops against a real ``dir`` namespace.
@@ -34,8 +34,9 @@ from lance_namespace import (
     connect,
 )
 
-from catalog.services import dataplane, table_claims
+from catalog.services import table_claims
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables import creation, schema, writes
 from lakehouse.records import base_registry
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
@@ -49,7 +50,7 @@ def table(tmp_path: Path) -> DoorTable:
     backend.create_namespace(CreateNamespaceRequest(id=["db"]))
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
     rows = pa.table({"id": [1, 2, 3], "v": ["a", "b", "c"]})
-    dataplane.create_table(backend, StorageOptions(), ["db", "t"], rows, root=str(tmp_path), mode="create", registry=registry, holder="db$t")
+    creation.create_table(backend, StorageOptions(), ["db", "t"], rows, root=str(tmp_path), mode="create", registry=registry, holder="db$t")
     return door_table(backend, ClaimStore(control_root=str(tmp_path / "control")), ["db", "t"], announces=lambda _operation: True)
 
 
@@ -73,22 +74,22 @@ STAMP = {"rask.author": "alice", "rask.operation": "update"}
 
 def _ops(table: DoorTable) -> dict[str, Any]:
     return {
-        "delete_from_table": lambda: dataplane.delete_from_table(
+        "delete_from_table": lambda: writes.delete_from_table(
             table, StorageOptions(), DeleteFromTableRequest(id=["db", "t"], predicate="id = 1"), transaction_properties=STAMP
         ),
-        "update_table": lambda: dataplane.update_table(
+        "update_table": lambda: writes.update_table(
             table, StorageOptions(), UpdateTableRequest(id=["db", "t"], updates=[["v", "'z'"]]), transaction_properties=STAMP
         ),
-        "add_columns": lambda: dataplane.add_columns(
+        "add_columns": lambda: schema.add_columns(
             table,
             StorageOptions(),
             AlterTableAddColumnsRequest(id=["db", "t"], new_columns=[{"name": "doubled", "expression": "id * 2"}]),
             transaction_properties=STAMP,
         ),
-        "drop_columns": lambda: dataplane.drop_columns(
+        "drop_columns": lambda: schema.drop_columns(
             table, StorageOptions(), AlterTableDropColumnsRequest(id=["db", "t"], columns=["v"]), transaction_properties=STAMP
         ),
-        "update_field_metadata": lambda: dataplane.update_field_metadata(
+        "update_field_metadata": lambda: schema.update_field_metadata(
             table, StorageOptions(), [{"path": "id", "metadata": {"unit": "px"}}], transaction_properties=STAMP
         ),
     }

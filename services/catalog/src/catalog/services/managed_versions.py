@@ -43,7 +43,8 @@ from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.namespace import overlapping_segments
 from catalog.core.vending import labelled_fields
-from catalog.services import client_fragments, committed_files, contracts, dataplane, maintenance, primary_keys, row_digests, table_claims
+from catalog.services import client_fragments, committed_files, contracts, maintenance, primary_keys, row_digests, table_claims
+from catalog.services.tables import commits, versions
 from lakehouse.lancekit import features, manifest_names
 from lakehouse.lancekit.auto_cleanup import AUTO_CLEANUP_PREFIX
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
@@ -104,7 +105,7 @@ def commit_ref(table_location: str, so: StorageOptions, branch: str | None) -> C
             f"branch {branch!r} does not exist: a branch is created through CreateTableBranch (POST /v1/table/{{id}}/branches/create), "
             "and each later version of it is committed here"
         )
-    return CommitRef(table_location=table_location, branch=branch, identifier=dataplane.identifier_of(listed[branch]))
+    return CommitRef(table_location=table_location, branch=branch, identifier=versions.identifier_of(listed[branch]))
 
 
 def _listed_branches(table_location: str, so: StorageOptions) -> dict[str, object]:
@@ -405,7 +406,7 @@ def _refuse_changed_schema_governance(proposed: lance.LanceDataset, current: lan
     with its own rung, so a staged commit may not change them.
 
     A label belongs to a field, which Lance identifies by its id, as the catalog's own column doors judge it
-    (``dataplane.commit_stamped``'s ``keeps_labels``): a rename keeps the id and the label goes with it, and a field
+    (``tables.commits.commit_stamped``'s ``keeps_labels``): a rename keeps the id and the label goes with it, and a field
     dropped and added again at its path is another field. An Overwrite is the exception, judged by path: it writes a
     schema of its own, whose ids Lance mints by position (measured on pylance 13.0.0: a reordered overwrite moved a
     labelled field from id 1 to id 0).
@@ -1033,7 +1034,7 @@ def forget_unlanded_author(table: table_claims.DoorTable, staged: StagedVersion,
     store refuses is logged and leaves the record.
     """
     try:
-        if dataplane.committed_manifest_digest(staged.location, so, staged.version) == staged.manifest_digest:
+        if commits.committed_manifest_digest(staged.location, so, staged.version) == staged.manifest_digest:
             return
         table.forget_author(staged.transaction_uuid, version=staged.version)
     except OSError as exc:

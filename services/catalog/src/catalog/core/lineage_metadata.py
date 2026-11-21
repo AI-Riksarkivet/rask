@@ -27,7 +27,7 @@ import pyarrow as pa
 #: Schema-metadata keys; the lineage service / a consumer reads these straight off the Lance table. Only
 #: opaque coordinates — no identity/PII (the creator is resolved via the gated /creator endpoint).
 #: ``lineage.dataset_id`` is the table's uuid, which only the write that brings the table into being knows, so
-#: ``catalog.services.dataplane.create_table`` stamps it there (ADR 0173 §10).
+#: ``catalog.services.tables.creation.create_table`` stamps it there (ADR 0173 §10).
 _KEY_NAMESPACE = "lineage.namespace"
 
 

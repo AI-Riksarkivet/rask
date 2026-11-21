@@ -16,7 +16,7 @@ than reading them::
     POST /v1/table/{id}/branches/delete branch missing   500 code 18   spec says 22
     POST /v1/table/{id}/branches/create branch exists    500 code 18   spec says 23
 
-`tags/version` was the ONE door that translated (`dataplane.get_tag_version` catches `ValueError`),
+`tags/version` was the ONE door that translated (`tables.refs.get_tag_version` catches `ValueError`),
 which is why the gap read as absent rather than systematic: the only tag op anyone had driven by hand
 was the one already fixed. It is parametrized in beside the doors it should match, so a later
 "simplification" that routes it through the shared helper has to keep answering 8.
@@ -61,18 +61,9 @@ from lance_namespace import (
 from tables_by_name import open_by_name
 
 from catalog.services import table_claims
-from catalog.services.dataplane import (
-    create_branch,
-    create_table,
-    create_tag,
-    delete_branch,
-    delete_tag,
-    get_tag_version,
-    list_branches,
-    list_tags,
-    update_tag,
-)
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.refs import create_branch, create_tag, delete_branch, delete_tag, get_tag_version, list_branches, list_tags, update_tag
 from lakehouse.records.history_fences import HistoryWork, TableHistory
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions

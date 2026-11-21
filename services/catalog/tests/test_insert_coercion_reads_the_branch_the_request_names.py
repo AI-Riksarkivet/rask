@@ -33,8 +33,9 @@ import pytest
 from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, connect
 from tables_by_name import open_by_name
 
-from catalog.services.dataplane import coerce_insert_arrow, create_table, insert_into_table
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.writes import coerce_insert_arrow, insert_into_table
 from lakehouse.records import base_registry
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions

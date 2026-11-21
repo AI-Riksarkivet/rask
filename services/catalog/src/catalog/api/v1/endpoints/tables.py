@@ -97,10 +97,11 @@ from catalog.core.vending import (
     vend_or_refuse,
 )
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import clone_endings, commit_reconcile, dataplane, native, protections, table_bases, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, commit_reconcile, native, protections, table_bases, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, Evidence, NameResolves, TrashedUnder, Unregistered
 from catalog.services.clone_ending_records import CloneEnding
 from catalog.services.table_claims import DoorTable, ResolvedTable
+from catalog.services.tables import creation, destroy, reads, refs, rename, schema, writes
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent, ControlAction
 from lakehouse.events.lineage_events import DatasetUuids
@@ -331,7 +332,7 @@ async def declare_table(
     body: DeclareTableRequest | None = None,
 ) -> DeclareTableResponse:
     """Declare a new (empty) table at ``id``, at the namespace root under the uuid the catalog mints for it
-    (``dataplane.declare_table``, [[LH-520]]), then seed the caller's FGA ownership and emit a versionless
+    (``tables.creation.declare_table``, [[LH-520]]), then seed the caller's FGA ownership and emit a versionless
     DECLARE_TABLE marker (the table's first provenance — who reserved it + where).
 
     The catalog chooses a declared table's location, which the spec leaves to the implementation
@@ -368,7 +369,7 @@ async def declare_table(
     try:
         location = await run_in_threadpool(
             partial(
-                dataplane.declare_table,
+                creation.declare_table,
                 ns,
                 so,
                 segments,
@@ -545,7 +546,7 @@ def _refuse_a_branch_describe_cannot_honour(branch: str | None, *, named_by: str
     `main` is read as no branch by `refuse_a_branch_this_door_cannot_honour` itself, as at every door it guards.
     """
     remedy = f"Use the branch operations under /v1/table/{{id}}/branches, or read the branch through `count_rows`. (got {branch!r})"
-    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="describe", remedy=f"{named_by}. {remedy}" if named_by else remedy)
+    reads.refuse_a_branch_this_door_cannot_honour(branch, door="describe", remedy=f"{named_by}. {remedy}" if named_by else remedy)
 
 
 @spec_router.post("/{id}/describe", response_model_exclude_none=True)
@@ -687,7 +688,7 @@ def _describe(
     segments = table.segments
     try:
         if tag is not None:
-            ref = dataplane.tag_reference(table.open_unchecked(so), tag)
+            ref = refs.tag_reference(table.open_unchecked(so), tag)
             _refuse_a_branch_describe_cannot_honour(ref.branch, named_by=str(ref))
             version = ref.version
         # A VERSION THAT DOES NOT EXIST MUST NOT DESCRIBE THE ONE THAT DOES. `describe_table` answers off
@@ -764,7 +765,7 @@ def _load_detailed_metadata(response: DescribeTableResponse, dataset: lance.Lanc
     response.stats = loaded.stats
     # The table's own schema metadata, then its file format under the platform's reserved keys, which no caller writes
     # ([[LH-260]]): a client staging files for `version/create` must write them at this version.
-    response.metadata = {**dataplane.user_schema_metadata(dataset.schema), **table_file_format(dataset).as_metadata()}
+    response.metadata = {**schema.user_schema_metadata(dataset.schema), **table_file_format(dataset).as_metadata()}
 
 
 #: The spec gives `exists` a 200 with NO `content:` block — *"Success, no content"* — so a conforming
@@ -1054,7 +1055,7 @@ async def _drop(
 
             response = await run_in_threadpool(
                 partial(
-                    dataplane.destroy_table,
+                    destroy.destroy_table,
                     ns,
                     so,
                     segments,
@@ -1068,7 +1069,7 @@ async def _drop(
                 )
             )
             ending = endings[0] if endings else None
-    except dataplane.TableBytesLeftError:
+    except destroy.TableBytesLeftError:
         # The row is gone and bytes remain: the claim stays held, kept by the residue record once the fence lapses, and the
         # grants stay. The trash purge reclaims the objects; the drop's announcements wait in the door's filing, which the
         # finish sends, since the table is registered under no name ([[LH-576]]).
@@ -1888,7 +1889,7 @@ async def rename_table(
     makes rename a first-class Metadata op. It is served here as what the spec describes: the destination id
     is registered at the SOURCE's existing location and the source id is deregistered. **No data byte is
     read, written or deleted**, so the cost is O(1) rather than the dataset's size — see
-    ``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one
+    ``tables.rename.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one
     shape (a V1 root-namespace table) it refuses.
 
     Within its namespace the caller must hold ``can_drop`` on the source (owner tier, gated by the router
@@ -1938,7 +1939,7 @@ async def rename_table(
     # another namespace its parent and child edges move with it, and those are all it writes in OpenFGA.
     reparent = await fga_deps.parent_edge_mover(client, settings, token, resolver, obj=renamed, source=segments, destination=new_segments)
     # A rename keeps the table's uuid (ADR 0173 §2): the event and the control event name the one the door resolved, and
-    # its location, which a rename keeps (`dataplane.rename_table`). Both are filed before the rename, which landed once
+    # its location, which a rename keeps (`tables.rename.rename_table`). Both are filed before the rename, which landed once
     # the destination's name resolves to the table ([[LH-576]]).
     destination_ids = await uuids.table(new_segments, uuid=table.uuid)
     named = NameResolves(segments=new_segments, uuid=table.require_uuid())
@@ -1957,7 +1958,7 @@ async def rename_table(
     async with announcer.announcing(door="rename_table", target=renamed, announcements=[moved, moved_event]) as filing:
         await run_in_threadpool(
             partial(
-                dataplane.rename_table,
+                rename.rename_table,
                 ns,
                 table,
                 body.new_table_name,
@@ -1997,14 +1998,14 @@ async def restore_table(
 
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    # THE BRANCH IS SERVED: `dataplane.restore` opens the ref named at the door's location, where a missing branch
+    # THE BRANCH IS SERVED: `tables.writes.restore` opens the ref named at the door's location, where a missing branch
     # answers 22 and a version the branch lacks answers 11, the codes `_open_ref` mints for every other door, and
     # restores through that handle, which commits on the ref it is on (measured on pylance 13.0.0: a branch restored
     # to an earlier version took a new version of its own, and main kept its version).
     # The event names the version THAT restore committed on the ref it restored, and the shared trailer reads
     # its schema off one pinned open (best-effort: a readback failure never fails the committed restore).
     response, committed = await run_in_threadpool(
-        partial(dataplane.restore, table, so, body, transaction_properties=lineage_deps.door_stamp(token, RESTORE_TABLE))
+        partial(writes.restore, table, so, body, transaction_properties=lineage_deps.door_stamp(token, RESTORE_TABLE))
     )
     await lineage_deps.emit_measured_write(
         emitter,
@@ -2051,7 +2052,7 @@ def get_table_stats(
     if body is not None and "branch" in body.model_fields_set:
         branch = body.branch
     req = GetTableStatsRequest(id=segments, branch=branch)
-    dataplane.refuse_a_branch_this_door_cannot_honour(branch, door="get_table_stats")
+    reads.refuse_a_branch_this_door_cannot_honour(branch, door="get_table_stats")
     # The request carries no version to pin, so the native read opens the table again after this judgement. No door
     # changes a table's base list between the two: every commit is judged at `version/create` or `commit_stamped`,
     # which refuse a base added, removed or repointed, and a writer's credential puts no final manifest, which every

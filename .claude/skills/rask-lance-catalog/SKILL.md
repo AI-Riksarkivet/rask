@@ -36,7 +36,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   the served route are SINGULAR — `POST /v1/table/{id}/backfill_column` (`spec.yaml:1570`,
   `endpoints/columns.py:146`) — while `alter_table_backfill_columns` is the native method it wraps.
   **`rename_table` is NOT one of them.** It is backed in-process and answers 200. It MOVES A POINTER, never bytes (2026-09-04):
-  `dataplane.rename_table` retires the source pointer and re-registers the destination at the source's
+  `tables.rename.rename_table` retires the source pointer and re-registers the destination at the source's
   own location, so version history, row count and the directory all survive untouched — every V2 reader
   finds a table through its row's `location` (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:55`).
   THE LOCATION CLAIM IS THE DOOR'S RACE ARBITRATION ([[LH-204]]), not the call order: the `dir` backend
@@ -64,7 +64,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   `can_create_table`'s (`fga_deps.require_rename_destination`), so under managed access a writer brings no table in
   and an owner inside takes none out; a rename that keeps its namespace asks `can_drop` on the table and
   `can_create_table` on that namespace. Where the table inherits from moves while the rename holds the claim
-  (`dataplane.Reparent`, built by `fga_deps.parent_edge_mover`), so the name and the edge have one arbiter. Its
+  (`tables.rename.Reparent`, built by `fga_deps.parent_edge_mover`), so the name and the edge have one arbiter. Its
   `parent` edge moves in one OpenFGA Write BEFORE the name; its `child` edge on the source is taken away with it and
   the one on the destination is written only once the name is registered there, because a namespace's removal ends
   every object its `child` edges name (`fga_deps.end_removed_subtree`) and a table between its two names is in
@@ -80,7 +80,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   a rename left, or died leaving, back on the table. **A table's grants are written before the table** ([[LH-588]]):
   create and declare write them (owner, `parent` and `child`, under the uuid the door minted) once the location's claim
   records that uuid and before the backend records the table (`fga_deps.GrantsBeforeWrite`, the `before_register` of
-  `dataplane.declare_table`); register writes them before its native register and again once its claim records the
+  `tables.creation.declare_table`); register writes them before its native register and again once its claim records the
   uuid (`fga_deps.seed_before_write`). Every refusal and failed write takes them back (`fga_deps.take_back_seed`), unless
   a table stands under the uuid. A door killed between its grants and its backend write leaves grants alone, which the
   drift repair revokes: the ghost door keeps a table's grants for a held claim only within its `LEASE`, while it is
@@ -132,7 +132,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   (`DoorTable.write_natively`): both version finalizes (`version/create`'s and `commit_stamped`'s, the backend's
   put-if-not-exists), drop_index, whose system-index refusal is the namespace's and not Lance's, and backfill. Describe
   answers for the name off its own describe (`require_described_at`). A readback after a committed write (the lineage
-  trailer, `dataplane.committed_version`, `branch_identifier`) opens the location unguarded: a 409 after a commit would
+  trailer, `tables.versions.committed_version`, `branch_identifier`) opens the location unguarded: a 409 after a commit would
   make a retry commit twice. An `Overwrite` create writes at the table it asked `can_drop` on, and one whose door found
   no table creates in Create mode, so a table created under the name meanwhile answers TableAlreadyExists rather than
   being overwritten without `can_drop`. The catalog has no by-name open; a test arranging a table by its name opens
@@ -218,7 +218,7 @@ Two contracts stack here, and confusing them is how bugs happen:
 - **A table the catalog makes lives at `<namespace root>/<table uuid>`** ([[LH-520]], ADR 0173 §5), the namespace root
   being the root of the warehouse its name's first segment names (`NamespaceRootDep`; CONTEXT.md's
   `<warehouse root>/<table uuid>`), the catalog's own root for the estate's warehouse. Create and declare
-  run the `dir` catalog's own DeclareTable steps with the catalog choosing the location (`dataplane.declare_table`): mint
+  run the `dir` catalog's own DeclareTable steps with the catalog choosing the location (`tables.creation.declare_table`): mint
   the uuid and take the location's claim before any backend call, write `.lance-reserved` there, then record the row
   through RegisterTable's relative location, which answers `is_only_declared` until data lands (measured on pylance
   13.0.0). The backend's own DeclareTable refuses every location but its `<hash>_<object_id>`, so the catalog never calls
@@ -229,7 +229,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   (`vending.split_s3_location`) and every catalog read and write of a table object (`table_objects.dataset_fs`,
   `object_store_path`, so `version/create` too) uses the key it decodes to once, and so does a destructive drop: the
   table door and the namespace cascade judge the bytes, remove the row with DeregisterTable and delete under the decoded
-  key and the spelling themselves (`dataplane.destroy_table`, [[LH-532]]), since the backend's own drop deletes where
+  key and the spelling themselves (`tables.destroy.destroy_table`, [[LH-532]]), since the backend's own drop deletes where
   `Path::join` percent-encodes the location. A location holding a `_versions/` tree gets a residue trash record (`trash.make_record(residue=True)`, grace 0) before the row goes, cleared once the bytes are; a delete that fails leaves it, so the claim stays held (`table_claims.kept_in_trash`), undrop refuses it and the trash purge reclaims the bytes. `_versions/` is deleted last. The control prefixes a drop, the purge and discovery refuse are one set, `lakehouse.records.control_prefixes`. The register door refuses a location in
   a uuid-spelled directory directly under the namespace root (`identifiers.is_spelled_as_a_uuid`): that is the catalog's
   layout. Pinned by `tests/integration/test_warehouse_routing.py`,
@@ -362,7 +362,7 @@ tuple that shows the parent to whoever holds a rung beneath it, is written only 
 (`name_namespace_child`), so those leftovers grant nothing; no drift repair revokes them (it judges tables).
 **A create lands only in the namespace it was authorized on** ([[LH-585]]): the router authorizes on the parent's uuid
 and the backend records the object by name, so once the row stands each door reads the parent's uuid again
-(`fga_deps.require_parent_as_authorized`: create and declare as `dataplane.declare_table`'s `after_register`, register
+(`fga_deps.require_parent_as_authorized`: create and declare as `tables.creation.declare_table`'s `after_register`, register
 and the namespace door after their native call) and, where a drop and a re-create left another namespace under the
 name, or the parent cannot be read, removes what it recorded and takes its grants back. A changed parent answers 409
 code 14 (`ParentChangedError`, which an ExistOk create never reads as a race it lost); an undo the store refuses
@@ -447,12 +447,12 @@ the rule:
   and delete announce `table_contract_set` / `table_contract_deleted`. A commit that drops, renames, retypes or
   loosens a contracted column is refused 409 code 19 (`contracts.require_kept`, which refuses only a violation the
   commit introduces over the version it follows, so a table already breaking its contract is not frozen) where every
-  commit passes: `managed_versions.judge` (a stock client), `dataplane.commit_stamped` (every catalog door, a restore
+  commit passes: `managed_versions.judge` (a stock client), `tables.commits.commit_stamped` (every catalog door, a restore
   included) and the create door's Overwrite; each reads the contract off the control root through `DoorTable.contract`.
   Pinned by `services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py`.
 - **Every version names its author, and every door commits stamped** ([[LH-497]]). Each catalog door stamps
   `rask.author` (the verified caller) and `rask.operation` (the lineage operation it announces) on its commit, on main
-  and on every branch, through `dataplane.commit_stamped`: the door's transaction is planned on the ref's latest version,
+  and on every branch, through `tables.commits.commit_stamped`: the door's transaction is planned on the ref's latest version,
   committed detached with the stamp and finalized as exactly the next version by the backend's put-if-not-exists, and a
   writer that lost that version plans again. An attempt that cannot land (its finalize lost, or a judge refused it) first
   deletes its own transaction file, the files it wrote and their committed-files record, for an operation that writes its
@@ -475,7 +475,7 @@ the rule:
   own retries on a version committed since. Most pylance operations take no transaction properties (14.0.3: `update`,
   `delete`, `add_columns`, `alter_columns`, `drop_columns`, both metadata updates, `drop_index`,
   `MergeInsertBuilder.execute`), so for those the plan is Lance's own call made on a handle opened through an in-process
-  namespace under managed versioning (`dataplane.captured`), which keeps the staged manifest instead of finalizing it;
+  namespace under managed versioning (`tables.commits.captured`), which keeps the staged manifest instead of finalizing it;
   the transaction read off it leaves the rows, schema, indices and version Lance's own call leaves (measured). Building
   a schema op's transaction by hand is not possible: `LanceSchema.from_pyarrow` renumbers field ids, and a `Project`
   built from it read one column's data as another's. A keyed insert and a merge plan `execute_uncommitted` instead,
@@ -871,7 +871,7 @@ governing their data. The project-scoped surface is the console's project page, 
   A table's compaction plan has ONE source too, its maintenance policy: Lance plans from `lance.compaction.*` manifest
   config whenever a plan names no option (`lance_docs/lance/format/table/table_config.md`), so the property guard
   (`core/formats.compaction_config_keys`), `version/create`, the register judge (`table_bases.judge_registered_table`)
-  and the restore door (`dataplane.refuse_a_restore_carrying_refused_config`) refuse every such key ([[LH-538]]).
+  and the restore door (`tables.writes.refuse_a_restore_carrying_refused_config`) refuse every such key ([[LH-538]]).
 - **Maintenance sizes by policy, never by a name.** The due list plans a compaction at the #50 policy's
   `target_rows_per_fragment`, else Lance's own sizing. A size guessed from a path or a label would be applied silently
   forever, so nothing derives one.
@@ -918,7 +918,7 @@ governing their data. The project-scoped surface is the console's project page, 
   the caller's scope, and `rask.idempotency_answer`, the response's fields besides the version; neither may ride a stock
   commit; a commit carrying the key and no answer is answered from its transaction, never a 500) and a takeover reads
   the ref's versions since that claim for it, answering from the commit it finds ([[LH-577]],
-  `dataplane.committed_under_key`, `endpoints.data._keyed_table_write`). Each records its answer right after its commit,
+  `tables.writes.committed_under_key`, `endpoints.data._keyed_table_write`). Each records its answer right after its commit,
   before the lineage emit, so a failure after the commit is answered on resend rather than run again.
   Every other keyed door claims through `KeyedDoor.begin(target=, takeover=, captured=)`, the key bound to the route
   that matched (`door_endpoint`), and `takeover` is required (`Takeover`): JUDGED (a judge, `Announcer.landed`: answered
@@ -945,7 +945,7 @@ governing their data. The project-scoped surface is the console's project page, 
   a strict `{str: str}` that cannot carry a null — which left table properties with no delete at all,
   and `str(None)` writing the literal string `"None"` onto the table. Since #78 a `null` value DELETES
   the key: no-null bodies stay on the native spec op, a body with any null routes to
-  `dataplane.update_schema_metadata` (pylance's `update_schema_metadata`, the same dialect
+  `tables.schema.update_schema_metadata` (pylance's `update_schema_metadata`, the same dialect
   `update_field_metadata` already speaks). **Never `replace=True`** — the map a caller holds came from
   `read_schema_metadata`, which excludes `lineage.*` and `rask.*`, so a replace silently destroys the #21
   self-describing coordinates. **Those two namespaces are the platform's** ([[LH-208]],
@@ -1127,11 +1127,11 @@ governing their data. The project-scoped surface is the console's project page, 
   `vending.classified_in_any_ref` finds a label on any field, nested ones included, on main or on any branch: a
   credential for any ref reads every ref's files (a stock client opens a branch with the table's credential; a branch
   reads its parent's fragments through a base, `lance_docs/lance/format/table/layout.md` § Shallow Clone). A label never leaves a
-  field another way: `alter_columns` and `drop_columns` commit with `keeps_labels` (`dataplane.commit_stamped`), which
+  field another way: `alter_columns` and `drop_columns` commit with `keeps_labels` (`tables.commits.commit_stamped`), which
   refuses 400 a commit losing or changing a field's `rask.*` keys by Lance field id (a same-type re-type re-mints the id
   with no metadata, measured on pylance 13.0.0), as `version/create` already refuses for a stock commit; an
   `add_columns` or `update` expression that reads a classified column asks `can_classify`, Lance itself telling which
-  columns it reads (`dataplane.expressions_reading_a_label` plans it with and without the labelled columns); and a
+  columns it reads (`tables.commits.expressions_reading_a_label` plans it with and without the labelled columns); and a
   create, through the door (on the parent namespace's `can_classify`) or a first `version/create` (on the table's),
   that carries a label asks what labelling asks. A vend whose table cannot be opened is refused, never read as
   unlabelled (`vending._open_vended_ref`, [[LH-572]]): an outage answers 503 (code 17) and a committed version that
@@ -1163,7 +1163,7 @@ governing their data. The project-scoped surface is the console's project page, 
   sanctioned, and no added file through a base; a new fragment naming a held file, no file, or (on an Append) an
   overlay, a deletion file or row ids below the table's `next_row_id`; each added file well formed, present at its
   declared size and agreeing with its footer, at the table's file version ([[LH-211]], `client_fragments`); blob
-  sidecars against the table's recorded external bases, every descriptor wherever its blob field lies beneath a Struct, List or LargeList ([[LH-539]]); the primary key across new rows and carried rows (`primary_keys.refuse_repeats_in_version`, which every catalog door's commit meets too in `dataplane.commit_stamped`, [[LH-540]]); a
+  sidecars against the table's recorded external bases, every descriptor wherever its blob field lies beneath a Struct, List or LargeList ([[LH-539]]); the primary key across new rows and carried rows (`primary_keys.refuse_repeats_in_version`, which every catalog door's commit meets too in `tables.commits.commit_stamped`, [[LH-540]]); a
   rewrite's `require_compactable`. The finalize is announced with `emit_measured_write`. A lost answer is Lance's own
   to recover ([[LH-491]], `verify_commit_outcome` in Lance's `rust/lance/src/io/commit.rs` at v13.0.0): it reads the
   version back and keeps the commit only when the inline transaction there is the one it staged, so the finalize must
@@ -1202,7 +1202,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (`base_registry.release_clone_sources`, `forget_base_record`), and keeps a tag the location's claim names another
   table for (a clone registered there since holds one of the same name); a deregister that cannot delete it answers
   503 PartiallyApplied with the location still held. While a tag stands, a destructive drop of the source refuses 409
-  code 19 (`dataplane.require_no_clone_reading`), a destroying cascade removes each source after the clones it removes
+  code 19 (`tables.destroy.require_no_clone_reading`), a destroying cascade removes each source after the clones it removes
   with it and refuses 409 code 19 while a clone outside it reads one of its tables (`clone_sources.destroy_order`), and
   the trash credentials door vends no session to delete a trashed source's bytes. **A failed end is finished by the
   record its door filed** (owner 2026-11-10, "Intent record"; ADR 0198's amendment of that day): each of the four doors
@@ -1235,7 +1235,7 @@ governing their data. The project-scoped surface is the console's project page, 
 - **A write's lineage event names the commit that write made, never a reopen** ([[LH-214]]).
   `lineage_deps.emit_measured_write` takes `pin_version` and `branch` with no default: a new write door
   passes its handle's `version` after the commit, its response's `version`, or
-  `dataplane.committed_version(transaction_id, branch=...)` (the spec's `DescribeTransaction` on main; a
+  `tables.versions.committed_version(transaction_id, branch=...)` (the spec's `DescribeTransaction` on main; a
   bounded walk of the branch's own handle on a branch, because the `dir` `describe_transaction` reads
   main only, measured on pylance 12.0.0). A branch write also carries `lance.branchIdentifier`, the last
   uuid of pylance's `branch_identifier` chain, because a recreated branch restarts its numbering. Pinned
@@ -1303,7 +1303,7 @@ governing their data. The project-scoped surface is the console's project page, 
   whole). The source's predicate never judges a derived table. A reader is shown a derived table (its uuid, and its edge
   name in the detail) only while holding `can_get_metadata` on it; the rest are counted in one `derived` surface, in the
   report and the obligation views alike (`erasure.shown`). Each tag the verification drops is announced as an untargeted
-  `table_tag_deleted` control event naming the tag, the ref it pinned (`dataplane.tag_event_ref`, the tag door's own) and
+  `table_tag_deleted` control event naming the tag, the ref it pinned (`tables.versions.tag_event_ref`, the tag door's own) and
   the obligation, and listed in `report.untagged`. A `follows` naming no recorded obligation is refused 400. A catalog
   keeping no provenance namespace walks the input record alone. Pinned by
   `tests/integration/test_an_erasure_finds_every_table_derived_from_a_source.py` (live catalog and lineage) and
@@ -1399,7 +1399,7 @@ governing their data. The project-scoped surface is the console's project page, 
   trash purge deletes a dropped table's data directories after its root and before the catalog forgets its base record, and
   so does every catalog door that ends a table with its bytes (`lakehouse.records.data_directories`, one rule for
   which directories: a `data` entry on a plain base whose claim names the table, held or released by it): a destructive
-  drop and namespace cascade (`dataplane.destroy_table`, after the root, inside its residue record), a purging
+  drop and namespace cascade (`tables.destroy.destroy_table`, after the root, inside its residue record), a purging
   warehouse cascade (`_detach_table` before the deregister, so a failed delete leaves the table for the re-issue;
   `_forget_trashed` before the record) and a create's undo. A cascade keeping its bucket keeps the directories. Pinned by
   `tests/integration/test_a_data_bases_bytes_are_reclaimed.py`.
@@ -1481,7 +1481,7 @@ governing their data. The project-scoped surface is the console's project page, 
   catalog re-declares it on every table it writes (`catalog.core.provenance_stamp.declare_dataset_id`, which DROPS an
   inherited id when none is given). When
   you check a declared-id chain, ask not "is an id stamped" but "whose uuid, on the table that derived it": the catalog
-  stamps the uuid its location claim holds, never the name (`dataplane._named_by_its_uuid`, ADR 0173 §10).
+  stamps the uuid its location claim holds, never the name (`tables.creation._named_by_its_uuid`, ADR 0173 §10).
 
   **EVERY TABLE IS WRITTEN THROUGH THE CATALOG, and the writer is the user's pipeline** (ADR 0154, ADR 0155): a table
   is a `table:` object with a record and ownership tuples from its first row, and the catalog announces every committed
@@ -1539,7 +1539,7 @@ governing their data. The project-scoped surface is the console's project page, 
 - **A tag names a version within ONE branch's history, so no reader takes its version alone** ([[LH-284]]). A tag
   file records `branch` beside `version` (`lance_docs/lance/format/table/branch_tag.md` § Tag File Format), branch
   histories are numbered independently, and pylance's `tags.get_version` answers the version alone (measured on pylance
-  13.0.0: a tag on `("work", 3)` answers 3). Every catalog reader resolves a tag through `dataplane.tag_reference`,
+  13.0.0: a tag on `("work", 3)` answers 3). Every catalog reader resolves a tag through `tables.refs.tag_reference`,
   which reads both. DescribeTable refuses a tag on a branch with the code `branch` gets (406, code 0), since
   DescribeTableResponse has no field to name the branch. Pinned by `tests/integration/test_moto_s3.py::test_describe_at_tag_resolves_via_the_catalog`.
 - **The manifest's feature flags ARE reachable, and they are the refusal gate (#64).**

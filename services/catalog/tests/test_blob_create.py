@@ -29,7 +29,7 @@ from lance_namespace import (
 
 from catalog.core import blobs
 from catalog.services import table_claims
-from catalog.services.dataplane import create_table
+from catalog.services.tables.creation import create_table
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 
@@ -186,7 +186,7 @@ def test_a_create_whose_write_and_rollback_both_fail_answers_the_write_and_logs_
     real = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(real, "db")
 
-    with caplog.at_level("ERROR", logger="catalog.services.dataplane"), pytest.raises(RuntimeError, match="refused the write"):
+    with caplog.at_level("ERROR", logger="catalog.services.tables.creation"), pytest.raises(RuntimeError, match="refused the write"):
         create_table(
             cast("LanceNamespace", _DropRefused(real)),
             StorageOptions(),
@@ -197,7 +197,7 @@ def test_a_create_whose_write_and_rollback_both_fail_answers_the_write_and_logs_
             registry=None,
         )
 
-    logged = [(record.getMessage(), getattr(record, "error", None)) for record in caplog.records if record.name == "catalog.services.dataplane"]
+    logged = [(record.getMessage(), getattr(record, "error", None)) for record in caplog.records if record.name == "catalog.services.tables.creation"]
     assert logged == [("create_rollback_drop_failed", "the store refused the delete")]
 
 
@@ -212,7 +212,7 @@ def test_a_create_whose_write_and_rollback_both_fail_answers_the_write_and_logs_
 #
 # Every table here is NAMESPACED, and that is required rather than tidy: a root-namespace table is stored
 # under V1 compatibility naming (`<name>.lance`, where the location IS the name), and renaming one is
-# refused — see `dataplane.rename_table` and the suite that pins the refusal.
+# refused — see `tables.rename.rename_table` and the suite that pins the refusal.
 
 
 # --- rename data-safety regressions (audit 2026-07-14) ------------------------------------------------ #
@@ -221,7 +221,7 @@ def test_a_create_whose_write_and_rollback_both_fail_answers_the_write_and_logs_
 def test_rename_rejects_a_blank_name_and_keeps_the_source(tmp_path: Path) -> None:
     """A blank/whitespace name used to declare the identifier ``['']``, byte-copy the dataset to
     ``<root>/.lance`` and DESTROY the named source — all while returning 200. It must be a 400."""
-    from catalog.services.dataplane import rename_table
+    from catalog.services.tables.rename import rename_table
 
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "db")
@@ -242,7 +242,7 @@ def test_rename_rejects_a_blank_name_and_keeps_the_source(tmp_path: Path) -> Non
 
 
 def test_rename_onto_itself_is_rejected(tmp_path: Path) -> None:
-    from catalog.services.dataplane import rename_table
+    from catalog.services.tables.rename import rename_table
 
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "db")
@@ -264,7 +264,7 @@ def test_rename_onto_itself_is_rejected(tmp_path: Path) -> None:
 def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> None:
     """A declared stub is TAKEN, never adopted. Adopting one would let two concurrent renames both claim
     the same name and both retire their sources, leaving two ids over one dataset and neither source."""
-    from catalog.services.dataplane import rename_table
+    from catalog.services.tables.rename import rename_table
 
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "media")
@@ -297,7 +297,8 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
     """
     from lance_namespace import DeregisterTableRequest
 
-    from catalog.services import dataplane, table_claims
+    from catalog.services import table_claims
+    from catalog.services.tables import rename
 
     ns = connect("dir", {"root": str(tmp_path)})
     _declare_namespace(ns, "media")
@@ -311,7 +312,7 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
     # is an `invalid-assignment` to `ty`, and the estate's rule is to type it rather than suppress it.
     monkeypatch.setattr(ns, "deregister_table", _fails)
     with pytest.raises(OSError, match="rustfs 503"):
-        dataplane.rename_table(
+        rename.rename_table(
             ns,
             table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["media", "a"]),
             "b",
@@ -328,7 +329,7 @@ def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypa
         ns.describe_table(DescribeTableRequest(id=["media", "b"]))
     assert _open(ns, ["media", "a"]).read_blobs("payload", indices=[0])[0][1] == b"x"
     assert (
-        dataplane.rename_table(
+        rename.rename_table(
             ns,
             table_claims.resolve(ns, ClaimStore(control_root=str(tmp_path)), ["media", "a"]),
             "c",

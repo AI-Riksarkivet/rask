@@ -1,6 +1,6 @@
 """A door's commit racing another commit lands, planned again on the version that won; none answers a server fault.
 
-Every column op commits stamped ([[LH-497]], `dataplane.commit_stamped`): Lance's own operation is planned on the
+Every column op commits stamped ([[LH-497]], `tables.commits.commit_stamped`): Lance's own operation is planned on the
 latest version and finalized as exactly the next one through the backend's put-if-not-exists, and a writer that lost
 that version plans again on the new latest. So six concurrent `add_columns` on one table, each adding its own column,
 all land, in six consecutive versions. A writer losing every one of its attempts answers 14 `ConcurrentModification`
@@ -35,17 +35,11 @@ from lance_namespace import (
 )
 
 from catalog.services import table_claims
-from catalog.services.dataplane import (
-    add_columns,
-    committed_manifest_digest,
-    create_table,
-    delete_from_table,
-    drop_columns,
-    insert_into_table,
-    restore,
-    update_table,
-)
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables.commits import committed_manifest_digest
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.schema import add_columns, drop_columns
+from catalog.services.tables.writes import delete_from_table, insert_into_table, restore, update_table
 from lakehouse.records import base_registry, commit_records, file_identities
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
@@ -169,7 +163,7 @@ def test_a_lost_finalize_whose_version_is_ambiguous_keeps_what_it_wrote(table: D
         return "" if version in lost else committed_manifest_digest(location, so, version)
 
     monkeypatch.setattr(table_claims.DoorTable, "finalize_version", loses_once)
-    monkeypatch.setattr("catalog.services.dataplane.committed_manifest_digest", ambiguous)
+    monkeypatch.setattr("catalog.services.tables.commits.committed_manifest_digest", ambiguous)
 
     update_table(table, StorageOptions(), UpdateTableRequest(id=TABLE_ID, predicate="id >= 0", updates=[["id", "id + 10"]]), transaction_properties=STAMP)
 
@@ -221,7 +215,7 @@ def test_a_finalize_refused_after_its_version_landed_keeps_that_commits_record(
 
     monkeypatch.setattr(table_claims.DoorTable, "finalize_version", landed_then_refused)
     if unread:
-        monkeypatch.setattr("catalog.services.dataplane.committed_manifest_digest", unanswered)
+        monkeypatch.setattr("catalog.services.tables.commits.committed_manifest_digest", unanswered)
     request = UpdateTableRequest(id=TABLE_ID, predicate="id >= 0", updates=[["id", "id + 10"]])
     try:
         outcome: int | type[Exception] = update_table(table, StorageOptions(), request, transaction_properties={**STAMP, "rask.operation": "update"}).version
@@ -309,7 +303,7 @@ def test_a_commit_lands_while_insert_appends_in_a_tight_loop_and_every_append_la
     and the delete each lose another way: at the finalize, and inside Lance's own retries. Each takes its ref's turn after
     its first lost race, the appends wait it out, and every append still lands. The change lands within 10 s: shown the
     versions committed since its plan, Lance spends its own retries on them even with the turn (measured on pylance 13.0.0,
-    a drop and a delete each took 30.4-30.5 s), so the namespace a change is planned through (``dataplane.captured``)
+    a drop and a delete each took 30.4-30.5 s), so the namespace a change is planned through (``tables.commits.captured``)
     answers none after the one planned on."""
     seeded = pa.table({"id": pa.array([0], pa.int64()), "v": pa.array([0], pa.int64()), "w": pa.array([0], pa.int64())})
     registry = base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={})
@@ -368,7 +362,7 @@ def test_a_column_named_concurrent_is_still_a_MISSING_COLUMN(table: DoorTable) -
     """
     from lance_namespace import AlterTableDropColumnsRequest, TableColumnNotFoundError
 
-    from catalog.services.dataplane import drop_columns
+    from catalog.services.tables.schema import drop_columns
 
     with pytest.raises(TableColumnNotFoundError) as caught:
         drop_columns(table, StorageOptions(), AlterTableDropColumnsRequest(id=TABLE_ID, columns=["concurrent"]), transaction_properties=STAMP)

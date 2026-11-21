@@ -489,7 +489,7 @@ def _location_strictly_within(outer: tuple[str, str], inner: tuple[str, str]) ->
     """True iff ``inner`` lies BENEATH ``outer`` — the approved base itself is not a table's directory ([[LH-252]]).
 
     Every table on an approved data base registers its own directory under it
-    (``dataplane.table_data_bases``), so a grant at the approved base is a grant on every sibling's
+    (``tables.creation.table_data_bases``), so a grant at the approved base is a grant on every sibling's
     fragments. A manifest declaring the approved base itself is therefore granted nothing: the vend
     reaches one table's directory or no part of the base.
     """
@@ -570,7 +570,7 @@ def labelled_fields(dataset: Any) -> dict[int, tuple[str, dict[str, str]]]:  # n
 
     KEYED BY FIELD ID, the identity Lance gives a field: a rename keeps it and its metadata, while a re-type re-mints the
     id with no metadata (measured on pylance 13.0.0), which is what a door's commit is held to
-    (``dataplane.commit_stamped``'s ``keeps_labels``).
+    (``tables.commits.commit_stamped``'s ``keeps_labels``).
 
     Raises:
         OSError: The dataset's schema could not be read.

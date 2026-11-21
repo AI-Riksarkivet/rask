@@ -32,11 +32,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import lance
 import pyarrow as pa
 import pytest
 from lance_namespace import TableAlreadyExistsError
 
-from catalog.services import dataplane
+from catalog.services.tables import creation
 from lakehouse.storage.options import StorageOptions
 
 
@@ -54,10 +55,10 @@ def _write_raising(message: str) -> Any:
 def test_a_collision_answers_conflict_and_names_the_location(monkeypatch: pytest.MonkeyPatch) -> None:
     """The measured message, verbatim from the live 500."""
     uri = "s3://bind86-wh/medallion/silver"
-    monkeypatch.setattr(dataplane.lance, "write_dataset", _write_raising(f"Dataset already exists: {uri}"))
+    monkeypatch.setattr(lance, "write_dataset", _write_raising(f"Dataset already exists: {uri}"))
 
     with pytest.raises(TableAlreadyExistsError) as caught:
-        dataplane._write_blob(_arrow_table(), uri, StorageOptions(), mode="create", external_blob_bases=[])
+        creation._write_blob(_arrow_table(), uri, StorageOptions(), mode="create", external_blob_bases=[])
 
     detail = str(caught.value)
     assert uri in detail, f"the conflict does not name the location it collided on: {detail!r}"
@@ -66,9 +67,10 @@ def test_a_collision_answers_conflict_and_names_the_location(monkeypatch: pytest
 def test_an_unrelated_os_error_is_still_a_500(monkeypatch: pytest.MonkeyPatch) -> None:
     """A translation that swallows every OSError turns real infra failures into client errors — the
     reason the sibling leg in this handler matches a phrase rather than a word."""
-    monkeypatch.setattr(dataplane.lance, "write_dataset", _write_raising("Connection reset by peer"))
+    monkeypatch.setattr(lance, "write_dataset", _write_raising("Connection reset by peer"))
 
     with pytest.raises(OSError) as caught:
-        dataplane._write_blob(_arrow_table(), "s3://b/t", StorageOptions(), mode="create", external_blob_bases=[])
+        creation._write_blob(_arrow_table(), "s3://b/t", StorageOptions(), mode="create", external_blob_bases=[])
 
     assert not isinstance(caught.value, TableAlreadyExistsError), "an infra OSError was mislabelled a conflict"
+    assert "Connection reset by peer" in str(caught.value), "the store's own failure must reach the caller unchanged"

@@ -167,7 +167,7 @@ class UuidReader(Protocol):
     async def table(self, segments: list[str], *, location: str | None = None, uuid: str | None = None) -> DatasetUuids: ...
 
     async def branch_identifier(self, segments: list[str], branch: str) -> str | None:
-        """The incarnation of the table's ``branch`` now (``dataplane.branch_identifier``), or ``None``. Never raises."""
+        """The incarnation of the table's ``branch`` now (``tables.versions.branch_identifier``), or ``None``. Never raises."""
         ...
 
 
@@ -492,7 +492,7 @@ class EmitFields(TypedDict, total=False):
     so an event names the project the warehouse's record names and no other.
     """
 
-    #: When the commit was made (``dataplane.CommitReadback.committed_at``), the event's ``eventTime``; now when unknown.
+    #: When the commit was made (``tables.versions.CommitReadback.committed_at``), the event's ``eventTime``; now when unknown.
     event_time: str | None
     #: The physical Lance URI → the standard ``dataSource`` facet.
     source_uri: str | None

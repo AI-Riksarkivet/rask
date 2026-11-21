@@ -7,7 +7,7 @@ in. The failure is not theoretical: `rask-maintenance` was OOMKilled (exit 137) 
 why maintenance already threads `shared_lance_session()` and the caps are clamped to the cgroup.
 
 THE CATALOG IS THE ONE THAT OPENS PER REQUEST, which is what makes it the next one to convert:
-`namespace.py`, `dataplane.py`, `publication.py`, `vending.py`, `models.py` and the credentials door all
+`namespace.py`, `tables/`, `publication.py`, `vending.py`, `models.py` and the credentials door all
 open on the request path, so the mint-and-discard happens per call rather than per sweep.
 
 A SESSION IS NOT A HANDLE CACHE, and the distinction is the whole reason this is safe to do. Caching a

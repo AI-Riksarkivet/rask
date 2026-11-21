@@ -33,7 +33,8 @@ from catalog.api.v1.endpoints import erasure as door
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses
-from catalog.services.dataplane import create_table, read_arrow_body
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.writes import read_arrow_body
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.derived_tables import EDGES
 from lakehouse.events.control_emit import NoopControlEmitter

@@ -31,8 +31,9 @@ import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, CreateTableTagRequest, connect
 
-from catalog.services.dataplane import create_table, create_tag
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.refs import create_tag
 from lakehouse.records import base_registry
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions

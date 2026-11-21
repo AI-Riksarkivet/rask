@@ -41,7 +41,8 @@ from catalog.api.ticks import Tick
 from catalog.core.config import CatalogLineageSettings, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.lineage_emit import LineageEmitter, emit_write_event, run_inputs
-from catalog.services import commit_reconcile, dataplane, erasure_derived, native, table_claims
+from catalog.services import commit_reconcile, erasure_derived, native, table_claims
+from catalog.services.tables import versions
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
@@ -191,7 +192,7 @@ async def _announce(
 ) -> None:
     """Announce ``commit`` as its door announced it, for the author the catalog recorded authorizing it, in the trace of the
     request that made it (ADR 0209), and audit the announcement."""
-    readback = await run_in_threadpool(dataplane.read_version_and_schema, table.location, so, table.segments, commit.version, commit.branch)
+    readback = await run_in_threadpool(versions.read_version_and_schema, table.location, so, table.segments, commit.version, commit.branch)
     with continuing(commit.traceparent):
         await emit_write_event(
             emitter,

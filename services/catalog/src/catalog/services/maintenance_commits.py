@@ -9,7 +9,7 @@ A DISARM IS THE CATALOG'S OWN SHAPE. Every door's commit disarms its ref first, 
 ``lance.auto_cleanup.*`` keys and nothing else, so the commit reconciler counts no author for one
 (:mod:`catalog.services.commit_reconcile`); the door's authorization is what records who asked.
 
-A RAISE IS A STAMPED COMMIT (:func:`dataplane.commit_stamped`), so the catalog records its caller as the author of the
+A RAISE IS A STAMPED COMMIT (:func:`tables.commits.commit_stamped`), so the catalog records its caller as the author of the
 version (ADR 0187), as for any door's commit. The feed announces none, since it changes no row, so the reconciler asks
 only that its author was recorded, and counts a raise that carries none.
 
@@ -22,7 +22,8 @@ import logging
 import time
 from typing import Final
 
-from catalog.services import dataplane, table_claims
+from catalog.services import table_claims
+from catalog.services.tables import commits
 from lakehouse.lancekit import auto_cleanup
 from lakehouse.lancekit.listing_floor import FLOOR_KEY
 from lakehouse.storage.options import StorageOptions
@@ -61,8 +62,8 @@ def raise_listing_floor(table: table_claims.DoorTable, so: StorageOptions, *, tr
         TableChangedError: The table changed since the door's resolution.
     """
     raised_at = time.time()
-    version, _ = dataplane.commit_stamped(
-        table, so, transaction_properties, dataplane.captured(table, so, lambda handle: handle.update_config({FLOOR_KEY: str(raised_at)}), branch=None)
+    version, _ = commits.commit_stamped(
+        table, so, transaction_properties, commits.captured(table, so, lambda handle: handle.update_config({FLOOR_KEY: str(raised_at)}), branch=None)
     )
     log.info("listing_floor_raised", extra={"table": table.segments, "version": version, "raised_at": raised_at})
     return version, raised_at

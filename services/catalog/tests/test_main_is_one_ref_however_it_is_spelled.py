@@ -2,7 +2,7 @@
 
 Lance records main as null — a tag's ``branch`` and a branch's ``parentBranch``
 (``lance_docs/lance/format/table/branch_tag.md`` "Tag File Format" / "Branch Metadata File Format") — while a request may
-name it ``"main"``. ``dataplane.recorded_branch`` folds both spellings into Lance's, and the catalog
+name it ``"main"``. ``version_retention.recorded_branch`` folds both spellings into Lance's, and the catalog
 compares refs through it, so a second spelling of main can never read as a second branch. A value that
 is neither a str nor None is the caller's type error, not a ref.
 """
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from catalog.services.dataplane import recorded_branch
+from catalog.core.version_retention import recorded_branch
 
 
 @pytest.mark.parametrize(("spelled", "recorded"), [(None, None), ("main", None), ("work", "work")])

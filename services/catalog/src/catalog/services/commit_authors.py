@@ -2,7 +2,7 @@
 
 Every commit of an operation the doors announce records the caller its door authenticated
 (:mod:`lakehouse.records.commit_records`), and the commit reconciler signs a re-announcement only for that record. A
-detached commit (``dataplane.commit_stamped``) and a stock commit through ``version/create`` record before their
+detached commit (``tables.commits.commit_stamped``) and a stock commit through ``version/create`` record before their
 finalize. The create door's ``write_dataset`` and an unkeyed ``/insert`` let Lance commit in one call, and Lance mints the
 transaction's uuid inside it, so the author is recorded just after the version lands, under the transaction its files
 were recorded under (:func:`catalog.services.committed_files.record_landed`): a crash or a store failure in between leaves

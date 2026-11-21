@@ -14,7 +14,7 @@ raises what that library raises: `import lance` registers `lance.blob.v2`, whose
 TypeError for a storage type it refuses. Lance refuses metadata that is not UTF-8 with an untyped
 ValueError on write (pylance 12.0.0).
 
-So both doors decode through `dataplane.read_arrow_body`, over the fleet's one validating decoder in
+So both doors decode through `tables.writes.read_arrow_body`, over the fleet's one validating decoder in
 `lakehouse.arrow_ipc`, and every such body answers 400 code 13 with nothing written. Driven
 over HTTP against a real `dir` backend.
 """

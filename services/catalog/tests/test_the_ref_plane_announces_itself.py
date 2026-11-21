@@ -41,7 +41,7 @@ from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import branches as branch_door
 from catalog.api.v1.endpoints import tags as tag_door
 from catalog.core.identifiers import with_minted_uuid
-from catalog.services.dataplane import create_table
+from catalog.services.tables.creation import create_table
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal

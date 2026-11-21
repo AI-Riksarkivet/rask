@@ -1801,7 +1801,7 @@ export interface paths {
          *
          *     Answers the change data feed `lance_docs/lance/format/table/row_id_lineage.md:426-454` documents, from one snapshot at
          *     the window's end, and refuses a window the version columns cannot describe; the rules and the
-         *     consumer contract live in `catalog.services.changes`, the read in `dataplane.read_changes`.
+         *     consumer contract live in `catalog.services.changes`, the read in `tables.reads.read_changes`.
          *
          *     A CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like
          *     one (§ J1), because following every row a table ever received is the most disclosing read
@@ -3352,7 +3352,7 @@ export interface paths {
          * Count Table Rows
          * @description Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
          *
-         *     Routed through `dataplane` rather than straight to `native.call` so that `branch` is honoured. It
+         *     Routed through `tables.reads` rather than straight to `native.call` so that `branch` is honoured. It
          *     was not: the parameter reached the upstream implementation, which answered from main regardless,
          *     so a branch-scoped count returned a plausible number for the wrong dataset with a 200.
          */
@@ -3458,7 +3458,7 @@ export interface paths {
         /**
          * Declare Table
          * @description Declare a new (empty) table at ``id``, at the namespace root under the uuid the catalog mints for it
-         *     (``dataplane.declare_table``, [[LH-520]]), then seed the caller's FGA ownership and emit a versionless
+         *     (``tables.creation.declare_table``, [[LH-520]]), then seed the caller's FGA ownership and emit a versionless
          *     DECLARE_TABLE marker (the table's first provenance — who reserved it + where).
          *
          *     The catalog chooses a declared table's location, which the spec leaves to the implementation
@@ -3720,7 +3720,7 @@ export interface paths {
          *
          *     Refused BEFORE the drop, because the whole point is that the drop would otherwise succeed against the wrong
          *     object. The drop is Lance's own on the handle opened at the door's location, committed with the door's stamp
-         *     ([[LH-497]], `dataplane.drop_index`), with the `dir` backend's own refusals of a system index and a missing one.
+         *     ([[LH-497]], `tables.writes.drop_index`), with the `dir` backend's own refusals of a system index and a missing one.
          */
         post: operations["drop_table_index_v1_table__id__index__index_name__drop_post"];
         delete?: never;
@@ -3892,7 +3892,7 @@ export interface paths {
          *     makes rename a first-class Metadata op. It is served here as what the spec describes: the destination id
          *     is registered at the SOURCE's existing location and the source id is deregistered. **No data byte is
          *     read, written or deleted**, so the cost is O(1) rather than the dataset's size — see
-         *     ``dataplane.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one
+         *     ``tables.rename.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one
          *     shape (a V1 root-namespace table) it refuses.
          *
          *     Within its namespace the caller must hold ``can_drop`` on the source (owner tier, gated by the router

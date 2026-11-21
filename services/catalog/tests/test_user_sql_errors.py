@@ -30,8 +30,9 @@ from lance_namespace import (
     connect,
 )
 
-from catalog.services.dataplane import create_table, delete_from_table, update_table
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.writes import delete_from_table, update_table
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table

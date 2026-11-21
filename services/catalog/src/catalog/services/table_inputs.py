@@ -4,7 +4,7 @@ A run names its inputs in its commit (``rask.inputs``, ADR 0156 C2), and the cat
 under the committer's grant, before the commit is finalized (``catalog.api.fga_deps.require_declared_inputs``). This
 record keeps what that resolution found: for each writing table, keyed by its uuid, every input uuid its commits declared,
 with when the catalog first recorded it and the version and branch of the input that declaration named. The writing
-commit's own version is not known before a door commits (``dataplane.commit_stamped`` plans it on the ref's latest version
+commit's own version is not known before a door commits (``tables.commits.commit_stamped`` plans it on the ref's latest version
 and plans again when another writer takes it), so the record names the input's, which a commit names before it lands.
 
 **WHY THE CATALOG KEEPS ITS OWN.** An erasure names the tables derived from the erased one (ADR 0178), and lineage's edge

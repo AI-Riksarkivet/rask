@@ -531,7 +531,7 @@ def entries_for_registration(
 def _beneath_an_approved_base(path: str, data_allowlist: Sequence[str]) -> bool:
     """Whether ``path`` is ONE directory beneath an approved data base, in its store — a table's directory, never the base.
 
-    One level, the shape a create mints (``dataplane.table_data_bases``): every table's directory is then
+    One level, the shape a create mints (``tables.creation.table_data_bases``): every table's directory is then
     a sibling of every other's, so whether two tables overlap is whether they name the same directory —
     the question the directory's location claim answers exactly ([[LH-252]]).
     """

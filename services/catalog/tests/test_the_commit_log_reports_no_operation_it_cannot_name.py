@@ -30,8 +30,8 @@ import lance
 import pyarrow as pa
 import pytest
 
-from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable, ResolvedTable
+from catalog.services.tables import versions
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 
@@ -57,7 +57,7 @@ def compacted(tmp_path: Path) -> DoorTable:
 
 
 def _history(table: DoorTable) -> dict[int, Any]:
-    rows = dataplane.table_history(table, StorageOptions())
+    rows = versions.table_history(table, StorageOptions())
     return {int(row["version"]): row["operation"] for row in rows}
 
 

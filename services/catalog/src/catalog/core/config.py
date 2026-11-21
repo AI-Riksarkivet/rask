@@ -557,7 +557,7 @@ class Settings(
     # this list — a caller can never point a base at an arbitrary bucket (data-exfil / rogue-write door).
     # Empty (default) = the feature is off and every create is byte-identical to today.
     # A table registers its OWN directory beneath each base it names (`<base>/<directory>`,
-    # `dataplane.table_data_bases`), and a vend grants that directory and never the base ([[LH-252]]).
+    # `tables.creation.table_data_bases`), and a vend grants that directory and never the base ([[LH-252]]).
     # Every base here is on the catalog's own store and part of its tables' storage, reached under the catalog's own
     # identity as a table root is ([[LH-286]]).
     multibase_data_bases: str = Field(default="", alias="LANCE_MULTIBASE_DATA_BASES")

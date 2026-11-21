@@ -36,8 +36,9 @@ from lance_namespace import CreateNamespaceRequest, MergeInsertIntoTableRequest,
 from tables_by_name import open_by_name
 
 from catalog.core.namespace import open_resolved_dataset_unchecked
-from catalog.services.dataplane import create_table, merge_insert_into_table
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.writes import merge_insert_into_table
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
 from tests.door_tables import door_table

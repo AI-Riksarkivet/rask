@@ -43,7 +43,7 @@ def blob_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Tes
 
     from catalog.api.dependencies import get_namespace, get_storage_options
     from catalog.main import app
-    from catalog.services.dataplane import create_table
+    from catalog.services.tables.creation import create_table
     from catalog.services.warehouses import ensure_catalog_row
 
     ns = connect("dir", {"root": str(tmp_path)})
@@ -180,7 +180,7 @@ def test_get_blob_version_param_over_http(blob_client: TestClient, tmp_path: Pat
     # Overwrite bumps the head; ?version=1 pins the ORIGINAL bytes; a missing version is a 404
     # problem+json (not the raw lance ValueError as a 500); version=0 fails validation.
     from catalog.api.dependencies import get_namespace
-    from catalog.services.dataplane import create_table as recreate
+    from catalog.services.tables.creation import create_table as recreate
 
     ns = blob_client.app.dependency_overrides[get_namespace]()
     recreate(ns, StorageOptions(), ["lance_catalog", "db", "clips"], _blob_table([b"replacement"]), root=str(tmp_path), mode="overwrite", registry=None)

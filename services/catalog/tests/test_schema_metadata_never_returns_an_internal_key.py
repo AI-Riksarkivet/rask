@@ -1,6 +1,6 @@
 """The schema-metadata write answers the table's map without the internal `lineage.*` keys ([[LH-019]]).
 
-Every body the door takes is written through `dataplane.update_schema_metadata`, on the handle opened at the door's
+Every body the door takes is written through `tables.schema.update_schema_metadata`, on the handle opened at the door's
 location ([[LH-530]]), and pylance's `update_schema_metadata` answers the whole map, internal keys included (measured
 on pylance 11.0.0 with `lineage.run_id` planted on the table: the native op answered `{'lineage.run_id': 'r-123',
 'owner': …}`).
@@ -19,8 +19,8 @@ import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, connect
 
-from catalog.services import dataplane
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables import creation, schema
 from lakehouse.records import base_registry
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
@@ -40,7 +40,7 @@ INTERNAL = "lineage.run_id"
 def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
     namespace = connect("dir", {"root": str(tmp_path / "data")})
     namespace.create_namespace(CreateNamespaceRequest(id=TABLE_ID[:-1]))
-    dataplane.create_table(
+    creation.create_table(
         namespace,
         StorageOptions(),
         TABLE_ID,
@@ -50,7 +50,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace is runtime-only
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),
         holder="$".join(TABLE_ID),
     )
-    dataplane.update_schema_metadata(
+    schema.update_schema_metadata(
         door_table(namespace, ClaimStore(control_root=str(tmp_path / "control")), TABLE_ID, announces=lambda _operation: True),
         StorageOptions(),
         {INTERNAL: "r-123"},
@@ -66,6 +66,6 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 
 
 def test_the_write_answers_the_map_without_the_internal_key(table: DoorTable) -> None:
-    answer, _ = dataplane.update_schema_metadata(table, StorageOptions(), {"owner": "bob"}, transaction_properties=STAMP)
+    answer, _ = schema.update_schema_metadata(table, StorageOptions(), {"owner": "bob"}, transaction_properties=STAMP)
 
     assert answer == {"owner": "bob"}, f"the write answered the internal key, or lost the caller's: {answer}"

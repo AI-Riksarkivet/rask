@@ -36,7 +36,9 @@ lakehouse = { workspace = true }
 
 # The catalog's import contracts, run by `make lint-imports` (ADR 0224). Lance's failures read as the spec's refusals
 # (`core.lance_refusals`) are the floor a caller's expression is bounded on (`core.query_bounds`): the bound reads a
-# caller's SQL through the refusal that answers it, and no refusal asks a bound.
+# caller's SQL through the refusal that answers it, and no refusal asks a bound. The table operations
+# (`services.tables`) import one way: the doors' operations (writes, schema changes, a rename) over the commit path,
+# a table's creation, its destruction, its reads and its refs, which share nothing, over what a committed version says.
 [tool.importlinter]
 root_package = "catalog"
 
@@ -45,3 +47,15 @@ id = "catalog-lance-refusals-are-the-floor"
 name = "ADR 0224: a caller's expression is bounded on top of how Lance's failures read"
 type = "layers"
 layers = ["catalog.core.query_bounds", "catalog.core.lance_refusals"]
+
+[[tool.importlinter.contracts]]
+id = "catalog-table-operations-import-one-way"
+name = "ADR 0224: the catalog's table operations import one way, the doors' operations over the commit path and creation over what a version says"
+type = "layers"
+containers = ["catalog.services.tables"]
+layers = [
+    "writes | schema | rename",
+    "commits | creation | destroy | reads | refs",
+    "versions",
+]
+exhaustive = true

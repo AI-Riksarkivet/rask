@@ -88,8 +88,8 @@ and the owner mends the table or the contract. It is checked where every commit 
 | Writer | Where | Code |
 |---|---|---|
 | A stock Lance client | `POST /v1/table/{id}/version/create`, which judges the staged manifest before it is finalized | `catalog/services/managed_versions.py::judge` |
-| A catalog door (`alter_columns`, `drop_columns`, `restore`, …) | The stamped commit every door makes | `catalog/services/dataplane.py::commit_stamped` |
-| `create?mode=Overwrite` over an existing table | Before the overwrite is written | `catalog/services/dataplane.py::create_table` |
+| A catalog door (`alter_columns`, `drop_columns`, `restore`, …) | The stamped commit every door makes | `catalog/services/tables/commits.py::commit_stamped` |
+| `create?mode=Overwrite` over an existing table | Before the overwrite is written | `catalog/services/tables/creation.py::create_table` |
 
 A column is named by its path, so a rename reads as a removal. Adding a column passes. Nothing else is checked, and
 nothing is checked at any other time: the catalog holds no version back, scans no row and runs no freshness timer.

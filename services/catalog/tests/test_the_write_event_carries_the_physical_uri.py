@@ -23,6 +23,7 @@ version and the schema in ONE open, and the location is an attribute of that sam
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, cast
 
 import pytest
@@ -72,9 +73,9 @@ def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
     monkey = pytest.MonkeyPatch()
     try:
         monkey.setattr(
-            lineage_deps.dataplane,
+            lineage_deps.versions,
             "read_version_and_schema",
-            lambda *a, **k: lineage_deps.dataplane.CommitReadback(version=4, schema_fields=[], uri="s3://bucket/abc12345_db$t"),
+            lambda *a, **k: lineage_deps.versions.CommitReadback(version=4, schema_fields=[], uri="s3://bucket/abc12345_db$t"),
         )
         asyncio.run(
             lineage_deps.emit_measured_write(
@@ -96,36 +97,30 @@ def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
     assert recorder.writes[0].get("source_uri") == "s3://bucket/abc12345_db$t"
 
 
-def test_a_readback_that_could_not_open_the_dataset_stamps_no_uri() -> None:
+def test_a_readback_that_could_not_open_the_dataset_stamps_no_uri(tmp_path: Path) -> None:
     """Degrading to no facet is correct; inventing a URI is not.
 
     The write is already committed when this runs, so a failed readback must weaken the lineage
     enrichment rather than fail the request — and a `dataSource` facet pointing at a path nobody
-    confirmed would send #23 reconcile to the wrong object.
+    confirmed would send #23 reconcile to the wrong object. The location holds no dataset, so the real
+    readback's open fails.
     """
 
     from catalog.api import lineage_deps
 
     recorder = _Recording()
-    monkey = pytest.MonkeyPatch()
-    try:
-        monkey.setattr(
-            lineage_deps.dataplane, "read_version_and_schema", lambda *a, **k: lineage_deps.dataplane.CommitReadback(version=None, schema_fields=[], uri=None)
+    asyncio.run(
+        lineage_deps.emit_measured_write(
+            cast(Any, recorder),
+            ["db", "t"],
+            location=str(tmp_path / "abc12345_db$t"),
+            so=StorageOptions(),
+            token=None,
+            operation="insert",
+            pin_version=4,
+            branch=None,
+            uuids=_NoUuids(),
         )
-        asyncio.run(
-            lineage_deps.emit_measured_write(
-                cast(Any, recorder),
-                ["db", "t"],
-                location="s3://bucket/abc12345_db$t",
-                so=StorageOptions(),
-                token=None,
-                operation="insert",
-                pin_version=4,
-                branch=None,
-                uuids=_NoUuids(),
-            )
-        )
-    finally:
-        monkey.undo()
+    )
 
     assert recorder.writes and recorder.writes[0].get("source_uri") is None

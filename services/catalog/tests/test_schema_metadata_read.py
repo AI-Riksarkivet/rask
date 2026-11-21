@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pyarrow as pa
 
-from catalog.services import dataplane
+from catalog.services.tables.schema import user_schema_metadata
 
 
 def test_excludes_internal_lineage_keys() -> None:
@@ -23,5 +23,5 @@ def test_excludes_internal_lineage_keys() -> None:
             b"lineage.create_run_id": b"abc",
         },
     )
-    out = dataplane.user_schema_metadata(schema)
+    out = user_schema_metadata(schema)
     assert out == {"proof": "live"}  # only the user key survives

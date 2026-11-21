@@ -36,7 +36,7 @@ reads a misspelt knob as absent. A blob-v2 column's two placement thresholds are
 judges them; any other key on a field is Lance's own.
 
 EVERY DOOR THAT WRITES FIELD METADATA asks the same rule: the create door of its properties and payload fields, and
-every commit, a catalog door's (``dataplane.commit_stamped``) and a stock client's (``version/create``), of the keys it
+every commit, a catalog door's (``tables.commits.commit_stamped``) and a stock client's (``version/create``), of the keys it
 adds or changes (:func:`require_no_new_invalid_encoding`).
 """
 

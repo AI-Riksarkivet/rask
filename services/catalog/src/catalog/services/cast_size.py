@@ -1,6 +1,6 @@
 """What casting insert rows to a table's own column types allocates, computed before any cast runs.
 
-`dataplane.coerce_insert_arrow` casts a caller's rows to the table's types. Most casts grow a column by a
+`tables.writes.coerce_insert_arrow` casts a caller's rows to the table's types. Most casts grow a column by a
 bounded width ratio, but one that decodes a dictionary writes its value out once per row that references
 it: measured on pyarrow 25.0.0, a 656-byte insert whose million rows reference one 1,000-byte value cast
 to 1,004,000,296 bytes. So the cast is sized first, from how often each dictionary value is referenced and

@@ -31,7 +31,7 @@ from lance_namespace import (
 )
 
 from catalog.services import table_bases
-from catalog.services.dataplane import CommitReadback
+from catalog.services.tables.versions import CommitReadback
 from lakehouse.lancekit.features import DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY
 from lakehouse.naming import UUID_PROPERTY
 from tests import seeding
@@ -181,7 +181,7 @@ def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns:
         # An overwrite writes a version into the table it replaces, at the location that table's claim records.
         return CreateTableResponse(location=fake_ns.describe_table.return_value.location, version=1)
 
-    monkeypatch.setattr("catalog.services.dataplane.create_table", _stub)
+    monkeypatch.setattr("catalog.services.tables.creation.create_table", _stub)
     claim_described("lance_catalog$media$clips")  # the table the overwrite replaces, which the double describes as existing
     resp = client.post(
         "/v1/table/lance_catalog$media$clips/create?mode=overwrite",
@@ -388,7 +388,7 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
     # commit and the read can't attach a later version's schema to this WROTE edge.
     from lance_namespace import AlterTableAddColumnsResponse
 
-    monkeypatch.setattr("catalog.services.dataplane.add_columns", lambda *a, **k: AlterTableAddColumnsResponse(version=4))
+    monkeypatch.setattr("catalog.services.tables.schema.add_columns", lambda *a, **k: AlterTableAddColumnsResponse(version=4))
     seen: dict[str, object] = {}
 
     def _readback(_ns: object, _so: object, _segments: object, pin_version: object = None, branch: object = None) -> object:
@@ -396,7 +396,7 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
         seen["branch"] = branch
         return CommitReadback(version=cast(int, pin_version), schema_fields=[{"name": "x", "type": "int64"}], uri="s3://bucket/abc12345_db$t")
 
-    monkeypatch.setattr("catalog.services.dataplane.read_version_and_schema", _readback)
+    monkeypatch.setattr("catalog.services.tables.versions.read_version_and_schema", _readback)
     captured = _capture_measured_emit(monkeypatch)
 
     resp = client.post("/v1/table/lance_catalog$db$t/add_columns", json={"new_columns": [{"name": "x", "expression": "1"}]})
@@ -426,8 +426,8 @@ def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_c
         raise AssertionError("ExistOk create must not trust the request payload's schema")
 
     # Patch the enrichment functions only AFTER the setup create, so the bomb guards the exist_ok call alone.
-    monkeypatch.setattr("catalog.services.dataplane.read_version_and_schema", _readback)
-    monkeypatch.setattr("catalog.services.dataplane.payload_schema_fields", _payload_bomb)
+    monkeypatch.setattr("catalog.services.tables.versions.read_version_and_schema", _readback)
+    monkeypatch.setattr("catalog.services.tables.versions.payload_schema_fields", _payload_bomb)
 
     resp = real_ns_client.post("/v1/table/lance_catalog$db$t/create?mode=exist_ok", content=body, headers=ARROW_STREAM)
     assert resp.status_code == 200

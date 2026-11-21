@@ -40,7 +40,8 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.core import lineage_emit, run_context, table_objects
 from catalog.core.config import CatalogStore, Settings
-from catalog.services import dataplane, maintenance_commits, managed_versions, provenance_namespace
+from catalog.services import maintenance_commits, managed_versions, provenance_namespace
+from catalog.services.tables import commits, versions
 from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.events.openlineage import BRANCH_IDENTIFIER
 from lakehouse.events.signing import SIGNATURE_FACET
@@ -188,7 +189,7 @@ def _listed_refs(dataset: lance.LanceDataset) -> list[tuple[str | None, str | No
     """Main, then each branch ``dataset`` lists, with the incarnation the same listing records: the one key a pass and a
     register's marks both read a ref by."""
     listed = dataset.branches.list() or {}
-    return [(None, None), *((name, dataplane.identifier_of(listed[name])) for name in sorted(listed))]
+    return [(None, None), *((name, versions.identifier_of(listed[name])) for name in sorted(listed))]
 
 
 def mark_registered_heads(settings: CatalogStore, so: StorageOptions, *, location: str, table_uuid: str) -> None:
@@ -344,7 +345,7 @@ def _signed_for(record: commit_records.CommitAuthor | None, ref_location: str, s
     """
     if record is None:
         return None
-    if record.manifest is not None and record.manifest != dataplane.committed_manifest_digest(ref_location, so, version):
+    if record.manifest is not None and record.manifest != commits.committed_manifest_digest(ref_location, so, version):
         return None
     return record.author
 
@@ -423,7 +424,7 @@ def _commit_at(handle: lance.LanceDataset, version: int, *, branch: str | None, 
         operation=operation,
         run=run,
         traceparent=properties.get(run_context.TRACEPARENT_PROPERTY),
-        committed_at=dataplane.commit_time(handle),
+        committed_at=versions.commit_time(handle),
         commits_rows=operation == lineage_emit.CREATE_TABLE and sum(int(fragment.physical_rows or 0) for fragment in fragments) > 0,
         transaction_uuid=transaction.uuid,
     )

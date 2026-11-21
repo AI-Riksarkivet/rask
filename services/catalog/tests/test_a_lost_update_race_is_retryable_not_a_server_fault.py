@@ -1,7 +1,7 @@
 """The UPDATE and DELETE doors answer the rows they touched and advance the table's version, and one that loses its race
 plans again.
 
-Both commit stamped ([[LH-497]], `dataplane.commit_stamped`): Lance's own operation, planned on the latest version and
+Both commit stamped ([[LH-497]], `tables.commits.commit_stamped`): Lance's own operation, planned on the latest version and
 finalized as exactly the next one, so the update's row count is the rows its predicate matched on that version. A
 writer that commits between the door's open and Lance's staging leaves the plan stale, and the door plans again on the
 version that won ([[LH-542]]): measured on pylance 13.0.0, Lance's own delete exhausts its retries against the planned
@@ -16,8 +16,10 @@ import pyarrow as pa
 import pytest
 from lance_namespace import CreateNamespaceRequest, DeleteFromTableRequest, UpdateTableRequest, connect
 
-from catalog.services.dataplane import captured, commit_stamped, create_table, delete_from_table, update_table
 from catalog.services.table_claims import DoorTable
+from catalog.services.tables.commits import captured, commit_stamped
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.writes import delete_from_table, update_table
 from lakehouse.records import base_registry
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions

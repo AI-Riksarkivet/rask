@@ -21,7 +21,8 @@ import pytest
 from lance_namespace import ConcurrentModificationError, CreateNamespaceRequest, InsertIntoTableRequest, connect
 from tables_by_name import open_by_name
 
-from catalog.services.dataplane import create_table, insert_into_table
+from catalog.services.tables.creation import create_table
+from catalog.services.tables.writes import insert_into_table
 from lakehouse.records import base_registry
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions

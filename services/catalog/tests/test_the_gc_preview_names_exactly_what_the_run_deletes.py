@@ -43,7 +43,7 @@ from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core import version_retention
 from catalog.core.config import Settings, get_settings
-from catalog.services.dataplane import create_table
+from catalog.services.tables.creation import create_table
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records import base_registry
 from lakehouse.storage.options import StorageOptions

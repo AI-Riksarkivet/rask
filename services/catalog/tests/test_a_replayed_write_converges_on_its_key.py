@@ -229,7 +229,8 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
     evidence cannot be read."""
     from catalog.api import idempotency as keyed_doors
     from catalog.core.config import get_settings
-    from catalog.services import dataplane, idempotency_records, native, table_claims
+    from catalog.services import idempotency_records, native, table_claims
+    from catalog.services.tables import creation
     from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
     from lakehouse.records import trash
     from lakehouse.storage.objectfs import fs_and_base
@@ -270,7 +271,7 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
         if case == "retired-by-another":
             during.setattr(table_claims, "fence", faults)
         if case == "died-before-the-change":
-            during.setattr(dataplane, "create_table", faults)
+            during.setattr(creation, "create_table", faults)
         if case == "died-before-the-detach":
             during.setattr(native, "call", detach_faults)
         if case == "stamp-refused":
@@ -318,6 +319,7 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
     elif case == "retired-by-another":
         assert (again.status_code, again.json().get("code")) == (404, 4), again.text
     elif case == "died-before-the-change":
+        assert first is None, "the first create must have died"
         assert again.status_code == 200, again.text
         assert catalog.client.post(f"{table}/describe", json={}, headers=alice).status_code == 200, "the resend must have created the table"
     elif case in {"lost", "evidence-unreadable"}:

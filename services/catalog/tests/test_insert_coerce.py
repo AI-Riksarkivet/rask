@@ -14,7 +14,7 @@ import pyarrow as pa
 import pytest
 from lance_namespace import InvalidInputError
 
-from catalog.services import dataplane
+from catalog.services.tables import writes
 
 
 #: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
@@ -41,7 +41,7 @@ class _Table:
 
 
 def _coerce(table: _Table, data: bytes) -> pa.Table:
-    out = dataplane.coerce_insert_arrow(cast(Any, table), cast(Any, {}), data, max_bytes=_BODY_LIMIT)
+    out = writes.coerce_insert_arrow(cast(Any, table), cast(Any, {}), data, max_bytes=_BODY_LIMIT)
     return pa.ipc.open_stream(out).read_all()
 
 
@@ -78,6 +78,6 @@ def test_matching_names_with_differing_nullability_still_coerces() -> None:
     the declared nullability lands (the native append checks the schema, not the values)."""
     table = _Table(pa.schema([pa.field("id", pa.int64(), nullable=False)]))
     data = _ipc(pa.table({"id": pa.array([1], pa.int64())}))  # incoming field is nullable=True
-    out = dataplane.coerce_insert_arrow(cast(Any, table), cast(Any, {}), data, max_bytes=_BODY_LIMIT)
+    out = writes.coerce_insert_arrow(cast(Any, table), cast(Any, {}), data, max_bytes=_BODY_LIMIT)
     assert out is not data
     assert pa.ipc.open_stream(out).read_all().schema.field("id").nullable is False

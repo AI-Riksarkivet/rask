@@ -41,7 +41,7 @@ from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, SettingsDe
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import branches as branch_door
 from catalog.core.identifiers import with_minted_uuid
-from catalog.services.dataplane import create_table
+from catalog.services.tables.creation import create_table
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -154,7 +154,7 @@ def test_the_REQUEST_is_not_used_as_a_fallback(app: FastAPI, emitted: list[dict[
     def _blind(*_a: Any, **_k: Any) -> Any:  # noqa: ANN401 — a stand-in that only ever raises
         raise RuntimeError("the branch list is unreadable")
 
-    monkeypatch.setattr(branch_door.dataplane, "list_branches", _blind)
+    monkeypatch.setattr(branch_door.refs, "list_branches", _blind)
     with TestClient(app) as client:
         assert _create(client, "unreadable", from_version=1).status_code == 200
 
