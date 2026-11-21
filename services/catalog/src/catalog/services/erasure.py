@@ -109,11 +109,12 @@ only an already-reclaimed version pointed at is beyond what the table still reco
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Final, Protocol, cast
 
+import pyarrow as pa
 import pyarrow.fs as pafs
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, Field
@@ -984,15 +985,20 @@ class _History:
         if self._builds is None:
             self._builds = {}
             for ref in self.refs:
-                head = _head(self.cold, ref)
-                horizon = self._trusted.get(_label(ref), -1)
-                for version in (version for version in self.versions(ref) if version <= horizon):
-                    transaction = read_transaction(head, version)
-                    built = getattr(getattr(transaction, "operation", None), "new_indices", None) or []
-                    for index in built:
-                        fresh = transaction is not None and int(index.dataset_version) == int(transaction.read_version)
-                        self._builds[str(index.uuid)] = frozenset(int(fragment_id) for fragment_id in index.fragment_ids) if fresh else None
+                for built_uuid, fragments in self._ref_builds(ref):
+                    self._builds[built_uuid] = fragments
         return self._builds.get(uuid)
+
+    def _ref_builds(self, ref: str | None) -> Iterator[tuple[str, frozenset[int] | None]]:
+        """``(segment uuid, fragments built from data or None)`` for each index ``ref``'s trusted commits built, oldest first."""
+        head = _head(self.cold, ref)
+        horizon = self._trusted.get(_label(ref), -1)
+        for version in (version for version in self.versions(ref) if version <= horizon):
+            transaction = read_transaction(head, version)
+            built = getattr(getattr(transaction, "operation", None), "new_indices", None) or []
+            for index in built:
+                fresh = transaction is not None and int(index.dataset_version) == int(transaction.read_version)
+                yield str(index.uuid), frozenset(int(fragment_id) for fragment_id in index.fragment_ids) if fresh else None
 
     def reclaimed(self, ref: str | None) -> bool:
         """Whether ``ref``'s cleanup ran: when it did not, nothing else is needed to explain a survivor."""
@@ -1193,6 +1199,11 @@ def _with_descendants(branches: set[str], forks: Mapping[str, _Reference]) -> se
 
 def _verify_detail(found: _Verification, account: _Account) -> str:
     """The failed verify surface's detail: what is left, and what finishing takes."""
+    return "; ".join([*_found_detail(found), *_account_detail(account)])
+
+
+def _found_detail(found: _Verification) -> list[str]:
+    """What the verification found left, each a part of :func:`_verify_detail`."""
     answering = [version for version in found.residual if version not in {*found.unreadable, *found.hidden, *found.indexed}]
     parts = [f"{answering} still answer this predicate"] if answering else []
     if found.hidden:
@@ -1209,6 +1220,12 @@ def _verify_detail(found: _Verification, account: _Account) -> str:
         parts.append("the tag list could not be read, so a tag pinning what is left was not named: verify again")
     if found.late:
         parts.append(f"{found.late} appeared during the verification: verify again")
+    return parts
+
+
+def _account_detail(account: _Account) -> list[str]:
+    """What keeps what is left and what finishing takes, each a part of :func:`_verify_detail`."""
+    parts: list[str] = []
     if account.pins:
         parts.append(f"{[pin.ref for pin in account.pins]} hold the rest, in the order their release deletes them")
     if account.held_by_retention:
@@ -1227,7 +1244,7 @@ def _verify_detail(found: _Verification, account: _Account) -> str:
         parts.append(f"the fork point of {account.unforked} could not be read, so a ref keeping these may be missing from pinned_by")
     if account.held_by_clones:
         parts.append(f"{account.held_by_clones} {_HELD_BY_A_CLONE}")
-    return "; ".join(parts)
+    return parts
 
 
 def _depth(name: str, forks: Mapping[str, _Reference | None]) -> int:
@@ -1320,9 +1337,8 @@ def _record_held(report: ErasureReport, dataset: _Dataset, refs: Sequence[str | 
     held: dict[str, set[str]] = {}
     for ref in refs:
         try:
-            for version in sorted(int(entry["version"]) for entry in _head(dataset, ref).versions()):
-                for surface, locations in _held_outside(dataset.checkout_version((ref, version)), predicate).items():
-                    held.setdefault(surface, set()).update(locations)
+            for surface, locations in _held_on_ref(dataset, ref, predicate):
+                held.setdefault(surface, set()).update(locations)
         except Exception as exc:  # noqa: BLE001 — one ref's failure must not hide the others
             log.warning("erasure_bases_unread", extra={"table": report.table, "ref": _label(ref), "error": str(exc)})
             detail = f"which files outside the table the subject's rows name could not be read: {exc}"
@@ -1344,6 +1360,12 @@ def _record_held(report: ErasureReport, dataset: _Dataset, refs: Sequence[str | 
         report.surfaces.append(SurfaceResult(surface="mem_wal", outcome="held", detail=detail))
 
 
+def _held_on_ref(dataset: _Dataset, ref: str | None, predicate: str) -> Iterator[tuple[str, set[str]]]:
+    """``(surface, locations)`` each retained version of ``ref`` keeps of the subject outside the table, oldest first."""
+    for version in sorted(int(entry["version"]) for entry in _head(dataset, ref).versions()):
+        yield from _held_outside(dataset.checkout_version((ref, version)), predicate).items()
+
+
 def _held_outside(handle: _Dataset, predicate: str) -> dict[str, set[str]]:
     """``{surface: locations}`` for the subject's bytes ``handle``'s version keeps outside the table's own files,
     rows a deletion vector hides included."""
@@ -1362,17 +1384,27 @@ def _held_outside(handle: _Dataset, predicate: str) -> dict[str, set[str]]:
         rows = handle.scanner(
             columns=columns, filter=predicate, include_deleted_rows=True, with_row_id=True, use_scalar_index=False, late_materialization=False
         ).to_table()
-        for column in columns:
-            declared = handle.schema.field(column)
-            for value in rows.column(column).to_pylist():
-                for _, _, descriptor in blob_descriptors(value, declared):
-                    if descriptor.get("kind") != EXTERNAL_KIND or not descriptor.get("blob_uri"):
-                        continue
-                    if base := bases.get(int(cast(int, descriptor.get("blob_id")) or 0)):
-                        held.setdefault(f"external_base:{_base_label(base)}", set()).add(f"{str(base.path).rstrip('/')}/{descriptor['blob_uri']}")
-                    else:
-                        held.setdefault("external_base:absolute", set()).add(str(descriptor["blob_uri"]))
+        for descriptor in _scanned_descriptors(handle, rows, columns):
+            if (external := _external_location(descriptor, bases)) is not None:
+                held.setdefault(external[0], set()).add(external[1])
     return held
+
+
+def _scanned_descriptors(handle: _Dataset, rows: pa.Table, columns: Sequence[str]) -> Iterator[dict[str, object]]:
+    """Each blob descriptor the scanned ``rows`` hold in ``columns``, column by column, in row order."""
+    for column in columns:
+        declared = handle.schema.field(column)
+        for value in rows.column(column).to_pylist():
+            yield from (descriptor for _, _, descriptor in blob_descriptors(value, declared))
+
+
+def _external_location(descriptor: dict[str, object], bases: Mapping[int, Any]) -> tuple[str, str] | None:
+    """``(surface, location)`` of the external payload ``descriptor`` names, by its base or absolute URI; else ``None``."""
+    if descriptor.get("kind") != EXTERNAL_KIND or not descriptor.get("blob_uri"):
+        return None
+    if base := bases.get(int(cast(int, descriptor.get("blob_id")) or 0)):
+        return f"external_base:{_base_label(base)}", f"{str(base.path).rstrip('/')}/{descriptor['blob_uri']}"
+    return "external_base:absolute", str(descriptor["blob_uri"])
 
 
 def _base_label(base: Any) -> str:

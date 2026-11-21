@@ -344,21 +344,33 @@ async def _open(settings: BusSettings, session: _Session, *, said: set[str]) -> 
             reconnected_cb=reconnected,
             closed_cb=ended,
         )
-        # THE USER'S OWN INBOX IS ASKED FOR BEFORE THE CONNECTION IS HELD. A session granted under a row without the
-        # inbox connects all the same, and the process would answer as connected while each publish waited out its
-        # timeout. TWO round trips: nats-py writes a flush's ping ahead of what its buffer still holds, so the first
-        # pong comes back before the bus has read the subscription, and the second ping leaves after it (the broker's
-        # trace, nats-py 2.16.0 against nats-server 2.15.2, 2026-11-14). The bus's refusal is in by the second pong.
-        inbox = await client.subscribe(f"{settings.inbox_prefix}.>")
-        await client.flush(timeout=_CONNECT_TIMEOUT_SECONDS)
-        await client.flush(timeout=_CONNECT_TIMEOUT_SECONDS)
-        await inbox.unsubscribe()
-        if unheard:
-            raise BusUnavailableError(f"the bus grants the user {settings.user} no inbox of its own ({settings.inbox_prefix}.>)")
+        await _require_own_inbox(client, settings, unheard)
         opening.reschedule(None)
         failed.pop_all()
     session.began = asyncio.get_running_loop().time()
     return client
+
+
+async def _require_own_inbox(client: Client, settings: BusSettings, unheard: list[str]) -> None:
+    """Refuse the connection (``BusUnavailableError``) when the bus says, into ``unheard``, it grants no inbox of its own."""
+    # THE USER'S OWN INBOX IS ASKED FOR BEFORE THE CONNECTION IS HELD. A session granted under a row without the inbox
+    # connects all the same, and the process would answer as connected while each publish waited out its timeout. TWO
+    # round trips: nats-py writes a flush's ping ahead of what its buffer still holds, so the first pong comes back before
+    # the bus has read the subscription, and the second ping leaves after it (the broker's trace, nats-py 2.16.0 against
+    # nats-server 2.15.2, 2026-11-14). The bus's refusal is in by the second pong.
+    inbox = await client.subscribe(f"{settings.inbox_prefix}.>")
+    await client.flush(timeout=_CONNECT_TIMEOUT_SECONDS)
+    await client.flush(timeout=_CONNECT_TIMEOUT_SECONDS)
+    await inbox.unsubscribe()
+    if unheard:
+        raise BusUnavailableError(f"the bus grants the user {settings.user} no inbox of its own ({settings.inbox_prefix}.>)")
+
+
+async def _ended_within(session: _Session, due: float) -> None:
+    """Wait up to ``due`` seconds for ``session`` to end."""
+    with suppress(TimeoutError):
+        async with asyncio.timeout(due):
+            await session.ended.wait()
 
 
 async def _released(client: Client) -> None:
@@ -412,9 +424,7 @@ class Bus:
         while not session.ended.is_set():
             due = session.began + self._settings.renew_after_seconds - clock.time()
             if due > 0:
-                with suppress(TimeoutError):
-                    async with asyncio.timeout(due):
-                        await session.ended.wait()
+                await _ended_within(session, due)
                 continue
             # Counted from now, so a connect the bus is slow to take is not asked for again on every turn; the bus
             # taking it sets the session's true start.
@@ -515,7 +525,6 @@ class Bus:
         if client is None:
             raise BusUnavailableError(f"this process is not connected to the bus: {subject} was not read")
         stream_reads = client.jetstream()
-        messages: list[Delivery] = []
         try:
             try:
                 end = (await stream_reads.get_last_msg(stream, subject)).seq or 0
@@ -523,16 +532,7 @@ class Bus:
                 if exc.err_code != _NO_MESSAGE_FOUND:
                     raise  # the stream itself is missing: a read the bus cannot answer, not an empty one
                 end = 0
-            place = StreamPage.first_place(after, end, limit)
-            while place is not None and len(messages) < limit and place < end:
-                try:
-                    stored = await stream_reads.get_msg(stream, seq=place + 1, subject=subject, next=True)
-                except NotFoundError as exc:
-                    if exc.err_code != _NO_MESSAGE_FOUND:
-                        raise
-                    break
-                place = stored.seq or place + 1
-                messages.append(Delivery(subject=stored.subject or subject, body=stored.data or b"", sequence=place, attempt=1))
+            messages = await _stored_after(stream_reads, stream, subject, place=StreamPage.first_place(after, end, limit), end=end, limit=limit)
         except NatsError as exc:
             raise BusUnavailableError(f"the bus did not answer the read of {subject}: {type(exc).__name__}: {exc}"[:500]) from exc
         return StreamPage.of(after, end, messages)
@@ -883,6 +883,21 @@ async def _handed_on(delivery: Delivery, handle: Follow) -> None:
             log.exception("bus_followed_message_not_handled", extra={"subject": delivery.subject, "sequence": delivery.sequence})
             outcome = "failed"
     record_delivery(delivery.subject, outcome)
+
+
+async def _stored_after(stream_reads: JetStreamContext, stream: str, subject: str, *, place: int | None, end: int, limit: int) -> list[Delivery]:
+    """At most ``limit`` messages ``stream`` holds on ``subject`` after sequence ``place`` up to ``end``, read by sequence."""
+    messages: list[Delivery] = []
+    while place is not None and len(messages) < limit and place < end:
+        try:
+            stored = await stream_reads.get_msg(stream, seq=place + 1, subject=subject, next=True)
+        except NotFoundError as exc:
+            if exc.err_code != _NO_MESSAGE_FOUND:
+                raise
+            break
+        place = stored.seq or place + 1
+        messages.append(Delivery(subject=stored.subject or subject, body=stored.data or b"", sequence=place, attempt=1))
+    return messages
 
 
 async def _stored_carries(stream: JetStreamContext, acknowledged: PubAck, body: bytes) -> bool:

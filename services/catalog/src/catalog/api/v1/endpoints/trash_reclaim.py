@@ -21,7 +21,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidTableStateError, NamespaceNotFoundError, TableNotFoundError
 
 from catalog.api import announcing
-from catalog.api.announcing import AnnouncerDep
+from catalog.api.announcing import AnnouncerDep, Filing
 from catalog.api.authz import decisions, door_gates, object_grants
 from catalog.api.dependencies import ClockDep, FgaClientDep, Resolver, ResolverDep, SettingsDep, VendorDep
 from catalog.api.security import Caller, CurrentSubject, CurrentToken
@@ -85,17 +85,30 @@ async def release_trash(
         told = {(t.object, t.relation, t.user): _revoked(t, record, uuid=uuid, actor=_actor(token)) for t in held if fga_ids.names_someone(str(t.user))}
         async with announcer.announcing(door="trash_release", target=obj, announcements=list(told.values())) as filing:
             removed = await object_grants.revoke_expired_object(client, settings, obj, token=token)
-            # Tell each person who lost a grant on the released object: none of them can see it any more, so no feed gated
-            # on seeing it would. Structural edges name objects, not people, and are not announced.
-            for t in removed:
-                if fga_ids.names_someone(str(t.user)):
-                    await filing.send(told.get((t.object, t.relation, t.user)) or _revoked(t, record, uuid=uuid, actor=_actor(token)))
+            await _tell_who_lost_a_grant(filing, removed, told, record=record, uuid=uuid, token=token)
             stamped = await run_in_threadpool(partial(trash_reclaim.stamp_released, settings, kind=kind, uuid=uuid, now=clock()))
     except Exception as failed:
         _audited(AuditAction.TRASH_RELEASE, AuditOutcome.FAILURE, token, kind=kind, uuid=uuid, reason=f"{type(failed).__name__}: {failed}"[:300])
         raise
     _audited(AuditAction.TRASH_RELEASE, AuditOutcome.SUCCESS, token, kind=kind, uuid=uuid, tuples_revoked=len(removed), stamped=stamped)
     return TrashReleaseResponse(tuples_revoked=len(removed), stamped=stamped)
+
+
+async def _tell_who_lost_a_grant(
+    filing: Filing,
+    removed: list[fga_writes.ClientTuple],
+    told: dict[tuple[str, str, str], Announcement],
+    *,
+    record: TrashRecord,
+    uuid: str,
+    token: Caller | None,
+) -> None:
+    """Send the ``grant_revoked`` filed for each person among ``removed``, the tuples a release took off its object."""
+    # Tell each person who lost a grant on the released object: none of them can see it any more, so no feed gated
+    # on seeing it would. Structural edges name objects, not people, and are not announced.
+    for t in removed:
+        if fga_ids.names_someone(str(t.user)):
+            await filing.send(told.get((t.object, t.relation, t.user)) or _revoked(t, record, uuid=uuid, actor=_actor(token)))
 
 
 @management_router.post("/{kind}/{uuid}/credentials", response_model_exclude_none=True)

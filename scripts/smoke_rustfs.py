@@ -65,6 +65,16 @@ def main() -> int:
     # ---- boto3 path: lakehouse.storage.client.s3_client, the lakehouse's S3 client ----
     print("\n== boto3 path (lakehouse.storage.client.s3_client) ==", flush=True)
     pair = S3KeyPair(access_key_id=os.environ["AWS_ACCESS_KEY_ID"], secret_access_key=SecretStr(os.environ["AWS_SECRET_ACCESS_KEY"]))
+    ok &= _round_trip_an_object_through_boto3(pair, bucket=bucket, key=key, body=body)
+
+    ok &= _create_and_read_a_lance_table(endpoint, pair, bucket)
+
+    print("\n" + ("ALL PASS — rustfs works with rask storage." if ok else "FAILURES above (see ^)."), flush=True)
+    return 0 if ok else 1
+
+
+def _round_trip_an_object_through_boto3(pair: S3KeyPair, *, bucket: str, key: str, body: bytes) -> bool:
+    """Round-trip one object through `lakehouse.storage.client.s3_client`, signed by ``pair``: whether every check passed."""
     c = s3_client(key_pair=pair)
 
     def ensure_bucket() -> None:
@@ -82,13 +92,17 @@ def main() -> int:
         got = c.get_object(Bucket=bucket, Key=key)["Body"].read()
         assert got == body, f"body mismatch: {got!r}"
 
-    ok &= _check("create/ensure bucket", ensure_bucket)
+    ok = _check("create/ensure bucket", ensure_bucket)
     ok &= _check("put_object", lambda: c.put_object(Bucket=bucket, Key=key, Body=body))
     ok &= _check("list_objects_v2 sees the key", list_has_key)
     ok &= _check("get_object round-trips bytes", get_roundtrips)
     ok &= _check("head_object", lambda: c.head_object(Bucket=bucket, Key=key))
     ok &= _check("delete_object", lambda: c.delete_object(Bucket=bucket, Key=key))
+    return ok
 
+
+def _create_and_read_a_lance_table(endpoint: str, pair: S3KeyPair, bucket: str) -> bool:
+    """Create a 2.2 table with stable row ids over ``s3://`` and read it back: whether the check passed."""
     # ---- Lance path: a table over s3:// through Lance's object_store -------------
     print("\n== Lance path (s3:// — the catalog's data plane) ==", flush=True)
     storage_opts = {
@@ -113,10 +127,7 @@ def main() -> int:
         read = (ds.count_rows(), ds.data_storage_version, ds.has_stable_row_ids)
         assert read == (2, "2.2", True), f"expected 2 rows at file version 2.2 with stable row ids, read {read}"
 
-    ok &= _check("pylance create + read over s3://", lance_roundtrips)
-
-    print("\n" + ("ALL PASS — rustfs works with rask storage." if ok else "FAILURES above (see ^)."), flush=True)
-    return 0 if ok else 1
+    return _check("pylance create + read over s3://", lance_roundtrips)
 
 
 if __name__ == "__main__":

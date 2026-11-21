@@ -16,7 +16,7 @@ from functools import partial
 
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import LanceNamespaceError
+from lance_namespace import LanceNamespace, LanceNamespaceError
 from openfga_sdk import OpenFgaClient
 from starlette.middleware import Middleware
 
@@ -35,7 +35,7 @@ from catalog.api.timers import start_timers
 from catalog.api.v1.router import api_router
 from catalog.core import base_judge
 from catalog.core.commit_ids import STATE as COMMIT_IDS_STATE
-from catalog.core.commit_ids import CommitIdKeyHolder, make_commit_ids
+from catalog.core.commit_ids import CommitIdKeyHolder, CommitIds, make_commit_ids
 from catalog.core.config import CatalogReadBounds, CatalogStore, Settings, get_settings
 from catalog.core.control_signing import control_sign
 from catalog.core.lineage_emit import make_emitter
@@ -50,7 +50,7 @@ from lakehouse.governed.auth_lifespan import attach_auth
 from lakehouse.governed.fga_provision import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
-from lakehouse.governed.signing_key import attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
+from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
 from lakehouse.lance_metrics import instrument_lance_if_available
 from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
 from lakehouse.process.log_levels import configure_app_logging
@@ -180,6 +180,69 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> None:
     """Build what the catalog serves with onto ``app.state``, each piece's release pushed onto ``stack`` as it is built,
     and its background loops and tasks started on ``loops``."""
+    namespace = await _open_the_store(app, settings, stack=stack, loops=loops)
+    await _attach_authorization_and_vending(app, settings, stack=stack, loops=loops)
+    # THIS PROCESS'S ONE CONNECTION TO THE BUS ([[XC-199]]), as the catalog's own bus user, which both emitters and the
+    # control relay publish on (`lakehouse.events.bus`). A loop of `loops` connects it behind the start and keeps it, so the
+    # catalog serves, and stages what it announces, while the bus is away. Entered before everything that publishes, so
+    # it is drained after them. None for a stack the chart names no bus.
+    bus = await stack.enter_async_context(bus_session(loops, settings.bus))
+
+    signing = make_signing_holder(identity=settings.signing_identity, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
+    attach_signing(app, signing)
+    # The reader the relay and the control lane verify with, built per start and before either can ask for it.
+    attach_published_keys(app)
+    # THE KEY EVERY COMMIT'S RUN ID IS DERIVED UNDER ([[LH-497]]): read from the store like the signing seed, or the empty
+    # key for a stack with no store. Published for the gate, the readiness check and the reconciler.
+    commit_ids = make_commit_ids()
+    setattr(app.state, COMMIT_IDS_STATE, commit_ids)
+    _attach_emitters(app, settings, bus=bus, signing=signing, commit_ids=commit_ids)
+    # RESOLVED LAST, so the probes and the app are up whether or not the key resolved: a catalog that is waiting for
+    # its key reports itself not ready and heals in place when the key is published, and a write it has already
+    # committed is never failed by an emit that cannot be signed; that emit is withheld, lineage and control alike.
+    if signing is not None:
+        await signing.start(loops)
+        stack.push_async_callback(signing.stop)
+    if isinstance(commit_ids, CommitIdKeyHolder):
+        await commit_ids.start(loops)
+        stack.push_async_callback(commit_ids.stop)
+    # Re-assert the warehouse grants over warehouses that already exist. BACKGROUND and non-fatal, and
+    # both of those are the design rather than caution:
+    #
+    #   * The grants are written ONCE, at warehouse-create, from `LANCE_FGA_MAINTAINERS` — a value that
+    #     CHANGES. Adding a subject extends the list and every older warehouse is missing it, so that
+    #     subject is refused on every existing tenant, in a log nobody watches.
+    #   * A hook Job would need a store identity and an OpenFGA writer's token of its own, for one
+    #     registry read and one write this process already holds both for, so the work belongs here.
+    #   * NOT awaited, so a slow or unreachable OpenFGA cannot delay readiness, and NOT fatal, because
+    #     a grant that could not be re-asserted must not take the catalog down — it leaves the estate
+    #     exactly as it was, which is the state this repairs, not a worse one.
+    #   * Per-replica repetition is harmless: every write is idempotent (`write_tuples` retries
+    #     one-by-one past a duplicate), so replicas racing land the same tuples.
+    loops.start("warehouse-grant-backfill", partial(_backfill_warehouse_grants, app))
+    # The estate's own warehouse row and the namespace lineage keeps its tables in, in the background for the
+    # backfill's reasons: lineage retries its tables until the namespace exists, so a slow OpenFGA or store must not
+    # delay this catalog's readiness. A name under the estate's warehouse is absent until the row is there.
+    loops.start("estate-namespaces", partial(_ensure_estate_namespaces, app))
+    _follow_control_events(app, settings, bus, loops=loops)
+    # What `/readyz` answers, read in the background so the probe never waits on a dependency or a request thread
+    # (`lakehouse.process.health`, ADR 0203). The store and OpenFGA gate: no door serves without them. The bus is reported only,
+    # since every announcement it carries is staged in an outbox first. The namespace this catalog serves is a fact
+    # read once here: a backend that cannot answer `namespace_id()` is no readiness fault, and per-request resolution
+    # surfaces that as a domain error.
+    with suppress(LanceNamespaceError):
+        app.state.readiness_facts = {"namespace": str(namespace.namespace_id())}
+    app.state.health = HealthWatch(_dependencies(app, settings, bus))
+    app.state.health.watch(loops)
+    # THE CATALOG'S FIXED TIMERS ([[XC-199]]), started last, once everything a tick works with is on `app.state`: the
+    # control relay, the erasure release, the commit reconcile, the manifest reclaim and the
+    # declaration converge, each a loop of `loops` on the period git gives it, each window claimed on the control root
+    # so a tick runs once whatever the replica count (`catalog.api.timers`).
+    start_timers(app, settings, loops)
+
+
+async def _open_the_store(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> LanceNamespace:
+    """Log in to the secret store, start the store session and open the namespace this catalog serves."""
     # THE CATALOG LOGS IN TO ITS SECRET STORE ITSELF ([[XC-199]]), before anything below reads a secret, and refuses to
     # start when the store never admits it, whichever secrets it goes on to read. A loop of `loops` then logs in again
     # once half the store token's lease is used, or as soon as the store no longer honours it. Nothing for a stack with
@@ -194,6 +257,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # `storage_options` as a callable. With no token (the offline and Dagger lanes) the environment's pair signs.
     store_session = await start_store_session(settings.web_identity, session_name="catalog", duration_seconds=settings.s3_session_seconds, loops=loops)
     if store_session is None:
+        # A ValueError when the environment's key pair may not sign.
         require_env_pair(settings, prefix="LANCE")
     else:
         stack.push_async_callback(store_session.stop)
@@ -207,6 +271,11 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
         await run_in_threadpool(warehouses.ensure_catalog_row, namespace, settings.estate_warehouse)
     except Exception as exc:  # noqa: BLE001 — retried by the loop below
         log.warning("estate_warehouse_row_deferred", extra={"error": str(exc)})
+    return namespace
+
+
+async def _attach_authorization_and_vending(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> None:
+    """Attach the authorization plane, the credential vendor and the base judge, each release pushed onto ``stack``."""
     # `fatal=True` KEEPS THIS SERVICE'S POSTURE: neither construction was wrapped in a `try`, so a
     # failed build has always crashed the pod. The catalog is the estate's authorization SOURCE — it
     # writes the grants every other service reads — so a boot that cannot reach OpenFGA must be
@@ -252,11 +321,10 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # cleared at shutdown so nothing in this process outlives the app that configured it.
     base_judge.install(partial(base_judge.BaseJudge.from_settings, settings, bucket_claim=warehouses.bucket_claim))
     stack.callback(base_judge.install, None)
-    # THIS PROCESS'S ONE CONNECTION TO THE BUS ([[XC-199]]), as the catalog's own bus user, which both emitters and the
-    # control relay publish on (`lakehouse.events.bus`). A loop of `loops` connects it behind the start and keeps it, so the
-    # catalog serves, and stages what it announces, while the bus is away. Entered before everything that publishes, so
-    # it is drained after them. None for a stack the chart names no bus.
-    bus = await stack.enter_async_context(bus_session(loops, settings.bus))
+
+
+def _attach_emitters(app: FastAPI, settings: Settings, *, bus: Bus | None, signing: SigningKeyHolder[SigningKey] | None, commit_ids: CommitIds) -> None:
+    """Attach the lineage emitter, the bus and the control emitter, each publishing on ``bus`` and signing with ``signing``."""
 
     # WHICH TENANT a write belongs to, for the emitted `rask_lance.project` facet — WATCH targeting's only
     # key. Without it a notifier skips the watcher loop entirely and every catalog write in the
@@ -267,14 +335,6 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     async def _resolve_project(warehouse_id: str) -> str | None:
         return await run_in_threadpool(warehouses.project_of, settings.registry_root, settings.storage_options(), warehouse_id)
 
-    signing = make_signing_holder(identity=settings.signing_identity, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
-    attach_signing(app, signing)
-    # The reader the relay and the control lane verify with, built per start and before either can ask for it.
-    attach_published_keys(app)
-    # THE KEY EVERY COMMIT'S RUN ID IS DERIVED UNDER ([[LH-497]]): read from the store like the signing seed, or the empty
-    # key for a stack with no store. Published for the gate, the readiness check and the reconciler.
-    commit_ids = make_commit_ids()
-    setattr(app.state, COMMIT_IDS_STATE, commit_ids)
     app.state.lineage_emitter = make_emitter(
         enabled=settings.lineage_emit_enabled,
         bus=bus,
@@ -319,48 +379,6 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
         outbox_uri=settings.control_outbox_uri,
         storage_options=settings.storage_options,
     )
-    # RESOLVED LAST, so the probes and the app are up whether or not the key resolved: a catalog that is waiting for
-    # its key reports itself not ready and heals in place when the key is published, and a write it has already
-    # committed is never failed by an emit that cannot be signed; that emit is withheld, lineage and control alike.
-    if signing is not None:
-        await signing.start(loops)
-        stack.push_async_callback(signing.stop)
-    if isinstance(commit_ids, CommitIdKeyHolder):
-        await commit_ids.start(loops)
-        stack.push_async_callback(commit_ids.stop)
-    # Re-assert the warehouse grants over warehouses that already exist. BACKGROUND and non-fatal, and
-    # both of those are the design rather than caution:
-    #
-    #   * The grants are written ONCE, at warehouse-create, from `LANCE_FGA_MAINTAINERS` — a value that
-    #     CHANGES. Adding a subject extends the list and every older warehouse is missing it, so that
-    #     subject is refused on every existing tenant, in a log nobody watches.
-    #   * A hook Job would need a store identity and an OpenFGA writer's token of its own, for one
-    #     registry read and one write this process already holds both for, so the work belongs here.
-    #   * NOT awaited, so a slow or unreachable OpenFGA cannot delay readiness, and NOT fatal, because
-    #     a grant that could not be re-asserted must not take the catalog down — it leaves the estate
-    #     exactly as it was, which is the state this repairs, not a worse one.
-    #   * Per-replica repetition is harmless: every write is idempotent (`write_tuples` retries
-    #     one-by-one past a duplicate), so replicas racing land the same tuples.
-    loops.start("warehouse-grant-backfill", partial(_backfill_warehouse_grants, app))
-    # The estate's own warehouse row and the namespace lineage keeps its tables in, in the background for the
-    # backfill's reasons: lineage retries its tables until the namespace exists, so a slow OpenFGA or store must not
-    # delay this catalog's readiness. A name under the estate's warehouse is absent until the row is there.
-    loops.start("estate-namespaces", partial(_ensure_estate_namespaces, app))
-    _follow_control_events(app, settings, bus, loops=loops)
-    # What `/readyz` answers, read in the background so the probe never waits on a dependency or a request thread
-    # (`lakehouse.process.health`, ADR 0203). The store and OpenFGA gate: no door serves without them. The bus is reported only,
-    # since every announcement it carries is staged in an outbox first. The namespace this catalog serves is a fact
-    # read once here: a backend that cannot answer `namespace_id()` is no readiness fault, and per-request resolution
-    # surfaces that as a domain error.
-    with suppress(LanceNamespaceError):
-        app.state.readiness_facts = {"namespace": str(namespace.namespace_id())}
-    app.state.health = HealthWatch(_dependencies(app, settings, bus))
-    app.state.health.watch(loops)
-    # THE CATALOG'S FIXED TIMERS ([[XC-199]]), started last, once everything a tick works with is on `app.state`: the
-    # control relay, the erasure release, the commit reconcile, the manifest reclaim and the
-    # declaration converge, each a loop of `loops` on the period git gives it, each window claimed on the control root
-    # so a tick runs once whatever the replica count (`catalog.api.timers`).
-    start_timers(app, settings, loops)
 
 
 def _follow_control_events(app: FastAPI, settings: Settings, bus: Bus | None, *, loops: Supervisor) -> None:

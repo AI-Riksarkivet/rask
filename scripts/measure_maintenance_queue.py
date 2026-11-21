@@ -137,17 +137,23 @@ async def main(out: Path) -> None:
     docs = render(*DEFAULT_ARGS, "-f", os.environ.get(VALUES_ENV) or str(REPO / "chart" / "values.yaml"), *RENDER_ARGS)
     bus = Rig(tools, docs, home / "rig", session_seconds=bus_users(docs)[0].session_seconds)
     bus.start()
-    measured: list[Measurement] = []
     try:
         await asyncio.to_thread(_declare, bus, docs, home)
-        for pass_seconds, tasks in _CASES:
-            for workers in _WORKERS:
-                for run in range(1, _RUNS + 1):
-                    measured.append(await _drain(bus, workers=workers, tasks=tasks, pass_seconds=pass_seconds, tag=f"b{len(measured)}", run=run))
-                    sys.stdout.write(measured[-1].model_dump_json() + "\n")
+        measured = await _measure_every_case(bus)
     finally:
         bus.stop()
     out.write_text(json.dumps([m.model_dump() for m in measured], indent=1))
+
+
+async def _measure_every_case(bus: Rig) -> list[Measurement]:
+    """Drain every case at every worker count ``_RUNS`` times on ``bus``, each measurement written to stdout as it lands."""
+    measured: list[Measurement] = []
+    for pass_seconds, tasks in _CASES:
+        for workers in _WORKERS:
+            for run in range(1, _RUNS + 1):
+                measured.append(await _drain(bus, workers=workers, tasks=tasks, pass_seconds=pass_seconds, tag=f"b{len(measured)}", run=run))
+                sys.stdout.write(measured[-1].model_dump_json() + "\n")
+    return measured
 
 
 if __name__ == "__main__":

@@ -346,21 +346,7 @@ def _require_followable_window(spans: list[_WindowSpan], *, table: str) -> None:
     """
     for span in spans:
         for version in range(span.high, span.low, -1):
-            try:
-                transaction = read_transaction(span.handle, version)
-            except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
-                if isinstance(exc, KeyboardInterrupt | SystemExit):
-                    raise
-                raise_if_store_outage(exc, table=table)
-                raise InvalidTableStateError(
-                    f"the change window on table {table} cannot be followed: version {version}'s transaction is unreadable "
-                    f"({type(exc).__name__}). Resynchronise from begin_version=0."
-                ) from exc
-            if (reason := changes.unfollowable(transaction)) is not None:
-                raise InvalidTableStateError(
-                    f"the change window on table {table} cannot be followed: version {version} {reason}, so the version columns "
-                    "do not describe what changed. Resynchronise from begin_version=0."
-                )
+            _require_followable_version(span, version, table=table)
     if not spans:
         return
     lowest = spans[-1]
@@ -374,6 +360,25 @@ def _require_followable_window(spans: list[_WindowSpan], *, table: str) -> None:
             f"the change window on table {table} cannot be followed: its begin version {lowest.low} is no longer retained "
             f"({type(exc).__name__}). Resynchronise from begin_version=0."
         ) from exc
+
+
+def _require_followable_version(span: _WindowSpan, version: int, *, table: str) -> None:
+    """Refuse ``version`` of ``span``'s ref when its transaction is unreadable or one the version columns cannot describe."""
+    try:
+        transaction = read_transaction(span.handle, version)
+    except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
+        if isinstance(exc, KeyboardInterrupt | SystemExit):
+            raise
+        raise_if_store_outage(exc, table=table)
+        raise InvalidTableStateError(
+            f"the change window on table {table} cannot be followed: version {version}'s transaction is unreadable "
+            f"({type(exc).__name__}). Resynchronise from begin_version=0."
+        ) from exc
+    if (reason := changes.unfollowable(transaction)) is not None:
+        raise InvalidTableStateError(
+            f"the change window on table {table} cannot be followed: version {version} {reason}, so the version columns "
+            "do not describe what changed. Resynchronise from begin_version=0."
+        )
 
 
 #: The deleted-row feed's schema: Lance's own answer is a single `_rowid` column.

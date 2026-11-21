@@ -33,7 +33,7 @@ from typing import Any, NamedTuple, Protocol, TypedDict, Unpack, runtime_checkab
 
 import lance
 from opentelemetry import metrics
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, lifecycle_run_id
 from catalog.core.identifiers import warehouse_of
@@ -343,6 +343,77 @@ def build_write_event(
     ``uuids`` are the table's and its namespace's (ADR 0173 §10): the output's ``rask_lance`` facet carries them beside its
     name, as each input's carries its own, so lineage keys the table by what a rename keeps.
     """
+    write = _Write(
+        table_id=table_id,
+        namespace=namespace,
+        author=author,
+        version=version,
+        operation=operation,
+        job_namespace=job_namespace,
+        source_uri=source_uri,
+        schema_fields=schema_fields,
+        run=run,
+        project=project,
+        originator=originator,
+        branch=branch,
+        branch_identifier=branch_identifier,
+        catalog_impl=catalog_impl,
+        warehouse_uri=warehouse_uri,
+        uuids=uuids,
+        renamed_from=renamed_from,
+    )
+    run_facets = _run_facets_of(write)
+    output = _output_dataset_of(write)
+    # A DDL change that DERIVED the table from another one keeps its run, and the spec is why: a
+    # `DatasetEvent` has only `dataset` — no `inputs` — and the edge list builds every edge from a run's
+    # inputs (`lineage.services.provenance.edges_of`), so moving it would sever the edge its run declared.
+    # A definition change that committed rows keeps its run for the same reason an Overwrite
+    # does: those rows are a write at this version, and a follower acting on writes reads them off a run.
+    if _is_ddl(operation) and not inputs and not commits_rows:
+        return _as_dataset_event(output=output, run_facets=run_facets, event_time=event_time)
+    return {
+        "eventType": "COMPLETE",
+        "eventTime": event_time,
+        "producer": _PRODUCER,
+        "schemaURL": RUN_EVENT_SCHEMA_URL,
+        "run": {"runId": run_id, "facets": run_facets},
+        # Job identity is per-TABLE (``<operation>.<table_id>``), not the bare op — else every table's
+        # writes lump into one job (``insert``) whose output set spans every table, in the feed and in a
+        # forwarded graph backend. Per-table keeps a job's output set scoped to the one table it wrote.
+        "job": {"namespace": job_namespace, "name": f"{operation}.{table_id}"},
+        "inputs": [_input_dataset(ref, namespace=namespace) for ref in (inputs or [])],
+        "outputs": [output],
+    }
+
+
+class _Write(BaseModel):
+    """A catalog write as its event describes it: the arguments of :func:`build_write_event` both builders read."""
+
+    model_config = ConfigDict(frozen=True)
+
+    table_id: str
+    namespace: str
+    author: str | None
+    version: int | None
+    operation: str
+    job_namespace: str
+    source_uri: str | None
+    schema_fields: SchemaFields | None
+    run: RunContext | None
+    project: str | None
+    originator: str | None
+    branch: str | None
+    branch_identifier: str | None
+    catalog_impl: str
+    warehouse_uri: str
+    uuids: DatasetUuids | None
+    renamed_from: str | None
+
+
+def _run_facets_of(write: _Write) -> dict[str, Any]:
+    """The run facets of a catalog write's event: the ``rask_lance`` facet, the engine, the parent run and the author."""
+    operation, version, branch, branch_identifier = write.operation, write.version, write.branch, write.branch_identifier
+    project, originator, run, author = write.project, write.originator, write.run, write.author
     lance_fields: dict[str, Any] = {"operation": operation}
     if version is not None:
         lance_fields["version"] = version
@@ -393,6 +464,14 @@ def build_write_event(
         run_facets["parent"] = parent.model_dump(by_alias=True, exclude_none=True)
     if author is not None:
         run_facets[AUTHOR_FACET] = author_facet(_PRODUCER, author)
+    return run_facets
+
+
+def _output_dataset_of(write: _Write) -> dict[str, Any]:
+    """The output dataset of a catalog write's event: the table under its canonical id, its facets and its uuids."""
+    table_id, namespace, version, operation, job_namespace = write.table_id, write.namespace, write.version, write.operation, write.job_namespace
+    source_uri, schema_fields, catalog_impl, warehouse_uri = write.source_uri, write.schema_fields, write.catalog_impl, write.warehouse_uri
+    uuids, renamed_from = write.uuids, write.renamed_from
     output: dict[str, Any] = {"namespace": namespace, "name": table_id}
     facets: dict[str, Any] = {}
     if version is not None:
@@ -439,26 +518,7 @@ def build_write_event(
     if facets:
         output["facets"] = facets
     output = with_dataset_uuids(output, uuids or DatasetUuids(), producer=_PRODUCER)
-    # A DDL change that DERIVED the table from another one keeps its run, and the spec is why: a
-    # `DatasetEvent` has only `dataset` — no `inputs` — and the edge list builds every edge from a run's
-    # inputs (`lineage.services.provenance.edges_of`), so moving it would sever the edge its run declared.
-    # A definition change that committed rows keeps its run for the same reason an Overwrite
-    # does: those rows are a write at this version, and a follower acting on writes reads them off a run.
-    if _is_ddl(operation) and not inputs and not commits_rows:
-        return _as_dataset_event(output=output, run_facets=run_facets, event_time=event_time)
-    return {
-        "eventType": "COMPLETE",
-        "eventTime": event_time,
-        "producer": _PRODUCER,
-        "schemaURL": RUN_EVENT_SCHEMA_URL,
-        "run": {"runId": run_id, "facets": run_facets},
-        # Job identity is per-TABLE (``<operation>.<table_id>``), not the bare op — else every table's
-        # writes lump into one job (``insert``) whose output set spans every table, in the feed and in a
-        # forwarded graph backend. Per-table keeps a job's output set scoped to the one table it wrote.
-        "job": {"namespace": job_namespace, "name": f"{operation}.{table_id}"},
-        "inputs": [_input_dataset(ref, namespace=namespace) for ref in (inputs or [])],
-        "outputs": [output],
-    }
+    return output
 
 
 #: How the emitter learns which TENANT a write belongs to, given the warehouse the table's name begins with ([[LH-593]]).

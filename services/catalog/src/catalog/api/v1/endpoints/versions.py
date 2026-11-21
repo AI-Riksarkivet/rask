@@ -29,6 +29,8 @@ from lance_namespace import (
     ListTableVersionsResponse,
     UnsupportedOperationError,
 )
+from openfga_sdk import OpenFgaClient
+from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.api import lineage_deps
 from catalog.api.authz import door_gates, write_doors
@@ -37,14 +39,16 @@ from catalog.api.dependencies import (
     FgaClientDep,
     LineageEmitterDep,
     ObjectUuidsDep,
+    Resolver,
     ResolverDep,
     SettingsDep,
     StorageOptionsDep,
 )
 from catalog.api.pagination import ListLimit, paginate_versions
-from catalog.api.security import CurrentToken
+from catalog.api.security import Caller, CurrentToken
 from catalog.core import run_context, version_retention
 from catalog.core.base_judge import BaseJudge
+from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import maintenance, managed_versions, table_inputs, warehouses
 from catalog.services.table_claims import DoorTable
@@ -231,73 +235,9 @@ async def create_table_version(
         # Another writer took the version since this one staged it: a lost race, so its retry gets the ref's next turn ([[LH-259]]).
         await run_in_threadpool(table.hand_turn, ref.branch, managed_versions.writer_turn(caller, exc.transaction_uuid, exc.operation))
         raise
-    author: str | None = None
-    created = False
-    try:
-        await door_gates.require_staged_operation(
-            client, settings, token, segments=segments, location=location, operation=staged.operation, creates=staged.creates
-        )
-        judge = BaseJudge.from_settings(settings, bucket_claim=warehouses.bucket_claim)
-        record = await run_in_threadpool(judge.read_record, location)
-        run = run_context.from_properties(staged.properties)
-        run_context.require_caller_authored(staged.properties, caller=token.subject if token is not None else None)
-        verdict = await run_in_threadpool(
-            partial(
-                managed_versions.judge,
-                base_judge=judge,
-                external_bases=record.entries if record is not None else (),
-                # A table's first version holds no contract yet: one is set on a table that exists.
-                contract=None if staged.creates else await run_in_threadpool(table.contract),
-            ),
-            staged,
-            so,
-        )
-        declared = await write_doors.judge_staged_run(
-            settings, token, client, resolver=resolver, ns=table.namespace, segments=segments, run=run, adds_data=verdict.adds_data
-        )
-        if staged.creates:
-            # A later version may change no field's labels (`managed_versions`); the first sets them, as a create does.
-            labels = await run_in_threadpool(managed_versions.staged_field_labels, staged, so)
-            await door_gates.require_classifier_to_set_labels(
-                client, settings, token, obj=fga_ids.table_object(table.resolved.require_uuid()), label=canonical, labels=labels
-            )
-        author = caller if caller is not None and table.announces(managed_versions.lineage_operation(staged)) else None
-        if author is not None:
-            # BEFORE THE FINALIZE: the reconciler signs a re-announcement only for the author the catalog recorded (ADR 0187).
-            try:
-                created = await run_in_threadpool(
-                    partial(table.record_author, staged.transaction_uuid, version=staged.version, ref=ref.key, author=author, manifest=staged.manifest_digest)
-                )
-            except commit_records.AuthorRecordedError as exc:
-                raise InvalidInputError(f"commit refused: its transaction {staged.transaction_uuid} is another commit's at version {staged.version}") from exc
-            except commit_records.UnreadableAuthorRecordError as exc:
-                raise InternalError(f"commit refused: {exc}") from exc
-    except BaseException:
-        await run_in_threadpool(managed_versions.refuse, staged, so)
-        raise
-    finally:
-        await run_in_threadpool(managed_versions.discard, staged, so)
-    try:
-        # BEFORE THE FINALIZE: each file the version adds is checked again from the moment it lands ([[LH-419]]).
-        await run_in_threadpool(table.record_committed_files, verdict.files)
-        if declared:
-            # BEFORE THE FINALIZE: an erasure names this table from the moment the version lands ([[LH-541]]).
-            await run_in_threadpool(
-                partial(
-                    table_inputs.record, settings.registry_root, settings.storage_options(), table.resolved.require_uuid(), name=canonical, declared=declared
-                )
-            )
-        writer = managed_versions.writer_turn(caller, staged.transaction_uuid, staged.operation)
-        # Waited out here, in the event loop, so a stock writer waiting holds no request thread; a turn handed to another stock
-        # writer is not waited out, since this writer races it as Lance's own backoff spreads them ([[LH-259]]).
-        kept = await table.wait_for_turn_in_loop(ref.branch, mine=writer.token if writer is not None else None, handed=False)
-        response = await run_in_threadpool(partial(managed_versions.finalize, writer=writer, kept=kept), table, staged, body, so=so)
-    except Exception:
-        # Only the request that created the record deletes it: a retry sharing the transaction relies on its twin's. A
-        # cancelled request is left out too, since its finalize may still land in the thread it runs in.
-        if created:
-            await run_in_threadpool(managed_versions.forget_unlanded_author, table, staged, so)
-        raise
+    commit = _StagedCommit(staged=staged, table=table, so=so, segments=segments, location=location, ref=ref, canonical=canonical, caller=caller)
+    judged = await _judge_the_staged_version(commit, settings=settings, token=token, client=client, resolver=resolver)
+    response = await _finalize_the_judged_version(commit, judged, body=body, settings=settings)
     audit(
         AuditAction.COMMIT_VERSION,
         AuditOutcome.SUCCESS,
@@ -317,9 +257,139 @@ async def create_table_version(
         uuids=uuids,
         pin_version=staged.version,
         branch=staged.branch,
-        run=run,
-        commits_rows=staged.creates and verdict.adds_data,
+        run=judged.run,
+        commits_rows=staged.creates and judged.verdict.adds_data,
     )
+    return response
+
+
+class _StagedCommit(BaseModel):
+    """What judging and finalizing one staged version share: the version, the table and ref it continues, and its caller."""
+
+    # `arbitrary_types_allowed` for `table`: the door's table is no pydantic type.
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    staged: managed_versions.StagedVersion
+    # The door's table is an opaque collaborator (an open dataset and its claims), not a value pydantic can judge.
+    table: SkipValidation[DoorTable]
+    so: StorageOptions
+    segments: list[str]
+    #: The table's location as the door holds it, where the staged manifest is judged.
+    location: str
+    ref: managed_versions.CommitRef
+    canonical: str
+    caller: str | None
+
+
+async def _judge_the_staged_version(
+    commit: _StagedCommit, *, settings: Settings, token: Caller | None, client: OpenFgaClient | None, resolver: Resolver
+) -> _JudgedVersion:
+    """Judge the staged version at the door's location, and record its author where it is announced."""
+    try:
+        await door_gates.require_staged_operation(
+            client, settings, token, segments=commit.segments, location=commit.location, operation=commit.staged.operation, creates=commit.staged.creates
+        )
+        judge = BaseJudge.from_settings(settings, bucket_claim=warehouses.bucket_claim)
+        record = await run_in_threadpool(judge.read_record, commit.location)
+        run = run_context.from_properties(commit.staged.properties)
+        run_context.require_caller_authored(commit.staged.properties, caller=token.subject if token is not None else None)
+        verdict = await run_in_threadpool(
+            partial(
+                managed_versions.judge,
+                base_judge=judge,
+                external_bases=record.entries if record is not None else (),
+                # A table's first version holds no contract yet: one is set on a table that exists.
+                contract=None if commit.staged.creates else await run_in_threadpool(commit.table.contract),
+            ),
+            commit.staged,
+            commit.so,
+        )
+        declared = await write_doors.judge_staged_run(
+            settings, token, client, resolver=resolver, ns=commit.table.namespace, segments=commit.segments, run=run, adds_data=verdict.adds_data
+        )
+        if commit.staged.creates:
+            # A later version may change no field's labels (`managed_versions`); the first sets them, as a create does.
+            labels = await run_in_threadpool(managed_versions.staged_field_labels, commit.staged, commit.so)
+            await door_gates.require_classifier_to_set_labels(
+                client, settings, token, obj=fga_ids.table_object(commit.table.resolved.require_uuid()), label=commit.canonical, labels=labels
+            )
+        created = await _record_the_staged_author(commit)
+    except BaseException:
+        await run_in_threadpool(managed_versions.refuse, commit.staged, commit.so)
+        raise
+    finally:
+        await run_in_threadpool(managed_versions.discard, commit.staged, commit.so)
+    return _JudgedVersion(verdict=verdict, declared=declared, run=run, created=created)
+
+
+async def _record_the_staged_author(commit: _StagedCommit) -> bool:
+    """Record the staged version's author where its table announces it; whether this request created the record."""
+    created = False
+    author = commit.caller if commit.caller is not None and commit.table.announces(managed_versions.lineage_operation(commit.staged)) else None
+    if author is not None:
+        # BEFORE THE FINALIZE: the reconciler signs a re-announcement only for the author the catalog recorded (ADR 0187).
+        try:
+            created = await run_in_threadpool(
+                partial(
+                    commit.table.record_author,
+                    commit.staged.transaction_uuid,
+                    version=commit.staged.version,
+                    ref=commit.ref.key,
+                    author=author,
+                    manifest=commit.staged.manifest_digest,
+                )
+            )
+        except commit_records.AuthorRecordedError as exc:
+            raise InvalidInputError(
+                f"commit refused: its transaction {commit.staged.transaction_uuid} is another commit's at version {commit.staged.version}"
+            ) from exc
+        except commit_records.UnreadableAuthorRecordError as exc:
+            raise InternalError(f"commit refused: {exc}") from exc
+    return created
+
+
+class _JudgedVersion(BaseModel):
+    """What judging a staged version decided: the verdict, the inputs its run declares, the run, and the author's record."""
+
+    model_config = ConfigDict(frozen=True)
+
+    verdict: managed_versions.Verdict
+    declared: dict[str, run_context.RunInput]
+    run: run_context.RunContext | None
+    #: Whether this request created the author's record, which only it may forget.
+    created: bool
+
+
+async def _finalize_the_judged_version(
+    commit: _StagedCommit, judged: _JudgedVersion, *, body: CreateTableVersionRequest, settings: Settings
+) -> CreateTableVersionResponse:
+    """Record what the judged version adds and declares, wait for its writer's turn, and finalize it."""
+    try:
+        # BEFORE THE FINALIZE: each file the version adds is checked again from the moment it lands ([[LH-419]]).
+        await run_in_threadpool(commit.table.record_committed_files, judged.verdict.files)
+        if judged.declared:
+            # BEFORE THE FINALIZE: an erasure names this table from the moment the version lands ([[LH-541]]).
+            await run_in_threadpool(
+                partial(
+                    table_inputs.record,
+                    settings.registry_root,
+                    settings.storage_options(),
+                    commit.table.resolved.require_uuid(),
+                    name=commit.canonical,
+                    declared=judged.declared,
+                )
+            )
+        writer = managed_versions.writer_turn(commit.caller, commit.staged.transaction_uuid, commit.staged.operation)
+        # Waited out here, in the event loop, so a stock writer waiting holds no request thread; a turn handed to another stock
+        # writer is not waited out, since this writer races it as Lance's own backoff spreads them ([[LH-259]]).
+        kept = await commit.table.wait_for_turn_in_loop(commit.ref.branch, mine=writer.token if writer is not None else None, handed=False)
+        response = await run_in_threadpool(partial(managed_versions.finalize, writer=writer, kept=kept), commit.table, commit.staged, body, so=commit.so)
+    except Exception:
+        # Only the request that created the record deletes it: a retry sharing the transaction relies on its twin's. A
+        # cancelled request is left out too, since its finalize may still land in the thread it runs in.
+        if judged.created:
+            await run_in_threadpool(managed_versions.forget_unlanded_author, commit.table, commit.staged, commit.so)
+        raise
     return response
 
 

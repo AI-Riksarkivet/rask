@@ -136,18 +136,7 @@ def destroy_table(
         except Exception:
             _clear_residue(control, residue)
             raise
-    removed: DeregisterTableResponse | None
-    try:
-        removed = native.call(ns, "deregister_table", DeregisterTableRequest(id=segments))
-    except TableNotFoundError:
-        _clear_residue(control, residue)
-        raise
-    except Exception as exc:
-        if _still_described(ns, segments):
-            _clear_residue(control, residue)
-            raise
-        log.warning("drop_deregister_answer_lost", extra={"table": table, "location": location, "error": str(exc)[:300]})
-        removed = None
+    removed = _deregister_row(ns, segments, control=control, residue=residue, table=table, location=location)
     try:
         if removed is not None and decoded_path(str(removed.location or "")) != decoded_path(location):
             raise InternalError(f"the row removed for {table} named {removed.location!r}, not the location judged")
@@ -159,6 +148,23 @@ def destroy_table(
     if removed is None:
         return DropTableResponse(id=segments, location=location)
     return DropTableResponse(id=removed.id, location=removed.location)
+
+
+def _deregister_row(
+    ns: LanceNamespace, segments: list[str], *, control: location_claims.ClaimStore, residue: TrashRecord | None, table: str, location: str
+) -> DeregisterTableResponse | None:
+    """Remove the table's row: the row removed, ``None`` when its answer was lost, the residue cleared when the row stands."""
+    try:
+        return native.call(ns, "deregister_table", DeregisterTableRequest(id=segments))
+    except TableNotFoundError:
+        _clear_residue(control, residue)
+        raise
+    except Exception as exc:
+        if _still_described(ns, segments):
+            _clear_residue(control, residue)
+            raise
+        log.warning("drop_deregister_answer_lost", extra={"table": table, "location": location, "error": str(exc)[:300]})
+        return None
 
 
 def _data_directories_of(control: location_claims.ClaimStore, location: str, table: str, *, uuid: str) -> list[base_registry.RecordedBase]:
@@ -328,10 +334,15 @@ def _delete_everything_under(location: str, so: StorageOptions, stored: str, *, 
         stored_objects.delete_objects(location, so, [obj for obj in held if not obj.startswith(versions)])
         stored_objects.delete_objects(location, so, [obj for obj in held if obj.startswith(versions)])
         if not on_s3(location):
-            fs, _ = dataset_fs(location, so)
-            for path in [versions.rstrip("/"), *paths]:
-                with suppress(FileNotFoundError):
-                    fs.delete_dir(path)
+            _delete_local_directories(location, so, [versions.rstrip("/"), *paths])
     left = [obj for path in paths for obj in _objects_under(location, so, path)]
     if left:
         raise OSError(f"{len(left)} object(s) remain under {location} after {_DELETE_PASSES} delete passes: {left[:5]}")
+
+
+def _delete_local_directories(location: str, so: StorageOptions, paths: list[str]) -> None:
+    """Delete each of ``paths`` as a directory of the filesystem ``location`` is on, one already gone counting as deleted."""
+    fs, _ = dataset_fs(location, so)
+    for path in paths:
+        with suppress(FileNotFoundError):
+            fs.delete_dir(path)

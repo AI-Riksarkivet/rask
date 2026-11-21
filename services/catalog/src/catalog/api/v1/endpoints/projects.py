@@ -63,7 +63,7 @@ from lance_namespace import (
     TableNotFoundError,
 )
 from openfga_sdk import OpenFgaClient
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
 from catalog.api import announcing
 from catalog.api import idempotency as idem
@@ -642,6 +642,7 @@ async def delete_project(
     writer = token.subject if token is not None else "system:catalog"
     announced = f"user:{token.subject}" if token is not None else None
     obj = f"project:{project_id}"
+    retiring = _Retiring(project_id=project_id, settings=settings, so=so, authz=authz, writer=writer, announced=announced)
     # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
     grants = announcing.grant_changes(
         await fga_reads.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=announced, reason="project_deleted"
@@ -655,12 +656,7 @@ async def delete_project(
         # more — privilege that nothing in the product can see, let alone clear.
         if authz is not None:
             removed = await fga_writes.revoke_object_tuples(authz, obj, actor=writer, origin="lifecycle_delete")  # noqa: TID251
-        # Each role is ended as its own delete door ends it, with authorization off too, so no record outlives its project.
-        for role in await run_in_threadpool(roles.every_role, settings.registry_root, so, project_id):
-            ending = await announcing.role_ending(authz, role, actor=announced, reason="project_deleted")
-            async with announcer.announcing(door="end_role", target=roles.role_object(role.id), announcements=ending.announcements()) as ending_filed:
-                ended = await role_grants.end_role(authz, role, control_root=settings.registry_root, storage_options=so, actor=writer)
-                await ending.send(ending_filed, ended, actor=announced, reason="project_deleted")
+        await _end_its_roles(retiring, announcer)
         if authz is not None:
             # A role's ending moves its project's `admin_revision` (`project_admins.withdraw`), bookkeeping no grant
             # reads and nobody is told of, so the project's tuples are revoked once more after its last role ended.
@@ -670,13 +666,7 @@ async def delete_project(
         # `warehouse:X#project@project:<id>`: none can survive here, because the emptiness refusal above proves no warehouse
         # record claims this project, and a warehouse's delete revokes its own tuples (that edge among them) before its
         # record goes.
-        # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant,
-        # and a policy kept for the id would govern that tenant's buckets as soon as it named them.
-        await run_in_threadpool(maintenance_policies.delete_policy, settings.registry_root, so, "project", key=project_id)
-        # Its label definitions too, for the same reason (ADR 0211). No object of it carries one by now: every object
-        # lay in a warehouse of it, and each ended its labels as it went.
-        await run_in_threadpool(object_labels.end_definitions, settings.registry_root, so, project_id)
-        await run_in_threadpool(project_registry.delete_project_record, settings.registry_root, so, project_id)
+        await _end_its_records(retiring)
 
         log.info("project_deleted", extra={"project": project_id, "tuples_revoked": len(removed), "forced": force})
         if authz is not None:
@@ -703,3 +693,41 @@ async def delete_project(
     answer = DeleteProjectResponse(project=project_id, tuples_revoked=len(removed))
     await converge.remember(200, answer)
     return answer
+
+
+class _Retiring(BaseModel):
+    """The project a delete retires, the store its records are in, and who retires it, in both spellings."""
+
+    # `arbitrary_types_allowed` for `authz`: an OpenFgaClient is no pydantic type.
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    project_id: str
+    settings: CatalogStore
+    so: StorageOptions
+    # An OpenFGA client is opaque: what the door was handed is what it uses, a stand-in in a test included.
+    authz: SkipValidation[OpenFgaClient | None]
+    writer: str
+    announced: str | None
+
+
+async def _end_its_roles(retiring: _Retiring, announcer: Announcer) -> None:
+    """End every role of the retiring project, each announced as its own delete door announces it."""
+    # Each role is ended as its own delete door ends it, with authorization off too, so no record outlives its project.
+    for role in await run_in_threadpool(roles.every_role, retiring.settings.registry_root, retiring.so, retiring.project_id):
+        ending = await announcing.role_ending(retiring.authz, role, actor=retiring.announced, reason="project_deleted")
+        async with announcer.announcing(door="end_role", target=roles.role_object(role.id), announcements=ending.announcements()) as ending_filed:
+            ended = await role_grants.end_role(
+                retiring.authz, role, control_root=retiring.settings.registry_root, storage_options=retiring.so, actor=retiring.writer
+            )
+            await ending.send(ending_filed, ended, actor=retiring.announced, reason="project_deleted")
+
+
+async def _end_its_records(retiring: _Retiring) -> None:
+    """End the retiring project's maintenance policy, label definitions and record, in that order."""
+    # Its maintenance policy goes before its record ([[LH-562]]): a project created again under the id is another tenant,
+    # and a policy kept for the id would govern that tenant's buckets as soon as it named them.
+    await run_in_threadpool(maintenance_policies.delete_policy, retiring.settings.registry_root, retiring.so, "project", key=retiring.project_id)
+    # Its label definitions too, for the same reason (ADR 0211). No object of it carries one by now: every object
+    # lay in a warehouse of it, and each ended its labels as it went.
+    await run_in_threadpool(object_labels.end_definitions, retiring.settings.registry_root, retiring.so, retiring.project_id)
+    await run_in_threadpool(project_registry.delete_project_record, retiring.settings.registry_root, retiring.so, retiring.project_id)

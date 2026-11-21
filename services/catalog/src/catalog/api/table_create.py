@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from functools import partial
 
 import pyarrow as pa
@@ -52,7 +53,7 @@ from lance_namespace import (
     TableNotFoundError,
 )
 from openfga_sdk import OpenFgaClient
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.api.authz import door_gates, hierarchy, object_grants, write_doors
 from catalog.api.dependencies import Resolver
@@ -267,27 +268,9 @@ async def create_governed_table(
         before_register=grants,
         after_register=partial(grants.parent_as_authorized, ns),
     )
-    try:
-        try:
-            response: CreateTableResponse = await run_in_threadpool(create)
-        except object_grants.ParentChangedError:
-            # Not a race lost to another create of the name: the table an ExistOk would keep is in a namespace this
-            # caller was not judged on ([[LH-585]]).
-            raise
-        except (TableAlreadyExistsError, ConcurrentModificationError):
-            # AN ExistOk THAT LOST THE RACE KEEPS THE WINNER'S TABLE. Two ExistOk creates in one pod both find no table
-            # at the probe, and the backend's put-if-not-exists answers the loser's add as a conflict; ExistOk asks for
-            # the table to exist, so the loser answers it as kept, and as kept it writes nothing and keeps no grant. A
-            # winner still between its declaration and its first write holds no version yet, and the conflict stands: a
-            # retry finds the table written.
-            if mode is not CreateMode.EXIST_OK or (kept := await run_in_threadpool(creation.kept_table, ns, so, segments)) is None:
-                raise
-            response, existok_kept_existing = kept, True
-    except Exception:
-        # A failed write is rolled back with its declaration, and so are its grants; a declaration whose rollback failed
-        # stands, and keeps them.
-        await grants.take_back_unless_standing(ns)
-        raise
+    kept = partial(creation.kept_table, ns, so, segments)
+    response, kept_the_winner = await _write_the_table(create, kept=kept, ns=ns, mode=mode, grants=grants)
+    existok_kept_existing = existok_kept_existing or kept_the_winner
 
     # The table's grants are held by the uuid its location's claim records: the one this create minted, or the kept
     # table's own under ExistOk or an Overwrite (ADR 0173 §2, [[LH-524]]). Only a table this request brought into being
@@ -310,6 +293,80 @@ async def create_governed_table(
     # response.version = the existing version), and an Overwrite of an existing table wrote the table's
     # provenance fields and metadata over the payload's. The read-back is made for every create, for the
     # commit's own time, the event's `eventTime` ([[LH-497]]). Best-effort either way (failure → []).
+    created = _Created(
+        response=response,
+        table=table,
+        segments=segments,
+        table_id=table_id,
+        namespace=namespace,
+        created_by=created_by,
+        mode=mode,
+        run=run,
+        overwrote_existing=overwrote_existing,
+        existok_kept_existing=existok_kept_existing,
+    )
+    await _announce_the_create_on_lineage(created, emitter=emitter, uuids=uuids, so=so)
+    await _announce_the_create_on_the_control_lane(created, control=control, token=token, table_uuid=table_uuid)
+    return response
+
+
+async def _write_the_table(
+    create: Callable[[], CreateTableResponse],
+    *,
+    kept: Callable[[], CreateTableResponse | None],
+    ns: LanceNamespace,
+    mode: CreateMode,
+    grants: object_grants.GrantsBeforeWrite,
+) -> tuple[CreateTableResponse, bool]:
+    """Write the table ``create`` makes: its answer, and whether an ExistOk that lost the race kept the winner's table."""
+    # A failed write takes back the grants written for it.
+    try:
+        try:
+            response: CreateTableResponse = await run_in_threadpool(create)
+        except object_grants.ParentChangedError:
+            # Not a race lost to another create of the name: the table an ExistOk would keep is in a namespace this
+            # caller was not judged on ([[LH-585]]).
+            raise
+        except (TableAlreadyExistsError, ConcurrentModificationError):
+            # AN ExistOk THAT LOST THE RACE KEEPS THE WINNER'S TABLE. Two ExistOk creates in one pod both find no table
+            # at the probe, and the backend's put-if-not-exists answers the loser's add as a conflict; ExistOk asks for
+            # the table to exist, so the loser answers it as kept, and as kept it writes nothing and keeps no grant. A
+            # winner still between its declaration and its first write holds no version yet, and the conflict stands: a
+            # retry finds the table written.
+            if mode is not CreateMode.EXIST_OK or (winner := await run_in_threadpool(kept)) is None:
+                raise
+            return winner, True
+    except Exception:
+        # A failed write is rolled back with its declaration, and so are its grants; a declaration whose rollback failed
+        # stands, and keeps them.
+        await grants.take_back_unless_standing(ns)
+        raise
+    return response, False
+
+
+class _Created(BaseModel):
+    """What a governed create did: its answer, the table it wrote, the names it announces under and how it landed."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    response: CreateTableResponse
+    # The written table is a pyarrow object pydantic cannot validate.
+    table: SkipValidation[pa.Table]
+    segments: list[str]
+    table_id: str
+    namespace: str
+    created_by: str | None
+    mode: CreateMode
+    run: RunContext | None
+    overwrote_existing: bool
+    existok_kept_existing: bool
+
+
+async def _announce_the_create_on_lineage(created: _Created, *, emitter: LineageEmitter, uuids: UuidReader, so: StorageOptions) -> None:
+    """Announce the create on lineage: as a write when it overwrote a table, else as the table's creation."""
+    response, table, segments, mode, run = created.response, created.table, created.segments, created.mode, created.run
+    table_id, namespace, created_by = created.table_id, created.namespace, created.created_by
+    overwrote_existing, existok_kept_existing = created.overwrote_existing, created.existok_kept_existing
     readback = await run_in_threadpool(versions.read_version_and_schema, str(response.location), so, segments, pin_version=response.version, branch=None)
     schema_fields = readback.schema_fields if mode is CreateMode.EXIST_OK or overwrote_existing else versions.payload_schema_fields(table.schema, segments)
     inputs = await input_refs(run_inputs(run), uuids=uuids)
@@ -345,6 +402,12 @@ async def create_governed_table(
             uuids=table_uuids,
             event_time=readback.committed_at,
         )
+
+
+async def _announce_the_create_on_the_control_lane(created: _Created, *, control: ControlEmitter, token: Caller | None, table_uuid: str) -> None:
+    """Announce on the control lane a table the create brought into being."""
+    response, mode, table_id, namespace = created.response, created.mode, created.table_id, created.namespace
+    existok_kept_existing, overwrote_existing = created.existok_kept_existing, created.overwrote_existing
     # Only a table this request brought into being is announced on the control lane. An ExistOk request that
     # KEPT a pre-existing table created nothing, and an Overwrite of an existing table kept its uuid, grants and
     # protection: it committed a new version of the same dataset (lance_docs transaction.md § Overwrite), so its
@@ -365,4 +428,3 @@ async def create_governed_table(
                 "location": response.location,
             },
         )
-    return response

@@ -647,29 +647,7 @@ def gather_compaction_bases(ds: FragmentCarrier, probe: DatasetRootProbe) -> Com
         try:
             probed: bool | None = probe(ref.path)
         except Exception as exc:
-            denied = _is_permission_denial(exc)
-            if denied:
-                # REPORTED ONCE PER BASE, PER PROCESS, AND WITHOUT A STACK. A denial is configuration,
-                # not an incident: it is the answer of the policy on the identity this service signs
-                # as, so it is deterministic for a given base. A rotation replaces that identity's key
-                # and keeps its policy ([[XC-082]]), so it changes no answer here; a changed policy is
-                # a deployment change, and a rollout is a new process and therefore a fresh report.
-                #
-                # Measured on the running sweep 2026-09-15: 134 rendered tracebacks in ONE pass, every
-                # one `base='s3://lance-catalog/models/' denied=True` — the same base, the same key,
-                # the same answer. They sat beside 315 refusals that were CORRECT, which is how a
-                # reader learns to scroll past the category that refuses to sign a rewrite with the
-                # deployment's ambient key.
-                #
-                # The stack goes because the classification already names the cause completely; a
-                # traceback of an S3 403 adds nothing an operator can act on. A NON-denial keeps both
-                # its traceback and its repetition — an outage or a probe bug is precisely where the
-                # stack matters, and it is not deterministic for the life of the process.
-                if ref.path not in _REPORTED_BASE_DENIALS:
-                    _REPORTED_BASE_DENIALS.add(ref.path)
-                    log.warning("compaction_base_probe_denied", extra={"base": ref.path, "denied": True})
-            else:
-                log.warning("compaction_base_probe_failed", extra={"base": ref.path, "denied": False}, exc_info=True)
+            denied = _log_probe_failure(ref.path, exc)
             probed = None
         bases.append(BaseEvidence(path=ref.path, declares_dataset_root=ref.is_dataset_root, probed_dataset_root=probed, probe_denied=denied))
     try:
@@ -678,6 +656,34 @@ def gather_compaction_bases(ds: FragmentCarrier, probe: DatasetRootProbe) -> Com
         log.warning("compaction_fragment_read_failed", exc_info=True)
         resolves = None
     return CompactionBases(bases=bases, data_resolves_through_a_base=resolves)
+
+
+def _log_probe_failure(path: str, exc: Exception) -> bool:
+    """Log the failed probe of the base at ``path``: whether ``exc`` was a permission denial."""
+    denied = _is_permission_denial(exc)
+    if denied:
+        # REPORTED ONCE PER BASE, PER PROCESS, AND WITHOUT A STACK. A denial is configuration,
+        # not an incident: it is the answer of the policy on the identity this service signs
+        # as, so it is deterministic for a given base. A rotation replaces that identity's key
+        # and keeps its policy ([[XC-082]]), so it changes no answer here; a changed policy is
+        # a deployment change, and a rollout is a new process and therefore a fresh report.
+        #
+        # Measured on the running sweep 2026-09-15: 134 rendered tracebacks in ONE pass, every
+        # one `base='s3://lance-catalog/models/' denied=True` — the same base, the same key,
+        # the same answer. They sat beside 315 refusals that were CORRECT, which is how a
+        # reader learns to scroll past the category that refuses to sign a rewrite with the
+        # deployment's ambient key.
+        #
+        # The stack goes because the classification already names the cause completely; a
+        # traceback of an S3 403 adds nothing an operator can act on. A NON-denial keeps both
+        # its traceback and its repetition — an outage or a probe bug is precisely where the
+        # stack matters, and it is not deterministic for the life of the process.
+        if path not in _REPORTED_BASE_DENIALS:
+            _REPORTED_BASE_DENIALS.add(path)
+            log.warning("compaction_base_probe_denied", extra={"base": path, "denied": True})
+    else:
+        log.warning("compaction_base_probe_failed", extra={"base": path, "denied": False}, exc_info=exc)
+    return denied
 
 
 def data_file_base_paths(ds: FragmentCarrier) -> set[str]:

@@ -10,6 +10,7 @@ import time
 from collections.abc import Callable, Sequence
 from contextlib import ExitStack
 from dataclasses import replace
+from functools import partial
 from typing import Any, Final
 
 import lance
@@ -33,6 +34,7 @@ from lance_namespace import (
     TableVersion,
     TableVersionNotFoundError,
 )
+from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.core import encoding, manifest_bytes, primary_keys
 from catalog.core.config import shared_lance_session
@@ -148,86 +150,204 @@ def commit_stamped[T](
     ref = recorded_branch(branch)
     turn: str | None = None
     author = properties.get(AUTHOR_PROPERTY) if table.announces(properties.get(OPERATION_PROPERTY, "")) else None
+    commit = _StampedCommit(table=table, so=so, properties=properties, ref=ref, author=author, keeps_labels=keeps_labels)
     with ExitStack() as held:
         for attempt in range(_STAMPED_COMMIT_ATTEMPTS):
             dataset = disarm_commit_path_cleanup(opened if opened is not None else table.open(so, branch=ref), table_id)
             opened = None
-            try:
-                transaction, measured = plan(dataset)
-            except _PlannedOnAStaleVersion:
-                turn = _turn_for_the_next_attempt(table, ref, held, turn=turn, attempt=attempt)
-                continue
-            stamped = replace(transaction, read_version=dataset.version, transaction_properties={**(transaction.transaction_properties or {}), **properties})
-            detached = lance.LanceDataset.commit(dataset, stamped, detached=True)
-            # The ref's own location: a branch handle reports the table's root, while its versions live under
-            # `tree/<branch>/`, where the detached commit wrote (measured on pylance 13.0.0).
-            location = detached.uri
-            version = dataset.version + 1
-            finalize_id = manifest_bytes.detached_id()
-            wrote: file_identities.CommittedFiles | None = None
-            recorded = finalizing = False
-            try:
-                if keeps_labels:
-                    _refuse_a_lost_label(dataset, detached)
-                encoding.require_no_new_invalid_encoding(dataset, detached)
-                primary_keys.refuse_repeats_in_version(detached, dataset, door=properties[OPERATION_PROPERTY])
-                contracts.require_kept(table.contract(), dataset.schema, detached.schema, door=properties[OPERATION_PROPERTY])
-                wrote = committed_files.added(
-                    dataset, detached, table_location=table.location, branch=ref, so=so, transaction_uuid=stamped.uuid, read_version=stamped.read_version
-                )
-                table.record_committed_files(wrote)
-                recorded = True
-                fs, base = dataset_fs(location, so)
-                versions = f"{base.rstrip('/')}/_versions"
-                with fs.open_input_stream(f"{versions}/{manifest_names.detached_name(detached.version)}") as source:
-                    body = manifest_bytes.with_manifest_version(source.read(), version)
-                with fs.open_output_stream(f"{versions}/{manifest_names.detached_name(finalize_id)}") as sink:
-                    sink.write(body)
-                request = CreateTableVersionRequest(
-                    id=table_id,
-                    version=version,
-                    branch=ref,
-                    manifest_path=f"{object_store_path(location)}/_versions/{manifest_names.detached_name(finalize_id)}",
-                    manifest_size=len(body),
-                )
-                judged = commit_records.manifest_digest(body)
-                if author is not None:
-                    # BEFORE THE FINALIZE: the reconciler signs a re-announcement only for the author recorded for exactly
-                    # these bytes (ADR 0187), which the backend moves into the version slot unchanged, under the ref's
-                    # incarnation as this attempt reads it.
-                    ref_key = commit_ref_key(table.location, so, table_id, branch=ref)
-                    table.record_author(stamped.uuid, version=version, ref=ref_key, author=author, manifest=judged)
-                finalizing = True
-                try:
-                    table.finalize_version(request, turn=turn)
-                except (table_claims.TableChangedError, table_claims.TurnWaitRefusedError):
-                    if author is not None:
-                        _forget_unlanded_author(table, so, stamped.uuid, location=location, version=version, judged=judged)
-                    raise
-                except ConcurrentModificationError:
-                    discard_detached_manifest(location, so, finalize_id)
-                    landed = _landed_digest(table, so, location=location, version=version)
-                    if landed == judged:
-                        # The store answered a conditional put that landed as a conflict: the version is this commit, and
-                        # planning it again would apply the change twice.
-                        return version, measured
-                    if author is not None:
-                        _forget_unlanded_author(table, so, stamped.uuid, location=location, version=version, judged=judged)
-                    if landed != _AMBIGUOUS_VERSION:
-                        _discard_unlanded_attempt(table, so, stamped, wrote=wrote, branch=ref, recorded=recorded)
-                    turn = _turn_for_the_next_attempt(table, ref, held, turn=turn, attempt=attempt)
-                    continue
-            except BaseException:
-                discard_detached_manifest(location, so, finalize_id)
-                if not finalizing:
-                    if wrote is None:
-                        wrote = _read_attempt_files(table, so, dataset, after=detached, transaction=stamped, branch=ref)
-                    _discard_unlanded_attempt(table, so, stamped, wrote=wrote, branch=ref, recorded=recorded)
-                raise
-            finally:
-                discard_detached_manifest(location, so, detached.version)
-            return version, measured
+            next_turn = partial(_turn_for_the_next_attempt, table, ref, held, turn=turn, attempt=attempt)
+            outcome = _attempt_once(commit, dataset, plan, turn=turn, next_turn=next_turn)
+            turn = outcome.turn
+            if outcome.landed is not None:
+                return outcome.landed
         raise ConcurrentModificationError(f"the commit lost the race for the next version {_STAMPED_COMMIT_ATTEMPTS} times; retry it")
+
+
+class _StampedCommit(BaseModel):
+    """What every attempt of one :func:`commit_stamped` call commits with."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    # The door's table is a collaborator holding the open namespace, not a value: a test stands in a double for it.
+    table: SkipValidation[table_claims.DoorTable]
+    so: StorageOptions
+    properties: dict[str, str]
+    ref: str | None
+    author: str | None
+    keeps_labels: bool
+
+
+class _Attempt(BaseModel):
+    """One attempt's detached commit, to land as ``version`` under ``turn``."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    # pylance's dataset handles and transaction are native objects pydantic cannot validate.
+    dataset: SkipValidation[lance.LanceDataset]
+    stamped: SkipValidation[Transaction]
+    detached: SkipValidation[lance.LanceDataset]
+    location: str
+    version: int
+    finalize_id: int
+    turn: str | None
+
+
+class _AttemptOutcome[T](BaseModel):
+    """What one attempt landed (its version and what ``plan`` measured), else ``None``, and the turn the next plans under."""
+
+    model_config = ConfigDict(frozen=True)
+
+    # What ``plan`` measured is the caller's own value, of the caller's own type, handed back as it was given.
+    landed: SkipValidation[tuple[int, T] | None]
+    turn: str | None
+
+
+class _Finalized(BaseModel):
+    """Whether an attempt's finalize landed, and the turn the next attempt plans under."""
+
+    model_config = ConfigDict(frozen=True)
+
+    landed: bool
+    turn: str | None
+
+
+class _PlantedFinalize(BaseModel):
+    """The ``version/create`` request that finalizes an attempt, and the digest of the manifest bytes it names."""
+
+    model_config = ConfigDict(frozen=True)
+
+    request: CreateTableVersionRequest
+    judged: str
+
+
+def _attempt_once[T](
+    commit: _StampedCommit,
+    dataset: lance.LanceDataset,
+    plan: Callable[[lance.LanceDataset], tuple[Transaction, T]],
+    *,
+    turn: str | None,
+    next_turn: Callable[[], str | None],
+) -> _AttemptOutcome[T]:
+    """Plan, judge and finalize one attempt: what it landed, and the turn the next attempt plans under."""
+    try:
+        transaction, measured = plan(dataset)
+    except _PlannedOnAStaleVersion:
+        return _AttemptOutcome[T](landed=None, turn=next_turn())
+    attempt = _commit_detached(commit, dataset, transaction, turn=turn)
+    wrote: file_identities.CommittedFiles | None = None
+    recorded = finalizing = False
+    try:
+        _judge_attempt(commit, attempt)
+        wrote = committed_files.added(
+            dataset,
+            attempt.detached,
+            table_location=commit.table.location,
+            branch=commit.ref,
+            so=commit.so,
+            transaction_uuid=attempt.stamped.uuid,
+            read_version=attempt.stamped.read_version,
+        )
+        commit.table.record_committed_files(wrote)
+        recorded = True
+        planted = _write_the_finalize_manifest(commit, attempt)
+        if commit.author is not None:
+            _record_attempt_author(commit, attempt, planted, author=commit.author)
+        finalizing = True
+        finalized = _finalize_attempt(commit, attempt, planted, wrote=wrote, next_turn=next_turn)
+        turn = finalized.turn
+        if not finalized.landed:
+            return _AttemptOutcome[T](landed=None, turn=turn)
+    except BaseException:
+        discard_detached_manifest(attempt.location, commit.so, attempt.finalize_id)
+        if not finalizing:
+            if wrote is None:
+                wrote = _read_attempt_files(commit.table, commit.so, dataset, after=attempt.detached, transaction=attempt.stamped, branch=commit.ref)
+            _discard_unlanded_attempt(commit.table, commit.so, attempt.stamped, wrote=wrote, branch=commit.ref, recorded=recorded)
+        raise
+    finally:
+        discard_detached_manifest(attempt.location, commit.so, attempt.detached.version)
+    return _AttemptOutcome[T](landed=(attempt.version, measured), turn=turn)
+
+
+def _commit_detached(commit: _StampedCommit, dataset: lance.LanceDataset, transaction: Transaction, *, turn: str | None) -> _Attempt:
+    """Commit ``transaction`` stamped with the commit's properties, detached, as the version after ``dataset``'s."""
+    stamped = replace(transaction, read_version=dataset.version, transaction_properties={**(transaction.transaction_properties or {}), **commit.properties})
+    detached = lance.LanceDataset.commit(dataset, stamped, detached=True)
+    # The ref's own location: a branch handle reports the table's root, while its versions live under
+    # `tree/<branch>/`, where the detached commit wrote (measured on pylance 13.0.0).
+    location = detached.uri
+    version = dataset.version + 1
+    finalize_id = manifest_bytes.detached_id()
+    return _Attempt(dataset=dataset, stamped=stamped, detached=detached, location=location, version=version, finalize_id=finalize_id, turn=turn)
+
+
+def _judge_attempt(commit: _StampedCommit, attempt: _Attempt) -> None:
+    """Refuse the attempt a judge refuses, as :func:`commit_stamped` states."""
+    if commit.keeps_labels:
+        _refuse_a_lost_label(attempt.dataset, attempt.detached)
+    encoding.require_no_new_invalid_encoding(attempt.dataset, attempt.detached)
+    primary_keys.refuse_repeats_in_version(attempt.detached, attempt.dataset, door=commit.properties[OPERATION_PROPERTY])
+    contracts.require_kept(commit.table.contract(), attempt.dataset.schema, attempt.detached.schema, door=commit.properties[OPERATION_PROPERTY])
+
+
+def _write_the_finalize_manifest(commit: _StampedCommit, attempt: _Attempt) -> _PlantedFinalize:
+    """Write the detached manifest again as the attempt's version under its finalize id, and the request that finalizes it."""
+    fs, base = dataset_fs(attempt.location, commit.so)
+    versions = f"{base.rstrip('/')}/_versions"
+    with fs.open_input_stream(f"{versions}/{manifest_names.detached_name(attempt.detached.version)}") as source:
+        body = manifest_bytes.with_manifest_version(source.read(), attempt.version)
+    with fs.open_output_stream(f"{versions}/{manifest_names.detached_name(attempt.finalize_id)}") as sink:
+        sink.write(body)
+    request = CreateTableVersionRequest(
+        id=commit.table.segments,
+        version=attempt.version,
+        branch=commit.ref,
+        manifest_path=f"{object_store_path(attempt.location)}/_versions/{manifest_names.detached_name(attempt.finalize_id)}",
+        manifest_size=len(body),
+    )
+    return _PlantedFinalize(request=request, judged=commit_records.manifest_digest(body))
+
+
+def _record_attempt_author(commit: _StampedCommit, attempt: _Attempt, planted: _PlantedFinalize, *, author: str) -> None:
+    """Record the commit's author for the attempt's planted manifest."""
+    # BEFORE THE FINALIZE: the reconciler signs a re-announcement only for the author recorded for exactly these bytes (ADR
+    # 0187), which the backend moves into the version slot unchanged, under the ref's incarnation as this attempt reads it.
+    ref_key = commit_ref_key(commit.table.location, commit.so, commit.table.segments, branch=commit.ref)
+    commit.table.record_author(attempt.stamped.uuid, version=attempt.version, ref=ref_key, author=author, manifest=planted.judged)
+
+
+def _finalize_attempt(
+    commit: _StampedCommit, attempt: _Attempt, planted: _PlantedFinalize, *, wrote: file_identities.CommittedFiles | None, next_turn: Callable[[], str | None]
+) -> _Finalized:
+    """Finalize the planted attempt under its turn: whether it landed, and the turn the next attempt plans under."""
+    try:
+        commit.table.finalize_version(planted.request, turn=attempt.turn)
+    except (table_claims.TableChangedError, table_claims.TurnWaitRefusedError):
+        if commit.author is not None:
+            _forget_unlanded_author(commit.table, commit.so, attempt.stamped.uuid, location=attempt.location, version=attempt.version, judged=planted.judged)
+        raise
+    except ConcurrentModificationError:
+        if _discard_a_lost_finalize_unless_it_landed(commit, attempt, planted, wrote=wrote):
+            # The store answered a conditional put that landed as a conflict: the version is this commit, and
+            # planning it again would apply the change twice.
+            return _Finalized(landed=True, turn=attempt.turn)
+        return _Finalized(landed=False, turn=next_turn())
+    return _Finalized(landed=True, turn=attempt.turn)
+
+
+def _discard_a_lost_finalize_unless_it_landed(
+    commit: _StampedCommit, attempt: _Attempt, planted: _PlantedFinalize, *, wrote: file_identities.CommittedFiles | None
+) -> bool:
+    """Whether a lost finalize landed after all; one that did not forgets its author and deletes what it wrote."""
+    discard_detached_manifest(attempt.location, commit.so, attempt.finalize_id)
+    landed = _landed_digest(commit.table, commit.so, location=attempt.location, version=attempt.version)
+    if landed == planted.judged:
+        return True
+    if commit.author is not None:
+        _forget_unlanded_author(commit.table, commit.so, attempt.stamped.uuid, location=attempt.location, version=attempt.version, judged=planted.judged)
+    if landed != _AMBIGUOUS_VERSION:
+        _discard_unlanded_attempt(commit.table, commit.so, attempt.stamped, wrote=wrote, branch=commit.ref, recorded=True)
+    return False
 
 
 def _discard_unlanded_attempt(

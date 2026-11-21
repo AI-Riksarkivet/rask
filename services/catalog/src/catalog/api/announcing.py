@@ -107,6 +107,28 @@ type GrantAction = Literal["grant_added", "grant_revoked"]
 type TupleKey = tuple[str, str, str]
 
 
+class _FilingOutcome(BaseModel):
+    """What finishing filings did, in the counts the finish answers with."""
+
+    model_config = ConfigDict(frozen=True)
+
+    finished: int = 0
+    sent: int = 0
+    unlanded: int = 0
+    young: int = 0
+    failed: int = 0
+
+    def plus(self, other: _FilingOutcome) -> _FilingOutcome:
+        """The two outcomes' counts added."""
+        return _FilingOutcome(
+            finished=self.finished + other.finished,
+            sent=self.sent + other.sent,
+            unlanded=self.unlanded + other.unlanded,
+            young=self.young + other.young,
+            failed=self.failed + other.failed,
+        )
+
+
 class DropAtWorkError(Exception):
     """A door is acting on the table a drop, a deregister or a cascade filed for, or a recoverable drop's own fence still
     stands, so whether that door retired it is not yet the store's to tell: its filing stands for a later judgement."""
@@ -242,61 +264,69 @@ class Announcer:
             raise store_refusal(exc, reading="the filed announcements", so="nothing was sent") from exc
         except ValueError as exc:
             raise InvalidInputError(str(exc)) from exc
-        done = AnnouncementIntentsFinishResponse(left=max(read.listed - limit, 0), next=read.next)
+        total = _FilingOutcome()
         _create_left_series()
         if after is None:  # a pass begins: what it reports is the oldest filing it leaves standing
             _oldest_left[0] = 0.0
         for key, filed_at, age in read.unread:
-            # Within its lease an unread filing waits: a door still running under another version of the code (a rolling
-            # upgrade) may have filed it, and may yet send it and settle it itself.
-            if age < announcement_intents.LEASE:
-                done.young += 1
-                continue
-            # REMOVED UNREAD. A filing this code cannot read exactly (`announcement_intents._Evidence`) can never be
-            # judged by it, so it announces nothing; left, it would stand for good and keep the standing-filing alert
-            # firing. The ERROR line and the counter are its trace, without its body, which can name principals. A
-            # filing is written once, create-if-absent under a key of its own, so nothing rewrites it between the read
-            # and the delete.
-            log.error("announcement_intent_unreadable", extra={"key": key, "filed_at": filed_at.isoformat()})
-            try:
-                await run_in_threadpool(announcement_intents.settle, root, so, key)
-            except OSError as exc:
-                raise store_refusal(exc, reading=f"removing the unreadable filing {key}", so="nothing of it was sent") from exc
-            _unreadable.add(1)
+            total = total.plus(await self._remove_unreadable(key, filed_at, age, root=root, so=so))
         for filing in read.filings:
-            if filing.young:
-                done.young += 1
-                _left(filing.age, "young")
-                continue
-            try:
-                landed = [a for a in filing.intent.announcements if await self.landed(a.evidence, filed_at=filing.filed_at)]
-            except DropAtWorkError:
-                done.young += 1
-                _left(filing.age, "at_work")
-                continue
-            except ServiceUnavailableError:
-                raise
-            except Exception as exc:  # noqa: BLE001 — one filing that cannot be judged must not stop every filing after it
-                # Judged alone: a record or a claim that cannot be read leaves this filing standing, said once a pass by
-                # its key, and the rest of the batch is finished.
-                log.error(
-                    "announcement_intent_unjudged",
-                    extra={"key": filing.key, "door": filing.intent.door, "target": filing.intent.target, "error": type(exc).__name__},
-                )
-                done.failed += 1
-                _left(filing.age, "failed")
-                continue
-            done.unlanded += len(filing.intent.announcements) - len(landed)
-            for announcement in landed:
-                await self._send(announcement.message)
-                done.sent += 1
-            try:
-                await run_in_threadpool(announcement_intents.settle, root, so, filing.key)
-            except OSError as exc:
-                raise store_refusal(exc, reading=f"removing the finished filing {filing.key}", so="its announcements went out") from exc
-            done.finished += 1
+            total = total.plus(await self._finish_filing(filing, root=root, so=so))
         _oldest_standing.set(_oldest_left[0])
-        return done
+        return AnnouncementIntentsFinishResponse(left=max(read.listed - limit, 0), next=read.next, **total.model_dump())
+
+    async def _remove_unreadable(self, key: str, filed_at: datetime, age: timedelta, *, root: str, so: StorageOptions) -> _FilingOutcome:
+        """Remove the unreadable filing under ``key`` once past its lease, and say what that did."""
+        # Within its lease an unread filing waits: a door still running under another version of the code (a rolling
+        # upgrade) may have filed it, and may yet send it and settle it itself.
+        if age < announcement_intents.LEASE:
+            return _FilingOutcome(young=1)
+        # REMOVED UNREAD. A filing this code cannot read exactly (`announcement_intents._Evidence`) can never be
+        # judged by it, so it announces nothing; left, it would stand for good and keep the standing-filing alert
+        # firing. The ERROR line and the counter are its trace, without its body, which can name principals. A
+        # filing is written once, create-if-absent under a key of its own, so nothing rewrites it between the read
+        # and the delete.
+        log.error("announcement_intent_unreadable", extra={"key": key, "filed_at": filed_at.isoformat()})
+        try:
+            await run_in_threadpool(announcement_intents.settle, root, so, key)
+        except OSError as exc:
+            raise store_refusal(exc, reading=f"removing the unreadable filing {key}", so="nothing of it was sent") from exc
+        _unreadable.add(1)
+        return _FilingOutcome()
+
+    async def _finish_filing(self, filing: Standing, *, root: str, so: StorageOptions) -> _FilingOutcome:
+        """Send what ``filing`` names wherever its change landed and remove it, unless it must stand, and say what that did."""
+        # A filing within its lease, one a drop at work is still deciding, and one whose judgement raises anything but an
+        # outage stand.
+        if filing.young:
+            _left(filing.age, "young")
+            return _FilingOutcome(young=1)
+        try:
+            landed = [a for a in filing.intent.announcements if await self.landed(a.evidence, filed_at=filing.filed_at)]
+        except DropAtWorkError:
+            _left(filing.age, "at_work")
+            return _FilingOutcome(young=1)
+        except ServiceUnavailableError:
+            raise
+        except Exception as exc:  # noqa: BLE001 — one filing that cannot be judged must not stop every filing after it
+            # Judged alone: a record or a claim that cannot be read leaves this filing standing, said once a pass by
+            # its key, and the rest of the batch is finished.
+            log.error(
+                "announcement_intent_unjudged",
+                extra={"key": filing.key, "door": filing.intent.door, "target": filing.intent.target, "error": type(exc).__name__},
+            )
+            _left(filing.age, "failed")
+            return _FilingOutcome(failed=1)
+        unlanded = len(filing.intent.announcements) - len(landed)
+        sent = 0
+        for announcement in landed:
+            await self._send(announcement.message)
+            sent += 1
+        try:
+            await run_in_threadpool(announcement_intents.settle, root, so, filing.key)
+        except OSError as exc:
+            raise store_refusal(exc, reading=f"removing the finished filing {filing.key}", so="its announcements went out") from exc
+        return _FilingOutcome(finished=1, sent=sent, unlanded=unlanded)
 
     async def landed(self, evidence: Evidence, *, withdrawing: bool = True, filed_at: datetime | None = None) -> bool:
         """Whether the store shows the change ``evidence`` names landed. A recoverable drop judged not to have detached its

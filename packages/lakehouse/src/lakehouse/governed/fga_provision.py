@@ -456,17 +456,10 @@ async def resolve(
     while True:
         transport_error: BaseException | None = None
         try:
-            found = store_id or await _named_store_id(api_url, store_name, token_file=token_file)
-            if found is None:
-                absent = OpenFgaModelAbsentError(f"OpenFGA at {api_url} holds no store named {store_name!r}")
-            else:
-                async with OpenFgaClient(client_configuration(api_url, token_file=token_file, store_id=found)) as client:
-                    history = await _model_history(client, model, known_newest=known_newest, retry=ONE_ATTEMPT)
-                if history.carrying is not None:
-                    return found, str(history.carrying.id)
-                if history.newest is not None:
-                    known_newest = str(_field(history.newest, "id"))
-                absent = OpenFgaModelAbsentError(f"store {found} at {api_url} holds no model carrying this image's model.json")
+            looked = await _looked_up(api_url, store_name, model, store_id=store_id, token_file=token_file, known_newest=known_newest)
+            if not isinstance(looked, _NotYet):
+                return looked
+            absent, known_newest = OpenFgaModelAbsentError(looked.reason), looked.known_newest
         except (*FAIL_CLOSED, ServiceUnavailableError) as exc:
             # The store lookup raises the transport's own errors; the history read raises them as
             # ServiceUnavailableError through `guarded`. Both are "not answering yet", except a refused
@@ -477,6 +470,31 @@ async def resolve(
         if loop.time() - started + poll_seconds > deadline_seconds:
             raise absent from transport_error
         await asyncio.sleep(poll_seconds)
+
+
+class _NotYet(BaseModel):
+    """One look that found the store or the model absent: why, and the newest model id it scanned past."""
+
+    model_config = ConfigDict(frozen=True)
+
+    reason: str
+    known_newest: str | None
+
+
+async def _looked_up(
+    api_url: str, store_name: str, model: Any, *, store_id: str | None, token_file: str | None, known_newest: str | None
+) -> tuple[str, str] | _NotYet:
+    """The ids of the store and of its model whose body is ``model``, from one look, or why not yet."""
+    found = store_id or await _named_store_id(api_url, store_name, token_file=token_file)
+    if found is None:
+        return _NotYet(reason=f"OpenFGA at {api_url} holds no store named {store_name!r}", known_newest=known_newest)
+    async with OpenFgaClient(client_configuration(api_url, token_file=token_file, store_id=found)) as client:
+        history = await _model_history(client, model, known_newest=known_newest, retry=ONE_ATTEMPT)
+    if history.carrying is not None:
+        return found, str(history.carrying.id)
+    if history.newest is not None:
+        known_newest = str(_field(history.newest, "id"))
+    return _NotYet(reason=f"store {found} at {api_url} holds no model carrying this image's model.json", known_newest=known_newest)
 
 
 async def _named_store_id(api_url: str, store_name: str, *, token_file: str | None) -> str | None:

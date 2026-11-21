@@ -666,13 +666,19 @@ async def end_removed_subtree(
             in_trash = await run_in_threadpool(trashed_objects, settings)
         return obj in in_trash
 
+    async def end_children(obj: str) -> AsyncIterator[int]:
+        # The objects a namespace's `child` edges name, each ended before the namespace holding the edge.
+        if (reading := wired(settings, client)) is None or not obj.startswith("namespace:"):
+            return
+        for held in await fga_reads.read_object_tuples(reading, obj):
+            if held.relation == "child" and held.user and held.user not in seen and not await trashed(held.user):
+                async for count in end(held.user):
+                    yield count
+
     async def end(obj: str) -> AsyncIterator[int]:
         seen.add(obj)
-        if (reading := wired(settings, client)) is not None and obj.startswith("namespace:"):
-            for held in await fga_reads.read_object_tuples(reading, obj):
-                if held.relation == "child" and held.user and held.user not in seen and not await trashed(held.user):
-                    async for count in end(held.user):
-                        yield count
+        async for count in end_children(obj):
+            yield count
         kind, _, uuid = obj.partition(":")
         await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, uuid=uuid)
         yield await revoke_removed_object(client, settings, obj, token=token)

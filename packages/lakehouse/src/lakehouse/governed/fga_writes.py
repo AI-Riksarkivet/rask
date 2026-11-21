@@ -8,7 +8,7 @@ or revokes is held to its registered call sites by a `banned-api` entry in ``pyp
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection
+from collections.abc import Awaitable, Callable, Collection
 from http import HTTPStatus
 from typing import Any, Literal, cast
 
@@ -303,16 +303,10 @@ async def delete_tuples(
     absent: list[ClientTuple] = []
     try:
         for t in tuples:
-            try:
-                await _delete_one(t)
+            if await _delete_unless_absent(_delete_one, t, removed=removed):
                 removed.append(t)
-            except FAIL_CLOSED as exc:
-                if isinstance(exc, ApiException) and _delete_reported_absent(exc):
-                    log.debug("openfga_delete_absent_skipped")
-                    absent.append(t)
-                    continue
-                log.error("openfga_delete_unavailable", exc_info=True)
-                raise RevokeInterrupted(removed=list(removed)) from exc
+            else:
+                absent.append(t)
     finally:
         # `finally`, NOT after the loop (SKG-02). The loop deletes one tuple per write and raises from
         # INSIDE itself on an outage, so the tuples already removed were gone from OpenFGA the moment
@@ -328,6 +322,19 @@ async def delete_tuples(
         _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, removed, actor, origin=origin)
         _audit_tuples(AuditAction.ACCESS_TUPLE_DELETE, absent, actor, origin=origin, reason="tuple_absent")
     return removed
+
+
+async def _delete_unless_absent(delete_one: Callable[[ClientTuple], Awaitable[None]], t: ClientTuple, *, removed: list[ClientTuple]) -> bool:
+    """Delete ``t``: whether the server removed it, False where it was already absent; ``RevokeInterrupted`` on an outage."""
+    try:
+        await delete_one(t)
+    except FAIL_CLOSED as exc:
+        if isinstance(exc, ApiException) and _delete_reported_absent(exc):
+            log.debug("openfga_delete_absent_skipped")
+            return False
+        log.error("openfga_delete_unavailable", exc_info=True)
+        raise RevokeInterrupted(removed=list(removed)) from exc
+    return True
 
 
 async def revoke_undeclared(

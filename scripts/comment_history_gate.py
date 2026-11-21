@@ -365,6 +365,19 @@ def scan_tree() -> list[Finding]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+    if args.report:
+        return _report()
+    findings = _gated_findings(args)
+    if findings is None:
+        return 2
+    if not findings:
+        return 0
+    return _refuse(findings)
+
+
+def _parse_args(argv: list[str] | None) -> argparse.Namespace:
+    """The one gate mode the caller names, and its operand."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--staged", action="store_true", help="gate the staged diff (the pre-commit entry point)")
@@ -372,15 +385,20 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--base", metavar="REF", help="gate this branch's added lines against REF's merge-base")
     mode.add_argument("--paths", nargs="+", metavar="FILE", help="gate whole files (a newly added file has no base to diff)")
     mode.add_argument("--report", action="store_true", help="ADVISORY whole-tree count; always exits 0")
-    args = parser.parse_args(argv)
+    return parser.parse_args(argv)
 
-    if args.report:
-        findings = scan_tree()
-        for finding in findings:
-            print(finding.render())
-        print(f"\n{len(findings)} pre-existing line(s) match. ADVISORY ONLY — the rule is forward-only and these are not gated.")
-        return 0
 
+def _report() -> int:
+    """Print the whole tree's standing matches, advisory only: always 0."""
+    findings = scan_tree()
+    for finding in findings:
+        print(finding.render())
+    print(f"\n{len(findings)} pre-existing line(s) match. ADVISORY ONLY — the rule is forward-only and these are not gated.")
+    return 0
+
+
+def _gated_findings(args: argparse.Namespace) -> list[Finding] | None:
+    """The matches on the lines the mode gates, ``None`` when ``--base`` names a ref with no merge-base here."""
     if args.paths:
         findings = []
         for path in args.paths:
@@ -400,11 +418,13 @@ def main(argv: list[str] | None = None) -> int:
             # A gate that dies with a traceback on an unfetched ref reads as a broken gate rather than
             # as a broken invocation, and in CI that difference decides whether anyone looks at it.
             print(f"cannot resolve a merge-base against {args.base!r} — fetch it, or name a ref this clone has.", file=sys.stderr)
-            return 2
+            return None
         findings = scan_changes(_git("diff", base, "--unified=0", "--no-color"), staged=False)
+    return findings
 
-    if not findings:
-        return 0
+
+def _refuse(findings: list[Finding]) -> int:
+    """Name each new line that narrates the prose, and how to rewrite it: always 1."""
     print(f"Comment rule violated — {len(findings)} new line(s) narrate the PROSE rather than the code.", file=sys.stderr)
     print(f"Rule: {RULE_DOC}\n", file=sys.stderr)
     for finding in findings:

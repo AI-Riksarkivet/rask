@@ -26,14 +26,14 @@ lands once on the feed; a mark one writes lower than another's costs a re-read, 
 from __future__ import annotations
 
 import logging
-from datetime import UTC, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import partial
 
 from fastapi import Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import DescribeTableRequest, LanceNamespace, NamespaceNotFoundError, PermissionDeniedError, TableNotFoundError
 from opentelemetry import metrics
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
 from catalog.api.dependencies import ObjectUuids, app_wire, estate_namespace, namespace_for_table
 from catalog.api.signing_gate import commit_ids_of
@@ -242,48 +242,89 @@ async def tick(ctx: Tick) -> CommitReconcileTick:
     live = await _live_tables(request, settings)
     tables = live.tables
     now = clock().astimezone(UTC)
-    reannounced = unauthored = 0
-    unreadable = live.unreadable
+    tick_pass = _Pass(emitter=emitter, request=request, settings=settings, so=so, feed=feed, now=now)
+    total = _Reconciled(unreadable=live.unreadable)
     for table in tables:
-        try:
-            found = await run_in_threadpool(
-                partial(
-                    commit_reconcile.reconcile_table,
-                    settings,
-                    so,
-                    segments=table.segments,
-                    location=table.location,
-                    table_uuid=str(table.uuids.table_uuid),
-                    feed=feed,
-                    now=now,
-                )
-            )
-        except Exception as exc:  # noqa: BLE001 — one table this tick cannot read must not stop the others
-            log.error("commit_reconcile_table_failed", extra={"table": table.segments, "error": str(exc)[:300]})
-            _unreadable.add(1)
-            unreadable += 1
-            continue
-        if found.unreadable:
-            _unreadable.add(len(found.unreadable))
-            unreadable += len(found.unreadable)
-        for scan in found.scans:
-            for commit in scan.missing:
-                await _announce(emitter, request=request, settings=settings, so=so, table=table, commit=commit)
-                _reannounced.add(1, {"lance.catalog.operation": commit.operation})
-                log.warning(
-                    "commit_reannounced",
-                    extra={"table": table.segments, "version": commit.version, "branch": commit.branch, "operation": commit.operation},
-                )
-            if scan.unauthored:
-                _unauthored.add(len(scan.unauthored))
-                log.error("commit_unauthored", extra={"table": table.segments, "versions": list(scan.unauthored), "branch": scan.branch})
-            reannounced += len(scan.missing)
-            unauthored += len(scan.unauthored)
+        total = total.plus(await _reconcile_table(table, tick_pass=tick_pass))
+    reannounced, unauthored, unreadable = total.reannounced, total.unauthored, total.unreadable
     log.info(
         "commit_reconcile_tick",
         extra={"tables": len(tables), "reannounced": reannounced, "unauthored": unauthored, "unreadable": unreadable, "late_derived": late_derived},
     )
     return CommitReconcileTick(tables=len(tables), reannounced=reannounced, unauthored=unauthored, unreadable=unreadable, late_derived=late_derived)
+
+
+class _Pass(BaseModel):
+    """What every table of one tick is reconciled against: the emitter, the request, the store and the feed, at one time."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    # The emitter (a protocol) and the request are collaborators pydantic cannot validate.
+    emitter: SkipValidation[LineageEmitter]
+    request: SkipValidation[Request]
+    settings: Settings
+    so: StorageOptions
+    feed: str
+    now: datetime
+
+
+class _Reconciled(BaseModel):
+    """How many versions a reconcile re-announced, found unauthored and could not read."""
+
+    model_config = ConfigDict(frozen=True)
+
+    reannounced: int = 0
+    unauthored: int = 0
+    unreadable: int = 0
+
+    def plus(self, other: _Reconciled) -> _Reconciled:
+        """The two counts added."""
+        return _Reconciled(
+            reannounced=self.reannounced + other.reannounced,
+            unauthored=self.unauthored + other.unauthored,
+            unreadable=self.unreadable + other.unreadable,
+        )
+
+
+async def _reconcile_table(table: _LiveTable, *, tick_pass: _Pass) -> _Reconciled:
+    """Announce every committed version of ``table`` past the grace that the tick's feed lacks, and count what it did."""
+    reannounced = unauthored = unreadable = 0
+    emitter, request, settings, so = tick_pass.emitter, tick_pass.request, tick_pass.settings, tick_pass.so
+    try:
+        found = await run_in_threadpool(
+            partial(
+                commit_reconcile.reconcile_table,
+                settings,
+                so,
+                segments=table.segments,
+                location=table.location,
+                table_uuid=str(table.uuids.table_uuid),
+                feed=tick_pass.feed,
+                now=tick_pass.now,
+            )
+        )
+    except Exception as exc:  # noqa: BLE001 — one table this tick cannot read must not stop the others
+        log.error("commit_reconcile_table_failed", extra={"table": table.segments, "error": str(exc)[:300]})
+        _unreadable.add(1)
+        unreadable += 1
+        return _Reconciled(reannounced=reannounced, unauthored=unauthored, unreadable=unreadable)
+    if found.unreadable:
+        _unreadable.add(len(found.unreadable))
+        unreadable += len(found.unreadable)
+    for scan in found.scans:
+        for commit in scan.missing:
+            await _announce(emitter, request=request, settings=settings, so=so, table=table, commit=commit)
+            _reannounced.add(1, {"lance.catalog.operation": commit.operation})
+            log.warning(
+                "commit_reannounced",
+                extra={"table": table.segments, "version": commit.version, "branch": commit.branch, "operation": commit.operation},
+            )
+        if scan.unauthored:
+            _unauthored.add(len(scan.unauthored))
+            log.error("commit_unauthored", extra={"table": table.segments, "versions": list(scan.unauthored), "branch": scan.branch})
+        reannounced += len(scan.missing)
+        unauthored += len(scan.unauthored)
+    return _Reconciled(reannounced=reannounced, unauthored=unauthored, unreadable=unreadable)
 
 
 async def _watch_released(settings: Settings, estate: LanceNamespace, so: StorageOptions) -> int:

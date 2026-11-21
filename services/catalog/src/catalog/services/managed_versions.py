@@ -244,34 +244,12 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         raise InvalidInputError(f"commit refused: version {request.version} does not follow the latest version {latest}")
     if request.naming_scheme not in (None, "V2"):
         raise InvalidInputError(f"commit refused: the table's manifests are named V2, not {request.naming_scheme}")
-    fs, _ = table_objects.dataset_fs(location, so)
-    try:
-        with fs.open_input_stream(table_objects.dataset_fs(staged, so)[1]) as source:
-            manifest = source.read()
-    except FileNotFoundError as exc:
-        raise InvalidInputError(f"commit refused: no staged manifest is at {request.manifest_path}") from exc
+    manifest = _staged_manifest(location, so, staged, manifest_path=request.manifest_path)
     stated = manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.VERSION_FIELD)
     detached_id, finalize_id = manifest_bytes.detached_id(), manifest_bytes.detached_id()
     _write(location, so, manifest_names.detached_name(detached_id), body=manifest_bytes.with_manifest_version(manifest, detached_id))
     _write(location, so, manifest_names.detached_name(finalize_id), body=manifest)
-    try:
-        transaction = read_transaction(
-            open_dataset(location, version=detached_id, storage_options=so.in_clear() or None, session=shared_lance_session()), detached_id
-        )
-    except (OSError, ValueError) as exc:
-        _discard(location, so, detached_id, finalize_id)
-        if reads_as_store_outage(exc):
-            raise ServiceUnavailableError("the object store did not answer opening the staged version") from exc
-        # A version Lance itself cannot open (an overlay on an appended fragment set reader flags 66, measured on
-        # pylance 12.0.0) is the staged manifest's fault, never the catalog's.
-        raise InvalidInputError(f"commit refused: the staged manifest cannot be opened: {exc}") from exc
-    except BaseException:
-        _discard(location, so, detached_id, finalize_id)
-        raise
-    if transaction is None or not commit_records.is_canonical_uuid(transaction.uuid):
-        _discard(location, so, detached_id, finalize_id)
-        # Every stock writer pylance builds names one (a uuid4, canonical); the catalog keys the commit's author by it.
-        raise InvalidInputError("commit refused: the staged manifest names no transaction with a canonical uuid, which the catalog records its author under")
+    transaction = _planted_transaction_or_discard(location, so, detached_id=detached_id, finalize_id=finalize_id)
     operation = type(transaction.operation).__name__
     if operation == lance.LanceOperation.BaseOperation.__name__:
         operation = _unmodelled_operation(manifest) or operation
@@ -304,6 +282,39 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         max_fragment_id=manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.MAX_FRAGMENT_ID_FIELD),
         next_row_id=manifest_bytes.varint_field(manifest_bytes.manifest_message(manifest), manifest_bytes.NEXT_ROW_ID_FIELD),
     )
+
+
+def _staged_manifest(location: str, so: StorageOptions, staged: str, *, manifest_path: str) -> bytes:
+    """The bytes of the staged manifest at ``staged``, which the request names as ``manifest_path``; none there is a 400."""
+    fs, _ = table_objects.dataset_fs(location, so)
+    try:
+        with fs.open_input_stream(table_objects.dataset_fs(staged, so)[1]) as source:
+            return source.read()
+    except FileNotFoundError as exc:
+        raise InvalidInputError(f"commit refused: no staged manifest is at {manifest_path}") from exc
+
+
+def _planted_transaction_or_discard(location: str, so: StorageOptions, *, detached_id: int, finalize_id: int) -> lance.Transaction:
+    """The transaction of the version planted as ``detached_id``; one that cannot be read discards both planted versions."""
+    try:
+        transaction = read_transaction(
+            open_dataset(location, version=detached_id, storage_options=so.in_clear() or None, session=shared_lance_session()), detached_id
+        )
+    except (OSError, ValueError) as exc:
+        _discard(location, so, detached_id, finalize_id)
+        if reads_as_store_outage(exc):
+            raise ServiceUnavailableError("the object store did not answer opening the staged version") from exc
+        # A version Lance itself cannot open (an overlay on an appended fragment set reader flags 66, measured on
+        # pylance 12.0.0) is the staged manifest's fault, never the catalog's.
+        raise InvalidInputError(f"commit refused: the staged manifest cannot be opened: {exc}") from exc
+    except BaseException:
+        _discard(location, so, detached_id, finalize_id)
+        raise
+    if transaction is None or not commit_records.is_canonical_uuid(transaction.uuid):
+        _discard(location, so, detached_id, finalize_id)
+        # Every stock writer pylance builds names one (a uuid4, canonical); the catalog keys the commit's author by it.
+        raise InvalidInputError("commit refused: the staged manifest names no transaction with a canonical uuid, which the catalog records its author under")
+    return transaction
 
 
 def _unmodelled_operation(manifest: bytes) -> str | None:

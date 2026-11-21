@@ -24,8 +24,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable, Mapping, Sequence
-from contextlib import suppress
+from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from contextlib import aclosing, suppress
 from datetime import UTC, datetime
 from functools import partial
 from typing import Annotated, Any, Final, Literal
@@ -50,15 +50,16 @@ from lance_namespace import (
     TableNotFoundError,
 )
 from openfga_sdk import OpenFgaClient
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.api import idempotency as idem
-from catalog.api.announcing import AnnouncerDep
+from catalog.api.announcing import Announcer, AnnouncerDep, Filing
 from catalog.api.authz import decisions, door_gates, hierarchy, object_grants, objects, visible_pages, warehouse_grants
 from catalog.api.declared import DECLARATION, Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import (
     ControlEmitterDep,
     FgaClientDep,
+    ObjectUuids,
     ObjectUuidsDep,
     SettingsDep,
     VendorDep,
@@ -84,6 +85,7 @@ from catalog.schemas import (
 )
 from catalog.services import clone_endings, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, Unregistered
+from catalog.services.clone_ending_records import CloneEnding
 from catalog.services.control_records import ProtectionChange, with_protection
 from catalog.services.tables import destroy
 from catalog.services.vend_probe import (
@@ -106,10 +108,12 @@ from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.problems.ns_errors import PartiallyApplied, status_for
 from lakehouse.records import base_registry, clone_sources, data_directories, location_claims, trash
+from lakehouse.records.location_claims import ClaimStore
 from lakehouse.records.trash import TrashRecord
 from lakehouse.records.warehouse_records import WarehouseRecord
-from lakehouse.storage.client import s3_client
+from lakehouse.storage.client import S3Client, s3_client
 from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError
+from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.uri import split_s3_uri
 
 
@@ -877,15 +881,7 @@ async def _detach_table(ns: LanceNamespace, settings: CatalogStore, segments: li
             )
         )
         if purge:
-            try:
-                await run_in_threadpool(
-                    partial(data_directories.delete_table_directories, registry, fenced.location, uuid=table_uuid, storage_options=settings.storage_options())
-                )
-            except Exception:
-                # This request has not touched the row, so the clone's holds are its own still.
-                if ending is not None:
-                    await run_in_threadpool(clone_endings.clear_ending, claims, ending)
-                raise
+            await _delete_table_directories(registry, claims, fenced, table_uuid=table_uuid, ending=ending, settings=settings)
         await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
     except TableNotFoundError:
         # Only the deregister answers this: the row went by a hand the fence does not bind, and this ending's finish
@@ -913,6 +909,28 @@ async def _detach_table(ns: LanceNamespace, settings: CatalogStore, segments: li
     return True
 
 
+async def _delete_table_directories(
+    registry: base_registry.BaseRegistry,
+    claims: ClaimStore,
+    fenced: table_claims.DoorFence,
+    *,
+    table_uuid: str,
+    ending: CloneEnding | None,
+    settings: CatalogStore,
+) -> None:
+    """Delete the data directories of the table ``fenced`` holds for a purge."""
+    try:
+        await run_in_threadpool(
+            partial(data_directories.delete_table_directories, registry, fenced.location, uuid=table_uuid, storage_options=settings.storage_options())
+        )
+    except Exception:
+        # A delete that fails releases the clone's ending before the failure is answered: this request has not touched
+        # the row, so the clone's holds are its own still.
+        if ending is not None:
+            await run_in_threadpool(clone_endings.clear_ending, claims, ending)
+        raise
+
+
 async def _require_no_outside_clones(
     ns: LanceNamespace | None, settings: CatalogStore, *, subtrees: list[_NamespaceSubtree], trashed: list[TrashRecord]
 ) -> None:
@@ -924,13 +942,7 @@ async def _require_no_outside_clones(
         ServiceUnavailableError: A table's tags could not be listed.
     """
     so = settings.storage_options()
-    located: dict[str, str] = {}
-    if ns is not None:
-        for table in [table for subtree in subtrees for table in subtree.tables]:
-            with suppress(TableNotFoundError):
-                described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=table))
-                if described.location:
-                    located[fga_ids.canonical_object_id(table)] = described.location
+    located = await _live_table_locations(ns, subtrees)
     for entry in trashed:
         if location := entry.location:
             located[f"{entry.id}@{entry.uuid}"] = location
@@ -943,6 +955,20 @@ async def _require_no_outside_clones(
             f"the purge would destroy {len(exc.read)} table(s) read by registered clones outside this warehouse; drop or deregister those "
             "clones first, or delete the warehouse without ?purge_bucket=true"
         ) from exc
+
+
+async def _live_table_locations(ns: LanceNamespace | None, subtrees: list[_NamespaceSubtree]) -> dict[str, str]:
+    """Where each table ``subtrees`` lists stands, by its canonical id."""
+    located: dict[str, str] = {}
+    # None for a warehouse whose store is not opened, and a table gone since it was listed is left out.
+    if ns is None:
+        return located
+    for table in [table for subtree in subtrees for table in subtree.tables]:
+        with suppress(TableNotFoundError):
+            described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=table))
+            if described.location:
+                located[fga_ids.canonical_object_id(table)] = described.location
+    return located
 
 
 async def _forget_trashed(settings: CatalogStore, entry: TrashRecord, *, purge: bool) -> None:
@@ -1073,23 +1099,182 @@ async def delete_warehouse(
         return DeleteWarehouseResponse.model_validate(converge.replay.body)
     record = warehouse_its_doors_manage(warehouse_id, await administered_warehouse(warehouse_id, settings, token, client=client), token)
     so = settings.storage_options()
-    project = record.project
+    asked = _DeleteAsked(warehouse_id=warehouse_id, cascade=cascade, purge_bucket=purge_bucket, force=force)
+    plan = await _plan_the_delete(record, asked, request=request, settings=settings, so=so)
+    ns_conn = plan.ns_conn
+    delete = _WarehouseDelete(
+        warehouse_id=warehouse_id, project=record.project, bucket=record.bucket, purge_bucket=purge_bucket, so=so, subtrees=plan.subtrees, trashed=plan.trashed
+    )
+    announced = await _what_the_delete_announces(delete, announcer=announcer, token=token, uuids=uuids)
+    async with announcer.announcing(
+        door="delete_warehouse", target=f"warehouse:{warehouse_id}", announcements=[*announced.detached.values(), announced.deleted]
+    ) as filing:
+        steps = _cascade_the_delete(delete, ns_conn, settings=settings, client=client, token=token)
+        landed = await _run_the_cascade(steps, delete, announced=announced, filing=filing)
+
+        log.info(
+            "warehouse_deleted",
+            extra={
+                "warehouse": warehouse_id,
+                "project": delete.project,
+                "bucket": delete.bucket,
+                "namespaces_dropped": landed.namespaces_dropped,
+                "tables_removed": landed.tables_removed,
+                "trash_ended": landed.trash_ended,
+                "tuples_revoked": landed.revoked,
+                "bucket_purged": purge_bucket,
+                "objects_purged": landed.purged,
+                "forced": force,
+            },
+        )
+        # Sent with what the delete dropped and purged, under the id the planned event was filed with.
+        planned = announced.planned
+        actual = planned.model_copy(update={"extra": {**planned.extra, "namespaces_dropped": landed.namespaces_dropped, "objects_purged": landed.purged}})
+        await filing.send(announced.deleted.model_copy(update={"message": ControlMessage(event=actual)}))
+    answer = DeleteWarehouseResponse(
+        id=warehouse_id,
+        bucket=delete.bucket,
+        namespaces_dropped=landed.namespaces_dropped,
+        tuples_revoked=landed.revoked,
+        bucket_purged=purge_bucket,
+        objects_purged=landed.purged,
+    )
+    await converge.remember(200, answer)
+    return answer
+
+
+async def _run_the_cascade(steps: AsyncGenerator[_Step], delete: _WarehouseDelete, *, announced: _DeleteAnnouncements, filing: Filing) -> _Landed:
+    """Run a warehouse delete's ``steps``, announcing each detached table: what landed, or the partial refusal."""
+    landed = _Landed()
+    try:
+        # Each step is counted as it lands, so a failure part-way reports what landed before it.
+        async with aclosing(steps):
+            async for step in steps:
+                landed = landed.added(step.landed)
+                await _announce_a_detached_table(step, announced=announced, filing=filing)
+    except Exception as exc:
+        # Partial-failure honesty (Decision 3), the half a raised error would otherwise erase: once the first
+        # table is detached, a later step CAN still fail (an OpenFGA outage on the revoke, a registry
+        # blip) — and the caller then gets a problem body that says nothing about what is already
+        # gone. The error is deliberately NOT swallowed (fail-closed; every primitive is idempotent, so the
+        # recovery path is to re-issue the same call), but what DID land is recorded here or it is lost.
+        if isinstance(exc, fga_writes.RevokeInterrupted):
+            # The object whose revoke the outage stopped lost these before it.
+            landed = landed.added(_Landed(revoked=len(exc.removed)))
+        if _a_refusal(exc) and not (landed.namespaces_dropped or landed.tables_removed or landed.trash_ended or landed.revoked):
+            # A GUARD'S REFUSAL BEFORE ANY STEP LANDED is the answer, under its own code ([[LH-572]]): a guard refuses before
+            # its step writes, so nothing is partial. A failure of the store or of OpenFGA is reported as partial even with
+            # nothing counted, since the step it stopped may have landed (a clone's row detached, then its tag's delete
+            # failed), and a re-issue is what finishes it.
+            raise
+        raise _partially_deleted(landed, delete) from exc
+    return landed
+
+
+async def _announce_a_detached_table(step: _Step, *, announced: _DeleteAnnouncements, filing: Filing) -> None:
+    """Send the deregister marker of the table ``step`` detached, if it detached one."""
+    if step.detached is not None:
+        await filing.send(announced.detached[step.detached])
+
+
+class _DeleteAsked(BaseModel):
+    """What a warehouse delete request asks for."""
+
+    model_config = ConfigDict(frozen=True)
+
+    warehouse_id: str
+    cascade: bool
+    purge_bucket: bool
+    force: bool
+
+
+class _WarehouseDelete(BaseModel):
+    """A warehouse delete that passed every refusal, and what it removes."""
+
+    model_config = ConfigDict(frozen=True)
+
+    warehouse_id: str
+    project: str
+    bucket: str
+    purge_bucket: bool
+    so: StorageOptions
+    subtrees: list[_NamespaceSubtree]
+    trashed: list[TrashRecord]
+
+
+class _DeleteAnnouncements(BaseModel):
+    """What a warehouse delete files before it changes anything."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: A deregister marker per table the delete means to detach, by the table's segments.
+    detached: dict[tuple[str, ...], Announcement]
+    planned: CatalogControlEvent
+    deleted: Announcement
+
+
+class _Landed(BaseModel):
+    """What a warehouse delete has landed, so a failure part-way reports it rather than what was planned."""
+
+    model_config = ConfigDict(frozen=True)
+
+    namespaces_dropped: list[str] = []
+    tables_removed: list[str] = []
+    trash_ended: list[str] = []
+    revoked: int = 0
+    bucket_purged: bool = False
+    purged: int = 0
+
+    def added(self, step: _Landed) -> _Landed:
+        """What landed with ``step`` landed too."""
+        return _Landed(
+            namespaces_dropped=[*self.namespaces_dropped, *step.namespaces_dropped],
+            tables_removed=[*self.tables_removed, *step.tables_removed],
+            trash_ended=[*self.trash_ended, *step.trash_ended],
+            revoked=self.revoked + step.revoked,
+            bucket_purged=self.bucket_purged or step.bucket_purged,
+            purged=self.purged + step.purged,
+        )
+
+
+class _Step(BaseModel):
+    """One step a warehouse delete landed, and the segments of the table it detached, which its caller announces."""
+
+    model_config = ConfigDict(frozen=True)
+
+    landed: _Landed
+    detached: tuple[str, ...] | None = None
+
+
+class _DeletePlan(BaseModel):
+    """What a delete that passed every refusal removes: through the warehouse's store, its subtrees and its trash."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    # The connection is an opaque collaborator, not a value pydantic can judge.
+    ns_conn: SkipValidation[LanceNamespace | None]
+    subtrees: list[_NamespaceSubtree]
+    trashed: list[TrashRecord]
+
+
+async def _plan_the_delete(record: WarehouseRecord, asked: _DeleteAsked, *, request: Request, settings: Settings, so: StorageOptions) -> _DeletePlan:
+    """Every refusal a delete makes before it changes anything; the store's connection, the subtrees and the trash it removes."""
+    warehouse_id = asked.warehouse_id
     # Everything below discloses the warehouse's CONTENTS (the 409 names its namespaces) or its protection
-    # state, so it runs strictly after the gate above.
-    hierarchy.require_not_protected(record.is_protected, kind="warehouse", obj_id=warehouse_id, force=force)
+    # state, so it runs only once the caller has read the record through `administered_warehouse`, which authorizes it.
+    hierarchy.require_not_protected(record.is_protected, kind="warehouse", obj_id=warehouse_id, force=asked.force)
 
     # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes.
     in_estate_store = names_the_estate_store(record.endpoint, estate=settings.s3_endpoint)
     ns_conn = await namespace_for_root(request, settings, record.root_uri, endpoint=record.endpoint or None) if in_estate_store else None
     held = await _namespaces_in(ns_conn, warehouse_id) if ns_conn is not None else []
-    if held and not cascade:
+    if held and not asked.cascade:
         raise NamespaceNotEmptyError(
             f"warehouse '{warehouse_id}' still holds {len(held)} namespace(s): {', '.join(held)}. "
             f"Drop them first, or pass ?cascade=true to drop exactly those with the warehouse."
         )
 
-    bucket = record.bucket
-    if purge_bucket:
+    if asked.purge_bucket:
         # The registry-wide read happens ONLY on the destructive path: the guard needs every claim on this
         # bucket, and a plain (recoverable) delete has no reason to pay for it. It runs here, before the
         # cascade, so a refusal still costs nothing — the bottom-up rule applies to the bytes too. Read whole: a record
@@ -1102,25 +1287,28 @@ async def delete_warehouse(
     # estate's key and the other would delete the estate's same-named bucket. Asked for, either is refused here,
     # before the first step lands, so the caller gets the refusal and not a report of a cascade that listed
     # nothing. A plain delete touches no store and stays open: it is how such a record is retired.
-    if cascade or purge_bucket:
+    if asked.cascade or asked.purge_bucket:
         require_estate_store(record.endpoint, estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     # The warehouse's OWN endpoint ([[LH-067]]): a cascade that opened the estate's store would find none of
     # this warehouse's namespaces and report a clean delete having removed nothing.
-    subtrees = await _cascade_subtrees(ns_conn, settings, held, force=force) if ns_conn is not None else []
+    subtrees = await _cascade_subtrees(ns_conn, settings, held, force=asked.force) if ns_conn is not None else []
     # The warehouse's own trash: the records whose names begin with its id.
     trashed = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id)
-    if purge_bucket:
+    if asked.purge_bucket:
         await _require_no_outside_clones(ns_conn, settings, subtrees=subtrees, trashed=trashed)
-    # What landed, recorded as each step lands, so a failure part-way reports it rather than what was planned.
-    # What the delete announces is filed before it changes anything, so a delete that fails part-way still announces what
-    # it did once the store shows it ([[LH-576]]): a deregister marker per table it means to detach, landed once that
-    # table is registered under no name and kept by no trash record (`Unregistered`), and `warehouse_deleted`, landed once
-    # the warehouse's record is gone. Its limit:
-    # the store cannot tell which actor retired a table, so another's deregister or destroying drop after this door died
-    # satisfies it too, and this door's event goes out as well, under its own ids.
+    return _DeletePlan(ns_conn=ns_conn, subtrees=subtrees, trashed=trashed)
+
+
+async def _what_the_delete_announces(delete: _WarehouseDelete, *, announcer: Announcer, token: Caller | None, uuids: ObjectUuids) -> _DeleteAnnouncements:
+    """What a warehouse delete files before it changes anything, read while what it names still stands."""
+    # A delete that fails part-way still announces what it did once the store shows it ([[LH-576]]): a marker is landed
+    # once that table is registered under no name and kept by no trash record (`Unregistered`), and `warehouse_deleted`
+    # once the warehouse's record is gone. Its limit: the store cannot tell which actor retired a table, so another's
+    # deregister or destroying drop after this door died satisfies it too, and this door's event goes out as well, under
+    # its own ids.
     detached: dict[tuple[str, ...], Announcement] = {}
-    for subtree in subtrees:
+    for subtree in delete.subtrees:
         for item in subtree.descendants:
             if item.kind == "table":
                 detached[tuple(item.segments)] = Announcement(
@@ -1135,161 +1323,155 @@ async def delete_warehouse(
     planned = CatalogControlEvent(
         action="warehouse_deleted",
         object_type="warehouse",
-        object_id=f"warehouse:{warehouse_id}",
+        object_id=f"warehouse:{delete.warehouse_id}",
         actor=f"user:{token.subject}" if token else None,
         extra={
-            "project": project,
-            "bucket": bucket,
-            "namespaces_dropped": [fga_ids.canonical_object_id(namespace) for subtree in subtrees for namespace in subtree.namespaces],
-            "bucket_purged": purge_bucket,
+            "project": delete.project,
+            "bucket": delete.bucket,
+            "namespaces_dropped": [fga_ids.canonical_object_id(namespace) for subtree in delete.subtrees for namespace in subtree.namespaces],
+            "bucket_purged": delete.purge_bucket,
             "objects_purged": 0,
         },
     )
-    deleted = Announcement(evidence=RecordGone(key=warehouses.record_key(warehouse_id)), message=ControlMessage(event=planned))
-    async with announcer.announcing(door="delete_warehouse", target=f"warehouse:{warehouse_id}", announcements=[*detached.values(), deleted]) as filing:
-        namespaces_dropped: list[str] = []
-        tables_removed: list[str] = []
-        trash_ended: list[str] = []
-        revoked = 0
-        bucket_purged = False
-        try:
-            for entry in trashed:
-                kind, canonical = str(entry.kind or "table"), entry.id
-                # A trashed object's grants are held by the uuid its record keeps ([[LH-524]]). Counted as the revoke lands,
-                # so a failure in the records after it still reports these tuples.
-                trashed_uuid = entry.uuid
-                if trashed_uuid is not None:
-                    obj = fga_ids.object_of(kind, trashed_uuid)
-                    revoked += await object_grants.revoke_removed_object(client, settings, obj, token=token)
-                else:
-                    log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": warehouse_id, "kind": kind, "id": canonical})
-                await _forget_trashed(settings, entry, purge=purge_bucket)
-                trash_ended.append(f"{kind}:{canonical}")
-            if ns_conn is not None:
-                for subtree in subtrees:
-                    # What this cascade removes of the subtree: every namespace, and each table it detaches itself. A listed
-                    # table that left before its turn ([[LH-586]]) is announced by no one here and ended by no step below.
-                    removed = [item for item in subtree.descendants if item.kind == "namespace"]
-                    for item in subtree.descendants:
-                        if item.kind != "table":
-                            continue
-                        # What the announcement names the table by, read while it still stands (ADR 0173 §10).
-                        if await _detach_table(ns_conn, settings, item.segments, purge=purge_bucket, table_uuid=item.uuid):
-                            removed.append(item)
-                            tables_removed.append(fga_ids.canonical_object_id(item.segments))
-                            await filing.send(detached[tuple(item.segments)])
-                    for namespace in subtree.namespaces:
-                        try:
-                            await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=namespace))
-                        except NamespaceNotFoundError:
-                            # Drift, or an earlier attempt's work: the namespace went before its turn, and refusing
-                            # here would leave records and grants nobody can end, so the catalog's own records still go.
-                            log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": warehouse_id, "namespace": namespace})
-                        namespaces_dropped.append(fga_ids.canonical_object_id(namespace))
-                    async for count in object_grants.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
-                        revoked += count
-                # The warehouse's own row last, once every namespace beneath it is gone.
-                with suppress(NamespaceNotFoundError):
-                    await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=[warehouse_id]))
-            # A namespace an earlier attempt removed is named by nothing but this warehouse's `child` edge, so its subtree
-            # is ended from there before the warehouse's own grants go.
-            ended = {fga_ids.namespace_object(subtree.uuid) for subtree in subtrees if subtree.uuid is not None}
-            for orphan in await object_grants.orphaned_children(client, settings, f"warehouse:{warehouse_id}", ended=ended):
-                async for count in object_grants.end_removed_subtree(client, settings, root_uuid=orphan, removed=[], token=token):
-                    revoked += count
+    deleted = Announcement(evidence=RecordGone(key=warehouses.record_key(delete.warehouse_id)), message=ControlMessage(event=planned))
+    return _DeleteAnnouncements(detached=detached, planned=planned, deleted=deleted)
 
-            revoked += await object_grants.revoke_removed_object(client, settings, f"warehouse:{warehouse_id}", token=token)
-            # The record goes LAST: it is what the door is addressed by, so while the purge or the claim's release can still
-            # fail, it keeps the warehouse for the re-issue that finishes them.
-            purged = 0
-            if purge_bucket:
-                purged = await run_in_threadpool(warehouses.purge_bucket, bucket, so)
-                bucket_purged = True
-                await run_in_threadpool(partial(warehouses.release_bucket_claim, settings.registry_root, so, bucket=bucket, warehouse_id=warehouse_id))
-            await run_in_threadpool(warehouses.delete_warehouse_record, settings.registry_root, so, warehouse_id)
-        except Exception as exc:
-            # Partial-failure honesty (Decision 3), the half a raised error would otherwise erase: once the first
-            # table is detached, a later step CAN still fail (an OpenFGA outage on the revoke, a registry
-            # blip) — and the caller then gets a problem body that says nothing about what is already
-            # gone. The error is deliberately NOT swallowed (fail-closed; every primitive is idempotent, so the
-            # recovery path is to re-issue the same call), but what DID land is recorded here or it is lost.
-            if isinstance(exc, fga_writes.RevokeInterrupted):
-                # The object whose revoke the outage stopped lost these before it.
-                revoked += len(exc.removed)
-            if _a_refusal(exc) and not (namespaces_dropped or tables_removed or trash_ended or revoked):
-                # A GUARD'S REFUSAL BEFORE ANY STEP LANDED is the answer, under its own code ([[LH-572]]): a guard refuses before
-                # its step writes, so nothing is partial. A failure of the store or of OpenFGA is reported as partial even with
-                # nothing counted, since the step it stopped may have landed (a clone's row detached, then its tag's delete
-                # failed), and a re-issue is what finishes it.
-                raise
-            log.error(
-                "warehouse_delete_partial",
-                extra={
-                    "warehouse": warehouse_id,
-                    "project": project,
-                    "bucket": bucket,
-                    "namespaces_dropped": namespaces_dropped,
-                    "tables_removed": tables_removed,
-                    "trash_ended": trash_ended,
-                    "tuples_revoked": revoked,
-                    "bucket_purged": bucket_purged,
-                },
-                exc_info=True,
-            )
-            # AND TELL THE CALLER, not only the log. The log records what landed for an operator; the
-            # caller got a problem body that said nothing, so it could not tell a delete that did nothing
-            # from one that destroyed three namespaces and then failed — and those need different next
-            # actions. The outcome rides as RFC 9457 extension members, which is what lets a 5xx say
-            # something true about the caller's own objects while `detail` stays redacted.
-            #
-            # ServiceUnavailable rather than the original error, and that is the honest code: every
-            # primitive here is idempotent, so the recovery is to re-issue the SAME call — which is
-            # precisely what a 503 asks a client to do. The cause is chained, so the real failure is still
-            # in the traceback and the log.
-            raise PartiallyApplied(
-                f"warehouse {warehouse_id!r} was PARTIALLY deleted: {len(namespaces_dropped)} namespace(s) dropped, "
-                f"{len(tables_removed)} table(s) removed, {len(trash_ended)} trashed object(s) ended and {revoked} tuple(s) "
-                "revoked before the failure. Every step is "
-                "idempotent — re-issue this call to finish it.",
-                problem_extra={
-                    "warehouse": warehouse_id,
-                    "namespaces_dropped": namespaces_dropped,
-                    "tables_removed": tables_removed,
-                    "trash_ended": trash_ended,
-                    "tuples_revoked": revoked,
-                    "bucket_purged": bucket_purged,
-                    "partial": True,
-                },
-            ) from exc
 
-        log.info(
-            "warehouse_deleted",
-            extra={
-                "warehouse": warehouse_id,
-                "project": project,
-                "bucket": bucket,
-                "namespaces_dropped": namespaces_dropped,
-                "tables_removed": tables_removed,
-                "trash_ended": trash_ended,
-                "tuples_revoked": revoked,
-                "bucket_purged": purge_bucket,
-                "objects_purged": purged,
-                "forced": force,
-            },
+async def _cascade_the_delete(
+    delete: _WarehouseDelete, ns_conn: LanceNamespace | None, *, settings: Settings, client: OpenFgaClient | None, token: Caller | None
+) -> AsyncGenerator[_Step]:
+    """Remove what the warehouse holds in the order :func:`delete_warehouse` states, its record last, yielding each step as it lands."""
+    for entry in delete.trashed:
+        async with aclosing(_end_trashed(entry, delete, settings=settings, client=client, token=token)) as ending:
+            async for step in ending:
+                yield step
+    if ns_conn is not None:
+        async with aclosing(_remove_every_subtree(delete, ns_conn, settings=settings, client=client, token=token)) as removing:
+            async for step in removing:
+                yield step
+        # The warehouse's own row last, once every namespace beneath it is gone.
+        with suppress(NamespaceNotFoundError):
+            await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=[delete.warehouse_id]))
+    # A namespace an earlier attempt removed is named by nothing but this warehouse's `child` edge, so its subtree
+    # is ended from there before the warehouse's own grants go.
+    ended = {fga_ids.namespace_object(subtree.uuid) for subtree in delete.subtrees if subtree.uuid is not None}
+    for orphan in await object_grants.orphaned_children(client, settings, f"warehouse:{delete.warehouse_id}", ended=ended):
+        async for count in object_grants.end_removed_subtree(client, settings, root_uuid=orphan, removed=[], token=token):
+            yield _Step(landed=_Landed(revoked=count))
+
+    yield _Step(landed=_Landed(revoked=await object_grants.revoke_removed_object(client, settings, f"warehouse:{delete.warehouse_id}", token=token)))
+    # The record goes LAST: it is what the door is addressed by, so while the purge or the claim's release can still
+    # fail, it keeps the warehouse for the re-issue that finishes them.
+    if delete.purge_bucket:
+        purged = await run_in_threadpool(warehouses.purge_bucket, delete.bucket, delete.so)
+        yield _Step(landed=_Landed(purged=purged, bucket_purged=True))
+        await run_in_threadpool(
+            partial(warehouses.release_bucket_claim, settings.registry_root, delete.so, bucket=delete.bucket, warehouse_id=delete.warehouse_id)
         )
-        # Sent with what the delete dropped and purged, under the id the planned event was filed with.
-        actual = planned.model_copy(update={"extra": {**planned.extra, "namespaces_dropped": namespaces_dropped, "objects_purged": purged}})
-        await filing.send(deleted.model_copy(update={"message": ControlMessage(event=actual)}))
-    answer = DeleteWarehouseResponse(
-        id=warehouse_id,
-        bucket=bucket,
-        namespaces_dropped=namespaces_dropped,
-        tuples_revoked=revoked,
-        bucket_purged=purge_bucket,
-        objects_purged=purged,
+    await run_in_threadpool(warehouses.delete_warehouse_record, settings.registry_root, delete.so, delete.warehouse_id)
+
+
+async def _remove_every_subtree(
+    delete: _WarehouseDelete, ns_conn: LanceNamespace, *, settings: Settings, client: OpenFgaClient | None, token: Caller | None
+) -> AsyncGenerator[_Step]:
+    """Remove each namespace of the warehouse with everything in it, one fully before the next, yielding each step."""
+    for subtree in delete.subtrees:
+        async with aclosing(_remove_subtree(subtree, delete, ns_conn, settings=settings, client=client, token=token)) as removing:
+            async for step in removing:
+                yield step
+
+
+async def _end_trashed(
+    entry: TrashRecord, delete: _WarehouseDelete, *, settings: Settings, client: OpenFgaClient | None, token: Caller | None
+) -> AsyncGenerator[_Step]:
+    """End one trashed object of the warehouse, its kept grants first, yielding each step as it lands."""
+    kind, canonical = str(entry.kind or "table"), entry.id
+    # A trashed object's grants are held by the uuid its record keeps ([[LH-524]]). Counted as the revoke lands,
+    # so a failure in the records after it still reports these tuples.
+    trashed_uuid = entry.uuid
+    if trashed_uuid is not None:
+        obj = fga_ids.object_of(kind, trashed_uuid)
+        yield _Step(landed=_Landed(revoked=await object_grants.revoke_removed_object(client, settings, obj, token=token)))
+    else:
+        log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": delete.warehouse_id, "kind": kind, "id": canonical})
+    await _forget_trashed(settings, entry, purge=delete.purge_bucket)
+    yield _Step(landed=_Landed(trash_ended=[f"{kind}:{canonical}"]))
+
+
+async def _remove_subtree(
+    subtree: _NamespaceSubtree,
+    delete: _WarehouseDelete,
+    ns_conn: LanceNamespace,
+    *,
+    settings: Settings,
+    client: OpenFgaClient | None,
+    token: Caller | None,
+) -> AsyncGenerator[_Step]:
+    """Remove one namespace of the warehouse with everything in it, yielding each step as it lands."""
+    # What this cascade removes of the subtree: every namespace, and each table it detaches itself. A listed
+    # table that left before its turn ([[LH-586]]) is announced by no one here and ended by no step below.
+    removed = [item for item in subtree.descendants if item.kind == "namespace"]
+    for item in subtree.descendants:
+        if item.kind != "table":
+            continue
+        # What the announcement names the table by, read while it still stands (ADR 0173 §10).
+        if await _detach_table(ns_conn, settings, item.segments, purge=delete.purge_bucket, table_uuid=item.uuid):
+            removed.append(item)
+            yield _Step(landed=_Landed(tables_removed=[fga_ids.canonical_object_id(item.segments)]), detached=tuple(item.segments))
+    # The namespaces deepest first, then what each object held ended.
+    for namespace in subtree.namespaces:
+        try:
+            await run_in_threadpool(native.call, ns_conn, "drop_namespace", DropNamespaceRequest(id=namespace))
+        except NamespaceNotFoundError:
+            # Drift, or an earlier attempt's work: the namespace went before its turn, and refusing
+            # here would leave records and grants nobody can end, so the catalog's own records still go.
+            log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": delete.warehouse_id, "namespace": namespace})
+        yield _Step(landed=_Landed(namespaces_dropped=[fga_ids.canonical_object_id(namespace)]))
+    async for count in object_grants.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
+        yield _Step(landed=_Landed(revoked=count))
+
+
+def _partially_deleted(landed: _Landed, delete: _WarehouseDelete) -> PartiallyApplied:
+    """The refusal a delete that failed part-way answers, naming what landed before it, logged with the failure."""
+    log.error(
+        "warehouse_delete_partial",
+        extra={
+            "warehouse": delete.warehouse_id,
+            "project": delete.project,
+            "bucket": delete.bucket,
+            "namespaces_dropped": landed.namespaces_dropped,
+            "tables_removed": landed.tables_removed,
+            "trash_ended": landed.trash_ended,
+            "tuples_revoked": landed.revoked,
+            "bucket_purged": landed.bucket_purged,
+        },
+        exc_info=True,
     )
-    await converge.remember(200, answer)
-    return answer
+    # AND TELL THE CALLER, not only the log. The log records what landed for an operator; the
+    # caller got a problem body that said nothing, so it could not tell a delete that did nothing
+    # from one that destroyed three namespaces and then failed — and those need different next
+    # actions. The outcome rides as RFC 9457 extension members, which is what lets a 5xx say
+    # something true about the caller's own objects while `detail` stays redacted.
+    #
+    # ServiceUnavailable rather than the original error, and that is the honest code: every
+    # primitive here is idempotent, so the recovery is to re-issue the SAME call — which is
+    # precisely what a 503 asks a client to do. The cause is chained, so the real failure is still
+    # in the traceback and the log.
+    return PartiallyApplied(
+        f"warehouse {delete.warehouse_id!r} was PARTIALLY deleted: {len(landed.namespaces_dropped)} namespace(s) dropped, "
+        f"{len(landed.tables_removed)} table(s) removed, {len(landed.trash_ended)} trashed object(s) ended and {landed.revoked} tuple(s) "
+        "revoked before the failure. Every step is "
+        "idempotent — re-issue this call to finish it.",
+        problem_extra={
+            "warehouse": delete.warehouse_id,
+            "namespaces_dropped": landed.namespaces_dropped,
+            "tables_removed": landed.tables_removed,
+            "trash_ended": landed.trash_ended,
+            "tuples_revoked": landed.revoked,
+            "bucket_purged": landed.bucket_purged,
+            "partial": True,
+        },
+    )
 
 
 @management_router.post("/{warehouse_id}/validate", response_model_exclude_none=True)
@@ -1427,20 +1609,9 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     # and the root is where a policy that was ignored would let it write.
     outside = f"{prefix.rstrip('/') + '/' if prefix else ''}_validate_scope_probe_should_fail"
 
-    checks: list[ProbeCheck] = []
-    try:
-        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="probe", session_name=session_name)
-        # The probe signs as the client a door hands the vend to, so it holds what that door would answer ([[LH-072]]).
-        options = None if vended is None else vended.as_storage_options()
-    except Exception as exc:  # noqa: BLE001 — any vend failure is one reportable outcome, not a 500
-        checks.append(ProbeCheck(name="issue", outcome="fail", detail=f"{type(exc).__name__}: {exc}"))
-        options = None
-    else:
-        checks.append(
-            ProbeCheck(name="issue", outcome="pass")
-            if options is not None
-            else ProbeCheck(name="issue", outcome="skip", detail="server_mediated: this warehouse vends no direct credentials")
-        )
+    vend = _vend_the_probe(vendor, bucket=bucket, probe_prefix=probe_prefix, session_name=session_name)
+    options = vend.options
+    checks: list[ProbeCheck] = [vend.issued]
 
     if options is None:
         checks += [
@@ -1452,78 +1623,120 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     s3 = s3_client(store_endpoint or None, key_pair=options.signing_pair(), region=options.region)
 
     def _step(name: str, fn: Callable[[], object], *, accepted_is: str = "") -> bool:
-        """Run one check: ``fn`` must go through, or, where ``accepted_is`` says what the store did wrong by accepting
-        it, must be refused. Whether the check got the outcome it wanted."""
-        expect_refusal = bool(accepted_is)
-        try:
-            fn()
-        except Exception as exc:  # noqa: BLE001 — the store's refusal is the RESULT here, not an error
-            detail = f"{type(exc).__name__}: {str(exc)[:120]}"
-            checks.append(ProbeCheck(name=name, outcome="pass" if expect_refusal else "fail", detail="" if expect_refusal else detail))
-            return expect_refusal
-        checks.append(ProbeCheck(name=name, outcome="fail", detail=accepted_is) if expect_refusal else ProbeCheck(name=name, outcome="pass"))
-        return not expect_refusal
+        # Records the check, and answers whether it got the outcome it wanted.
+        check = _probe_step(name, fn, accepted_is=accepted_is)
+        checks.append(check)
+        return check.outcome == "pass"
 
     wrote = _step("write_inside", lambda: s3.put_object(Bucket=bucket, Key=inside, Body=b"scope-probe"))
-    if wrote:
-        _step("read_inside", lambda: s3.get_object(Bucket=bucket, Key=inside))
-        # As the credential tells its writer to encrypt, after a plain write the store took: a store whose role holds no grant
-        # on the vended KMS key fails here, a verdict on the store, not the first write to the warehouse's first table
-        # ([[LH-262]]). The read back asks the key's decrypt as a reader would.
-        if encrypted := _encryption_put_args(options.options):
-
-            def _round_trip() -> None:
-                s3.put_object(Bucket=bucket, Key=sealed, Body=b"scope-probe", **encrypted)
-                s3.get_object(Bucket=bucket, Key=sealed)
-
-            _step(ENCRYPTED_WRITE, _round_trip)
-        # `_step` returns "the step got the outcome we wanted", so a False here means the out-of-scope
-        # write LANDED and left an object at the warehouse root. Cleaned below — but only in that case:
-        # a correctly scoped credential is refused the delete too, and reporting that refusal as a
-        # cleanup failure would raise a false alarm about the store that just passed.
-        scope_refused = _step(
-            SCOPE_CHECK,
-            lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"),
-            accepted_is="the store accepted a write OUTSIDE the credential's prefix",
-        )
-        # PUT-IF-NOT-EXISTS, the primitive Lance's commit protocol rests on
-        # (`lance_docs/lance/format/table/transaction.md` § "Commit Protocol" -> "Storage Primitives"). Two conditional
-        # puts at one key: the first must be ACCEPTED and the second REFUSED. A store that accepts
-        # both has no "exactly one writer succeeds" guarantee, so two concurrent Lance writers would
-        # each believe they committed the same manifest version — with a 200 on both and no error
-        # anywhere. That is the failure this step exists to name, and it is why the SECOND put is the
-        # check rather than the first.
-        reserved = _step(CAS_RESERVE, lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"first", IfNoneMatch="*"))
-        if reserved:
-            _step(
-                CAS_CHECK,
-                lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"second", IfNoneMatch="*"),
-                accepted_is="the store accepted a second conditional put at a key that exists",
-            )
-        else:
-            # The store refused the HEADER, not a racing writer. That is a real failure — recorded by
-            # the step above — but it measures nothing about a second writer, so the claim stays
-            # UNKNOWN rather than becoming a verdict the probe never reached.
-            checks.append(ProbeCheck(name=CAS_CHECK, outcome="skip", detail="the store refused the conditional header itself"))
-
-        # [[LH-511]] THE WRITE TIER'S DENY, asked of a write-tier credential for the same prefix. Managed versioning
-        # (ADR 0157) rests on the store refusing a writer the final manifest and every ref; a store that takes the
-        # session policy and ignores its Deny would let any writer finalize a version past `version/create`.
-        landed = _probe_the_write_tier(
-            _step, vendor, bucket=bucket, probe_prefix=probe_prefix, store_endpoint=store_endpoint, session_name=session_name, checks=checks
-        )
-
-        def _clean() -> None:
-            # Under the probe tier: the write tier deletes nothing, what it landed included.
-            for key in (inside, cas, sealed, *landed):
-                s3.delete_object(Bucket=bucket, Key=key)
-            if not scope_refused:
-                s3.delete_object(Bucket=bucket, Key=outside)
-
-        _step("cleanup", _clean)
-    else:
+    if not wrote:
         checks += [
             ProbeCheck(name=n, outcome="skip", detail="nothing was written")
             for n in ("read_inside", SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, *_WRITE_TIER_CHECKS, "cleanup")
         ]
+        return checks
+    _step("read_inside", lambda: s3.get_object(Bucket=bucket, Key=inside))
+    # As the credential tells its writer to encrypt, after a plain write the store took: a store whose role holds no grant
+    # on the vended KMS key fails here, a verdict on the store, not the first write to the warehouse's first table
+    # ([[LH-262]]). The read back asks the key's decrypt as a reader would.
+    _probe_encryption(_step, s3, bucket=bucket, sealed=sealed, options=options)
+    # `_step` returns "the step got the outcome we wanted", so a False here means the out-of-scope
+    # write LANDED and left an object at the warehouse root. Cleaned below — but only in that case:
+    # a correctly scoped credential is refused the delete too, and reporting that refusal as a
+    # cleanup failure would raise a false alarm about the store that just passed.
+    scope_refused = _step(
+        SCOPE_CHECK,
+        lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"),
+        accepted_is="the store accepted a write OUTSIDE the credential's prefix",
+    )
+    # PUT-IF-NOT-EXISTS, the primitive Lance's commit protocol rests on
+    # (`lance_docs/lance/format/table/transaction.md` § "Commit Protocol" -> "Storage Primitives"). Two conditional
+    # puts at one key: the first must be ACCEPTED and the second REFUSED. A store that accepts
+    # both has no "exactly one writer succeeds" guarantee, so two concurrent Lance writers would
+    # each believe they committed the same manifest version — with a 200 on both and no error
+    # anywhere. That is the failure this step exists to name, and it is why the SECOND put is the
+    # check rather than the first.
+    if (unmeasured := _probe_put_if_not_exists(_step, s3, bucket=bucket, cas=cas)) is not None:
+        checks.append(unmeasured)
+
+    # [[LH-511]] THE WRITE TIER'S DENY, asked of a write-tier credential for the same prefix. Managed versioning
+    # (ADR 0157) rests on the store refusing a writer the final manifest and every ref; a store that takes the
+    # session policy and ignores its Deny would let any writer finalize a version past `version/create`.
+    landed = _probe_the_write_tier(
+        _step, vendor, bucket=bucket, probe_prefix=probe_prefix, store_endpoint=store_endpoint, session_name=session_name, checks=checks
+    )
+
+    def _clean() -> None:
+        # Under the probe tier: the write tier deletes nothing, what it landed included.
+        for key in (inside, cas, sealed, *landed):
+            s3.delete_object(Bucket=bucket, Key=key)
+        if not scope_refused:
+            s3.delete_object(Bucket=bucket, Key=outside)
+
+    _step("cleanup", _clean)
     return checks
+
+
+class _ProbeVend(BaseModel):
+    """The probe tier's credential, ``None`` when nothing was vended, and the check its issue is."""
+
+    model_config = ConfigDict(frozen=True)
+
+    options: StorageOptions | None
+    issued: ProbeCheck
+
+
+def _vend_the_probe(vendor: CredentialVendor, *, bucket: str, probe_prefix: str, session_name: str) -> _ProbeVend:
+    """The probe tier's credential for ``probe_prefix``, ``None`` when nothing was vended, and the check its issue is."""
+    try:
+        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="probe", session_name=session_name)
+        # The probe signs as the client a door hands the vend to, so it holds what that door would answer ([[LH-072]]).
+        options = None if vended is None else vended.as_storage_options()
+    except Exception as exc:  # noqa: BLE001 — any vend failure is one reportable outcome, not a 500
+        issued = ProbeCheck(name="issue", outcome="fail", detail=f"{type(exc).__name__}: {exc}")
+        options = None
+    else:
+        issued = (
+            ProbeCheck(name="issue", outcome="pass")
+            if options is not None
+            else ProbeCheck(name="issue", outcome="skip", detail="server_mediated: this warehouse vends no direct credentials")
+        )
+    return _ProbeVend(options=options, issued=issued)
+
+
+def _probe_step(name: str, fn: Callable[[], object], *, accepted_is: str = "") -> ProbeCheck:
+    """Run one check, ``fn``, which must go through, or be refused where ``accepted_is`` says why accepting it is wrong."""
+    expect_refusal = bool(accepted_is)
+    try:
+        fn()
+    except Exception as exc:  # noqa: BLE001 — the store's refusal is the RESULT here, not an error
+        detail = f"{type(exc).__name__}: {str(exc)[:120]}"
+        return ProbeCheck(name=name, outcome="pass" if expect_refusal else "fail", detail="" if expect_refusal else detail)
+    return ProbeCheck(name=name, outcome="fail", detail=accepted_is) if expect_refusal else ProbeCheck(name=name, outcome="pass")
+
+
+def _probe_encryption(step: Callable[..., bool], s3: S3Client, *, bucket: str, sealed: str, options: StorageOptions) -> None:
+    """Write and read ``sealed`` encrypted as the credential tells its writer to, when it tells it to at all."""
+    if encrypted := _encryption_put_args(options.options):
+
+        def _round_trip() -> None:
+            s3.put_object(Bucket=bucket, Key=sealed, Body=b"scope-probe", **encrypted)
+            s3.get_object(Bucket=bucket, Key=sealed)
+
+        step(ENCRYPTED_WRITE, _round_trip)
+
+
+def _probe_put_if_not_exists(step: Callable[..., bool], s3: S3Client, *, bucket: str, cas: str) -> ProbeCheck | None:
+    """Two conditional puts at ``cas``, the first accepted and the second refused; the check left unmeasured, if any."""
+    reserved = step(CAS_RESERVE, lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"first", IfNoneMatch="*"))
+    if not reserved:
+        # The store refused the HEADER, not a racing writer. That is a real failure — recorded by
+        # the step above — but it measures nothing about a second writer, so the claim stays
+        # UNKNOWN rather than becoming a verdict the probe never reached.
+        return ProbeCheck(name=CAS_CHECK, outcome="skip", detail="the store refused the conditional header itself")
+    step(
+        CAS_CHECK,
+        lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"second", IfNoneMatch="*"),
+        accepted_is="the store accepted a second conditional put at a key that exists",
+    )
+    return None

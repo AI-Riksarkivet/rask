@@ -23,10 +23,11 @@ import httpx
 from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse.events import outbox, outbox_metrics
 from lakehouse.events.bus import Bus
+from lakehouse.events.cloud_events import CloudEvent
 from lakehouse.process.supervision import Supervisor
 from lakehouse.storage.options import StorageOptions
 from lakehouse.timers import Timer
@@ -239,73 +240,17 @@ async def _drain_outbox(
             staged_copy = read_staged(event_json)
             event: RunEvent | DatasetEvent = parse_staged(staged_copy)
         except UnparseableEventError as exc:
-            # ONLY a genuinely-unparseable event is poison. The author rides the RAW json: this branch fires
-            # because the event would not validate, so the strict model is unavailable exactly where the answer
-            # is needed.
-            poison_author: str | None = None
-            poison_run: str | None = None
-            with suppress(Exception):
-                payload = json.loads(event_json).get("data") or {}
-                poison_author = author_sub_from_payload(payload)
-                poison_run = str((payload.get("run") or {}).get("runId") or "") or None
-            log.warning("lineage_outbox_poison_dropped", extra={"outbox_key": key, "run_id": poison_run, "error": str(exc), "author": poison_author})
-            outbox_metrics.record_poison_dropped("lineage")
-            # ITS OWN TRY: this handler is outside the per-event `except Exception`, so a delete that raised here
-            # would leave the loop and strand every event behind it.
-            try:
-                await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
-            except Exception as undropped:
-                log.warning("lineage_outbox_poison_left_staged", extra={"outbox_key": key, "error": str(undropped)})
+            await _drop_poison(settings, opts, key=key, event_json=event_json, exc=exc)
             continue
+        held = _StagedEvent(key=key, event=event, envelope=staged_copy)
         try:
-            # THE BUS DOOR'S GATE, never a second copy: the outbox is writable by the producers that stage there,
-            # so a stager refused at the bus could stage instead. It authorizes AS the subject the producer
-            # stamped, over THE STAGED BYTES (the signature covers what the producer wrote).
-            arrived = staged_copy.data
-            aliased = await enforce_bus_authz(event, app, settings, arrived=arrived)
-            await provenance.record(event, aliased=aliased)
-            # RE-PUBLISH, then drop. Recording alone repairs the feed and leaves every SUBSCRIBER unaware:
-            # maintenance's arrival consumer and a notifier on the bus hear of a recovered event only this way.
-            # BEFORE the drop: a publish that fails leaves the staged object for the next tick, whose re-record
-            # is a no-op. A duplicate delivery is the at-least-once contract subscribers are built for.
-            await republish_staged(publisher, settings, staged_copy)
-            await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
+            await _record_republish_and_drop(app, provenance, settings, opts=opts, publisher=publisher, staged=held)
         except PermissionDeniedError as exc:
             # NEITHER POISON NOR STRANDED: a governance answer about a well-formed event, so the object is retired
             # only once the event is kept below — never on the verdict alone.
             refused += 1
-            outcome = refusal_outcome(exc)
-            refused_author = author_sub_from_payload(staged_copy.data)
-            log.warning(
-                "lineage_outbox_event_unauthorized",
-                extra={"outbox_key": key, "run_id": event.run_id, "author": refused_author, "outcome": outcome, "reason": str(exc)},
-            )
-            # KEEP, THEN RETIRE ([[LH-182]]). A crash after the keep leaves the object, the next tick re-refuses
-            # it, and the upsert on the row's key (the bus copy's id for a park, the staged key otherwise) makes that
-            # a no-op; delete-first would lose the only durable copy. ITS OWN TRY ([[LH-297]]): a keep or a drop that
-            # raised here would leave the loop.
-            landed = False
-            try:
-                if outcome is Outcome.REFUSED:
-                    # A GRANT REPAIRS IT: parked as the bus lane parks the same event, under the id its bus copy
-                    # carries, so the two routes keep one row and the parked doors replay either.
-                    await park(provenance, bus_copy(staged_copy).as_wire(), str(exc))
-                else:
-                    await provenance.record_refusal(
-                        outbox_key=key, run_id=event.run_id, author=refused_author, reason=str(exc), event_json=json.dumps(staged_copy.data)
-                    )
-                landed = True
+            if await _keep_refusal_and_drop(provenance, settings, opts, staged=held, exc=exc):
                 recorded += 1
-                # COUNTED ONCE KEPT, under the outcome every door counts a refusal by, so the alerts reading it see a
-                # drained refusal as they see a delivered one ([[LH-573]]); one whose keep failed stays staged and is
-                # counted by the tick that keeps it.
-                record_outcome(outcome, door=Door.OUTBOX)
-                await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
-            except Exception as unretired:
-                log.warning(
-                    "lineage_outbox_refusal_left_staged",
-                    extra={"outbox_key": key, "run_id": event.run_id, "recorded": landed, "error": str(unretired)},
-                )
             continue
         except Exception as exc:
             # LEFT STAGED on purpose — see "STRANDED IS NOT POISON" above.
@@ -313,9 +258,102 @@ async def _drain_outbox(
             log.warning("lineage_outbox_event_stranded", extra={"outbox_key": key, "run_id": event.run_id, "error": str(exc)})
             continue
         drained += 1
+    _record_drained_counts(drained, stranded, refused)
+    return DrainOutcome(drained=drained, stranded=stranded, refused=refused, recorded=recorded)
+
+
+def _record_drained_counts(drained: int, stranded: int, refused: int) -> None:
+    """Count what one drain of the outbox drained, stranded and refused, and say it when there was any."""
     outbox_metrics.record_drained("lineage", drained)
     outbox_metrics.record_stranded("lineage", stranded)
     outbox_metrics.record_refused("lineage", refused)
     if drained or stranded or refused:
         log.info("lineage_outbox_drained", extra={"drained": drained, "stranded": stranded, "refused": refused})
-    return DrainOutcome(drained=drained, stranded=stranded, refused=refused, recorded=recorded)
+
+
+class _StagedEvent(BaseModel):
+    """A well-formed event the outbox holds: its staged key, the event and the envelope it was staged in."""
+
+    model_config = ConfigDict(frozen=True)
+
+    key: str
+    event: RunEvent | DatasetEvent
+    envelope: CloudEvent
+
+
+async def _drop_poison(settings: LineageSettings, opts: StorageOptions, *, key: str, event_json: str, exc: UnparseableEventError) -> None:
+    """Drop the staged object at ``key`` whose ``event_json`` would not parse, saying a drop that fails."""
+    # ONLY a genuinely-unparseable event is poison. The author rides the RAW json: this branch fires
+    # because the event would not validate, so the strict model is unavailable exactly where the answer
+    # is needed.
+    poison_author: str | None = None
+    poison_run: str | None = None
+    with suppress(Exception):
+        payload = json.loads(event_json).get("data") or {}
+        poison_author = author_sub_from_payload(payload)
+        poison_run = str((payload.get("run") or {}).get("runId") or "") or None
+    log.warning("lineage_outbox_poison_dropped", extra={"outbox_key": key, "run_id": poison_run, "error": str(exc), "author": poison_author})
+    outbox_metrics.record_poison_dropped("lineage")
+    # ITS OWN TRY: this handler is outside the per-event `except Exception`, so a delete that raised here
+    # would leave the loop and strand every event behind it.
+    try:
+        await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
+    except Exception as undropped:
+        log.warning("lineage_outbox_poison_left_staged", extra={"outbox_key": key, "error": str(undropped)})
+
+
+async def _record_republish_and_drop(
+    app: FastAPI, provenance: ProvenanceStore, settings: LineageSettings, *, opts: StorageOptions, publisher: Bus | None, staged: _StagedEvent
+) -> None:
+    """Record ``staged`` under the bus door's own gate, publish it again and drop its staged object."""
+    # THE BUS DOOR'S GATE, never a second copy: the outbox is writable by the producers that stage there,
+    # so a stager refused at the bus could stage instead. It authorizes AS the subject the producer
+    # stamped, over THE STAGED BYTES (the signature covers what the producer wrote).
+    arrived = staged.envelope.data
+    aliased = await enforce_bus_authz(staged.event, app, settings, arrived=arrived)
+    await provenance.record(staged.event, aliased=aliased)
+    # RE-PUBLISH, then drop. Recording alone repairs the feed and leaves every SUBSCRIBER unaware:
+    # maintenance's arrival consumer and a notifier on the bus hear of a recovered event only this way.
+    # BEFORE the drop: a publish that fails leaves the staged object for the next tick, whose re-record
+    # is a no-op. A duplicate delivery is the at-least-once contract subscribers are built for.
+    await republish_staged(publisher, settings, staged.envelope)
+    await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, staged.key)
+
+
+async def _keep_refusal_and_drop(
+    provenance: ProvenanceStore, settings: LineageSettings, opts: StorageOptions, *, staged: _StagedEvent, exc: PermissionDeniedError
+) -> bool:
+    """Keep the refusal of ``staged`` and drop its staged object, saying a failure; whether the refusal was kept."""
+    event, key = staged.event, staged.key
+    outcome = refusal_outcome(exc)
+    refused_author = author_sub_from_payload(staged.envelope.data)
+    log.warning(
+        "lineage_outbox_event_unauthorized",
+        extra={"outbox_key": key, "run_id": event.run_id, "author": refused_author, "outcome": outcome, "reason": str(exc)},
+    )
+    # KEEP, THEN RETIRE ([[LH-182]]). A crash after the keep leaves the object, the next tick re-refuses
+    # it, and the upsert on the row's key (the bus copy's id for a park, the staged key otherwise) makes that
+    # a no-op; delete-first would lose the only durable copy. ITS OWN TRY ([[LH-297]]): a keep or a drop that
+    # raised here would leave the loop.
+    landed = False
+    try:
+        if outcome is Outcome.REFUSED:
+            # A GRANT REPAIRS IT: parked as the bus lane parks the same event, under the id its bus copy
+            # carries, so the two routes keep one row and the parked doors replay either.
+            await park(provenance, bus_copy(staged.envelope).as_wire(), str(exc))
+        else:
+            await provenance.record_refusal(
+                outbox_key=key, run_id=event.run_id, author=refused_author, reason=str(exc), event_json=json.dumps(staged.envelope.data)
+            )
+        landed = True
+        # COUNTED ONCE KEPT, under the outcome every door counts a refusal by, so the alerts reading it see a
+        # drained refusal as they see a delivered one ([[LH-573]]); one whose keep failed stays staged and is
+        # counted by the tick that keeps it.
+        record_outcome(outcome, door=Door.OUTBOX)
+        await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
+    except Exception as unretired:
+        log.warning(
+            "lineage_outbox_refusal_left_staged",
+            extra={"outbox_key": key, "run_id": event.run_id, "recorded": landed, "error": str(unretired)},
+        )
+    return landed

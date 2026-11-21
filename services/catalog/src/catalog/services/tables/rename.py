@@ -15,6 +15,7 @@ from lance_namespace import (
     TableAlreadyExistsError,
     TableNotFoundError,
 )
+from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.core.identifiers import rename_destination
 from catalog.core.table_objects import holds_a_version, relative_location
@@ -133,24 +134,7 @@ def rename_table(
     new_segments = rename_destination(segments, new_namespace_id, new_table_name)
     if new_segments == segments:
         raise InvalidInputError("the rename destination is identical to the source")
-    source_uri = source.location
-    if source_uri is None or not holds_a_version(source_uri, so):
-        # Missing OR declared-but-unwritten → nothing to repoint (404, symmetric with every op that
-        # requires a written table).
-        raise TableNotFoundError(f"table not found: {'.'.join(segments)}")
-    if len(segments) == 1:
-        raise InvalidInputError(
-            f"cannot rename {'.'.join(segments)}: it is a root-namespace table, which the directory catalog stores "
-            "under V1 compatibility naming (<name>.lance) where the location IS the name. The spec's rule is that such "
-            "a rename transitions the table to V2 hash-based naming, which relocates its data — unbounded work this "
-            "door will not do in a request. Move the table into a namespace first."
-        )
-    # The destination must be free in EVERY form, checked BEFORE anything is touched. A declared-only
-    # stub is TAKEN, never adopted: adopting one skips `register_table`, which is what arbitrates two
-    # concurrent renames into the SAME destination name — the source-side race is arbitrated by the
-    # location claim below, and the two together are what make this door safe under concurrency.
-    if existing_location(ns, new_segments) is not None:
-        raise TableAlreadyExistsError(f"table already exists: {'.'.join(new_segments)}")
+    source_uri = _renamed_location(ns, segments, new_segments, source=source, so=so)
     # RELATIVE, because the dir backend refuses an absolute URI here ("Absolute URIs are not allowed
     # for register_table"): the key the source's location decodes to under the namespace connection's
     # own root, ``root``, as both undrops re-attach a table (:func:`relative_location`, [[LH-528]]).
@@ -170,64 +154,25 @@ def rename_table(
     # until the destination is registered it names a table the backend does not describe, which a registration of
     # the destination's name would otherwise replace under a uuid of its own.
     source_id, dest_id = CATALOG_DELIMITER.join(segments), CATALOG_DELIMITER.join(new_segments)
-    try:
-        fenced = table_claims.hand_over(ns, claims, source, table=dest_id, segments=new_segments, previous=source_id)
-    except (location_claims.LocationHeldError, location_claims.ClaimChangedError) as refused:
-        holder = refused.claim.table if isinstance(refused, location_claims.LocationHeldError) else None
-        log.warning("rename_refused_held_location", extra={"source": source_id, "location": source_uri, "holder": holder})
-        raise ConcurrentModificationError(
-            f"cannot rename {source_id}: its location is held by another table, by a concurrent rename or registration; describe it and retry"
-        ) from None
-
-    def _hand_back(put_back: Callable[[], None] | None) -> None:
-        # The source keeps its location, so it keeps the claim; left with the destination, every later
-        # rename of the source would answer code 14 for the claim's lease. What followed the table goes back
-        # first, while the claim still keeps every other request off it. Under this request's token, since the
-        # claim is fenced for it, and the claim the source takes back carries no fence. Logged, never raised over
-        # the failure that made the rename compensate.
-        if put_back is not None:
-            try:
-                put_back()
-            except Exception as exc:
-                log.error("rename_parent_not_put_back", extra={"source": source_id, "destination": dest_id, "error": str(exc)[:300]}, exc_info=True)
-        try:
-            table_claims.take(ns, claims, source_uri, table=source_id, segments=segments, previous=dest_id, token=fenced.token)
-        except Exception as exc:
-            log.error("rename_claim_not_handed_back", extra={"source": source_id, "location": source_uri, "error": str(exc)[:300]})
-
-    put_back = None
-    if reparent is not None:
-        try:
-            reparent.leave()
-        except Exception:
-            _hand_back(None)
-            raise
-        put_back = reparent.put_back
+    fenced = _hand_over_the_claim(ns, claims, source, new_segments=new_segments, source_id=source_id, dest_id=dest_id)
+    move = _Move(
+        ns=ns,
+        claims=claims,
+        source_uri=source_uri,
+        segments=segments,
+        new_segments=new_segments,
+        location=location,
+        source_id=source_id,
+        dest_id=dest_id,
+        fenced=fenced,
+    )
+    put_back = _move_inheritance_to_the_destination(move, reparent)
     try:
         ns.deregister_table(DeregisterTableRequest(id=segments))
     except Exception:
-        _hand_back(put_back)
+        _hand_back(move, put_back)
         raise
-    try:
-        ns.register_table(RegisterTableRequest(id=new_segments, location=location))
-    except Exception:
-        # COMPENSATE, or a rename that trips on its destination leaves the table reachable by NO id —
-        # bytes intact and invisible. The same call at the same location the source already had, and
-        # the claim handed back with it. A destination found registered at this very location is no finished
-        # rename, since no other rename holds the claim this one fenced: it is the row a RegisterTable of the
-        # destination's name attaches before the claim refuses it, which that registration then detaches itself.
-        try:
-            ns.register_table(RegisterTableRequest(id=segments, location=location))
-        except Exception as restore:
-            # The source is now unreachable and the location is the only way back, so it goes in the
-            # log rather than being swallowed with the original error.
-            log.error(
-                "rename_source_pointer_lost",
-                extra={"source": source_id, "location": location, "error": str(restore)},
-            )
-        else:
-            _hand_back(put_back)
-        raise
+    _register_destination(move, put_back)
     if reparent is not None:
         try:
             reparent.arrive()
@@ -237,3 +182,113 @@ def rename_table(
     # The table is settled under its new name, so the claim is every door's to act on again.
     table_claims.lift_fence(claims, fenced)
     return new_segments, source_uri
+
+
+class _Move(BaseModel):
+    """A rename past its claim's hand-over: what it moves between and the fence it holds."""
+
+    # `arbitrary_types_allowed` for `ns`: a LanceNamespace is no pydantic type.
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    # A namespace connection is opaque: what the rename was handed is what it uses, a stand-in in a test included.
+    ns: SkipValidation[LanceNamespace]
+    claims: location_claims.ClaimStore
+    source_uri: str
+    segments: list[str]
+    new_segments: list[str]
+    location: str
+    source_id: str
+    dest_id: str
+    fenced: table_claims.DoorFence
+
+
+def _renamed_location(ns: LanceNamespace, segments: list[str], new_segments: list[str], *, source: table_claims.ResolvedTable, so: StorageOptions) -> str:
+    """The location of the written table ``source`` a rename moves from ``segments`` to the free name ``new_segments``."""
+    source_uri = source.location
+    if source_uri is None or not holds_a_version(source_uri, so):
+        # Missing OR declared-but-unwritten → nothing to repoint (404, symmetric with every op that
+        # requires a written table).
+        raise TableNotFoundError(f"table not found: {'.'.join(segments)}")
+    if len(segments) == 1:
+        raise InvalidInputError(
+            f"cannot rename {'.'.join(segments)}: it is a root-namespace table, which the directory catalog stores "
+            "under V1 compatibility naming (<name>.lance) where the location IS the name. The spec's rule is that such "
+            "a rename transitions the table to V2 hash-based naming, which relocates its data — unbounded work this "
+            "door will not do in a request. Move the table into a namespace first."
+        )
+    # The destination must be free in EVERY form, checked BEFORE anything is touched. A declared-only
+    # stub is TAKEN, never adopted: adopting one skips `register_table`, which is what arbitrates two
+    # concurrent renames into the SAME destination name — the source-side race is arbitrated by the
+    # location claim below, and the two together are what make this door safe under concurrency.
+    if existing_location(ns, new_segments) is not None:
+        raise TableAlreadyExistsError(f"table already exists: {'.'.join(new_segments)}")
+    return source_uri
+
+
+def _hand_over_the_claim(
+    ns: LanceNamespace, claims: location_claims.ClaimStore, source: table_claims.ResolvedTable, *, new_segments: list[str], source_id: str, dest_id: str
+) -> table_claims.DoorFence:
+    """Hand the source's location claim over to ``dest_id``, fenced under this request's token; a held claim is a 409."""
+    try:
+        return table_claims.hand_over(ns, claims, source, table=dest_id, segments=new_segments, previous=source_id)
+    except (location_claims.LocationHeldError, location_claims.ClaimChangedError) as refused:
+        holder = refused.claim.table if isinstance(refused, location_claims.LocationHeldError) else None
+        log.warning("rename_refused_held_location", extra={"source": source_id, "location": source.location, "holder": holder})
+        raise ConcurrentModificationError(
+            f"cannot rename {source_id}: its location is held by another table, by a concurrent rename or registration; describe it and retry"
+        ) from None
+
+
+def _move_inheritance_to_the_destination(move: _Move, reparent: Reparent | None) -> Callable[[], None] | None:
+    """Move where the table inherits from to the destination: how to put it back, ``None`` when nothing moves along."""
+    if reparent is None:
+        return None
+    try:
+        reparent.leave()
+    except Exception:
+        # A leave that raises has returned what it may have moved, and the claim is handed back.
+        _hand_back(move, None)
+        raise
+    return reparent.put_back
+
+
+def _hand_back(move: _Move, put_back: Callable[[], None] | None) -> None:
+    """Hand the claim of a rename that is undone back to the source, after ``put_back`` returns what followed the table."""
+    # The source keeps its location, so it keeps the claim; left with the destination, every later
+    # rename of the source would answer code 14 for the claim's lease. What followed the table goes back
+    # first, while the claim still keeps every other request off it. Under this request's token, since the
+    # claim is fenced for it, and the claim the source takes back carries no fence. Logged, never raised over
+    # the failure that made the rename compensate.
+    if put_back is not None:
+        try:
+            put_back()
+        except Exception as exc:
+            log.error("rename_parent_not_put_back", extra={"source": move.source_id, "destination": move.dest_id, "error": str(exc)[:300]}, exc_info=True)
+    try:
+        table_claims.take(move.ns, move.claims, move.source_uri, table=move.source_id, segments=move.segments, previous=move.dest_id, token=move.fenced.token)
+    except Exception as exc:
+        log.error("rename_claim_not_handed_back", extra={"source": move.source_id, "location": move.source_uri, "error": str(exc)[:300]})
+
+
+def _register_destination(move: _Move, put_back: Callable[[], None] | None) -> None:
+    """Register the deregistered table under its new name; one that fails registers the source again and hands back."""
+    try:
+        move.ns.register_table(RegisterTableRequest(id=move.new_segments, location=move.location))
+    except Exception:
+        # COMPENSATE, or a rename that trips on its destination leaves the table reachable by NO id —
+        # bytes intact and invisible. The same call at the same location the source already had, and
+        # the claim handed back with it. A destination found registered at this very location is no finished
+        # rename, since no other rename holds the claim this one fenced: it is the row a RegisterTable of the
+        # destination's name attaches before the claim refuses it, which that registration then detaches itself.
+        try:
+            move.ns.register_table(RegisterTableRequest(id=move.segments, location=move.location))
+        except Exception as restore:
+            # The source is now unreachable and the location is the only way back, so it goes in the
+            # log rather than being swallowed with the original error.
+            log.error(
+                "rename_source_pointer_lost",
+                extra={"source": move.source_id, "location": move.location, "error": str(restore)},
+            )
+        else:
+            _hand_back(move, put_back)
+        raise

@@ -226,6 +226,20 @@ def write_policy(bucket: str, prefix: str) -> Policy:
 
 def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
     wait_up(endpoint)
+    _seed_buckets(endpoint)
+    _the_canned_policy_names_the_session(endpoint, state)
+    _a_read_session_reaches_its_prefix_alone(endpoint, state)
+    write = _lance_writes_through_a_web_identity_session(endpoint, state)
+    _tokens_the_policy_does_not_name_are_refused(endpoint, state)
+    _the_admin_api_lists_users_and_no_session(endpoint, write_key_id=write.access_key_id)
+
+    failed = [r for r in RESULTS if not r[0]]
+    print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks as rask needs them", flush=True)
+    sys.exit(1 if failed else 0)
+
+
+def _seed_buckets(endpoint: str) -> None:
+    """The three buckets the checks read, and one object under each prefix they name, as root."""
     root = boto3.client("s3", endpoint_url=endpoint, aws_access_key_id=_root()[0], aws_secret_access_key=_root()[1], region_name=REGION, config=CFG)
     for bucket in ("tenant-a", "tenant-b", "unrelated"):
         root.create_bucket(Bucket=bucket)
@@ -234,6 +248,9 @@ def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
     root.put_object(Bucket="tenant-b", Key="t1/x", Body=b"b1")
     root.put_object(Bucket="unrelated", Key="x", Body=b"u")
 
+
+def _the_canned_policy_names_the_session(endpoint: str, state: Path) -> None:
+    """A canned policy named by the catalog's subject, and the session its token is issued without a session policy."""
     canned: Policy = {
         "Version": "2012-10-17",
         "Statement": [
@@ -262,6 +279,9 @@ def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
             code_of(lambda: own.get_object(Bucket="unrelated", Key="x")),
         )
 
+
+def _a_read_session_reaches_its_prefix_alone(endpoint: str, state: Path) -> None:
+    """A read session reaches its own prefix for its full duration, and nothing else, whatever its policy names."""
     creds = exchange(endpoint, token(state), read_policy("tenant-a", "t1"), duration=3600)
     expires_in = creds.expiration.timestamp() - time.time()
     record(3500 < expires_in <= 3600, "DurationSeconds=3600 honoured", f"expires in {expires_in:.0f}s")
@@ -293,6 +313,9 @@ def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
         code_of(lambda: widen.get_object(Bucket="unrelated", Key="x")),
     )
 
+
+def _lance_writes_through_a_web_identity_session(endpoint: str, state: Path) -> Session:
+    """Lance creates and appends a dataset through a write session: the session it used."""
     write = exchange(endpoint, token(state), write_policy("tenant-a", "t1/ds.lance"))
     options = {
         "aws_access_key_id": write.access_key_id,
@@ -314,7 +337,11 @@ def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
         )
     except Exception as exc:  # the measurement reports what Lance answered
         record(False, "Lance creates and appends through a web-identity session", repr(exc)[:200])
+    return write
 
+
+def _tokens_the_policy_does_not_name_are_refused(endpoint: str, state: Path) -> None:
+    """A token for another subject, namespace or audience, an expired one, a forged one and another issuer's are refused."""
     other = refused(lambda: exchange(endpoint, token(state, "system:serviceaccount:default:rask-sa-lineage")))
     record(other != "issued", "another ServiceAccount's token for the same audience is refused", other)
     other_ns = refused(lambda: exchange(endpoint, token(state, "system:serviceaccount:other:rask-sa-catalog")))
@@ -328,6 +355,9 @@ def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
     issuer = refused(lambda: exchange(endpoint, token(state, iss="https://evil.example")))
     record(issuer != "issued", "a token from another issuer is refused", issuer)
 
+
+def _the_admin_api_lists_users_and_no_session(endpoint: str, *, write_key_id: str) -> None:
+    """The admin API lists a regular user and no STS session, and removes a user once."""
     user = json.dumps({"secretKey": secrets.token_urlsafe(30), "status": "enabled"}).encode()
     status, _ = admin(endpoint, "PUT", "/rustfs/admin/v3/add-user", params={"accessKey": "rask-catalog"}, body=user)
     status_list, listed = admin(endpoint, "GET", "/rustfs/admin/v3/list-users", params={})
@@ -337,17 +367,13 @@ def measure(endpoint: str, state: Path) -> None:  # one check per line, in order
         f"{status_list} {listed[:160]}",
     )
     record(
-        "ASIA" not in listed and write.access_key_id not in listed,
+        "ASIA" not in listed and write_key_id not in listed,
         "list-users names no STS session",
-        "sessions absent" if write.access_key_id not in listed else "a session is listed",
+        "sessions absent" if write_key_id not in listed else "a session is listed",
     )
     removed, _ = admin(endpoint, "DELETE", "/rustfs/admin/v3/remove-user", params={"accessKey": "rask-catalog"})
     again, text = admin(endpoint, "DELETE", "/rustfs/admin/v3/remove-user", params={"accessKey": "rask-catalog"})
     record(removed == 200 and again == 404, "remove-user removes a user, then answers 404 for it", f"{removed}, then {again} {text[:80]}")
-
-    failed = [r for r in RESULTS if not r[0]]
-    print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} checks as rask needs them", flush=True)
-    sys.exit(1 if failed else 0)
 
 
 if __name__ == "__main__":

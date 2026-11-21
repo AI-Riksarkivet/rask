@@ -29,14 +29,14 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Set
 from datetime import datetime, timedelta
 from typing import Any, Final
 
 import lance
 from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import InvalidInputError, ServiceUnavailableError
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.core import lineage_emit, run_context, table_objects
 from catalog.core.config import CatalogStore, Settings
@@ -288,41 +288,33 @@ def scan_ref(
     forget: list[Commit] = []
     confirmed = mark
     contiguous = True
+    reading = _RefReading(
+        location=location,
+        so=so,
+        branch=branch,
+        branch_identifier=branch_identifier,
+        key=key,
+        ref_location=ref_location,
+        after=after,
+        announced=announced,
+        record_of=record_of,
+        authenticates=authenticates,
+        unannounced=unannounced,
+    )
     for version, handle in _versions_after(location, so, branch, mark=mark):
         when = stamped.get(version)
         if when is None:
             raise ReconcileReadError(f"version {version} of {location} on {branch or 'main'} has no manifest the store lists")
         if when >= before:
             break
-        on_feed = when < after or (key, version) in announced
-        try:
-            commit = _commit_at(handle, version, branch=branch, branch_identifier=branch_identifier)
-        except UnidentifiedCommitError as exc:
-            if not on_feed and authenticates:
-                log.warning("commit_reconcile_unidentified", extra={"location": location, "branch": branch, "version": version, "error": str(exc)})
-                unauthored.append(version)
-            commit = None
-        if commit is None or unannounced(commit.operation):
-            pass
-        elif commit.operation in _AUTHORED_UNANNOUNCED:
-            record = record_of(commit.transaction_uuid, version, key)
-            if _signed_for(record, ref_location, so, version=version) is None and authenticates:
-                unauthored.append(version)
-            if record is not None:
-                forget.append(commit)
-        elif on_feed:
-            forget.append(commit)
-        else:
-            record = record_of(commit.transaction_uuid, version, key)
-            author = _signed_for(record, ref_location, so, version=version)
-            if author is None and authenticates:
-                unauthored.append(version)
-                if record is not None:
-                    # This ref's record for other bytes signs nothing, and is not needed once the version is counted.
-                    forget.append(commit)
-            else:
-                missing.append(commit.model_copy(update={"author": author}))
-                contiguous = False
+        found = _judge_version(reading, handle, version, when=when)
+        if found.unauthored:
+            unauthored.append(version)
+        if found.forget is not None:
+            forget.append(found.forget)
+        if found.missing is not None:
+            missing.append(found.missing)
+            contiguous = False
         if contiguous:
             confirmed = version
     return RefScan(
@@ -333,6 +325,62 @@ def scan_ref(
         forget=tuple(forget),
         mark=confirmed,
     )
+
+
+class _RefReading(BaseModel):
+    """What :func:`scan_ref` judges every retained version of one ref by, read once per pass."""
+
+    model_config = ConfigDict(frozen=True)
+
+    location: str
+    so: StorageOptions
+    branch: str | None
+    branch_identifier: str | None
+    key: str
+    ref_location: str
+    after: datetime
+    # The feed's announced commits as the caller read them once for the table, held as that same set and only read: a
+    # copy validated for every ref would walk the whole feed again each time.
+    announced: SkipValidation[Set[tuple[str, int]]]
+    record_of: Callable[[str, int, str], commit_records.CommitAuthor | None]
+    authenticates: bool
+    unannounced: Callable[[str], bool]
+
+
+class _VersionFinding(BaseModel):
+    """What one version is to a pass: counted unauthored, an author record to forget, a version to announce."""
+
+    model_config = ConfigDict(frozen=True)
+
+    unauthored: bool = False
+    forget: Commit | None = None
+    missing: Commit | None = None
+
+
+def _judge_version(reading: _RefReading, handle: lance.LanceDataset, version: int, *, when: datetime) -> _VersionFinding:
+    """What :func:`scan_ref` makes of ``version``, read through ``handle`` and stamped ``when``, by the rules it states."""
+    on_feed = when < reading.after or (reading.key, version) in reading.announced
+    try:
+        commit = _commit_at(handle, version, branch=reading.branch, branch_identifier=reading.branch_identifier)
+    except UnidentifiedCommitError as exc:
+        if not on_feed and reading.authenticates:
+            log.warning("commit_reconcile_unidentified", extra={"location": reading.location, "branch": reading.branch, "version": version, "error": str(exc)})
+            return _VersionFinding(unauthored=True)
+        commit = None
+    if commit is None or reading.unannounced(commit.operation):
+        return _VersionFinding()
+    if commit.operation in _AUTHORED_UNANNOUNCED:
+        record = reading.record_of(commit.transaction_uuid, version, reading.key)
+        counted = _signed_for(record, reading.ref_location, reading.so, version=version) is None and reading.authenticates
+        return _VersionFinding(unauthored=counted, forget=commit if record is not None else None)
+    if on_feed:
+        return _VersionFinding(forget=commit)
+    record = reading.record_of(commit.transaction_uuid, version, reading.key)
+    author = _signed_for(record, reading.ref_location, reading.so, version=version)
+    if author is None and reading.authenticates:
+        # This ref's record for other bytes signs nothing, and is not needed once the version is counted.
+        return _VersionFinding(unauthored=True, forget=commit if record is not None else None)
+    return _VersionFinding(missing=commit.model_copy(update={"author": author}))
 
 
 def _signed_for(record: commit_records.CommitAuthor | None, ref_location: str, so: StorageOptions, *, version: int) -> str | None:

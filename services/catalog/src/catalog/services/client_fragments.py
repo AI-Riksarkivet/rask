@@ -442,18 +442,23 @@ def _descriptors(scanned: pa.Table, table: lance.LanceDataset, columns: Sequence
         declared = table.schema.field(column)
         for value, address in zip(scanned.column(column).to_pylist(), scanned.column("_rowaddr").to_pylist(), strict=True):
             fragment, row = int(address) >> 32, int(address) & 0xFFFFFFFF
-            for path, names, blob in blobs.blob_descriptors(value, declared):
-                where = f"fragment {fragment} row {row} of blob column {path!r}"
-                if blob.get("kind") not in _SERVED_KINDS:
-                    raise InvalidInputError(
-                        f"commit refused: {where} is a blob of kind {blob.get('kind')}, and this catalog judges kinds {list(_SERVED_KINDS)}. Nothing was committed"
-                    )
-                try:
-                    yield _Descriptor.model_validate({**blob, "where": where, "fragment_id": fragment, "field_id": ids[names]})
-                except ValidationError as exc:
-                    raise InvalidInputError(
-                        f"commit refused: {where} is a blob of kind {blob.get('kind')} without a value its kind needs: {blob}. Nothing was committed"
-                    ) from exc
+            yield from _value_descriptors(value, declared, fragment=fragment, row=row, ids=ids)
+
+
+def _value_descriptors(value: object, declared: pa.Field, *, fragment: int, row: int, ids: dict[tuple[str, ...], int]) -> Iterator[_Descriptor]:
+    """The blob descriptors one scanned ``value`` of the ``declared`` column holds; a kind not judged here is a 400."""
+    for path, names, blob in blobs.blob_descriptors(value, declared):
+        where = f"fragment {fragment} row {row} of blob column {path!r}"
+        if blob.get("kind") not in _SERVED_KINDS:
+            raise InvalidInputError(
+                f"commit refused: {where} is a blob of kind {blob.get('kind')}, and this catalog judges kinds {list(_SERVED_KINDS)}. Nothing was committed"
+            )
+        try:
+            yield _Descriptor.model_validate({**blob, "where": where, "fragment_id": fragment, "field_id": ids[names]})
+        except ValidationError as exc:
+            raise InvalidInputError(
+                f"commit refused: {where} is a blob of kind {blob.get('kind')} without a value its kind needs: {blob}. Nothing was committed"
+            ) from exc
 
 
 def _field_ids(fields: Sequence[_LanceField], parent: tuple[str, ...]) -> Iterator[tuple[tuple[str, ...], int]]:

@@ -35,6 +35,7 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError, Transact
 
 from lakehouse.events import outbox
 from lakehouse.events.bus_delivery import Verdict
+from lakehouse.events.cloud_events import CloudEvent
 from lakehouse.events.lineage_events import dataset_uuids
 from lakehouse.governed import audit, fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome
@@ -174,8 +175,7 @@ async def replay_dlq(
         raise TransactionNotFoundError(f"no staged lineage event for run {run_id}")
     staged_key, event_json = resolved
     try:
-        staged = read_staged(event_json)
-        event = parse_staged(staged)
+        staged, event = _read_and_parse_staged(event_json)
     except UnparseableEventError as exc:
         # A poison object is dataset-less, so the governed list_dlq already hides it under FGA — replay must
         # too: 404 (indistinguishable from missing), no audited existence signal. Auth-off dev keeps the
@@ -216,6 +216,13 @@ async def replay_dlq(
     audit.audit(AuditAction.DLQ_REPLAY, AuditOutcome.SUCCESS, subject=token.subject if token else "", resource=_audited(event, run_id))
     log.info("lineage_dlq_replayed", extra={"run_id": run_id})
     return DlqReplayResponse(status="replayed", run_id=run_id)
+
+
+def _read_and_parse_staged(event_json: str) -> tuple[CloudEvent, RunEvent | DatasetEvent]:
+    """The envelope a staged object holds and the event it carries; raises ``UnparseableEventError`` for a poison one."""
+    staged = read_staged(event_json)
+    event = parse_staged(staged)
+    return staged, event
 
 
 @router.get("/parked", dependencies=[Depends(require_parks_reader)])

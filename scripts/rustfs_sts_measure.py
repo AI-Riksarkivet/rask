@@ -222,6 +222,12 @@ def write_session() -> None:
         "region": REGION,
         "allow_http": "true",
     }
+    _lance_writes_with_the_vended_session(options)
+    _pyarrow_writes_records_with_the_own_pair(options)
+
+
+def _lance_writes_with_the_vended_session(options: dict[str, str]) -> None:
+    """Lance creates and appends a dataset with the vended write session, and is refused one outside its prefix."""
     try:
         table = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
         lance.write_dataset(table, "s3://tenant-a/t1/ds.lance", storage_options=options, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
@@ -244,6 +250,10 @@ def write_session() -> None:
         record(
             "denied" in str(exc).lower() or "403" in str(exc), "Lance is refused a dataset outside the vended prefix", f"{type(exc).__name__}: {str(exc)[:120]}"
         )
+
+
+def _pyarrow_writes_records_with_the_own_pair(options: dict[str, str]) -> None:
+    """The record store writes with a service's own pair; a prefix-scoped session is refused pyarrow's HeadBucket."""
     # The record store is pyarrow's S3FileSystem, and rask writes it with a service's own scoped pair (the catalog's,
     # maintenance's), never a vended session: `lakehouse.records.record_store.put_record`.
     own = StorageOptions.from_flat(

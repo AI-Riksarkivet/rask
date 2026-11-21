@@ -13,6 +13,7 @@ import logging
 from fastapi import Request
 from lance_namespace import InternalError, InvalidInputError, PermissionDeniedError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
+from pydantic import BaseModel, ConfigDict
 
 from catalog.api.authz.decisions import record_undeclared, refused_read_as_absent, require_audited, require_rung, require_trashed, require_wired
 from catalog.api.authz.grant_authority import authorize_grant
@@ -198,7 +199,27 @@ async def _decide(request: Request, settings: Settings, token: Caller | None, *,
     # so the check object and the seeded object agree byte-for-byte even for edge forms
     # (e.g. the delimiter-only root id). Passing the raw URL string here would diverge.
     segments = parse_identifier(object_id)
+    door = _Addressed(path=path, resource=resource, suffix=suffix, object_id=object_id, segments=segments)
+    await _decide_on_id(request, client, resolver, token=token, door=door)
 
+
+class _Addressed(BaseModel):
+    """The door a request with an ``{id}`` addresses: its route path, resource, suffix, raw id and that id's segments."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    resource: str
+    suffix: str
+    object_id: str
+    segments: list[str]
+
+
+async def _decide_on_id(request: Request, client: OpenFgaClient, resolver: Resolver, *, token: Caller, door: _Addressed) -> None:
+    """The caller's permission for a route whose ``{id}`` names an object of the door's resource."""
+    path, resource, suffix, object_id, segments = door.path, door.resource, door.suffix, door.object_id, door.segments
+    # A create asks the parent, a transaction the table it names, the root only its per-item reads, and every other door
+    # the object itself.
     # Create-on-parent: child does not exist yet → authorize the parent.
     if suffix in CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
         if (parent := create_parent_rung(resource, segments)) is not None:
@@ -239,8 +260,13 @@ async def _decide(request: Request, settings: Settings, token: Caller | None, *,
         if suffix in ROOT_READ_SUFFIXES:
             return
         raise PermissionDeniedError(f"the root namespace names no object, so {suffix!r} cannot be authorized on it")
+    await _decide_on_object(request, client, resolver, token=token, door=door)
 
-    fga_type = FGA_TYPE[resource]
+
+async def _decide_on_object(request: Request, client: OpenFgaClient, resolver: Resolver, *, token: Caller, door: _Addressed) -> None:
+    """The caller's permission on the object the door's segments name, by the rung the door asks."""
+    path, fga_type, suffix, segments = door.path, FGA_TYPE[door.resource], door.suffix, door.segments
+    # The rung a grant hands out, a classification's one read, or the `can_*` relation the door declares.
     # Grant/revoke authorize on the RUNG BEING HANDED OUT, which lives in the body — so, like the
     # batch routes above, this one cannot be answered from the path alone.
     if suffix in GRANT_SUFFIXES:

@@ -300,21 +300,31 @@ def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, *, r
     body = json.dumps(record).encode("utf-8")
 
     if on_s3(root_uri):
-        from botocore.exceptions import ClientError
-
-        bucket, full_key = _s3_parts(root_uri, key)
-        try:
-            object_client(storage_options).put_object(Bucket=bucket, Key=full_key, Body=body, IfMatch=etag)
-        except ClientError as exc:
-            status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-            code = str(exc.response.get("Error", {}).get("Code", ""))
-            # A record deleted since the read answers 404 NoSuchKey, not 412 (measured on moto 5: a PutObject naming
-            # If-Match on a deleted key): it changed under the writer as surely as one written over.
-            if status in {404, 409, 412} or code in {"PreconditionFailed", "ConditionalRequestConflict", "NoSuchKey"}:
-                raise RecordChangedError(f"record {key!r} changed under {root_uri!r}") from exc
-            raise
+        _replace_s3_json(root_uri, storage_options, key, body=body, etag=etag)
         return
 
+    _replace_local_json(root_uri, key, body=body, etag=etag)
+
+
+def _replace_s3_json(root_uri: str, storage_options: StorageOptions, key: str, *, body: bytes, etag: str) -> None:
+    """Put ``body`` at ``key`` under the S3 root iff its ETag is ``etag``; ``RecordChangedError`` where it changed."""
+    from botocore.exceptions import ClientError
+
+    bucket, full_key = _s3_parts(root_uri, key)
+    try:
+        object_client(storage_options).put_object(Bucket=bucket, Key=full_key, Body=body, IfMatch=etag)
+    except ClientError as exc:
+        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        code = str(exc.response.get("Error", {}).get("Code", ""))
+        # A record deleted since the read answers 404 NoSuchKey, not 412 (measured on moto 5: a PutObject naming
+        # If-Match on a deleted key): it changed under the writer as surely as one written over.
+        if status in {404, 409, 412} or code in {"PreconditionFailed", "ConditionalRequestConflict", "NoSuchKey"}:
+            raise RecordChangedError(f"record {key!r} changed under {root_uri!r}") from exc
+        raise
+
+
+def _replace_local_json(root_uri: str, key: str, *, body: bytes, etag: str) -> None:
+    """Write ``body`` at ``key`` under the local root iff it hashes to ``etag``; ``RecordChangedError`` where it changed."""
     fs, path = pafs.FileSystem.from_uri(root_uri)
     if not isinstance(fs, pafs.LocalFileSystem):
         raise NotImplementedError(f"conditional replace is not supported for root {root_uri!r} ({type(fs).__name__})")

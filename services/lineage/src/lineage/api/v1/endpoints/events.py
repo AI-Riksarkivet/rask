@@ -255,15 +255,21 @@ async def _visible_page(
             read = await window.take(want)
             exhausted = len(read) < want
             continue
-        # The rows read ahead are the last chunk's first part; the rest of the window is read after the verdict, unless
-        # it ran out under the read ahead or that read already took it all.
-        read = await ahead
-        exhausted = len(read) < ahead_rows
-        if not exhausted and want > len(read):
-            tail = await window.take(want - len(read))
-            exhausted = len(tail) < want - len(read)
-            read = read + tail
+        read, exhausted = await _rest_after_ahead(window, ahead, asked=ahead_rows, want=want)
     return records, visible
+
+
+async def _rest_after_ahead(window: FeedWindow, ahead: asyncio.Future[list[EventRecord]], *, asked: int, want: int) -> tuple[list[EventRecord], bool]:
+    """The last chunk of a page, ``asked`` rows read ahead and the rest of ``want`` after, and whether the window ran out."""
+    # The rows read ahead are the last chunk's first part; the rest of the window is read after the verdict, unless it ran
+    # out under the read ahead or that read already took it all.
+    read = await ahead
+    exhausted = len(read) < asked
+    if not exhausted and want > len(read):
+        tail = await window.take(want - len(read))
+        exhausted = len(tail) < want - len(read)
+        read = read + tail
+    return read, exhausted
 
 
 def _next_chunk(limit: int, read: int, visible: int, *, left: int, reads: int) -> int:

@@ -21,6 +21,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Any
 
+import lance
 from lance_namespace import (
     InvalidInputError,
     TableColumnNotFoundError,
@@ -128,20 +129,7 @@ def read_blob(
     (RFC 9110 §14.1.2) and reports ``first >= size`` as unsatisfiable rather than erroring
     (``read_range`` rejects over-length windows).
     """
-    try:
-        dataset = table.open(so, version=version)
-    except ValueError as exc:
-        # lance raises bare ValueErrors for two distinct missing-things: a pinned version with no
-        # manifest ("…/_versions/N.manifest was not found…") and a location with no dataset at all
-        # ("Dataset at path … was not found…" — a declared-but-never-written table, or wiped
-        # storage). Told apart by the manifest-path shape so neither is a 500 and neither is
-        # mislabeled as the other; any other ValueError stays a 500.
-        message = str(exc).lower()
-        if version is not None and "_versions/" in message and ".manifest" in message:
-            raise TableVersionNotFoundError(f"table version {version} was not found") from exc
-        if "dataset at path" in message and "not found" in message:
-            raise TableNotFoundError("table has no readable dataset at its declared location") from exc
-        raise
+    dataset = _open_served(table, so, version=version)
     schema = dataset.schema
     if column not in schema.names:
         raise TableColumnNotFoundError(f"column {column!r} does not exist")
@@ -161,18 +149,43 @@ def read_blob(
     handle = files[0]
     size: int = handle.size()
 
+    whole = BlobStream(
+        version=served,
+        size=size,
+        start=0,
+        length=size,
+        etag=etag,
+        ranged=False,
+        satisfiable=True,
+        handle=handle,
+        dataset=dataset,
+    )
     if range_spec is None:
-        return BlobStream(
-            version=served,
-            size=size,
-            start=0,
-            length=size,
-            etag=etag,
-            ranged=False,
-            satisfiable=True,
-            handle=handle,
-            dataset=dataset,
-        )
+        return whole
+    return _ranged(whole, range_spec)
+
+
+def _open_served(table: DoorTable, so: StorageOptions, *, version: int | None) -> lance.LanceDataset:
+    """The dataset a blob read serves from, at ``version`` or the head; a version or dataset that is not there is a 404."""
+    try:
+        return table.open(so, version=version)
+    except ValueError as exc:
+        # lance raises bare ValueErrors for two distinct missing-things: a pinned version with no
+        # manifest ("…/_versions/N.manifest was not found…") and a location with no dataset at all
+        # ("Dataset at path … was not found…" — a declared-but-never-written table, or wiped
+        # storage). Told apart by the manifest-path shape so neither is a 500 and neither is
+        # mislabeled as the other; any other ValueError stays a 500.
+        message = str(exc).lower()
+        if version is not None and "_versions/" in message and ".manifest" in message:
+            raise TableVersionNotFoundError(f"table version {version} was not found") from exc
+        if "dataset at path" in message and "not found" in message:
+            raise TableNotFoundError("table has no readable dataset at its declared location") from exc
+        raise
+
+
+def _ranged(whole: BlobStream, range_spec: tuple[int | None, int | None]) -> BlobStream:
+    """The window ``range_spec`` asks of the ``whole`` payload, clamped to it, or unsatisfiable (RFC 9110 §14.1.2)."""
+    served, size, etag = whole.version, whole.size, whole.etag
     first, last = range_spec
     if first is None:  # suffix range: the final `last` bytes
         if last is None or last <= 0 or size == 0:
@@ -184,14 +197,4 @@ def read_blob(
             return BlobStream(version=served, size=size, start=0, length=0, etag=etag, ranged=True, satisfiable=False)
         start = first
         end = size - 1 if last is None else min(last, size - 1)
-    return BlobStream(
-        version=served,
-        size=size,
-        start=start,
-        length=end - start + 1,
-        etag=etag,
-        ranged=True,
-        satisfiable=True,
-        handle=handle,
-        dataset=dataset,
-    )
+    return whole.model_copy(update={"start": start, "length": end - start + 1, "ranged": True})

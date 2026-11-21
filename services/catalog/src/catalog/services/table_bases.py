@@ -38,7 +38,7 @@ from catalog.core import blobs, formats, native
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import is_spelled_as_a_uuid
-from catalog.core.namespace import registered_dataset_facts
+from catalog.core.namespace import RegisteredDataset, registered_dataset_facts
 from catalog.core.run_context import RunInput
 from catalog.core.vending import IAM_POLICY_SYNTAX
 from catalog.services import clone_ending_records, table_inputs
@@ -617,6 +617,31 @@ def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: lis
             table it just registered, so nothing was judged.
     """
     table = fga_ids.canonical_object_id(segments)
+    location = _registered_location(ns, segments, table=table)
+    require_exclusive_location(context.root, relative, so)
+    try:
+        facts = registered_dataset_facts(location, so)
+    except Exception as exc:
+        log.warning("register_flags_unreadable", extra={"table": table, "error": str(exc)[:300]})
+        raise store_refusal(exc, reading=f"opening the dataset registered at {table}", so="its feature flags were not read") from exc
+    if facts is None:
+        return RegistrationVerdict(location=location)
+    _refuse_an_unservable_dataset(facts, table=table, location=location)
+    clone = admit_clone(facts.clone, facts.bases, location=location, context=context)
+    entries = entries_for_registration(
+        location,
+        facts.bases,
+        registry=context.registry,
+        configured=context.configured,
+        data_allowlist=context.data_allowlist,
+        governed=context.governed,
+        clone=clone,
+    )
+    return RegistrationVerdict(location=location, entries=entries, sources=clone.sources, holds_dataset=True)
+
+
+def _registered_location(ns: LanceNamespace, segments: list[str], *, table: str) -> str:
+    """The location the backend resolved for the table it just registered at ``segments``."""
     try:
         described: DescribeTableResponse = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
     except LanceNamespaceError:
@@ -629,15 +654,11 @@ def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: lis
         # The backend contradicting what it just registered is the catalog's fault, never "no such table" to the caller
         # who registered it.
         raise InternalError(f"the table registered at {table} describes no location, so its dataset was not judged")
-    location = described.location
-    require_exclusive_location(context.root, relative, so)
-    try:
-        facts = registered_dataset_facts(location, so)
-    except Exception as exc:
-        log.warning("register_flags_unreadable", extra={"table": table, "error": str(exc)[:300]})
-        raise store_refusal(exc, reading=f"opening the dataset registered at {table}", so="its feature flags were not read") from exc
-    if facts is None:
-        return RegistrationVerdict(location=location)
+    return described.location
+
+
+def _refuse_an_unservable_dataset(facts: RegisteredDataset, *, table: str, location: str) -> None:
+    """Refuse registering the dataset at ``location`` whose ``facts`` this catalog cannot serve, as :func:`judge_registered_table` states."""
     if facts.mixed:
         log.warning("register_refused_mixed_file_versions", extra={"table": table, "location": location})
         raise InvalidInputError(
@@ -669,17 +690,6 @@ def judge_registered_table(ns: LanceNamespace, so: StorageOptions, segments: lis
     if facts.index_overlap is not None:
         log.warning("register_refused_overlapping_index_segments", extra={"table": table, "location": location, "index": facts.index_overlap.index})
         raise InvalidInputError(f"the dataset at {location!r} cannot be registered: {facts.index_overlap.describe()}")
-    clone = admit_clone(facts.clone, facts.bases, location=location, context=context)
-    entries = entries_for_registration(
-        location,
-        facts.bases,
-        registry=context.registry,
-        configured=context.configured,
-        data_allowlist=context.data_allowlist,
-        governed=context.governed,
-        clone=clone,
-    )
-    return RegistrationVerdict(location=location, entries=entries, sources=clone.sources, holds_dataset=True)
 
 
 def admit_registered_table(so: StorageOptions, *, segments: list[str], verdict: RegistrationVerdict, clone_uuid: str, context: RegistrationContext) -> Admitted:

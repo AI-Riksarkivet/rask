@@ -167,13 +167,20 @@ def listed_identities(uri: str, storage_options: StorageOptions, keys: Sequence[
     found: dict[str, ObjectIdentity] = {}
     try:
         for page in object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=under):
-            for entry in page.get("Contents", []):
-                if (key := str(entry["Key"]).removeprefix(under)) in wanted:
-                    found[key] = ObjectIdentity(etag=str(entry["ETag"]).strip('"'), size=int(entry.get("Size", 0)))
+            found.update(_listed_on_page(page, under=under, wanted=wanted))
     except ClientError as exc:
         raise OSError(f"the store refused listing {bucket}/{under}: {exc}") from exc
     except BotoCoreError as exc:
         raise OSError(f"the store could not be reached listing {bucket}/{under}: {exc}") from exc
+    return found
+
+
+def _listed_on_page(page: Mapping[str, Any], *, under: str, wanted: set[str]) -> dict[str, ObjectIdentity]:
+    """Each object a ``ListObjectsV2`` ``page`` names whose key under ``under`` is one of ``wanted``, by that key."""
+    found: dict[str, ObjectIdentity] = {}
+    for entry in page.get("Contents", []):
+        if (key := str(entry["Key"]).removeprefix(under)) in wanted:
+            found[key] = ObjectIdentity(etag=str(entry["ETag"]).strip('"'), size=int(entry.get("Size", 0)))
     return found
 
 

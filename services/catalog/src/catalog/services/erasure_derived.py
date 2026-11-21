@@ -46,7 +46,7 @@ Every function is BLOCKING IO; callers threadpool it.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from functools import cache, partial
 from typing import Final
@@ -216,11 +216,17 @@ class _Derivation(BaseModel):
             if entry.table_uuid in times:
                 times[entry.table_uuid] += [declared.first_declared_at for input_uuid, declared in entry.inputs.items() if input_uuid in inputs]
         if self.edges is not None:
-            for where in in_lists("out_table", keys):
-                for row in self.edges.to_table(columns=["in_table", "out_table", "event_time"], filter=where).to_pylist():
-                    if row["in_table"] in inputs:
-                        times[str(row["out_table"])].append(_run_time(row["event_time"]))
+            for out_table, at in _edge_times(self.edges, keys, inputs=inputs):
+                times[out_table].append(at)
         return {key: None if None in found else min(at for at in found if at is not None) for key, found in times.items() if found}
+
+
+def _edge_times(edges: lance.LanceDataset, keys: set[str], *, inputs: Collection[str]) -> Iterator[tuple[str, datetime | None]]:
+    """``(table, run time)`` for each edge into one of ``keys`` out of a table in ``inputs``, in the edge list's order."""
+    for where in in_lists("out_table", keys):
+        for row in edges.to_table(columns=["in_table", "out_table", "event_time"], filter=where).to_pylist():
+            if row["in_table"] in inputs:
+                yield str(row["out_table"]), _run_time(row["event_time"])
 
 
 def _run_time(event_time: object) -> datetime | None:

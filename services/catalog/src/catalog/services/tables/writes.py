@@ -110,14 +110,19 @@ def _refuse_values_that_are_not_json(rows: pa.Table) -> None:
         seen: Counter[str] = Counter()
         for chunk in rows.column(field.name).chunks:
             for path, values in _json_values(field.name, chunk):
-                for position, value in enumerate(values.storage.to_pylist(), start=seen[path]):
-                    if value is None:
-                        continue
-                    try:
-                        json.loads(value)
-                    except ValueError as exc:
-                        raise InvalidInputError(f"column {path!r} holds a value that is not JSON at position {position}: {exc}") from exc
+                _require_json(path, values, first=seen[path])
                 seen[path] += len(values)
+
+
+def _require_json(path: str, values: pa.ExtensionArray, *, first: int) -> None:
+    """Refuse a value of the JSON array ``values`` at ``path`` that does not parse, its position counted from ``first``."""
+    for position, value in enumerate(values.storage.to_pylist(), start=first):
+        if value is None:
+            continue
+        try:
+            json.loads(value)
+        except ValueError as exc:
+            raise InvalidInputError(f"column {path!r} holds a value that is not JSON at position {position}: {exc}") from exc
 
 
 #: The nested types whose ``values`` hold one child array: every list, and a map, whose child is its key and value struct.

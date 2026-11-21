@@ -15,6 +15,7 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
+from lance_namespace import CreateTableResponse
 
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.events.control_emit import NoopControlEmitter
@@ -80,7 +81,7 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
         # Stubs the write, not the table handed to it: this test is about the THREE-AXIS identity the
         # endpoint derives, and the Lance metadata axis is only real if it reaches the table written.
         written["table"] = table
-        return SimpleNamespace(version=1, location="s3://lakehouse/0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
+        return CreateTableResponse(version=1, location="s3://lakehouse/0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
 
     # The write is faked, so no claim records its uuid; the uuid the seed is handed is not an axis compared here.
     monkeypatch.setattr(table_create.table_claims, "uuid_at", lambda *_a: "0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")

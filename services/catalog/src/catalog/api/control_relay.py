@@ -47,7 +47,7 @@ from typing import Any, Final
 
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, SkipValidation, ValidationError
 
 from catalog.api.dependencies import app_wire
 from catalog.api.ticks import Tick
@@ -59,6 +59,7 @@ from lakehouse.events.control_events import CONTROL_TOPIC
 from lakehouse.events.published_keys import PublishedKeys
 from lakehouse.events.signing import KeySourceUnavailableError, SignatureError, SigningKey, VerifiedSignature, control_signature_of, verify_control_signature
 from lakehouse.governed.signing_key import SIGNING_STATE, SigningKeyHolder, published_key_fetch
+from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -220,69 +221,121 @@ async def _drain(settings: Settings, publisher: Bus | None, verify: StagedVerifi
         log.warning("control_relay_no_publisher", extra={"depth": depth, "oldest_age_seconds": report.oldest_age_seconds})
         return report
 
-    async def drop_or_leave_staged(key: str) -> bool:
-        """Delete one staged object and answer whether the store did; one it refuses stays staged, logged and counted on the report."""
-        try:
-            await run_in_threadpool(outbox.drop_event, settings.control_outbox_uri, options, key)
-        except Exception as exc:
-            log.warning("control_outbox_left_staged", extra={"key": bounded(key), "error": bounded(str(exc))})
-            report.left_staged += 1
-            return False
-        return True
-
-    async def retire(key: str) -> None:
-        """Drop one staged object this lane can never deliver, so the pass goes on to the events behind it."""
-        if await drop_or_leave_staged(key):
-            outbox_metrics.record_poison_dropped("control")
-            report.poison_dropped += 1
-
     staged = await run_in_threadpool(lambda: list(outbox.list_events(settings.control_outbox_uri, options, limit=DRAIN_LIMIT)))
+    lane = _Lane(publisher=publisher, settings=settings, options=options, verify=verify)
+    total = _Relayed()
     for key, event_json in staged:
-        try:
-            # ENVELOPED, THEN VERIFIED. The envelope is derived from the staged event, which must therefore be a
-            # control event one can carry: that asks "could a subscriber read this?". Verification asks "did this
-            # catalog write it?", and the answers decide poison vs relay. The envelope's data is the staged event as
-            # it is, never a re-serialization of a parsed model, and never signed here; it goes out in the trace it
-            # was staged under (ADR 0209). The staged object's refusal is a `ValidationError`, the poison verdict,
-            # whatever is wrong with the text: not JSON, no envelope, or nested past the parser's limit.
-            staged = outbox.staged_envelope(event_json)
-            envelope = control_envelope(staged.data).with_trace_of(staged)
-            if verify is not None:
-                await run_in_threadpool(verify, envelope.data)
-        except KeySourceUnavailableError as exc:
-            # No verdict on any signature: nothing may go out and nothing may be retired. Stop the pass like
-            # a bus still down, and every object stays staged for the next tick to retry from the oldest.
-            log.warning("control_relay_keys_unavailable", extra={"key": bounded(key), "depth": depth, "error": bounded(str(exc))})
-            report.keys_unavailable = True
+        relayed = await _relay_one(key, event_json, lane=lane, depth=report.depth)
+        total = total.plus(relayed)
+        if relayed.stop:
             break
-        except (ValidationError, SignatureError) as exc:
-            # NARROW on purpose: only an object no subscriber can read, or one this catalog did not sign, is
-            # poison. A broad `except` here would retire a staged event on any transient failure, i.e. destroy
-            # the one durable copy this module exists to deliver.
-            reason = exc.reason if isinstance(exc, SignatureError) else "invalid"
-            log.warning("control_outbox_unverifiable", extra={"key": bounded(key), "action": _action_of(event_json), "reason": reason})
-            await retire(key)
-            continue
-        try:
-            await _republish(publisher, settings, envelope)
-        except ValueError as exc:
-            # THE BUS CAN NEVER CARRY IT: the publish seam's own refusal, made before any I/O, so no later tick
-            # changes it. Left staged, it would stop every pass at itself and hold every event behind it.
-            log.warning("control_outbox_undeliverable", extra={"key": bounded(key), "action": _action_of(event_json), "error": bounded(str(exc))})
-            await retire(key)
-            continue
-        except Exception as exc:
-            # The bus is still down. Stop the pass rather than grinding the whole backlog against it:
-            # every remaining object stays staged and the next tick retries from the oldest.
-            log.warning("control_outbox_republish_failed", extra={"key": key, "error": str(exc)})
-            outbox_metrics.record_publish_failed("control")
-            break
-        if await drop_or_leave_staged(key):
-            report.republished += 1
-        else:
-            outbox_metrics.record_drop_failed("control")
+    report = report.model_copy(
+        update={
+            "republished": total.republished,
+            "poison_dropped": total.poison_dropped,
+            "left_staged": total.left_staged,
+            "keys_unavailable": total.keys_unavailable,
+        }
+    )
     outbox_metrics.record_drained("control", report.republished)
     return report
+
+
+class _Lane(BaseModel):
+    """What relaying a staged object goes through: the bus, the outbox it is staged in and the check it passes."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    # The bus connection and the verifying callable are collaborators pydantic cannot validate.
+    publisher: SkipValidation[Bus]
+    settings: Settings
+    options: StorageOptions
+    verify: SkipValidation[StagedVerifier | None]
+
+
+class _Relayed(BaseModel):
+    """What relaying staged objects did, in the report's counts, and whether the pass stops."""
+
+    model_config = ConfigDict(frozen=True)
+
+    republished: int = 0
+    poison_dropped: int = 0
+    left_staged: int = 0
+    keys_unavailable: bool = False
+    stop: bool = False
+
+    def plus(self, other: _Relayed) -> _Relayed:
+        """The two outcomes' counts added; the pass stops when either stopped it."""
+        return _Relayed(
+            republished=self.republished + other.republished,
+            poison_dropped=self.poison_dropped + other.poison_dropped,
+            left_staged=self.left_staged + other.left_staged,
+            keys_unavailable=self.keys_unavailable or other.keys_unavailable,
+            stop=self.stop or other.stop,
+        )
+
+
+async def _relay_one(key: str, event_json: str, *, lane: _Lane, depth: int) -> _Relayed:
+    """Verify, republish and delete the staged object ``key`` holding ``event_json``, and say what that did."""
+    # Keys that cannot be read and a bus that is down stop the pass; every other outcome goes on to the events behind it.
+    try:
+        # ENVELOPED, THEN VERIFIED. The envelope is derived from the staged event, which must therefore be a
+        # control event one can carry: that asks "could a subscriber read this?". Verification asks "did this
+        # catalog write it?", and the answers decide poison vs relay. The envelope's data is the staged event as
+        # it is, never a re-serialization of a parsed model, and never signed here; it goes out in the trace it
+        # was staged under (ADR 0209). The staged object's refusal is a `ValidationError`, the poison verdict,
+        # whatever is wrong with the text: not JSON, no envelope, or nested past the parser's limit.
+        staged = outbox.staged_envelope(event_json)
+        envelope = control_envelope(staged.data).with_trace_of(staged)
+        if lane.verify is not None:
+            await run_in_threadpool(lane.verify, envelope.data)
+    except KeySourceUnavailableError as exc:
+        # No verdict on any signature: nothing may go out and nothing may be retired. Stop the pass like
+        # a bus still down, and every object stays staged for the next tick to retry from the oldest.
+        log.warning("control_relay_keys_unavailable", extra={"key": bounded(key), "depth": depth, "error": bounded(str(exc))})
+        return _Relayed(keys_unavailable=True, stop=True)
+    except (ValidationError, SignatureError) as exc:
+        # NARROW on purpose: only an object no subscriber can read, or one this catalog did not sign, is
+        # poison. A broad `except` here would retire a staged event on any transient failure, i.e. destroy
+        # the one durable copy this module exists to deliver.
+        reason = exc.reason if isinstance(exc, SignatureError) else "invalid"
+        log.warning("control_outbox_unverifiable", extra={"key": bounded(key), "action": _action_of(event_json), "reason": reason})
+        return await _delete_poison(key, lane=lane)
+    try:
+        await _republish(lane.publisher, lane.settings, envelope)
+    except ValueError as exc:
+        # THE BUS CAN NEVER CARRY IT: the publish seam's own refusal, made before any I/O, so no later tick
+        # changes it. Left staged, it would stop every pass at itself and hold every event behind it.
+        log.warning("control_outbox_undeliverable", extra={"key": bounded(key), "action": _action_of(event_json), "error": bounded(str(exc))})
+        return await _delete_poison(key, lane=lane)
+    except Exception as exc:
+        # The bus is still down. Stop the pass rather than grinding the whole backlog against it:
+        # every remaining object stays staged and the next tick retries from the oldest.
+        log.warning("control_outbox_republish_failed", extra={"key": key, "error": str(exc)})
+        outbox_metrics.record_publish_failed("control")
+        return _Relayed(stop=True)
+    if await _delete_staged(key, lane=lane):
+        return _Relayed(republished=1)
+    outbox_metrics.record_drop_failed("control")
+    return _Relayed(left_staged=1)
+
+
+async def _delete_staged(key: str, *, lane: _Lane) -> bool:
+    """Delete one staged object and answer whether the store did; one it refuses stays staged and is logged."""
+    try:
+        await run_in_threadpool(outbox.drop_event, lane.settings.control_outbox_uri, lane.options, key)
+    except Exception as exc:
+        log.warning("control_outbox_left_staged", extra={"key": bounded(key), "error": bounded(str(exc))})
+        return False
+    return True
+
+
+async def _delete_poison(key: str, *, lane: _Lane) -> _Relayed:
+    """Delete one staged object this lane can never deliver, so the pass goes on to the events behind it."""
+    if await _delete_staged(key, lane=lane):
+        outbox_metrics.record_poison_dropped("control")
+        return _Relayed(poison_dropped=1)
+    return _Relayed(left_staged=1)
 
 
 async def tick(ctx: Tick) -> ControlRelayReport:

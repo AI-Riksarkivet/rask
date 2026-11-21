@@ -143,18 +143,9 @@ def do_backup(client: Any, *, root: str, dest: str | None, stamp: str) -> dict[s
             if is_directory_marker(key):
                 continue
             relative = key[len(_join(src_prefix, "")) :].lstrip("/") if src_prefix else key
-            # A RACE IS WHAT THE STORE REFUSES, NOT AN ETAG THAT DIFFERS. A server-side copy of an object written by a
-            # multipart upload gets an ETag of its own (measured on RustFS 1.0.3 and moto 2026-11-08: listed `…-1`,
-            # copied a plain MD5), so comparing the two flagged every streamed record as raced on a quiet store. The
-            # copy is conditional on the listed ETag instead (`x-amz-copy-source-if-match`, which RustFS 1.0.3
-            # refuses 412 once the source changed, measured), and a refused one copies the version there now.
-            try:
-                response = _copy(client, dst_bucket, _join(run_prefix, relative), src_bucket=src_bucket, src_key=key, if_match=listed_etag)
-            except ClientError as exc:
-                if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") != 412:
-                    raise
+            response, moved = _copy_as_listed(client, dst_bucket, _join(run_prefix, relative), src_bucket=src_bucket, src_key=key, listed_etag=listed_etag)
+            if moved:
                 raced.append(relative)
-                response = _copy(client, dst_bucket, _join(run_prefix, relative), src_bucket=src_bucket, src_key=key, if_match=None)
             # THE COPY'S ETAG, NOT THE LISTING'S. A live control root is written while it is being
             # read — measured 2026-09-14, three records changed between the list and the
             # copy on a single run — so recording the listed value made the manifest describe a
@@ -178,6 +169,30 @@ def do_backup(client: Any, *, root: str, dest: str | None, stamp: str) -> dict[s
         "raced": sorted(raced),
         "protects_against": manifest["protects_against"],
     }
+
+
+def _copy_as_listed(
+    client: Any,  # noqa: ANN401 — boto3 client has no public stub
+    dst_bucket: str,
+    dst_key: str,
+    *,
+    src_bucket: str,
+    src_key: str,
+    listed_etag: str,
+) -> tuple[dict[str, Any], bool]:
+    """Copy one listed object as the listing saw it, or as it is now if it moved: the answer, and whether it moved."""
+    # A RACE IS WHAT THE STORE REFUSES, NOT AN ETAG THAT DIFFERS. A server-side copy of an object written by a multipart
+    # upload gets an ETag of its own (measured on RustFS 1.0.3 and moto 2026-11-08: listed `…-1`, copied a plain MD5), so
+    # comparing the two flagged every streamed record as raced on a quiet store. The copy is conditional on the listed ETag
+    # instead (`x-amz-copy-source-if-match`, which RustFS 1.0.3 refuses 412 once the source changed, measured), and a
+    # refused one copies the version there now.
+    try:
+        response = _copy(client, dst_bucket, dst_key, src_bucket=src_bucket, src_key=src_key, if_match=listed_etag)
+    except ClientError as exc:
+        if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") != 412:
+            raise
+        return _copy(client, dst_bucket, dst_key, src_bucket=src_bucket, src_key=src_key, if_match=None), True
+    return response, False
 
 
 def do_prune(client: Any, *, dest: str, keep: int) -> dict[str, Any]:  # noqa: ANN401

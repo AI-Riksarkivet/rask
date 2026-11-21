@@ -101,10 +101,11 @@ def mint(state: Path, *, issuer: str, subject: str, audience: str, ttl: int, out
 def policy(component: str, rendered: str) -> str:
     """The canned policy the chart grants ``component`` (`rask-sa-<component>.json`), compact, off its render."""
     for doc in yaml.safe_load_all(rendered):
-        if doc and doc.get("kind") == "ConfigMap" and str(doc["metadata"]["name"]).endswith("-object-store-identities"):
-            for key, document in (doc.get("data") or {}).items():
-                if key.endswith(f"-sa-{component}.json"):
-                    return json.dumps(json.loads(document), separators=(",", ":"))
+        if not (doc and doc.get("kind") == "ConfigMap" and str(doc["metadata"]["name"]).endswith("-object-store-identities")):
+            continue
+        for key, document in (doc.get("data") or {}).items():
+            if key.endswith(f"-sa-{component}.json"):
+                return json.dumps(json.loads(document), separators=(",", ":"))
     raise SystemExit(f"the render grants {component!r} no store policy")
 
 

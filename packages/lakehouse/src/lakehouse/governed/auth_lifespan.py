@@ -216,74 +216,20 @@ async def attach_auth(
     app.state.fga = None
     app.state.decider = None
     providers = settings.oidc_person_providers
-    if settings.oidc_enabled and providers and settings.oidc_audience:
+    if settings.oidc_enabled and providers:
         try:
-            from lakehouse.governed import idp_identity, oidc
-
-            # A caller is the principal its issuer's naming rule reads from the verified token ([[XC-214]], ADR 0208), so
-            # one verifier over every issuer is wrapped with each issuer's rule rather than handed to the doors on its own.
-            app.state.oidc = idp_identity.IdpVerifier(
-                oidc.OIDCVerifier(
-                    [provider.issuer for provider in providers],
-                    settings.oidc_audience,
-                    settings.oidc_cache_ttl,
-                    leeway=settings.oidc_leeway,
-                    allow_insecure=settings.oidc_allow_insecure,
-                    # Split-horizon (reverse-proxied IdP): fetch discovery/JWKS in-cluster while tokens
-                    # keep the public issuer string. The omission of this argument at ONE of six doors
-                    # broke every signed-in ingest; it is centralized here so there is no sixth door.
-                    discovery_overrides={provider.issuer: url for provider in providers if (url := provider.discovery_url)} or None,
-                ),
-                providers,
-            )
-            # PROVED, not asserted. The constructor above performs no I/O, so until this call the
-            # log line "verifier ready" said only that a Python object existed. `warm` resolves every
-            # configured issuer, which puts a wrong issuer, a wrong split-horizon override or an
-            # unreachable IdP in this pod's log AT BOOT with the URL that failed — instead of in a
-            # user's failed request minutes later.
-            #
-            # OFF THE EVENT LOOP: `refresh` performs bounded but blocking HTTP, and this runs inside the
-            # lifespan of an async app. Awaiting it inline would stall the worker.
-            failures = await run_in_threadpool(app.state.oidc.refresh)
-            loops.keep("oidc-keys", app.state.oidc.refresh_forever)
-            if failures:
-                # NOT FATAL, and never readiness. Gating startup or `/readyz` on a downstream IdP
-                # turns one blip into every governed pod leaving its Service endpoints at once —
-                # worse than the 503 the door answers on its own. The pod serves and says what is
-                # wrong; an operator reads this line.
-                for issuer, reason in failures:
-                    log.error("%s: OIDC issuer unusable (issuer=%s): %s", service, issuer, reason)
-            else:
-                log.info("%s: OIDC verifier ready (issuers=%s, discovery reached)", service, ", ".join(provider.issuer for provider in providers))
+            await _attach_person_verifier(app, settings, providers=providers, service=service, loops=loops)
         except Exception:
             if fatal:
                 raise
             log.exception("%s: OIDC verifier failed to build — governed routes will 503", service)
 
-    if settings.sa_issuer and settings.sa_audience:
-        try:
-            from lakehouse.governed import machine_identity
-
-            app.state.sa_oidc = machine_identity.ServiceAccountVerifier(
-                settings.sa_issuer,
-                settings.sa_audience,
-                cache_ttl=settings.oidc_cache_ttl,
-                leeway=settings.oidc_leeway,
-                fetch_token_file=settings.sa_fetch_token_file,
-                ca_file=settings.sa_ca_file,
-                max_lifetime=settings.sa_max_token_seconds,
-            )
-            # Proved at boot, off the loop, reported and never fatal: the Dex verifier's reasons above.
-            failures = await run_in_threadpool(app.state.sa_oidc.refresh)
-            loops.keep("service-account-keys", app.state.sa_oidc.refresh_forever)
-            for issuer, reason in failures:
-                log.error("%s: service-account issuer unusable (issuer=%s): %s", service, issuer, reason)
-            if not failures:
-                log.info("%s: service-account verifier ready (issuer=%s, discovery reached)", service, settings.sa_issuer)
-        except Exception:
-            if fatal:
-                raise
-            log.exception("%s: service-account verifier failed to build — service callers will 503", service)
+    try:
+        await _attach_service_account_verifier(app, settings, service=service, loops=loops)
+    except Exception:
+        if fatal:
+            raise
+        log.exception("%s: service-account verifier failed to build — service callers will 503", service)
 
     app.state.decider = build_catalog_decider(settings, service=service)
     if app.state.decider is not None:
@@ -294,6 +240,75 @@ async def attach_auth(
 
         app.state.fga = client
         app.state.decider = OpenFgaDecider(client)
+
+
+async def _attach_person_verifier(app: FastAPI, settings: _GovernedSettings, *, providers: Sequence[OidcProvider], service: str, loops: Supervisor) -> None:
+    """Put ``app.state.oidc`` in place over the person issuers ``providers`` names when an audience is set, keys kept fresh."""
+    audience = settings.oidc_audience
+    if not audience:
+        return
+    from lakehouse.governed import idp_identity, oidc
+
+    # A caller is the principal its issuer's naming rule reads from the verified token ([[XC-214]], ADR 0208), so
+    # one verifier over every issuer is wrapped with each issuer's rule rather than handed to the doors on its own.
+    app.state.oidc = idp_identity.IdpVerifier(
+        oidc.OIDCVerifier(
+            [provider.issuer for provider in providers],
+            audience,
+            settings.oidc_cache_ttl,
+            leeway=settings.oidc_leeway,
+            allow_insecure=settings.oidc_allow_insecure,
+            # Split-horizon (reverse-proxied IdP): fetch discovery/JWKS in-cluster while tokens
+            # keep the public issuer string. The omission of this argument at ONE of six doors
+            # broke every signed-in ingest; it is centralized here so there is no sixth door.
+            discovery_overrides={provider.issuer: url for provider in providers if (url := provider.discovery_url)} or None,
+        ),
+        providers,
+    )
+    # PROVED, not asserted. The constructor above performs no I/O, so until this call the
+    # log line "verifier ready" said only that a Python object existed. `warm` resolves every
+    # configured issuer, which puts a wrong issuer, a wrong split-horizon override or an
+    # unreachable IdP in this pod's log AT BOOT with the URL that failed — instead of in a
+    # user's failed request minutes later.
+    #
+    # OFF THE EVENT LOOP: `refresh` performs bounded but blocking HTTP, and this runs inside the
+    # lifespan of an async app. Awaiting it inline would stall the worker.
+    failures = await run_in_threadpool(app.state.oidc.refresh)
+    loops.keep("oidc-keys", app.state.oidc.refresh_forever)
+    if failures:
+        # NOT FATAL, and never readiness. Gating startup or `/readyz` on a downstream IdP
+        # turns one blip into every governed pod leaving its Service endpoints at once —
+        # worse than the 503 the door answers on its own. The pod serves and says what is
+        # wrong; an operator reads this line.
+        for issuer, reason in failures:
+            log.error("%s: OIDC issuer unusable (issuer=%s): %s", service, issuer, reason)
+    else:
+        log.info("%s: OIDC verifier ready (issuers=%s, discovery reached)", service, ", ".join(provider.issuer for provider in providers))
+
+
+async def _attach_service_account_verifier(app: FastAPI, settings: _GovernedSettings, *, service: str, loops: Supervisor) -> None:
+    """Put ``app.state.sa_oidc`` in place for the configured service-account issuer, if any, its keys kept fresh on ``loops``."""
+    sa_issuer, sa_audience = settings.sa_issuer, settings.sa_audience
+    if not (sa_issuer and sa_audience):
+        return
+    from lakehouse.governed import machine_identity
+
+    app.state.sa_oidc = machine_identity.ServiceAccountVerifier(
+        sa_issuer,
+        sa_audience,
+        cache_ttl=settings.oidc_cache_ttl,
+        leeway=settings.oidc_leeway,
+        fetch_token_file=settings.sa_fetch_token_file,
+        ca_file=settings.sa_ca_file,
+        max_lifetime=settings.sa_max_token_seconds,
+    )
+    # Proved at boot, off the loop, reported and never fatal: the Dex verifier's reasons above.
+    failures = await run_in_threadpool(app.state.sa_oidc.refresh)
+    loops.keep("service-account-keys", app.state.sa_oidc.refresh_forever)
+    for issuer, reason in failures:
+        log.error("%s: service-account issuer unusable (issuer=%s): %s", service, issuer, reason)
+    if not failures:
+        log.info("%s: service-account verifier ready (issuer=%s, discovery reached)", service, sa_issuer)
 
 
 def build_catalog_decider(settings: _DeciderSettings, *, service: str) -> AccessDecider | None:

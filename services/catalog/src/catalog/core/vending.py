@@ -926,11 +926,7 @@ def build_session_policy(
     # registered location, which refuses the syntax. A base is its table's writer's, judged by the base judge
     # before it reaches this function (`require_vendable_bases`), and one holding the syntax is dropped below.
     branch = branch.strip("/")
-    if branch:
-        if held := held_iam_policy_syntax(branch):
-            raise InvalidInputError(f"branch {branch!r} holds IAM policy syntax {held}, which a vended policy cannot name")
-        if ".." in branch.split("/"):
-            raise InvalidInputError(f"branch {branch!r} may not traverse out of the table's prefix")
+    _refuse_an_unnameable_branch(branch)
     # READ-ONLY ON MAIN, WRITE-ONLY ON THE BRANCH — the LanceDB blog's branching post
     # (https://www.lancedb.com/blog/branching-and-shallow-clone) names this as the governance isolation the `tree/` layout exists to give. Main stays
     # READABLE because a branch manifest references its parent's fragments through a base pointing at
@@ -962,6 +958,53 @@ def build_session_policy(
     # `tree/a/*` was a write credential for every branch named under `a`. Naming directories
     # (`branch_layout.BRANCH_FILE_DIRS`) stops at `a`'s own files.
     ref_root = f"{root}/{BRANCH_CONTAINER}/{branch}" if branch else root
+    scope = _Scope(bucket=bucket, prefix=prefix, root=root, ref_root=ref_root, tier=tier, branch=branch)
+    statements.extend(_tier_statements(scope, records=records))
+    if kms_key:
+        statements.append(
+            {
+                "Sid": "KmsAccess",
+                "Effect": "Allow",
+                "Action": list(_KMS_READ_ACTIONS if tier == "read" else _KMS_WRITE_ACTIONS),
+                "Resource": kms_key,
+                # Only through S3: `kms:ViaService` names the service calling KMS on the session's behalf, so the
+                # credential's holder cannot call KMS with the platform's key directly.
+                "Condition": {"StringLike": {"kms:ViaService": "s3.*"}},
+            }
+        )
+    statements.extend(_base_statements(bases, scope=scope, data_directories=data_directories, sanctioned_bases=sanctioned_bases))
+    return {"Version": "2012-10-17", "Statement": statements}
+
+
+def _refuse_an_unnameable_branch(branch: str) -> None:
+    """Refuse, as invalid input, a branch a vended policy cannot name or one that climbs out of the table's prefix."""
+    if not branch:
+        return
+    if held := held_iam_policy_syntax(branch):
+        raise InvalidInputError(f"branch {branch!r} holds IAM policy syntax {held}, which a vended policy cannot name")
+    if ".." in branch.split("/"):
+        raise InvalidInputError(f"branch {branch!r} may not traverse out of the table's prefix")
+
+
+class _Scope(BaseModel):
+    """The table a session policy is scoped to: its bucket and prefix, its root, the ref it writes, its tier and branch."""
+
+    model_config = ConfigDict(frozen=True)
+
+    bucket: str
+    prefix: str
+    root: str
+    ref_root: str
+    tier: SessionTier
+    branch: str
+
+
+def _tier_statements(scope: _Scope, *, records: TableRecords | None) -> list[dict[str, object]]:
+    """What the scope's tier adds to a session policy beyond reading the table under its root."""
+    tier, root, ref_root, branch = scope.tier, scope.root, scope.ref_root, scope.branch
+    # A writer's staged commit and the Deny on every final manifest, a branch maintainer's own directories, or a table
+    # maintainer's Deny on every ref and the records a reclaim writes.
+    statements: list[dict[str, object]] = []
     if tier == "write":
         # The same rung on a branch as on main, scoped to the ref the writer writes; the table's own credential also
         # stages every branch's commits, because a stock client opens a branch with the table's DescribeTable.
@@ -990,18 +1033,15 @@ def build_session_policy(
         statements.append({"Sid": "NeverARef", "Effect": "Deny", "Action": ["s3:DeleteObject"], "Resource": f"arn:aws:s3:::{root}/{REFS_GLOB}"})
         if records is not None:
             statements.extend(records.maintain_statements())
-    if kms_key:
-        statements.append(
-            {
-                "Sid": "KmsAccess",
-                "Effect": "Allow",
-                "Action": list(_KMS_READ_ACTIONS if tier == "read" else _KMS_WRITE_ACTIONS),
-                "Resource": kms_key,
-                # Only through S3: `kms:ViaService` names the service calling KMS on the session's behalf, so the
-                # credential's holder cannot call KMS with the platform's key directly.
-                "Condition": {"StringLike": {"kms:ViaService": "s3.*"}},
-            }
-        )
+    return statements
+
+
+def _base_statements(bases: Sequence[str], *, scope: _Scope, data_directories: Sequence[str], sanctioned_bases: Sequence[str]) -> list[dict[str, object]]:
+    """The statements granting each sanctioned base of ``bases`` to a session on the scope's table."""
+    bucket, prefix, tier, branch = scope.bucket, scope.prefix, scope.tier, scope.branch
+    # Read everywhere, and delete as well on the table's own data directories at its `maintain` tier; a base naming a
+    # bucket root rather than a location inside one is a ValueError.
+    statements: list[dict[str, object]] = []
     n = 0
     for base in bases:
         if held_iam_policy_syntax(base):
@@ -1050,7 +1090,7 @@ def build_session_policy(
             }
         )
         n += 1
-    return {"Version": "2012-10-17", "Statement": statements}
+    return statements
 
 
 def vend_or_refuse(

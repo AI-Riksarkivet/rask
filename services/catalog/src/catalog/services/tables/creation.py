@@ -677,20 +677,9 @@ def _write_blob_into(
         # the rollback and leave the name declared with no dataset behind it ([[LH-302]]).
         # A failed drop leaves the name declared with no dataset behind it: logged as the release below is, while the write
         # error stays what the caller is told. A name nothing is declared under has nothing to roll back.
-        try:
-            with suppress(TableNotFoundError):
-                ns.drop_table(DropTableRequest(id=segments))
-        except Exception as drop_exc:  # noqa: BLE001 — the write error is what the caller is told
-            log.error("create_rollback_drop_failed", extra={"table": "$".join(segments), "location": location, "error": str(drop_exc)[:300]})
+        _drop_the_declared_name(ns, segments, location=location)
         if registry is not None:
-            try:
-                if claim is not None:
-                    base_registry.release_claim(registry, claim)
-                if claimed_uuid is not None:
-                    base_registry.release_data_directories(registry, directories, uuid=claimed_uuid)
-                location_claims.release(_claim_store(registry), location, holder, uuid=claimed_uuid)
-            except Exception as release_exc:  # noqa: BLE001 — the write error is what the caller is told
-                log.error("create_base_record_release_failed", extra={"location": location, "error": str(release_exc)[:300]})
+            _release_what_the_write_took(registry, location=location, claim=claim, directories=directories, claimed_uuid=claimed_uuid, holder=holder)
         if isinstance(exc, Exception | KeyboardInterrupt | SystemExit | GeneratorExit):
             if isinstance(exc, OSError) and _UNSUPPORTED_TYPE_MARKER in str(exc):
                 raise InvalidInputError(f"the table's schema holds a type Lance does not store: {clean_lance_message(str(exc))}") from exc
@@ -698,6 +687,35 @@ def _write_blob_into(
         raise InternalError("the table's first write panicked in Lance; the create was rolled back and may be retried") from exc
     _record_written(registry, location, so, written=dataset, author=recorded_author)
     return CreateTableResponse(location=location, version=dataset.version)
+
+
+def _drop_the_declared_name(ns: LanceNamespace, segments: list[str], *, location: str) -> None:
+    """Drop the name a failed first write declared, logging a drop that fails."""
+    try:
+        with suppress(TableNotFoundError):
+            ns.drop_table(DropTableRequest(id=segments))
+    except Exception as drop_exc:  # noqa: BLE001 — the write error is what the caller is told
+        log.error("create_rollback_drop_failed", extra={"table": "$".join(segments), "location": location, "error": str(drop_exc)[:300]})
+
+
+def _release_what_the_write_took(
+    registry: base_registry.BaseRegistry,
+    *,
+    location: str,
+    claim: base_registry.BaseClaim | None,
+    directories: list[str],
+    claimed_uuid: str | None,
+    holder: str,
+) -> None:
+    """Release the base record, data directories and location claim a failed first write took, logging a release that fails."""
+    try:
+        if claim is not None:
+            base_registry.release_claim(registry, claim)
+        if claimed_uuid is not None:
+            base_registry.release_data_directories(registry, directories, uuid=claimed_uuid)
+        location_claims.release(_claim_store(registry), location, holder, uuid=claimed_uuid)
+    except Exception as release_exc:  # noqa: BLE001 — the write error is what the caller is told
+        log.error("create_base_record_release_failed", extra={"location": location, "error": str(release_exc)[:300]})
 
 
 #: Lance's refusal of an Arrow type it does not store, as a bare `OSError`: "LanceError(Schema): Unsupported data type:

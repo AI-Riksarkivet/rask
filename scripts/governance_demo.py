@@ -123,10 +123,27 @@ def main() -> int:
     ah, bh = {"Authorization": f"Bearer {alice}"}, {"Authorization": f"Bearer {bob}"}
     print(f"  alice sub = {alice_sub}")
 
+    _anonymous_create_is_refused(ns)
+    _alice_creates_bronze(ns, bronze, ah)
+    _only_the_owner_reads_bronze(bronze, ah, bh)
+    _the_create_is_authored_by_alice(bronze, ah, alice_sub)
+    _a_job_promotes_bronze_to_silver(ns, bronze, silver, ah=ah, alice_sub=alice_sub)
+    _silver_derives_from_bronze(bronze, silver, ah)
+
+    summary = f"{RED}{_failures} check(s) FAILED{RESET}" if _failures else f"{GREEN}ALL GOVERNANCE INVARIANTS HELD{RESET}"
+    print(f"\n{summary}")
+    return 1 if _failures else 0
+
+
+def _anonymous_create_is_refused(ns: str) -> None:
+    """A create carrying no token is refused 401."""
     step("who-may: anonymous create is rejected (OIDC enforced)")
     anon = requests.post(f"{CATALOG}/v1/namespace/{ns}/create", json={}, timeout=10)
     check(anon.status_code == 401, f"anon create namespace -> {anon.status_code} (want 401)")
 
+
+def _alice_creates_bronze(ns: str, bronze: str, ah: dict[str, str]) -> None:
+    """Alice creates the namespace and its bronze table, and owns both."""
     step("alice creates a namespace + a bronze Lance table (she becomes its owner)")
     r = requests.post(f"{CATALOG}/v1/namespace/{ns}/create", headers=ah, json={}, timeout=10)
     check(r.status_code == 200, f"alice create namespace -> {r.status_code} (want 200)")
@@ -134,12 +151,18 @@ def main() -> int:
     r = requests.post(f"{CATALOG}/v1/table/{bronze}/create", headers={**ah, **ARROW}, data=ipc(rows), timeout=30)
     check(r.status_code == 200, f"alice create {bronze} -> {r.status_code} (want 200)")
 
+
+def _only_the_owner_reads_bronze(bronze: str, ah: dict[str, str], bh: dict[str, str]) -> None:
+    """Bob, holding no grant, is refused the table's metadata; alice, its owner, reads it."""
     step("who-may: bob holds no grant, so he cannot even read the table's metadata")
     r = requests.post(f"{CATALOG}/v1/table/{bronze}/describe", headers=bh, timeout=10)
     check(r.status_code == 403, f"bob describe {bronze} -> {r.status_code} (want 403)")
     r = requests.post(f"{CATALOG}/v1/table/{bronze}/describe", headers=ah, timeout=10)
     check(r.status_code == 200, f"alice describe {bronze} -> {r.status_code} (want 200, cascade from owner)")
 
+
+def _the_create_is_authored_by_alice(bronze: str, ah: dict[str, str], alice_sub: str) -> None:
+    """Lineage's feed names alice, whose token the catalog verified, as an author of the create."""
     step("how/who: the catalog (which verified alice's token) recorded her as the author of the create")
 
     def bronze_authors() -> set[str | None]:
@@ -149,6 +172,9 @@ def main() -> int:
     recorded = poll(lambda: alice_sub in bronze_authors(), True)
     check(recorded is True, f"lineage feed authors of {bronze} = {bronze_authors()} (want {alice_sub} among them)")
 
+
+def _a_job_promotes_bronze_to_silver(ns: str, bronze: str, silver: str, *, ah: dict[str, str], alice_sub: str) -> None:
+    """A pipeline job's OpenLineage run, bronze in and silver out, is accepted 201."""
     step("a pipeline job promotes bronze -> silver and emits OpenLineage")
     promote = {
         "eventType": "COMPLETE",
@@ -164,16 +190,15 @@ def main() -> int:
     r = requests.post(f"{LINEAGE}/api/v1/lineage", json=promote, headers=ah, timeout=10)
     check(r.status_code == 201, f"emit promote run -> {r.status_code} (want 201)")
 
+
+def _silver_derives_from_bronze(bronze: str, silver: str, ah: dict[str, str]) -> None:
+    """Lineage's edge list names silver among bronze's derived tables."""
     step("how: silver is derived from bronze (derivation lineage, off lineage's edge list)")
     down = poll(
         lambda: [d["table"] for d in get_json(f"{LINEAGE}/tables/{bronze}/derived", ah).get("derived", [])],
         [silver],
     )
     check(isinstance(down, list) and silver in down, f"derived({bronze}) = {down} (want it to include {silver})")
-
-    summary = f"{RED}{_failures} check(s) FAILED{RESET}" if _failures else f"{GREEN}ALL GOVERNANCE INVARIANTS HELD{RESET}"
-    print(f"\n{summary}")
-    return 1 if _failures else 0
 
 
 if __name__ == "__main__":

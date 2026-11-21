@@ -528,40 +528,38 @@ def seed(http: httpx.Client, steps: Sequence[Step]) -> list[Outcome]:
             if step.key is not None:
                 blocked.add(step.key)
             continue
-        step, unresolved = _with_roles_resolved(http, step, role_ids)
-        body, unresolved = (None, unresolved) if unresolved else _governed_body(http, step)
-        if unresolved:
-            print(f"  !! {step.label}: {unresolved}", file=sys.stderr)
-            outcomes.append(Outcome(step=step, state="failed", note=unresolved))
-            continue
-        try:
-            response = http.request(step.method, step.path, json=body)
-        except httpx.HTTPError as exc:
-            note = f"{type(exc).__name__}: {exc}"
-            print(f"  !! {step.label}: {note}", file=sys.stderr)
-            outcomes.append(Outcome(step=step, state="failed", note=note))
-            if step.key is not None:
-                blocked.add(step.key)
-            continue
-        if response.is_success:
-            print(f"  +  {step.label}")
-            outcomes.append(Outcome(step=step, state="created"))
-            continue
-        note = problem(response)
-        tolerated = step.tolerate.get(response.status_code)
-        if tolerated is not None:
-            state, word = tolerated
-            print(f"  =  {step.label}: {word} ({note})")
-            outcomes.append(Outcome(step=step, state=state, note=note))
-            if state == "skipped" and step.key is not None:
-                blocked.add(step.key)
-            continue
-        note = f"HTTP {response.status_code} {note}"
-        print(f"  !! {step.label}: {note}", file=sys.stderr)
-        outcomes.append(Outcome(step=step, state="failed", note=note))
-        if step.key is not None:
-            blocked.add(step.key)
+        outcome, blocks = _send(http, step, role_ids)
+        outcomes.append(outcome)
+        if blocks and outcome.step.key is not None:
+            blocked.add(outcome.step.key)
     return outcomes
+
+
+def _send(http: httpx.Client, step: Step, role_ids: dict[str, str]) -> tuple[Outcome, bool]:
+    """Send one step, printing its line: what became of it, and whether the steps beneath it are skipped."""
+    step, unresolved = _with_roles_resolved(http, step, role_ids)
+    body, unresolved = (None, unresolved) if unresolved else _governed_body(http, step)
+    if unresolved:
+        print(f"  !! {step.label}: {unresolved}", file=sys.stderr)
+        return Outcome(step=step, state="failed", note=unresolved), False
+    try:
+        response = http.request(step.method, step.path, json=body)
+    except httpx.HTTPError as exc:
+        note = f"{type(exc).__name__}: {exc}"
+        print(f"  !! {step.label}: {note}", file=sys.stderr)
+        return Outcome(step=step, state="failed", note=note), True
+    if response.is_success:
+        print(f"  +  {step.label}")
+        return Outcome(step=step, state="created"), False
+    note = problem(response)
+    tolerated = step.tolerate.get(response.status_code)
+    if tolerated is not None:
+        state, word = tolerated
+        print(f"  =  {step.label}: {word} ({note})")
+        return Outcome(step=step, state=state, note=note), state == "skipped"
+    note = f"HTTP {response.status_code} {note}"
+    print(f"  !! {step.label}: {note}", file=sys.stderr)
+    return Outcome(step=step, state="failed", note=note), True
 
 
 def _role_id(http: httpx.Client, ref: str, role_ids: dict[str, str]) -> tuple[str | None, str]:
@@ -590,16 +588,24 @@ def _with_roles_resolved(http: httpx.Client, step: Step, role_ids: dict[str, str
             return step, f"could not resolve {ref}: {note}"
         path = path.replace(f"{{{ref}}}", role_id)
     if body is not None:
-        resolved: dict[str, object] = {}
-        for field, value in body.items():
-            if isinstance(value, str) and (matched := _ROLE_REF.match(value)) is not None:
-                role_id, note = _role_id(http, matched.group(0), role_ids)
-                if role_id is None:
-                    return step, f"could not resolve {matched.group(0)}: {note}"
-                value = f"role:{role_id}{value[matched.end() :]}"
-            resolved[field] = value
+        resolved, note = _body_with_roles_resolved(http, body, role_ids)
+        if note:
+            return step, note
         body = resolved
     return step.model_copy(update={"path": path, "body": body}), ""
+
+
+def _body_with_roles_resolved(http: httpx.Client, body: dict[str, object], role_ids: dict[str, str]) -> tuple[dict[str, object], str]:
+    """``body`` with each value naming a role by ``role:<project>/<name>`` naming it ``role:<uuid>``, or a note."""
+    resolved: dict[str, object] = {}
+    for field, value in body.items():
+        if isinstance(value, str) and (matched := _ROLE_REF.match(value)) is not None:
+            role_id, note = _role_id(http, matched.group(0), role_ids)
+            if role_id is None:
+                return resolved, f"could not resolve {matched.group(0)}: {note}"
+            value = f"role:{role_id}{value[matched.end() :]}"
+        resolved[field] = value
+    return resolved, ""
 
 
 #: The object types whose grants OpenFGA holds by the uuid the catalog minted, never by name (ADR 0173 §8, [[LH-524]]).
@@ -695,16 +701,7 @@ def summarize(http: httpx.Client, estate: Estate) -> list[str]:
         if record is None:
             absent(f"project {project.id} is absent from GET /management/v1/projects — the registry never got it")
         else:
-            print(f"  project {project.id}")
-            held: set[str] = set()
-            for entry in (_as_record(item) for item in _as_list(record.get("warehouses"))):
-                held.add(str(entry.get("id")))
-                print(f"    warehouse {entry.get('id')}  bucket={entry.get('bucket')}  status={entry.get('status')}")
-            admins = ", ".join(str(admin) for admin in _as_list(record.get("admins")))
-            print(f"    admins: {admins or '(none — FGA off or unavailable)'}")
-            for warehouse_spec in project.warehouses:
-                if warehouse_spec.id not in held:
-                    absent(f"warehouse {warehouse_spec.id} is absent from project {project.id}'s warehouses")
+            _summarize_listed_project(project, record, absent=absent)
         if project.roles:
             _summarize_roles(http, project, absent=absent)
         # Read the namespaces WHETHER OR NOT the project listed. Nesting this under the listing is how a
@@ -714,6 +711,20 @@ def summarize(http: httpx.Client, estate: Estate) -> list[str]:
             for namespace in warehouse_spec.namespaces:
                 _summarize_namespace(http, warehouse_spec, namespace, absent=absent)
     return problems
+
+
+def _summarize_listed_project(project: Project, record: dict[str, object], *, absent: Callable[[str], None]) -> None:
+    """Print one listed project's warehouses and admins, reporting every planned warehouse it does not hold."""
+    print(f"  project {project.id}")
+    held: set[str] = set()
+    for entry in (_as_record(item) for item in _as_list(record.get("warehouses"))):
+        held.add(str(entry.get("id")))
+        print(f"    warehouse {entry.get('id')}  bucket={entry.get('bucket')}  status={entry.get('status')}")
+    admins = ", ".join(str(admin) for admin in _as_list(record.get("admins")))
+    print(f"    admins: {admins or '(none — FGA off or unavailable)'}")
+    for warehouse_spec in project.warehouses:
+        if warehouse_spec.id not in held:
+            absent(f"warehouse {warehouse_spec.id} is absent from project {project.id}'s warehouses")
 
 
 def _summarize_roles(http: httpx.Client, project: Project, *, absent: Callable[[str], None]) -> None:
@@ -764,13 +775,9 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
     )
     args = parser.parse_args(argv)
 
-    principals = dict(DEX_PRINCIPALS)
-    for pair in args.map:
-        name, _, principal = pair.partition("=")
-        if not principal:
-            print(f"!! --map wants NAME=PRINCIPAL, got {pair!r}", file=sys.stderr)
-            return 1
-        principals[name] = principal
+    principals = _principals(args.map)
+    if principals is None:
+        return 1
 
     steps = plan(DEMO_ESTATE, principals)
     print(f"  {len(steps)} steps against {args.catalog}")
@@ -786,6 +793,23 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
         outcomes = seed(http, steps)
         problems = summarize(http, DEMO_ESTATE)
 
+    return _report(outcomes, problems)
+
+
+def _principals(overrides: Sequence[str]) -> dict[str, str] | None:
+    """The demo identities' principals with each ``NAME=PRINCIPAL`` override applied, ``None`` for a malformed one."""
+    principals = dict(DEX_PRINCIPALS)
+    for pair in overrides:
+        name, _, principal = pair.partition("=")
+        if not principal:
+            print(f"!! --map wants NAME=PRINCIPAL, got {pair!r}", file=sys.stderr)
+            return None
+        principals[name] = principal
+    return principals
+
+
+def _report(outcomes: list[Outcome], problems: list[str]) -> int:
+    """Print the tally and what did not land or read back: 0 only when nothing is missing."""
     tally: dict[str, int] = {}
     for outcome in outcomes:
         tally[outcome.state] = tally.get(outcome.state, 0) + 1
