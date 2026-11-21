@@ -308,6 +308,7 @@ def _unscannable_reason(ds: lance.LanceDataset, *, fs: pafs.FileSystem, prefix: 
             # failure — we could not determine whether this layout is present, and a layout we cannot
             # rule out is one we must not certify. Fail CLOSED so the dataset reads checked=False rather
             # than falling through to a scan that would name a live branch's files as orphans.
+            log.warning("orphan_layout_probe_failed", extra={"prefix": prefix, "directory": directory}, exc_info=exc)
             return f"{prefix}: layout probe for `{directory}/` failed ({type(exc).__name__}: {exc}) — cannot certify the dataset is scannable"
         if probe.type == pafs.FileType.Directory:
             return f"{prefix}: {why}"
@@ -414,7 +415,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
         # ordinary unopenable path keeps its existing `TypeName: message` shape.
         refusal = unsupported_features_from_open_error(exc)
         reason = f"{prefix}: {refusal}" if refusal is not None else f"{type(exc).__name__}: {exc}"
-        log.warning("orphan_scan_unreadable", extra={"dataset": dataset_uri, "error": str(exc)})
+        log.warning("orphan_scan_unreadable", extra={"dataset": dataset_uri, "error": str(exc)}, exc_info=exc)
         # A flag refusal is STRUCTURAL on this path too: the reader will refuse the same manifest on
         # every future tick, so blocking reclamation on it never resolves. An open that failed for any
         # OTHER reason is a scan that could succeed later and must keep blocking.
@@ -432,7 +433,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
         log.warning("orphan_scan_skipped", extra={"dataset": dataset_uri, "reason": str(exc)})
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=str(exc), excluded=True)
     except Exception as exc:
-        log.warning("orphan_listing_failed", extra={"dataset": dataset_uri, "error": str(exc)})
+        log.warning("orphan_listing_failed", extra={"dataset": dataset_uri, "error": str(exc)}, exc_info=exc)
         return DatasetOrphanScan(dataset=dataset_uri, checked=False, versions_scanned=versions, reason=f"listing failed: {exc}")
     _classify_against_floor(orphans, ds, dataset_uri)
     return DatasetOrphanScan(dataset=dataset_uri, checked=True, orphans=orphans, versions_scanned=versions)

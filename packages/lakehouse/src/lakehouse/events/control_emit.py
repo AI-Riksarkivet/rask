@@ -47,6 +47,7 @@ from collections.abc import Callable
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from opentelemetry import metrics
+from pydantic import ValidationError
 
 from lakehouse.events import outbox, outbox_metrics
 from lakehouse.events.bus import Bus
@@ -168,7 +169,7 @@ class BusControlEmitter:
         if self._sign is not None:
             try:
                 wire = self._sign(wire)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — post-commit, swallows all; _record_undelivered logs exc_info
                 self._record_undelivered(event, exc, reason="unsigned", staged=False)
                 return
         try:
@@ -181,7 +182,7 @@ class BusControlEmitter:
                 timeout_seconds=self._timeout_seconds,
                 lane="control",
             )
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — post-commit, swallows all; _record_undelivered logs exc_info
             self._record_undelivered(event, exc, reason="publish", staged=outbox.left_staged(exc))
 
     def _undelivered(self, reason: _Undelivered, *, staged: bool) -> dict[str, str]:
@@ -201,6 +202,7 @@ class BusControlEmitter:
                 # reading it should not have to go and check how the service was configured.
                 "staged": staged,
             },
+            exc_info=error,
         )
 
 
@@ -259,9 +261,10 @@ async def emit_control(
     release scheduled, a principal deleted) it names the PERSON the event is about, and being named IS the targeting. It must
     be a real principal — a userset or the ``user:*`` wildcard addresses nobody.
 
-    Fail-open covers the WHOLE path, not just the publish: the event construction (pydantic validation)
-    is wrapped too, so a malformed event can never raise into — and 500 — a mutation that already
-    committed. A build failure degrades to no live-refresh hint, exactly like a publish failure.
+    Fail-open covers the WHOLE path, not just the publish: the event construction is wrapped too, so an event its
+    model refuses (a ``ValidationError``) never raises into, and 500s, a mutation that already committed. Such a
+    build failure degrades to no live-refresh hint, exactly like a publish failure. Any other exception is a defect in
+    the model and is not swallowed.
     """
     try:
         event = CatalogControlEvent(
@@ -274,10 +277,11 @@ async def emit_control(
             actor=actor,
             extra=extra or {},
         )
-    except Exception as exc:
+    except ValidationError as exc:
         log.warning(
             "control_event_build_failed",
             extra={"action": action, "object_id": object_id, "error": str(exc)},
+            exc_info=exc,
         )
         return
     await emitter.emit(event)

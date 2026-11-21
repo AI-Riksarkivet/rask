@@ -32,6 +32,7 @@ refuses. Exit 2 = no reachable datasource (the caller decides whether that is a 
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import shutil
@@ -95,10 +96,10 @@ def evaluate(base: str, expr: str) -> tuple[bool, str]:
         detail = ""
         try:
             detail = exc.read().decode(errors="replace")[:200]
-        except Exception:  # the body is best-effort diagnostics
+        except (OSError, http.client.HTTPException):  # the body is best-effort diagnostics
             detail = ""
         return False, f"HTTP {exc.code} {detail}"
-    except Exception as exc:  # any transport failure is a non-evaluation
+    except (OSError, http.client.HTTPException, ValueError) as exc:  # a transport failure or a body not JSON is a non-evaluation
         return False, f"{type(exc).__name__}: {exc}"
     if body.get("status") != "success":
         return False, f"status={body.get('status')} {str(body)[:200]}"

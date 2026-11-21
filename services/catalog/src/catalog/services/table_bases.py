@@ -730,6 +730,7 @@ def admit_registered_table(so: StorageOptions, *, segments: list[str], verdict: 
             log.error(
                 "register_admission_undo_incomplete",
                 extra={"table": context.holder, "location": verdict.location, "error": f"{type(undo).__name__}: {undo}"[:300]},
+                exc_info=undo,
             )
         raise
     return admitted

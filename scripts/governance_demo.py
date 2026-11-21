@@ -98,7 +98,7 @@ def get_json(url: str, headers: dict[str, str] | None = None) -> dict:
     """
     try:
         return requests.get(url, headers=headers, timeout=10).json()
-    except Exception:
+    except (requests.RequestException, ValueError):
         return {}
 
 

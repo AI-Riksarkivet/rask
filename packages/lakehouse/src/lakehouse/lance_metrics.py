@@ -33,7 +33,7 @@ def instrument_lance_if_available() -> bool:
     try:
         instrument_lance_metrics()
     except Exception as exc:
-        log.warning("lance_metrics_instrument_failed", extra={"error": str(exc)})
+        log.warning("lance_metrics_instrument_failed", extra={"error": str(exc)}, exc_info=exc)
         return False
     log.info("lance_metrics_instrumented")
     return True

@@ -68,7 +68,7 @@ def main(argv: list[str]) -> int:
         # the missing dependency. Classified here exactly as below, then skipped.
         try:
             found = importlib.import_module(package)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — a per-module verdict: whatever the import raised is classified and reported
             line = f"{package}: {type(exc).__name__}: {exc}"
             (failures if _is_packaging_failure(exc) else executed).append(line)
             continue
@@ -82,7 +82,7 @@ def main(argv: list[str]) -> int:
     for name in modules:
         try:
             importlib.import_module(name)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — a per-module verdict: whatever the import raised is classified and reported
             line = f"{name}: {type(exc).__name__}: {exc}"
             (failures if _is_packaging_failure(exc) else executed).append(line)
 

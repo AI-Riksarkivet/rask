@@ -349,7 +349,7 @@ async def publish_with_outbox(
             # an unstaged event that reaches the bus is still delivered. Counted because every other outbox
             # signal describes objects that exist and is blind to this path by construction.
             outbox_metrics.record_stage_failed(lane)
-            log.warning("outbox_stage_failed", extra={"outbox_uri": outbox_uri, "error": str(exc)})
+            log.warning("outbox_stage_failed", extra={"outbox_uri": outbox_uri, "error": str(exc)}, exc_info=exc)
             staged = False
         else:
             outbox_metrics.record_staged(lane)
@@ -369,7 +369,7 @@ async def publish_with_outbox(
         await run_in_threadpool(drop_event, outbox_uri, storage_options, envelope.id)
     except Exception as exc:  # the event is delivered; what is left is a staged copy the relay re-ingests and drops
         outbox_metrics.record_drop_failed(lane)
-        log.warning("outbox_drop_failed", extra={"outbox_uri": outbox_uri, "key": envelope.id, "error": str(exc)})
+        log.warning("outbox_drop_failed", extra={"outbox_uri": outbox_uri, "key": envelope.id, "error": str(exc)}, exc_info=exc)
 
 
 __all__ = [

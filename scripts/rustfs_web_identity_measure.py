@@ -335,7 +335,7 @@ def _lance_writes_through_a_web_identity_session(endpoint: str, state: Path) -> 
         record(
             stored == (6, "2.2", True), "Lance creates (2.2, stable row ids) and appends through a web-identity session", f"rows, version, stable ids: {stored}"
         )
-    except Exception as exc:  # the measurement reports what Lance answered
+    except Exception as exc:  # noqa: BLE001 — a measurement: each check reports what it answered, and a failed one exits non-zero
         record(False, "Lance creates and appends through a web-identity session", repr(exc)[:200])
     return write
 

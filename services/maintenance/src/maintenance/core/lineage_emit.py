@@ -49,6 +49,7 @@ from lakehouse.events.openlineage import (
 from lakehouse.events.signing import CanonError, SigningKey, attach_signature
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from lakehouse.storage.options import StorageOptions
+from maintenance.core.metrics import create_lineage_emit_series, record_lineage_emit_failed
 
 
 log = logging.getLogger(__name__)
@@ -252,6 +253,7 @@ class BusMaintenanceEmitter:
             )
         self._bus = bus
         outbox_metrics.create_series("lineage")
+        create_lineage_emit_series()
         #: This service's OWN signing key ([[LH-064]]). None is a service with no store to sign from, which emits
         #: unsigned as it always did. A holder without a key emits nothing at all, never an unsigned event.
         self._signing = signing
@@ -337,9 +339,13 @@ class BusMaintenanceEmitter:
                 lane="lineage",
             )
         except (SigningKeyUnavailableError, CanonError) as exc:
+            record_lineage_emit_failed(reason="unsigned")
             log.warning("maintenance_event_withheld_unsigned", extra={"table": table_id, "error": str(exc)})
         except Exception as exc:
-            log.warning("maintenance_publish_failed", extra={"table": table_id, "error": str(exc), "staged": outbox.left_staged(exc)})
+            # Best-effort after a committed pass: any failure is a lost announcement, counted and logged with its
+            # traceback, and never a failed pass.
+            record_lineage_emit_failed(reason="publish")
+            log.warning("maintenance_publish_failed", extra={"table": table_id, "error": str(exc), "staged": outbox.left_staged(exc)}, exc_info=exc)
 
 
 def make_emitter(

@@ -26,7 +26,7 @@ import pyarrow.ipc as ipc
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import InternalError
+from lance_namespace import InternalError, LanceNamespace
 
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event, served_relay_tick
 
@@ -152,6 +152,57 @@ def test_a_tick_fails_when_its_wire_is_missing(
         real_ns_client.portal.call(run)
 
     assert _faulted(caplog, wire), caplog.text
+
+
+#: What a `dir` connection that has opened its index answers when the store then stops answering: the backend's Debug
+#: form of the IO failure, under the spec's InternalError (its shape as measured on pylance 14.0.3 over moto stopped
+#: after a read: the staleness check's prefix and the store's IO source, here with a refused connection's text).
+_CACHED_CONNECTION_OUTAGE = (
+    'Internal error: Failed to check dataset staleness: IO { source: Generic { store: "S3", source: Reqwest { retries: 0, '
+    "max_retries: 0, elapsed: 2ms, retry_timeout: 1s, source: reqwest::Error { kind: Request, "
+    'source: hyper_util::client::legacy::Error(Connect, "error sending request") } } } }'
+)
+
+
+@pytest.mark.parametrize(
+    ("raised", "retried"),
+    [
+        pytest.param(_CACHED_CONNECTION_OUTAGE, True, id="a-store-outage-on-an-open-connection-is-retried"),
+        pytest.param("Internal error: the index holds a row no reader can parse", False, id="any-other-internal-error-ends-the-task"),
+    ],
+)
+def test_the_estate_namespaces_task_retries_only_a_store_outage(
+    real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, raised: str, retried: bool
+) -> None:
+    """The boot task outlasts a store the catalog's open connection can no longer reach, and ends on a permanent fault."""
+    from catalog import main
+    from catalog.services import warehouses
+
+    app = real_ns_client.app
+    assert isinstance(app, FastAPI)
+    assert real_ns_client.portal is not None
+    keep = warehouses.ensure_catalog_row
+    calls: list[str] = []
+
+    def once_failing(ns: LanceNamespace, warehouse_id: str) -> None:
+        calls.append(warehouse_id)
+        if len(calls) == 1:
+            raise InternalError(raised)
+        keep(ns, warehouse_id)
+
+    monkeypatch.setattr(warehouses, "ensure_catalog_row", once_failing)
+    monkeypatch.setattr(main, "_PROVENANCE_RETRY_FIRST_SECONDS", 0.0)
+
+    async def run() -> object:
+        return await main._ensure_estate_namespaces(app)
+
+    if retried:
+        real_ns_client.portal.call(run)
+        assert len(calls) == 2
+    else:
+        with pytest.raises(InternalError):
+            real_ns_client.portal.call(run)
+        assert len(calls) == 1
 
 
 @pytest.mark.parametrize(

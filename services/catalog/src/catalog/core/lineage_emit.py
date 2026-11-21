@@ -919,7 +919,11 @@ class BusEmitter(_BaseLineageEmitter):
             log.warning("lineage_emit_withheld_unsigned", extra={"operation": operation, "table": table_id, "error": str(exc)})
         except Exception as exc:
             _emit_failed.add(1, {"lance.catalog.transport": "bus"})
-            log.warning("lineage_publish_failed", extra={"operation": operation, "table": table_id, "error": str(exc), "staged": outbox.left_staged(exc)})
+            log.warning(
+                "lineage_publish_failed",
+                extra={"operation": operation, "table": table_id, "error": str(exc), "staged": outbox.left_staged(exc)},
+                exc_info=exc,
+            )
 
 
 def make_emitter(

@@ -598,9 +598,14 @@ class OIDCVerifier:
         for configured in self._issuers:
             try:
                 self._install(configured, self._fetch(configured))
-            # Every failure is reported and none is raised — see this method docstring.
-            except Exception as exc:
+            # Every failure is reported and none is raised — see this method docstring. An expected one (the provider
+            # unreachable, or what it published unusable) was logged where it was classified; anything else is a defect
+            # this loop outlives, logged here with its traceback.
+            except ProviderUnavailableError as exc:
                 failures.append((configured, str(exc)))
+            except Exception as exc:
+                log.exception("oidc_refresh_unexpected_failure", extra={"issuer": configured})
+                failures.append((configured, f"{type(exc).__name__}: {exc}"))
         return failures
 
     async def refresh_forever(self) -> None:

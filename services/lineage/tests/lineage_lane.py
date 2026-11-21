@@ -27,6 +27,7 @@ from starlette.testclient import TestClient
 from lakehouse.events.bus_delivery import Lane, Settlement
 from lakehouse.governed import fga_provision
 from lakehouse.governed.decider import AccessDecider, OpenFgaDecider
+from lakehouse.problems import domain_errors
 from lineage import main
 from lineage.api.ingest_lane import CONSUMER
 from lineage.core import metrics
@@ -78,7 +79,8 @@ class Feed:
 
     async def record(self, event: RunEvent | DatasetEvent, *, aliased: Collection[str]) -> None:
         if self.unrecordable:
-            raise ServiceUnavailableError("the catalog does not take the feed's write")
+            # The class the feed's write raises for a catalog that does not take it (`translate_catalog_errors`).
+            raise domain_errors.ServiceUnavailableError("the catalog does not take the feed's write")
         self.recorded.append(event)
 
     async def run_author(self, run_id: str) -> str | None:

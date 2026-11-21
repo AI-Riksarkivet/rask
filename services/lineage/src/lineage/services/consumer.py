@@ -20,12 +20,14 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from typing import Any
+from typing import Any, Final
 
-from lance_namespace import PermissionDeniedError
+import urllib3
+from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 from pydantic import ValidationError
 
 from lakehouse.events.bus_delivery import Verdict
+from lakehouse.problems import domain_errors
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome, refusal_outcome
 from lineage.core.refusals import ForeignRunError
 from lineage.models import DatasetEvent, RunEvent, parse_event
@@ -33,6 +35,18 @@ from lineage.services.provenance import ProvenanceStore
 
 
 log = logging.getLogger(__name__)
+
+#: What a recording meets that its delivery is asked for again over, counted ``retried``: every answer the catalog gave
+#: the feed's read or write, translated into the ``DomainError`` family (`catalog_reader.translate_catalog_errors`: a
+#: 5xx or 429, a conflict another writer won, a row it refused, which the writer's halving leaves to the one event that
+#: carries it), this service's token unreadable (`machine_identity.read_identity_token`, a ``DomainError`` too), and a
+#: catalog the transport did not reach (urllib3's ``HTTPError``). Anything else is a defect and reaches the delivery
+#: seam, which asks for the delivery again with its traceback and parks it on its last (`lakehouse.events.bus_delivery`).
+FEED_FAILURES: Final = (domain_errors.DomainError, urllib3.exceptions.HTTPError)
+#: The outages an authorization meets, each asked for again and counted ``retried``: OpenFGA, the catalog's decision
+#: doors or the signers' published keys not answering (``ServiceUnavailableError``: `fga_resilience.guarded`,
+#: `decider`, `signature.verify_arrived_event`), and the feed read a replay's check makes (:data:`FEED_FAILURES`).
+AUTHORIZATION_OUTAGES: Final = (ServiceUnavailableError, *FEED_FAILURES)
 
 
 async def handle_cloud_event(
@@ -103,7 +117,7 @@ async def handle_cloud_event(
         log.warning("lineage_event_refused", extra={"run": event.run_id, "outcome": outcome, "reason": str(exc)})
         record_outcome(outcome, door=door)
         return Verdict.PARK if outcome is Outcome.REFUSED else Verdict.TAKEN
-    except Exception as exc:
+    except AUTHORIZATION_OUTAGES as exc:
         log.warning("lineage_authz_unavailable", extra={"run": event.run_id, "error": str(exc)})
         record_outcome(Outcome.RETRIED, door=door)
         return Verdict.AGAIN
@@ -118,7 +132,7 @@ async def handle_cloud_event(
         log.warning("lineage_event_foreign_run", extra={"run": event.run_id, "reason": str(exc)})
         record_outcome(Outcome.UNREPAIRABLE, door=door)
         return Verdict.TAKEN
-    except Exception as exc:
+    except FEED_FAILURES as exc:
         log.warning("lineage_ingest_failed", extra={"run": event.run_id, "error": str(exc)})
         record_outcome(Outcome.RETRIED, door=door)
         return Verdict.AGAIN

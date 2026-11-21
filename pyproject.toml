@@ -92,8 +92,11 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 # the fix is keyword-only parameters, guard clauses and helpers named by job. PLR0913 stays off: it counts keyword-only
 # parameters too, and keyword-only is the fix. A FastAPI handler's parameters are keyword-only, since FastAPI resolves
 # them by name. The tests trees are exempt below: a test's parameters are fixtures pytest injects by name, and a test
-# reads as one scenario.
-extend-select = ["TID251", "FAST001", "T20", "PLR0917", "PLR0915", "PLR1702"]
+# reads as one scenario. BLE001 refuses a handler that catches `Exception` and neither re-raises nor logs the traceback:
+# the writing-python references' "catch specific exceptions; log or re-raise". A boundary that must outlive every failure
+# (a supervision loop, a per-item batch, a post-commit announcement) keeps the broad catch and logs with `exc_info`, or
+# says why it cannot in a reasoned `# noqa: BLE001`. The tests trees are exempt: a test double raises what it is told to.
+extend-select = ["TID251", "FAST001", "T20", "PLR0917", "PLR0915", "PLR1702", "BLE001"]
 # PLR1702 is a preview rule on ruff 0.16.0. `explicit-preview-rules` admits a preview rule only where it is named by its
 # exact code, so preview selects PLR1702 and nothing else: measured 2026-11-21 over `ruff check .` with and without the
 # pair, the findings of every other rule were identical by code, file and position.
@@ -110,7 +113,7 @@ max-nested-blocks = 3
 # client timeout (S113), and use tmp paths (S108) — that is what a fixture IS. rask already exempted
 # S101/ANN2xx here; the lance-ns suites needed the rest of the same family. TID251 is exempt in the
 # tests and scripts trees because both sit outside the platform seams the banned-api rules guard.
-"**/tests/**" = ["PLR0917", "PLR0915", "PLR1702", "TID251", "T20", "S101", "S105", "S106", "S107", "S108", "S113", "ANN201", "ANN202", "ANN401", "S608", "S607", "S603", "RUF001"]
+"**/tests/**" = ["PLR0917", "PLR0915", "PLR1702", "BLE001", "TID251", "T20", "S101", "S105", "S106", "S107", "S108", "S113", "ANN201", "ANN202", "ANN401", "S608", "S607", "S603", "RUF001"]
 # The media pipeline shells out to ffmpeg/ffprobe with LIST-form argv (never shell=True), which is
 # the safe form S603 cannot distinguish from an unsafe one. Scoped to the two trees that decode
 # media rather than silenced globally.
@@ -123,11 +126,9 @@ max-nested-blocks = 3
 #   ANN401 — `Any` at the boundaries of pyarrow/lance, neither of which ships precise stubs.
 #   RUF002/3 — typographically correct prose (MINUS SIGN, MULTIPLICATION SIGN, EN DASH) in docstrings
 #            and comments; "fixing" it degrades the writing.
-#   RUF100 — the directives it flags are `# noqa: BLE001` (41) and `# noqa: ANN001` (33), each
-#            carrying a written reason on its own line. They are dead only because rask selects
-#            neither BLE nor ANN001, so honouring RUF100 would delete 74 rationale comments to
-#            satisfy a rule about comments. The honest fix is to SELECT `BLE` — which fires 171
-#            further sites estate-wide (measured 2026-09-09) and so is not a lakehouse change.
+#   RUF100 — the directives it flags are `# noqa: ANN001`, each carrying a written reason on its
+#            own line. They are dead only because rask does not select ANN001, so honouring RUF100
+#            would delete rationale comments to satisfy a rule about comments.
 #   the rest — C901/E501/PERF401/RUF012/RUF043/SIM108/S608: real, small, and per-glob below.
 #
 # NARROWED PER GLOB 2026-09-09 (§ Q3-37, `open_lakehouse_diff_left.md`), by the same measurement that

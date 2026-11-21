@@ -206,9 +206,12 @@ def _read_footers(location: str, so: StorageOptions, paths: Sequence[str]) -> li
     options = so.in_clear() or None
 
     def _read(path: str) -> _FooterMetadata | Exception:
+        # What the reader raises, measured on pylance 14.0.3: ``OSError`` for a file that is not a Lance file, one too
+        # short or cut in half, and a store that did not answer; ``ValueError`` for a file that is absent. Anything else
+        # is a defect and propagates.
         try:
             return cast(_FooterMetadata, LanceFileReader(root + path, storage_options=options).metadata())
-        except Exception as exc:
+        except (OSError, ValueError) as exc:
             return exc
 
     with ThreadPoolExecutor(max_workers=min(8, len(paths))) as pool:

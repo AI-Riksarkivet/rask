@@ -94,5 +94,5 @@ async def _reconcile(client: OpenFgaClient, settings: Settings) -> tuple[int, in
             # exit code must reflect it. A backfill that half-ran and said nothing is how an estate
             # ends up believing it is repaired.
             failures.append(f"{warehouse_id}: {exc}")
-            log.warning("warehouse_grant_backfill_failed", extra={"warehouse": warehouse_id, "error": str(exc)})
+            log.warning("warehouse_grant_backfill_failed", extra={"warehouse": warehouse_id, "error": str(exc)}, exc_info=exc)
     return (seen, written, failures)

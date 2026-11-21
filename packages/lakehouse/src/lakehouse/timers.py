@@ -186,7 +186,7 @@ class Timer:
         try:
             asked = await asyncio.to_thread(self._ask)
         except Exception as exc:
-            log.warning("timer_claim_unread", extra={"timer": self.name, "error": str(exc)[:300]})
+            log.warning("timer_claim_unread", extra={"timer": self.name, "error": str(exc)[:300]}, exc_info=exc)
             return self._ended(Outcome.UNREAD, None, min(self._period, RETRY_SECONDS))
         if not asked.mine:
             # A wait is measured on the monotonic clock and a window on the store's, whose front ends may stamp a second

@@ -27,6 +27,7 @@ from collections.abc import Callable
 
 import lance
 import pyarrow as pa
+from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 from pydantic import SecretStr
 
@@ -40,7 +41,7 @@ def _check(label: str, fn: Callable[[], object]) -> bool:
         fn()
         print(f"  PASS  {label}", flush=True)
         return True
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 — a smoke check: any failure is its FAIL line, and the run exits 1
         print(f"  FAIL  {label}: {type(e).__name__}: {str(e)[:240]}", flush=True)
         return False
 
@@ -80,7 +81,10 @@ def _round_trip_an_object_through_boto3(pair: S3KeyPair, *, bucket: str, key: st
     def ensure_bucket() -> None:
         try:
             c.head_bucket(Bucket=bucket)
-        except Exception:
+        except ClientError as exc:
+            # Only a bucket the store says is absent is created; an unreachable store fails the check as itself.
+            if exc.response.get("Error", {}).get("Code") not in ("404", "NoSuchBucket", "NotFound"):
+                raise
             c.create_bucket(Bucket=bucket)
 
     def list_has_key() -> None:

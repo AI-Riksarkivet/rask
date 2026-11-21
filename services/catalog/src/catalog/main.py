@@ -13,10 +13,12 @@ import os
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from functools import partial
+from typing import Final
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import LanceNamespace, LanceNamespaceError
+from lance_namespace import LanceNamespace, LanceNamespaceError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from starlette.middleware import Middleware
 
@@ -52,11 +54,14 @@ from lakehouse.governed.secrets import secret_store_configured, secret_store_ses
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
 from lakehouse.lance_metrics import instrument_lance_if_available
+from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
 from lakehouse.process.log_levels import configure_app_logging
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.factory import build_service_app
+from lakehouse.storage.conditional_records import RecordChangedError
+from lakehouse.storage.errors import StorageError
 from lakehouse.storage.objectfs import store_dependency
 from lakehouse.storage.store_session import require_env_pair, start_store_session
 
@@ -68,6 +73,17 @@ PROBLEM_JSON = "application/problem+json"
 #: The backoff of the provenance namespace's boot task: doubling from the first delay, capped at the second.
 _PROVENANCE_RETRY_FIRST_SECONDS = 1.0
 _PROVENANCE_RETRY_MAX_SECONDS = 60.0
+#: What the provenance namespace's boot task outlasts: the store, its key pair or OpenFGA not answering yet. Read from
+#: what its steps raise: an unanswered OpenFGA, a store credential not yet confirmed and a store that did not take the
+#: connection are ``ServiceUnavailableError`` (`fga_resilience.guarded`, `StoreCredentialUnavailableError`,
+#: `namespace._connected`); a record read or write the store failed is ``OSError`` or botocore's (`record_store`,
+#: `conditional_records`), or a ``StorageError`` for a pair not yet whole; a record another replica changed meanwhile
+#: is ``RecordChangedError``. A connection that has already opened its index answers a store that then stops answering
+#: under the spec's ``InternalError`` with the store's IO text (measured on pylance 14.0.3 over moto stopped after a
+#: read), so a namespace error is an outage where its text reads as one (`reads_as_store_outage`). Anything else (a
+#: refused input, a namespace the configuration names under no parent, a defect) is permanent, so it ends the task, and
+#: the supervisor the process, where a crash-loop shows it.
+_PROVENANCE_TRANSIENT: Final = (ServiceUnavailableError, OSError, ClientError, BotoCoreError, StorageError, RecordChangedError)
 
 
 async def _ensure_estate_namespaces(app: FastAPI) -> None:
@@ -82,6 +98,8 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
     ends the task, and the supervisor ends the process with it (`app_wire`). An authorization client missing where
     authorization is on is retried as the outage it may be (`decisions.wired`), never read as off: a namespace made
     with no grant would leave lineage unable to write its feed.
+
+    Only the outages in :data:`_PROVENANCE_TRANSIENT` are retried; any other failure is permanent and ends the task.
 
     Raises:
         InternalError: The lifespan wired no settings, no connections or no authorization client, not even its ``None``.
@@ -98,9 +116,11 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
             await run_in_threadpool(warehouses.ensure_catalog_row, namespace, settings.estate_warehouse)
             await ensure_provenance_namespace(namespace, settings, decisions.wired(settings, client))
             return
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
+        except _PROVENANCE_TRANSIENT as exc:
+            log.warning("provenance_namespace_error", extra={"error": str(exc), "retry_in_seconds": delay})
+        except LanceNamespaceError as exc:
+            if not reads_as_store_outage(exc):
+                raise
             log.warning("provenance_namespace_error", extra={"error": str(exc), "retry_in_seconds": delay})
         await asyncio.sleep(delay)
         delay = min(delay * 2, _PROVENANCE_RETRY_MAX_SECONDS)
@@ -112,10 +132,8 @@ async def _backfill_warehouse_grants(app: FastAPI) -> None:
 
     try:
         seen, written, failures = await backfill(app.state.settings)
-    except asyncio.CancelledError:
-        raise
     except Exception as exc:
-        log.warning("warehouse_grant_backfill_error", extra={"error": str(exc)})
+        log.warning("warehouse_grant_backfill_error", extra={"error": str(exc)}, exc_info=exc)
         return
     if seen:
         log.info("warehouse_grant_backfill_done", extra={"warehouses": seen, "tuples": written, "failures": len(failures)})

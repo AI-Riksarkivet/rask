@@ -267,7 +267,7 @@ def _hand_back(move: _Move, put_back: Callable[[], None] | None) -> None:
     try:
         table_claims.take(move.ns, move.claims, move.source_uri, table=move.source_id, segments=move.segments, previous=move.dest_id, token=move.fenced.token)
     except Exception as exc:
-        log.error("rename_claim_not_handed_back", extra={"source": move.source_id, "location": move.source_uri, "error": str(exc)[:300]})
+        log.error("rename_claim_not_handed_back", extra={"source": move.source_id, "location": move.source_uri, "error": str(exc)[:300]}, exc_info=True)
 
 
 def _register_destination(move: _Move, put_back: Callable[[], None] | None) -> None:
@@ -288,6 +288,7 @@ def _register_destination(move: _Move, put_back: Callable[[], None] | None) -> N
             log.error(
                 "rename_source_pointer_lost",
                 extra={"source": move.source_id, "location": move.location, "error": str(restore)},
+                exc_info=restore,
             )
         else:
             _hand_back(move, put_back)

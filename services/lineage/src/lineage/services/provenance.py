@@ -629,7 +629,9 @@ class ProvenanceStore:
                 self._land(batch[:half])
                 self._land(batch[half:])
                 return
-            log.warning("provenance_record_failed", extra={"events": len(batch), "error": str(exc)})
+            # Not swallowed: the failure is each delivery's answer, raised where it waits (`record`). The writer must
+            # answer every one, or a delivery waits for an answer nothing gives.
+            log.warning("provenance_record_failed", extra={"events": len(batch), "error": str(exc)}, exc_info=exc)
             for recording in batch:
                 _settle(recording, exc)
             return

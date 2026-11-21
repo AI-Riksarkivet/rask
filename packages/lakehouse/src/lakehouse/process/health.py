@@ -110,7 +110,7 @@ class HealthWatch:
                 await dependency.read()
         except Exception as exc:  # whatever the read raised, the dependency did not answer
             if answer.answering is not False:
-                log.warning("dependency_unavailable", extra={"dependency": dependency.name, "error": f"{type(exc).__name__}: {exc}"[:300]})
+                log.warning("dependency_unavailable", extra={"dependency": dependency.name, "error": f"{type(exc).__name__}: {exc}"[:300]}, exc_info=exc)
             answer.answering = False
             return
         if answer.answering is not True:

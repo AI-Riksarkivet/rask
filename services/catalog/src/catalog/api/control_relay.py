@@ -45,6 +45,7 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Any, Final
 
+from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, SkipValidation, ValidationError
@@ -53,12 +54,13 @@ from catalog.api.dependencies import app_wire
 from catalog.api.ticks import Tick
 from catalog.core.config import CatalogControlBusSettings, Settings
 from lakehouse.events import outbox, outbox_metrics
-from lakehouse.events.bus import Bus, publish_event  # noqa: TID251 — the control relay is a registered publish site
+from lakehouse.events.bus import Bus, BusUnavailableError, publish_event  # noqa: TID251 — the control relay is a registered publish site
 from lakehouse.events.cloud_events import CloudEvent, control_envelope
 from lakehouse.events.control_events import CONTROL_TOPIC
 from lakehouse.events.published_keys import PublishedKeys
 from lakehouse.events.signing import KeySourceUnavailableError, SignatureError, SigningKey, VerifiedSignature, control_signature_of, verify_control_signature
 from lakehouse.governed.signing_key import SIGNING_STATE, SigningKeyHolder, published_key_fetch
+from lakehouse.storage.errors import StorageError
 from lakehouse.storage.options import StorageOptions
 
 
@@ -308,9 +310,10 @@ async def _relay_one(key: str, event_json: str, *, lane: _Lane, depth: int) -> _
         # changes it. Left staged, it would stop every pass at itself and hold every event behind it.
         log.warning("control_outbox_undeliverable", extra={"key": bounded(key), "action": _action_of(event_json), "error": bounded(str(exc))})
         return await _delete_poison(key, lane=lane)
-    except Exception as exc:
-        # The bus is still down. Stop the pass rather than grinding the whole backlog against it:
-        # every remaining object stays staged and the next tick retries from the oldest.
+    except (TimeoutError, BusUnavailableError) as exc:
+        # The bus is still down: `publish_event`'s outages, its size refusal answered above. Stop the pass rather than
+        # grinding the whole backlog against it: every remaining object stays staged and the next tick retries from the
+        # oldest. Anything else is a defect, which fails the timer's turn with its traceback and leaves the object staged.
         log.warning("control_outbox_republish_failed", extra={"key": key, "error": str(exc)})
         outbox_metrics.record_publish_failed("control")
         return _Relayed(stop=True)
@@ -321,10 +324,14 @@ async def _relay_one(key: str, event_json: str, *, lane: _Lane, depth: int) -> _
 
 
 async def _delete_staged(key: str, *, lane: _Lane) -> bool:
-    """Delete one staged object and answer whether the store did; one it refuses stays staged and is logged."""
+    """Delete one staged object and answer whether the store did; one it refuses stays staged and is logged.
+
+    A store's failure is caught; anything else is a defect, which fails the timer's turn with its traceback, and the
+    object stays staged for a redelivery the subscribers tolerate.
+    """
     try:
         await run_in_threadpool(outbox.drop_event, lane.settings.control_outbox_uri, lane.options, key)
-    except Exception as exc:
+    except (ClientError, BotoCoreError, OSError, StorageError) as exc:
         log.warning("control_outbox_left_staged", extra={"key": bounded(key), "error": bounded(str(exc))})
         return False
     return True

@@ -239,14 +239,14 @@ def _lance_writes_with_the_vended_session(options: dict[str, str]) -> None:
             "Lance creates (2.2, stable row ids) and appends a dataset with the vended session credential",
             f"rows, version, stable ids: {read}",
         )
-    except Exception as exc:  # the measurement reports whatever Lance answered
+    except Exception as exc:  # noqa: BLE001 — a measurement: each check reports what it answered, and a failed one exits non-zero
         record(False, "Lance creates and appends a dataset with the vended session credential", f"{type(exc).__name__}: {str(exc)[:200]}")
     try:
         lance.write_dataset(
             pa.table({"id": [1]}), "s3://tenant-a/t2/ds.lance", storage_options=options, mode="create", data_storage_version="2.2", enable_stable_row_ids=True
         )
         record(False, "Lance is refused a dataset outside the vended prefix", "the write succeeded")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — a measurement: each check reports what it answered, and a failed one exits non-zero
         record(
             "denied" in str(exc).lower() or "403" in str(exc), "Lance is refused a dataset outside the vended prefix", f"{type(exc).__name__}: {str(exc)[:120]}"
         )
@@ -263,7 +263,7 @@ def _pyarrow_writes_records_with_the_own_pair(options: dict[str, str]) -> None:
         put_record("s3://tenant-a", own, "_protection/x.json", record={"k": "v"})
         back = get_record("s3://tenant-a", own, "_protection/x.json", event="measure")
         record(back == {"k": "v"}, "pyarrow's record-store write (multipart) with the scoped user's own pair, read back", f"read {back}")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — a measurement: each check reports what it answered, and a failed one exits non-zero
         record(False, "pyarrow's record-store write (multipart) with the scoped user's own pair, read back", f"{type(exc).__name__}: {str(exc)[:200]}")
     # pyarrow checks the bucket with HeadBucket before it writes, which RustFS authorizes as an unprefixed
     # s3:ListBucket (`rustfs@1.0.3:rustfs/src/storage/access.rs:2955-2960`), so a prefix-scoped session is refused it:

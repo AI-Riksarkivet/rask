@@ -218,7 +218,7 @@ def _refuse_a_branch_with_branches_inside(opened: _Opened, uri: str) -> DatasetR
     """The ``nested_branch`` refusal for ``uri``, an error when its refs cannot be read, or ``None`` to proceed."""
     try:
         nested = _branches_inside(opened.ds, uri)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — a per-dataset result: the error and its type are the dataset's to report
         failed = opened.result(uri)
         failed.error, failed.error_type = f"refs: {exc}", type(exc).__name__
         return failed
@@ -282,7 +282,7 @@ def _open(target: ExpiryTarget, opener: DatasetOpener | None = None) -> _Opened 
             data_storage_version=ds.data_storage_version,
             mixed=mixes_data_file_versions(reader_flags),
         )
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 — a per-dataset result: a refusal, or the error and its type, for the dataset
         if (refusal := unsupported_features_from_open_error(exc)) is None:
             return DatasetResult(uri=target.uri, error=f"open: {exc}", error_type=type(exc).__name__)
         log.warning("maintenance_refused_unsupported_features", extra={"uri": target.uri, "reason": refusal})

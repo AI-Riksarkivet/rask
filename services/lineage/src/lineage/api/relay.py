@@ -117,7 +117,7 @@ async def _prune_old_events(provenance: ProvenanceStore, settings: LineageSettin
         delivered = await provenance.cursor(follower(settings, await provenance.feed_incarnation())) if settings.forward_url else None
         pruned = await provenance.prune_events(settings.events_retention_days, delivered_through=delivered)
     except Exception as exc:
-        log.warning("lineage_event_prune_failed", extra={"error": str(exc)})
+        log.warning("lineage_event_prune_failed", extra={"error": str(exc)}, exc_info=exc)
         return 0
     if pruned:
         log.info("lineage_events_pruned", extra={"pruned": pruned, "retention_days": settings.events_retention_days})
@@ -185,19 +185,19 @@ async def tick(app: FastAPI, settings: LineageSettings) -> RelayReport:
             report.outbox_refusals_recorded = outcome.recorded
         except Exception as exc:
             report.failed.append("outbox")
-            log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)})
+            log.warning("lineage_outbox_drain_failed", extra={"error": str(exc)}, exc_info=exc)
     try:
         report.parks_retired = await provenance.retire_recovered_parks()
     except Exception as exc:
         report.failed.append("parks")
-        log.warning("lineage_parks_retire_failed", extra={"error": str(exc)})
+        log.warning("lineage_parks_retire_failed", extra={"error": str(exc)}, exc_info=exc)
     if settings.forward_url and client is not None:
         try:
             forwarded = await forward(provenance, settings, client)
             report.forwarded, report.forward_refused, report.forward_stalled = forwarded.forwarded, forwarded.refused, forwarded.stalled
         except Exception as exc:
             report.forward_stalled = f"{type(exc).__name__}: {exc}"
-            log.warning("lineage_forward_failed", extra={"error": str(exc)})
+            log.warning("lineage_forward_failed", extra={"error": str(exc)}, exc_info=exc)
     # AFTER THE FORWARD, so a row this tick delivered past its retention goes in this tick rather than the next.
     report.pruned_events = await _prune_old_events(provenance, settings)
     log.info("lineage_relay_tick", extra=report.model_dump())
@@ -255,7 +255,7 @@ async def _drain_outbox(
         except Exception as exc:
             # LEFT STAGED on purpose — see "STRANDED IS NOT POISON" above.
             stranded += 1
-            log.warning("lineage_outbox_event_stranded", extra={"outbox_key": key, "run_id": event.run_id, "error": str(exc)})
+            log.warning("lineage_outbox_event_stranded", extra={"outbox_key": key, "run_id": event.run_id, "error": str(exc)}, exc_info=exc)
             continue
         drained += 1
     _record_drained_counts(drained, stranded, refused)
@@ -288,7 +288,9 @@ async def _drop_poison(settings: LineageSettings, opts: StorageOptions, *, key: 
     # is needed.
     poison_author: str | None = None
     poison_run: str | None = None
-    with suppress(Exception):
+    # What the poison text itself can raise, and nothing else: not JSON or nested past the parser (``ValueError``,
+    # ``RecursionError``), or a value that is no object where one is read (``AttributeError``).
+    with suppress(ValueError, RecursionError, AttributeError):
         payload = json.loads(event_json).get("data") or {}
         poison_author = author_sub_from_payload(payload)
         poison_run = str((payload.get("run") or {}).get("runId") or "") or None
@@ -299,7 +301,7 @@ async def _drop_poison(settings: LineageSettings, opts: StorageOptions, *, key: 
     try:
         await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
     except Exception as undropped:
-        log.warning("lineage_outbox_poison_left_staged", extra={"outbox_key": key, "error": str(undropped)})
+        log.warning("lineage_outbox_poison_left_staged", extra={"outbox_key": key, "error": str(undropped)}, exc_info=undropped)
 
 
 async def _record_republish_and_drop(
@@ -355,5 +357,6 @@ async def _keep_refusal_and_drop(
         log.warning(
             "lineage_outbox_refusal_left_staged",
             extra={"outbox_key": key, "run_id": event.run_id, "recorded": landed, "error": str(unretired)},
+            exc_info=unretired,
         )
     return landed

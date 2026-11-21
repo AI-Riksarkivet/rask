@@ -85,7 +85,7 @@ def _flush_providers(deadline: float) -> None:
             continue
         try:
             force_flush(timeout_millis=int(left * 1000))
-        except Exception:  # noqa: S112 — a failed flush cannot stop a process from ending
+        except Exception:  # noqa: BLE001, S112 — a failed flush cannot stop a process from ending, and has nowhere to be logged
             continue
 
 

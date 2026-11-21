@@ -88,7 +88,7 @@ def read_version_and_schema(
         # `services/maintenance` holds no catalog client by design.
         uri = str(getattr(dataset, "uri", "") or "") or None
     except Exception as exc:
-        log.warning("lineage_readback_failed", extra={"table": table_id, "error": str(exc)})
+        log.warning("lineage_readback_failed", extra={"table": table_id, "error": str(exc)}, exc_info=exc)
         return CommitReadback(version=pin_version, schema_fields=[], uri=None)
     if pin_version is None:
         return CommitReadback(version=None, schema_fields=[], uri=uri)
@@ -96,7 +96,7 @@ def read_version_and_schema(
     try:
         return CommitReadback(version=pin_version, schema_fields=facet_fields(dataset.schema), uri=uri, committed_at=when)
     except Exception as exc:
-        log.warning("schema_facet_read_failed", extra={"table": table_id, "error": str(exc)})
+        log.warning("schema_facet_read_failed", extra={"table": table_id, "error": str(exc)}, exc_info=exc)
         return CommitReadback(version=pin_version, schema_fields=[], uri=uri, committed_at=when)
 
 
@@ -105,7 +105,7 @@ def commit_time(dataset: lance.LanceDataset) -> str | None:
     try:
         when = manifest_bytes.commit_time(dataset._ds.serialized_manifest())  # noqa: SLF001 — pylance exposes the manifest only here
     except Exception as exc:
-        log.warning("commit_time_unread", extra={"uri": str(getattr(dataset, "uri", "")), "error": str(exc)})
+        log.warning("commit_time_unread", extra={"uri": str(getattr(dataset, "uri", "")), "error": str(exc)}, exc_info=exc)
         return None
     return when.isoformat() if when is not None else None
 
@@ -186,7 +186,7 @@ def branch_identifier(location: str, so: StorageOptions, table_id: list[str], *,
     try:
         entry = open_resolved_dataset_unchecked(location, so, table_id).branches.list().get(name)
     except Exception as exc:
-        log.warning("branch_identifier_unreadable", extra={"table": table_id, "branch": name, "error": str(exc)})
+        log.warning("branch_identifier_unreadable", extra={"table": table_id, "branch": name, "error": str(exc)}, exc_info=exc)
         return None
     return identifier_of(entry)
 
@@ -233,7 +233,7 @@ def payload_schema_fields(schema: pa.Schema, table_id: list[str]) -> SchemaField
     try:
         return facet_fields(schema)
     except Exception as exc:
-        log.warning("schema_facet_parse_failed", extra={"table": table_id, "error": str(exc)})
+        log.warning("schema_facet_parse_failed", extra={"table": table_id, "error": str(exc)}, exc_info=exc)
         return []
 
 
@@ -344,7 +344,11 @@ def table_history(table: table_claims.DoorTable, so: StorageOptions, limit: int 
         except Exception as exc:
             # Versions written before transaction files, or a GC'd txn, still belong in the log. Reporting
             # the version with a null operation is honest; dropping it would make the history lie by omission.
-            log.info("txn_unreadable", extra={"table": table.segments, "version": version, "error": str(exc)})
+            # ONE VERSION, NOT THE DOOR: whatever kept this version's transaction from being read or converted (an
+            # ``OSError`` for a manifest gone, truncated or not one, measured on pylance 14.0.3; a namespace error for
+            # a store an open connection lost; an operation this binding cannot convert), the version is listed with
+            # a null operation and the failure logged with its traceback.
+            log.info("txn_unreadable", extra={"table": table.segments, "version": version, "error": str(exc)}, exc_info=exc)
             out.append(row)
             continue
         op = getattr(txn, "operation", None)

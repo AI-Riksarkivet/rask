@@ -441,10 +441,11 @@ class Bus:
             return await _open(self._settings, session, said=self._said)
         except (NatsError, OSError) as exc:
             self._report(f"{type(exc).__name__}: {exc}"[:300])
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — the reconnect loop must outlive any connect fault; no exc_info, as the text and trace may hold the token
             # Whatever kept this attempt from a connection, the next attempt is the only way to one, and the loop this
             # runs on must outlive it: a loop that ended would end the process over a bus the service is built to do
-            # without. Its type alone is said, since such a fault's text is not known to leave the token out.
+            # without. Its type alone is said, and no traceback, since such a fault's text and frames are not known to
+            # leave the token out.
             self._report(type(exc).__name__)
         return None
 

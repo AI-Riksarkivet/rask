@@ -130,7 +130,7 @@ def main() -> int:
         try:
             before, after = compact(args.catalog_url.rstrip("/"), headers, due)
         # Any exception: one table's refusal or outage must not stop the rest of the run, which reports it.
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — one table's failure is printed with its type, and the run exits 1
             failed += 1
             print(f"  FAILED    {due.table}: {type(exc).__name__}: {str(exc)[:300]}")
             continue

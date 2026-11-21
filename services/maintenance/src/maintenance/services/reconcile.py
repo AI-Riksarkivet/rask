@@ -323,7 +323,7 @@ async def _read_async[T](source: str, awaitable: Awaitable[T]) -> tuple[T | None
     try:
         return (await awaitable), None
     except Exception as exc:
-        log.warning("reconcile_source_unavailable", extra={"source": source, "error": str(exc)})
+        log.warning("reconcile_source_unavailable", extra={"source": source, "error": str(exc)}, exc_info=exc)
         return None, _reason(source, exc)
 
 
@@ -369,6 +369,9 @@ def _list_json_records(
             with fs.open_input_stream(info.path) as stream:
                 record = json.loads(stream.readall().decode("utf-8"))
         except Exception as exc:
+            # ONE RECORD, NOT THE SOURCE: whatever kept this record from being read, it is reported as skipped and the
+            # rest are read, so the listing names what it could not see rather than seeing nothing.
+            log.warning("reconcile_record_unreadable", extra={"record": info.path}, exc_info=exc)
             skipped.append(f"{info.path} is unreadable ({type(exc).__name__}: {exc})")
             continue
         if not isinstance(record, dict):
@@ -1206,6 +1209,8 @@ def _walk_storage(report: ReconcileReport, settings: MaintenanceStore, sources: 
         try:
             found = discover_datasets(fs, bucket, max_depth=settings.discovery_max_depth)
         except Exception as exc:
+            # One bucket's walk, never the others': it is reported incomplete, which holds the purge.
+            log.warning("reconcile_bucket_discovery_failed", extra={"bucket": bucket}, exc_info=exc)
             report.incomplete.append(IncompleteScan(source=f"storage:{bucket}", reason=f"dataset discovery failed: {exc}"))
             continue
         walked_buckets.append(bucket)

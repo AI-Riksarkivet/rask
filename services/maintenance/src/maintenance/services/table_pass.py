@@ -201,7 +201,7 @@ def _probe_before_vending(
             reclaimable_versions=counted,
         )
     except Exception as exc:
-        log.debug("maintenance_write_probe_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"})
+        log.warning("maintenance_write_probe_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"}, exc_info=exc)
         return WriteProbe(may_write=True, armed=True, mixed_data_file_versions=mixes_data_file_versions(flags_from_open_error(exc) or 0))
 
 

@@ -646,7 +646,7 @@ def gather_compaction_bases(ds: FragmentCarrier, probe: DatasetRootProbe) -> Com
         denied = False
         try:
             probed: bool | None = probe(ref.path)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — unknown is the refusal; _log_probe_failure logs it, with exc_info unless a denial
             denied = _log_probe_failure(ref.path, exc)
             probed = None
         bases.append(BaseEvidence(path=ref.path, declares_dataset_root=ref.is_dataset_root, probed_dataset_root=probed, probe_denied=denied))
