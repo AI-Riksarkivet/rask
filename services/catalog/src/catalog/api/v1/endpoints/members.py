@@ -29,8 +29,7 @@ from lance_namespace import ServiceUnavailableError
 from catalog.api import announcing
 from catalog.api.announcing import AnnouncerDep
 from catalog.api.authz import decisions, door_gates, grant_authority
-from catalog.api.dependencies import FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken
+from catalog.api.authz.context import AuthzContextDep
 from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from catalog.services import project_admins
 from lakehouse.governed import fga_ids, fga_reads, fga_writes
@@ -83,15 +82,15 @@ def _client_or_conflict(client: OpenFgaClient | None, settings: FgaSettings) -> 
 
 
 @management_router.get("/{project_id}/members")
-async def list_members(*, project_id: ProjectId, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> MemberList:
+async def list_members(*, project_id: ProjectId, context: AuthzContextDep) -> MemberList:
     """Who holds which rung directly on this tenant — gated on ``can_read_assignments``.
 
     DIRECT grants only. A person who holds a rung through a role is not listed: the role is, and it is revoked
     here; who is in it is the role's assignees door.
     """
     obj = f"project:{project_id}"
-    await door_gates.require_relation(client, settings, token, relation="can_read_assignments", obj=obj)
-    if (client := decisions.wired(settings, client)) is None:
+    await door_gates.require_relation(context, relation="can_read_assignments", obj=obj)
+    if (client := decisions.wired(context.settings, context.client)) is None:
         # Authz off (local dev): there are no tuples, and an empty list is the honest answer. Inventing
         # names here would put people in front of someone who never granted them.
         return MemberList(members=[])
@@ -101,7 +100,11 @@ async def list_members(*, project_id: ProjectId, client: FgaClientDep, settings:
 
 @management_router.put("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def grant_member(
-    *, project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
+    *,
+    project_id: ProjectId,
+    payload: GrantRequest,
+    context: AuthzContextDep,
+    announcer: AnnouncerDep,
 ) -> MemberList:
     """Grant one tenant rung to one subject — gated PER RUNG (``can_grant_admin`` / ``can_grant_member``).
 
@@ -121,11 +124,11 @@ async def grant_member(
         ConcurrentModificationError: The project's administration changed under both of an ``admin`` grant's reads.
     """
     obj = f"project:{project_id}"
-    await door_gates.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
-    wired = _client_or_conflict(client, settings)
+    await door_gates.require_relation(context, relation=f"can_grant_{payload.relation}", obj=obj)
+    wired = _client_or_conflict(context.client, context.settings)
     user = _user_string(payload.user)
-    actor = token.subject if token else "system:catalog"
-    await grant_authority.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=settings)
+    actor = context.token.subject if context.token else "system:catalog"
+    await grant_authority.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=context.settings)
 
     existing = await fga_reads.read_object_tuples(wired, obj)
     tup = fga_writes.ClientTuple(user=user, relation=payload.relation, object=obj)
@@ -135,7 +138,7 @@ async def grant_member(
     # TELL THE PERSON, filed before the write so a door failing after it still does ([[LH-576]]). Only a grant that
     # changes the store is announced: a re-grant is a no-op there, and an announcement of an unchanged state would put a
     # row in someone's inbox for something that did not happen.
-    told = announcing.grant_announcement(tup, action="grant_added", actor=f"user:{token.subject}" if token else None)
+    told = announcing.grant_announcement(tup, action="grant_added", actor=f"user:{context.token.subject}" if context.token else None)
     async with announcer.announcing(door="member_grant", target=obj, announcements=[told]) as filing:
         if payload.relation in ADMINISTRATIVE:
             if not await project_admins.confer(wired, tup, actor=actor, origin="grant_api"):
@@ -150,7 +153,11 @@ async def grant_member(
 
 @management_router.delete("/{project_id}/members", status_code=status.HTTP_200_OK)
 async def revoke_member(
-    *, project_id: ProjectId, payload: GrantRequest, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
+    *,
+    project_id: ProjectId,
+    payload: GrantRequest,
+    context: AuthzContextDep,
+    announcer: AnnouncerDep,
 ) -> MemberList:
     """Revoke one tenant rung — gated identically to granting it.
 
@@ -163,10 +170,10 @@ async def revoke_member(
     state already holds.
     """
     obj = f"project:{project_id}"
-    await door_gates.require_relation(client, settings, token, relation=f"can_grant_{payload.relation}", obj=obj)
-    wired = _client_or_conflict(client, settings)
+    await door_gates.require_relation(context, relation=f"can_grant_{payload.relation}", obj=obj)
+    wired = _client_or_conflict(context.client, context.settings)
     user = _user_string(payload.user)
-    actor = token.subject if token else "system:catalog"
+    actor = context.token.subject if context.token else "system:catalog"
 
     tup = fga_writes.ClientTuple(user=user, relation=payload.relation, object=obj)
     if payload.relation not in ADMINISTRATIVE:
@@ -178,7 +185,7 @@ async def revoke_member(
     # why being NAMED is the targeting. Unannounced, losing tenant access is discovered as a 403 in the
     # middle of work, the failure this lane exists to end; so it is filed before the revoke, and a door that
     # fails after the revoke still tells them ([[LH-576]]). A no-op revoke announces nothing.
-    told = announcing.grant_announcement(tup, action="grant_revoked", actor=f"user:{token.subject}" if token else None)
+    told = announcing.grant_announcement(tup, action="grant_revoked", actor=f"user:{context.token.subject}" if context.token else None)
     async with announcer.announcing(door="member_revoke", target=obj, announcements=[told]) as filing:
         if payload.relation in ADMINISTRATIVE:
             if not await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api"):

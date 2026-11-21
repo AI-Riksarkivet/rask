@@ -32,6 +32,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api import read_actions
 from catalog.api.authz import door_gates, grant_authority, route_guard, rungs
+from catalog.api.authz.context import AuthzContext
 from catalog.api.dependencies import Resolver
 from catalog.core import write_judge
 from catalog.core.config import Settings
@@ -190,7 +191,10 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
         pairs.add(("table", rungs.rename_relation(["acme-wh", "db1", "child"], destination)))
         asyncio.run(
             door_gates.require_rename_destination(
-                _CLIENT, settings, token, resolver=NamedResolver(), source=["acme-wh", "db1", "child"], destination=destination
+                AuthzContext(client=_CLIENT, settings=settings, token=token),
+                resolver=NamedResolver(),
+                source=["acme-wh", "db1", "child"],
+                destination=destination,
             )
         )
 
@@ -363,7 +367,7 @@ def test_grant_routes_are_intercepted_before_the_resolver(monkeypatch: pytest.Mo
     for fga_type in sorted(revoked):
         for rung in _grantable_relations(fga_type):
             request = cast("Request", _FakeRequest({"user": "dex~bob", "relation": rung}))
-            asyncio.run(grant_authority.authorize_grant(request, _CLIENT, NamedResolver(), user="dex~alice", fga_type=fga_type, segments=["x"], revoking=True))
+            asyncio.run(grant_authority.authorize_revoke(request, _CLIENT, NamedResolver(), user="dex~alice", fga_type=fga_type, segments=["x"]))
     model = _model_relations()
     undefined = sorted(f"{t}#{r}" for t, r in checked if r not in model[t])
     assert not undefined, f"the revoke gate checks {undefined}, which the model does not define: OpenFGA refuses each, and every revoke there answers 503"

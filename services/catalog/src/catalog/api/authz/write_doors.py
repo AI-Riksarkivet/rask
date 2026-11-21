@@ -20,7 +20,8 @@ from lance_namespace import (
 )
 from openfga_sdk import OpenFgaClient
 
-from catalog.api.authz.decisions import answered, authorization, require_rung, require_wired
+from catalog.api.authz.context import AuthzContext
+from catalog.api.authz.decisions import authorization, check_recording_outage, require_rung, require_wired
 from catalog.api.authz.objects import addressed_object, rung_label, rung_on
 from catalog.api.authz.request_reads import json_body_or_none, rename_landing
 from catalog.api.authz.rungs import (
@@ -42,14 +43,11 @@ from catalog.api.authz.rungs import (
 )
 from catalog.api.dependencies import Resolver, namespace_for_warehouse
 from catalog.api.route_path import route_path
-from catalog.api.security import Caller
 from catalog.core import run_context, vending, write_judge
-from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services import object_uuids
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import PLATFORM_PREFIX
 
 
@@ -79,10 +77,14 @@ def _classifies_only(body: object) -> bool:
     for update in updates:
         if not isinstance(update, dict) or update.get("replace"):
             return False
-        metadata = update.get("metadata")
-        if not isinstance(metadata, dict) or not metadata or not all(isinstance(key, str) and key.startswith(PLATFORM_PREFIX) for key in metadata):
+        if not _names_only_governance_keys(update.get("metadata")):
             return False
     return True
+
+
+def _names_only_governance_keys(metadata: object) -> bool:
+    """Whether ``metadata`` is a map naming at least one key, every one of them a governance key (``rask.*``)."""
+    return isinstance(metadata, dict) and bool(metadata) and all(isinstance(key, str) and key.startswith(PLATFORM_PREFIX) for key in metadata)
 
 
 async def write_door(request: Request) -> write_judge.Write | None:
@@ -138,9 +140,7 @@ async def write_door(request: Request) -> write_judge.Write | None:
     )
 
 
-async def require_declared_inputs(
-    run: run_context.RunContext, settings: FgaSettings, token: Caller | None, *, injected: OpenFgaClient | None, resolver: Resolver
-) -> dict[str, run_context.RunInput]:
+async def require_declared_inputs(run: run_context.RunContext, context: AuthzContext, *, resolver: Resolver) -> dict[str, run_context.RunInput]:
     """Each input ``run`` declares, by the uuid of the table it names now, once each names a table the committer may read
     (ADR 0183 §2).
 
@@ -153,7 +153,7 @@ async def require_declared_inputs(
         InvalidInputError: An input names no table, or one the committer may not read.
         UnauthenticatedError: FGA is on and nobody is signed in.
     """
-    check = _rung_check(settings, token, injected, resolver=resolver)
+    check = _rung_check(context, resolver=resolver)
     if check is not None:
         for entry in run.inputs:
             try:
@@ -193,14 +193,14 @@ def _unreadable_input(entry: run_context.RunInput) -> InvalidInputError:
     )
 
 
-def _rung_check(settings: FgaSettings, token: Caller | None, injected: OpenFgaClient | None, *, resolver: Resolver) -> write_judge.RungCheck | None:
+def _rung_check(context: AuthzContext, *, resolver: Resolver) -> write_judge.RungCheck | None:
     """The write judge's rung check, asked through :func:`require_rung`; ``None`` with FGA off, when every rung allows.
 
     Raises:
         ServiceUnavailableError: FGA is on and unwired.
         UnauthenticatedError: FGA is on and nobody is signed in.
     """
-    if (authz := authorization(settings, injected, token)) is None:
+    if (authz := authorization(context)) is None:
         return None
 
     async def check(rung: write_judge.Rung) -> None:
@@ -211,7 +211,7 @@ def _rung_check(settings: FgaSettings, token: Caller | None, injected: OpenFgaCl
             # deregister is a judged write door, so this is the one place that door's rung is asked.
             if rung.relation != UNIDENTIFIED_TABLE_RUNG:
                 raise
-            await _require_estate_admin_for_unidentified(authz.client, user=authz.subject, root=settings.fga_root_object, rung=rung)
+            await _require_estate_admin_for_unidentified(authz.client, user=authz.subject, root=context.settings.fga_root_object, rung=rung)
 
     return check
 
@@ -225,7 +225,7 @@ async def _require_estate_admin_for_unidentified(client: OpenFgaClient, *, user:
     caller that the name holds a table.
     """
     label = rung_label(rung)
-    allowed = await answered(client, user=user, relation=UNIDENTIFIED_TABLE_ESTATE_VERB, obj=root, resource=label, decided_on=root)
+    allowed = await check_recording_outage(client, user=user, relation=UNIDENTIFIED_TABLE_ESTATE_VERB, obj=root, resource=label, decided_on=root)
     audit(
         AuditAction.AUTHZ,
         AuditOutcome.ALLOW if allowed else AuditOutcome.DENY,
@@ -240,28 +240,24 @@ async def _require_estate_admin_for_unidentified(client: OpenFgaClient, *, user:
         raise PermissionDeniedError(f"{rung.relation} required on {label}")
 
 
-async def judge_write(
-    request: Request, *, settings: Settings, token: Caller | None, injected: OpenFgaClient | None, resolver: Resolver, write: write_judge.Write
-) -> None:
+async def judge_write(request: Request, *, context: AuthzContext, resolver: Resolver, write: write_judge.Write) -> None:
     """Hand ``write`` to the write judge, with the rung asked through :func:`require_rung` when FGA is on."""
-    check = _rung_check(settings, token, injected, resolver=resolver)
+    check = _rung_check(context, resolver=resolver)
 
     async def namespace(warehouse_id: str) -> LanceNamespace:
-        return await namespace_for_warehouse(request, settings, warehouse_id)
+        return await namespace_for_warehouse(request, context.settings, warehouse_id)
 
     await write_judge.judge(
         write,
-        caller=token.subject if token is not None else None,
+        caller=context.token.subject if context.token is not None else None,
         check=check,
-        inputs=partial(require_declared_inputs, settings=settings, token=token, injected=injected, resolver=resolver),
+        inputs=partial(require_declared_inputs, context=context, resolver=resolver),
         namespace=namespace,
     )
 
 
 async def judge_staged_run(
-    settings: FgaSettings,
-    token: Caller | None,
-    injected: OpenFgaClient | None,
+    context: AuthzContext,
     *,
     resolver: Resolver,
     ns: LanceNamespace,
@@ -284,12 +280,12 @@ async def judge_staged_run(
     declared: dict[str, run_context.RunInput] = {}
 
     async def inputs(named: run_context.RunContext) -> None:
-        declared.update(await require_declared_inputs(named, settings, token, injected=injected, resolver=resolver))
+        declared.update(await require_declared_inputs(named, context, resolver=resolver))
 
     # The stock client's door asks the rule directly, so its decision is audited here as the catalog's own doors' is in
     # `write_judge.judge`: every decision under the run rule leaves a record, whichever door took the write.
     judged = {
-        "subject": token.subject if token is not None else None,
+        "subject": context.token.subject if context.token is not None else None,
         "resource": f"table:{fga_ids.canonical_object_id(list(segments))}",
         "op": "version_create",
         "requires_run": str(required).lower(),
@@ -306,21 +302,19 @@ async def judge_staged_run(
 async def _granted_vend_tier(client: OpenFgaClient, subject: str, obj: str) -> Literal["read", "write"] | None:
     """The tier ``subject``'s rungs on ``obj`` open at a spec door, each rung that decided it audited ALLOW."""
     writing = VEND_TIER_RUNGS["write"]
-    if await answered(client, user=subject, relation=writing, obj=obj):
+    if await check_recording_outage(client, user=subject, relation=writing, obj=obj):
         audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=writing, subject=subject, resource=obj)
         return "write"
-    if not await answered(client, user=subject, relation="can_read_data", obj=obj):
+    if not await check_recording_outage(client, user=subject, relation="can_read_data", obj=obj):
         return None
     audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation="can_read_data", subject=subject, resource=obj)
-    if not await answered(client, user=subject, relation="can_maintain", obj=obj):
+    if not await check_recording_outage(client, user=subject, relation="can_maintain", obj=obj):
         return "read"
     audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation="can_maintain", subject=subject, resource=obj)
     return "write"
 
 
-async def spec_vend_tier(
-    settings: Settings, token: Caller | None, injected: OpenFgaClient | None, *, ns: LanceNamespace, segments: Sequence[str], table_uuid: str, door: str
-) -> Literal["read", "write"] | None:
+async def spec_vend_tier(context: AuthzContext, *, ns: LanceNamespace, segments: Sequence[str], table_uuid: str, door: str) -> Literal["read", "write"] | None:
     """The highest tier a spec door (``describe``, ``declare``) vends the caller on table ``segments`` (ADR 0156 C3).
 
     ``table_uuid`` is the uuid the door resolved the name to (or minted, for a declare), whose object the grants are
@@ -336,7 +330,7 @@ async def spec_vend_tier(
     opens the read tier: the window refuses every write at the catalog's doors, and a write-tier credential would write
     storage straight past them.
 
-    The rungs are probed through :func:`answered`, which writes no DENY: a reader's describe asking whether it may also
+    The rungs are probed through :func:`check_recording_outage`, which writes no DENY: a reader's describe asking whether it may also
     write is not an access attempt. An outage is recorded, as at every gate. The rung that decides the tier is audited ALLOW, as every authorization
     decision is; whether a credential is then minted is the door's ``vend_credentials`` record. With FGA off
     every rung allows, so the write tier is vended, as the management door vends it.
@@ -346,21 +340,21 @@ async def spec_vend_tier(
         UnauthenticatedError: FGA is on and nobody is signed in.
     """
     obj = fga_ids.table_object(table_uuid)
-    if settings.fga_enabled:
-        client = require_wired(injected)
-        if token is None:
+    if context.settings.fga_enabled:
+        client = require_wired(context.client)
+        if context.token is None:
             raise UnauthenticatedError("authentication required")
-        granted = await _granted_vend_tier(client, token.subject, obj)
+        granted = await _granted_vend_tier(client, context.token.subject, obj)
         if granted != "write":
             return granted
-    if settings.maintenance_read_only:
+    if context.settings.maintenance_read_only:
         return "read"
 
     async def namespace(_warehouse_id: str) -> LanceNamespace:
         return ns
 
     write = write_judge.Write(op=door, obj=addressed_object("table", list(segments)), rung=None, table=tuple(segments))
-    await write_judge.judge(write, caller=token.subject if token is not None else None, check=None, inputs=_names_no_run, namespace=namespace)
+    await write_judge.judge(write, caller=context.token.subject if context.token is not None else None, check=None, inputs=_names_no_run, namespace=namespace)
     return "write"
 
 

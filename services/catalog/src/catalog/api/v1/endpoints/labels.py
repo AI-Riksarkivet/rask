@@ -35,7 +35,8 @@ from lance_namespace import (
 )
 
 from catalog.api.authz import decisions, door_gates, hierarchy, objects, visible_pages
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, ResolvedTableDep, Resolver, ResolverDep, SettingsDep
+from catalog.api.authz.context import AuthzContextDep
+from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, ResolvedTableDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
@@ -267,23 +268,23 @@ async def _registered(settings: CatalogStore, project: str) -> str:
     return project
 
 
-async def _readable_project(id: str, settings: Settings, token: Caller | None, *, client: FgaClientDep) -> str:
+async def _readable_project(id: str, context: AuthzContextDep) -> str:
     """``id``, for a caller its project list shows the project to: a member, or the estate admin. Anyone else, and a
     project the registry does not hold, is answered the missing project's 404 ([[LH-587]])."""
     project = _project(id)
-    doors = [("can_list_all_projects", settings.fga_root_object), ("member", f"project:{project}")]
+    doors = [("can_list_all_projects", context.settings.fga_root_object), ("member", f"project:{project}")]
     try:
-        await door_gates.require_any_relation(client, settings, token, doors=doors)
+        await door_gates.require_any_relation(context, doors=doors)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project}") from exc
-    return await _registered(settings, project)
+    return await _registered(context.settings, project)
 
 
-async def _administered_project(id: str, settings: Settings, token: Caller | None, *, client: FgaClientDep) -> str:
+async def _administered_project(id: str, context: AuthzContextDep) -> str:
     """``id``, for its project's admin; a project the registry does not hold is not found, after the gate."""
     project = _project(id)
-    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    return await _registered(settings, project)
+    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
+    return await _registered(context.settings, project)
 
 
 async def _standing(settings: CatalogStore, found: Sequence[Attachment]) -> list[tuple[Attachment, str]]:
@@ -307,20 +308,18 @@ async def _standing(settings: CatalogStore, found: Sequence[Attachment]) -> list
 
 
 @projects_router.get("/{id}/labels", response_model_exclude_none=True)
-async def list_label_definitions(*, id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[LabelDefinition]:
+async def list_label_definitions(*, id: str, context: AuthzContextDep) -> list[LabelDefinition]:
     """Every label the project defines, by name, for a member of it or the estate admin."""
-    project = await _readable_project(id, settings, token, client=client)
-    return await run_in_threadpool(object_labels.definitions, settings.registry_root, settings.storage_options(), project)
+    project = await _readable_project(id, context)
+    return await run_in_threadpool(object_labels.definitions, context.settings.registry_root, context.settings.storage_options(), project)
 
 
 @projects_router.post("/{id}/labels/define", response_model_exclude_none=True)
-async def define_label(
-    *, id: str, body: LabelDefinitionRequest, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, control: ControlEmitterDep
-) -> LabelDefinition:
+async def define_label(*, id: str, body: LabelDefinitionRequest, context: AuthzContextDep, control: ControlEmitterDep) -> LabelDefinition:
     """Define a label, or evolve the definition its name holds: its scope and allowed values only grow and its kind
     never changes, so every label already attached stays valid. A definition applied again as it stands announces
     nothing. The project's admin's act."""
-    project = await _administered_project(id, settings, token, client=client)
+    project = await _administered_project(id, context)
     asked = object_labels.proposed(
         project=project,
         name=body.name,
@@ -328,10 +327,10 @@ async def define_label(
         scope=body.scope,
         kind=body.kind,
         allowed_values=body.allowed_values,
-        actor=_actor(token),
+        actor=_actor(context.token),
     )
     try:
-        defined, changed = await run_in_threadpool(object_labels.define, settings.registry_root, settings.storage_options(), asked)
+        defined, changed = await run_in_threadpool(object_labels.define, context.settings.registry_root, context.settings.storage_options(), asked)
     except conditional_records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"label {asked.name!r} kept changing; define it again") from exc
     if not changed:
@@ -341,25 +340,23 @@ async def define_label(
         action="label_defined",
         object_type="label",
         object_id=object_labels.label_object(defined.uuid),
-        actor=_actor(token),
+        actor=_actor(context.token),
         extra={"project": project, "name": defined.name},
     )
     return defined
 
 
 @projects_router.post("/{id}/labels/{name}/delete", response_model_exclude_none=True)
-async def delete_label_definition(
-    *, id: str, name: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, control: ControlEmitterDep
-) -> LabelDefinition:
+async def delete_label_definition(*, id: str, name: str, context: AuthzContextDep, control: ControlEmitterDep) -> LabelDefinition:
     """Delete a label the project defines, once no standing object of the project carries it (409 otherwise, naming
     each as it is named now). An object in the trash does not hold the definition: restored after the delete, it shows
     no such label. The project's admin's act."""
-    project = await _administered_project(id, settings, token, client=client)
-    root, so = settings.registry_root, settings.storage_options()
+    project = await _administered_project(id, context)
+    root, so = context.settings.registry_root, context.settings.storage_options()
     deleted = await run_in_threadpool(object_labels.definition, root, so, project, name=object_labels.require_name(name))
     if deleted is None:
         raise TableNotFoundError(f"label not found: {name}")
-    carried = sorted(named for _, named in await _standing(settings, await run_in_threadpool(object_labels.carriers, root, so, deleted)))
+    carried = sorted(named for _, named in await _standing(context.settings, await run_in_threadpool(object_labels.carriers, root, so, deleted)))
     if carried:
         raise NamespaceNotEmptyError(f"label {name!r} is attached to {len(carried)} object(s) ({', '.join(carried[:5])}); remove it from each first")
     await run_in_threadpool(object_labels.delete_definition, root, so, deleted)
@@ -368,7 +365,7 @@ async def delete_label_definition(
         action="label_deleted",
         object_type="label",
         object_id=object_labels.label_object(deleted.uuid),
-        actor=_actor(token),
+        actor=_actor(context.token),
         extra={"project": project, "name": deleted.name},
     )
     return deleted
@@ -378,9 +375,7 @@ async def delete_label_definition(
 async def list_labelled_objects(
     *,
     id: str,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     label: Annotated[str | None, Query(description="Only the objects carrying this label.")] = None,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     page_token: Annotated[str | None, Query(description="Continue after this object (the previous page's `page_token`).")] = None,
@@ -388,12 +383,12 @@ async def list_labelled_objects(
     """The project's labelled tables and namespaces the caller may see (``can_get_metadata`` on each, judged on its
     uuid), each named as it is named now, with the labels whose definition stands. An object that is gone or in the
     trash is listed to nobody. Paged in the order of the objects' kinds and uuids."""
-    project = await _readable_project(id, settings, token, client=client)
-    so = settings.storage_options()
-    defined = await _defined(settings, project)
-    found = await run_in_threadpool(object_labels.attachments, settings.registry_root, so, project=project)
+    project = await _readable_project(id, context)
+    so = context.settings.storage_options()
+    defined = await _defined(context.settings, project)
+    found = await run_in_threadpool(object_labels.attachments, context.settings.registry_root, so, project=project)
     candidates: list[tuple[str, ObjectLabelsResponse]] = []
-    for attachment, name in await _standing(settings, found):
+    for attachment, name in await _standing(context.settings, found):
         shown = object_labels.labels_shown(attachment, defined)
         if not shown or (label is not None and label not in shown):
             continue
@@ -404,7 +399,7 @@ async def list_labelled_objects(
         return [_object(item.kind, item.uuid) for item in batch]
 
     page, next_token = await visible_pages.judged_page(
-        decisions.authorization(settings, client, token),
+        decisions.authorization(context),
         relation="can_get_metadata",
         candidates=candidates,
         objects_of=judged_on,

@@ -1,5 +1,4 @@
-"""The hierarchy's shape and existence guards, which ask no FGA question: a parent that exists, the depth ceiling,
-protection, the namespace still being the one identified, a project that exists, a rename staying in its warehouse."""
+"""The hierarchy's shape and existence guards, which ask no FGA question."""
 
 from __future__ import annotations
 

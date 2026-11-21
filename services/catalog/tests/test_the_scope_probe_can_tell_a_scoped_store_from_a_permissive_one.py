@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 from pydantic import SecretStr
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import warehouses as endpoint
 from catalog.core.vending import ReclaimScope, TableRecords, VendedSession
 from catalog.services.vend_probe import CAS_CHECK, SCOPE_CHECK, ProbeCheck
@@ -374,7 +375,7 @@ class TestTheDoorGatesBeforeItWrites:
                 async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
                     try:
                         await endpoint.validate_warehouse_credentials(
-                            warehouse_id="wh", settings=settings, token=_token(), client=client, vendor=_Vendor(credentials=None)
+                            context=AuthzContext(client=client, settings=settings, token=_token()), warehouse_id="wh", vendor=_Vendor(credentials=None)
                         )
                     except TableNotFoundError as refused:
                         return str(refused)
@@ -407,7 +408,7 @@ class TestTheDoorGatesBeforeItWrites:
         monkeypatch.setattr(endpoint, "_run_scope_probe", _probe)
 
         report = await endpoint.validate_warehouse_credentials(
-            warehouse_id="wh", settings=self._settings(), token=_token(), client=None, vendor=_Vendor(credentials=None)
+            context=AuthzContext(client=None, settings=self._settings(), token=_token()), warehouse_id="wh", vendor=_Vendor(credentials=None)
         )
 
         assert seen == [ROOT]

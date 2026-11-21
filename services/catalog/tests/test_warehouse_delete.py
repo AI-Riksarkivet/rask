@@ -36,6 +36,7 @@ from lance_namespace import (
 )
 from unfiled_announcer import unfiled
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.idempotency import KeyedDoor
 from catalog.core.config import Settings
 from catalog.services import warehouses
@@ -162,12 +163,10 @@ def _delete(
 
     async def _deleted() -> Any:
         return await wh_ep.delete_warehouse(
+            context=AuthzContext(client=client, settings=settings, token=token),
             warehouse_id=warehouse_id,
             keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             request=request,
-            settings=settings,
-            token=token,
-            client=client,
             announcer=unfiled(NoopControlEmitter()),
             uuids=NO_OBJECT_UUIDS,
             cascade=cascade,

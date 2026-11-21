@@ -36,20 +36,19 @@ from lance_namespace import (
     UpdateFieldMetadataResponse,
     UpdateTableSchemaMetadataResponse,
 )
-from openfga_sdk import OpenFgaClient
 
 from catalog.api import lineage_deps
 from catalog.api.authz import decisions, door_gates
+from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.dependencies import (
     DataNamespaceDep,
     DoorTableDep,
-    FgaClientDep,
     LineageEmitterDep,
     ObjectUuidsDep,
     SettingsDep,
     StorageOptionsDep,
 )
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import CurrentToken
 from catalog.core import formats, provenance_guard
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import (
@@ -61,8 +60,7 @@ from catalog.core.lineage_emit import (
 )
 from catalog.services.table_claims import ResolvedTable
 from catalog.services.tables import schema
-from lakehouse.governed import fga_ids
-from lakehouse.governed.settings import FgaSettings
+from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.naming import PLATFORM_PREFIX
 
 
@@ -79,9 +77,7 @@ from lakehouse.naming import PLATFORM_PREFIX
 
 
 async def _require_classifier_for_governance_keys(
-    client: OpenFgaClient | None,
-    settings: FgaSettings,
-    token: Caller | None,
+    context: AuthzContext,
     *,
     table: ResolvedTable,
     updates: list[dict[str, Any]],
@@ -91,7 +87,7 @@ async def _require_classifier_for_governance_keys(
     BODY-AUTHORIZED, like the write-tier check inside `vend_credentials` and `authorize_grant`: the rung
     depends on WHAT the body touches rather than on which route it is. The router has asked `can_write_data`
     for a body that changes any ordinary key, and `can_classify` alone for one that changes governance keys
-    and nothing else (`write_doors._classifies_only`, ADR 0225); this asks the classifier's rung of every body
+    and nothing else (its classify-only reading of the body, ADR 0225); this asks the classifier's rung of every body
     that touches the governance namespace either way, so the door holds the rule on its own.
 
     A DELETE COUNTS, AND IT HAS THREE SPELLINGS. `update_field_metadata` signals key removal with a
@@ -114,7 +110,7 @@ async def _require_classifier_for_governance_keys(
     touched = sorted({key for update in updates for key in (update.get("metadata") or {}) if key.startswith(PLATFORM_PREFIX)})
     if not touched and not replaces:
         return
-    await door_gates.require_relation(client, settings, token, relation="can_classify", obj=fga_ids.table_object(table.require_uuid()))
+    await door_gates.require_relation(context, relation="can_classify", obj=fga_ids.table_object(table.require_uuid()))
     # THE SECOND QUESTION ([[LH-055]]). `can_classify` is ONE BIT — whoever may label anything may
     # label everything — so the ruling's "per-tag `apply` delegation" needs the VALUE asked about too.
     # Asked second on purpose: a caller with no business on this table is already refused above,
@@ -125,22 +121,22 @@ async def _require_classifier_for_governance_keys(
     # could attach and nobody present could remove — so removal stays on the table rung alone.
     values = {str(v) for update in updates for key, v in (update.get("metadata") or {}).items() if key.startswith(PLATFORM_PREFIX) and v is not None}
     for value in sorted(values):
-        await door_gates.require_relation(client, settings, token, relation="can_apply", obj=f"classification:{value}")
+        await door_gates.require_relation(context, relation="can_apply", obj=f"classification:{value}")
 
 
-async def _sees_the_schema(client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, table: ResolvedTable) -> bool:
-    """Whether the caller holds ``can_get_metadata`` on ``table``, asked only when a missing path is refused.
+async def _sees_the_schema(context: AuthzContext, *, table: ResolvedTable) -> bool:
+    """Whether the caller holds ``can_get_metadata`` on ``table``, and so may be shown the table's fields.
 
     A classifier is admitted on ``can_classify`` alone (ADR 0225), which sees no schema, and Lance's refusal of a missing
     path lists the table's fields and suggests the nearest. Such a caller is told only the paths it sent. The probe writes
     no denial, since nothing was attempted, and an outage answers as not seeing: the refusal stands either way.
     """
-    authz = decisions.authorization(settings, client, token)
+    authz = decisions.authorization(context)
     if authz is None:
         return True
     obj = fga_ids.table_object(table.require_uuid())
     try:
-        return (await authz.batch_check("can_get_metadata", [obj])).get(obj, False)
+        return await fga_reads.check(authz.client, user=authz.subject, relation="can_get_metadata", obj=obj)
     except ServiceUnavailableError:
         return False
 
@@ -154,10 +150,8 @@ async def add_columns(
     id: str,
     body: AlterTableAddColumnsRequest,
     table: DoorTableDep,
-    settings: SettingsDep,
+    context: AuthzContextDep,
     so: StorageOptionsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
 ) -> AlterTableAddColumnsResponse:
@@ -166,14 +160,14 @@ async def add_columns(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     expressions = [column.expression for column in body.new_columns or [] if column.expression]
-    await door_gates.require_classifier_to_copy_a_label(client, settings, token, table=table, so=so, branch=body.branch, expressions=expressions)
-    response = await run_in_threadpool(partial(schema.add_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(token, ADD_COLUMNS)))
+    await door_gates.require_classifier_to_copy_a_label(context, table=table, so=so, branch=body.branch, expressions=expressions)
+    response = await run_in_threadpool(partial(schema.add_columns, table, so, body, transaction_properties=lineage_deps.door_stamp(context.token, ADD_COLUMNS)))
     await lineage_deps.emit_measured_write(
         emitter,
         segments,
         location=table.location,
         so=so,
-        token=token,
+        token=context.token,
         operation=ADD_COLUMNS,
         uuids=uuids,
         pin_version=response.version,
@@ -269,10 +263,8 @@ async def update_field_metadata(
     id: str,
     body: UpdateFieldMetadataRequest,
     table: DoorTableDep,
-    settings: SettingsDep,
+    context: AuthzContextDep,
     so: StorageOptionsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
 ) -> UpdateFieldMetadataResponse:
@@ -286,7 +278,7 @@ async def update_field_metadata(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     updates = [u.model_dump() for u in (body.updates or [])]
-    await _require_classifier_for_governance_keys(client, settings, token, table=table.resolved, updates=updates)
+    await _require_classifier_for_governance_keys(context, table=table.resolved, updates=updates)
     try:
         response = await run_in_threadpool(
             partial(
@@ -295,11 +287,11 @@ async def update_field_metadata(
                 so,
                 updates,
                 branch=body.branch,
-                transaction_properties=lineage_deps.door_stamp(token, UPDATE_FIELD_METADATA),
+                transaction_properties=lineage_deps.door_stamp(context.token, UPDATE_FIELD_METADATA),
             )
         )
     except TableColumnNotFoundError:
-        if await _sees_the_schema(client, settings, token, table=table.resolved):
+        if await _sees_the_schema(context, table=table.resolved):
             raise
         named = ", ".join(sorted({str(update["path"]) for update in updates if update.get("path")}))
         raise TableColumnNotFoundError(f"update_field_metadata: a field this request names is not on the table ({named})") from None
@@ -308,7 +300,7 @@ async def update_field_metadata(
         segments,
         location=table.location,
         so=so,
-        token=token,
+        token=context.token,
         operation=UPDATE_FIELD_METADATA,
         uuids=uuids,
         pin_version=response.version,

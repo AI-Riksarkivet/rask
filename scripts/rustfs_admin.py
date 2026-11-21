@@ -71,6 +71,10 @@ class ProvisionError(RuntimeError):
     """The store refused a provisioning call; the hook exits non-zero naming the call."""
 
 
+class AdminObjectAbsentError(ProvisionError):
+    """The admin API answered 404: the object a call named is not there."""
+
+
 class Plan(BaseModel):
     """Everything one hook run provisions, checked before the first call so a typo fails before any write."""
 
@@ -140,9 +144,12 @@ class AdminClient:
 
     def delete(self, operation: str, query: dict[str, str]) -> None:
         """DELETE one admin object; one already gone (404) is the outcome asked for."""
-        self._call("DELETE", operation, query, body=b"", absent_ok=True)
+        try:
+            self._call("DELETE", operation, query, body=b"")
+        except AdminObjectAbsentError:
+            return
 
-    def _call(self, method: str, operation: str, query: dict[str, str], *, body: bytes, absent_ok: bool = False) -> bytes:
+    def _call(self, method: str, operation: str, query: dict[str, str], *, body: bytes) -> bytes:
         from botocore.auth import S3SigV4Auth
         from botocore.awsrequest import AWSRequest
 
@@ -156,10 +163,10 @@ class AdminClient:
                 with urllib.request.urlopen(prepared, timeout=30) as response:  # noqa: S310 — as above
                     return response.read()
             except urllib.error.HTTPError as exc:
-                if absent_ok and exc.code == 404:
-                    return b""
                 # The store's error body names the refused argument; it never echoes a request body, so it carries no secret.
                 detail = exc.read().decode("utf-8", "replace")[:500]
+                if exc.code == 404:
+                    raise AdminObjectAbsentError(f"{operation} {query} refused: HTTP {exc.code} {detail}") from exc
                 if exc.code < 500 or attempt == ADMIN_ATTEMPTS:
                     raise ProvisionError(f"{operation} {query} refused: HTTP {exc.code} {detail}") from exc
             except urllib.error.URLError as exc:

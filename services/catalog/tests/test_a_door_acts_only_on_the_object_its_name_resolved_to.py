@@ -37,6 +37,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ConcurrentModificationError
 
 from catalog.api.authz import door_gates, hierarchy, route_guard
+from catalog.api.authz.context import AuthzContext
 from catalog.api.dependencies import FgaClientDep, ResolverDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.services import table_claims
@@ -218,7 +219,7 @@ def test_a_door_raced_by_a_drop_and_a_re_create_acts_on_no_other_table(
     else:
 
         async def _authorize_then_race(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
-            await route_guard.authorize(request, settings, token, injected=injected, resolver=resolver)
+            await route_guard.authorize(request, AuthzContext(client=injected, settings=settings, token=token), resolver=resolver)
             await run_in_threadpool(_drop_and_create_again)
 
         app.dependency_overrides[route_guard.authorize] = _authorize_then_race
@@ -296,7 +297,7 @@ def test_a_namespace_door_raced_by_a_drop_and_a_re_create_acts_on_no_other_names
         made.append(_namespace_as_alice_made_it(catalog))
 
     async def _authorize_then_race(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
-        await route_guard.authorize(request, settings, token, injected=injected, resolver=resolver)
+        await route_guard.authorize(request, AuthzContext(client=injected, settings=settings, token=token), resolver=resolver)
         await run_in_threadpool(_drop_and_create_again)
 
     if race == "door":

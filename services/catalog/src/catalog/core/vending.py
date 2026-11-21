@@ -570,7 +570,7 @@ def labelled_fields(dataset: Any) -> dict[int, tuple[str, dict[str, str]]]:  # n
 
     KEYED BY FIELD ID, the identity Lance gives a field: a rename keeps it and its metadata, while a re-type re-mints the
     id with no metadata (measured on pylance 13.0.0), which is what a door's commit is held to
-    (``tables.commits.commit_stamped``'s ``keeps_labels``).
+    (``tables.commits.commit_stamped_keeping_labels``).
 
     Raises:
         OSError: The dataset's schema could not be read.

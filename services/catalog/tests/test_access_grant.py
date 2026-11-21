@@ -19,6 +19,7 @@ from lance_namespace.errors import ErrorCode
 from openfga_sdk.client import OpenFgaClient
 from unfiled_announcer import unfiled
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
 from lakehouse.events.control_emit import NoopControlEmitter
@@ -66,16 +67,11 @@ def _run(
     token = _person("alice")
     body = access.AccessGrantRequest(user=user, relation=relation)
     resp = asyncio.run(
-        access._access_mutate(
-            client,
+        access._grant_access(
+            AuthzContext(client=client, settings=settings, token=token),
             announcer=unfiled(NoopControlEmitter()),
-            settings=settings,
-            token=token,
             resolver=NamedResolver(),
-            fga_type=fga_type,
-            id=ident,
-            body=body,
-            grant=True,
+            target=access._AccessTarget(fga_type=fga_type, id=ident, body=body),
         )
     )
     return resp, captured
@@ -169,7 +165,11 @@ def test_check_with_an_unknown_relation_is_a_400(monkeypatch: pytest.MonkeyPatch
     settings = cast(Settings, SimpleNamespace(fga_enabled=True))
     token = _person("alice")
     with pytest.raises(InvalidInputError) as exc:
-        asyncio.run(access._access_check(client, settings=settings, token=token, resolver=NamedResolver(), fga_type="table", id="db1$users", body=body))
+        asyncio.run(
+            access._access_check(
+                AuthzContext(client=client, settings=settings, token=token), resolver=NamedResolver(), fga_type="table", id="db1$users", body=body
+            )
+        )
     assert status_for(int(exc.value.code)) == 400, "a client-supplied bad relation must surface as the client's error"
 
 
@@ -182,7 +182,11 @@ def test_the_auth_off_answer_stays_unsupported() -> None:
     token = _person("alice")
     body = access.AccessCheckRequest(user="dex~gina", relation="can_read_data")
     with pytest.raises(Exception) as exc:
-        asyncio.run(access._access_check(client, settings=settings, token=token, resolver=NamedResolver(), fga_type="table", id="db1$users", body=body))
+        asyncio.run(
+            access._access_check(
+                AuthzContext(client=client, settings=settings, token=token), resolver=NamedResolver(), fga_type="table", id="db1$users", body=body
+            )
+        )
     assert (
         status_for(int(getattr(exc.value, "code", ErrorCode.UNSUPPORTED))) == 406
     )  # 406 since Q3 (2026-09-02): the spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported to NOT_ACCEPTABLE.
@@ -206,7 +210,9 @@ def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) ->
     client = cast(OpenFgaClient, object())
     settings = cast(Settings, SimpleNamespace(fga_enabled=True))
     token = _person("alice")
-    resp = asyncio.run(access._access_graph(client, settings=settings, token=token, resolver=NamedResolver(), fga_type="table", id="db1$t"))
+    resp = asyncio.run(
+        access._access_graph(AuthzContext(client=client, settings=settings, token=token), resolver=NamedResolver(), fga_type="table", id="db1$t")
+    )
 
     assert (resp.object, resp.name) == (table, "db1$t")
     assert {n.id for n in resp.nodes} == {table, "user:dex~alice", "role:eng#assignee", namespace}

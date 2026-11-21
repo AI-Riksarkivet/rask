@@ -22,6 +22,7 @@ from lance_namespace import (
 from openfga_sdk import OpenFgaClient
 
 from catalog.api import idempotency
+from catalog.api.authz.context import AuthzContext
 from catalog.api.authz.objects import resolve_rung, rung_label, standing_ancestors, trashed_at_or_above
 from catalog.api.authz.rungs import READ_RELATIONS, UUID_KEYED
 from catalog.api.dependencies import Resolver
@@ -35,10 +36,10 @@ from lakehouse.records.trash import TrashRecord
 
 __all__ = [
     "Authorization",
-    "answered",
     "authorization",
+    "check_recording_outage",
     "record_undeclared",
-    "refuse_absent",
+    "refusal_of_absent",
     "refused_read_as_absent",
     "require_any",
     "require_audited",
@@ -60,7 +61,7 @@ def record_undeclared(path: str, fga_type: str, suffix: str, *, user: str, obj: 
     audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, subject=user, resource=obj, reason="undeclared_door", suffix=suffix)
 
 
-async def answered(client: OpenFgaClient, *, user: str, relation: str, obj: str, **recorded: str) -> bool:
+async def check_recording_outage(client: OpenFgaClient, *, user: str, relation: str, obj: str, **recorded: str) -> bool:
     """Whether ``user`` holds ``relation`` on ``obj``, with an outage recorded before it fails the request closed.
 
     Every check a gate makes goes through here, so OpenFGA not answering is one ``failure`` record naming the relation
@@ -84,7 +85,7 @@ async def require_audited(client: OpenFgaClient, *, user: str, relation: str, ob
     ``label`` is what the refusal names the object as, its name for a table or namespace, so a refusal reads the same
     whether the name holds an object or not (:func:`require_rung`).
     """
-    allowed = await answered(client, user=user, relation=relation, obj=obj)
+    allowed = await check_recording_outage(client, user=user, relation=relation, obj=obj)
     audit(
         AuditAction.AUTHZ, AuditOutcome.ALLOW if allowed else AuditOutcome.DENY, relation=relation, subject=user, resource=obj
     )  # #41 audit every authz decision
@@ -93,7 +94,7 @@ async def require_audited(client: OpenFgaClient, *, user: str, relation: str, ob
         raise PermissionDeniedError(f"{relation} required on {label or obj}")
 
 
-def refuse_absent(*, user: str, relation: str, label: str) -> PermissionDeniedError:
+def refusal_of_absent(*, user: str, relation: str, label: str) -> PermissionDeniedError:
     """The refusal of ``relation`` on a name that holds no object, audited by the name: no tuple can grant it."""
     audit(AuditAction.AUTHZ, AuditOutcome.DENY, relation=relation, subject=user, resource=label, reason="no_such_object")
     log.info("access_denied", extra={"relation": relation, "object": label})
@@ -120,7 +121,7 @@ async def require_rung(client: OpenFgaClient, resolver: Resolver, *, user: str, 
     if obj is None and not isinstance(rung.on, str):
         obj = await idempotency.captured_object(resolver.request, resolver.settings, subject=user, name=fga_ids.canonical_object_id(list(rung.on.segments)))
     if obj is None:
-        raise refuse_absent(user=user, relation=rung.relation, label=label)
+        raise refusal_of_absent(user=user, relation=rung.relation, label=label)
     await require_audited(client, user=user, relation=rung.relation, obj=obj, label=label)
     return obj
 
@@ -165,7 +166,7 @@ async def require_any(client: OpenFgaClient, *, user: str, doors: list[tuple[str
     FAILURE and propagates (503) rather than falling through to the next door.
     """
     for relation, obj in doors:
-        if await answered(client, user=user, relation=relation, obj=obj):
+        if await check_recording_outage(client, user=user, relation=relation, obj=obj):
             audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=relation, subject=user, resource=obj)
             return
     for relation, obj in doors:  # reaching here means every door was probed and every one denied
@@ -237,7 +238,7 @@ class Authorization(NamedTuple):
         return await fga_reads.batch_check(self.client, user=self.subject, relation=relation, objects=list(objects))
 
 
-def authorization(settings: FgaSettings, client: OpenFgaClient | None, token: Caller | None) -> Authorization | None:
+def authorization(context: AuthzContext) -> Authorization | None:
     """The client and the subject a decision is asked with, ``None`` only with FGA off, when every decision allows.
 
     Every gate and every listing that judges its items asks this, so none reads an authorization layer that is on as
@@ -248,12 +249,12 @@ def authorization(settings: FgaSettings, client: OpenFgaClient | None, token: Ca
         ServiceUnavailableError: FGA is on and unwired.
         UnauthenticatedError: FGA is on and nobody is signed in.
     """
-    if not settings.fga_enabled:
+    if not context.settings.fga_enabled:
         return None
-    wired = require_wired(client)
-    if token is None:
+    wired = require_wired(context.client)
+    if context.token is None:
         raise UnauthenticatedError("authentication required")
-    return Authorization(client=wired, subject=token.subject)
+    return Authorization(client=wired, subject=context.token.subject)
 
 
 async def refused_read_as_absent(

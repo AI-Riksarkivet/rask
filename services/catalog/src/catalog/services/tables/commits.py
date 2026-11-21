@@ -100,15 +100,9 @@ def commit_stamped[T](
     plan: Callable[[lance.LanceDataset], tuple[Transaction, T]],
     branch: str | None = None,
     opened: lance.LanceDataset | None = None,
-    keeps_labels: bool = False,
 ) -> tuple[int, T]:
     """Commit the transaction ``plan`` builds on the latest version of ``branch`` (``None`` = main) with ``properties``;
     return the version.
-
-    ``keeps_labels`` holds a schema door to the rule ``version/create`` applies to a stock commit ([[LH-207]]): a field's
-    ``rask.*`` metadata changes only through ``update_field_metadata``, which asks ``can_classify``. Measured on pylance
-    13.0.0, a same-type re-type re-mints the field id with no metadata and a drop removes the field, either of which would
-    leave a classified table directly vendable; such a commit is discarded before its finalize.
 
     Every catalog door's commit carries the ``rask.*`` stamp ([[LH-497]]), and most Lance operations take no transaction
     properties (pylance 13.0.0: ``update``, ``delete``, ``add_columns``, ``alter_columns``, ``drop_columns``, both metadata
@@ -140,20 +134,49 @@ def commit_stamped[T](
     Raises:
         ConcurrentModificationError: Every attempt lost its race.
         TableChangedError: The table changed since the door's resolution.
-        InvalidInputError: ``keeps_labels`` and the commit loses or changes a field's ``rask.*`` metadata.
         InvalidInputError: The commit adds or changes a field's encoding knob to one Lance cannot honour ([[LH-246]]).
         InvalidInputError: The commit's new rows repeat a value of the table's primary key, within themselves or with a row it
             carries ([[LH-540]]), as ``version/create`` refuses a stock commit's.
         InvalidTableStateError: The commit breaks the data contract the table holds (ADR 0212).
     """
-    table_id = table.segments
-    ref = recorded_branch(branch)
-    turn: str | None = None
+    return _land(_stamped_commit(table, so, properties, branch=branch), plan, opened=opened)
+
+
+def commit_stamped_keeping_labels[T](
+    table: table_claims.DoorTable,
+    so: StorageOptions,
+    properties: dict[str, str],
+    *,
+    plan: Callable[[lance.LanceDataset], tuple[Transaction, T]],
+    branch: str | None = None,
+    opened: lance.LanceDataset | None = None,
+) -> tuple[int, T]:
+    """:func:`commit_stamped` for a schema door, held to the rule ``version/create`` applies to a stock commit
+    ([[LH-207]]): a field's ``rask.*`` metadata changes only through ``update_field_metadata``, which asks
+    ``can_classify``. Measured on pylance 13.0.0, a same-type re-type re-mints the field id with no metadata and a drop
+    removes the field, either of which would leave a classified table directly vendable; such a commit is discarded
+    before its finalize.
+
+    Raises:
+        InvalidInputError: The commit loses or changes a field's ``rask.*`` metadata, or :func:`commit_stamped` refuses it.
+    """
+    commit = _stamped_commit(table, so, properties, branch=branch).model_copy(update={"keeps_labels": True})
+    return _land(commit, plan, opened=opened)
+
+
+def _stamped_commit(table: table_claims.DoorTable, so: StorageOptions, properties: dict[str, str], *, branch: str | None) -> _StampedCommit:
+    """What every attempt of one commit commits with, on the ref ``branch`` names, its author the one ``properties`` name."""
     author = properties.get(AUTHOR_PROPERTY) if table.announces(properties.get(OPERATION_PROPERTY, "")) else None
-    commit = _StampedCommit(table=table, so=so, properties=properties, ref=ref, author=author, keeps_labels=keeps_labels)
+    return _StampedCommit(table=table, so=so, properties=properties, ref=recorded_branch(branch), author=author)
+
+
+def _land[T](commit: _StampedCommit, plan: Callable[[lance.LanceDataset], tuple[Transaction, T]], *, opened: lance.LanceDataset | None) -> tuple[int, T]:
+    """Attempt ``commit`` until one attempt lands: the version, and what ``plan`` measured."""
+    table, ref = commit.table, commit.ref
+    turn: str | None = None
     with ExitStack() as held:
         for attempt in range(_STAMPED_COMMIT_ATTEMPTS):
-            dataset = disarm_commit_path_cleanup(opened if opened is not None else table.open(so, branch=ref), table_id)
+            dataset = disarm_commit_path_cleanup(opened if opened is not None else table.open(commit.so, branch=ref), table.segments)
             opened = None
             next_turn = partial(_turn_for_the_next_attempt, table, ref, held, turn=turn, attempt=attempt)
             outcome = _attempt_once(commit, dataset, plan, turn=turn, next_turn=next_turn)
@@ -164,7 +187,8 @@ def commit_stamped[T](
 
 
 class _StampedCommit(BaseModel):
-    """What every attempt of one :func:`commit_stamped` call commits with."""
+    """What every attempt of one :func:`commit_stamped` call commits with: ``keeps_labels`` for
+    :func:`commit_stamped_keeping_labels`."""
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -174,7 +198,7 @@ class _StampedCommit(BaseModel):
     properties: dict[str, str]
     ref: str | None
     author: str | None
-    keeps_labels: bool
+    keeps_labels: bool = False
 
 
 class _Attempt(BaseModel):
@@ -260,13 +284,22 @@ def _attempt_once[T](
     except BaseException:
         discard_detached_manifest(attempt.location, commit.so, attempt.finalize_id)
         if not finalizing:
-            if wrote is None:
-                wrote = _read_attempt_files(commit.table, commit.so, dataset, after=attempt.detached, transaction=attempt.stamped, branch=commit.ref)
-            _discard_unlanded_attempt(commit.table, commit.so, attempt.stamped, wrote=wrote, branch=commit.ref, recorded=recorded)
+            _discard_an_attempt_refused_before_its_finalize(commit, dataset, attempt, wrote=wrote)
+            if recorded:
+                _forget_committed_files(commit.table, attempt.stamped)
         raise
     finally:
         discard_detached_manifest(attempt.location, commit.so, attempt.detached.version)
     return _AttemptOutcome[T](landed=(attempt.version, measured), turn=turn)
+
+
+def _discard_an_attempt_refused_before_its_finalize(
+    commit: _StampedCommit, dataset: lance.LanceDataset, attempt: _Attempt, *, wrote: file_identities.CommittedFiles | None
+) -> None:
+    """Delete what an attempt refused before its finalize wrote, reading what it added where it was refused first."""
+    if wrote is None:
+        wrote = _read_attempt_files(commit.table, commit.so, dataset, after=attempt.detached, transaction=attempt.stamped, branch=commit.ref)
+    _discard_unlanded_attempt(commit.table, commit.so, attempt.stamped, wrote=wrote, branch=commit.ref)
 
 
 def _commit_detached(commit: _StampedCommit, dataset: lance.LanceDataset, transaction: Transaction, *, turn: str | None) -> _Attempt:
@@ -346,7 +379,8 @@ def _discard_a_lost_finalize_unless_it_landed(
     if commit.author is not None:
         _forget_unlanded_author(commit.table, commit.so, attempt.stamped.uuid, location=attempt.location, version=attempt.version, judged=planted.judged)
     if landed != _AMBIGUOUS_VERSION:
-        _discard_unlanded_attempt(commit.table, commit.so, attempt.stamped, wrote=wrote, branch=commit.ref, recorded=True)
+        _discard_unlanded_attempt(commit.table, commit.so, attempt.stamped, wrote=wrote, branch=commit.ref)
+        _forget_committed_files(commit.table, attempt.stamped)
     return False
 
 
@@ -357,10 +391,10 @@ def _discard_unlanded_attempt(
     *,
     wrote: file_identities.CommittedFiles | None,
     branch: str | None,
-    recorded: bool,
 ) -> None:
     """Delete what a commit attempt that never landed wrote ([[LH-564]]): its transaction file, and every file it added when
-    its operation writes its own (:func:`committed_files.written_by`), then their committed-files record when ``recorded``.
+    its operation writes its own (:func:`committed_files.written_by`). An attempt that recorded them then forgets that
+    record (:func:`_forget_committed_files`).
 
     Called only once the attempt cannot land, its finalize lost to another commit's manifest or the attempt refused before
     its finalize, so no version names these files, and the next attempt plans afresh and writes its own. Lance would keep
@@ -373,8 +407,11 @@ def _discard_unlanded_attempt(
     for path in own:
         delete_table_object(root, so, path)
     log.info("commit_attempt_discarded", extra={"table": table.segments, "transaction": transaction.uuid, "files": len(own)})
-    if not recorded:
-        return
+
+
+def _forget_committed_files(table: table_claims.DoorTable, transaction: Transaction) -> None:
+    """Forget the committed-files record of an attempt :func:`_discard_unlanded_attempt` discarded. It raises nothing, for
+    the same reason: a delete the store refuses is logged and leaves the record."""
     try:
         table.forget_committed_files(transaction.uuid)
     except (OSError, UnidentifiedObjectError) as exc:

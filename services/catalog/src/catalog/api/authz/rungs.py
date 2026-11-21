@@ -64,11 +64,11 @@ __all__ = [
 
 # Guarded resource prefixes, in match order. Each but ``transaction`` maps to its own dedicated FGA type in the model
 # (``lakehouse/governed/auth/model.fga``). A transaction is no object of its own: its id names the table it belongs
-# to, and both its doors are authorized on that table (``authorize_transaction``, [[LH-221]]).
+# to, and both its doors are authorized on that table ([[LH-221]]).
 #: `classification` is the odd one and belongs here anyway: it is a governance VOCABULARY rather than a
 #: data object — no rows, no parent warehouse, and the path segment IS the label ([[LH-055]]). It
-#: reaches this map because its grant/revoke doors must be authorized like every other, through
-#: `authorize_grant` reading the rung out of the body.
+#: reaches this map because its grant/revoke doors must be authorized like every other, on
+#: the rung their body names.
 _RESOURCES: tuple[str, ...] = ("namespace", "table", "materialized_view", "transaction", "classification")
 
 
@@ -175,8 +175,8 @@ OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "access/my-permissions": "can_get_metadata",
         # NOTE: `access/grant` and `access/revoke` are NOT here. They gated on the owner bar until the
         # grant axis landed, which meant handing out access required owning the data. They are now
-        # authorized per-rung from the BODY (`can_grant_<relation>`) by `authorize_grant`, which
-        # intercepts before `action_relation` is consulted — a mapping here would be dead code that
+        # authorized per-rung from the BODY (`can_grant_<relation>`, or `can_revoke_grant`), read
+        # before `action_relation` is consulted — a mapping here would be dead code that
         # reads like the live rule.
         # #81 authorization graph: one hop of the relationship graph discloses principals + the cascade,
         # the same disclosure as access/list — owner bar.
@@ -236,7 +236,7 @@ OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "policy/delete": "can_delete",
         "access/list": "can_delete",
         "access/check": "can_delete",
-        # Same as the table block: grant/revoke are body-authorized by `authorize_grant`.
+        # Same as the table block: grant/revoke are authorized on the rung their body names.
         # #C4 managed access. SUFFIX PER OPERATION (`policy/describe` vs `policy/set`, the convention
         # already here) — and not stylistic: this map is keyed on the PATH ALONE, so one `managed-access`
         # suffix serving both a read and a write can only carry ONE tier, and the write's tier is the
@@ -324,7 +324,7 @@ WRITER_SUFFIX_RELATION: Final[dict[str, dict[str, str]]] = {
 }
 
 
-# Grant/revoke are authorized from the BODY, per rung, by `authorize_grant` — they appear in neither
+# Grant/revoke are authorized from the BODY, per rung — they appear in neither
 # block above on purpose. `authorize` intercepts these suffixes before `action_relation` runs, so a
 # mapping here would never be consulted while reading exactly like the live rule.
 GRANT_SUFFIXES = frozenset({"access/grant", "access/revoke"})
@@ -465,7 +465,7 @@ def create_parent_rung(resource: str, id_segments: list[str]) -> write_judge.Run
     return write_judge.Rung(relation=relation, on=write_judge.Named(kind="namespace", segments=tuple(id_segments[:-1])))
 
 
-#: The transaction doors `authorize_transaction` serves.
+#: The transaction doors, each authorized on the table its id names.
 TRANSACTION_SUFFIXES: Final = frozenset({"describe", "alter"})
 
 

@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from catalog.api.authz import warehouse_grants
+from catalog.api.authz.context import AuthzContext
 from catalog.core.config import Settings
 from lakehouse.governed import fga_ids, fga_provision
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -113,7 +114,7 @@ def test_creating_a_warehouse_grants_it(
 
     async def _create() -> None:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:
-            await warehouse_grants.seed_warehouse(store, settings, creator, warehouse_id="wh1", project="acme")
+            await warehouse_grants.seed_warehouse(AuthzContext(client=store, settings=settings, token=creator), warehouse_id="wh1", project="acme")
 
     asyncio.run(_create())
 

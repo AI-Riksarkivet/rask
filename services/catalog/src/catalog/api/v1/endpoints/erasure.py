@@ -35,11 +35,11 @@ from uuid import uuid4
 import lance
 from fastapi import APIRouter, Depends, Query
 from fastapi.concurrency import run_in_threadpool
-from openfga_sdk import OpenFgaClient
 
 from catalog.api.authz import decisions, visible_pages
+from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, ProvenanceNamespaceDep, SettingsDep, StorageOptionsDep
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import CurrentToken
 from catalog.core.config import CatalogMaintenanceSettings, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import disarm_every_ref
@@ -52,7 +52,6 @@ from lakehouse import derived_tables
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.governed.settings import FgaSettings
 from lakehouse.lancekit.lance_session import fresh_session, open_dataset
 from lakehouse.records.history_fences import TableHistory
 from lakehouse.storage.conditional_records import RecordExistsError
@@ -175,14 +174,12 @@ async def verify_erasure(
     obligation_id: str,
     body: ErasureVerifyRequest,
     table: DoorTableDep,
-    settings: SettingsDep,
+    context: AuthzContextDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
     owners: TableOwnersDep,
     provenance: ProvenanceNamespaceDep,
-    client: FgaClientDep,
     clock: ClockDep,
-    token: CurrentToken = None,
 ) -> ErasureVerification:
     """Verify what the bring-your-own job left, and release the obligation when nothing but a scheduled release remains.
 
@@ -214,7 +211,7 @@ async def verify_erasure(
     """
     segments = parse_identifier(id)
     canonical = fga_ids.canonical_object_id(segments)
-    control_root, control_options = settings.registry_root, settings.storage_options()
+    control_root, control_options = context.settings.registry_root, context.settings.storage_options()
     obligation = await run_in_threadpool(erasure_obligations.read, control_root, control_options, obligation_id)
     table_uuid = table.resolved.require_uuid()
     dataset = await run_in_threadpool(table.open, so)
@@ -229,7 +226,7 @@ async def verify_erasure(
         retention=timedelta(days=obligation.retain_days),
         trusted=obligation.refs,
         history=TableHistory(control_root=control_root, storage_options=control_options, table_uuid=table_uuid),
-        derived=partial(erasure_derived.judge, settings, provenance, so, obligation=obligation, table=canonical),
+        derived=partial(erasure_derived.judge, context.settings, provenance, so, obligation=obligation, table=canonical),
     )
     # Each tag the verification dropped is announced as the tag door announces a deletion ([[LH-332]]): untargeted, naming
     # the tag and the ref it pinned, beside the obligation whose verification dropped it. AFTER the drops, so a tag still
@@ -242,25 +239,25 @@ async def verify_erasure(
             object_type="table",
             object_id=fga_ids.table_object(table_uuid),
             object_name=canonical,
-            actor=f"user:{token.subject}" if token is not None else None,
+            actor=f"user:{context.token.subject}" if context.token is not None else None,
             extra={"tag": dropped.tag, **pinned, "obligation_id": obligation_id},
         )
     if report.settled and report.pinned_by:
         # The events name the table as it is named now, which a rename since the request changed; its owners are found on
         # its uuid, which no rename changes.
         current = obligation.model_copy(update={"table": canonical})
-        await _schedule_release(report, current, settings=settings, control=control, owners=owners, now=clock())
+        await _schedule_release(report, current, settings=context.settings, control=control, owners=owners, now=clock())
     standing = await run_in_threadpool(erasure_obligations.settle, control_root, control_options, obligation_id, report=report, now=clock())
     audit(
         AuditAction.ERASURE_OBLIGATION_VERIFIED,
         AuditOutcome.SUCCESS,
-        subject=token.subject if token is not None else None,
+        subject=context.token.subject if context.token is not None else None,
         resource=obligation.object_id,
         obligation=obligation_id,
         state=standing.state,
         open_surfaces=",".join(surface.surface for surface in standing.open_surfaces),
     )
-    hidden = await _hidden_derived([*report.surfaces, *standing.open_surfaces], late=standing.late_derived, settings=settings, client=client, token=token)
+    hidden = await _hidden_derived([*report.surfaces, *standing.open_surfaces], context=context, late=standing.late_derived)
     shown = report.model_copy(update={"surfaces": erasure.shown(report.surfaces, hidden=hidden)})
     return ErasureVerification(obligation=standing.view(clock(), table=canonical, hidden=hidden), report=shown)
 
@@ -268,9 +265,7 @@ async def verify_erasure(
 @obligations_router.get("")
 async def list_erasure_obligations(
     *,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     clock: ClockDep,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     page_token: Annotated[str | None, Query(description="Continue after this obligation (the previous page's `page_token`).")] = None,
@@ -279,12 +274,12 @@ async def list_erasure_obligations(
     earliest deadline first: what each still owes, whether it is overdue, and the release it scheduled. Each names its
     table as the table is named now, which a rename since the request changed; one whose table is gone, its bytes with
     it, is listed to nobody. A derived table the caller may not see is counted, never named, as the verification shows it."""
-    obligations = await run_in_threadpool(erasure_obligations.list_obligations, settings.registry_root, settings.storage_options())
+    obligations = await run_in_threadpool(erasure_obligations.list_obligations, context.settings.registry_root, context.settings.storage_options())
     # Named and judged on the uuid each obligation records ([[LH-524]]) only as the page fills, so a page costs about the
     # obligations it serves or passes over.
     listed, next_token = await visible_pages.named_record_page(
-        decisions.authorization(settings, client, token),
-        table_claims.claim_store(settings),
+        decisions.authorization(context),
+        table_claims.claim_store(context.settings),
         relation="can_maintain",
         candidates=sorted(
             ((f"{obligation.deadline.isoformat()}|{obligation.obligation_id}", obligation) for obligation in obligations), key=lambda candidate: candidate[0]
@@ -296,24 +291,20 @@ async def list_erasure_obligations(
     now = clock()
     hidden = await _hidden_derived(
         [surface for _, obligation in listed for surface in obligation.open_surfaces],
+        context=context,
         late=[key for _, obligation in listed for key in obligation.late_derived],
-        settings=settings,
-        client=client,
-        token=token,
     )
     return ErasureObligations(obligations=[obligation.view(now, table=name, hidden=hidden) for name, obligation in listed], page_token=next_token)
 
 
-async def _hidden_derived(
-    surfaces: Sequence[SurfaceResult], *, late: Sequence[str], settings: FgaSettings, client: OpenFgaClient | None, token: Caller | None
-) -> frozenset[str]:
+async def _hidden_derived(surfaces: Sequence[SurfaceResult], *, late: Sequence[str], context: AuthzContext) -> frozenset[str]:
     """The derived tables ``surfaces`` and the ``late`` derived tables name that the caller may not see: none with
     authorization off, else every one the caller holds no ``can_get_metadata`` on, the rung lineage's derived door asks to
     show one, and every one keyed by a name, which no grant can reach."""
     keys = {key for surface in surfaces if (key := erasure.derived_key(surface.surface)) is not None} | set(late)
     if not keys:
         return frozenset()
-    if (authz := decisions.authorization(settings, client, token)) is None:
+    if (authz := decisions.authorization(context)) is None:
         return frozenset()
     objects = sorted(fga_ids.table_object(key) for key in keys if derived_tables.is_table_uuid(key))
     allowed = await authz.batch_check("can_get_metadata", objects) if objects else {}

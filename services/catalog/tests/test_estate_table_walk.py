@@ -19,6 +19,7 @@ import pytest
 from fastapi import Request
 from lance_namespace import LanceNamespace, ListNamespacesRequest, ListNamespacesResponse, ListTablesRequest, ListTablesResponse
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.pagination import MAX_LIST_LIMIT
 from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
@@ -77,11 +78,9 @@ def _list(monkeypatch: pytest.MonkeyPatch, tmp_path: object, catalogs: dict[str,
     monkeypatch.setattr(t_ep, "namespace_for_warehouse", _resolve)
     response = asyncio.run(
         t_ep.list_all_tables(
+            context=AuthzContext(client=None, settings=settings, token=None),
             request=cast(Request, SimpleNamespace()),
-            settings=settings,
             so=StorageOptions(),
-            token=None,
-            client=None,
             resolver=NamedResolver(),
             limit=MAX_LIST_LIMIT,
         )

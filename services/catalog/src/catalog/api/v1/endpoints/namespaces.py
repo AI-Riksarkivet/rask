@@ -36,16 +36,15 @@ from lance_namespace import (
     TableAlreadyExistsError,
     TableNotFoundError,
 )
-from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.api import idempotency as idem
 from catalog.api import listings
 from catalog.api.announcing import Announcer, AnnouncerDep, Filing
 from catalog.api.authz import decisions, door_gates, hierarchy, object_grants, objects, visible_pages
+from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.dependencies import (
     ControlEmitterDep,
-    FgaClientDep,
     NamespaceDep,
     NamespaceRootDep,
     ObjectUuids,
@@ -154,9 +153,7 @@ async def create_namespace(
     id: str,
     keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     control: ControlEmitterDep,
     resolver: ResolverDep,
     body: CreateNamespaceRequest | None = None,
@@ -190,20 +187,20 @@ async def create_namespace(
     # the kept namespace's own, and an Overwrite's replacement is a new namespace with a new one.
     req.properties = with_minted_uuid(req.properties)
     minted = req.properties[UUID_PROPERTY]
-    await _judge_run_rule_declaration(ns, settings, token, client=client, segments=segments, declared=declared, overwrite=create_mode is CreateMode.OVERWRITE)
+    await _judge_run_rule_declaration(ns, context, segments=segments, declared=declared, mode=create_mode)
     # The namespace's owner and its `parent` edge are written under the uuid minted above BEFORE the backend records it
     # ([[LH-585]], `object_grants.seed_namespace_before_write`), so a seed that fails has nothing to undo and no namespace
     # stands without them. They name the minted uuid, so they reach no namespace the request only finds standing: an
     # ExistOk that keeps one, or a create the backend refuses, takes them back.
-    await object_grants.seed_namespace_before_write(client, settings, token, resolver=resolver, segments=segments, uuid=minted)
-    create = _NamespaceCreate(ns=ns, settings=settings, token=token, client=client, resolver=resolver, segments=segments, minted=minted)
+    await object_grants.seed_namespace_before_write(context, resolver=resolver, segments=segments, uuid=minted)
+    create = _NamespaceCreate(ns=ns, context=context, resolver=resolver, segments=segments, minted=minted)
     created = await _create_in_its_mode(create, req, create_mode)
     response = created.response
     if created.kept_existing:
         # NOT ON THE `ExistOk` KEEP PATH, for the grants and for the ANNOUNCEMENT alike: the namespace kept is another
         # caller's, under its own uuid and grants, and `namespace_created` would announce a creation that did not
         # happen to every subscriber of the control stream.
-        await object_grants.take_back_seed(client, settings, token, segments=segments, uuid=minted, reason="not_kept", resource="namespace")
+        await object_grants.take_back_seed(context, segments=segments, uuid=minted, reason="not_kept", resource="namespace")
         if declared and (response.properties or {}).get(write_judge.REQUIRES_RUN_PROPERTY) != write_judge.REQUIRED:
             # ExistOk keeps the namespace as it is, so a rule it does not already declare would not land. The rule is
             # declared once (ADR 0211): saying so beats a 200 that quietly ignored the declaration.
@@ -217,14 +214,14 @@ async def create_namespace(
         await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
 
     await _require_parent_or_drop(create, undo=_undo_create)
-    await object_grants.name_namespace_child(client, settings, token, resolver=resolver, segments=segments, uuid=minted)
+    await object_grants.name_namespace_child(context, resolver=resolver, segments=segments, uuid=minted)
     await emit_control(
         control,
         action="namespace_created",
         object_type="namespace",
         object_id=fga_ids.namespace_object(minted),
         object_name=fga_ids.canonical_object_id(segments),
-        actor=f"user:{token.subject}" if token else None,
+        actor=f"user:{context.token.subject}" if context.token else None,
         extra={"mode": req.mode, "properties": req.properties},
     )
     await converge.remember(200, response)
@@ -236,13 +233,9 @@ class _NamespaceCreate(BaseModel):
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
-    # The connection, the authorization client and the resolver are opaque collaborators, not values pydantic can judge.
+    # The connection and the resolver are opaque collaborators, not values pydantic can judge.
     ns: SkipValidation[LanceNamespace]
-    # The service's settings were validated once, where they were built: validating them again re-runs their
-    # environment-bound checks on every request.
-    settings: SkipValidation[Settings]
-    token: Caller | None
-    client: SkipValidation[OpenFgaClient | None]
+    context: AuthzContext
     resolver: SkipValidation[Resolver]
     segments: list[str]
     #: The uuid this request minted for the namespace, which its grants are seeded under.
@@ -271,9 +264,7 @@ async def _create_in_its_mode(create: _NamespaceCreate, req: CreateNamespaceRequ
             response, kept_existing = (
                 await _create_or_replace_empty_namespace(
                     create.ns,
-                    settings=create.settings,
-                    token=create.token,
-                    client=create.client,
+                    context=create.context,
                     resolver=create.resolver,
                     segments=create.segments,
                     req=req,
@@ -284,7 +275,11 @@ async def _create_in_its_mode(create: _NamespaceCreate, req: CreateNamespaceRequ
             response, kept_existing = await run_in_threadpool(native.call, create.ns, "create_namespace", req), False
     except Exception:
         await object_grants.take_back_unless_namespace_stands(
-            create.ns, create.client, create.settings, token=create.token, segments=create.segments, uuid=create.minted, reason="not_written"
+            create.ns,
+            create.context,
+            segments=create.segments,
+            uuid=create.minted,
+            reason="not_written",
         )
         raise
     return _NamespaceCreated(response=response, kept_existing=kept_existing)
@@ -294,14 +289,12 @@ async def _require_parent_or_drop(create: _NamespaceCreate, *, undo: Callable[[]
     """Refuse a created namespace whose parent is not the one it was authorized under, undoing the create first."""
     try:
         await object_grants.require_parent_as_authorized(
-            create.ns, create.settings, create.client, resolver=create.resolver, resource="namespace", segments=create.segments
+            create.ns, create.context.settings, create.context.client, resolver=create.resolver, resource="namespace", segments=create.segments
         )
     except Exception:
         # A Restrict drop, which removes the namespace only while it holds nothing, so the undo destroys nobody's data.
         await object_grants.undo_a_create_whose_parent_is_unread(
-            create.client,
-            create.settings,
-            create.token,
+            create.context,
             resource="namespace",
             segments=create.segments,
             uuid=create.minted,
@@ -383,7 +376,7 @@ async def create_or_keep_namespace(ns: LanceNamespace, segments: list[str], req:
         return CreateNamespaceResponse(properties=getattr(described, "properties", None)), True
 
 
-async def _forget_namespace(settings: Settings, client: OpenFgaClient | None, token: Caller | None, *, namespace_uuid: str | None) -> None:
+async def _forget_namespace(context: AuthzContext, *, namespace_uuid: str | None) -> None:
     """Remove what a dropped namespace leaves behind: the records kept under its uuid when the caller read one before
     the drop, and its FGA tuples, with those of every child an earlier attempt removed, which its `child` edges still
     name (``object_grants.end_removed_subtree``).
@@ -392,19 +385,17 @@ async def _forget_namespace(settings: Settings, client: OpenFgaClient | None, to
     half-finished drop converges. A grant or record left behind governs nothing, since no other namespace holds the
     uuid it is keyed by ([[LH-524]]).
     """
-    async for _ in object_grants.end_removed_subtree(client, settings, root_uuid=namespace_uuid, removed=[], token=token):
+    async for _ in object_grants.end_removed_subtree(context, root_uuid=namespace_uuid, removed=[]):
         pass
 
 
 async def _judge_run_rule_declaration(
     ns: LanceNamespace,
-    settings: Settings,
-    token: Caller | None,
+    context: AuthzContext,
     *,
-    client: OpenFgaClient | None,
     segments: list[str],
     declared: bool,
-    overwrite: bool,
+    mode: CreateMode,
 ) -> None:
     """Refuse a create that declares the run rule, or an Overwrite that would drop one, unless an admin asks (ADR 0211).
 
@@ -417,19 +408,17 @@ async def _judge_run_rule_declaration(
     Raises:
         PermissionDeniedError: The caller is not the namespace's project admin (or the estate admin).
     """
-    replaced = await write_judge.declared_on(ns, segments) if overwrite else False
+    replaced = await write_judge.declared_on(ns, segments) if mode is CreateMode.OVERWRITE else False
     if not declared and not replaced:
         return
-    project = await run_in_threadpool(warehouses.project_of, settings.registry_root, settings.storage_options(), segments[0])
-    await door_gates.require_run_rule_authority(client, settings, token, project=project)
+    project = await run_in_threadpool(warehouses.project_of, context.settings.registry_root, context.settings.storage_options(), segments[0])
+    await door_gates.require_run_rule_authority(context, project=project)
 
 
 async def _create_or_replace_empty_namespace(
     ns: LanceNamespace,
     *,
-    settings: Settings,
-    token: Caller | None,
-    client: OpenFgaClient | None,
+    context: AuthzContext,
     resolver: Resolver,
     segments: list[str],
     req: CreateNamespaceRequest,
@@ -455,8 +444,8 @@ async def _create_or_replace_empty_namespace(
         pass
     canonical = fga_ids.canonical_object_id(segments)
     replaced = await objects.identify_namespace(resolver, ns, segments)
-    await door_gates.require_relation(client, settings, token, relation="can_delete", obj=replaced.fga_object(), label=f"namespace:{canonical}")
-    await hierarchy.require_namespace_unprotected(settings, replaced, force=False)
+    await door_gates.require_relation(context, relation="can_delete", obj=replaced.fga_object(), label=f"namespace:{canonical}")
+    await hierarchy.require_namespace_unprotected(context.settings, replaced, force=False)
     _, tables = await _drain_tables(ns, segments)
     _, children = await _drain_namespaces(ns, segments)
     if tables or children:
@@ -467,7 +456,7 @@ async def _create_or_replace_empty_namespace(
     await hierarchy.require_namespace_as_identified(ns, replaced)
     # A table landing between the listing and this drop is refused by the backend's own Restrict check.
     await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
-    await _forget_namespace(settings, client, token, namespace_uuid=replaced.uuid)
+    await _forget_namespace(context, namespace_uuid=replaced.uuid)
     return await run_in_threadpool(native.call, ns, "create_namespace", req)
 
 
@@ -476,9 +465,7 @@ async def list_namespaces(
     *,
     id: str,
     ns: NamespaceDep,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     resolver: ResolverDep,
     limit: ListLimit,
     page_token: str | None = None,
@@ -513,9 +500,11 @@ async def list_namespaces(
         response, names = await _drain_namespaces(ns, segments)
     else:
         response = ListNamespacesResponse(namespaces=[])
-        names = await run_in_threadpool(partial(warehouses.served_ids, settings.registry_root, settings.storage_options(), estate=settings.estate_warehouse))
+        names = await run_in_threadpool(
+            partial(warehouses.served_ids, context.settings.registry_root, context.settings.storage_options(), estate=context.settings.estate_warehouse)
+        )
 
-    if (authz := decisions.authorization(settings, client, token)) is not None:
+    if (authz := decisions.authorization(context)) is not None:
         response.namespaces, response.page_token = await visible_pages.authorized_page(
             authz,
             resolver,
@@ -890,9 +879,7 @@ async def drop_namespace(
     id: str,
     keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     announcer: AnnouncerDep,
     uuids: ObjectUuidsDep,
     resolver: ResolverDep,
@@ -949,21 +936,21 @@ async def drop_namespace(
         ns,
         _DropTarget(segments=segments, cascade=cascade, drop_mode=drop_mode, purge=purge, force=force),
         resolver=resolver,
-        settings=settings,
+        settings=context.settings,
         converge=converge,
     )
     if isinstance(identified, DropNamespaceResponse):
         return identified
-    plan = await _plan_the_drop(identified, uuids=uuids, settings=settings, announcer=announcer, token=token)
+    plan = await _plan_the_drop(identified, uuids=uuids, settings=context.settings, announcer=announcer, token=context.token)
     async with announcer.announcing(
         door="drop_namespace", target=identified.dropped.fga_object(), announcements=[*plan.dropped_tables.values(), plan.dropped_namespace]
     ) as filing:
         if plan.recoverable:
-            removal = await _trash_the_cascade(ns, plan, settings=settings, token=token)
+            removal = await _trash_the_cascade(ns, plan, settings=context.settings, token=context.token)
         elif cascade:
             # The dir backend cannot cascade (#117) — we enumerate and destroy bottom-up ourselves, announcing each table as
             # it goes ([[LH-495]]): the retry after a failure part-way lists only what still stands.
-            removal = await _destroy_announcing_each_table(ns, plan, settings=settings, token=token, filing=filing)
+            removal = await _destroy_announcing_each_table(ns, plan, settings=context.settings, token=context.token, filing=filing)
         else:
             restricted = await _drop_restrict(ns, req, drop_mode=drop_mode, converge=converge)
             if restricted.skipped:
@@ -972,9 +959,9 @@ async def drop_namespace(
             removal = _CascadeRemoval(response=restricted.response, removed_tables=frozenset())
         removed = [item for item in identified.descendants if item.kind == "namespace" or tuple(item.segments) in removal.removed_tables]
         if plan.recoverable:
-            await _settle_a_recoverable_drop(plan, removed, settings=settings, filing=filing)
+            await _settle_a_recoverable_drop(plan, removed, settings=context.settings, filing=filing)
         else:
-            await _end_what_a_destroying_drop_removed(plan, removed, settings=settings, client=client, token=token)
+            await _end_what_a_destroying_drop_removed(plan, removed, context=context)
         # Sent with the count of what this drop removed, under the id the planned event was filed with.
         await filing.send(
             plan.dropped_namespace.model_copy(
@@ -1218,9 +1205,7 @@ async def _settle_a_recoverable_drop(plan: _DropPlan, removed: list[objects.Gove
             await filing.send(plan.dropped_tables[tuple(item.segments)])
 
 
-async def _end_what_a_destroying_drop_removed(
-    plan: _DropPlan, removed: list[objects.GovernedObject], *, settings: Settings, client: OpenFgaClient | None, token: Caller | None
-) -> None:
+async def _end_what_a_destroying_drop_removed(plan: _DropPlan, removed: list[objects.GovernedObject], *, context: AuthzContext) -> None:
     """End what each object a destroying drop removed holds, the descendants first, then the namespace's own."""
     # End what each removed object holds AFTER the drop commits, so a failed or Restrict-refused drop leaves all of it in
     # place: the descendants first, found by the catalog's listing and by the `child` edges a failed earlier attempt
@@ -1228,7 +1213,7 @@ async def _end_what_a_destroying_drop_removed(
     # recoverable cascade (#96, the #75 rule): undrop rebuilds the subtree, and each object must come back configured
     # as it was and reachable by the owner, the one person who needs to undrop it. Those die with the bytes — at
     # purge, or when the sweep's expiry reclaims the trash.
-    async for _ in object_grants.end_removed_subtree(client, settings, root_uuid=plan.drop.dropped.uuid, removed=removed, token=token):
+    async for _ in object_grants.end_removed_subtree(context, root_uuid=plan.drop.dropped.uuid, removed=removed):
         pass
 
 
@@ -1508,10 +1493,8 @@ async def list_tables(
     *,
     id: str,
     ns: NamespaceDep,
-    settings: SettingsDep,
+    context: AuthzContextDep,
     so: StorageOptionsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
     resolver: ResolverDep,
     limit: ListLimit,
     page_token: str | None = None,
@@ -1549,7 +1532,7 @@ async def list_tables(
         candidates = await listings.holding_a_version(resolver, so, candidates)
     # With FGA on, keep only the tables the caller may actually read, each judged on the object its name resolves to
     # ([[LH-223]], [[LH-524]]).
-    if (authz := decisions.authorization(settings, client, token)) is not None:
+    if (authz := decisions.authorization(context)) is not None:
         response.tables, response.page_token = await visible_pages.authorized_page(
             authz,
             resolver,

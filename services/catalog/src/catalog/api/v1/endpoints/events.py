@@ -30,9 +30,9 @@ from fastapi import APIRouter, Query, Request
 from lance_namespace import ServiceUnavailableError
 
 from catalog.api.authz import door_gates
+from catalog.api.authz.context import AuthzContextDep
 from catalog.api.control_lane import STREAM, TOPIC, control_event_in, judge
-from catalog.api.dependencies import FgaClientDep, SettingsDep, app_wire
-from catalog.api.security import CurrentToken
+from catalog.api.dependencies import app_wire
 from catalog.core.config import Settings
 from catalog.schemas import EventsResponse
 from lakehouse.events.bus import Bus, BusUnavailableError
@@ -49,9 +49,7 @@ management_router = APIRouter(prefix="/management/v1/events", tags=["events"])
 async def poll_control_events(
     *,
     request: Request,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     since: Annotated[int, Query(ge=0, description="the last cursor the client saw (0 = baseline)")] = 0,
 ) -> EventsResponse:
     """Return control-plane change-events after ``since`` for a platform (estate) administrator.
@@ -61,16 +59,16 @@ async def poll_control_events(
     # Estate gate: can_observe_events on the fixed root object (NOT a caller-supplied project → no injectable
     # object id, and authz scope == the estate-wide data scope). 403 for a non-estate-admin, 503 on an FGA
     # outage, no-op when FGA is off.
-    await door_gates.require_relation(client, settings, token, relation="can_observe_events", obj=settings.fga_root_object)
-    events, cursor, reset = await _served(request, settings, since)
+    await door_gates.require_relation(context, relation="can_observe_events", obj=context.settings.fga_root_object)
+    events, cursor, reset = await _served(request, context.settings, since)
     # Audit only a MEANINGFUL poll (events delivered or a reset), NEVER an empty 5s tick — else a polling
     # console floods the #41 audit trail. The gate's own allow/deny audit still records every authorized read.
     if events or reset:
         audit(
             AuditAction.EVENT_STREAM_OPENED,
             AuditOutcome.SUCCESS,
-            subject=token.subject if token is not None else None,
-            resource=settings.fga_root_object,
+            subject=context.token.subject if context.token is not None else None,
+            resource=context.settings.fga_root_object,
             delivered=len(events),
             reset=reset,
         )

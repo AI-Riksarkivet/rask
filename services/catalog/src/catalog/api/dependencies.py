@@ -19,6 +19,7 @@ from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
 
 from catalog.core import run_context
+from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import Settings, StorePlane, get_settings
 from catalog.core.identifiers import is_spelled_as_a_uuid, parse_identifier, transaction_table
 from catalog.core.lineage_emit import LineageEmitter, OriginatorBoundEmitter, is_person_subject
@@ -282,6 +283,17 @@ async def get_provenance_namespace(request: Request, settings: SettingsDep) -> L
 
 
 ProvenanceNamespaceDep = Annotated[LanceNamespace | None, Depends(get_provenance_namespace)]
+
+
+def declared_base_judge(settings: Settings) -> BaseJudge:
+    """The judge every door and the lifespan judge a declared base with: governed storage is the catalog's roots and the
+    buckets the warehouse registry claims."""
+    return BaseJudge.from_settings(settings, bucket_claim=warehouses.bucket_claim)
+
+
+def governed_storage(settings: Settings) -> GovernedStorage:
+    """The storage the catalog governs, as :func:`declared_base_judge` reads it: its roots and the registry's buckets."""
+    return GovernedStorage.from_settings(settings, bucket_claim=warehouses.bucket_claim)
 
 
 def warehouse_object(settings: FgaSettings, warehouse_id: str) -> str | None:

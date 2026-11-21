@@ -40,7 +40,8 @@ from lance_namespace import (
 )
 
 from catalog.api.authz import door_gates, hierarchy, objects
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, ResolvedTableDep, Resolver, ResolverDep, SettingsDep
+from catalog.api.authz.context import AuthzContextDep
+from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, ResolvedTableDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import CatalogStore
 from catalog.core.identifiers import parse_identifier
@@ -269,9 +270,7 @@ async def set_project_policy(
     *,
     id: str,
     body: PolicyRequest,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     control: ControlEmitterDep,
 ) -> PolicyResponse:
     """Set (or replace) the project-level maintenance policy (#84) — the tenant-wide default the sweep
@@ -290,11 +289,11 @@ async def set_project_policy(
     is refused with 409 — even if a rival claim somehow got past ``create_warehouse``'s guards, it must
     not become a policy governing (and destroying version history in) the other tenant's data."""
     project = _validated_project(id)
-    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    so = settings.storage_options()
+    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
+    so = context.settings.storage_options()
     # Read whole ([[LH-572]]): a record that cannot be read is a bucket of this project the policy would leave on the
     # defaults, or another project's claim on one it would govern.
-    registered = await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so)
+    registered = await run_in_threadpool(warehouses.every_warehouse, context.settings.registry_root, so)
     buckets = sorted({r.bucket for r in registered if r.project == project and not r.is_deactivated})
     if not buckets:
         raise InvalidInputError(
@@ -309,39 +308,39 @@ async def set_project_policy(
                 "contested; refusing to set a policy over another tenant's data (fix the warehouse "
                 "records first)"
             )
-    record = await _set(settings, "project", project, compose=lambda stored: _record("project", project, body, existing=stored, uuid=None, buckets=buckets))
+    record = await _set(
+        context.settings, "project", project, compose=lambda stored: _record("project", project, body, existing=stored, uuid=None, buckets=buckets)
+    )
     log.info("maintenance_policy_set", extra={"kind": "project", "id": project})
     await emit_control(
         control,
         action="policy_set",
         object_type="policy",
         object_id=f"project:{project}",
-        actor=f"user:{token.subject}" if token else None,
+        actor=f"user:{context.token.subject}" if context.token else None,
         extra={"kind": "project", "buckets": buckets},
     )
     return _response(record)
 
 
 @project_router.post("/{id}/policy/describe", response_model_exclude_none=True)
-async def describe_project_policy(*, id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> PolicyResponse | PolicyUnset:
+async def describe_project_policy(*, id: str, context: AuthzContextDep) -> PolicyResponse | PolicyUnset:
     """The project's maintenance policy — admin-gated like set/delete (``project`` defines no
     reader-tier relation) — or ``set: false`` when none is set; a project the registry does not know is not found."""
     project = _validated_project(id)
-    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
     # Read after the gate, so a caller who may not administer the project is refused alike whether it exists or not.
-    if await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project) is None:
+    if await run_in_threadpool(project_registry.get_project, context.settings.registry_root, context.settings.storage_options(), project) is None:
         raise TableNotFoundError(f"project not found: {project}")
-    return await _describe(settings, kind="project", key=project, canonical=project, uuid=None)
+    return await _describe(context.settings, kind="project", key=project, canonical=project, uuid=None)
 
 
 @project_router.post("/{id}/policy/delete", response_model_exclude_none=True)
-async def delete_project_policy(
-    *, id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, control: ControlEmitterDep
-) -> PolicyDeleteResponse:
+async def delete_project_policy(*, id: str, context: AuthzContextDep, control: ControlEmitterDep) -> PolicyDeleteResponse:
     """Remove the project's maintenance policy (idempotent) — admin-gated."""
     project = _validated_project(id)
-    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    return await _delete(settings, control, token, kind="project", key=project, canonical=project)
+    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
+    return await _delete(context.settings, control, context.token, kind="project", key=project, canonical=project)
 
 
 def _named_now(settings: CatalogStore, records: list[PolicyRecord]) -> list[PolicyRecord]:
@@ -377,7 +376,7 @@ def _scoped_to_project(record: PolicyRecord, *, warehouse_ids: frozenset[str], p
 
 
 @projects_router.get("/{id}/policies", response_model_exclude_none=True)
-async def list_project_policies(*, id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectPoliciesResponse:
+async def list_project_policies(*, id: str, context: AuthzContextDep) -> ProjectPoliciesResponse:
     """Every maintenance policy governing data inside this project (#65) — the tenant-scoped VIEW.
 
     Admin-gated on ``project:<id>#can_administer``, exactly like ``describe_project_policy``: the trio
@@ -394,14 +393,14 @@ async def list_project_policies(*, id: str, settings: SettingsDep, token: Curren
     by the registry primitives themselves.
     """
     project = _validated_project(id)
-    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
-    so = settings.storage_options()
-    registered = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, so)
+    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
+    so = context.settings.storage_options()
+    registered = await run_in_threadpool(warehouses.list_warehouses, context.settings.registry_root, so)
     mine = [r for r in registered if r.project == project]
     buckets = sorted({r.bucket for r in mine})
     warehouse_ids = sorted({r.id for r in mine})
-    records = await run_in_threadpool(policies.list_policies, settings.registry_root, so)
-    named = await run_in_threadpool(_named_now, settings, records)
+    records = await run_in_threadpool(policies.list_policies, context.settings.registry_root, so)
+    named = await run_in_threadpool(_named_now, context.settings, records)
     scoped = [r for r in named if _scoped_to_project(r, warehouse_ids=frozenset(warehouse_ids), project=project)]
     scoped.sort(key=lambda r: (r.kind, r.id))
     log.info("maintenance_policies_listed", extra={"project": project, "policies": len(scoped), "buckets": len(buckets), "warehouses": len(warehouse_ids)})

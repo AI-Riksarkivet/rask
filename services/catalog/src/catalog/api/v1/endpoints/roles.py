@@ -38,8 +38,9 @@ from starlette.concurrency import run_in_threadpool
 from catalog.api import announcing
 from catalog.api.announcing import AnnouncerDep
 from catalog.api.authz import decisions, door_gates, grant_authority
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
-from catalog.api.security import CurrentToken, current_subject
+from catalog.api.authz.context import AuthzContext, AuthzContextDep
+from catalog.api.dependencies import ControlEmitterDep
+from catalog.api.security import current_subject
 from catalog.api.v1.endpoints.members import ProjectId
 from catalog.core.identifiers import require_names
 from catalog.schemas import AssigneeRequest, Role, RoleCreateRequest, RoleDeleted, RoleList, RoleRecord
@@ -55,8 +56,7 @@ if TYPE_CHECKING:
     from openfga_sdk.client import OpenFgaClient
 
     from catalog.api.security import Caller
-    from catalog.core.config import CatalogStore, Settings
-    from lakehouse.governed.settings import FgaSettings
+    from catalog.core.config import CatalogStore
 
 
 log = logging.getLogger(__name__)
@@ -64,30 +64,30 @@ log = logging.getLogger(__name__)
 management_router = APIRouter(prefix="/management/v1/projects", tags=["roles"])
 
 
-async def _project_gate(*, client: OpenFgaClient | None, settings: Settings, token: Caller | None, project_id: str, relation: str) -> OpenFgaClient:
+async def _project_gate(*, context: AuthzContext, project_id: str, relation: str) -> OpenFgaClient:
     """The client, once the caller holds ``relation`` on an existing ``project_id``; else the missing project's 404."""
     try:
-        await door_gates.require_relation(client, settings, token, relation=relation, obj=f"project:{project_id}")
+        await door_gates.require_relation(context, relation=relation, obj=f"project:{project_id}")
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
-    if await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project_id) is None:
+    if await run_in_threadpool(project_registry.get_project, context.settings.registry_root, context.settings.storage_options(), project_id) is None:
         raise TableNotFoundError(f"project not found: {project_id}")
-    return decisions.require_fga(settings, client, feature="roles")
+    return decisions.require_fga(context.settings, context.client, feature="roles")
 
 
-async def _role_gate(
-    *, client: OpenFgaClient | None, settings: Settings, token: Caller | None, project_id: str, role_id: uuid.UUID, relation: str
-) -> tuple[OpenFgaClient, RoleRecord]:
+async def _role_gate(*, context: AuthzContext, project_id: str, role_id: uuid.UUID, relation: str) -> tuple[OpenFgaClient, RoleRecord]:
     """The client and the role, once the caller holds ``relation`` on standing role ``role_id`` of ``project_id``; else
     the missing role's 404."""
     missing = TableNotFoundError(f"role not found: {role_id}")
     try:
-        await door_gates.require_relation(client, settings, token, relation=relation, obj=roles.role_object(role_id))
+        await door_gates.require_relation(context, relation=relation, obj=roles.role_object(role_id))
     except PermissionDeniedError as exc:
         raise missing from exc
-    if (role := await run_in_threadpool(roles.find_role, settings.registry_root, settings.storage_options(), project_id, role_id=role_id)) is None:
+    if (
+        role := await run_in_threadpool(roles.find_role, context.settings.registry_root, context.settings.storage_options(), project_id, role_id=role_id)
+    ) is None:
         raise missing
-    return decisions.require_fga(settings, client, feature="roles"), role
+    return decisions.require_fga(context.settings, context.client, feature="roles"), role
 
 
 def _announced_actor(token: Caller | None) -> str | None:
@@ -101,7 +101,11 @@ async def _assignees(client: OpenFgaClient, role_id: uuid.UUID) -> list[str]:
 
 @management_router.post("/{project_id}/roles", status_code=status.HTTP_201_CREATED)
 async def create_role(
-    *, project_id: ProjectId, body: RoleCreateRequest, client: FgaClientDep, control: ControlEmitterDep, settings: SettingsDep, token: CurrentToken
+    *,
+    project_id: ProjectId,
+    body: RoleCreateRequest,
+    context: AuthzContextDep,
+    control: ControlEmitterDep,
 ) -> Role:
     """Mint a role in the project, gated on ``can_create_role``: its ``project`` edge, then its record.
 
@@ -117,14 +121,14 @@ async def create_role(
         NamespaceAlreadyExistsError: A standing role of the project holds the name.
     """
     require_names([body.name])
-    wired = await _project_gate(client=client, settings=settings, token=token, project_id=project_id, relation="can_create_role")
-    actor = current_subject(token)
+    wired = await _project_gate(context=context, project_id=project_id, relation="can_create_role")
+    actor = current_subject(context.token)
     record = RoleRecord(id=uuid.uuid4(), project=project_id, name=body.name, description=body.description, created_at=datetime.now(UTC), created_by=actor)
     obj = roles.role_object(record.id)
     edge = fga_writes.ClientTuple(user=f"project:{project_id}", relation="project", object=obj)
     await fga_writes.write_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
     try:
-        await run_in_threadpool(roles.create_role_record, settings.registry_root, settings.storage_options(), record)
+        await run_in_threadpool(roles.create_role_record, context.settings.registry_root, context.settings.storage_options(), record)
     except RecordExistsError:
         await fga_writes.delete_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
         raise NamespaceAlreadyExistsError(f"project {project_id!r} already holds a role named {body.name!r}") from None
@@ -137,30 +141,34 @@ async def create_role(
         action="role_created",
         object_type="role",
         object_id=obj,
-        actor=_announced_actor(token),
+        actor=_announced_actor(context.token),
         extra={"project": project_id, "name": record.name},
     )
     return Role(**record.model_dump(), assignees=[])
 
 
 @management_router.get("/{project_id}/roles")
-async def list_roles(*, project_id: ProjectId, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> RoleList:
+async def list_roles(*, project_id: ProjectId, context: AuthzContextDep) -> RoleList:
     """The project's standing roles, ordered by name, gated on ``can_list_roles``; a role's assignees are its own read."""
-    await _project_gate(client=client, settings=settings, token=token, project_id=project_id, relation="can_list_roles")
-    records = await run_in_threadpool(roles.list_roles, settings.registry_root, settings.storage_options(), project_id)
+    await _project_gate(context=context, project_id=project_id, relation="can_list_roles")
+    records = await run_in_threadpool(roles.list_roles, context.settings.registry_root, context.settings.storage_options(), project_id)
     return RoleList(roles=[Role(**record.model_dump()) for record in records])
 
 
 @management_router.get("/{project_id}/roles/{role_id}")
-async def get_role(*, project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> Role:
+async def get_role(*, project_id: ProjectId, role_id: uuid.UUID, context: AuthzContextDep) -> Role:
     """One role and its direct assignees, gated on the role's ``can_read``."""
-    wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_read")
+    wired, role = await _role_gate(context=context, project_id=project_id, role_id=role_id, relation="can_read")
     return Role(**role.model_dump(), assignees=await _assignees(wired, role.id))
 
 
 @management_router.delete("/{project_id}/roles/{role_id}")
 async def delete_role(
-    *, project_id: ProjectId, role_id: uuid.UUID, client: FgaClientDep, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
+    *,
+    project_id: ProjectId,
+    role_id: uuid.UUID,
+    context: AuthzContextDep,
+    announcer: AnnouncerDep,
 ) -> RoleDeleted:
     """End a role, gated on its ``can_delete``, and on the project's ``can_grant_admin`` while the project's ``admin``
     reaches the role: every tuple naming it and on it, and its record (:func:`role_grants.end_role`).
@@ -174,17 +182,17 @@ async def delete_role(
         TableNotFoundError: The role is absent, or its caller may not delete it.
         ConcurrentModificationError: Ending it would strand a project.
     """
-    wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_delete")
-    actor, announced = current_subject(token), _announced_actor(token)
+    wired, role = await _role_gate(context=context, project_id=project_id, role_id=role_id, relation="can_delete")
+    actor, announced = current_subject(context.token), _announced_actor(context.token)
     ending = await announcing.role_ending(wired, role, actor=announced, reason="role_deleted")
     async with announcer.announcing(door="delete_role", target=roles.role_object(role.id), announcements=ending.announcements()) as filing:
         removed = await role_grants.end_role(
             wired,
             role,
-            control_root=settings.registry_root,
-            storage_options=settings.storage_options(),
+            control_root=context.settings.registry_root,
+            storage_options=context.settings.storage_options(),
             actor=actor,
-            permit=_admin_grant(client=wired, settings=settings, token=token, role=role),
+            permit=_admin_grant(context=context, role=role),
         )
         audit(AuditAction.ROLE_DELETE, AuditOutcome.SUCCESS, subject=actor, resource=roles.role_object(role.id), project=project_id, removed=len(removed))
         await ending.send(filing, removed, actor=announced, reason="role_deleted")
@@ -207,14 +215,14 @@ async def _assignee(*, settings: CatalogStore, role: RoleRecord, raw: str) -> st
     return user
 
 
-def _admin_grant(*, client: OpenFgaClient, settings: FgaSettings, token: Caller | None, role: RoleRecord) -> project_admins.Permit:
+def _admin_grant(*, context: AuthzContext, role: RoleRecord) -> project_admins.Permit:
     """Asks ``can_grant_admin`` on each project whose ``admin`` reaches ``role``; a refusal answers the missing role's
     404, as the role's own gate does."""
 
     async def permit(projects: list[str]) -> None:
         try:
             for project in projects:
-                await door_gates.require_relation(client, settings, token, relation="can_grant_admin", obj=project)
+                await door_gates.require_relation(context, relation="can_grant_admin", obj=project)
         except PermissionDeniedError as exc:
             raise TableNotFoundError(f"role not found: {role.id}") from exc
 
@@ -227,10 +235,8 @@ async def assign_role(
     project_id: ProjectId,
     role_id: uuid.UUID,
     body: AssigneeRequest,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     announcer: AnnouncerDep,
-    settings: SettingsDep,
-    token: CurrentToken,
 ) -> Role:
     """Assign one principal or standing role of the project to the role, gated on its ``can_manage_assignees``, and on
     the project's ``can_grant_admin`` while the project's ``admin`` reaches the role. Idempotent.
@@ -245,15 +251,15 @@ async def assign_role(
         PermissionDeniedError: The assignment would raise the caller's own access.
         ConcurrentModificationError: Who administers the project changed under both of the assignment's reads.
     """
-    wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
-    user = await _assignee(settings=settings, role=role, raw=body.user)
+    wired, role = await _role_gate(context=context, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+    user = await _assignee(settings=context.settings, role=role, raw=body.user)
     obj = roles.role_object(role.id)
-    if token is not None:
-        await grant_authority.refuse_self_elevation(wired, user=token.subject, grantee=user, relation=roles.ASSIGNEE, obj=obj)
-    actor = current_subject(token)
+    if context.token is not None:
+        await grant_authority.refuse_self_elevation(wired, user=context.token.subject, grantee=user, relation=roles.ASSIGNEE, obj=obj)
+    actor = current_subject(context.token)
     tup = fga_writes.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
-    told = announcing.grant_announcement(tup, action="grant_added", actor=_announced_actor(token))
-    permit = _admin_grant(client=wired, settings=settings, token=token, role=role)
+    told = announcing.grant_announcement(tup, action="grant_added", actor=_announced_actor(context.token))
+    permit = _admin_grant(context=context, role=role)
     async with announcer.announcing(door="role_assign", target=obj, announcements=[told]) as filing:
         if await project_admins.confer(wired, tup, actor=actor, origin="grant_api", permit=permit):
             audit(AuditAction.ROLE_ASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)
@@ -267,10 +273,8 @@ async def unassign_role(
     project_id: ProjectId,
     role_id: uuid.UUID,
     body: AssigneeRequest,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     announcer: AnnouncerDep,
-    settings: SettingsDep,
-    token: CurrentToken,
 ) -> Role:
     """Remove one assignee from the role, gated as an assignment is; removing one it does not hold is a no-op.
 
@@ -282,13 +286,13 @@ async def unassign_role(
         TableNotFoundError: The role is absent, or its caller may not manage its assignees.
         ConcurrentModificationError: The removal would leave the project nobody administers.
     """
-    wired, role = await _role_gate(client=client, settings=settings, token=token, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
+    wired, role = await _role_gate(context=context, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
     user = fga_ids.grantee_object(body.user)
     obj = roles.role_object(role.id)
-    actor = current_subject(token)
+    actor = current_subject(context.token)
     tup = fga_writes.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
-    told = announcing.grant_announcement(tup, action="grant_revoked", actor=_announced_actor(token))
-    permit = _admin_grant(client=wired, settings=settings, token=token, role=role)
+    told = announcing.grant_announcement(tup, action="grant_revoked", actor=_announced_actor(context.token))
+    permit = _admin_grant(context=context, role=role)
     async with announcer.announcing(door="role_unassign", target=obj, announcements=[told]) as filing:
         if await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api", permit=permit):
             audit(AuditAction.ROLE_UNASSIGN, AuditOutcome.SUCCESS, subject=actor, resource=obj, project=project_id, grantee=user)

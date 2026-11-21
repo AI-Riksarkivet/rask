@@ -29,6 +29,7 @@ from uuid import uuid4
 import pytest
 from lance_namespace import LanceNamespace
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.authz.objects import GovernedObject
 from catalog.api.pagination import MAX_LIST_LIMIT
 from catalog.api.v1.endpoints import namespaces as n_ep
@@ -152,12 +153,9 @@ def test_the_estate_listing_walks_every_warehouse_concurrently(tmp_path: Path, m
 
     asyncio.run(
         t_ep.list_all_tables(
+            context=AuthzContext(client=None, settings=_settings(tmp_path), token=None),
             request=cast("Any", SimpleNamespace()),
-            settings=_settings(tmp_path),
             so=StorageOptions(),
-            token=None,
-            client=None,
-            # With no caller and no OpenFGA the listing authorizes no candidate, so no name is resolved.
             resolver=cast("Any", None),
             limit=MAX_LIST_LIMIT,
         )

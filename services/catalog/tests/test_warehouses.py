@@ -27,6 +27,7 @@ from unfiled_announcer import unfiled
 
 from catalog.api import dependencies
 from catalog.api.authz import door_gates, hierarchy, object_grants, warehouse_grants
+from catalog.api.authz.context import AuthzContext
 from catalog.api.security import Caller
 from catalog.core.config import Settings
 from catalog.core.vending import ModeBVendor
@@ -116,7 +117,7 @@ def test_gate_fails_closed_on_outage(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(fga_reads, "check", outage)
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(door_gates.require_can_create_warehouse(MagicMock(), _fga_settings(), _TOKEN, project="acme"))
+        asyncio.run(door_gates.require_can_create_warehouse(AuthzContext(client=MagicMock(), settings=_fga_settings(), token=_TOKEN), project="acme"))
 
 
 _TOKEN = _caller("dex~alice")
@@ -137,7 +138,7 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     # Drive BOTH seeds: together they are the full tuple surface this feature writes — seed_warehouse
     # (owner + the project edge, from warehouse-create) and seed_project_admin (the tenant's admin,
     # minted by POST /management/v1/projects since the bootstrap exception died).
-    asyncio.run(warehouse_grants.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
+    asyncio.run(warehouse_grants.seed_warehouse(AuthzContext(client=MagicMock(), settings=_fga_settings(), token=_TOKEN), warehouse_id="wh-a", project="acme"))
     granted = asyncio.run(object_grants.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN.subject, project="acme", admin="dex~alice"))
     assert granted is True  # reported, so create_project only audits a grant that really happened
     assert captured, "the seeds wrote no tuples"
@@ -225,10 +226,8 @@ def _create_as(settings: Settings, sub: str, body: Any, store: Any) -> Any:  # n
     return _on(
         store,
         lambda client: wh_ep.create_warehouse(
+            context=AuthzContext(client=client, settings=settings, token=_caller(sub)),
             request=_request(settings),
-            settings=settings,
-            token=_caller(sub),
-            client=client,
             control=NoopControlEmitter(),
             vendor=ModeBVendor(),  # the default `get_vendor` falls back to: no direct credentials, so the probe skips
             body=body,
@@ -240,7 +239,12 @@ def _create_project_as(settings: Settings, token: Caller, body: Any, store: Any)
     from catalog.api.v1.endpoints import projects as proj_ep
     from lakehouse.events.control_emit import NoopControlEmitter
 
-    return _on(store, lambda client: proj_ep.create_project(settings=settings, token=token, client=client, announcer=unfiled(NoopControlEmitter()), body=body))
+    return _on(
+        store,
+        lambda client: proj_ep.create_project(
+            context=AuthzContext(client=client, settings=settings, token=token), announcer=unfiled(NoopControlEmitter()), body=body
+        ),
+    )
 
 
 def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> None:

@@ -40,9 +40,9 @@ from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUna
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.authz import decisions, door_gates
+from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
-from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, require_names
 from catalog.services import table_claims
 from catalog.services.object_uuids import UnidentifiedObjectError
@@ -97,34 +97,34 @@ def _is_decidable(relation: str) -> bool:
 management_router = APIRouter(prefix=DECISIONS_PREFIX, tags=["decisions"])
 
 
-async def require_a_caller(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> Caller:
+async def require_a_caller(context: AuthzContextDep) -> Caller:
     """The signed-in caller, with authorization wired: 406 with it off, 503 unwired, 401 with no caller.
 
     The check route's whole gate: what the caller is answered is then its scope's ([[LH-563]]).
     """
-    decisions.require_fga(settings, client, feature="authorization decisions")
-    if token is None:
+    decisions.require_fga(context.settings, context.client, feature="authorization decisions")
+    if context.token is None:
         raise UnauthenticatedError("authentication required")
-    return token
+    return context.token
 
 
 SignedInCaller = Annotated[Caller, Depends(require_a_caller)]
 
 
-async def _require(client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, permission: str) -> None:
+async def _require(context: AuthzContext, *, permission: str) -> None:
     """Refuse a caller that does not hold ``permission`` on the estate root: 401, 403, 406 or 503."""
-    caller = await require_a_caller(client, settings, token)
-    await door_gates.require_relation(client, settings, caller, relation=permission, obj=settings.fga_root_object)
+    await require_a_caller(context)
+    await door_gates.require_relation(context, relation=permission, obj=context.settings.fga_root_object)
 
 
-async def require_can_expand_members(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
+async def require_can_expand_members(context: AuthzContextDep) -> None:
     """The list-users route's gate: the caller is a `member_expander`."""
-    await _require(client, settings, token, permission="can_expand_members")
+    await _require(context, permission="can_expand_members")
 
 
-async def require_can_probe_governance(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
+async def require_can_probe_governance(context: AuthzContextDep) -> None:
     """The governed route's gate: the caller is a `governance_prober`."""
-    await _require(client, settings, token, permission="can_probe_governance")
+    await _require(context, permission="can_probe_governance")
 
 
 def _wired_client(client: FgaClientDep) -> OpenFgaClient:

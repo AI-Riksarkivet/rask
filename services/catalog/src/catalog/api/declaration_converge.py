@@ -31,6 +31,7 @@ from pydantic import BaseModel, Field
 from catalog.api import announcing
 from catalog.api.announcing import Announcer, get_announcer
 from catalog.api.authz import decisions, hierarchy, warehouse_grants
+from catalog.api.authz.context import AuthzContext
 from catalog.api.declared import DECLARATION
 from catalog.api.dependencies import ObjectUuids, Resolver, get_fga_client, get_vendor
 from catalog.api.ticks import Tick
@@ -150,7 +151,13 @@ class _Converger:
             ids = warehouse_doors.validated_ids(self._settings, body)
             await hierarchy.require_project_exists(self._settings, declared.project)
             record = await warehouse_doors.establish_warehouse(
-                self._request, self._settings, body, ids=ids, client=self._client, control=self._control, vendor=self._vendor, author=DECLARATION, owner=None
+                self._request,
+                AuthzContext(client=self._client, settings=self._settings, token=None),
+                body,
+                ids=ids,
+                control=self._control,
+                vendor=self._vendor,
+                author=DECLARATION,
             )
             if record.managed_by != GIT:
                 await run_in_threadpool(warehouses.set_warehouse_manager, self._root, self._so, declared.id, manager=GIT)

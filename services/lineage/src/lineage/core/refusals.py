@@ -1,8 +1,8 @@
 """The refusals a lineage door answers with that no grant repairs: each its own type, because its verdict differs.
 
 A plain :class:`PermissionDeniedError` names a person who lacks a grant, and writing the tuple repairs it. These four
-name a defect no tuple, redelivery or restart changes, so the doors take the event and count it
-(`lineage.core.metrics.refusal_outcome`) rather than park it for a repair that cannot come.
+name a defect no tuple, redelivery or restart changes, so the doors take the event and count it rather than park it
+for a repair that cannot come.
 """
 
 from __future__ import annotations

@@ -24,9 +24,8 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidTableStateError, ServiceUnavailableError, TableBranchNotFoundError
 
-from catalog.api.dependencies import DoorTableDep, FgaClientDep, Resolver, ResolverDep, SettingsDep, VendorDep
+from catalog.api.dependencies import DoorTableDep, Resolver, ResolverDep, SettingsDep, VendorDep, declared_base_judge
 from catalog.api.security import CurrentSubject, CurrentToken
-from catalog.core.base_judge import BaseJudge
 from catalog.core.vending import (
     TableRecords,
     Tier,
@@ -40,7 +39,6 @@ from catalog.core.vending import (
 )
 from catalog.core.version_retention import recorded_branch
 from catalog.schemas import CredentialResponse, VendedCredentials
-from catalog.services import warehouses
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.records import maintenance_policies
@@ -116,7 +114,6 @@ async def vend_credentials(
     settings: SettingsDep,
     token: CurrentToken,
     subject: CurrentSubject,
-    client: FgaClientDep,
     vendor: VendorDep,
     tier: Annotated[
         Tier,
@@ -164,7 +161,7 @@ async def vend_credentials(
         # [[LH-279]] A BASE NOTHING SANCTIONED REFUSES THE VEND, before the classification answer below can
         # route it anywhere: a writer can plant any root in its manifest, and a credential granting READ on
         # it — or a server-mediated read through it — hands over another table's bytes. 409, not a fallback.
-        bases = await run_in_threadpool(require_vendable_bases, location, facts, BaseJudge.from_settings(settings, bucket_claim=warehouses.bucket_claim))
+        bases = await run_in_threadpool(require_vendable_bases, location, facts, declared_base_judge(settings))
     except Exception:
         await run_in_threadpool(table.require_held)
         raise

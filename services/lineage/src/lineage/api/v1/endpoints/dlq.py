@@ -45,7 +45,6 @@ from lineage.api.fga_deps import (
     Governed,
     enforce_bus_authz,
     enforce_output_authz,
-    governed,
     require_parks_reader,
     require_parks_replayer,
 )
@@ -125,7 +124,7 @@ async def list_dlq(
     events = [
         (_summary(run_id, event_json), next(scopes) if event is not None else Governed()) for (run_id, event_json), event in zip(staged, parsed, strict=True)
     ]
-    visible = await governed(datasets, settings.fga_enabled, events, refs=lambda pair: pair[1])
+    visible = await datasets.governed(events, refs=lambda pair: pair[1])
     return DlqBacklog(depth=depth, oldest_age_seconds=oldest_age, events=[summary for summary, _ in visible], limit=limit)
 
 

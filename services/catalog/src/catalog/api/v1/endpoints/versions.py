@@ -29,11 +29,11 @@ from lance_namespace import (
     ListTableVersionsResponse,
     UnsupportedOperationError,
 )
-from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.api import lineage_deps
 from catalog.api.authz import door_gates, write_doors
+from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.dependencies import (
     DoorTableDep,
     FgaClientDep,
@@ -41,16 +41,15 @@ from catalog.api.dependencies import (
     ObjectUuidsDep,
     Resolver,
     ResolverDep,
-    SettingsDep,
     StorageOptionsDep,
+    declared_base_judge,
 )
 from catalog.api.pagination import ListLimit, paginate_versions
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import CurrentToken
 from catalog.core import run_context, version_retention
-from catalog.core.base_judge import BaseJudge
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
-from catalog.services import maintenance, managed_versions, table_inputs, warehouses
+from catalog.services import maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
 from catalog.services.tables import versions
 from lakehouse.governed import fga_ids
@@ -202,10 +201,8 @@ async def create_table_version(
     id: str,
     body: CreateTableVersionRequest,
     table: DoorTableDep,
-    settings: SettingsDep,
+    context: AuthzContextDep,
     so: StorageOptionsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
     resolver: ResolverDep,
@@ -227,7 +224,7 @@ async def create_table_version(
     await run_in_threadpool(table.require_held)
     location = table.location
     canonical = fga_ids.canonical_object_id(segments)
-    caller = token.subject if token is not None else None
+    caller = context.token.subject if context.token is not None else None
     ref = await run_in_threadpool(managed_versions.commit_ref, location, so, version_retention.recorded_branch(body.branch))
     try:
         staged = await run_in_threadpool(managed_versions.stage, ref, so, body)
@@ -236,12 +233,12 @@ async def create_table_version(
         await run_in_threadpool(table.hand_turn, ref.branch, managed_versions.writer_turn(caller, exc.transaction_uuid, exc.operation))
         raise
     commit = _StagedCommit(staged=staged, table=table, so=so, segments=segments, location=location, ref=ref, canonical=canonical, caller=caller)
-    judged = await _judge_the_staged_version(commit, settings=settings, token=token, client=client, resolver=resolver)
-    response = await _finalize_the_judged_version(commit, judged, body=body, settings=settings)
+    judged = await _judge_the_staged_version(commit, context=context, resolver=resolver)
+    response = await _finalize_the_judged_version(commit, judged, body=body, settings=context.settings)
     audit(
         AuditAction.COMMIT_VERSION,
         AuditOutcome.SUCCESS,
-        subject=token.subject if token is not None else None,
+        subject=context.token.subject if context.token is not None else None,
         resource=f"table:{canonical}",
         version=staged.version,
         operation=staged.operation,
@@ -252,7 +249,7 @@ async def create_table_version(
         segments,
         location=location,
         so=so,
-        token=token,
+        token=context.token,
         operation=managed_versions.lineage_operation(staged),
         uuids=uuids,
         pin_version=staged.version,
@@ -281,18 +278,16 @@ class _StagedCommit(BaseModel):
     caller: str | None
 
 
-async def _judge_the_staged_version(
-    commit: _StagedCommit, *, settings: Settings, token: Caller | None, client: OpenFgaClient | None, resolver: Resolver
-) -> _JudgedVersion:
+async def _judge_the_staged_version(commit: _StagedCommit, *, context: AuthzContext, resolver: Resolver) -> _JudgedVersion:
     """Judge the staged version at the door's location, and record its author where it is announced."""
     try:
         await door_gates.require_staged_operation(
-            client, settings, token, segments=commit.segments, location=commit.location, operation=commit.staged.operation, creates=commit.staged.creates
+            context, segments=commit.segments, location=commit.location, operation=commit.staged.operation, creates=commit.staged.creates
         )
-        judge = BaseJudge.from_settings(settings, bucket_claim=warehouses.bucket_claim)
+        judge = declared_base_judge(context.settings)
         record = await run_in_threadpool(judge.read_record, commit.location)
         run = run_context.from_properties(commit.staged.properties)
-        run_context.require_caller_authored(commit.staged.properties, caller=token.subject if token is not None else None)
+        run_context.require_caller_authored(commit.staged.properties, caller=context.token.subject if context.token is not None else None)
         verdict = await run_in_threadpool(
             partial(
                 managed_versions.judge,
@@ -305,13 +300,13 @@ async def _judge_the_staged_version(
             commit.so,
         )
         declared = await write_doors.judge_staged_run(
-            settings, token, client, resolver=resolver, ns=commit.table.namespace, segments=commit.segments, run=run, adds_data=verdict.adds_data
+            context, resolver=resolver, ns=commit.table.namespace, segments=commit.segments, run=run, adds_data=verdict.adds_data
         )
         if commit.staged.creates:
             # A later version may change no field's labels (`managed_versions`); the first sets them, as a create does.
             labels = await run_in_threadpool(managed_versions.staged_field_labels, commit.staged, commit.so)
             await door_gates.require_classifier_to_set_labels(
-                client, settings, token, obj=fga_ids.table_object(commit.table.resolved.require_uuid()), label=commit.canonical, labels=labels
+                context, obj=fga_ids.table_object(commit.table.resolved.require_uuid()), label=commit.canonical, labels=labels
             )
         created = await _record_the_staged_author(commit)
     except BaseException:

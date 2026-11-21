@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable, Collection
 from http import HTTPStatus
-from typing import Any, Literal, cast
+from typing import Any, Literal, Protocol, cast
 
 from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
@@ -247,6 +247,12 @@ def _delete_reported_absent(exc: ApiException) -> bool:
     absent, and the audit split in :func:`delete_tuples` needs it.
     """
     return exc.status == 400 and exc.code == ErrorCode.WRITE_FAILED_DUE_TO_INVALID_INPUT
+
+
+class TupleStore(Protocol):
+    """A door's call that changes caller-named tuples: :func:`write_tuples` or :func:`delete_tuples`."""
+
+    async def __call__(self, client: OpenFgaClient, tuples: list[ClientTuple], /, *, actor: str, origin: TupleOrigin) -> object: ...
 
 
 class RevokeInterrupted(ServiceUnavailableError):
@@ -525,6 +531,7 @@ __all__ = [
     "RelationshipCondition",
     "RevokeInterrupted",
     "TupleOrigin",
+    "TupleStore",
     "commit_unless_changed",
     "delete_tuples",
     "grant_before_arrival",

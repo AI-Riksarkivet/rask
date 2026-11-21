@@ -185,10 +185,9 @@ def verify_against_footers(location: str, so: StorageOptions, fragments: Sequenc
         )
     paths = sorted({data_file.path for fragment in fragments for data_file in fragment.files})
     footers = dict(zip(paths, _read_footers(location, so, paths), strict=True))
-    every_field = _format_version(table.data_storage_version) == (2, 0)
     for index, fragment in enumerate(fragments):
         for data_file in fragment.files:
-            _verify_one(index, data_file, footers[data_file.path], physical_rows=fragment.physical_rows, table=table, every_field=every_field)
+            _verify_one(index, data_file, footers[data_file.path], physical_rows=fragment.physical_rows, table=table)
 
 
 def _format_version(version: str) -> tuple[int, int]:
@@ -216,9 +215,7 @@ def _read_footers(location: str, so: StorageOptions, paths: Sequence[str]) -> li
         return list(pool.map(_read, paths))
 
 
-def _verify_one(
-    index: int, data_file: DataFile, footer: _FooterMetadata | Exception, *, physical_rows: int, table: lance.LanceDataset, every_field: bool
-) -> None:
+def _verify_one(index: int, data_file: DataFile, footer: _FooterMetadata | Exception, *, physical_rows: int, table: lance.LanceDataset) -> None:
     path = data_file.path
     if isinstance(footer, Exception):
         if _names(footer, _UNREADABLE_FILE_MARKERS):
@@ -243,7 +240,7 @@ def _verify_one(
             f"its footer has {columns} columns, so it declares {columns} fields with column_indices {list(range(columns))}; "
             f"it declares fields {data_file.fields} with column_indices {data_file.column_indices}",
         )
-    expected = _fields_the_footer_names(index, path, footer.schema, table=table, every_field=every_field)
+    expected = _fields_the_footer_names(index, path, footer.schema, table=table)
     if data_file.fields != expected:
         raise _refuse(index, path, f"its columns are the table's field ids {expected} in that order, and it declares {data_file.fields}")
 
@@ -298,14 +295,11 @@ def _footer_matches(column: pa.Field, declared: pa.Field) -> bool:
     return pa.types.is_large_list(wanted) and pa.types.is_large_list(found) and _footer_matches(found.value_field, wanted.value_field)
 
 
-def _fields_the_footer_names(index: int, path: str, schema: pa.Schema, *, table: lance.LanceDataset, every_field: bool) -> list[int]:
-    """The field ids, in column order, of the table fields this footer's columns are.
-
-    Which ids a data file lists is Lance's per-version rule, measured on pylance 12.0.0 with struct,
-    list, fixed-size-list, nested-struct and map columns: a 2.0 file lists every field depth-first,
-    parents included; 2.1 and 2.2 list only leaves, and a blob-v2 column as the one id of its
-    descriptor. A column the table lacks, or whose type differs from the table's, matches no field.
+def _fields_the_footer_names(index: int, path: str, schema: pa.Schema, *, table: lance.LanceDataset) -> list[int]:
+    """The field ids, in column order, of the table fields this footer's columns are, by the table's
+    :class:`_ColumnRule`. A column the table lacks, or whose type differs from the table's, matches no field.
     """
+    rule = _COLUMN_RULES.get(_format_version(table.data_storage_version), _LEAVES_ONLY)
     by_name = {field.name(): field for field in table.lance_schema.fields()}
     expected: list[int] = []
     for column in _footer_columns(schema):
@@ -324,7 +318,7 @@ def _fields_the_footer_names(index: int, path: str, schema: pa.Schema, *, table:
                     "struct carrying lance-encoding:blob and every other field as the table types it",
                 )
             raise _refuse(index, path, f"its column {column.name!r} is {column.type} and the table's is {declared.type}")
-        expected.extend(_column_ids(field, declared, every_field=every_field))
+        expected.extend(_column_ids(field, declared, rule=rule))
     return expected
 
 
@@ -336,21 +330,38 @@ class _LanceField(Protocol):
     def children(self) -> Sequence[_LanceField]: ...
 
 
-def _is_packed(declared: pa.Field, *, every_field: bool) -> bool:
-    """A struct Lance packs is one column: "Only leaf fields and packed structs have column indices" (`lance_docs/lance/format/table/index.md`
-    § Data Files). Measured on pylance 13.0.0, a 2.0 file packs a struct carrying any ``packed`` value and a 2.1 or 2.2
-    file only one whose value Lance reads as true."""
-    return encoding.packs_at_2_0(declared) if every_field else encoding.packs(declared)
+class _ColumnRule(BaseModel):
+    """Which field ids a data file of one format version lists, Lance's per-version rule.
+
+    Measured on pylance 12.0.0 with struct, list, fixed-size-list, nested-struct and map columns: a 2.0 file lists every
+    field depth-first, parents included; 2.1 and 2.2 list only leaves, and a blob-v2 column as the one id of its
+    descriptor. A struct Lance packs is one column: "Only leaf fields and packed structs have column indices"
+    (`lance_docs/lance/format/table/index.md` § Data Files). Measured on pylance 13.0.0, a 2.0 file packs a struct
+    carrying any ``packed`` value and a 2.1 or 2.2 file only one whose value Lance reads as true.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    #: A 2.0 file: every field listed, parents included, and a struct carrying any ``packed`` value packed.
+    at_2_0: bool
+
+    def packs(self, declared: pa.Field) -> bool:
+        """Whether a file under this rule holds the struct ``declared`` as one packed column."""
+        return encoding.packs_at_2_0(declared) if self.at_2_0 else encoding.packs(declared)
 
 
-def _column_ids(field: _LanceField, declared: pa.Field, *, every_field: bool) -> list[int]:
+_LEAVES_ONLY: Final = _ColumnRule(at_2_0=False)
+_COLUMN_RULES: Final = {(2, 0): _ColumnRule(at_2_0=True)}
+
+
+def _column_ids(field: _LanceField, declared: pa.Field, *, rule: _ColumnRule) -> list[int]:
     """A blob-v2 field is one column, its descriptor's, wherever it lies (`lance_docs/lance/format/table/blob.md` § Data File Schema)."""
     children = field.children()
-    if not children or blobs.is_blob_field(declared) or _is_packed(declared, every_field=every_field):
+    if not children or blobs.is_blob_field(declared) or rule.packs(declared):
         return [field.id()]
     declared_children = (declared.type.field(i) for i in range(declared.type.num_fields))
-    nested = [column for child, arrow in zip(children, declared_children, strict=True) for column in _column_ids(child, arrow, every_field=every_field)]
-    return [field.id(), *nested] if every_field else nested
+    nested = [column for child, arrow in zip(children, declared_children, strict=True) for column in _column_ids(child, arrow, rule=rule)]
+    return [field.id(), *nested] if rule.at_2_0 else nested
 
 
 def blob_columns(table: lance.LanceDataset) -> list[str]:

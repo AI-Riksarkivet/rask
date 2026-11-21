@@ -24,7 +24,7 @@ from lakehouse.events.signing import SIGNATURE_FACET
 from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.naming import CATALOG_DELIMITER
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
-from lineage.api.fga_deps import FilterDep, Governed, governed, governed_refs, output_refs, require_event_feed_reader, upstreams_named_as_tables
+from lineage.api.fga_deps import FilterDep, Governed, governed_refs, output_refs, require_event_feed_reader, upstreams_named_as_tables
 from lineage.api.security import CurrentToken
 from lineage.models import Dataset
 from lineage.schemas import EventRecord, Events, FeedProjection, ProjectedEvent
@@ -422,7 +422,7 @@ async def get_events(
         return governs[record.seq]
 
     async def judge(read: list[EventRecord]) -> list[EventRecord]:
-        return await governed(datasets, settings.fga_enabled, [record for record in read if scope.names(record)], refs=governed_by)
+        return await datasets.governed([record for record in read if scope.names(record)], refs=governed_by)
 
     def undecided(read: list[EventRecord]) -> int:
         return datasets.undecided(obj for record in read if scope.names(record) for obj in governed_by(record).objects)

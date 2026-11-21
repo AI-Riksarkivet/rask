@@ -37,6 +37,7 @@ import pytest
 from lance_namespace import DescribeNamespaceResponse, DropNamespaceRequest, DropNamespaceResponse, InvalidInputError, NamespaceNotFoundError
 from unfiled_announcer import unfiled
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.idempotency import KeyedDoor
 from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.config import Settings
@@ -109,13 +110,11 @@ async def _drop(
 
     ns, settings = MagicMock(), cast(Settings, _Settings())
     return await ns_ep.drop_namespace(
+        context=AuthzContext(client=None, settings=settings, token=None),
         id="ghost",
         keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
         ns=ns,
         resolver=door_resolver(settings),
-        settings=settings,
-        token=None,
-        client=None,
         announcer=unfiled(_Announced()),
         body=DropNamespaceRequest(id=["ghost"], mode=mode, behavior=behavior),
         uuids=NO_OBJECT_UUIDS,

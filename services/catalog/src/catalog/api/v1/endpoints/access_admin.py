@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Path, Query
 from fastapi.concurrency import run_in_threadpool
@@ -31,10 +31,12 @@ from lance_namespace import (
     TableNotFoundError,
 )
 from openfga_sdk import OpenFgaClient
+from pydantic import BaseModel, ConfigDict
 
 from catalog.api import announcing
 from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.authz import decisions, door_gates
+from catalog.api.authz.context import AuthzContextDep
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import CatalogStore, Settings
@@ -257,7 +259,7 @@ def _require_fga_client(client: FgaClientDep) -> OpenFgaClient:
 EstateFgaClient = Annotated[OpenFgaClient, Depends(_require_fga_client)]
 
 
-async def estate_gate(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
+async def estate_gate(context: AuthzContextDep) -> None:
     """The estate-admin door every ``/management/v1/access`` route clears (mirrors ``/management/v1/events``).
 
     ON THE ROUTER, not called nine times by hand. This used to be `_estate_gate`, opened explicitly at
@@ -275,8 +277,8 @@ async def estate_gate(client: FgaClientDep, settings: SettingsDep, token: Curren
     platform privilege, NOT per-project, because the tuple store is the whole estate's authorization state
     (authz scope == data scope, the #12 events fix). The gate itself audits the allow/deny.
     """
-    wired = decisions.require_fga(settings, client, feature="FGA administration")
-    await door_gates.require_relation(wired, settings, token, relation="can_administer_authz", obj=settings.fga_root_object)
+    decisions.require_fga(context.settings, context.client, feature="FGA administration")
+    await door_gates.require_relation(context, relation="can_administer_authz", obj=context.settings.fga_root_object)
 
 
 #: ONE DOOR for the whole router. See `estate_gate` — this replaces nine hand-written calls, and is
@@ -400,31 +402,45 @@ def _validated_write_tuple(body: AccessTuple, *, evaluated: bool) -> fga_writes.
     return tup
 
 
-async def _mutate_tuple(client: OpenFgaClient, announcer: Announcer, token: Caller | None, *, body: AccessTuple, write: bool) -> AccessTuple:
-    tup = _validated_write_tuple(body, evaluated=write)
+class _TupleChange(BaseModel):
+    """What a raw-tuple door does to the store, and how it audits and announces it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    #: Whether OpenFGA evaluates the tuple (:func:`_validated_write_tuple`): a write does, a delete is resolved by key.
+    evaluated: bool
+    event: AuditAction
+    action: Literal["grant_added", "grant_revoked"]
+    door: str
+
+
+_WRITE = _TupleChange(evaluated=True, event=AuditAction.ACCESS_TUPLE_WRITE, action="grant_added", door="access_tuple_write")
+_DELETE = _TupleChange(evaluated=False, event=AuditAction.ACCESS_TUPLE_DELETE, action="grant_revoked", door="access_tuple_delete")
+
+
+async def _change_tuple(
+    client: OpenFgaClient, announcer: Announcer, token: Caller | None, *, body: AccessTuple, change: _TupleChange, store: fga_writes.TupleStore
+) -> AccessTuple:
+    tup = _validated_write_tuple(body, evaluated=change.evaluated)
     actor = token.subject if token else "anonymous"
-    event = AuditAction.ACCESS_TUPLE_WRITE if write else AuditAction.ACCESS_TUPLE_DELETE
     # The control-plane feed documents that GRANTS tick the cursor — and the per-object grant surface
     # emits, so a raw-tuple write that stayed silent made this the one grant path live surfaces could
     # not see. Filed before the store mutation and sent after it, like access.py ([[LH-576]]).
     condition = getattr(tup, "condition", None)
     told = announcing.grant_announcement(
         tup,
-        action="grant_added" if write else "grant_revoked",
+        action=change.action,
         actor=f"user:{token.subject}" if token else None,
         extra={"condition": condition.name} if condition is not None else None,
     )
-    async with announcer.announcing(door="access_tuple_write" if write else "access_tuple_delete", target=tup.object, announcements=[told]) as filing:
+    async with announcer.announcing(door=change.door, target=tup.object, announcements=[told]) as filing:
         try:
-            if write:
-                await fga_writes.write_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
-            else:
-                await fga_writes.delete_tuples(client, [tup], actor=actor, origin="admin_api")  # noqa: TID251
+            await store(client, [tup], actor=actor, origin="admin_api")
         except ServiceUnavailableError:
             # Only the FAILURE row is emitted here. The SUCCESS row now comes from inside
             # `fga_writes.write_tuples`/`delete_tuples`, so every write site gets one — and emitting it here too
             # would give this one surface two rows per write while the other six still had none.
-            audit(event, AuditOutcome.FAILURE, subject=actor, resource=tup.object, grantee=tup.user, relation=tup.relation)
+            audit(change.event, AuditOutcome.FAILURE, subject=actor, resource=tup.object, grantee=tup.user, relation=tup.relation)
             raise
         await filing.send(told)
     return _as_access_tuple(tup)
@@ -440,7 +456,7 @@ async def write_access_tuple(*, client: EstateFgaClient, announcer: AnnouncerDep
     named by its name is written on its uuid object (:func:`_held_object`), the one every decision reads.
     """
     held = body.model_copy(update={"object": await _held_object(resolver, body.object)})
-    return await _mutate_tuple(client, announcer, token, body=held, write=True)
+    return await _change_tuple(client, announcer, token, body=held, change=_WRITE, store=fga_writes.write_tuples)  # noqa: TID251
 
 
 @management_router.delete("/tuples")
@@ -455,7 +471,7 @@ async def delete_access_tuple(
     decides what is revoked.
     """
     held = AccessTuple(user=body.user, relation=body.relation, object=await _held_object(resolver, body.object), condition=body.condition)
-    return await _mutate_tuple(client, announcer, token, body=held, write=False)
+    return await _change_tuple(client, announcer, token, body=held, change=_DELETE, store=fga_writes.delete_tuples)  # noqa: TID251
 
 
 @management_router.get("/model")

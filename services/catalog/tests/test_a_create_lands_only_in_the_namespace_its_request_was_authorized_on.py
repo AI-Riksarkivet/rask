@@ -26,6 +26,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ConcurrentModificationError, ServiceUnavailableError
 
 from catalog.api.authz import route_guard
+from catalog.api.authz.context import AuthzContext
 from catalog.api.dependencies import FgaClientDep, ResolverDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.core import native
@@ -85,7 +86,7 @@ def _send_raced(catalog: Any, tmp_path: Path, path: str, sent: dict[str, Any]) -
         as_alice_made_it.append(catalog.store.tuples())
 
     async def _authorize_then_race(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
-        await route_guard.authorize(request, settings, token, injected=injected, resolver=resolver)
+        await route_guard.authorize(request, AuthzContext(client=injected, settings=settings, token=token), resolver=resolver)
         await run_in_threadpool(_drop_and_create_again)
 
     app.dependency_overrides[route_guard.authorize] = _authorize_then_race

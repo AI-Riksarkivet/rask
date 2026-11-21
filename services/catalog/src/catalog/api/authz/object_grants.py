@@ -1,5 +1,4 @@
-"""An object's grants over its life: seeded on create, taken back from a create that fails, its parent edge moved on a
-rename, and revoked on removal or expiry."""
+"""An object's grants over its life, from its create to its removal."""
 
 from __future__ import annotations
 
@@ -14,6 +13,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ConcurrentModificationError, InvalidInputError, LanceNamespace, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.authz.decisions import Authorization, authorization, wired
 from catalog.api.authz.objects import GovernedObject, namespace_parent, owned_object, parent_object_of, trashed_objects
 from catalog.api.authz.rungs import moves_namespace
@@ -108,9 +108,7 @@ async def seed_project_admin(
 
 
 async def seed_ownership(
-    client: OpenFgaClient | None,
-    settings: FgaSettings,
-    token: Caller | None,
+    context: AuthzContext,
     *,
     resolver: Resolver,
     resource: str,
@@ -131,7 +129,7 @@ async def seed_ownership(
     door calls it unconditionally with one line. Who owns what a create makes is decided here and in
     :func:`seed_namespace_before_write`, and nowhere else. The ``parent`` edge names :func:`parent_object_of`.
     """
-    if token is None or (client := wired(settings, client)) is None:
+    if context.token is None or (client := wired(context.settings, context.client)) is None:
         return
     # A MACHINE DOES NOT OWN WHAT IT REGISTERS (owner ruling 2026-09-10, zero trust). A service principal
     # registering its own output would become that table's owner, keeping `can_drop`, `can_deregister`,
@@ -149,18 +147,16 @@ async def seed_ownership(
     # drifts the moment a service is renamed.
     await fga_writes.grant_on_create(  # noqa: TID251
         client,
-        grant_owner=not isinstance(token, ServicePrincipal),
-        user_sub=token.subject,
+        grant_owner=not isinstance(context.token, ServicePrincipal),
+        user_sub=context.token.subject,
         obj=owned_object(resource, uuid),
-        actor=token.subject,
+        actor=context.token.subject,
         origin="create",
-        parent_object=await parent_object_of(resolver, settings, resource, segments=segments),
+        parent_object=await parent_object_of(resolver, context.settings, resource, segments=segments),
     )
 
 
-async def seed_before_write(
-    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, resolver: Resolver, segments: list[str], uuid: str
-) -> None:
+async def seed_before_write(context: AuthzContext, *, resolver: Resolver, segments: list[str], uuid: str) -> None:
     """:func:`seed_ownership` for the table ``uuid`` its door minted and is about to write: its grants stand before the
     table does ([[LH-588]]), so no table stands without them.
 
@@ -169,15 +165,13 @@ async def seed_before_write(
     that fails is taken back before its error is raised, so a grant whose answer OpenFGA lost leaves nothing either.
     """
     try:
-        await seed_ownership(client, settings, token, resolver=resolver, resource="table", segments=segments, uuid=uuid)
+        await seed_ownership(context, resolver=resolver, resource="table", segments=segments, uuid=uuid)
     except Exception:
-        await take_back_seed(client, settings, token, segments=segments, uuid=uuid, reason="grant_failed")
+        await take_back_seed(context, segments=segments, uuid=uuid, reason="grant_failed")
         raise
 
 
-async def seed_namespace_before_write(
-    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, resolver: Resolver, segments: list[str], uuid: str
-) -> None:
+async def seed_namespace_before_write(context: AuthzContext, *, resolver: Resolver, segments: list[str], uuid: str) -> None:
     """Grant the creator ``owner`` of the namespace ``uuid`` its door minted and is about to write, and the ``parent``
     edge it inherits through, so no namespace stands without them ([[LH-585]]).
 
@@ -188,45 +182,49 @@ async def seed_namespace_before_write(
     killed between its two writes leaves behind, on a uuid no object holds, grants nothing to anyone. A seed that fails
     is taken back before its error is raised.
     """
-    if token is None or (client := wired(settings, client)) is None:
+    if context.token is None or (client := wired(context.settings, context.client)) is None:
         return
     try:
         await fga_writes.grant_before_arrival(  # noqa: TID251
             client,
-            user_sub=token.subject,
+            user_sub=context.token.subject,
             obj=fga_ids.namespace_object(uuid),
-            actor=token.subject,
+            actor=context.token.subject,
             origin="create",
-            grant_owner=not isinstance(token, ServicePrincipal),
-            parent_object=await namespace_parent(resolver, settings, segments),
+            grant_owner=not isinstance(context.token, ServicePrincipal),
+            parent_object=await namespace_parent(resolver, context.settings, segments),
         )
     except Exception:
-        await take_back_seed(client, settings, token, segments=segments, uuid=uuid, reason="grant_failed", resource="namespace")
+        await take_back_seed(
+            AuthzContext(client=client, settings=context.settings, token=context.token),
+            segments=segments,
+            uuid=uuid,
+            reason="grant_failed",
+            resource="namespace",
+        )
         raise
 
 
-async def name_namespace_child(
-    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, resolver: Resolver, segments: list[str], uuid: str
-) -> None:
+async def name_namespace_child(context: AuthzContext, *, resolver: Resolver, segments: list[str], uuid: str) -> None:
     """Name the namespace ``uuid`` a child of its parent, now that it stands there: the end of its create.
 
     The namespace exists by now, owned and inheriting, so an outage here is logged at ERROR and raised over nothing:
     it is then named a child of no parent, which costs whoever holds a rung only beneath it the sight of the namespaces
     above, and which its parent's listing covers for a removal.
     """
-    if token is None or (client := wired(settings, client)) is None:
+    if context.token is None or (client := wired(context.settings, context.client)) is None:
         return
     obj = fga_ids.namespace_object(uuid)
     try:
-        await fga_writes.name_child(client, obj=obj, parent=await namespace_parent(resolver, settings, segments), actor=token.subject, origin="create")  # noqa: TID251
+        await fga_writes.name_child(  # noqa: TID251
+            client, obj=obj, parent=await namespace_parent(resolver, context.settings, segments), actor=context.token.subject, origin="create"
+        )
     except ServiceUnavailableError as exc:
         log.error("namespace_arrival_not_settled", extra={"object": obj, "name": fga_ids.canonical_object_id(segments), "error": str(exc)})
 
 
 async def take_back_seed(
-    client: OpenFgaClient | None,
-    settings: FgaSettings,
-    token: Caller | None,
+    context: AuthzContext,
     *,
     segments: list[str],
     uuid: str,
@@ -240,14 +238,12 @@ async def take_back_seed(
     edge, so they grant nothing.
     """
     try:
-        await revoke_ownership(client, settings, obj=owned_object(resource, uuid), token=token, origin="create")
+        await revoke_ownership(context, obj=owned_object(resource, uuid), origin="create")
     except Exception as exc:  # noqa: BLE001 — the door's own failure is what the caller is told
         log.warning("seed_not_taken_back", extra={"object": fga_ids.canonical_object_id(segments), "uuid": uuid, "reason": reason, "error": str(exc)[:300]})
 
 
-async def take_back_unless_namespace_stands(
-    ns: LanceNamespace, client: OpenFgaClient | None, settings: FgaSettings, *, token: Caller | None, segments: list[str], uuid: str, reason: str
-) -> None:
+async def take_back_unless_namespace_stands(ns: LanceNamespace, context: AuthzContext, *, segments: list[str], uuid: str, reason: str) -> None:
     """Take back the grants written for the namespace ``uuid``, whose create door is failing or kept another namespace,
     unless the namespace stands under ``segments``: a create whose answer the store lost may have landed, and a namespace
     never stands without its grants ([[LH-585]]). An answer that cannot be read is read on the side that keeps them.
@@ -258,7 +254,7 @@ async def take_back_unless_namespace_stands(
         log.warning("namespace_standing_unread", extra={"namespace": fga_ids.canonical_object_id(segments), "uuid": uuid, "error": str(exc)[:300]})
         return
     if standing != uuid:
-        await take_back_seed(client, settings, token, segments=segments, uuid=uuid, reason=reason, resource="namespace")
+        await take_back_seed(context, segments=segments, uuid=uuid, reason=reason, resource="namespace")
 
 
 class ParentChangedError(ConcurrentModificationError):
@@ -271,9 +267,7 @@ class ParentChangedError(ConcurrentModificationError):
 
 
 async def undo_a_create_whose_parent_is_unread(
-    client: OpenFgaClient | None,
-    settings: FgaSettings,
-    token: Caller | None,
+    context: AuthzContext,
     *,
     resource: Literal["table", "namespace"],
     segments: list[str],
@@ -288,7 +282,7 @@ async def undo_a_create_whose_parent_is_unread(
         PartiallyApplied: The undo failed, so the object stands, with its grants, where nobody confirmed it belongs: a
             retry would meet it as already there, so the answer names it and its remedy.
     """
-    if await undo_then_take_back(client, settings, token, segments=segments, uuid=uuid, undo=undo, reason="parent_unconfirmed", resource=resource):
+    if await undo_then_take_back(context, segments=segments, uuid=uuid, undo=undo, reason="parent_unconfirmed", resource=resource):
         return
     name = fga_ids.canonical_object_id(segments)
     raise PartiallyApplied(
@@ -329,9 +323,7 @@ async def require_parent_as_authorized(
 
 
 async def undo_then_take_back(
-    client: OpenFgaClient | None,
-    settings: FgaSettings,
-    token: Caller | None,
+    context: AuthzContext,
     *,
     segments: list[str],
     uuid: str,
@@ -353,7 +345,7 @@ async def undo_then_take_back(
         log.error("create_compensation_failed", extra={"object": name, "resource": resource, "reason": reason, "error": str(undo_exc)[:300]})
         return False
     log.warning("create_compensated", extra={"object": name, "resource": resource, "reason": reason})
-    await take_back_seed(client, settings, token, segments=segments, uuid=uuid, reason=reason, resource=resource)
+    await take_back_seed(context, segments=segments, uuid=uuid, reason=reason, resource=resource)
     return True
 
 
@@ -364,10 +356,8 @@ class GrantsBeforeWrite:
     table lives. :meth:`parent_as_authorized` is the door's ``after_register``.
     """
 
-    def __init__(self, client: OpenFgaClient | None, settings: Settings, token: Caller | None, *, resolver: Resolver, segments: list[str]) -> None:
-        self._client = client
-        self._settings = settings
-        self._token = token
+    def __init__(self, context: AuthzContext, *, resolver: Resolver, segments: list[str]) -> None:
+        self._context = context
         self._resolver = resolver
         self._segments = segments
         #: The table the grants were written for, and its location, once they were.
@@ -376,20 +366,34 @@ class GrantsBeforeWrite:
 
     def __call__(self, uuid: str, location: str) -> None:
         anyio.from_thread.run(
-            partial(seed_before_write, self._client, self._settings, self._token, resolver=self._resolver, segments=self._segments, uuid=uuid)
+            partial(
+                seed_before_write,
+                self._context,
+                resolver=self._resolver,
+                segments=self._segments,
+                uuid=uuid,
+            )
         )
         self.uuid, self._location = uuid, location
 
     def parent_as_authorized(self, ns: LanceNamespace) -> None:
         """:func:`require_parent_as_authorized` for the table, from the backend write's worker thread."""
         anyio.from_thread.run(
-            partial(require_parent_as_authorized, ns, self._settings, self._client, resolver=self._resolver, resource="table", segments=self._segments)
+            partial(
+                require_parent_as_authorized,
+                ns,
+                self._context.settings,
+                self._context.client,
+                resolver=self._resolver,
+                resource="table",
+                segments=self._segments,
+            )
         )
 
     async def take_back(self, *, reason: str) -> None:
         """Take back the grants written, the door having undone the table they were written for."""
         if self.uuid is not None:
-            await take_back_seed(self._client, self._settings, self._token, segments=self._segments, uuid=self.uuid, reason=reason)
+            await take_back_seed(self._context, segments=self._segments, uuid=self.uuid, reason=reason)
 
     async def take_back_unless_kept(self, kept: str | None) -> None:
         """Take back the grants written for a table the door did not keep: ``kept`` is the uuid of the table the door
@@ -507,9 +511,7 @@ async def _return_to_source(authz: Authorization, *, obj: str, source: str, dest
         log.error("rename_parent_edge_not_restored", extra={"object": obj, "source": source, "destination": destination, "error": str(exc)})
 
 
-async def parent_edge_mover(
-    client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, resolver: Resolver, obj: str, source: list[str], destination: list[str]
-) -> rename.Reparent | None:
+async def parent_edge_mover(context: AuthzContext, *, resolver: Resolver, obj: str, source: list[str], destination: list[str]) -> rename.Reparent | None:
     """How a rename of table ``source`` to ``destination`` takes ``obj``'s parent edge along, or ``None`` when it has
     none to take: the rename keeps its namespace, or FGA is off (:func:`authorization`).
 
@@ -525,10 +527,10 @@ async def parent_edge_mover(
         ServiceUnavailableError: FGA is on and unwired.
         UnauthenticatedError: FGA is on and nobody is signed in.
     """
-    if not moves_namespace(source, destination) or (authz := authorization(settings, client, token)) is None:
+    if not moves_namespace(source, destination) or (authz := authorization(context)) is None:
         return None
-    left = await parent_object_of(resolver, settings, "table", segments=source)
-    entered = await parent_object_of(resolver, settings, "table", segments=destination)
+    left = await parent_object_of(resolver, context.settings, "table", segments=source)
+    entered = await parent_object_of(resolver, context.settings, "table", segments=destination)
     if left is None or entered is None:
         return None
     loop = asyncio.get_running_loop()
@@ -543,7 +545,7 @@ async def parent_edge_mover(
     )
 
 
-async def revoke_ownership(client: OpenFgaClient | None, settings: FgaSettings, *, obj: str, token: Caller | None, origin: fga_writes.TupleOrigin) -> None:
+async def revoke_ownership(context: AuthzContext, *, obj: str, origin: fga_writes.TupleOrigin) -> None:
     """Delete every FGA tuple on ``obj`` (the revoke counterpart of :func:`seed_ownership`), recorded as ``origin``:
     ``lifecycle_delete`` for an object a door dropped or detached, ``create`` for a create taking back the grants it
     wrote. The trail is the only record of why a grant went, so the two are never one label ([[LH-585]]).
@@ -557,66 +559,78 @@ async def revoke_ownership(client: OpenFgaClient | None, settings: FgaSettings, 
     with the tuples left stale until reconciled — the mutation itself already committed. The object is a uuid no
     other object will hold, so a stale tuple grants nothing on anything created later.
     """
-    if (client := wired(settings, client)) is None:
+    if (client := wired(context.settings, context.client)) is None:
         return
     # The actor is the caller who dropped the object. `system:catalog` is the honest fallback for an
     # auth-off stack, where there genuinely is no principal — never a stand-in for one we simply did
     # not thread through.
-    actor = token.subject if token is not None else "system:catalog"
+    actor = context.token.subject if context.token is not None else "system:catalog"
     removed = await fga_writes.revoke_object_tuples(client, obj, actor=actor, origin=origin)  # noqa: TID251
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
 
 
-async def revoke_removed_object(client: OpenFgaClient | None, settings: FgaSettings, obj: str, *, token: Caller | None) -> int:
+async def revoke_removed_object(
+    context: AuthzContext,
+    obj: str,
+) -> int:
     """Delete every tuple on ``obj``, an object a lifecycle delete removed, and return how many the server removed.
 
     Distinct from :func:`revoke_ownership` in two ways that matter to a cascade: the audit origin is
     ``lifecycle_delete`` (a deletion of the hierarchy, not one object's drop), and the count comes back for the door to
     report. 0 when FGA is off; a 503 when it is on with no client wired. An outage part-way raises :class:`fga_writes.RevokeInterrupted` naming what went.
     """
-    if (client := wired(settings, client)) is None:
+    if (client := wired(context.settings, context.client)) is None:
         return 0
-    actor = token.subject if token is not None else "system:catalog"
+    actor = context.token.subject if context.token is not None else "system:catalog"
     removed = await fga_writes.revoke_object_tuples(client, obj, actor=actor, origin="lifecycle_delete")  # noqa: TID251
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
     return len(removed)
 
 
-async def revoke_ghost_object(client: OpenFgaClient | None, settings: FgaSettings, obj: str, *, token: Caller | None) -> int:
+async def revoke_ghost_object(
+    context: AuthzContext,
+    obj: str,
+) -> int:
     """Delete every tuple on ``obj``, an object no registry names ([[LH-061]]'s repair half), and return how many went.
 
     The origin is ``drift_repair``: nothing was destroyed, the object was already gone, and the revoke is justified only
     by the drift finding the catalog judged again on its own reads. 0 when FGA is off; a 503 when it is on with no
     client wired.
     """
-    if (client := wired(settings, client)) is None:
+    if (client := wired(context.settings, context.client)) is None:
         return 0
-    actor = token.subject if token is not None else "system:catalog"
+    actor = context.token.subject if context.token is not None else "system:catalog"
     return len(await fga_writes.revoke_object_tuples(client, obj, actor=actor, origin="drift_repair"))  # noqa: TID251
 
 
-async def write_registry_edges(client: OpenFgaClient | None, settings: FgaSettings, edges: list[fga_writes.ClientTuple], *, token: Caller | None) -> None:
+async def write_registry_edges(
+    context: AuthzContext,
+    edges: list[fga_writes.ClientTuple],
+) -> None:
     """Write ``edges``, structural tuples a registry record justifies, under the ``registry_rebuild`` origin ([[LH-061]]):
     no person granted them, they were reconstructed from the record. A no-op when FGA is off; a 503 when it is on
     with no client wired."""
-    if (client := wired(settings, client)) is None or not edges:
+    if (client := wired(context.settings, context.client)) is None or not edges:
         return
-    actor = token.subject if token is not None else "system:catalog"
+    actor = context.token.subject if context.token is not None else "system:catalog"
     await fga_writes.write_tuples(client, edges, actor=actor, origin="registry_rebuild")  # noqa: TID251
 
 
-async def revoke_expired_object(client: OpenFgaClient | None, settings: FgaSettings, obj: str, *, token: Caller | None) -> list[fga_writes.ClientTuple]:
+async def revoke_expired_object(
+    context: AuthzContext,
+    obj: str,
+) -> list[fga_writes.ClientTuple]:
     """Delete every tuple on ``obj``, a trashed object whose deadline has passed, and return what the server removed.
 
     The origin is ``trash_expired`` (ADR 0146): nobody revoked them and nothing was destroyed, the grace period ended
     and the bytes wait for the purge. The tuples come back so the door can tell each person who lost one. Empty when
     FGA is off; a 503 when it is on with no client wired. An outage part-way raises :class:`fga_writes.RevokeInterrupted` naming what went.
     """
-    if (client := wired(settings, client)) is None:
+    if (client := wired(context.settings, context.client)) is None:
         return []
-    actor = token.subject if token is not None else "system:catalog"
+    actor = context.token.subject if context.token is not None else "system:catalog"
     removed = await fga_writes.revoke_object_tuples(client, obj, actor=actor, origin="trash_expired")  # noqa: TID251
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
@@ -624,12 +638,10 @@ async def revoke_expired_object(client: OpenFgaClient | None, settings: FgaSetti
 
 
 async def end_removed_subtree(
-    client: OpenFgaClient | None,
-    settings: Settings,
+    context: AuthzContext,
     *,
     root_uuid: str | None,
     removed: Sequence[GovernedObject],
-    token: Caller | None,
 ) -> AsyncIterator[int]:
     """End what the namespace ``root_uuid`` and ``removed``, which a lifecycle delete removed, still hold, children first.
 
@@ -653,7 +665,7 @@ async def end_removed_subtree(
     trashed table is undropped into its namespace once that namespace is created again, so they go only when its
     trash record does: at the trash purge, or with its warehouse (``catalog.services.warehouses.trash_owned_by``).
     """
-    so = settings.storage_options()
+    so = context.settings.storage_options()
     seen: set[str] = set()
     roots = [fga_ids.namespace_object(root_uuid)] if root_uuid is not None else []
     in_trash: set[str] | None = None
@@ -663,12 +675,12 @@ async def end_removed_subtree(
         # object by uuid, and the trash record names its object by the uuid its claim or its properties keep.
         nonlocal in_trash
         if in_trash is None:
-            in_trash = await run_in_threadpool(trashed_objects, settings)
+            in_trash = await run_in_threadpool(trashed_objects, context.settings)
         return obj in in_trash
 
     async def end_children(obj: str) -> AsyncIterator[int]:
         # The objects a namespace's `child` edges name, each ended before the namespace holding the edge.
-        if (reading := wired(settings, client)) is None or not obj.startswith("namespace:"):
+        if (reading := wired(context.settings, context.client)) is None or not obj.startswith("namespace:"):
             return
         for held in await fga_reads.read_object_tuples(reading, obj):
             if held.relation == "child" and held.user and held.user not in seen and not await trashed(held.user):
@@ -680,8 +692,8 @@ async def end_removed_subtree(
         async for count in end_children(obj):
             yield count
         kind, _, uuid = obj.partition(":")
-        await run_in_threadpool(object_records.end_object_records, settings.registry_root, so, kind, uuid=uuid)
-        yield await revoke_removed_object(client, settings, obj, token=token)
+        await run_in_threadpool(object_records.end_object_records, context.settings.registry_root, so, kind, uuid=uuid)
+        yield await revoke_removed_object(context, obj)
 
     children_first = sorted(removed, key=lambda item: (item.kind == "namespace", -len(item.segments)))
     for obj in [*(item.fga_object() for item in children_first), *roots]:

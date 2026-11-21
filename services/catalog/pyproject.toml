@@ -89,6 +89,6 @@ layers = [
     "write_doors | grant_authority | door_gates | visible_pages | object_grants | warehouse_grants",
     "decisions | hierarchy",
     "objects | request_reads",
-    "rungs",
+    "rungs | context",
 ]
 exhaustive = true

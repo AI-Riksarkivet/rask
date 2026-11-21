@@ -26,6 +26,7 @@ import pytest
 from lance_namespace import DeregisterTableResponse, InternalError, InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
 from unfiled_announcer import unfiled
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.dependencies import Resolver
 from catalog.api.idempotency import KeyedDoor
 from catalog.core.config import Settings
@@ -200,14 +201,12 @@ def _drop_table(settings: Settings, ns: Any, *, force: bool = False) -> Any:
 
     return asyncio.run(
         t_ep.drop_table(
+            context=AuthzContext(client=None, settings=settings, token=None),
             id="bronze$pages",
             keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=ns,  # structural stand-in, recorded not mocked
             table=_resolved(settings),
-            settings=settings,
-            client=None,
             announcer=unfiled(NoopControlEmitter()),
-            token=None,
             so=StorageOptions(),
             force=force,
             uuids=NO_OBJECT_UUIDS,
@@ -278,15 +277,13 @@ def test_a_protected_table_refuses_deregister_too(tmp_path: Any) -> None:
     with pytest.raises(InvalidTableStateError, match="protected against deletion"):
         asyncio.run(
             t_ep.deregister_table(
+                context=AuthzContext(client=None, settings=settings, token=None),
                 id="bronze$pages",
                 keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
                 ns=ns,
                 table=_resolved(settings),
-                settings=settings,
-                client=None,
                 control=NoopControlEmitter(),
                 announcer=unfiled(NoopControlEmitter()),
-                token=None,
                 uuids=NO_OBJECT_UUIDS,
             )
         )
@@ -302,13 +299,11 @@ def test_a_protected_namespace_refuses_drop(tmp_path: Any) -> None:
     with pytest.raises(NamespaceNotEmptyError, match="protected against deletion"):
         asyncio.run(
             n_ep.drop_namespace(
+                context=AuthzContext(client=None, settings=settings, token=None),
                 id="bronze",
                 keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
                 ns=ns,
                 resolver=door_resolver(settings),
-                settings=settings,
-                token=None,
-                client=None,
                 announcer=unfiled(NoopControlEmitter()),
                 body=None,
                 uuids=NO_OBJECT_UUIDS,
@@ -479,10 +474,8 @@ def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
             keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=ns,
             table=_resolved(settings),
-            settings=settings,
-            client=None,
+            context=AuthzContext(client=None, settings=settings, token=None),
             announcer=unfiled(NoopControlEmitter()),
-            token=None,
             so=StorageOptions(),
             force=False,
             purge=True,
@@ -557,13 +550,11 @@ def test_a_cascade_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None
     with pytest.raises(InvalidTableStateError, match="bronze\\$pages"):
         asyncio.run(
             n_ep.drop_namespace(
+                context=AuthzContext(client=None, settings=settings, token=None),
                 id="bronze",
                 keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
                 ns=ns,
                 resolver=door_resolver(settings),
-                settings=settings,
-                token=None,
-                client=None,
                 announcer=unfiled(NoopControlEmitter()),
                 body=DropNamespaceRequest(behavior="Cascade"),
                 uuids=NO_OBJECT_UUIDS,
@@ -584,13 +575,11 @@ def test_force_lets_a_cascade_through(tmp_path: Any) -> None:
     ns: Any = _RecordingNamespace()
     asyncio.run(
         n_ep.drop_namespace(
+            context=AuthzContext(client=None, settings=settings, token=None),
             id="bronze",
             keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=ns,
             resolver=door_resolver(settings),
-            settings=settings,
-            token=None,
-            client=None,
             announcer=unfiled(NoopControlEmitter()),
             body=DropNamespaceRequest(behavior="Cascade"),
             force=True,
@@ -644,13 +633,11 @@ def _drop_namespace_cascade(settings: Settings, ns: Any, *, force: bool = False,
     _stand(settings, "bronze$pages", "bronze$inner$t2")
     return asyncio.run(
         n_ep.drop_namespace(
+            context=AuthzContext(client=None, settings=settings, token=None),
             id="bronze",
             keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=ns,
             resolver=door_resolver(settings),
-            settings=settings,
-            token=None,
-            client=None,
             announcer=unfiled(NoopControlEmitter()),
             body=DropNamespaceRequest(behavior="Cascade"),
             force=force,

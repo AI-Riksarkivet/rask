@@ -35,11 +35,11 @@ from pydantic import BaseModel, StringConstraints
 from catalog.api import idempotency as idem
 from catalog.api import lineage_deps, table_create
 from catalog.api.authz import door_gates
+from catalog.api.authz.context import AuthzContextDep
 from catalog.api.dependencies import (
     ControlEmitterDep,
     DataNamespaceDep,
     DoorTableDep,
-    FgaClientDep,
     LineageEmitterDep,
     NamespaceDep,
     NamespaceRootDep,
@@ -115,9 +115,7 @@ async def create_table(
     keyed: idem.KeyedDoorDep,
     ns: NamespaceDep,
     root: NamespaceRootDep,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
     control: ControlEmitterDep,
@@ -166,14 +164,14 @@ async def create_table(
         )
     shape = table_create.parse_create_shape(
         id,
-        settings=settings,
+        settings=context.settings,
         data_base=data_base,
         external_blob_base=external_blob_base,
         properties=properties,
     )
     # The body is shape too, read off the loop. The table read here is the one written, so the payload
     # is decoded once.
-    table = await run_in_threadpool(writes.read_arrow_body, data, max_bytes=settings.max_body_bytes)
+    table = await run_in_threadpool(writes.read_arrow_body, data, max_bytes=context.settings.max_body_bytes)
     # The payload's schema metadata becomes the table's, so a reserved key in it is a forged claim
     # whether or not the lineage stamp would later overwrite it ([[LH-208]]).
     provenance_guard.refuse_reserved_keys((table.schema.metadata or {}).keys(), door="create payload")
@@ -182,7 +180,7 @@ async def create_table(
     encoding.require_valid_field_encoding(table.schema)
     namespace = parse_identifier(id)[:-1]
     if (labels := provenance_guard.field_labels(table.schema)) and (parent := await resolver.object("namespace", namespace)) is not None:
-        await door_gates.require_classifier_to_set_labels(client, settings, token, obj=parent, label=fga_ids.canonical_object_id(namespace), labels=labels)
+        await door_gates.require_classifier_to_set_labels(context, obj=parent, label=fga_ids.canonical_object_id(namespace), labels=labels)
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.
@@ -193,12 +191,10 @@ async def create_table(
         return CreateTableResponse.model_validate(converge.replay.body)
 
     response = await table_create.create_governed_table(
+        context=context,
         id=id,
         ns=ns,
         root=root,
-        settings=settings,
-        token=token,
-        client=client,
         emitter=emitter,
         uuids=uuids,
         control=control,
@@ -257,9 +253,7 @@ async def insert_into_table(
     # Cast the incoming rows to the table's schema first, so a client that infers loose Arrow types (a
     # browser infers float64 for every JS number) can append to int64 columns — else the append 500s on
     # the mismatch. A genuinely incompatible payload becomes a clean 400 here, not a 500 downstream.
-    data = await run_in_threadpool(
-        writes.coerce_insert_arrow, table, so, data, branch=branch, max_bytes=settings.max_body_bytes, overwrite=insert_mode is InsertMode.OVERWRITE
-    )
+    data = await run_in_threadpool(writes.coerce_insert_arrow, table, so, data, branch=branch, max_bytes=settings.max_body_bytes, mode=insert_mode)
     req = InsertIntoTableRequest(id=segments, mode=insert_mode.value, branch=branch)
     # After every shape refusal, so a malformed body claims no key. The claim binds the mode too, so the key on another
     # mode is refused rather than answered with this append's response ([[LH-576]]).
@@ -454,10 +448,8 @@ async def update_table(
     body: UpdateTableRequest,
     keyed: idem.KeyedDoorDep,
     table: DoorTableDep,
-    settings: SettingsDep,
+    context: AuthzContextDep,
     so: StorageOptionsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
     emitter: LineageEmitterDep,
     uuids: ObjectUuidsDep,
 ) -> UpdateTableResponse:
@@ -474,12 +466,12 @@ async def update_table(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     expressions = [expression for _, expression in body.updates or []]
-    await door_gates.require_classifier_to_copy_a_label(client, settings, token, table=table, so=so, branch=body.branch, expressions=expressions)
+    await door_gates.require_classifier_to_copy_a_label(context, table=table, so=so, branch=body.branch, expressions=expressions)
     converge, answered = await _keyed_table_write(keyed, table=table, so=so, segments=segments, branch=body.branch, answer=UpdateTableResponse)
     if answered is not None:
         return answered
     response: UpdateTableResponse = await run_in_threadpool(
-        partial(writes.update_table, table, so, body, transaction_properties=_keyed_stamp(converge, lineage_deps.door_stamp(token, UPDATE)))
+        partial(writes.update_table, table, so, body, transaction_properties=_keyed_stamp(converge, lineage_deps.door_stamp(context.token, UPDATE)))
     )
     await converge.remember(200, response)
     await lineage_deps.emit_measured_write(
@@ -487,7 +479,7 @@ async def update_table(
         segments,
         location=table.location,
         so=so,
-        token=token,
+        token=context.token,
         operation=UPDATE,
         uuids=uuids,
         pin_version=response.version,

@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from openfga_sdk import OpenFgaClient
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.authz.decisions import wired
-from catalog.api.security import Caller
 from catalog.core.config import CatalogAuthzSettings, CatalogLineageSettings, Settings
 from lakehouse.governed import fga_ids, fga_writes
 from lakehouse.governed.machine_identity import ServicePrincipal
@@ -22,9 +22,7 @@ __all__ = [
 
 
 async def seed_warehouse(
-    client: OpenFgaClient | None,
-    settings: Settings,
-    token: Caller | None,
+    context: AuthzContext,
     *,
     warehouse_id: str,
     project: str,
@@ -42,7 +40,7 @@ async def seed_warehouse(
     The project-admin bootstrap tuple this used to optionally carry moved to ``seed_project_admin``,
     written by ``POST /management/v1/projects`` — a tenant's admin is minted with the tenant, not with its
     first warehouse."""
-    if token is None or (client := wired(settings, client)) is None:
+    if context.token is None or (client := wired(context.settings, context.client)) is None:
         return
     obj = f"warehouse:{warehouse_id}"
     # The project edge and the sweep's grant, granted here and not per namespace, at the WAREHOUSE because
@@ -51,11 +49,15 @@ async def seed_warehouse(
     # warehouse exists and is unreachable from its project or unmaintained.
     # A person owns the warehouse they create. A machine holds nothing on it by creating it, as with a table or a
     # project ([[LH-433]]): its project's admins own it through the project edge.
-    owner = [] if isinstance(token, ServicePrincipal) else [fga_writes.ClientTuple(user=fga_ids.user_object(token.subject), relation="owner", object=obj)]
+    owner = (
+        []
+        if isinstance(context.token, ServicePrincipal)
+        else [fga_writes.ClientTuple(user=fga_ids.user_object(context.token.subject), relation="owner", object=obj)]
+    )
     await fga_writes.write_tuples(  # noqa: TID251
         client,
-        [*owner, *cascade_tuples(settings, warehouse_id=warehouse_id, project=project)],
-        actor=token.subject,
+        [*owner, *cascade_tuples(context.settings, warehouse_id=warehouse_id, project=project)],
+        actor=context.token.subject,
         origin="warehouse_create",
     )
 

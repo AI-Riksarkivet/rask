@@ -23,7 +23,8 @@ from lance_namespace import InvalidTableStateError, NamespaceNotFoundError, Tabl
 from catalog.api import announcing
 from catalog.api.announcing import AnnouncerDep, Filing
 from catalog.api.authz import decisions, door_gates, object_grants
-from catalog.api.dependencies import ClockDep, FgaClientDep, Resolver, ResolverDep, SettingsDep, VendorDep
+from catalog.api.authz.context import AuthzContextDep
+from catalog.api.dependencies import ClockDep, Resolver, ResolverDep, SettingsDep, VendorDep
 from catalog.api.security import Caller, CurrentSubject, CurrentToken
 from catalog.core.config import CatalogStore
 from catalog.core.identifiers import parse_identifier
@@ -40,9 +41,9 @@ from lakehouse.records.location_claims import LocationClaim
 from lakehouse.records.trash import TrashKind, TrashRecord
 
 
-async def require_can_reclaim_trash(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
+async def require_can_reclaim_trash(context: AuthzContextDep) -> None:
     """Every trash door's gate: the caller holds ``can_reclaim_trash`` on the estate root."""
-    await door_gates.require_relation(client, settings, token, relation="can_reclaim_trash", obj=settings.fga_root_object)
+    await door_gates.require_relation(context, relation="can_reclaim_trash", obj=context.settings.fga_root_object)
 
 
 management_router = APIRouter(prefix="/management/v1/trash", tags=["trash-reclaim"], dependencies=[Depends(require_can_reclaim_trash)])
@@ -54,9 +55,7 @@ async def release_trash(
     kind: TrashKind,
     uuid: str,
     resolver: ResolverDep,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     announcer: AnnouncerDep,
     clock: ClockDep,
 ) -> TrashReleaseResponse:
@@ -71,26 +70,26 @@ async def release_trash(
     fails (``trash_release``): it revokes grants on the catalog's own session, for whoever asked.
     """
     try:
-        record = await run_in_threadpool(trash_reclaim.read_record, settings, kind, uuid)
+        record = await run_in_threadpool(trash_reclaim.read_record, context.settings, kind, uuid)
         # A wait for the finish, not a judgement of the record, so nothing is noted on it: the finish orders a record
         # against a filing by the store's stamp of the record's last write, and a note written now would read as a drop
         # of the table since the filing, which loses a dead deregister's announcement.
-        if (waiting := await _unannounced_refusal(settings, kind=kind, uuid=uuid)) is not None:
+        if (waiting := await _unannounced_refusal(context.settings, kind=kind, uuid=uuid)) is not None:
             raise InvalidTableStateError(waiting)
-        claim = await run_in_threadpool(trash_reclaim.location_claim, settings, record)
+        claim = await run_in_threadpool(trash_reclaim.location_claim, context.settings, record)
         if (reason := trash_reclaim.release_refusal(record, now=clock()) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
-            raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
+            raise await _noted(context.settings, kind=kind, uuid=uuid, reason=reason)
         obj = fga_ids.object_of(kind, uuid)
-        held = await fga_reads.read_object_tuples(wired, obj) if (wired := decisions.wired(settings, client)) is not None else []
-        told = {(t.object, t.relation, t.user): _revoked(t, record, uuid=uuid, actor=_actor(token)) for t in held if fga_ids.names_someone(str(t.user))}
+        held = await fga_reads.read_object_tuples(wired, obj) if (wired := decisions.wired(context.settings, context.client)) is not None else []
+        told = {(t.object, t.relation, t.user): _revoked(t, record, uuid=uuid, actor=_actor(context.token)) for t in held if fga_ids.names_someone(str(t.user))}
         async with announcer.announcing(door="trash_release", target=obj, announcements=list(told.values())) as filing:
-            removed = await object_grants.revoke_expired_object(client, settings, obj, token=token)
-            await _tell_who_lost_a_grant(filing, removed, told, record=record, uuid=uuid, token=token)
-            stamped = await run_in_threadpool(partial(trash_reclaim.stamp_released, settings, kind=kind, uuid=uuid, now=clock()))
+            removed = await object_grants.revoke_expired_object(context, obj)
+            await _tell_who_lost_a_grant(filing, removed, told, record=record, uuid=uuid, token=context.token)
+            stamped = await run_in_threadpool(partial(trash_reclaim.stamp_released, context.settings, kind=kind, uuid=uuid, now=clock()))
     except Exception as failed:
-        _audited(AuditAction.TRASH_RELEASE, AuditOutcome.FAILURE, token, kind=kind, uuid=uuid, reason=f"{type(failed).__name__}: {failed}"[:300])
+        _audited(AuditAction.TRASH_RELEASE, AuditOutcome.FAILURE, context.token, kind=kind, uuid=uuid, reason=f"{type(failed).__name__}: {failed}"[:300])
         raise
-    _audited(AuditAction.TRASH_RELEASE, AuditOutcome.SUCCESS, token, kind=kind, uuid=uuid, tuples_revoked=len(removed), stamped=stamped)
+    _audited(AuditAction.TRASH_RELEASE, AuditOutcome.SUCCESS, context.token, kind=kind, uuid=uuid, tuples_revoked=len(removed), stamped=stamped)
     return TrashReleaseResponse(tuples_revoked=len(removed), stamped=stamped)
 
 
@@ -155,9 +154,7 @@ async def vend_reclaim_credentials(
 
 
 @management_router.delete("/{kind}/{uuid}")
-async def end_trash(
-    *, kind: TrashKind, uuid: str, resolver: ResolverDep, settings: SettingsDep, token: CurrentToken, client: FgaClientDep, clock: ClockDep
-) -> TrashEndResponse:
+async def end_trash(*, kind: TrashKind, uuid: str, resolver: ResolverDep, context: AuthzContextDep, clock: ClockDep) -> TrashEndResponse:
     """End a trash record whose object holds no byte: revoke the grants it still holds, end the records it keeps under
     its uuid, a table's claim and base record, and the record last.
 
@@ -167,17 +164,17 @@ async def end_trash(
     it revokes grants and ends records on the catalog's own session, for whoever asked.
     """
     try:
-        record = await run_in_threadpool(trash_reclaim.read_record, settings, kind, uuid)
-        claim = await run_in_threadpool(trash_reclaim.location_claim, settings, record)
-        judged = partial(trash_reclaim.end_refusal, settings, record, claim, kind=kind, uuid=uuid, now=clock())
+        record = await run_in_threadpool(trash_reclaim.read_record, context.settings, kind, uuid)
+        claim = await run_in_threadpool(trash_reclaim.location_claim, context.settings, record)
+        judged = partial(trash_reclaim.end_refusal, context.settings, record, claim, kind=kind, uuid=uuid, now=clock())
         if (reason := await run_in_threadpool(judged) or await _standing_refusal(resolver, record, claim, kind=kind, uuid=uuid)) is not None:
-            raise await _noted(settings, kind=kind, uuid=uuid, reason=reason)
-        revoked = await object_grants.revoke_removed_object(client, settings, fga_ids.object_of(kind, uuid), token=token)
-        await run_in_threadpool(partial(trash.end, settings.registry_root, settings.storage_options(), record, kind=kind, uuid=uuid))
+            raise await _noted(context.settings, kind=kind, uuid=uuid, reason=reason)
+        revoked = await object_grants.revoke_removed_object(context, fga_ids.object_of(kind, uuid))
+        await run_in_threadpool(partial(trash.end, context.settings.registry_root, context.settings.storage_options(), record, kind=kind, uuid=uuid))
     except Exception as failed:
-        _audited(AuditAction.TRASH_END, AuditOutcome.FAILURE, token, kind=kind, uuid=uuid, reason=f"{type(failed).__name__}: {failed}"[:300])
+        _audited(AuditAction.TRASH_END, AuditOutcome.FAILURE, context.token, kind=kind, uuid=uuid, reason=f"{type(failed).__name__}: {failed}"[:300])
         raise
-    _audited(AuditAction.TRASH_END, AuditOutcome.SUCCESS, token, kind=kind, uuid=uuid, tuples_revoked=revoked)
+    _audited(AuditAction.TRASH_END, AuditOutcome.SUCCESS, context.token, kind=kind, uuid=uuid, tuples_revoked=revoked)
     return TrashEndResponse(tuples_revoked=revoked)
 
 

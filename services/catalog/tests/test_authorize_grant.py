@@ -40,7 +40,6 @@ def _run(body: Any) -> None:
             user="dex~alice",
             fga_type="namespace",
             segments=["gold"],
-            revoking=False,
         )
     )
 
@@ -171,8 +170,8 @@ def test_a_malformed_relation_is_denied(body: Any) -> None:
         _run(body)
 
 
-@pytest.mark.parametrize("revoking", [pytest.param(False, id="grant"), pytest.param(True, id="revoke")])
-def test_a_phantom_rung_is_refused_before_reaching_openfga(revoking: bool) -> None:
+@pytest.mark.parametrize("gate", [pytest.param(grant_authority.authorize_grant, id="grant"), pytest.param(grant_authority.authorize_revoke, id="revoke")])
+def test_a_phantom_rung_is_refused_before_reaching_openfga(gate: Any) -> None:
     """The phantom-relation guard, on a grant and a revoke alike. Passing the structural `parent` edge through would
     build ``can_grant_parent`` and ask OpenFGA for a relation the model does not define — a 400 that fails closed to a
     503 for EVERY caller, owners included. A rung the model cannot grant is not a rung the API may be asked to revoke
@@ -181,8 +180,4 @@ def test_a_phantom_rung_is_refused_before_reaching_openfga(revoking: bool) -> No
     request = cast(Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~bob", "relation": "parent"})))
 
     with pytest.raises(PermissionDeniedError):
-        asyncio.run(
-            grant_authority.authorize_grant(
-                request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"], revoking=revoking
-            )
-        )
+        asyncio.run(gate(request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"]))

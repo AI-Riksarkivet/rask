@@ -25,7 +25,7 @@ from catalog.api.control_lane import STREAM as CONTROL_STREAM
 from catalog.api.control_lane import TOPIC as CONTROL_TOPIC
 from catalog.api.control_lane import ControlLane, create_signature_refused_series
 from catalog.api.control_relay import attach_published_keys
-from catalog.api.dependencies import app_wire
+from catalog.api.dependencies import app_wire, declared_base_judge
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
 from catalog.api.maintenance_mode import maintenance_middleware
 from catalog.api.path_reading import PathReadingMiddleware
@@ -319,7 +319,7 @@ async def _attach_authorization_and_vending(app: FastAPI, settings: Settings, *,
     # register doors write each table's base record to. Installed
     # as the settings it is built from, so each read signs its record reads with the pair in force, and
     # cleared at shutdown so nothing in this process outlives the app that configured it.
-    base_judge.install(partial(base_judge.BaseJudge.from_settings, settings, bucket_claim=warehouses.bucket_claim))
+    base_judge.install(partial(declared_base_judge, settings))
     stack.callback(base_judge.install, None)
 
 

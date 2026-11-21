@@ -17,6 +17,7 @@ import pyarrow as pa
 import pytest
 from lance_namespace import CreateTableResponse
 
+from catalog.api.authz.context import AuthzContext
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -91,13 +92,15 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
     emitter = _RecordingEmitter()
     asyncio.run(
         data.create_table(
+            context=AuthzContext(
+                client=cast(Any, object()),
+                settings=_settings(),
+                token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),
+            ),
             id="alpha$bronze$images",
             keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=cast(Any, object()),
             root="s3://root",
-            settings=_settings(),
-            token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),
-            client=cast(Any, object()),
             emitter=cast(Any, emitter),
             control=cast(Any, NoopControlEmitter()),
             so=cast(Any, {}),  # unused on the native (non-blob) path this test drives

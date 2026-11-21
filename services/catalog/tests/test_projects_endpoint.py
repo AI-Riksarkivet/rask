@@ -19,6 +19,7 @@ import pytest
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import projects as ep
 from lakehouse.governed import fga_provision
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -60,11 +61,11 @@ def _client() -> OpenFgaClient:
 
 
 def _list(settings: Any, *, token: Any = None, client: Any = None) -> list[ep.ProjectResponse]:
-    return asyncio.run(ep.list_projects(settings=settings, token=token, client=client))
+    return asyncio.run(ep.list_projects(context=AuthzContext(client=client, settings=settings, token=token)))
 
 
 def _get(project_id: str, settings: Any, *, token: Any = None, client: Any = None) -> ep.ProjectResponse:
-    return asyncio.run(ep.get_project(project_id=project_id, settings=settings, token=token, client=client))
+    return asyncio.run(ep.get_project(context=AuthzContext(client=client, settings=settings, token=token), project_id=project_id))
 
 
 # ── grouping: registry records → derived tenants ─────────────────────────────────────────────────────
@@ -125,7 +126,7 @@ def test_admins_are_the_projects_effective_administrators(monkeypatch: pytest.Mo
 
     async def _listed() -> list[ep.ProjectResponse]:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
-            return await ep.list_projects(settings=settings, token=_BOB, client=client)
+            return await ep.list_projects(context=AuthzContext(client=client, settings=settings, token=_BOB))
 
     result = asyncio.run(_listed())
 

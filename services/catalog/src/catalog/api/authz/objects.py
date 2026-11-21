@@ -1,4 +1,4 @@
-"""A name to the FGA object its grants are held by, and what stands at a name now.
+"""A name to the FGA object its grants are held by.
 
 A table or namespace is asked about as the object its grants are held by, ``table:<uuid>`` or ``namespace:<uuid>``
 (ADR 0173 §8, [[LH-524]]): every door is addressed by name, and the name is resolved once per request

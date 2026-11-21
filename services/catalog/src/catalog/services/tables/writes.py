@@ -1,9 +1,7 @@
 """The data doors' commits, from the request body to the version it made: insert, merge-insert, update, delete, restore
 and an index's drop.
 
-The native ``DirectoryNamespace`` stubs these operations, so each resolves the table's dataset through the namespace
-and performs the operation with pylance. Most take the table a door resolved (``table_claims.DoorTable``) and the
-storage options, and return the typed ``lance_namespace`` response model."""
+Most take the table a door resolved (``table_claims.DoorTable``) and the storage options."""
 
 from __future__ import annotations
 
@@ -531,7 +529,7 @@ def drop_index(table: table_claims.DoorTable, so: StorageOptions, name: str, *, 
 
 
 def coerce_insert_arrow(
-    table: table_claims.DoorTable, so: StorageOptions, data: bytes, *, branch: str | None = None, max_bytes: int, overwrite: bool = False
+    table: table_claims.DoorTable, so: StorageOptions, data: bytes, *, branch: str | None = None, max_bytes: int, mode: InsertMode = InsertMode.APPEND
 ) -> bytes:
     """Align Arrow-IPC insert rows to the table's schema before the append.
 
@@ -554,7 +552,7 @@ def coerce_insert_arrow(
     so a dictionary decoded once per row cannot allocate past the cap, and the append is never handed a body
     larger than the one the caller was held to.
 
-    AN ``overwrite`` KEEPS THE TABLE'S PROVENANCE ([[LH-208]]). Lance takes an overwrite's schema from
+    AN OVERWRITE (``mode``, the request's) KEEPS THE TABLE'S PROVENANCE ([[LH-208]]). Lance takes an overwrite's schema from
     its payload, metadata included, so a payload naming a reserved key would forge one and a payload
     with none would erase every ``lineage.*`` stamp and the primary key's field metadata (measured on
     pylance 12.0.0, on main and on a branch). A reserved key in the payload is refused, and the body handed on carries
@@ -562,6 +560,7 @@ def coerce_insert_arrow(
     payload's schema metadata (measured on the same version).
     """
     incoming = read_arrow_body(data, max_bytes=max_bytes)
+    overwrite = mode is InsertMode.OVERWRITE
     if overwrite:
         provenance_guard.refuse_reserved_keys((incoming.schema.metadata or {}).keys(), door="insert?mode=overwrite payload")
         formats.refuse_flag_locking_keys((incoming.schema.metadata or {}).keys(), door="insert?mode=overwrite payload")

@@ -21,8 +21,8 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import PermissionDeniedError
 
 from catalog.api.authz import decisions, door_gates, object_grants
+from catalog.api.authz.context import AuthzContextDep
 from catalog.api.dependencies import FgaClientDep, SettingsDep, namespace_for_table
-from catalog.api.security import CurrentToken
 from catalog.core.config import Settings
 from catalog.schemas import GhostRevokeRequest, GhostRevokeResponse, GrantCensusResponse, TenancyRebuildRequest, TenancyRebuildResponse
 from catalog.services import grant_reconcile, table_claims, warehouses
@@ -30,9 +30,9 @@ from lakehouse.governed import fga_reads, fga_writes
 from lakehouse.records import location_claims
 
 
-async def require_can_reconcile_grants(client: FgaClientDep, settings: SettingsDep, token: CurrentToken) -> None:
+async def require_can_reconcile_grants(context: AuthzContextDep) -> None:
     """Every grant door's gate: the caller holds ``can_reconcile_grants`` on the estate root."""
-    await door_gates.require_relation(client, settings, token, relation="can_reconcile_grants", obj=settings.fga_root_object)
+    await door_gates.require_relation(context, relation="can_reconcile_grants", obj=context.settings.fga_root_object)
 
 
 management_router = APIRouter(prefix="/management/v1/grants", tags=["grant-reconcile"], dependencies=[Depends(require_can_reconcile_grants)])
@@ -52,26 +52,24 @@ async def grant_census(settings: SettingsDep, client: FgaClientDep) -> GrantCens
 
 
 @management_router.post("/ghosts/revoke")
-async def revoke_ghost_grants(
-    *, body: GhostRevokeRequest, request: Request, settings: SettingsDep, client: FgaClientDep, token: CurrentToken
-) -> GhostRevokeResponse:
+async def revoke_ghost_grants(*, body: GhostRevokeRequest, request: Request, context: AuthzContextDep) -> GhostRevokeResponse:
     """Revoke every grant on each object no registry names, as a drift report found them.
 
     Each object is judged again on the catalog's own reads (a project or warehouse record, a held location claim, a trash
     record) and one any of them names is refused, not revoked: a trashed table keeps its grants for its undrop, and a
     table a held claim records keeps them while its door may be writing it or while it stands ([[LH-588]]).
     """
-    held = await run_in_threadpool(grant_reconcile.held_table_claims, settings)
+    held = await run_in_threadpool(grant_reconcile.held_table_claims, context.settings)
     answer = GhostRevokeResponse()
     for obj in dict.fromkeys(body.objects):
         claim = held.get(obj)
-        reason = await _claim_refusal(request, settings, claim) if claim is not None else None
+        reason = await _claim_refusal(request, context.settings, claim) if claim is not None else None
         if reason is None:
-            reason = await run_in_threadpool(partial(grant_reconcile.ghost_refusal, settings, obj))
+            reason = await run_in_threadpool(partial(grant_reconcile.ghost_refusal, context.settings, obj))
         if reason is not None:
             answer.refused[obj] = reason
             continue
-        answer.revoked[obj] = await object_grants.revoke_ghost_object(client, settings, obj, token=token)
+        answer.revoked[obj] = await object_grants.revoke_ghost_object(context, obj)
     return answer
 
 
@@ -91,7 +89,7 @@ async def _claim_refusal(request: Request, settings: Settings, claim: location_c
 
 
 @management_router.post("/tenancy/rebuild")
-async def rebuild_warehouse_tenancy(*, body: TenancyRebuildRequest, settings: SettingsDep, client: FgaClientDep, token: CurrentToken) -> TenancyRebuildResponse:
+async def rebuild_warehouse_tenancy(*, body: TenancyRebuildRequest, context: AuthzContextDep) -> TenancyRebuildResponse:
     """Write each warehouse's tenancy edge, ``project:<p> project warehouse:<id>``, as its registry record names it.
 
     A structural edge confers nothing on its own, so rebuilding it re-grants no one; a warehouse whose record names no
@@ -100,12 +98,12 @@ async def rebuild_warehouse_tenancy(*, body: TenancyRebuildRequest, settings: Se
     answer = TenancyRebuildResponse()
     edges: list[fga_writes.ClientTuple] = []
     for warehouse_id in dict.fromkeys(body.warehouses):
-        record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
+        record = await run_in_threadpool(warehouses.get_warehouse, context.settings.registry_root, context.settings.storage_options(), warehouse_id)
         match grant_reconcile.tenancy_edge(record, warehouse_id):
             case str() as reason:
                 answer.unjustified[warehouse_id] = reason
             case edge:
                 edges.append(edge)
-    await object_grants.write_registry_edges(client, settings, edges, token=token)
+    await object_grants.write_registry_edges(context, edges)
     answer.written = [f"{edge.user} {edge.relation} {edge.object}" for edge in edges]
     return answer

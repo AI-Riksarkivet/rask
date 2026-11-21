@@ -36,8 +36,8 @@ from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.authz import decisions
-from catalog.api.dependencies import FgaClientDep, SettingsDep
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.authz.context import AuthzContextDep
+from catalog.api.security import Caller
 from catalog.schemas import MeProject, MeResponse
 from lakehouse.governed import fga_reads, fga_resilience
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -97,7 +97,7 @@ async def _project_ids(client: OpenFgaClient, sub: str, relation: str, *, deadli
 
 
 @management_router.get("")
-async def get_me(settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> MeResponse:
+async def get_me(context: AuthzContextDep) -> MeResponse:
     """Describe the signed-in caller: verified claims, estate standing, and tenant memberships.
 
     Any verified token → 200; anonymous → 401. FGA off → ``estate_admin=true``, ``can_create_project=true`` + ``projects=[]`` (dev
@@ -105,23 +105,23 @@ async def get_me(settings: SettingsDep, token: CurrentToken, client: FgaClientDe
     outage/brownout — this endpoint never 5xxes over authz-lookup health."""
     # Authn floor: with FGA on the router-wide authorize already 401'd an anonymous call; with FGA off it
     # is a no-op, so the contract's 401 is enforced here — there is no self to describe without a token.
-    if token is None:
+    if context.token is None:
         raise UnauthenticatedError("authentication required")
-    name, email = _claim(token, "name"), _claim(token, "email")
-    if (client := decisions.wired(settings, client)) is None:
+    name, email = _claim(context.token, "name"), _claim(context.token, "email")
+    if (client := decisions.wired(context.settings, context.client)) is None:
         # Dev parity (FGA off): every require_* gate is a no-op, so the caller effectively holds full
         # standing — say so honestly rather than painting a locked-down shell over an open catalog.
-        return MeResponse(sub=token.subject, name=name, email=email, estate_admin=True, can_create_project=True, projects=[])
+        return MeResponse(sub=context.token.subject, name=name, email=email, estate_admin=True, can_create_project=True, projects=[])
     # One shared deadline across the four sequential lookups — admin BEFORE member, so the stronger
     # role wins the dedupe below and a budget expiry costs the weaker list first.
     deadline = asyncio.get_running_loop().time() + _LOOKUP_BUDGET_SECONDS
-    estate_admin = await _estate_standing(client, settings, token.subject, relation="can_administer_estate", deadline=deadline)
-    can_create_project = await _estate_standing(client, settings, token.subject, relation="can_create_project", deadline=deadline)
-    admin_ids = await _project_ids(client, token.subject, "can_administer", deadline=deadline)
-    member_ids = await _project_ids(client, token.subject, "member", deadline=deadline)
+    estate_admin = await _estate_standing(client, context.settings, context.token.subject, relation="can_administer_estate", deadline=deadline)
+    can_create_project = await _estate_standing(client, context.settings, context.token.subject, relation="can_create_project", deadline=deadline)
+    admin_ids = await _project_ids(client, context.token.subject, "can_administer", deadline=deadline)
+    member_ids = await _project_ids(client, context.token.subject, "member", deadline=deadline)
     # The model folds admins into members (`member: ... or admin`), so every admin project also shows up
     # in the member list — keep the admin row, drop the duplicate.
     projects = [MeProject(project=p, role="admin") for p in admin_ids]
     admin_set = set(admin_ids)
     projects += [MeProject(project=p, role="member") for p in member_ids if p not in admin_set]
-    return MeResponse(sub=token.subject, name=name, email=email, estate_admin=estate_admin, can_create_project=can_create_project, projects=projects)
+    return MeResponse(sub=context.token.subject, name=name, email=email, estate_admin=estate_admin, can_create_project=can_create_project, projects=projects)

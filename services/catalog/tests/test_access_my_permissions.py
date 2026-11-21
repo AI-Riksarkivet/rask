@@ -24,6 +24,7 @@ import pytest
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError, UnsupportedOperationError
 from openfga_sdk.client import OpenFgaClient
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import access
 from catalog.core.config import Settings
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -59,7 +60,9 @@ def _run(
     token = (
         PersonPrincipal(principal=Principal(idp_id="dex", subject=sub), claims=IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1)) if token_present else None
     )
-    resp = asyncio.run(access._my_permissions(client, settings=settings, token=token, resolver=NamedResolver(), fga_type=fga_type, id=ident))
+    resp = asyncio.run(
+        access._my_permissions(AuthzContext(client=client, settings=settings, token=token), resolver=NamedResolver(), fga_type=fga_type, id=ident)
+    )
     return resp, asked
 
 

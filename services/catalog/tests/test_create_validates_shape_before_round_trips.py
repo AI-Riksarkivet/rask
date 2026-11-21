@@ -20,6 +20,7 @@ import pytest
 from lance_namespace import InvalidInputError, LanceNamespace
 
 from catalog.api.authz import hierarchy
+from catalog.api.authz.context import AuthzContext
 from catalog.api.idempotency import KeyedDoor
 from catalog.api.v1.endpoints import data as ep
 from catalog.core.config import Settings
@@ -49,9 +50,7 @@ def _create(**over: Any) -> Any:
         "keyed": KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
         "ns": cast("LanceNamespace", object()),
         "root": "s3://root",
-        "settings": _settings(),
-        "token": None,
-        "client": None,
+        "context": AuthzContext(client=None, settings=_settings(), token=None),
         "emitter": None,
         "uuids": None,
         "control": None,

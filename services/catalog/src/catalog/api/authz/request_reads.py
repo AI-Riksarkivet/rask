@@ -1,5 +1,4 @@
-"""What the router reads off a request: its JSON body, a batch's table ids, a rename's destination, and the shape rung
-that refuses identifiers no door can read."""
+"""What the router reads off a request before it decides."""
 
 from __future__ import annotations
 

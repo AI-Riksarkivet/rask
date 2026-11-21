@@ -52,14 +52,13 @@ from lance_namespace import (
     TableAlreadyExistsError,
     TableNotFoundError,
 )
-from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.api.authz import door_gates, hierarchy, object_grants, write_doors
-from catalog.api.dependencies import Resolver
+from catalog.api.authz.context import AuthzContext
+from catalog.api.dependencies import Resolver, governed_storage
 from catalog.api.security import Caller
 from catalog.core import encoding, native, provenance_guard, run_context
-from catalog.core.base_judge import GovernedStorage
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier
@@ -67,7 +66,7 @@ from catalog.core.lineage_emit import CREATE_TABLE, OVERWRITE_TABLE, LineageEmit
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
-from catalog.services import provenance_namespace, table_bases, table_claims, table_inputs, warehouses
+from catalog.services import provenance_namespace, table_bases, table_claims, table_inputs
 from catalog.services.tables import creation, versions
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga_ids
@@ -157,9 +156,7 @@ async def create_governed_table(
     id: str,
     ns: LanceNamespace,
     root: str,
-    settings: Settings,
-    token: Caller | None,
-    client: OpenFgaClient | None,
+    context: AuthzContext,
     emitter: LineageEmitter,
     uuids: UuidReader,
     control: ControlEmitter,
@@ -200,20 +197,20 @@ async def create_governed_table(
         table_bases.requested_external_blob_base,
         shape.external_blob_base,
         table.schema,
-        approved=settings.external_blob_bases_for(parse_identifier(id)[0]),
+        approved=context.settings.external_blob_bases_for(parse_identifier(id)[0]),
         warehouse=parse_identifier(id)[0],
-        governed=GovernedStorage.from_settings(settings, bucket_claim=warehouses.bucket_claim),
+        governed=governed_storage(context.settings),
     )
     segments = parse_identifier(id)
     table_id = fga_ids.canonical_object_id(segments)
     namespace = fga_ids.parent_namespace_id(segments) or ""
-    created_by = token.subject if token is not None else None
+    created_by = context.token.subject if context.token is not None else None
     # #21: stamp the lineage coordinates into the Lance file's schema metadata so the data is
     # self-describing (reconcilable to the graph without the catalog). A metadata swap on the decoded
     # table that shares its buffers, so no payload is too large to stamp. Gated on lineage being
     # enabled: when off we don't stamp coordinates the graph never receives.
-    if settings.lineage_emit_enabled:
-        table = stamp_lineage_metadata(table, build_lineage_metadata(namespace=settings.lineage_dataset_namespace))
+    if context.settings.lineage_emit_enabled:
+        table = stamp_lineage_metadata(table, build_lineage_metadata(namespace=context.settings.lineage_dataset_namespace))
     # Pre-existence, computed BEFORE the write (declared-only counts — it already holds an owner grant).
     # Overwrite and ExistOk always probe, because what each did decides its lineage record, which does not
     # depend on FGA: an Overwrite of a table is not its create, and an ExistOk that kept one committed no rows
@@ -231,15 +228,17 @@ async def create_governed_table(
     overwriting: table_claims.DoorTable | None = None
     if overwrote_existing:
         overwritten = await resolver.table(segments, ns=ns)
-        await door_gates.require_can_drop_table(client, settings, token, table=overwritten)
+        await door_gates.require_can_drop_table(context, table=overwritten)
         # The table asked about is the one overwritten ([[LH-530]]).
-        overwriting = table_claims.DoorTable(ns, table_claims.claim_store(settings), overwritten, announces=provenance_namespace.announcer(segments, settings))
+        overwriting = table_claims.DoorTable(
+            ns, table_claims.claim_store(context.settings), overwritten, announces=provenance_namespace.announcer(segments, context.settings)
+        )
     operation = OVERWRITE_TABLE if overwrote_existing else CREATE_TABLE
     # The grants of a table this request brings into being are written before the backend records it ([[LH-588]]).
-    grants = object_grants.GrantsBeforeWrite(client, settings, token, resolver=resolver, segments=segments)
+    grants = object_grants.GrantsBeforeWrite(context, resolver=resolver, segments=segments)
     # [[LH-279]] Where the create records the bases it registers — the catalog's control root, written
     # with the catalog's own credential and never through a vend.
-    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
+    registry = base_registry.BaseRegistry(control_root=context.settings.registry_root, storage_options=context.settings.storage_options())
     # ``tables.creation.create_table`` picks the write path by schema off the event loop: a blob-v2 column needs
     # file format 2.2 (native create pins 2.1 and rejects it) → a direct 2.2 write; else → native create. (§9)
     create = partial(
@@ -260,10 +259,10 @@ async def create_governed_table(
         transaction_properties=run_context.commit_properties(run, author=created_by, operation=operation),
         # The author the reconciler signs a lost announcement of this write for (ADR 0187); none for a write the emitter
         # never announces, which keeps no record.
-        recorded_author=None if provenance_namespace.is_unannounced(namespace, operation, settings) else created_by,
+        recorded_author=None if provenance_namespace.is_unannounced(namespace, operation, context.settings) else created_by,
         overwriting=overwriting,
         before_commit=table_inputs.recorder(
-            settings.registry_root, settings.storage_options(), name=table_id, declared=await write_doors.declared_inputs(resolver, run)
+            context.settings.registry_root, context.settings.storage_options(), name=table_id, declared=await write_doors.declared_inputs(resolver, run)
         ),
         before_register=grants,
         after_register=partial(grants.parent_as_authorized, ns),
@@ -277,7 +276,7 @@ async def create_governed_table(
     # was granted, before it was written ([[LH-588]]); one the request found standing holds its own grants and gains
     # none, since granting the caller `owner` on it would seize it (audit: CRITICAL), and the grants written for a uuid
     # it did not keep (a declaration that lost the race to the name) are taken back.
-    table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(settings), response.location or "", segments)
+    table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(context.settings), response.location or "", segments)
     await grants.take_back_unless_kept(table_uuid)
     # Record provenance authoritatively: the catalog knows the verified principal. Fire-and-forget
     # (after the response, best-effort) so the lineage service can never block/fail a create. The
@@ -306,7 +305,7 @@ async def create_governed_table(
         existok_kept_existing=existok_kept_existing,
     )
     await _announce_the_create_on_lineage(created, emitter=emitter, uuids=uuids, so=so)
-    await _announce_the_create_on_the_control_lane(created, control=control, token=token, table_uuid=table_uuid)
+    await _announce_the_create_on_the_control_lane(created, control=control, token=context.token, table_uuid=table_uuid)
     return response
 
 

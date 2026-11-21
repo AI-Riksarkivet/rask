@@ -807,6 +807,17 @@ class DatasetFilter:
             self._decided.update({obj: bool(allowed.get(obj)) for obj in undecided})
         return {obj for obj in unique if self._decided[obj]}
 
+    async def governed[T](self, items: list[T], *, refs: Callable[[T], Governed]) -> list[T]:
+        """Drop items the caller may not see: any naming a table the caller may not read, or a governed table recorded
+        without a uuid (no tuple can name it), and — when FGA is on — any item naming no table at all (it would otherwise
+        pass vacuously, leaking run/author/error to a caller with no grants). Auth off → nothing is dropped. (#22 audit)
+        """
+        if not self._settings.fga_enabled:
+            return list(items)
+        named = [(item, refs(item)) for item in items]
+        visible = await self.visible({obj for _, governs in named for obj in governs.objects})
+        return [item for item, governs in named if not governs.names_nothing and not governs.unresolved and governs.objects <= visible]
+
     async def attestation(self, arrived: Mapping[str, Any]) -> VerifiedSignature | None:
         """The signature a staged event's bytes carry, verified as the doors that record it verify it, or ``None`` for one
         that does not verify now (`staged_signature`)."""
@@ -838,21 +849,3 @@ def get_dataset_filter(request: Request, settings: SettingsDep, token: CurrentTo
 
 
 FilterDep = Annotated[DatasetFilter, Depends(get_dataset_filter)]
-
-
-async def governed[T](
-    datasets: DatasetFilter,
-    fga_enabled: bool,
-    items: list[T],
-    *,
-    refs: Callable[[T], Governed],
-) -> list[T]:
-    """Drop items the caller may not see: any naming a table the caller may not read, or a governed table recorded
-    without a uuid (no tuple can name it), and — when FGA is on — any item naming no table at all (it would otherwise
-    pass vacuously, leaking run/author/error to a caller with no grants). Auth off → nothing is dropped. (#22 audit)
-    """
-    if not fga_enabled:
-        return list(items)
-    named = [(item, refs(item)) for item in items]
-    visible = await datasets.visible({obj for _, governs in named for obj in governs.objects})
-    return [item for item, governs in named if not governs.names_nothing and not governs.unresolved and governs.objects <= visible]

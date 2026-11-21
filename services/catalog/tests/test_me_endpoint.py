@@ -17,6 +17,7 @@ from typing import Any
 import pytest
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import me as ep
 from lakehouse.governed import fga_resilience
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -33,7 +34,7 @@ def _token(**claims: Any) -> PersonPrincipal:
 
 
 def _me(settings: Any, *, token: Any, client: Any = None) -> ep.MeResponse:
-    return asyncio.run(ep.get_me(settings=settings, token=token, client=client))
+    return asyncio.run(ep.get_me(context=AuthzContext(client=client, settings=settings, token=token)))
 
 
 # ── the authn floor: anonymous → 401, in every configuration ─────────────────────────────────────────

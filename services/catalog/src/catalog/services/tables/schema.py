@@ -1,7 +1,4 @@
-"""A table's columns and metadata: add, alter and drop columns, and its schema-level and field metadata.
-
-The native ``DirectoryNamespace`` stubs these operations, so each resolves the table's dataset through the namespace
-and performs the operation with pylance, returning the typed ``lance_namespace`` response model."""
+"""A table's columns and metadata: add, alter and drop columns, and its schema-level and field metadata."""
 
 from __future__ import annotations
 
@@ -28,7 +25,7 @@ from catalog.core import json_arrow, provenance_guard
 from catalog.core.lance_refusals import column_op
 from catalog.core.version_retention import recorded_branch
 from catalog.services import table_claims
-from catalog.services.tables.commits import captured, commit_stamped
+from catalog.services.tables.commits import captured, commit_stamped, commit_stamped_keeping_labels
 from lakehouse.storage.options import StorageOptions
 
 
@@ -116,8 +113,8 @@ def alter_columns(
         handle.alter_columns(*cast(list[Iterable[AlterColumn]], alterations))
 
     with column_op("alter_columns", schema.names):
-        version, _ = commit_stamped(
-            table, so, transaction_properties, plan=captured(table, so, alter, branch=req.branch), branch=req.branch, opened=dataset, keeps_labels=True
+        version, _ = commit_stamped_keeping_labels(
+            table, so, transaction_properties, plan=captured(table, so, alter, branch=req.branch), branch=req.branch, opened=dataset
         )
     return AlterTableAlterColumnsResponse(version=version)
 
@@ -130,14 +127,13 @@ def drop_columns(
     dataset = table.open(so, branch=req.branch)
     provenance_guard.refuse_provenance_drop(dataset.schema, columns)
     with column_op("drop_columns", dataset.schema.names):
-        version, _ = commit_stamped(
+        version, _ = commit_stamped_keeping_labels(
             table,
             so,
             transaction_properties,
             plan=captured(table, so, lambda handle: handle.drop_columns(columns), branch=req.branch),
             branch=req.branch,
             opened=dataset,
-            keeps_labels=True,
         )
     return AlterTableDropColumnsResponse(version=version)
 

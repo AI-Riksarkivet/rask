@@ -20,6 +20,7 @@ from openfga_sdk.client.models import ClientTuple
 from openfga_sdk.exceptions import ApiException
 
 from catalog.api.authz import object_grants
+from catalog.api.authz.context import AuthzContext
 from lakehouse.governed import fga_ids, fga_writes
 
 
@@ -101,7 +102,11 @@ _TABLE = fga_ids.table_object("0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
 
 def test_revoke_ownership_noop_when_fga_disabled() -> None:
     fake = _ReadDeleteClient([([_tuple("user:a", "owner", _TABLE)], "")])
-    asyncio.run(object_grants.revoke_ownership(_client(fake), _settings(fga_enabled=False), obj=_TABLE, token=None, origin="lifecycle_delete"))
+    asyncio.run(
+        object_grants.revoke_ownership(
+            AuthzContext(client=_client(fake), settings=_settings(fga_enabled=False), token=None), obj=_TABLE, origin="lifecycle_delete"
+        )
+    )
     assert fake.read_calls == 0  # FGA off → never touched
 
 
@@ -109,12 +114,18 @@ def test_a_revoke_with_authorization_on_and_no_client_fails_closed() -> None:
     """A missing client is never read as "authorization is off" ([[LH-585]]): the dropped object would keep its grants
     without a word."""
     with pytest.raises(ServiceUnavailableError, match="authorization service is not available"):
-        asyncio.run(object_grants.revoke_ownership(None, _settings(fga_enabled=True), obj=_TABLE, token=None, origin="lifecycle_delete"))
+        asyncio.run(
+            object_grants.revoke_ownership(AuthzContext(client=None, settings=_settings(fga_enabled=True), token=None), obj=_TABLE, origin="lifecycle_delete")
+        )
 
 
 def test_revoke_ownership_deletes_every_tuple_for_the_object() -> None:
     fake = _ReadDeleteClient([([_tuple("user:a", "owner", _TABLE), _tuple("user:b", "reader", _TABLE)], "")])
-    asyncio.run(object_grants.revoke_ownership(_client(fake), _settings(fga_enabled=True), obj=_TABLE, token=None, origin="lifecycle_delete"))
+    asyncio.run(
+        object_grants.revoke_ownership(
+            AuthzContext(client=_client(fake), settings=_settings(fga_enabled=True), token=None), obj=_TABLE, origin="lifecycle_delete"
+        )
+    )
     assert _keys(fake.deleted) == {
         ("user:a", "owner", _TABLE),
         ("user:b", "reader", _TABLE),

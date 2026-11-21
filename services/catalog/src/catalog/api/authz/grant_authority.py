@@ -1,5 +1,4 @@
-"""Who may grant or revoke what: the rung a grant's body names, a grant that would elevate its caller, and a role's grant
-across tenants."""
+"""Who may grant or revoke what."""
 
 from __future__ import annotations
 
@@ -11,25 +10,26 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 
+from catalog.api.authz.context import AuthzContext
 from catalog.api.authz.decisions import authorization, require_rung
 from catalog.api.authz.objects import rung_on
 from catalog.api.authz.request_reads import json_body_or_400
 from catalog.api.authz.rungs import TENANT_HELD
 from catalog.api.dependencies import Resolver
-from catalog.api.security import Caller
 from catalog.core.config import CatalogStore
 from catalog.services import warehouses
 from lakehouse.governed import fga_ids, fga_model, fga_reads
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
-from lakehouse.governed.settings import FgaSettings
 
 
 __all__ = [
     "authorize_grant",
+    "authorize_revoke",
     "grant_actions",
     "refuse_a_cross_tenant_role_grant",
     "refuse_self_elevation",
     "require_grant_authority",
+    "require_revoke_authority",
 ]
 
 
@@ -72,27 +72,24 @@ async def authorize_grant(
     user: str,
     fga_type: str,
     segments: list[str],
-    revoking: bool,
 ) -> None:
-    """Authorize grant/revoke on the RUNG in the body — ``can_grant_<relation>``, not a blanket bar.
+    """Authorize a grant on the RUNG in the body — ``can_grant_<relation>``, not a blanket bar.
 
-    This route used to gate on the owner tier (``can_drop`` / ``can_delete``), which welded handing
-    out access to owning the data: the only way to let someone administer access was to give them
-    everything. The model now separates the two (``manage_grants`` / ``pass_grants``), and the gate
-    has to read the body to use it — the path says *that* a grant is happening, only the body says
-    *which rung*. Same shape as ``authorize_batch`` above, and ``request.json()`` is cached by
+    Handing out access is its own axis in the model (``manage_grants`` / ``pass_grants``), apart from
+    owning the data, so someone may administer access without holding everything; an owner-tier bar
+    (``can_drop`` / ``can_delete``) would weld the two together. The gate reads the body because the path
+    says only *that* a grant is happening, and the body says *which rung*. Same shape as :func:`catalog.api.authz.route_guard.authorize_batch`, and ``request.json()`` is cached by
     Starlette so the endpoint re-parses the same bytes.
 
     Fails CLOSED on anything unexpected. The body is client-controlled and this runs BEFORE Pydantic,
     so a non-dict, a non-string relation, or a rung the model has no ``can_grant_*`` for is a 403 —
     never a 500, and never a check on a phantom relation.
 
-    **REVOKE IS NOT GATED IDENTICALLY TO GRANT, and used to be.** The old rule said "taking a rung
-    away is the same authority as handing it out, and a weaker revoke bar would let a delegate strip
-    the owner who delegated to them" — true of ``owner``, and false of everything at or below the
-    delegate's own rung. ``can_grant_reader`` is ``manage_grants or (reader and pass_grants)``, so
-    kevin (``writer`` + ``pass_grants``, the fixture's "delegate and no more") could DELETE carol's
-    reader tuple, and every other reader/writer tuple on the object including the owner's.
+    **REVOKE IS NOT GATED IDENTICALLY TO GRANT.** Gating a revoke on the rung's own ``can_grant_*`` would
+    hold for ``owner`` and fail for everything at or below a delegate's rung: ``can_grant_reader`` is
+    ``manage_grants or (reader and pass_grants)``, so kevin (``writer`` + ``pass_grants``, the fixture's
+    "delegate and no more") could delete carol's reader tuple, and every other reader/writer tuple on the
+    object including the owner's.
     Revoke goes to ``can_revoke_grant``, which every type the door serves defines stricter than its grants:
     ``manage_grants`` alone on a table or a namespace, ``curator`` alone on a classification label.
 
@@ -115,7 +112,38 @@ async def authorize_grant(
 
     Raises:
         InvalidInputError: The body is not JSON.
-        PermissionDeniedError: The body is not an access request, or the caller may not grant or revoke its rung.
+        PermissionDeniedError: The body is not an access request, or the caller may not grant its rung.
+    """
+    body, relation = await _grantable_rung(request, fga_type)
+    obj = await require_rung(client, resolver, user=user, rung=rung_on(f"can_grant_{relation}", fga_type, segments))
+    await refuse_self_elevation(client, user=user, grantee=body.get("user"), relation=relation, obj=obj)
+
+
+async def authorize_revoke(
+    request: Request,
+    client: OpenFgaClient,
+    resolver: Resolver,
+    *,
+    user: str,
+    fga_type: str,
+    segments: list[str],
+) -> None:
+    """Authorize a revoke of the RUNG in the body on ``can_revoke_grant``, the stricter bar :func:`authorize_grant` gives
+    taking a rung away.
+
+    Raises:
+        InvalidInputError: The body is not JSON.
+        PermissionDeniedError: The body is not an access request, or the caller may not revoke its rung.
+    """
+    await _grantable_rung(request, fga_type)
+    await require_rung(client, resolver, user=user, rung=rung_on("can_revoke_grant", fga_type, segments))
+
+
+async def _grantable_rung(request: Request, fga_type: str) -> tuple[dict[str, object], str]:
+    """The access request's body and the rung it names, refused unless the model can grant that rung on ``fga_type``.
+
+    A revoke is shape-checked against the GRANT actions too: the set of rungs that may be taken away is the set that
+    may be handed out. Only the AUTHORITY differs.
     """
     body = await json_body_or_400(request)
     if not isinstance(body, dict):
@@ -123,34 +151,41 @@ async def authorize_grant(
     relation = body.get("relation")
     if not isinstance(relation, str) or not relation:
         raise PermissionDeniedError("malformed access request body: 'relation' must be a string")
-    action = "can_revoke_grant" if revoking else f"can_grant_{relation}"
-    # Shape-checked against the GRANT actions for a revoke too: the set of rungs that may be taken away is the set
-    # that may be handed out. Only the AUTHORITY differs.
     if f"can_grant_{relation}" not in grant_actions(fga_type):
         raise PermissionDeniedError(f"{relation!r} is not a grantable rung on {fga_type}")
-    obj = await require_rung(client, resolver, user=user, rung=rung_on(action, fga_type, segments))
-    if not revoking:
-        await refuse_self_elevation(client, user=user, grantee=body.get("user"), relation=relation, obj=obj)
+    return body, relation
 
 
 async def require_grant_authority(
     request: Request,
-    client: OpenFgaClient | None,
-    settings: FgaSettings,
+    context: AuthzContext,
     *,
-    token: Caller | None,
     resolver: Resolver,
     fga_type: str,
     segments: list[str],
-    revoking: bool,
 ) -> None:
-    """Gate a grant or revoke door the router leaves to its handler exactly as :func:`authorize` gates the table and
-    namespace ones, through :func:`authorize_grant`: ``can_grant_<rung>`` from the body, or ``can_revoke_grant``, and no
-    grant that raises the caller's own access ([[LH-555]]). A no-op with FGA off; with it on, no client is 503 and no
-    caller 401 (:func:`authorization`), since nothing before the handler decided."""
-    if (authz := authorization(settings, client, token)) is None:
+    """Gate a grant door the router leaves to its handler exactly as :func:`authorize` gates the table and namespace
+    ones, through :func:`authorize_grant`: ``can_grant_<rung>`` from the body, and no grant that raises the caller's own
+    access ([[LH-555]]). A no-op with FGA off; with it on, no client is 503 and no caller 401 (:func:`authorization`),
+    since nothing before the handler decided."""
+    if (authz := authorization(context)) is None:
         return
-    await authorize_grant(request, authz.client, resolver, user=authz.subject, fga_type=fga_type, segments=segments, revoking=revoking)
+    await authorize_grant(request, authz.client, resolver, user=authz.subject, fga_type=fga_type, segments=segments)
+
+
+async def require_revoke_authority(
+    request: Request,
+    context: AuthzContext,
+    *,
+    resolver: Resolver,
+    fga_type: str,
+    segments: list[str],
+) -> None:
+    """Gate a revoke door the router leaves to its handler as :func:`require_grant_authority` gates a grant, through
+    :func:`authorize_revoke`: ``can_revoke_grant``."""
+    if (authz := authorization(context)) is None:
+        return
+    await authorize_revoke(request, authz.client, resolver, user=authz.subject, fga_type=fga_type, segments=segments)
 
 
 async def refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: object, relation: str, obj: str) -> None:
@@ -159,7 +194,7 @@ async def refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: ob
     Separation of duties, enforced at the only layer that can see both sides. See
     :func:`authorize_grant` for why it cannot live in the model.
 
-    Reads the grantee the same way :func:`~catalog.api.v1.endpoints.access._access_mutate` does
+    Reads the grantee the same way :func:`~catalog.api.v1.endpoints.access._change_access` does
     (:func:`fga_ids.grantee_object`) — because a guard that resolved it
     DIFFERENTLY from the code that writes the tuple would be guarding a grant nobody makes.
 

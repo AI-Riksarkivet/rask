@@ -49,16 +49,15 @@ from lance_namespace import (
     ServiceUnavailableError,
     TableNotFoundError,
 )
-from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.api import idempotency as idem
 from catalog.api.announcing import Announcer, AnnouncerDep, Filing
 from catalog.api.authz import decisions, door_gates, hierarchy, object_grants, objects, visible_pages, warehouse_grants
+from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.declared import DECLARATION, Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import (
     ControlEmitterDep,
-    FgaClientDep,
     ObjectUuids,
     ObjectUuidsDep,
     SettingsDep,
@@ -104,7 +103,6 @@ from catalog.services.vend_probe import (
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids, fga_writes
-from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.problems.ns_errors import PartiallyApplied, status_for
 from lakehouse.records import base_registry, clone_sources, data_directories, location_claims, trash
@@ -159,9 +157,7 @@ def _delete_profile_fields(profile: DeleteProfile | None) -> dict[str, str]:
 async def create_warehouse(
     *,
     request: Request,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     control: ControlEmitterDep,
     vendor: VendorDep,
     body: CreateWarehouseRequest,
@@ -174,14 +170,14 @@ async def create_warehouse(
     makes it. A warehouse git declares is not changed here ([[XC-213]]): its declaration is, and the catalog converges
     it. A re-run with the same id is idempotent (bucket + record overwrite-safe).
     """
-    ids = validated_ids(settings, body)
+    ids = validated_ids(context.settings, body)
     _warehouse_id, project, _bucket = ids
-    await hierarchy.require_project_exists(settings, project)
-    await door_gates.require_can_create_warehouse(client, settings, token, project=project)
+    await hierarchy.require_project_exists(context.settings, project)
+    await door_gates.require_can_create_warehouse(context, project=project)
     # A declaration naming the warehouse's deletion protection asks what the protection door asks ([[LH-548]]).
     if body.protected is not None:
-        await _require_project_admin(client, settings, token, project=project)
-    record = await establish_warehouse(request, settings, body, ids=ids, client=client, control=control, vendor=vendor, author=author_of(token), owner=token)
+        await _require_project_admin(context, project=project)
+    record = await establish_warehouse(request, context, body, ids=ids, control=control, vendor=vendor, author=author_of(context.token))
     return WarehouseResponse.model_validate(record.stored())
 
 
@@ -213,15 +209,13 @@ def validated_ids(settings: Settings, body: CreateWarehouseRequest) -> Warehouse
 
 async def establish_warehouse(
     request: Request,
-    settings: Settings,
+    context: AuthzContext,
     body: CreateWarehouseRequest,
     *,
     ids: WarehouseIds,
-    client: OpenFgaClient | None,
     control: ControlEmitter,
     vendor: CredentialVendor,
     author: Author | None,
-    owner: Caller | None,
 ) -> WarehouseRecord:
     """Make the warehouse ``body`` names, or converge the one that stands onto it; the record as written.
 
@@ -230,7 +224,7 @@ async def establish_warehouse(
     warehouse its row in its own catalog, seed its grants and announce it. The probe refuses a store that ignores
     credential scope, a conditional put or the write tier's policy (400) and one it cannot reach (503), so no such
     warehouse becomes routable ([[LH-481]], [[LH-511]]). ``ids`` are ``body``'s (:func:`validated_ids`), in a project its caller found in the registry.
-    ``owner`` is the caller granted ``owner`` on it, none for a declared warehouse, whose project's admins own it
+    ``context.token`` is the caller granted ``owner`` on it, none for a declared warehouse, whose project's admins own it
     through the project.
 
     Raises:
@@ -240,23 +234,23 @@ async def establish_warehouse(
         ServiceUnavailableError: The store or its STS could not be probed.
     """
     warehouse_id, project, bucket = ids
-    existing = await _claim_the_bucket(settings, body, ids, author=author, owner=owner)
+    existing = await _claim_the_bucket(context.settings, body, ids, author=author, owner=context.token)
     root_uri = f"s3://{bucket}"
-    await run_in_threadpool(warehouses.provision_bucket, bucket, settings.storage_options())
-    await _require_a_conforming_store(settings, vendor, root_uri, warehouse_id=warehouse_id, author=author)
+    await run_in_threadpool(warehouses.provision_bucket, bucket, context.settings.storage_options())
+    await _require_a_conforming_store(context.settings, vendor, root_uri, warehouse_id=warehouse_id, author=author)
     actor = author.actor if author is not None else None
     protection = None if body.protected is None else ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
     record = _record_for(body, existing, warehouse_id=warehouse_id, project=project, bucket=bucket, protection=protection)
-    replaced, record = await _write_record(settings, body, record, existing=existing, protection=protection)
+    replaced, record = await _write_record(context.settings, body, record, existing=existing, protection=protection)
     # ITS OWN ROW IN ITS OWN CATALOG ([[LH-593]]): every name beneath a warehouse begins with its id, and the directory
     # catalog refuses a namespace whose parent has no row (measured on pylance 13.0.0). After the record, which makes
     # the root the warehouse's, and idempotent, so a re-POST converges a create that failed here.
-    ns_conn = await namespace_for_root(request, settings, root_uri, endpoint=record.endpoint or None)
+    ns_conn = await namespace_for_root(request, context.settings, root_uri, endpoint=record.endpoint or None)
     await run_in_threadpool(warehouses.ensure_catalog_row, ns_conn, warehouse_id)
-    if owner is not None:
-        await warehouse_grants.seed_warehouse(client, settings, owner, warehouse_id=warehouse_id, project=project)
+    if context.token is not None:
+        await warehouse_grants.seed_warehouse(context, warehouse_id=warehouse_id, project=project)
     elif author is not None:
-        await warehouse_grants.converge_warehouse_grants(client, settings, warehouse_id=warehouse_id, project=project, actor=author.subject)
+        await warehouse_grants.converge_warehouse_grants(context.client, context.settings, warehouse_id=warehouse_id, project=project, actor=author.subject)
     log.info("warehouse_created", extra={"warehouse": warehouse_id, "bucket": bucket, "project": project})
     await emit_control(
         control,
@@ -477,11 +471,11 @@ async def _write_record(
 
 
 @management_router.get("", response_model_exclude_none=True)
-async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[WarehouseResponse]:
+async def list_warehouses(context: AuthzContextDep) -> list[WarehouseResponse]:
     """Every warehouse the caller can read. Governed like the metadata feeds: with FGA on, filtered to the
     warehouses the caller has ``can_get_metadata`` on (never discloses another tenant's bucket names)."""
-    records = await run_in_threadpool(warehouses.list_warehouses, settings.registry_root, settings.storage_options())
-    if (authz := decisions.authorization(settings, client, token)) is not None:
+    records = await run_in_threadpool(warehouses.list_warehouses, context.settings.registry_root, context.settings.storage_options())
+    if (authz := decisions.authorization(context)) is not None:
         # The listing's own candidates, batch-checked ([[LH-223]]): never what the caller reaches across the estate,
         # which OpenFGA stops counting at its ceiling.
         allowed = await authz.batch_check("can_get_metadata", [f"warehouse:{r.id}" for r in records])
@@ -490,10 +484,10 @@ async def list_warehouses(settings: SettingsDep, token: CurrentToken, client: Fg
 
 
 @management_router.get("/{warehouse_id}", response_model_exclude_none=True)
-async def get_warehouse(*, warehouse_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> WarehouseResponse:
+async def get_warehouse(*, warehouse_id: str, context: AuthzContextDep) -> WarehouseResponse:
     """One warehouse record — reader-gated on ``warehouse:<id>`` (fail-closed on an OpenFGA outage)."""
-    await door_gates.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
-    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
+    await door_gates.require_relation(context, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
+    record = await run_in_threadpool(warehouses.get_warehouse, context.settings.registry_root, context.settings.storage_options(), warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     return WarehouseResponse.model_validate(record.stored())
@@ -503,9 +497,7 @@ async def get_warehouse(*, warehouse_id: str, settings: SettingsDep, token: Curr
 async def list_warehouse_trash(
     *,
     warehouse_id: str,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     limit: ListLimit,
     namespace: Annotated[str | None, Query(description="List only what was dropped beneath this namespace name.")] = None,
     page_token: str | None = None,
@@ -524,12 +516,12 @@ async def list_warehouse_trash(
     warehouse's drops on a shared bucket are never listed. They sort by name and then uuid, the key the opaque page token
     resumes after (``trash_doors.listing_key``, `lance_docs/ns_catalog/spec.yaml` PageToken).
     """
-    await door_gates.require_relation(client, settings, token, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
-    so = settings.storage_options()
-    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
+    await door_gates.require_relation(context, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
+    so = context.settings.storage_options()
+    record = await run_in_threadpool(warehouses.get_warehouse, context.settings.registry_root, so, warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
-    owned = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id)
+    owned = await run_in_threadpool(warehouses.trash_owned_by, context.settings.registry_root, so, warehouse_id)
     beneath = f"{namespace}{CATALOG_DELIMITER}" if namespace else ""
     candidates = sorted(((trash_doors.listing_key(r), r) for r in owned if r.uuid and r.id.startswith(beneath)), key=lambda c: c[0])
 
@@ -537,7 +529,7 @@ async def list_warehouse_trash(
         return [fga_ids.object_of(r.kind, str(r.uuid)) for r in records]
 
     page, next_token = await visible_pages.judged_page(
-        decisions.authorization(settings, client, token),
+        decisions.authorization(context),
         relation="can_get_metadata",
         candidates=candidates,
         objects_of=judged_on,
@@ -551,9 +543,7 @@ async def _set_warehouse_status(
     warehouse_id: str,
     status: WarehouseStatus,
     *,
-    settings: Settings,
-    token: Caller | None,
-    client: OpenFgaClient | None,
+    context: AuthzContext,
     control: ControlEmitter,
 ) -> WarehouseResponse:
     """Shared deactivate/activate: admin-gate on the warehouse's OWN project, flip ``status``, persist.
@@ -564,18 +554,20 @@ async def _set_warehouse_status(
     gets the SAME 404 as a missing warehouse — the not-found and permission-denied outcomes are made
     indistinguishable so an unauthorized user cannot probe which warehouse ids exist. Status is read LIVE by
     the resolver, so no cache invalidation is needed — the very next routed request sees the new status."""
-    so = settings.storage_options()
-    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
+    so = context.settings.storage_options()
+    record = await run_in_threadpool(warehouses.get_warehouse, context.settings.registry_root, so, warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     try:
-        await door_gates.require_can_create_warehouse(client, settings, token, project=record.project)
+        await door_gates.require_can_create_warehouse(context, project=record.project)
     except PermissionDeniedError as exc:
         # Collapse denied → not-found so existence is not disclosed to a non-admin (audit #4). A legitimate
         # admin of the warehouse's own project still passes; anyone else sees exactly a missing-warehouse 404.
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
-    refuse_what_git_declares(record.managed_by, obj=f"warehouse:{warehouse_id}", token=token)
-    updated = await change_warehouse_status(settings, control, warehouse_id, status=status, actor=f"user:{token.subject}" if token else None)
+    refuse_what_git_declares(record.managed_by, obj=f"warehouse:{warehouse_id}", token=context.token)
+    updated = await change_warehouse_status(
+        context.settings, control, warehouse_id, status=status, actor=f"user:{context.token.subject}" if context.token else None
+    )
     return WarehouseResponse.model_validate(updated.stored())
 
 
@@ -609,38 +601,34 @@ async def change_warehouse_status(
 async def deactivate_warehouse(
     *,
     warehouse_id: str,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     control: ControlEmitterDep,
 ) -> WarehouseResponse:
     """Quarantine a warehouse (#3-A lifecycle): the resolver then refuses EVERY op on a name beneath it
     (403), so no new tables are created and existing ones are suspended — the tenant-offboarding first step.
     Admin-gated on the warehouse's project. Idempotent (re-deactivating is a no-op)."""
-    return await _set_warehouse_status(warehouse_id, "deactivated", settings=settings, token=token, client=client, control=control)
+    return await _set_warehouse_status(warehouse_id, "deactivated", context=context, control=control)
 
 
 @management_router.post("/{warehouse_id}/activate", response_model_exclude_none=True)
 async def activate_warehouse(
     *,
     warehouse_id: str,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     control: ControlEmitterDep,
 ) -> WarehouseResponse:
     """Reactivate a quarantined warehouse (#3-A lifecycle) — restores routing to the names beneath it.
     Admin-gated on the warehouse's project. Idempotent."""
-    return await _set_warehouse_status(warehouse_id, "active", settings=settings, token=token, client=client, control=control)
+    return await _set_warehouse_status(warehouse_id, "active", context=context, control=control)
 
 
-async def _require_project_admin(client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, project: str) -> None:
+async def _require_project_admin(context: AuthzContext, *, project: str) -> None:
     """Refuse a caller without ``can_administer`` on ``project``: the authority over its warehouses' destruction, and so
     over the lock on it."""
-    await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
 
 
-async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token: CurrentToken, *, client: FgaClientDep) -> WarehouseRecord:
+async def administered_warehouse(warehouse_id: str, context: AuthzContextDep) -> WarehouseRecord:
     """The record of ``warehouse_id``, for a caller who administers its project (:func:`_require_project_admin`).
 
     The record is read first, since the gate is on the warehouse's own project and never on one the caller names. NO
@@ -649,9 +637,7 @@ async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token
 
     Args:
         warehouse_id: The warehouse the route's path names.
-        settings: The catalog's settings.
-        token: The verified caller.
-        client: The OpenFGA client deciding.
+        context: The request's authorization context: the OpenFGA client, the settings and the caller.
 
     Returns:
         The warehouse's registry record.
@@ -661,11 +647,11 @@ async def administered_warehouse(warehouse_id: str, settings: SettingsDep, token
         TableNotFoundError: The warehouse is absent, or its caller does not administer its project.
     """
     _validate_id(warehouse_id, what="warehouse id")
-    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, settings.storage_options(), warehouse_id)
+    record = await run_in_threadpool(warehouses.get_warehouse, context.settings.registry_root, context.settings.storage_options(), warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     try:
-        await _require_project_admin(client, settings, token, project=record.project)
+        await _require_project_admin(context, project=record.project)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
     return record
@@ -1038,9 +1024,7 @@ async def delete_warehouse(
     warehouse_id: str,
     keyed: idem.KeyedDoorDep,
     request: Request,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     announcer: AnnouncerDep,
     uuids: ObjectUuidsDep,
     cascade: bool = False,
@@ -1097,19 +1081,19 @@ async def delete_warehouse(
     converge = await keyed.begin(target=f"warehouse:{warehouse_id}", takeover="unknown")
     if converge.replay is not None:
         return DeleteWarehouseResponse.model_validate(converge.replay.body)
-    record = warehouse_its_doors_manage(warehouse_id, await administered_warehouse(warehouse_id, settings, token, client=client), token)
-    so = settings.storage_options()
+    record = warehouse_its_doors_manage(warehouse_id, await administered_warehouse(warehouse_id, context), context.token)
+    so = context.settings.storage_options()
     asked = _DeleteAsked(warehouse_id=warehouse_id, cascade=cascade, purge_bucket=purge_bucket, force=force)
-    plan = await _plan_the_delete(record, asked, request=request, settings=settings, so=so)
+    plan = await _plan_the_delete(record, asked, request=request, settings=context.settings, so=so)
     ns_conn = plan.ns_conn
     delete = _WarehouseDelete(
         warehouse_id=warehouse_id, project=record.project, bucket=record.bucket, purge_bucket=purge_bucket, so=so, subtrees=plan.subtrees, trashed=plan.trashed
     )
-    announced = await _what_the_delete_announces(delete, announcer=announcer, token=token, uuids=uuids)
+    announced = await _what_the_delete_announces(delete, announcer=announcer, token=context.token, uuids=uuids)
     async with announcer.announcing(
         door="delete_warehouse", target=f"warehouse:{warehouse_id}", announcements=[*announced.detached.values(), announced.deleted]
     ) as filing:
-        steps = _cascade_the_delete(delete, ns_conn, settings=settings, client=client, token=token)
+        steps = _cascade_the_delete(delete, ns_conn, context=context)
         landed = await _run_the_cascade(steps, delete, announced=announced, filing=filing)
 
         log.info(
@@ -1337,16 +1321,14 @@ async def _what_the_delete_announces(delete: _WarehouseDelete, *, announcer: Ann
     return _DeleteAnnouncements(detached=detached, planned=planned, deleted=deleted)
 
 
-async def _cascade_the_delete(
-    delete: _WarehouseDelete, ns_conn: LanceNamespace | None, *, settings: Settings, client: OpenFgaClient | None, token: Caller | None
-) -> AsyncGenerator[_Step]:
+async def _cascade_the_delete(delete: _WarehouseDelete, ns_conn: LanceNamespace | None, *, context: AuthzContext) -> AsyncGenerator[_Step]:
     """Remove what the warehouse holds in the order :func:`delete_warehouse` states, its record last, yielding each step as it lands."""
     for entry in delete.trashed:
-        async with aclosing(_end_trashed(entry, delete, settings=settings, client=client, token=token)) as ending:
+        async with aclosing(_end_trashed(entry, delete, context=context)) as ending:
             async for step in ending:
                 yield step
     if ns_conn is not None:
-        async with aclosing(_remove_every_subtree(delete, ns_conn, settings=settings, client=client, token=token)) as removing:
+        async with aclosing(_remove_every_subtree(delete, ns_conn, context=context)) as removing:
             async for step in removing:
                 yield step
         # The warehouse's own row last, once every namespace beneath it is gone.
@@ -1355,35 +1337,31 @@ async def _cascade_the_delete(
     # A namespace an earlier attempt removed is named by nothing but this warehouse's `child` edge, so its subtree
     # is ended from there before the warehouse's own grants go.
     ended = {fga_ids.namespace_object(subtree.uuid) for subtree in delete.subtrees if subtree.uuid is not None}
-    for orphan in await object_grants.orphaned_children(client, settings, f"warehouse:{delete.warehouse_id}", ended=ended):
-        async for count in object_grants.end_removed_subtree(client, settings, root_uuid=orphan, removed=[], token=token):
+    for orphan in await object_grants.orphaned_children(context.client, context.settings, f"warehouse:{delete.warehouse_id}", ended=ended):
+        async for count in object_grants.end_removed_subtree(context, root_uuid=orphan, removed=[]):
             yield _Step(landed=_Landed(revoked=count))
 
-    yield _Step(landed=_Landed(revoked=await object_grants.revoke_removed_object(client, settings, f"warehouse:{delete.warehouse_id}", token=token)))
+    yield _Step(landed=_Landed(revoked=await object_grants.revoke_removed_object(context, f"warehouse:{delete.warehouse_id}")))
     # The record goes LAST: it is what the door is addressed by, so while the purge or the claim's release can still
     # fail, it keeps the warehouse for the re-issue that finishes them.
     if delete.purge_bucket:
         purged = await run_in_threadpool(warehouses.purge_bucket, delete.bucket, delete.so)
         yield _Step(landed=_Landed(purged=purged, bucket_purged=True))
         await run_in_threadpool(
-            partial(warehouses.release_bucket_claim, settings.registry_root, delete.so, bucket=delete.bucket, warehouse_id=delete.warehouse_id)
+            partial(warehouses.release_bucket_claim, context.settings.registry_root, delete.so, bucket=delete.bucket, warehouse_id=delete.warehouse_id)
         )
-    await run_in_threadpool(warehouses.delete_warehouse_record, settings.registry_root, delete.so, delete.warehouse_id)
+    await run_in_threadpool(warehouses.delete_warehouse_record, context.settings.registry_root, delete.so, delete.warehouse_id)
 
 
-async def _remove_every_subtree(
-    delete: _WarehouseDelete, ns_conn: LanceNamespace, *, settings: Settings, client: OpenFgaClient | None, token: Caller | None
-) -> AsyncGenerator[_Step]:
+async def _remove_every_subtree(delete: _WarehouseDelete, ns_conn: LanceNamespace, *, context: AuthzContext) -> AsyncGenerator[_Step]:
     """Remove each namespace of the warehouse with everything in it, one fully before the next, yielding each step."""
     for subtree in delete.subtrees:
-        async with aclosing(_remove_subtree(subtree, delete, ns_conn, settings=settings, client=client, token=token)) as removing:
+        async with aclosing(_remove_subtree(subtree, delete, ns_conn, context=context)) as removing:
             async for step in removing:
                 yield step
 
 
-async def _end_trashed(
-    entry: TrashRecord, delete: _WarehouseDelete, *, settings: Settings, client: OpenFgaClient | None, token: Caller | None
-) -> AsyncGenerator[_Step]:
+async def _end_trashed(entry: TrashRecord, delete: _WarehouseDelete, *, context: AuthzContext) -> AsyncGenerator[_Step]:
     """End one trashed object of the warehouse, its kept grants first, yielding each step as it lands."""
     kind, canonical = str(entry.kind or "table"), entry.id
     # A trashed object's grants are held by the uuid its record keeps ([[LH-524]]). Counted as the revoke lands,
@@ -1391,22 +1369,14 @@ async def _end_trashed(
     trashed_uuid = entry.uuid
     if trashed_uuid is not None:
         obj = fga_ids.object_of(kind, trashed_uuid)
-        yield _Step(landed=_Landed(revoked=await object_grants.revoke_removed_object(client, settings, obj, token=token)))
+        yield _Step(landed=_Landed(revoked=await object_grants.revoke_removed_object(context, obj)))
     else:
         log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": delete.warehouse_id, "kind": kind, "id": canonical})
-    await _forget_trashed(settings, entry, purge=delete.purge_bucket)
+    await _forget_trashed(context.settings, entry, purge=delete.purge_bucket)
     yield _Step(landed=_Landed(trash_ended=[f"{kind}:{canonical}"]))
 
 
-async def _remove_subtree(
-    subtree: _NamespaceSubtree,
-    delete: _WarehouseDelete,
-    ns_conn: LanceNamespace,
-    *,
-    settings: Settings,
-    client: OpenFgaClient | None,
-    token: Caller | None,
-) -> AsyncGenerator[_Step]:
+async def _remove_subtree(subtree: _NamespaceSubtree, delete: _WarehouseDelete, ns_conn: LanceNamespace, *, context: AuthzContext) -> AsyncGenerator[_Step]:
     """Remove one namespace of the warehouse with everything in it, yielding each step as it lands."""
     # What this cascade removes of the subtree: every namespace, and each table it detaches itself. A listed
     # table that left before its turn ([[LH-586]]) is announced by no one here and ended by no step below.
@@ -1415,7 +1385,7 @@ async def _remove_subtree(
         if item.kind != "table":
             continue
         # What the announcement names the table by, read while it still stands (ADR 0173 §10).
-        if await _detach_table(ns_conn, settings, item.segments, purge=delete.purge_bucket, table_uuid=item.uuid):
+        if await _detach_table(ns_conn, context.settings, item.segments, purge=delete.purge_bucket, table_uuid=item.uuid):
             removed.append(item)
             yield _Step(landed=_Landed(tables_removed=[fga_ids.canonical_object_id(item.segments)]), detached=tuple(item.segments))
     # The namespaces deepest first, then what each object held ended.
@@ -1427,7 +1397,7 @@ async def _remove_subtree(
             # here would leave records and grants nobody can end, so the catalog's own records still go.
             log.warning("warehouse_cascade_namespace_absent", extra={"warehouse": delete.warehouse_id, "namespace": namespace})
         yield _Step(landed=_Landed(namespaces_dropped=[fga_ids.canonical_object_id(namespace)]))
-    async for count in object_grants.end_removed_subtree(client, settings, root_uuid=subtree.uuid, removed=removed, token=token):
+    async for count in object_grants.end_removed_subtree(context, root_uuid=subtree.uuid, removed=removed):
         yield _Step(landed=_Landed(revoked=count))
 
 
@@ -1478,9 +1448,7 @@ def _partially_deleted(landed: _Landed, delete: _WarehouseDelete) -> PartiallyAp
 async def validate_warehouse_credentials(
     *,
     warehouse_id: str,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     vendor: VendorDep,
 ) -> ProbeReport:
     """Prove this warehouse's vended credentials are actually SCOPED, by using one.
@@ -1506,20 +1474,20 @@ async def validate_warehouse_credentials(
     Reports every check even after one fails (see :func:`summarize_probe`) — an over-permissive store
     and an unreachable one need different answers, and a first-failure exit cannot tell them apart.
     """
-    so = settings.storage_options()
-    record = await run_in_threadpool(warehouses.get_warehouse, settings.registry_root, so, warehouse_id)
+    so = context.settings.storage_options()
+    record = await run_in_threadpool(warehouses.get_warehouse, context.settings.registry_root, so, warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
     try:
-        await door_gates.require_can_create_warehouse(client, settings, token, project=record.project)
+        await door_gates.require_can_create_warehouse(context, project=record.project)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
     # [[LH-205]] The probe vends through the estate's STS and writes through the estate's client, so for
     # a record naming another store it would vend and write against the wrong store entirely.
-    require_estate_store(record.endpoint, estate=settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
+    require_estate_store(record.endpoint, estate=context.settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
-    subject = token.subject if token is not None else ANONYMOUS_SUBJECT
-    probe = partial(_run_scope_probe, record.root_uri, vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=role_session_name(subject))
+    subject = context.token.subject if context.token is not None else ANONYMOUS_SUBJECT
+    probe = partial(_run_scope_probe, record.root_uri, vendor=vendor, store_endpoint=context.settings.s3_endpoint, session_name=role_session_name(subject))
     checks = await run_in_threadpool(probe)
     return summarize_probe(checks)
 

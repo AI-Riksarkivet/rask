@@ -1,7 +1,4 @@
-"""A table's branches and tags: list, create, update and delete, and the rules a ref's name is held to.
-
-The native ``DirectoryNamespace`` stubs these operations, so each resolves the table's dataset through the namespace
-and performs the operation with pylance, returning the typed ``lance_namespace`` response model."""
+"""A table's branches and tags: list, create, update and delete, and the rules a ref's name is held to."""
 
 from __future__ import annotations
 

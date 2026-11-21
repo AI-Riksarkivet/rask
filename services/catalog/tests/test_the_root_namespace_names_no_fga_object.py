@@ -49,6 +49,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import InvalidInputError, PermissionDeniedError
 
 from catalog.api.authz import route_guard
+from catalog.api.authz.context import AuthzContext
 from lakehouse.governed import fga_provision
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -77,7 +78,11 @@ def _drive(path: str, object_id: str) -> None:
     # the attributes the guard reads, and constructing a real Request/Settings/OpenFgaClient would drag
     # a whole app and a live store into a test about one composed object id. The caller is a real one.
     asyncio.run(
-        route_guard.authorize(cast(Any, _Request(path, object_id)), cast(Any, _Settings()), _CALLER, injected=cast(Any, object()), resolver=NamedResolver())
+        route_guard.authorize(
+            cast(Any, _Request(path, object_id)),
+            AuthzContext(client=cast(Any, object()), settings=cast(Any, _Settings()), token=_CALLER),
+            resolver=NamedResolver(),
+        )
     )
 
 
@@ -91,7 +96,7 @@ def test_a_named_namespace_is_still_checked(openfga_store: Any, held: str | None
 
     async def _authorized() -> None:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
-            await route_guard.authorize(request, cast(Any, _Settings()), _CALLER, injected=client, resolver=NamedResolver())
+            await route_guard.authorize(request, AuthzContext(client=client, settings=cast(Any, _Settings()), token=_CALLER), resolver=NamedResolver())
 
     with pytest.raises(PermissionDeniedError) if held is None else nullcontext():
         asyncio.run(_authorized())

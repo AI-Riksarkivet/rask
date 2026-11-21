@@ -69,8 +69,9 @@ from catalog.api import announcing
 from catalog.api import idempotency as idem
 from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.authz import decisions, door_gates, hierarchy, object_grants
+from catalog.api.authz.context import AuthzContextDep
 from catalog.api.declared import Author, author_of, refuse_what_git_declares
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, SettingsDep
+from catalog.api.dependencies import ControlEmitterDep, SettingsDep
 from catalog.api.security import ANONYMOUS_SUBJECT, CurrentToken, current_subject
 from catalog.core.config import CatalogStore, Settings
 from catalog.schemas import (
@@ -232,9 +233,7 @@ async def _write_project_record(settings: CatalogStore, so: StorageOptions, reco
 @management_router.post("", response_model_exclude_none=True)
 async def create_project(
     *,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     announcer: AnnouncerDep,
     body: CreateProjectRequest,
 ) -> ProjectResponse:
@@ -249,10 +248,10 @@ async def create_project(
     project_id = body.id
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    admin = object_grants.project_admin_for(token, body.admin)
-    await door_gates.require_relation(client, settings, token, relation="can_create_project", obj=settings.fga_root_object)
-    record = await establish_project(settings, client, announcer, project_id=project_id, admin=admin, author=author_of(token))
-    return Tenant(project=project_id, record=record).response(await _admins_for(client, settings, project_id))
+    admin = object_grants.project_admin_for(context.token, body.admin)
+    await door_gates.require_relation(context, relation="can_create_project", obj=context.settings.fga_root_object)
+    record = await establish_project(context.settings, context.client, announcer, project_id=project_id, admin=admin, author=author_of(context.token))
+    return Tenant(project=project_id, record=record).response(await _admins_for(context.client, context.settings, project_id))
 
 
 async def establish_project(
@@ -316,7 +315,7 @@ async def establish_project(
     return record
 
 
-async def _visible_projects(client: OpenFgaClient | None, settings: FgaSettings, token: CurrentToken, *, candidates: list[str]) -> set[str] | None:
+async def _visible_projects(context: AuthzContextDep, *, candidates: list[str]) -> set[str] | None:
     """Which of ``candidates`` (the registry's project ids) this caller may list, or ``None`` for every tenant.
 
     ``None`` for the estate admin, and with FGA off, as for every gate. Otherwise the candidates are batch-checked on
@@ -324,9 +323,9 @@ async def _visible_projects(client: OpenFgaClient | None, settings: FgaSettings,
     counting at its ceiling. Fail-closed: no client, no caller (``decisions.authorization``) and an OpenFGA outage raise,
     so a caller is never shown more, or less, than their memberships by accident.
     """
-    if (authz := decisions.authorization(settings, client, token)) is None:
+    if (authz := decisions.authorization(context)) is None:
         return None
-    root = settings.fga_root_object
+    root = context.settings.fga_root_object
     try:
         observer = await fga_reads.check(authz.client, user=authz.subject, relation="can_list_all_projects", obj=root)
         allowed = None if observer else await authz.batch_check("member", [f"project:{p}" for p in candidates])
@@ -347,24 +346,24 @@ async def _visible_projects(client: OpenFgaClient | None, settings: FgaSettings,
 
 
 @management_router.get("")
-async def list_projects(settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> list[ProjectResponse]:
+async def list_projects(context: AuthzContextDep) -> list[ProjectResponse]:
     """The caller's tenants: every tenant for the estate admin, else the ones the caller is a member of.
 
     ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable — the registry
     facts still serve; the visibility decision itself fails closed (``_visible_projects``)."""
-    tenants = await _load_tenants(settings)
-    visible = await _visible_projects(client, settings, token, candidates=sorted(tenants))
+    tenants = await _load_tenants(context.settings)
+    visible = await _visible_projects(context, candidates=sorted(tenants))
     # The per-project admins lookups run CONCURRENTLY: sequential awaits would stack N × the per-call
     # budget on a slow OpenFGA (a brownout, not an outage) and blow past the caller's request deadline;
     # gathered, the worst case is ONE _ADMINS_TIMEOUT_SECONDS regardless of tenant count (each call
     # still degrades to [] on its own expiry — see _admins_for).
     projects = sorted(p for p in tenants if visible is None or p in visible)
-    admins = await asyncio.gather(*(_admins_for(client, settings, project) for project in projects))
+    admins = await asyncio.gather(*(_admins_for(context.client, context.settings, project) for project in projects))
     return [tenants[project].response(project_admins) for project, project_admins in zip(projects, admins, strict=True)]
 
 
 @management_router.get("/{project_id}")
-async def get_project(*, project_id: str, settings: SettingsDep, token: CurrentToken, client: FgaClientDep) -> ProjectResponse:
+async def get_project(*, project_id: str, context: AuthzContextDep) -> ProjectResponse:
     """One tenant, in the list's shape, for the callers the list shows it to: the estate admin, or a member of it.
 
     Anyone else is answered the missing project's 404, so the door tells no caller which project ids exist (the rule
@@ -372,18 +371,18 @@ async def get_project(*, project_id: str, settings: SettingsDep, token: CurrentT
     """
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    doors = [("can_list_all_projects", settings.fga_root_object), ("member", f"project:{project_id}")]
+    doors = [("can_list_all_projects", context.settings.fga_root_object), ("member", f"project:{project_id}")]
     try:
-        await door_gates.require_any_relation(client, settings, token, doors=doors)
+        await door_gates.require_any_relation(context, doors=doors)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
-    tenant = (await _load_tenants(settings)).get(project_id)
+    tenant = (await _load_tenants(context.settings)).get(project_id)
     if tenant is None:
         raise TableNotFoundError(f"project not found: {project_id}")
-    return tenant.response(await _admins_for(client, settings, project_id))
+    return tenant.response(await _admins_for(context.client, context.settings, project_id))
 
 
-async def administered_project(project_id: str, settings: SettingsDep, token: CurrentToken, *, client: FgaClientDep) -> ProjectRecord:
+async def administered_project(project_id: str, context: AuthzContextDep) -> ProjectRecord:
     """The record of ``project_id``, for a caller who administers it (``project:<id>#can_administer``).
 
     The record is read first, since the gate is on the tenant it names. NO EXISTENCE ORACLE (audit #4, the rule the
@@ -396,9 +395,7 @@ async def administered_project(project_id: str, settings: SettingsDep, token: Cu
 
     Args:
         project_id: The project the route's path names.
-        settings: The catalog's settings.
-        token: The verified caller.
-        client: The OpenFGA client deciding.
+        context: The request's authorization context: the OpenFGA client, the settings and the caller.
 
     Returns:
         The project's registry record.
@@ -409,17 +406,17 @@ async def administered_project(project_id: str, settings: SettingsDep, token: Cu
     """
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    record = await run_in_threadpool(project_registry.get_project, settings.registry_root, settings.storage_options(), project_id)
+    record = await run_in_threadpool(project_registry.get_project, context.settings.registry_root, context.settings.storage_options(), project_id)
     if record is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     try:
-        await door_gates.require_relation(client, settings, token, relation="can_administer", obj=f"project:{project_id}")
+        await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project_id}")
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
     return record
 
 
-async def project_to_delete(project_id: str, settings: SettingsDep, token: CurrentToken, *, client: FgaClientDep) -> ProjectRecord:
+async def project_to_delete(project_id: str, context: AuthzContextDep) -> ProjectRecord:
     """The record of ``project_id``, for its delete: a caller who administers it starts one, and once one has started,
     the caller who started it, an admin it has not reached, or the estate's owner finishes it ([[LH-576]]).
 
@@ -430,9 +427,7 @@ async def project_to_delete(project_id: str, settings: SettingsDep, token: Curre
 
     Args:
         project_id: The project the route's path names.
-        settings: The catalog's settings.
-        token: The verified caller.
-        client: The OpenFGA client deciding.
+        context: The request's authorization context: the OpenFGA client, the settings and the caller.
 
     Returns:
         The project's record, the delete it names included.
@@ -443,18 +438,18 @@ async def project_to_delete(project_id: str, settings: SettingsDep, token: Curre
     """
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    record = await run_in_threadpool(project_registry.get_project_record, settings.registry_root, settings.storage_options(), project_id)
+    record = await run_in_threadpool(project_registry.get_project_record, context.settings.registry_root, context.settings.storage_options(), project_id)
     if record is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     starter = record.deleting_by
-    if starter is not None and starter == current_subject(token):
+    if starter is not None and starter == current_subject(context.token):
         audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=project_registry.DELETING_BY, subject=starter, resource=f"project:{project_id}")
         return record
     doors = [("can_administer", f"project:{project_id}")]
     if starter is not None:
-        doors.append(("can_finish_project_delete", settings.fga_root_object))
+        doors.append(("can_finish_project_delete", context.settings.fga_root_object))
     try:
-        await door_gates.require_any_relation(client, settings, token, doors=doors)
+        await door_gates.require_any_relation(context, doors=doors)
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
     return record
@@ -570,9 +565,7 @@ async def delete_project(
     *,
     project_id: str,
     keyed: idem.KeyedDoorDep,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     announcer: AnnouncerDep,
     force: bool = False,
 ) -> DeleteProjectResponse:
@@ -609,9 +602,7 @@ async def delete_project(
     Args:
         project_id: The project to retire.
         keyed: The caller's `Idempotency-Key`, when it sent one.
-        settings: The catalog's settings.
-        token: The verified caller.
-        client: The OpenFGA client its tuples are revoked through.
+        context: The request's authorization context: the OpenFGA client, the settings and the caller.
         announcer: Where what it announces is filed and sent.
         force: Delete it though it is protected.
 
@@ -630,19 +621,19 @@ async def delete_project(
     converge = await keyed.begin(target=f"project:{project_id}", takeover="unknown")
     if converge.replay is not None:
         return DeleteProjectResponse.model_validate(converge.replay.body)
-    record = project_its_doors_delete(project_id, await project_to_delete(project_id, settings, token, client=client), token)
-    so = settings.storage_options()
+    record = project_its_doors_delete(project_id, await project_to_delete(project_id, context), context.token)
+    so = context.settings.storage_options()
     # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
-    authz = decisions.wired(settings, client)
+    authz = decisions.wired(context.settings, context.client)
     if not record.is_being_deleted:
-        await _start_delete(project_id, record, settings, token=token, force=force)
+        await _start_delete(project_id, record, context.settings, token=context.token, force=force)
     # The caller who retired the tenant, in the two spellings `establish_project` names its author by: the subject the
     # audit trail and the revoked tuples' writer name, and the actor its control events name. `system:catalog` is the
     # honest writer on an auth-off stack, where there genuinely is no principal, never a stand-in for one we failed to thread.
-    writer = token.subject if token is not None else "system:catalog"
-    announced = f"user:{token.subject}" if token is not None else None
+    writer = context.token.subject if context.token is not None else "system:catalog"
+    announced = f"user:{context.token.subject}" if context.token is not None else None
     obj = f"project:{project_id}"
-    retiring = _Retiring(project_id=project_id, settings=settings, so=so, authz=authz, writer=writer, announced=announced)
+    retiring = _Retiring(project_id=project_id, settings=context.settings, so=so, authz=authz, writer=writer, announced=announced)
     # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
     grants = announcing.grant_changes(
         await fga_reads.read_object_tuples(authz, obj) if authz is not None else [], action="grant_revoked", actor=announced, reason="project_deleted"

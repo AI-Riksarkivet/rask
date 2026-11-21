@@ -417,7 +417,7 @@ def _refuse_changed_schema_governance(proposed: lance.LanceDataset, current: lan
     with its own rung, so a staged commit may not change them.
 
     A label belongs to a field, which Lance identifies by its id, as the catalog's own column doors judge it
-    (``tables.commits.commit_stamped``'s ``keeps_labels``): a rename keeps the id and the label goes with it, and a field
+    (``tables.commits.commit_stamped_keeping_labels``): a rename keeps the id and the label goes with it, and a field
     dropped and added again at its path is another field. An Overwrite is the exception, judged by path: it writes a
     schema of its own, whose ids Lance mints by position (measured on pylance 13.0.0: a reordered overwrite moved a
     labelled field from id 1 to id 0).

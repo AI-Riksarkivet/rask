@@ -15,8 +15,9 @@ from lance_namespace import InternalError, InvalidInputError, PermissionDeniedEr
 from openfga_sdk import OpenFgaClient
 from pydantic import BaseModel, ConfigDict
 
+from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.authz.decisions import record_undeclared, refused_read_as_absent, require_audited, require_rung, require_trashed, require_wired
-from catalog.api.authz.grant_authority import authorize_grant
+from catalog.api.authz.grant_authority import authorize_grant, authorize_revoke
 from catalog.api.authz.objects import addressed_object, resolve_rung, rung_label, rung_on
 from catalog.api.authz.request_reads import batch_ids, json_body_or_400
 from catalog.api.authz.rungs import (
@@ -34,11 +35,10 @@ from catalog.api.authz.rungs import (
     undeclared_door,
 )
 from catalog.api.authz.write_doors import judge_write, write_door
-from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
+from catalog.api.dependencies import Resolver, ResolverDep
 from catalog.api.route_path import route_path
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import Caller
 from catalog.core import write_judge
-from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, transaction_table
 from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
@@ -141,7 +141,7 @@ async def authorize_batch(request: Request, client: OpenFgaClient, resolver: Res
         raise PermissionDeniedError(f"permission denied on {', '.join(sorted(denied))}")
 
 
-async def authorize(request: Request, settings: SettingsDep, token: CurrentToken, *, injected: FgaClientDep, resolver: ResolverDep) -> None:
+async def authorize(request: Request, context: AuthzContextDep, *, resolver: ResolverDep) -> None:
     """Enforce the caller's permission for this route, then the quarantine of the warehouse its ``{id}`` begins with.
 
     In that order: a deactivated warehouse suspends every operation beneath it, and that it is deactivated is told
@@ -151,7 +151,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
     Raises:
         PermissionDeniedError: The caller may not act here, or may and the warehouse is deactivated.
     """
-    await _decide(request, settings, token, injected=injected, resolver=resolver)
+    await _decide(request, context, resolver=resolver)
     object_id = request.path_params.get("id")
     # A classification's id is a label, in no warehouse.
     if object_id is None or resource_for(route_path(request.scope)) in (None, "classification"):
@@ -160,7 +160,7 @@ async def authorize(request: Request, settings: SettingsDep, token: CurrentToken
         await resolver.require_active_warehouse(segments[0])
 
 
-async def _decide(request: Request, settings: Settings, token: Caller | None, *, injected: OpenFgaClient | None, resolver: Resolver) -> None:
+async def _decide(request: Request, context: AuthzContext, *, resolver: Resolver) -> None:
     """The caller's permission for this route: the write judge decides every write door, with FGA on
     or off, and OpenFGA every other door (a no-op when FGA is off).
 
@@ -168,14 +168,14 @@ async def _decide(request: Request, settings: Settings, token: Caller | None, *,
     (ADR 0173 §8, [[LH-524]]), through ``resolver``, which the door then reads the same resolution from.
     """
     if (write := await write_door(request)) is not None:
-        await judge_write(request, settings=settings, token=token, injected=injected, resolver=resolver, write=write)
+        await judge_write(request, context=context, resolver=resolver, write=write)
         return
-    if not settings.fga_enabled:
+    if not context.settings.fga_enabled:
         return
     # Fail closed: enabled but unwired authz must never silently allow the request. The client is
     # INJECTED (`FgaClientDep`) rather than read off `app.state` here — one place knows where it lives.
-    client = require_wired(injected)
-    if token is None:
+    client = require_wired(context.client)
+    if context.token is None:
         raise UnauthenticatedError("authentication required")
 
     # The path routing matches (`catalog.api.route_path`), never `request.url.path`: that re-parses the
@@ -187,7 +187,7 @@ async def _decide(request: Request, settings: Settings, token: Caller | None, *,
     # Body-keyed batch routes have no {id} path param — authorize by reading the body.
     if object_id is None:
         if path.rstrip("/") in BATCH_PATHS:
-            await authorize_batch(request, client, resolver, user=token.subject)
+            await authorize_batch(request, client, resolver, user=context.token.subject)
         # Other id-less routes (collection lists, health) need only authentication.
         return
 
@@ -200,7 +200,7 @@ async def _decide(request: Request, settings: Settings, token: Caller | None, *,
     # (e.g. the delimiter-only root id). Passing the raw URL string here would diverge.
     segments = parse_identifier(object_id)
     door = _Addressed(path=path, resource=resource, suffix=suffix, object_id=object_id, segments=segments)
-    await _decide_on_id(request, client, resolver, token=token, door=door)
+    await _decide_on_id(request, client, resolver, token=context.token, door=door)
 
 
 class _Addressed(BaseModel):
@@ -270,7 +270,8 @@ async def _decide_on_object(request: Request, client: OpenFgaClient, resolver: R
     # Grant/revoke authorize on the RUNG BEING HANDED OUT, which lives in the body — so, like the
     # batch routes above, this one cannot be answered from the path alone.
     if suffix in GRANT_SUFFIXES:
-        await authorize_grant(request, client, resolver, user=token.subject, fga_type=fga_type, segments=segments, revoking=suffix == "access/revoke")
+        gate = authorize_revoke if suffix == "access/revoke" else authorize_grant
+        await gate(request, client, resolver, user=token.subject, fga_type=fga_type, segments=segments)
         return
     # A CLASSIFICATION IS A LABEL, NOT A DATASET ([[LH-055]]). Its router carries exactly three routes
     # and the two grant ones returned above, so only `access/my-permissions` reaches here. It resolves

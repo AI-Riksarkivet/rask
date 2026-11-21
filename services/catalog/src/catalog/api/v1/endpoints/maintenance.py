@@ -29,7 +29,8 @@ from fastapi.concurrency import run_in_threadpool
 
 from catalog.api import lineage_deps
 from catalog.api.authz import decisions, visible_pages
-from catalog.api.dependencies import DoorTableDep, FgaClientDep, SettingsDep, StorageOptionsDep
+from catalog.api.authz.context import AuthzContextDep
+from catalog.api.dependencies import DoorTableDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
 from catalog.schemas import CleanupDisarmed, DueTable, FloorRaised, FloorRaiseRequest, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
 from catalog.services import maintenance, maintenance_commits, table_claims
@@ -146,9 +147,7 @@ async def raise_listing_floor(*, id: str, body: FloorRaiseRequest, table: DoorTa
 @due_router.get("/due")
 async def list_due_maintenance(
     *,
-    settings: SettingsDep,
-    token: CurrentToken,
-    client: FgaClientDep,
+    context: AuthzContextDep,
     limit: Annotated[int, Query(ge=1, le=1000)] = 100,
     page_token: Annotated[str | None, Query(description="Continue after this record (the previous page's `page_token`).")] = None,
 ) -> MaintenanceDueResponse:
@@ -159,7 +158,7 @@ async def list_due_maintenance(
     Paged in the order of the records' keys, each keyed by its table's uuid: the door lists the keys and reads, names and
     judges records only as its page fills (:func:`visible_pages.judged_page`, [[LH-562]]), so a walk a page at a time reads
     each record a few times at most, where reading every record for every page grew with the square of the list."""
-    root, options = settings.registry_root, settings.storage_options()
+    root, options = context.settings.registry_root, context.settings.storage_options()
     names = sorted(await run_in_threadpool(maintenance_due.due_record_names, root, options))
     shown: dict[str, DueTable] = {}
 
@@ -167,7 +166,7 @@ async def list_due_maintenance(
         records = await asyncio.gather(*(run_in_threadpool(maintenance_due.read_due_named, root, options, name) for name in batch))
         held = [(name, record) for name, record in zip(batch, records, strict=True) if record is not None]
         entries = [table_claims.TableRecord(location=record.location, uuid=record.uuid) for _, record in held]
-        tables = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(settings), entries)
+        tables = await run_in_threadpool(table_claims.names_now, table_claims.claim_store(context.settings), entries)
         for (name, record), table in zip(held, tables, strict=True):
             if table is not None:
                 shown[name] = _due_view(record, table=table)
@@ -175,7 +174,7 @@ async def list_due_maintenance(
         return [fga_ids.table_object(shown[name].uuid) if name in shown else None for name in batch]
 
     page, next_token = await visible_pages.judged_page(
-        decisions.authorization(settings, client, token),
+        decisions.authorization(context),
         relation="can_maintain",
         candidates=[(name, name) for name in names],
         objects_of=judged_on,
