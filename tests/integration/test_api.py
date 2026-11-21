@@ -148,7 +148,7 @@ def _arrow_ipc(table: pa.Table) -> bytes:
 _ONE_ROW = _arrow_ipc(pa.table({"id": [1]}))
 
 
-def test_create_delegates_to_dataplane_create_table(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
+def test_create_delegates_to_the_creation_facade(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
     # The endpoint stays thin: it delegates create; the write path lives in the facade.
     seen: dict[str, object] = {}
 

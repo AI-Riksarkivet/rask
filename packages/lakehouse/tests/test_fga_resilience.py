@@ -15,16 +15,17 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import aiohttp
 import pytest
 from lance_namespace import ServiceUnavailableError
 from openfga_sdk import ApiException, OpenFgaClient
-from openfga_sdk.client.models import ClientCheckRequest, ClientTuple, ClientWriteRequest
+from openfga_sdk.client.models import ClientCheckRequest, ClientTuple, ClientWriteRequest, ClientWriteResponse
+from openfga_sdk.models import CheckResponse, ListObjectsResponse, ListUsersResponse
 
 from lakehouse.governed import fga_ids, fga_provision, fga_reads, fga_resilience, fga_writes
+from tests.fga_answers import answer
 
 
 def test_is_transient_classifies_network_errors() -> None:
@@ -80,9 +81,9 @@ class _CapturingCheck:
     def __init__(self) -> None:
         self.seen: list[str] = []
 
-    async def check(self, request: ClientCheckRequest, options: object = None) -> object:
+    async def check(self, request: ClientCheckRequest, options: object = None) -> CheckResponse:
         self.seen.append(request.user)
-        return SimpleNamespace(allowed=True)
+        return answer({"allowed": True}, CheckResponse)
 
 
 def test_check_qualify_false_sends_subject_verbatim() -> None:
@@ -107,14 +108,11 @@ def test_list_users_extracts_subjects_and_wildcard() -> None:
     # The wrapper returns sorted bare subjects; a `user:*` public wildcard surfaces as "*" — an
     # access review must never hide a public grant.
     class _Client:
-        async def list_users(self, body: object, options: object = None) -> object:
+        async def list_users(self, body: object, options: object = None) -> ListUsersResponse:
             del body
-            return SimpleNamespace(
-                users=[
-                    SimpleNamespace(object=SimpleNamespace(type="user", id="bob"), wildcard=None),
-                    SimpleNamespace(object=SimpleNamespace(type="user", id="alice"), wildcard=None),
-                    SimpleNamespace(object=None, wildcard=SimpleNamespace(type="user")),
-                ]
+            return answer(
+                {"users": [{"object": {"type": "user", "id": "bob"}}, {"object": {"type": "user", "id": "alice"}}, {"wildcard": {"type": "user"}}]},
+                ListUsersResponse,
             )
 
     result = asyncio.run(fga_reads.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t"))
@@ -150,7 +148,7 @@ class _TransactionalStore:
                 reason=f"cannot write a tuple which already exists: {dupes[0]}: invalid write input",
             )
         self.tuples.update(batch)
-        return SimpleNamespace()
+        return ClientWriteResponse(writes=[], deletes=[])
 
 
 def test_write_tuples_lands_siblings_when_one_tuple_already_exists() -> None:
@@ -228,7 +226,7 @@ class _CapturingList:
 
     async def list_objects(self, request: Any, options: Any = None) -> object:
         self.requests.append(request)
-        return SimpleNamespace(objects=["table:acme_gold_catalog"])
+        return answer({"objects": ["table:acme_gold_catalog"]}, ListObjectsResponse)
 
 
 def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:

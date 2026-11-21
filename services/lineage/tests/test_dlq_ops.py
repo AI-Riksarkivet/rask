@@ -16,10 +16,10 @@ import logging
 import uuid
 from collections.abc import Collection, Iterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from fastapi import Request
 from lance_namespace import (
     PermissionDeniedError,
     TransactionNotFoundError,
@@ -39,6 +39,7 @@ from lakehouse.governed.principal import Principal
 from lineage.api.fga_deps import DatasetFilter
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, storage_options
+from tests.app_state import request_on
 
 
 _FULL_AUTH = {
@@ -111,8 +112,8 @@ class _Repo:
         return None
 
 
-def _request(**state: object) -> Any:
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(**state)))
+def _request(**state: object) -> Request:
+    return request_on(**state)
 
 
 def _token(name: str = "alice") -> PersonPrincipal:

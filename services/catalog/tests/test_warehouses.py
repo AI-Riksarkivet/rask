@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
@@ -19,6 +18,7 @@ import boto3
 import lance_namespace
 import pytest
 from botocore.exceptions import ClientError
+from fastapi import Request
 from lance_namespace import InternalError, InvalidInputError, LanceNamespace, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
 from moto.server import ThreadedMotoServer
 from openfga_sdk.client import OpenFgaClient
@@ -41,6 +41,7 @@ from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
+from tests.app_state import request_on
 from tests.integration.store_requests import counted
 
 
@@ -183,9 +184,9 @@ class _BucketCatalogs:
         return lance_namespace.connect("dir", {"root": str(self._base / root.removeprefix("s3://"))})
 
 
-def _request(settings: Settings) -> Any:
-    """A stand-in request carrying the one piece of app state the create touches: the catalog's connections."""
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(connections=_BucketCatalogs(Path(settings.registry_root.removeprefix("file://"))))))
+def _request(settings: Settings) -> Request:
+    """A request carrying the one piece of app state the create touches: the catalog's connections."""
+    return request_on(connections=_BucketCatalogs(Path(settings.registry_root.removeprefix("file://"))))
 
 
 def _governed_settings(tmp_path: Any) -> Settings:
@@ -342,8 +343,8 @@ def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, m
 # --------------------------------------------------------------------------- #
 
 
-def _bare_request() -> Any:
-    return SimpleNamespace(state=SimpleNamespace())
+def _bare_request() -> Request:
+    return request_on()
 
 
 def test_a_first_segment_no_record_names_is_served_from_the_estate_root(monkeypatch: pytest.MonkeyPatch) -> None:

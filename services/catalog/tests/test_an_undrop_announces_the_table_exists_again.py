@@ -13,11 +13,11 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pyarrow as pa
 import pytest
+from catalog_settings import catalog_settings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import LanceNamespace, connect
@@ -82,14 +82,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
         application.include_router(door.spec_router)
         application.include_router(door.management_router)
     control.mkdir(exist_ok=True)
-    settings = SimpleNamespace(
-        registry_root=str(control),
-        storage_options=lambda **_: StorageOptions(),
-        trash_grace_days=7,
-        fga_enabled=False,
-        estate_warehouse="lance_catalog",
-        root=str(tmp_path / "data"),
-    )
+    settings = catalog_settings(control_root=str(control), trash_grace_days=7, estate_warehouse="lance_catalog", root=str(tmp_path / "data"))
     for dependency, value in (
         (SettingsDep, settings),
         (NamespaceDep, ns),

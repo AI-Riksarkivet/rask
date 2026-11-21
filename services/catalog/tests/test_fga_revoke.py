@@ -10,40 +10,43 @@ Uses stdlib ``asyncio.run`` so no pytest-asyncio dependency is needed (matches t
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from catalog_settings import catalog_settings, governed_settings
 from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 from openfga_sdk.exceptions import ApiException
+from openfga_sdk.models import ReadResponse
 
 from catalog.api.authz import object_grants
 from catalog.api.authz.context import AuthzContext
+from catalog.core.config import Settings
 from lakehouse.governed import fga_ids, fga_writes
+from tests.fga_answers import answer, tuple_json
 
 
-def _tuple(user: str, relation: str, obj: str) -> SimpleNamespace:
-    """A read-response tuple: ``.key`` carries user/relation/object (the SDK Tuple shape)."""
-    return SimpleNamespace(key=SimpleNamespace(user=user, relation=relation, object=obj))
+def _tuple(user: str, relation: str, obj: str) -> dict[str, Any]:
+    """A stored tuple as a ``Read`` answer lists it."""
+    return tuple_json(user, relation, obj)
 
 
 class _ReadDeleteClient:
     """Fake OpenFGA client: serves canned read pages, records the options each read got, and accumulates
     the per-tuple delete writes (delete_tuples now issues one write per tuple, not a batch)."""
 
-    def __init__(self, pages: list[tuple[list[SimpleNamespace], str]]) -> None:
+    def __init__(self, pages: list[tuple[list[dict[str, Any]], str]]) -> None:
         self._pages = pages
         self.read_calls = 0
         self.read_options: list[Any] = []
         self.deleted: list[ClientTuple] = []
 
-    async def read(self, _body: Any = None, options: Any = None, *_a: object, **_k: object) -> SimpleNamespace:
+    async def read(self, _body: Any = None, options: Any = None, *_a: object, **_k: object) -> ReadResponse:
         self.read_options.append(options)
         tuples, token = self._pages[self.read_calls]
         self.read_calls += 1
-        return SimpleNamespace(tuples=tuples, continuation_token=token)
+        return answer({"tuples": tuples, "continuation_token": token}, ReadResponse)
 
     async def write(self, body: Any, *_a: object, **_k: object) -> None:
         self.deleted.extend(body.deletes)
@@ -66,14 +69,17 @@ class _PartialMissingClient:
     def __init__(self) -> None:
         self.deleted: list[ClientTuple] = []
 
-    async def read(self, *_a: object, **_k: object) -> SimpleNamespace:
-        return SimpleNamespace(
-            tuples=[
-                _tuple("user:a", "owner", "table:t"),
-                _tuple("user:b", "reader", "table:t"),
-                _tuple("user:c", "writer", "table:t"),
-            ],
-            continuation_token="",
+    async def read(self, *_a: object, **_k: object) -> ReadResponse:
+        return answer(
+            {
+                "tuples": [
+                    _tuple("user:a", "owner", "table:t"),
+                    _tuple("user:b", "reader", "table:t"),
+                    _tuple("user:c", "writer", "table:t"),
+                ],
+                "continuation_token": "",
+            },
+            ReadResponse,
         )
 
     async def write(self, body: Any, *_a: object, **_k: object) -> None:
@@ -92,8 +98,8 @@ def test_per_tuple_delete_tolerates_one_missing_without_losing_the_rest() -> Non
     assert _keys(removed) == _keys(fake.deleted)
 
 
-def _settings(*, fga_enabled: bool) -> Any:
-    return cast(Any, SimpleNamespace(fga_enabled=fga_enabled))
+def _settings(*, fga_enabled: bool) -> Settings:
+    return governed_settings() if fga_enabled else catalog_settings()
 
 
 #: The object a dropped table's grants are held by: its uuid's (ADR 0173 §8).

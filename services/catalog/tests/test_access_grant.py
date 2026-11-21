@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from catalog_settings import catalog_settings, governed_settings
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from lance_namespace.errors import ErrorCode
 from openfga_sdk.client import OpenFgaClient
@@ -21,7 +21,6 @@ from unfiled_announcer import unfiled
 
 from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import access
-from catalog.core.config import Settings
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome, configure_audit
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -63,7 +62,7 @@ def _run(
     # The FGA client and the control emitter are INJECTED now (catalog-api-09) — the helper no longer
     # digs either out of `request.app.state`, so the drive hands them over directly.
     client = cast(OpenFgaClient, object())
-    settings = cast(Settings, SimpleNamespace(fga_enabled=True))
+    settings = governed_settings()
     token = _person("alice")
     body = access.AccessGrantRequest(user=user, relation=relation)
     resp = asyncio.run(
@@ -162,7 +161,7 @@ def test_check_with_an_unknown_relation_is_a_400(monkeypatch: pytest.MonkeyPatch
     body = access.AccessCheckRequest(user="dex~gina", relation="not_a_real_relation")
     # The injected OpenFGA client is never used: the check refuses before any call.
     client = cast(OpenFgaClient, object())
-    settings = cast(Settings, SimpleNamespace(fga_enabled=True))
+    settings = governed_settings()
     token = _person("alice")
     with pytest.raises(InvalidInputError) as exc:
         asyncio.run(
@@ -178,7 +177,7 @@ def test_the_auth_off_answer_stays_unsupported() -> None:
     swept into 400 by the bad-relation fix: the caller's request is well-formed, the deployment lacks
     the feature."""
     client = cast(OpenFgaClient, object())
-    settings = cast(Settings, SimpleNamespace(fga_enabled=False))
+    settings = catalog_settings()
     token = _person("alice")
     body = access.AccessCheckRequest(user="dex~gina", relation="can_read_data")
     with pytest.raises(Exception) as exc:
@@ -208,7 +207,7 @@ def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) ->
 
     monkeypatch.setattr(access.fga_reads, "read_object_tuples", fake_read)
     client = cast(OpenFgaClient, object())
-    settings = cast(Settings, SimpleNamespace(fga_enabled=True))
+    settings = governed_settings()
     token = _person("alice")
     resp = asyncio.run(
         access._access_graph(AuthzContext(client=client, settings=settings, token=token), resolver=NamedResolver(), fga_type="table", id="db1$t")

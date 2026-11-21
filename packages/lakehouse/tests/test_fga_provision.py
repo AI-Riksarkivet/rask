@@ -14,8 +14,10 @@ from typing import Any, ClassVar
 
 import pytest
 from openfga_sdk import CreateStoreRequest, OpenFgaClient
+from openfga_sdk.models import CreateStoreResponse, ListStoresResponse, ReadAuthorizationModelsResponse, WriteAuthorizationModelResponse
 
 from lakehouse.governed import fga_model, fga_provision
+from tests.fga_answers import answer
 
 
 # ---------------------------------------------------------------------------------------------- #
@@ -66,28 +68,13 @@ def _as_openfga_stores_it(model: dict[str, Any]) -> dict[str, Any]:
     return {"schema_version": model["schema_version"], "type_definitions": types, "conditions": model.get("conditions") or {}}
 
 
-class _StoredModel:
-    """What `read_latest_authorization_model` yields: an SDK object exposing `to_dict()`."""
-
-    id = "model-EXISTING"
-
-    def __init__(self, model: dict[str, Any]) -> None:
-        self._model = _as_openfga_stores_it(model)
-        self.schema_version = self._model["schema_version"]
-        self.type_definitions = self._model["type_definitions"]
-        self.conditions = self._model["conditions"]
-
-    def to_dict(self) -> dict[str, Any]:
-        return dict(self._model)
+def _stored_model(model: dict[str, Any]) -> dict[str, Any]:
+    """The store's model as ``ReadAuthorizationModels`` lists it: the body as OpenFGA stores it, under its id."""
+    return {"id": "model-EXISTING", **_as_openfga_stores_it(model)}
 
 
-class _ExistingStores:
-    class _Store:
-        id = "store-1"
-        name = "lance-catalog"
-        created_at = "2026-01-01T00:00:00Z"
-
-    stores: ClassVar[list[Any]] = [_Store()]
+#: The estate's store, as ``ListStores`` lists it.
+_ESTATE_STORE = {"id": "store-1", "name": "lance-catalog", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"}
 
 
 class _ModelStoreClient:
@@ -106,29 +93,28 @@ class _ModelStoreClient:
         return None
 
     async def list_stores(self, options: dict[str, Any] | None = None) -> Any:
-        if _ModelStoreClient.empty_store:
-            return type("_Empty", (), {"stores": []})()
-        return _ExistingStores()
+        stores = [] if _ModelStoreClient.empty_store else [_ESTATE_STORE]
+        return answer({"stores": stores, "continuation_token": ""}, ListStoresResponse)
 
     async def create_store(self, _request: Any) -> Any:
-        return type("_Created", (), {"id": "store-NEW"})()
+        return answer({**_ESTATE_STORE, "id": "store-NEW"}, CreateStoreResponse)
 
     async def read_authorization_models(self, options: dict[str, Any] | None = None) -> Any:
         del options
         _ModelStoreClient.reads += 1
         held = [_ModelStoreClient.current] if _ModelStoreClient.current is not None else []
-        return type("_Response", (), {"authorization_models": held, "continuation_token": ""})()
+        return answer({"authorization_models": held, "continuation_token": ""}, ReadAuthorizationModelsResponse)
 
     async def write_authorization_model(self, request: Any) -> Any:
         _ModelStoreClient.requests.append(request)
-        return type("_Written", (), {"authorization_model_id": "model-NEWLY-WRITTEN"})()
+        return answer({"authorization_model_id": "model-NEWLY-WRITTEN"}, WriteAuthorizationModelResponse)
 
 
 def _install(monkeypatch: pytest.MonkeyPatch, *, desired: dict[str, Any], stored: dict[str, Any] | None, empty_store: bool = False) -> None:
     _ModelStoreClient.requests = []
     _ModelStoreClient.reads = 0
     _ModelStoreClient.empty_store = empty_store
-    _ModelStoreClient.current = _StoredModel(stored) if stored is not None else None
+    _ModelStoreClient.current = _stored_model(stored) if stored is not None else None
     monkeypatch.setattr(fga_provision, "OpenFgaClient", _ModelStoreClient)
     monkeypatch.setattr(fga_model, "load_model", lambda: desired)
 

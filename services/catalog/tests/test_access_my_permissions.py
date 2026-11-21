@@ -17,16 +17,15 @@ Sync via ``asyncio.run`` — no async-plugin dependency (this repo does not set 
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
+from catalog_settings import catalog_settings, governed_settings
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError, UnsupportedOperationError
 from openfga_sdk.client import OpenFgaClient
 
 from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import access
-from catalog.core.config import Settings
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -56,7 +55,7 @@ def _run(
 
     monkeypatch.setattr(access.fga_reads, "check", fake_check)
     client = cast("OpenFgaClient", object())  # injected now (catalog-api-09); the fga.* module functions are faked below
-    settings = cast(Settings, SimpleNamespace(fga_enabled=fga_enabled))
+    settings = governed_settings() if fga_enabled else catalog_settings()
     token = (
         PersonPrincipal(principal=Principal(idp_id="dex", subject=sub), claims=IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1)) if token_present else None
     )

@@ -21,11 +21,11 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pyarrow as pa
 import pytest
+from catalog_settings import catalog_settings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import connect
@@ -89,13 +89,7 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
 
     control = tmp_path / "control"
     control.mkdir(exist_ok=True)
-    settings = SimpleNamespace(
-        registry_root=str(control),
-        root=str(tmp_path / "data"),
-        storage_options=lambda **_: StorageOptions(),
-        trash_grace_days=0,
-        fga_enabled=False,
-    )
+    settings = catalog_settings(control_root=str(control), root=str(tmp_path / "data"), trash_grace_days=0)
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: _CALLER

@@ -16,12 +16,13 @@ Sync via ``asyncio.run`` — no async-plugin dependency (this repo does not set 
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
+import json
 from typing import Any, cast
 
 import pytest
 from fastapi import Request
 from lance_namespace import PermissionDeniedError
+from starlette.types import Message
 
 from catalog.api.authz import grant_authority
 from tests.unit.named_resolver import NamedResolver
@@ -31,10 +32,9 @@ def _run(body: Any) -> None:
     """Drive the gate on a grant of the namespace ``gold``. The client is a bare object, so a gate that asked OpenFGA
     anything would fail with its ``AttributeError``: only a refusal made WITHOUT consulting OpenFGA raises the
     ``PermissionDeniedError`` the callers expect."""
-    request = cast(Request, SimpleNamespace(json=lambda: _as_coro(body)))
     asyncio.run(
         grant_authority.authorize_grant(
-            request,
+            _request(body),
             cast(Any, object()),
             NamedResolver(),
             user="dex~alice",
@@ -44,8 +44,14 @@ def _run(body: Any) -> None:
     )
 
 
-async def _as_coro(value: Any) -> Any:
-    return value
+def _request(body: Any) -> Request:  # noqa: ANN401 — any JSON the client sends
+    """A POST whose body is ``body`` as JSON, as the server receives it."""
+    payload = json.dumps(body).encode()
+
+    async def _receive() -> Message:
+        return {"type": "http.request", "body": payload, "more_body": False}
+
+    return Request({"type": "http", "method": "POST", "path": "/", "headers": []}, _receive)
 
 
 #: alice's namespace, the object every grant below is asked on.
@@ -155,7 +161,7 @@ def test_a_grant_is_gated_on_the_rung_in_its_body_and_never_raises_its_callers_o
     ],
 )
 def test_a_non_dict_body_is_denied_not_crashed(body: Any) -> None:
-    with pytest.raises(PermissionDeniedError):
+    with pytest.raises(PermissionDeniedError, match=r"^malformed access request body$"):
         _run(body)
 
 
@@ -166,7 +172,7 @@ def test_a_non_dict_body_is_denied_not_crashed(body: Any) -> None:
     ],
 )
 def test_a_malformed_relation_is_denied(body: Any) -> None:
-    with pytest.raises(PermissionDeniedError):
+    with pytest.raises(PermissionDeniedError, match=r"^malformed access request body: 'relation' must be a string$"):
         _run(body)
 
 
@@ -177,7 +183,7 @@ def test_a_phantom_rung_is_refused_before_reaching_openfga(gate: Any) -> None:
     503 for EVERY caller, owners included. A rung the model cannot grant is not a rung the API may be asked to revoke
     either, so the shape check holds whichever authority decides. What matters is that it is
     refused locally, on a bare-object client that any question to OpenFGA would fail on."""
-    request = cast(Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~bob", "relation": "parent"})))
+    request = _request({"user": "dex~bob", "relation": "parent"})
 
-    with pytest.raises(PermissionDeniedError):
+    with pytest.raises(PermissionDeniedError, match=r"^'parent' is not a grantable rung on namespace$"):
         asyncio.run(gate(request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"]))

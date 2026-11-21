@@ -10,14 +10,15 @@ file names another and provenance splits. The real ``create_table`` handler deri
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pyarrow as pa
 import pytest
+from catalog_settings import catalog_settings
 from lance_namespace import CreateTableResponse
 
 from catalog.api.authz.context import AuthzContext
+from catalog.core.config import Settings
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -30,21 +31,15 @@ from tests.unit.no_uuids import NO_OBJECT_UUIDS
 _DATASETS = "lance-namespace://rask.example.org/api/catalog"
 
 
-def _settings() -> Any:
-    return SimpleNamespace(
-        lineage_emit_enabled=True,
-        external_blob_bases_for=lambda _warehouse: [],
-        # [[XC-104]] The door holds the body to this once its compressed buffers inflate.
-        max_body_bytes=256 * 1024 * 1024,
-        # [[LH-279]] Where the create records the bases it registers; the write is faked here.
-        registry_root="",
-        # [[LH-209]] What the create judges a requested external blob base against; this create requests none.
+def _settings() -> Settings:
+    # The create records no bases (its write is faked) and requests no external blob base; no namespace is the provenance
+    # one (ADR 0187); and the Lance file names the table under the catalog's dataset namespace, as every event does
+    # ([[LH-553]]). A catalog that emits lineage names the bus it publishes on, which this test never dials.
+    return catalog_settings(
         root="",
-        reserved_bucket_set=frozenset(),
-        storage_options=dict,
-        # ADR 0187: the create records its author unless it is a provenance row write, and no namespace is that here.
+        lineage_emit_enabled=True,
+        bus={"RASK_BUS_URL": "nats://bus.test:4222", "RASK_BUS_USER": "catalog", "RASK_BUS_TOKEN_FILE": "/var/run/unread"},
         provenance_namespace="",
-        # [[LH-553]] The catalog's dataset namespace, which the Lance file names the table under as every event does.
         lineage_dataset_namespace=_DATASETS,
     )
 

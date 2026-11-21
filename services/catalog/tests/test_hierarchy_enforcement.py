@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any
 
-from lance_namespace import NamespaceNotFoundError
+from lance_namespace import DropNamespaceResponse, NamespaceExistsResponse, NamespaceNotFoundError
 
 from catalog.api.authz.objects import GovernedObject
 from lakehouse.naming import UUID_PROPERTY
@@ -56,7 +56,7 @@ class _RecordingNs:
         self.calls.append(f"namespace_exists:{ident}")
         if ident not in self._existing:
             raise NamespaceNotFoundError(f"Namespace not found: {ident}")
-        return type("R", (), {"model_fields_set": set()})()
+        return NamespaceExistsResponse()
 
     def describe_namespace(self, request: Any) -> Any:
         from lance_namespace import DescribeNamespaceResponse
@@ -78,7 +78,7 @@ class _RecordingNs:
 
     def drop_namespace(self, request: Any) -> Any:
         self.calls.append(f"drop_namespace:{'$'.join(request.id)}:{(request.behavior or 'restrict').lower()}")
-        return type("R", (), {"model_fields_set": set()})()
+        return DropNamespaceResponse()
 
 
 # ---------------------------------------------------------------- #118 parent must EXIST

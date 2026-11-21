@@ -11,15 +11,16 @@ store must remain revocable.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from types import SimpleNamespace
 from typing import cast
 
 import pytest
 from lance_namespace import InvalidInputError
 from openfga_sdk import OpenFgaClient
-from openfga_sdk.client.models import ClientCheckRequest, ClientTuple, ClientWriteRequest
+from openfga_sdk.client.models import ClientCheckRequest, ClientTuple, ClientWriteRequest, ClientWriteResponse
+from openfga_sdk.models import CheckResponse
 
 from lakehouse.governed import fga_reads, fga_writes
+from tests.fga_answers import answer
 
 
 REFUSAL = f"cannot carry {fga_reads.CLOCK_PARAMETER} on the tuple"
@@ -47,11 +48,11 @@ class _Store:
 
     async def write(self, body: ClientWriteRequest, options: dict[str, int | str | dict[str, int | str]] | None = None) -> object:
         self.writes.append(body)
-        return SimpleNamespace()
+        return ClientWriteResponse(writes=[], deletes=[])
 
     async def check(self, body: ClientCheckRequest, options: dict[str, int | str | dict[str, int | str]] | None = None) -> object:
         self.checks.append(body)
-        return SimpleNamespace(allowed=True)
+        return answer({"allowed": True}, CheckResponse)
 
 
 async def _write(store: _Store, tuples: list[ClientTuple]) -> None:

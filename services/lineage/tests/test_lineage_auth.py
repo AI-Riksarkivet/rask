@@ -17,7 +17,6 @@ import asyncio
 import uuid
 from collections.abc import Collection
 from contextlib import AbstractContextManager, nullcontext
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -31,9 +30,10 @@ from pydantic import ValidationError
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.governed.decider import OpenFgaDecider
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.idp_identity import IdpVerifier, PersonPrincipal
+from lakehouse.governed.oidc import IDToken, OIDCVerifier
 from lakehouse.governed.principal import Principal
+from lakehouse.governed.settings import OidcProvider
 from lineage.api import fga_deps, security
 from lineage.core.config import LineageSettings
 from lineage.models import RunEvent
@@ -129,11 +129,16 @@ def test_authenticate_enabled_unwired_verifier_fails_closed() -> None:
         security.authenticate(_request(), settings, _creds())
 
 
-def test_authenticate_enabled_verifies_token() -> None:
-    settings = _settings(oidc_enabled=True, oidc_issuer=_ISSUER, oidc_audience="lance", oidc_idp_id="dex", oidc_connectors={"local": "dex"})
-    verifier = SimpleNamespace(verify=lambda _t: _token("dee"))
-    token = security.authenticate(_request(oidc=verifier), settings, _creds())
-    assert token is not None and token.subject == "dex~dee"
+def test_authenticate_enabled_verifies_token(dex_issuer: Any) -> None:  # noqa: ANN401 — the root conftest's DexIssuer
+    """The caller is the person the verifier the lifespan installs reads off a token the issuer signed."""
+    provider = OidcProvider(issuer=dex_issuer.issuer, idp_id="dex", connectors={"local": "dex"})
+    settings = _settings(
+        oidc_enabled=True, oidc_issuer=dex_issuer.issuer, oidc_allow_insecure=True, oidc_audience="lance", oidc_idp_id="dex", oidc_connectors={"local": "dex"}
+    )
+    verifier = IdpVerifier(OIDCVerifier(dex_issuer.issuer, "lance", 300, allow_insecure=True), [provider])
+    token = security.authenticate(_request(oidc=verifier), settings, _creds(dex_issuer.mint("dee", connector="local", audience="lance")))
+    assert token is not None
+    assert token.subject == "dex~dee"
 
 
 # --------------------------------------------------------------------------- #

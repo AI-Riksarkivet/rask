@@ -69,8 +69,7 @@ def test_an_unrelated_os_error_is_still_a_500(monkeypatch: pytest.MonkeyPatch) -
     reason the sibling leg in this handler matches a phrase rather than a word."""
     monkeypatch.setattr(lance, "write_dataset", _write_raising("Connection reset by peer"))
 
-    with pytest.raises(OSError) as caught:
+    with pytest.raises(OSError, match=r"^Connection reset by peer$") as caught:
         creation._write_blob(_arrow_table(), "s3://b/t", StorageOptions(), mode="create", external_blob_bases=[])
 
     assert not isinstance(caught.value, TableAlreadyExistsError), "an infra OSError was mislabelled a conflict"
-    assert "Connection reset by peer" in str(caught.value), "the store's own failure must reach the caller unchanged"

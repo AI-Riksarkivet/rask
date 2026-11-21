@@ -404,7 +404,8 @@ class TestARetriedTableWriteCommitsOnce:
         landed = _table_rows(real_ns_client, tid)
         if resent == "key-only":
             lapsed = lance.dataset(_versions(real_ns_client, tid)["location"]).read_transaction(before + 1)
-            assert lapsed is not None and IDEMPOTENCY_ANSWER_PROPERTY not in (lapsed.transaction_properties or {}), "the commit must carry its key alone"
+            assert lapsed is not None
+            assert (lapsed.transaction_properties or {}).get(IDEMPOTENCY_ANSWER_PROPERTY) is None, "the commit must carry its key alone"
         monkeypatch.setattr(keyed_doors.idempotency_records, "claim", partial(idempotency_records.claim, lease=timedelta(0)))
         again = write.send(real_ns_client, tid, keyed, other=resent == "other-request")
 

@@ -10,11 +10,11 @@ The refusal is the catalog's, not the backend's: a backend that implements the o
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from catalog_settings import catalog_settings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import (
@@ -41,7 +41,7 @@ def _app(ns: object, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, list[lis
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(version_door.spec_router)
-    settings = SimpleNamespace(storage_options=dict, fga_enabled=False, root="")
+    settings = catalog_settings(root="")
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: StorageOptions()

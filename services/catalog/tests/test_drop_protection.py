@@ -23,7 +23,20 @@ from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
-from lance_namespace import DeregisterTableResponse, InternalError, InvalidTableStateError, NamespaceNotEmptyError, TableNotFoundError
+from lance_namespace import (
+    CreateNamespaceResponse,
+    DeregisterTableResponse,
+    DescribeNamespaceResponse,
+    DescribeTableResponse,
+    DropNamespaceResponse,
+    InternalError,
+    InvalidTableStateError,
+    ListNamespacesResponse,
+    ListTablesResponse,
+    NamespaceNotEmptyError,
+    RegisterTableResponse,
+    TableNotFoundError,
+)
 from unfiled_announcer import unfiled
 
 from catalog.api.authz.context import AuthzContext
@@ -105,10 +118,10 @@ class _RecordingNamespace:
         self.calls: list[str] = []
 
     def describe_table(self, request: Any) -> Any:
-        return type("R", (), {"location": _location(request.id), "is_only_declared": False, "model_fields_set": set()})()
+        return DescribeTableResponse(location=_location(request.id), is_only_declared=False)
 
     def describe_namespace(self, request: Any) -> Any:
-        return type("R", (), {"properties": {UUID_PROPERTY: _uuid("$".join(request.id))}, "model_fields_set": set()})()
+        return DescribeNamespaceResponse(properties={UUID_PROPERTY: _uuid("$".join(request.id))})
 
     def deregister_table(self, request: Any) -> Any:
         self.calls.append("deregister_table")
@@ -116,14 +129,14 @@ class _RecordingNamespace:
 
     def drop_namespace(self, request: Any) -> Any:
         self.calls.append("drop_namespace")
-        return type("R", (), {"model_fields_set": set()})()
+        return DropNamespaceResponse()
 
     def list_namespaces(self, request: Any) -> Any:
-        return type("R", (), {"namespaces": [], "page_token": None})()
+        return ListNamespacesResponse(namespaces=[])
 
     def list_tables(self, request: Any) -> Any:
         tables = ["pages"] if request.id == ["bronze"] else []
-        return type("R", (), {"tables": tables, "page_token": None})()
+        return ListTablesResponse(tables=tables)
 
 
 def _protect(settings: Settings, kind: str, canonical: str) -> None:
@@ -459,7 +472,7 @@ class _TrashableNamespace(_RecordingNamespace):
 
     def register_table(self, request: Any) -> Any:
         self.calls.append(f"register_table:{request.location}")
-        return type("R", (), {"location": request.location, "model_fields_set": set()})()
+        return RegisterTableResponse(location=request.location)
 
 
 def test_purge_true_still_destroys_immediately(tmp_path: Any) -> None:
@@ -602,11 +615,11 @@ class _CascadableNamespace(_TrashableNamespace):
 
     def list_tables(self, request: Any) -> Any:
         tables = {("bronze",): ["pages"], ("bronze", "inner"): ["t2"]}.get(tuple(request.id), [])
-        return type("R", (), {"tables": tables, "page_token": None})()
+        return ListTablesResponse(tables=tables)
 
     def list_namespaces(self, request: Any) -> Any:
         children = ["inner"] if request.id == ["bronze"] else []
-        return type("R", (), {"namespaces": children, "page_token": None})()
+        return ListNamespacesResponse(namespaces=children)
 
     def describe_table(self, request: Any) -> Any:
         self.calls.append(f"describe_table:{'$'.join(request.id)}")
@@ -618,11 +631,11 @@ class _CascadableNamespace(_TrashableNamespace):
 
     def drop_namespace(self, request: Any) -> Any:
         self.calls.append(f"drop_namespace:{'$'.join(request.id)}:{(request.behavior or 'restrict').lower()}")
-        return type("R", (), {"model_fields_set": set()})()
+        return DropNamespaceResponse()
 
     def create_namespace(self, request: Any) -> Any:
         self.calls.append(f"create_namespace:{'$'.join(request.id)}:{(request.mode or 'create').lower()}")
-        return type("R", (), {"model_fields_set": set()})()
+        return CreateNamespaceResponse()
 
 
 def _drop_namespace_cascade(settings: Settings, ns: Any, *, force: bool = False, purge: bool = False) -> Any:

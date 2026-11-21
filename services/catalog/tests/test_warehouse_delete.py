@@ -16,11 +16,11 @@ pylance, is `tests/integration/test_a_warehouse_cascade_revokes_a_grant_only_onc
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 import pytest
+from fastapi import Request
 from lance_namespace import (
     DescribeNamespaceRequest,
     DescribeNamespaceResponse,
@@ -45,6 +45,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
+from tests.app_state import request_on
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -117,11 +118,10 @@ class _Connections:
         return self._ns
 
 
-def _request(root_uri: str = "s3://acme-bkt", ns: _FakeNamespace | None = None) -> Any:
-    """A stand-in request carrying the app state the delete touches: the catalog's connections, answering a fake so no
-    real backend is built."""
-    state = SimpleNamespace(connections=_Connections(root_uri, ns if ns is not None else _FakeNamespace()))
-    return SimpleNamespace(app=SimpleNamespace(state=state))
+def _request(root_uri: str = "s3://acme-bkt", ns: _FakeNamespace | None = None) -> Request:
+    """A request carrying the app state the delete touches: the catalog's connections, answering a fake so no real
+    backend is built."""
+    return request_on(connections=_Connections(root_uri, ns if ns is not None else _FakeNamespace()))
 
 
 def _seed(

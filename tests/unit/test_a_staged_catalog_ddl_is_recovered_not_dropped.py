@@ -23,10 +23,10 @@ import os
 import uuid
 from collections.abc import Awaitable, Callable, Collection
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast, override
 
 import pytest
+from fastapi import Request
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, TransactionNotFoundError, UnsupportedOperationError
 from pydantic import SecretStr
 
@@ -52,6 +52,7 @@ from lineage.core.refusals import UnverifiedEventError
 from lineage.models import DatasetEvent
 from lineage.services.provenance import feed_key
 from lineage.services.signature import store_published_keys
+from tests.app_state import request_on
 from tests.bus_double import BusDouble
 from tests.secret_store_double import SecretStoreDouble
 
@@ -207,12 +208,10 @@ def _arm_gate(store: Any, *, writer: str | None, readers: tuple[str, ...] = ("de
     )
 
 
-def _request(client: Any = None) -> Any:  # noqa: ANN401 — the drain and the routes read only app.state; an OpenFGA client
+def _request(client: Any = None) -> Request:  # noqa: ANN401 — an OpenFGA client
     """The app state the drain and the routes read, its decider holding ``client``: one on the test's own store, or none
     for a case authorization never reaches."""
-    return SimpleNamespace(
-        app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", client or object())), published_keys=store_published_keys()))
-    )
+    return request_on(decider=OpenFgaDecider(cast("Any", client or object())), published_keys=store_published_keys())
 
 
 def _decided[T](store: Any, call: Callable[[Any], Awaitable[T]]) -> T:  # noqa: ANN401 — the root conftest's OpenFgaStore

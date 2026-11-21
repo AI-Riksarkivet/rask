@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from types import SimpleNamespace
 from typing import Any, ClassVar, cast
 
 import aiohttp
@@ -31,9 +30,11 @@ import pytest
 from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
+from openfga_sdk.models import ExpandResponse
 
 from lakehouse.governed import fga_reads, fga_resilience, fga_writes, oidc
 from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
+from tests.fga_answers import answer
 
 
 def _client(c: object) -> OpenFgaClient:
@@ -115,15 +116,10 @@ def test_delete_tuples_audits_the_tuples_that_landed_before_it_fails(audit_rows:
 # --------------------------------------------------------------------------- #
 
 
-def _leaf_node(name: str, *, computed: str | None = None, users: list[str] | None = None) -> SimpleNamespace:
-    return SimpleNamespace(
-        name=name,
-        leaf=SimpleNamespace(
-            computed=SimpleNamespace(userset=computed) if computed else None,
-            tuple_to_userset=None,
-            users=SimpleNamespace(users=users) if users is not None else None,
-        ),
-    )
+def _leaf_node(name: str, *, computed: str | None = None, users: list[str] | None = None) -> dict[str, Any]:
+    """A leaf as the server's expand JSON spells it, which leaves out the arms a leaf does not have."""
+    leaf = {"computed": {"userset": computed}} if computed else {"users": {"users": users}} if users is not None else {}
+    return {"name": name, "leaf": leaf}
 
 
 class _DiamondClient:
@@ -139,18 +135,18 @@ class _DiamondClient:
     async def expand(self, body: Any, *_a: object, **_k: object) -> object:
         relation = body.relation
         if relation == "can_read":
-            root = SimpleNamespace(
-                name="table:t#can_read",
-                union=SimpleNamespace(
-                    nodes=[
+            root = {
+                "name": "table:t#can_read",
+                "union": {
+                    "nodes": [
                         _leaf_node("table:t#can_read", computed="table:t#writer"),
                         _leaf_node("table:t#can_read", computed="table:t#reader"),
                     ]
-                ),
-            )
+                },
+            }
         else:
             root = self._TREE[relation]
-        return SimpleNamespace(tree=SimpleNamespace(root=root))
+        return answer({"tree": {"root": root}}, ExpandResponse)
 
 
 def test_expand_tree_does_not_call_a_diamond_a_cycle() -> None:

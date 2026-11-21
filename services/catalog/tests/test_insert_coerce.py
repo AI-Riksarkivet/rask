@@ -7,9 +7,10 @@ turns a genuinely incompatible payload into a clean 400 (InvalidInputError), nev
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any, ClassVar, cast
+from unittest.mock import create_autospec
 
+import lance
 import pyarrow as pa
 import pytest
 from lance_namespace import InvalidInputError
@@ -36,8 +37,11 @@ class _Table:
     def __init__(self, schema: pa.Schema) -> None:
         self._schema = schema
 
-    def open(self, so: Any, *, version: int | None = None, branch: str | None = None) -> Any:  # noqa: ANN401 — a handle's schema is all that is read
-        return SimpleNamespace(schema=self._schema)
+    def open(self, so: Any, *, version: int | None = None, branch: str | None = None) -> lance.LanceDataset:  # noqa: ANN401 — the store options are not read
+        """A handle with the dataset's whole signature (``create_autospec``) whose schema is the table's."""
+        handle = create_autospec(lance.LanceDataset, instance=True)
+        handle.schema = self._schema
+        return handle
 
 
 def _coerce(table: _Table, data: bytes) -> pa.Table:

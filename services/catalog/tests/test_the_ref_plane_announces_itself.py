@@ -27,11 +27,11 @@ from __future__ import annotations
 import logging
 from collections.abc import Iterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pyarrow as pa
 import pytest
+from catalog_settings import catalog_settings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, connect
@@ -92,7 +92,7 @@ def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.M
 
     # `registry_root` is not decoration: every ref door resolves the table's claim and holds its history fence on the
     # control root ([[LH-308]]), and a double without it fails inside the handler rather than at the assertion.
-    settings = SimpleNamespace(storage_options=lambda: StorageOptions(), fga_enabled=False, registry_root=str(tmp_path / "control"))
+    settings = catalog_settings(control_root=str(tmp_path / "control"))
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: StorageOptions()

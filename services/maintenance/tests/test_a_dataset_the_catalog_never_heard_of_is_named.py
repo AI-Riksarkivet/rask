@@ -24,14 +24,13 @@ names them, so counting those would report every ordinary drop as an unregistere
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 from pydantic import SecretStr
 
 from lakehouse.lancekit.base_refs import normalise
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import reconcile as mod
+from maintenance.services.discovery import Discovery
 from maintenance.services.naming import TableIds
 from maintenance.services.reconcile import _unregistered_datasets
 
@@ -97,7 +96,7 @@ def _category(monkeypatch: pytest.MonkeyPatch, sources: mod.Sources) -> mod.Reco
     monkeypatch.setattr(
         mod,
         "discover_datasets",
-        lambda _fs, _bucket, max_depth=3: SimpleNamespace(uris=["s3://lance-catalog/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"], truncated=[]),
+        lambda _fs, _bucket, max_depth=3: Discovery(uris=["s3://lance-catalog/0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"], truncated=[]),
     )
 
     settings = MaintenanceSettings(s3_bucket="lance-catalog", s3_access_key_id="unit", s3_secret_access_key=SecretStr("unit"))

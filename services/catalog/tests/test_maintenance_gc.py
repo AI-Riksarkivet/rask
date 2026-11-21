@@ -4,10 +4,12 @@ cutoff, and never mutate; run passes the bounds through with the sweep's tag exe
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
 from typing import Any
+from unittest.mock import create_autospec
 
 import pytest
+from lance.lance import CleanupStats
+from lance.optimize import CompactionMetrics
 
 from catalog.services import maintenance
 from lakehouse.lancekit.manifest_wire import encode_varint
@@ -78,7 +80,10 @@ class _Optimize:
 
     def compact_files(self, **kw: Any) -> Any:
         self.compact_kw = kw
-        return SimpleNamespace(fragments_removed=4, fragments_added=1)
+        # Lance's metrics cannot be constructed from Python, so the double carries its class's whole signature.
+        metrics = create_autospec(CompactionMetrics, instance=True)
+        metrics.fragments_removed, metrics.fragments_added = 4, 1
+        return metrics
 
     def optimize_indices(self) -> None:
         self.indices_optimized = True
@@ -90,7 +95,10 @@ def _versions(n: int, *, age_days: int = 100) -> list[dict[str, Any]]:
 
 
 def test_run_gc_passes_bounds_and_reports_stats() -> None:
-    ds = _FakeDs(version=3, versions=_versions(3), tags={}, stats=SimpleNamespace(old_versions=2, bytes_removed=4096))
+    # Lance's cleanup stats cannot be constructed from Python, so the double carries its class's whole signature.
+    stats = create_autospec(CleanupStats, instance=True)
+    stats.old_versions, stats.bytes_removed = 2, 4096
+    ds = _FakeDs(version=3, versions=_versions(3), tags={}, stats=stats)
     out = maintenance.run_gc(ds, retention_days=7, retain_versions=1)
     assert out == {"ok": True, "old_versions_removed": 2, "bytes_removed": 4096}
     # tagged versions are exempt exactly like the sweep, and the retain bound is forwarded

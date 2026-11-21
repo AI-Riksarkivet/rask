@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Collection
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -47,6 +46,7 @@ from lakehouse.events.openlineage import run_id_for
 from lakehouse.storage.options import StorageOptions
 from lineage.api import relay
 from lineage.core.config import LineageSettings
+from tests.app_state import app_holding
 
 
 def _staged(uri: str, *, author: str, run: str, token: str) -> None:
@@ -87,18 +87,9 @@ class _Repo:
         return set()
 
 
-def _settings(uri: str) -> Any:  # noqa: ANN401 — a stand-in for the drain's settings protocol
-    class _S:
-        outbox_uri = uri
-        outbox_drain_limit = 500
-        fga_enabled = True
-
-    return _S()
-
-
 def _drive(uri: str) -> Any:  # noqa: ANN401 — DrainOutcome
-    app = cast("Any", SimpleNamespace(state=SimpleNamespace()))
-    return asyncio.run(relay._drain_outbox(app, cast("Any", _Repo()), _settings(uri), opts=StorageOptions()))
+    app = app_holding()
+    return asyncio.run(relay._drain_outbox(app, cast("Any", _Repo()), _governed_settings(uri), opts=StorageOptions()))
 
 
 def _governed_settings(outbox_uri: str) -> LineageSettings:
@@ -149,7 +140,7 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
         async def events_recorded(self, keys: Collection[str]) -> set[str]:
             return set()
 
-    app = cast("Any", SimpleNamespace(state=SimpleNamespace()))
+    app = app_holding()
     outcome = asyncio.run(relay._drain_outbox(app, cast("Any", _OrderRepo()), _governed_settings(uri), opts=StorageOptions()))
 
     assert (outcome.refused, outcome.stranded, outcome.drained) == (1, 0, 0), (

@@ -45,6 +45,8 @@ from typing import Any, cast
 import lance
 import pyarrow as pa
 import pytest
+from catalog_settings import governed_settings
+from fastapi import Request
 from fastapi.testclient import TestClient
 from lance_namespace import InvalidInputError, PermissionDeniedError
 
@@ -60,27 +62,18 @@ from tests.unit.named_resolver import NamedResolver, uuid_of
 _CALLER = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
 
 
-class _Settings:
-    fga_enabled = True
-
-
-class _Request:
-    def __init__(self, path: str, object_id: str) -> None:
-        self.scope = {"path": path}
-        self.path_params = {"id": object_id}
-        self.method = "POST"
+def _request(path: str, object_id: str) -> Request:
+    """The request the router hands the guard: its path, the id it matched, and the method."""
+    return Request({"type": "http", "method": "POST", "path": path, "path_params": {"id": object_id}, "headers": []})
 
 
 def _drive(path: str, object_id: str) -> None:
     """Run the guard on a bare-object client: a question it put to OpenFGA would fail with the client's
     ``AttributeError``, so the refusal each caller expects is one made before OpenFGA is asked."""
-    # CAST, the idiom `test_the_bus_door_authorizes_what_it_records` uses: the stand-ins carry exactly
-    # the attributes the guard reads, and constructing a real Request/Settings/OpenFgaClient would drag
-    # a whole app and a live store into a test about one composed object id. The caller is a real one.
     asyncio.run(
         route_guard.authorize(
-            cast(Any, _Request(path, object_id)),
-            AuthzContext(client=cast(Any, object()), settings=cast(Any, _Settings()), token=_CALLER),
+            _request(path, object_id),
+            AuthzContext(client=cast(Any, object()), settings=governed_settings(), token=_CALLER),
             resolver=NamedResolver(),
         )
     )
@@ -92,27 +85,27 @@ def test_a_named_namespace_is_still_checked(openfga_store: Any, held: str | None
     holding nothing on ``acme-bronze`` is refused its listing, and its reader is admitted."""
     if held is not None:
         openfga_store.write(("user:dex~alice", held, f"namespace:{uuid_of('namespace', ['acme-bronze'])}"))
-    request = cast(Any, _Request("/v1/namespace/acme-bronze/list", "acme-bronze"))
+    request = _request("/v1/namespace/acme-bronze/list", "acme-bronze")
 
     async def _authorized() -> None:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
-            await route_guard.authorize(request, AuthzContext(client=client, settings=cast(Any, _Settings()), token=_CALLER), resolver=NamedResolver())
+            await route_guard.authorize(request, AuthzContext(client=client, settings=governed_settings(), token=_CALLER), resolver=NamedResolver())
 
-    with pytest.raises(PermissionDeniedError) if held is None else nullcontext():
+    with pytest.raises(PermissionDeniedError, match=r"^can_get_metadata required on namespace:acme-bronze$") if held is None else nullcontext():
         asyncio.run(_authorized())
 
 
 def test_an_empty_id_on_a_table_is_a_typed_refusal() -> None:
     """A table id with no segments is malformed, not a root — so it earns the spec's own 400 rather
     than an empty object or a silent open."""
-    with pytest.raises(InvalidInputError):
+    with pytest.raises(InvalidInputError, match=r"^table id is empty: '\$' names no table$"):
         _drive("/v1/table/$/describe", "$")
 
 
 @pytest.mark.parametrize("suffix", ["drop"])
 def test_every_other_action_on_the_root_is_refused(suffix: str) -> None:
     """No tuple can name the root, so an action that is not a per-item-filtered read cannot be authorized on it."""
-    with pytest.raises(PermissionDeniedError):
+    with pytest.raises(PermissionDeniedError, match=rf"^the root namespace names no object, so '{suffix}' cannot be authorized on it$"):
         _drive(f"/v1/namespace/$/{suffix}", "$")
 
 

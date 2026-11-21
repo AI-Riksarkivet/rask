@@ -12,7 +12,6 @@ per-warehouse walks, which a test of one walk alone cannot see.
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import cast
 
 import pytest
@@ -79,7 +78,7 @@ def _list(monkeypatch: pytest.MonkeyPatch, tmp_path: object, catalogs: dict[str,
     response = asyncio.run(
         t_ep.list_all_tables(
             context=AuthzContext(client=None, settings=settings, token=None),
-            request=cast(Request, SimpleNamespace()),
+            request=Request({"type": "http", "headers": []}),
             so=StorageOptions(),
             resolver=NamedResolver(),
             limit=MAX_LIST_LIMIT,

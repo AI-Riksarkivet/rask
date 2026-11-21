@@ -30,22 +30,22 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pyarrow as pa
 import pytest
-from lance_namespace import TableBranchNotFoundError
+from catalog_settings import catalog_settings
+from lance_namespace import DescribeTableResponse, TableBranchNotFoundError
 from pydantic import SecretStr
 
 from catalog.api.v1.endpoints.credentials import vend_credentials
+from catalog.core.config import Settings
 from catalog.core.vending import ReclaimScope, VendedSession
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse.lancekit.features import TableFileFormat
 from lakehouse.records import location_claims
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.credential import S3KeyPair
-from lakehouse.storage.options import StorageOptions
 
 
 lance = pytest.importorskip("lance")
@@ -57,8 +57,8 @@ class _Namespace:
     def __init__(self, location: str) -> None:
         self._location = location
 
-    def describe_table(self, request: Any) -> Any:  # noqa: ANN401 — the door's own shape
-        return SimpleNamespace(location=self._location)
+    def describe_table(self, request: Any) -> DescribeTableResponse:  # noqa: ANN401 — the door's own shape
+        return DescribeTableResponse(location=self._location)
 
 
 class _Vendor:
@@ -75,20 +75,13 @@ class _Vendor:
         raise AssertionError("the table vend door vends no reclaim")
 
 
-def _settings() -> SimpleNamespace:
+def _settings() -> Settings:
     # FGA OFF so the write-tier rung check is skipped and the branch lookup is the only thing that can
     # refuse — a 403 from the authz arm would be indistinguishable from the refusal under test.
-    return SimpleNamespace(
-        fga_enabled=False,
-        multibase_data_base_list=[],
-        storage_options=lambda: StorageOptions(),
-        # The base judge's two inputs ([[LH-279]]). These tables declare no base outside their own root,
-        # so the record is never read and the control root is never reached.
-        registry_root="/nonexistent/control",
-        # [[LH-209]] What the judge holds a configured base against: governed roots and buckets. None here.
-        root="",
-        reserved_bucket_set=frozenset(),
-    )
+    # The base judge's two inputs ([[LH-279]]): these tables declare no base outside their own root, so the record
+    # is never read and the control root is never reached; and no governed root or bucket to hold a base against
+    # ([[LH-209]]).
+    return catalog_settings(control_root="/nonexistent/control", root="")
 
 
 def _door(location: str) -> DoorTable:

@@ -22,12 +22,12 @@ from __future__ import annotations
 import asyncio
 import threading
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any, cast
 from uuid import uuid4
 
 import pytest
-from lance_namespace import LanceNamespace
+from fastapi import Request
+from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse, LanceNamespace
 
 from catalog.api.authz.context import AuthzContext
 from catalog.api.authz.objects import GovernedObject
@@ -119,14 +119,15 @@ def test_the_trash_subtree_describes_every_table_concurrently(tmp_path: Path, mo
             claims, f"s3://bkt/{item.segments[-1]}.lance", "$".join(item.segments), segments=item.segments, is_gone=lambda _claim: False, uuid=item.uuid
         )
 
-    own = ControlUuids(object_uuid=str(uuid4()))
+    own_uuid = str(uuid4())
+    own = ControlUuids(object_uuid=own_uuid)
 
     def native_call(_ns: Any, op: str, req: Any) -> Any:
         calls.append(op)
         if op == "describe_table":
-            return _slow(tracker, SimpleNamespace(location=f"s3://bkt/{req.id[-1]}.lance"))()
+            return _slow(tracker, DescribeTableResponse(location=f"s3://bkt/{req.id[-1]}.lance"))()
         # The cascaded namespace, as it stands under the uuid the door identified it by.
-        return SimpleNamespace(properties={UUID_PROPERTY: own.object_uuid})
+        return DescribeNamespaceResponse(properties={UUID_PROPERTY: own_uuid})
 
     monkeypatch.setattr(n_ep.native, "call", native_call)
     monkeypatch.setattr(n_ep.trash, "put", lambda *_a, **_kw: None)
@@ -154,7 +155,7 @@ def test_the_estate_listing_walks_every_warehouse_concurrently(tmp_path: Path, m
     asyncio.run(
         t_ep.list_all_tables(
             context=AuthzContext(client=None, settings=_settings(tmp_path), token=None),
-            request=cast("Any", SimpleNamespace()),
+            request=Request({"type": "http", "headers": []}),
             so=StorageOptions(),
             resolver=cast("Any", None),
             limit=MAX_LIST_LIMIT,

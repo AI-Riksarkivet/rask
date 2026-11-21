@@ -30,21 +30,20 @@ cleans up is pinned on the real app in `tests/integration/test_a_namespace_mode_
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from catalog_settings import catalog_settings
 from lance_namespace import DescribeNamespaceResponse, DropNamespaceRequest, DropNamespaceResponse, InvalidInputError, NamespaceNotFoundError
 from unfiled_announcer import unfiled
 
 from catalog.api.authz.context import AuthzContext
 from catalog.api.idempotency import KeyedDoor
 from catalog.api.v1.endpoints import namespaces as ns_ep
-from catalog.core.config import Settings
 from catalog.core.modes import DropMode
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.storage.options import StorageOptions
 from tests.unit.named_resolver import door_resolver
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
@@ -52,13 +51,7 @@ from tests.unit.no_uuids import NO_OBJECT_UUIDS
 _GHOST_UUID = "5d2f8c1e-4b7a-4e9d-8c3f-0a1b2c3d4e5f"
 
 
-class _Settings:
-    fga_enabled = False
-    trash_grace_days = 0
-    registry_root = "file:///tmp/does-not-matter"
-
-    def storage_options(self) -> StorageOptions:
-        return StorageOptions()
+_SETTINGS = catalog_settings(trash_grace_days=0, control_root="file:///tmp/does-not-matter")
 
 
 async def _drop(
@@ -108,7 +101,7 @@ async def _drop(
 
     monkeypatch.setattr(ns_ep.native, "call", _native)
 
-    ns, settings = MagicMock(), cast(Settings, _Settings())
+    ns, settings = MagicMock(), _SETTINGS
     return await ns_ep.drop_namespace(
         context=AuthzContext(client=None, settings=settings, token=None),
         id="ghost",

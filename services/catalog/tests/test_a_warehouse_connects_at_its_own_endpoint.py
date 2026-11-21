@@ -13,7 +13,7 @@ door resolves one.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from fastapi import Request
@@ -22,6 +22,7 @@ from moto.server import ThreadedMotoServer
 from catalog.core import namespace as namespace_module
 from catalog.core.config import Settings
 from lakehouse.records.warehouse_records import WarehouseRecord
+from tests.app_state import request_on
 
 
 _STORAGE = "storage."
@@ -59,16 +60,9 @@ def test_a_warehouse_with_NO_endpoint_uses_the_estate_default(settings: Settings
     assert captured[0]["root"] == "s3://tenant-bucket"
 
 
-class _Req:
-    """The one piece of `request` the resolver touches, without standing up an app.
-
-    Handed over with an explicit `cast` at each call rather than a `type: ignore`: the resolver keeps what it resolved on
-    the request's own `state`, and touches nothing else, so the cast states what is actually required of the argument
-    instead of silencing the checker.
-    """
-
-    def __init__(self) -> None:
-        self.state = type("_RequestState", (), {})()
+def _req() -> Request:
+    """A request with an empty state: the resolver keeps what it resolved on the request's own `state`."""
+    return request_on()
 
 
 @pytest.mark.asyncio
@@ -92,7 +86,7 @@ async def test_the_resolver_carries_the_RECORDS_endpoint(
     record = WarehouseRecord.model_validate(stored)
     monkeypatch.setattr(dependencies.warehouses, "get_warehouse", lambda *a, **k: record)
 
-    resolved = await dependencies._resolve_warehouse_root(cast(Request, _Req()), settings, "wh-1")
+    resolved = await dependencies._resolve_warehouse_root(_req(), settings, "wh-1")
 
     assert resolved == dependencies.ServedWarehouse(root_uri="s3://tenant-bucket", endpoint=expected)
 

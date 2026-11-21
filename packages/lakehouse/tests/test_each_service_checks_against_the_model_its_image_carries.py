@@ -19,16 +19,17 @@ import copy
 import json
 import logging
 import urllib.parse
-from types import SimpleNamespace
 from typing import Any, Self
 
 import aiohttp
 import pytest
 from lance_namespace import ServiceUnavailableError
+from openfga_sdk.models import ListStoresResponse, ReadAuthorizationModelsResponse, WriteAuthorizationModelResponse
 
 from lakehouse.governed import fga_model, fga_provision, fga_resilience
 from lakehouse.governed.auth import write_model
 from lakehouse.governed.fga_provision import ModelHistoryTooLongError
+from tests.fga_answers import answer
 
 
 def _model(can_read_data: dict[str, Any], *, extra: tuple[str, ...] = ()) -> dict[str, Any]:
@@ -104,7 +105,8 @@ def _client_class(fake: _OpenFga) -> type:
             if isinstance(listing, Exception):
                 raise listing
             wanted = (options or {}).get("name")
-            return SimpleNamespace(stores=[SimpleNamespace(**store) for store in listing if wanted is None or store.get("name") == wanted])
+            named = [{"updated_at": store["created_at"], **store} for store in listing if wanted is None or store.get("name") == wanted]
+            return answer({"stores": named, "continuation_token": ""}, ListStoresResponse)
 
         async def create_store(self, request: Any) -> Any:
             raise AssertionError("the store exists; nothing here may create one")
@@ -118,13 +120,14 @@ def _client_class(fake: _OpenFga) -> type:
                 self._pages = fake.next_history()
                 fake.pages_per_read.append(0)
             fake.pages_per_read[-1] += 1
-            page = [SimpleNamespace(**m) for m in self._pages[token : token + 1]]
             more = token + 1 < len(self._pages)
-            return SimpleNamespace(authorization_models=page, continuation_token=str(token + 1) if more else "")
+            return answer(
+                {"authorization_models": self._pages[token : token + 1], "continuation_token": str(token + 1) if more else ""}, ReadAuthorizationModelsResponse
+            )
 
         async def write_authorization_model(self, request: Any) -> Any:
             fake.written.append((str(self._store_id), request))
-            return SimpleNamespace(authorization_model_id="model-WRITTEN")
+            return answer({"authorization_model_id": "model-WRITTEN"}, WriteAuthorizationModelResponse)
 
     return _Client
 

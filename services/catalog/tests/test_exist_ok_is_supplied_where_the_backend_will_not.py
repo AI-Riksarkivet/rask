@@ -18,13 +18,13 @@ somebody else's object. The backend's own refusal is the only answer that cannot
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 from lance_namespace import (
     CreateNamespaceRequest,
     CreateNamespaceResponse,
+    DescribeNamespaceResponse,
     LanceNamespace,
     NamespaceAlreadyExistsError,
     TableNotFoundError,
@@ -52,7 +52,7 @@ def _native(backend: _Backend):
         if op == "describe_namespace":
             if backend.describe_raises is not None:
                 raise backend.describe_raises
-            return SimpleNamespace(properties={"kept": "true"})
+            return DescribeNamespaceResponse(properties={"kept": "true"})
         raise AssertionError(f"unexpected op {op!r}")
 
     return call

@@ -90,7 +90,7 @@ def _field_metadata(location: str) -> dict[str, dict[bytes, bytes]]:
         pytest.param(
             {"classifier", "apply:pii"}, _RELABEL_BY_REPLACE, 403, {"payload": "pii", "note": None}, id="a-classifier-cannot-replace-a-fields-metadata"
         ),
-        pytest.param(set(), _LABEL_NOTE_RESTRICTED, 403, {"payload": "pii", "note": None}, id="a-caller-holding-nothing-is-refused-as-before"),
+        pytest.param(set(), _LABEL_NOTE_RESTRICTED, 403, {"payload": "pii", "note": None}, id="a-caller-holding-nothing-is-refused"),
     ],
 )
 def test_only_a_classifier_may_write_a_governance_key(
@@ -114,17 +114,25 @@ def test_only_a_classifier_may_write_a_governance_key(
 
 
 @pytest.mark.parametrize(
-    ("held", "shown"),
+    ("held", "detail", "fields"),
     [
-        pytest.param({"classifier"}, set(), id="a-classifier-who-cannot-see-the-table-is-told-only-its-own-path"),
-        pytest.param({"classifier", "reader"}, {"id", "payload", "note"}, id="a-classifier-who-sees-the-table-is-told-its-fields"),
+        pytest.param(
+            {"classifier"},
+            "update_field_metadata: a field this request names is not on the table (nope)",
+            None,
+            id="a-classifier-who-cannot-see-the-table-is-told-only-its-own-path",
+        ),
+        pytest.param({"classifier", "reader"}, None, ["id", "payload", "note"], id="a-classifier-who-sees-the-table-is-told-its-fields"),
     ],
 )
 def test_a_missing_path_discloses_no_schema_the_caller_cannot_see(
     governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
     held: set[str],
-    shown: set[str],
+    detail: str | None,
+    fields: list[str] | None,
 ) -> None:
+    """A caller who cannot see the table is told the rask sentence naming only its own path; one who can is told Lance's
+    own answer, whose field list is read out of it (the sentence around the list is Lance's and not pinned here)."""
     catalog = governed_catalog
     location = _a_table_bob_holds(catalog, held)
     before = _field_metadata(location)
@@ -135,7 +143,12 @@ def test_a_missing_path_discloses_no_schema_the_caller_cannot_see(
 
     problem = answered.json()
     assert (answered.status_code, problem["code"], _field_metadata(location)) == (404, 12, before), answered.text
-    assert {"nope"} | shown == {"nope", "id", "payload", "note"} & set(re.findall(r"\w+", problem["detail"])), problem["detail"]
+    if detail is not None:
+        assert problem["detail"] == detail
+    else:
+        listed = re.search(r"Available fields: \[(.*)\]", problem["detail"])
+        assert listed is not None, problem["detail"]
+        assert re.findall(r"'(\w+)'", listed.group(1)) == fields, problem["detail"]
 
 
 def _a_table_bob_holds(catalog: Any, held: set[str]) -> str:  # noqa: ANN401 — the catalog conftest's GovernedCatalog

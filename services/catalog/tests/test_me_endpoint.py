@@ -11,22 +11,25 @@ degrading PER RELATION on an FGA outage — the endpoint never 5xxes over authz-
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from catalog_settings import catalog_settings, governed_settings
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import me as ep
+from catalog.core.config import Settings
 from lakehouse.governed import fga_resilience
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 
 
-def _settings(*, fga_enabled: bool = False) -> Any:
-    return SimpleNamespace(fga_enabled=fga_enabled, fga_root_object="warehouse:lance_catalog")
+def _settings(*, fga_enabled: bool = False) -> Settings:
+    if fga_enabled:
+        return governed_settings(fga_root_object="warehouse:lance_catalog")
+    return catalog_settings(fga_root_object="warehouse:lance_catalog")
 
 
 def _token(**claims: Any) -> PersonPrincipal:

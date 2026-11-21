@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Collection
-from types import SimpleNamespace
 from typing import Any, cast
 
 from lakehouse.events import outbox
@@ -25,6 +24,7 @@ from lakehouse.storage.options import StorageOptions
 from lineage.api import relay
 from lineage.core.config import LineageSettings, Signing
 from lineage.services.signature import store_published_keys
+from tests.app_state import app_holding
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -65,7 +65,7 @@ def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_stag
     outbox.stage_envelope(uri, StorageOptions(), lineage_envelope(signer.sign(_wire())))
     settings = LineageSettings.model_validate({"outbox_uri": uri, "signing": Signing(signers=frozenset({IDENTITY}), delegators=frozenset())})
     repo = _Repo()
-    app = cast("Any", SimpleNamespace(state=SimpleNamespace(published_keys=store_published_keys())))
+    app = app_holding(published_keys=store_published_keys())
 
     outcome = asyncio.run(relay._drain_outbox(app, cast("Any", repo), settings, opts=StorageOptions(), publisher=None))
 

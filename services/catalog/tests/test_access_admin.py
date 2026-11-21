@@ -15,10 +15,10 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from functools import partial
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from catalog_settings import governed_settings
 from lance_namespace import (
     InvalidInputError,
     ServiceUnavailableError,
@@ -26,6 +26,7 @@ from lance_namespace import (
 from unfiled_announcer import unfiled
 
 from catalog.api.v1.endpoints import access_admin as ep
+from catalog.core.config import Settings
 from catalog.schemas import (
     AccessCheckBody,
     AccessExpandRequest,
@@ -58,8 +59,8 @@ def unnamed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ep.object_names, "current_names", lambda _settings, _objects: {})
 
 
-def _settings(*, fga_enabled: bool = True) -> Any:
-    return SimpleNamespace(fga_enabled=fga_enabled, fga_root_object="warehouse:lance_catalog")
+def _settings() -> Settings:
+    return governed_settings(fga_root_object="warehouse:lance_catalog")
 
 
 def _fga_client(stub: Any = None) -> Any:
@@ -244,10 +245,9 @@ def test_write_rejects_unknown_type_and_bare_object(rec: _AuditRecorder) -> None
 # ── the model + check surfaces ────────────────────────────────────────────────────────────────────────
 
 
-def test_model_returns_the_checked_in_dsl_and_the_id_the_catalog_checks_against(rec: _AuditRecorder) -> None:
-    client = SimpleNamespace(get_authorization_model_id=lambda: "01MODEL")
-    response = asyncio.run(ep.get_access_model(client=_fga_client(client)))
-    assert response.authorization_model_id == "01MODEL"
+def test_model_returns_the_checked_in_dsl_and_the_id_the_catalog_checks_against(rec: _AuditRecorder, openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    response = _on(openfga_store, lambda client: ep.get_access_model(client=client))
+    assert response.authorization_model_id == openfga_store.model_id
     assert response.dsl == fga_model.load_model_dsl() and "type table" in response.dsl
 
 

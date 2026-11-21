@@ -21,73 +21,72 @@ stdlib ``asyncio.run`` throughout, so no pytest-asyncio dependency, matching ``t
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
 from openfga_sdk import OpenFgaClient
+from openfga_sdk.client.models import ClientWriteResponse
+from openfga_sdk.models import CheckResponse, ExpandResponse, ListUsersResponse, ReadChangesResponse, ReadResponse
 
 from lakehouse.governed import fga_reads, fga_writes
+from tests.fga_answers import TIMESTAMP, answer, tuple_json
 
 
 # --------------------------------------------------------------------------- #
-# Builders for the SDK's expand-tree object graph (SimpleNamespace duck-types it)
+# Builders for an expand tree, as the server's JSON spells one (the SDK decodes it: tests/fga_answers.py)
 # --------------------------------------------------------------------------- #
 
-
-def _node(
-    name: str | None = None,
-    *,
-    leaf: Any = None,
-    union: Any = None,
-    intersection: Any = None,
-    difference: Any = None,
-) -> SimpleNamespace:
-    return SimpleNamespace(name=name, leaf=leaf, union=union, intersection=intersection, difference=difference)
+type _Json = dict[str, Any]
 
 
-def _leaf(*, users: list[str] | None = None, computed: str | None = None, ttu: Any = None) -> SimpleNamespace:
-    return SimpleNamespace(
-        users=SimpleNamespace(users=users) if users is not None else None,
-        computed=SimpleNamespace(userset=computed) if computed is not None else None,
-        tuple_to_userset=ttu,
+def _present(**fields: Any) -> _Json:
+    """The fields the server sends: it leaves out an arm a node does not have."""
+    return {name: value for name, value in fields.items() if value is not None}
+
+
+def _node(name: str, *, leaf: _Json | None = None, union: _Json | None = None, intersection: _Json | None = None, difference: _Json | None = None) -> _Json:
+    return _present(name=name, leaf=leaf, union=union, intersection=intersection, difference=difference)
+
+
+def _leaf(*, users: list[str] | None = None, computed: str | None = None, ttu: _Json | None = None) -> _Json:
+    return _present(
+        users={"users": users} if users is not None else None,
+        computed={"userset": computed} if computed is not None else None,
+        tupleToUserset=ttu,
     )
 
 
-def _ttu(tupleset: str, computed: list[str]) -> SimpleNamespace:
-    return SimpleNamespace(tupleset=tupleset, computed=[SimpleNamespace(userset=c) for c in computed])
+def _ttu(tupleset: str, computed: list[str]) -> _Json:
+    return {"tupleset": tupleset, "computed": [{"userset": c} for c in computed]}
 
 
-def _nodes(*children: SimpleNamespace) -> SimpleNamespace:
-    return SimpleNamespace(nodes=list(children))
+def _nodes(*children: _Json) -> _Json:
+    return {"nodes": list(children)}
 
 
 class _ExpandClient:
     """Serves a canned tree per ``object#relation`` and canned tuples per object."""
 
-    def __init__(self, trees: dict[str, SimpleNamespace], tuples: dict[str, list[tuple[str, str, str]]] | None = None) -> None:
+    def __init__(self, trees: dict[str, _Json], tuples: dict[str, list[tuple[str, str, str]]] | None = None) -> None:
         self.trees = trees
         self.tuples = tuples or {}
         self.expanded: list[str] = []
         self.reads: list[str] = []
 
-    async def expand(self, body: Any, options: Any = None) -> object:
+    async def expand(self, body: Any, options: Any = None) -> ExpandResponse:
         key = f"{body.object}#{body.relation}"
         self.expanded.append(key)
         root = self.trees.get(key)
-        return SimpleNamespace(tree=SimpleNamespace(root=root) if root is not None else None)
+        return answer({"tree": {"root": root}} if root is not None else {}, ExpandResponse)
 
-    async def read(self, tuple_key: Any, options: Any = None) -> object:
+    async def read(self, tuple_key: Any, options: Any = None) -> ReadResponse:
         del options
         self.reads.append(tuple_key.object)
         rows = self.tuples.get(tuple_key.object, [])
-        return SimpleNamespace(
-            tuples=[SimpleNamespace(key=SimpleNamespace(user=u, relation=r, object=o)) for u, r, o in rows],
-            continuation_token=None,
-        )
+        return answer({"tuples": [tuple_json(u, r, o) for u, r, o in rows], "continuation_token": ""}, ReadResponse)
 
 
-def _client(trees: dict[str, SimpleNamespace], tuples: dict[str, list[tuple[str, str, str]]] | None = None) -> OpenFgaClient:
+def _client(trees: dict[str, _Json], tuples: dict[str, list[tuple[str, str, str]]] | None = None) -> OpenFgaClient:
     return cast(OpenFgaClient, _ExpandClient(trees, tuples))
 
 
@@ -123,10 +122,10 @@ def test_expand_preserves_intersection_and_difference() -> None:
             _node("a", leaf=_leaf(computed="writer")),
             _node(
                 "b",
-                difference=SimpleNamespace(
-                    base=_node("base", leaf=_leaf(computed="classifier")),
-                    subtract=_node("sub", leaf=_leaf(users=["user:banned"])),
-                ),
+                difference={
+                    "base": _node("base", leaf=_leaf(computed="classifier")),
+                    "subtract": _node("sub", leaf=_leaf(users=["user:banned"])),
+                },
             ),
         ),
     )
@@ -241,14 +240,17 @@ def test_expand_tree_clamps_max_depth_to_the_module_ceiling() -> None:
 
 def test_list_users_returns_the_userset_arm_it_used_to_discard() -> None:
     class _Client:
-        async def list_users(self, body: Any, options: Any = None) -> object:
+        async def list_users(self, body: Any, options: Any = None) -> ListUsersResponse:
             del body
-            return SimpleNamespace(
-                users=[
-                    SimpleNamespace(object=None, userset=SimpleNamespace(type="role", id="stewards", relation="assignee"), wildcard=None),
-                    SimpleNamespace(object=SimpleNamespace(type="user", id="alice"), userset=None, wildcard=None),
-                    SimpleNamespace(object=None, userset=None, wildcard=SimpleNamespace(type="user")),
-                ]
+            return answer(
+                {
+                    "users": [
+                        {"userset": {"type": "role", "id": "stewards", "relation": "assignee"}},
+                        {"object": {"type": "user", "id": "alice"}},
+                        {"wildcard": {"type": "user"}},
+                    ]
+                },
+                ListUsersResponse,
             )
 
     result = asyncio.run(fga_reads.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t", qualified=True))
@@ -261,7 +263,7 @@ def test_list_users_passes_the_requested_filter_through() -> None:
     class _Client:
         async def list_users(self, body: Any, options: Any = None) -> object:
             seen["filters"] = body.user_filters
-            return SimpleNamespace(users=[])
+            return answer({"users": []}, ListUsersResponse)
 
     asyncio.run(fga_reads.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t", user_type="role", user_relation="assignee"))
     assert (seen["filters"][0].type, seen["filters"][0].relation) == ("role", "assignee")
@@ -321,14 +323,14 @@ def test_check_passes_contextual_tuples_through_without_writing() -> None:
     writes: list[Any] = []
 
     class _Client:
-        async def check(self, body: Any, options: Any = None) -> object:
+        async def check(self, body: Any, options: Any = None) -> CheckResponse:
             seen["user"] = body.user
             seen["contextual"] = body.contextual_tuples
-            return SimpleNamespace(allowed=True)
+            return answer({"allowed": True}, CheckResponse)
 
-        async def write(self, *_a: object, **_k: object) -> object:
+        async def write(self, *_a: object, **_k: object) -> ClientWriteResponse:
             writes.append(1)
-            return SimpleNamespace()
+            return ClientWriteResponse(writes=[], deletes=[])
 
     hypothetical = [fga_writes.ClientTuple(user="user:bob", relation="reader", object="warehouse:acme")]
     allowed = asyncio.run(
@@ -349,22 +351,25 @@ def test_check_passes_contextual_tuples_through_without_writing() -> None:
 
 def test_read_changes_normalises_operation_and_timestamp() -> None:
     class _Client:
-        async def read_changes(self, body: Any, options: Any = None) -> object:
+        async def read_changes(self, body: Any, options: Any = None) -> ReadChangesResponse:
             del body, options
-            return SimpleNamespace(
-                changes=[
-                    SimpleNamespace(
-                        tuple_key=SimpleNamespace(user="user:alice", relation="owner", object="table:t"),
-                        operation="TUPLE_OPERATION_WRITE",
-                        timestamp="2026-07-29T09:37:21.909224Z",
-                    ),
-                    SimpleNamespace(
-                        tuple_key=SimpleNamespace(user="user:bob", relation="reader", object="table:t"),
-                        operation="TUPLE_OPERATION_DELETE",
-                        timestamp="2026-07-29T10:00:00Z",
-                    ),
-                ],
-                continuation_token="next",
+            return answer(
+                {
+                    "changes": [
+                        {
+                            "tuple_key": {"user": "user:alice", "relation": "owner", "object": "table:t"},
+                            "operation": "TUPLE_OPERATION_WRITE",
+                            "timestamp": "2026-07-29T09:37:21.909224Z",
+                        },
+                        {
+                            "tuple_key": {"user": "user:bob", "relation": "reader", "object": "table:t"},
+                            "operation": "TUPLE_OPERATION_DELETE",
+                            "timestamp": "2026-07-29T10:00:00Z",
+                        },
+                    ],
+                    "continuation_token": "next",
+                },
+                ReadChangesResponse,
             )
 
     changes, token = asyncio.run(fga_reads.read_changes(cast(OpenFgaClient, _Client()), object_type="table"))
@@ -390,20 +395,23 @@ def test_read_changes_returns_the_token_raw_so_callers_stop_on_an_empty_page() -
     calls = {"n": 0}
 
     class _Client:
-        async def read_changes(self, body: Any, options: Any = None) -> object:
+        async def read_changes(self, body: Any, options: Any = None) -> ReadChangesResponse:
             del body, options
             rows, token = pages[min(calls["n"], len(pages) - 1)]
             calls["n"] += 1
-            return SimpleNamespace(
-                changes=[
-                    SimpleNamespace(
-                        tuple_key=SimpleNamespace(user=f"user:{r}", relation="owner", object="table:t"),
-                        operation="TUPLE_OPERATION_WRITE",
-                        timestamp="2026-07-29T09:37:21Z",
-                    )
-                    for r in rows
-                ],
-                continuation_token=token,
+            return answer(
+                {
+                    "changes": [
+                        {
+                            "tuple_key": {"user": f"user:{r}", "relation": "owner", "object": "table:t"},
+                            "operation": "TUPLE_OPERATION_WRITE",
+                            "timestamp": TIMESTAMP,
+                        }
+                        for r in rows
+                    ],
+                    "continuation_token": token,
+                },
+                ReadChangesResponse,
             )
 
     client = cast(OpenFgaClient, _Client())

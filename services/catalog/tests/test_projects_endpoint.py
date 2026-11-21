@@ -11,34 +11,30 @@ never a 500); ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any
 from unittest.mock import create_autospec
 
 import pytest
+from catalog_settings import catalog_settings, governed_settings
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import projects as ep
+from catalog.core.config import Settings
 from lakehouse.governed import fga_provision
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.records.warehouse_records import WarehouseRecord
-from lakehouse.storage.options import StorageOptions
 
 
-def _settings(*, fga_enabled: bool = False) -> Any:
+def _settings(*, fga_enabled: bool = False, fga_root_object: str = "warehouse:lance_catalog") -> Settings:
     # fga_enabled=False: every authorization decision allows (``decisions.authorization`` answers None) and
-    # _admins_for degrades to []; the list's own check is asserted with FGA on below. registry_root/storage_options
-    # feed the (patched) list_warehouses call.
-    return SimpleNamespace(
-        fga_enabled=fga_enabled,
-        fga_root_object="warehouse:lance_catalog",
-        registry_root="file:///unused",
-        storage_options=lambda: StorageOptions(),
-    )
+    # _admins_for degrades to []; the list's own check is asserted with FGA on below. The control root feeds the
+    # (patched) list_warehouses call.
+    build = governed_settings if fga_enabled else catalog_settings
+    return build(fga_root_object=fga_root_object, control_root="file:///unused")
 
 
 _RECORDS: list[dict[str, str]] = [
@@ -122,7 +118,7 @@ def test_admins_are_the_projects_effective_administrators(monkeypatch: pytest.Mo
         ("user:dex~carol", "assignee", "role:leads"),
         ("user:dex~dave", "member", "project:globex"),
     )
-    settings: Any = SimpleNamespace(**{**vars(_settings(fga_enabled=True)), "fga_root_object": "estate:rask"})
+    settings = _settings(fga_enabled=True, fga_root_object="estate:rask")
 
     async def _listed() -> list[ep.ProjectResponse]:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:

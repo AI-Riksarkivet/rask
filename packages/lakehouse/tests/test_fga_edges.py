@@ -20,18 +20,19 @@ dependency (this repo does not set ``asyncio_mode``).
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
 from typing import Any, cast
 
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
+from openfga_sdk.models import ReadResponse
 
 from lakehouse.governed import fga_writes
+from tests.fga_answers import answer, tuple_json
 
 
-def _tuple(user: str, relation: str, obj: str) -> SimpleNamespace:
-    """A read-response tuple: ``.key`` carries user/relation/object (the SDK Tuple shape)."""
-    return SimpleNamespace(key=SimpleNamespace(user=user, relation=relation, object=obj))
+def _tuple(user: str, relation: str, obj: str) -> dict[str, Any]:
+    """A stored tuple as a ``Read`` answer lists it."""
+    return tuple_json(user, relation, obj)
 
 
 def _keys(tuples: list[ClientTuple]) -> set[tuple[str, str, str]]:
@@ -61,12 +62,12 @@ class _WriteClient:
 class _ReadDeleteClient:
     """Serves one canned read page and accumulates the per-tuple deletes."""
 
-    def __init__(self, tuples: list[SimpleNamespace]) -> None:
+    def __init__(self, tuples: list[dict[str, Any]]) -> None:
         self._tuples = tuples
         self.deleted: list[ClientTuple] = []
 
-    async def read(self, _body: Any = None, options: Any = None, *_a: object, **_k: object) -> SimpleNamespace:
-        return SimpleNamespace(tuples=self._tuples, continuation_token="")
+    async def read(self, _body: Any = None, options: Any = None, *_a: object, **_k: object) -> ReadResponse:
+        return answer({"tuples": self._tuples, "continuation_token": ""}, ReadResponse)
 
     async def write(self, body: Any, *_a: object, **_k: object) -> None:
         self.deleted.extend(body.deletes)

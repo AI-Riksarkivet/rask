@@ -16,11 +16,9 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
-from fastapi import Request
 from lance_namespace import ServiceUnavailableError
 from lineage_lane import Feed, governed, started
 from openfga_sdk import OpenFgaClient
@@ -41,6 +39,7 @@ from lakehouse.governed.principal import Principal
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings, get_settings
 from lineage.models import RunEvent
+from tests.app_state import request_on
 
 
 def _uuid(name: str) -> str:
@@ -154,7 +153,7 @@ def _filter(fga_client: _OpenFga) -> fga_deps.DatasetFilter:
             "fga_store_id": "s",
         }
     )
-    request = cast(Request, SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast(OpenFgaClient, fga_client))))))
+    request = request_on(decider=OpenFgaDecider(cast(OpenFgaClient, fga_client)))
     return fga_deps.DatasetFilter(
         request,
         settings,

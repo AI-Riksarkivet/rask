@@ -20,44 +20,41 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed import fga_provision
 from lakehouse.governed import oidc as oidc_mod
 from lakehouse.governed.auth_lifespan import attach_auth, build_fga_client
-from lakehouse.governed.settings import OidcProvider
+from lakehouse.governed.settings import GovernedAuthSettings
 from lakehouse.process.supervision import Supervisor
 
 
-class _Settings(BaseModel):
-    """A structural stand-in for `GovernedAuthSettings` — `attach_auth` takes a Protocol, so any
-    service's own settings class satisfies it without importing a base."""
+class _ServiceSettings(GovernedAuthSettings, BaseSettings):
+    """A service's settings as each service composes them: the estate's auth mixins on a settings base."""
 
-    oidc_enabled: bool = True
-    oidc_issuer: str | None = "https://issuer.test"
-    oidc_audience: str | None = "rask"
-    oidc_discovery_url: str | None = "http://dex.internal/dex"
-    oidc_cache_ttl: int = 300
-    oidc_leeway: int = 30
-    oidc_allow_insecure: bool = False
-    oidc_person_providers: list[OidcProvider] = [
-        OidcProvider(issuer="https://issuer.test", idp_id="dex", discovery_url="http://dex.internal/dex", connectors={"local": "dex"})
-    ]
-    sa_issuer: str | None = None
-    sa_audience: str | None = None
-    sa_fetch_token_file: str | None = None
-    sa_ca_file: str | None = None
-    sa_max_token_seconds: int = 3600
-    fga_enabled: bool = True
-    fga_api_url: str = "http://fga.test:8080"
-    fga_store_id: str | None = None
-    fga_timeout_seconds: float = 5.0
-    fga_token_file: str | None = None
-    fga_decider_url: str | None = None
-    fga_decider_token_file: str | None = None
+    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+
+
+#: A person issuer reached in-cluster at its own discovery URL, and the OpenFGA the store is looked up on.
+_GOVERNED: dict[str, Any] = {
+    "oidc_enabled": True,
+    "oidc_issuer": "https://issuer.test",
+    "oidc_audience": "rask",
+    "oidc_discovery_url": "http://dex.internal/dex",
+    "oidc_leeway": 30,
+    "oidc_idp_id": "dex",
+    "oidc_connectors": {"local": "dex"},
+    "fga_enabled": True,
+    "fga_api_url": "http://fga.test:8080",
+}
+
+
+def _settings(**fields: Any) -> _ServiceSettings:
+    return _ServiceSettings.model_validate({**_GOVERNED, **fields})
 
 
 class _Recorder:
@@ -117,7 +114,7 @@ async def test_the_default_posture_RESOLVES_when_unpinned(fga_calls: _Recorder) 
     """
     app = FastAPI()
     async with Supervisor() as loops:
-        await attach_auth(app, _Settings(), service="t", loops=loops)
+        await attach_auth(app, _settings(), service="t", loops=loops)
 
     assert "provision" not in fga_calls.calls, "the DEFAULT posture published a model — boot order now decides the estate's permissions"
     assert fga_calls.calls == ["resolve", "make_client:01RESOLVED"]
@@ -140,7 +137,7 @@ async def test_provision_False_with_no_store_leaves_the_door_SHUT(
     app = FastAPI()
     with caplog.at_level(logging.WARNING):
         async with Supervisor() as loops:
-            await attach_auth(app, _Settings(), service="t", loops=loops, provision=False)
+            await attach_auth(app, _settings(), service="t", loops=loops, provision=False)
 
     assert getattr(app.state, "fga", None) is None
     assert not any(c.startswith("make_client") for c in fga_calls.calls)
@@ -154,7 +151,7 @@ async def test_provision_False_with_no_store_leaves_the_door_SHUT(
 async def test_a_pinned_store_reaches_the_lookup(fga_calls: _Recorder, provision: bool) -> None:
     """The model hook writes into a pinned store; a service that looked its store up by
     name instead would check against a different one ([[LH-201]])."""
-    await build_fga_client(_Settings(fga_store_id="01PINNED"), service="t", provision=provision)
+    await build_fga_client(_settings(fga_store_id="01PINNED"), service="t", provision=provision)
 
     assert fga_calls.kwargs["provision" if provision else "resolve"].get("store_id") == "01PINNED"
 
@@ -172,7 +169,7 @@ async def test_fatal_True_refuses_to_run_without_the_model_its_image_carries(mon
     monkeypatch.setattr(fga_provision, "resolve", resolve)
 
     with pytest.raises(fga_provision.OpenFgaModelAbsentError, match=r"holds no model carrying this image's model\.json"):
-        await build_fga_client(_Settings(), service="warehouse-grant-backfill", provision=False, fatal=True)
+        await build_fga_client(_settings(), service="warehouse-grant-backfill", provision=False, fatal=True)
     assert not any(c.startswith("make_client") for c in fga_calls.calls)
 
 
@@ -190,7 +187,7 @@ async def test_fatal_True_reraises_a_failed_fga_build(monkeypatch: pytest.Monkey
     app = FastAPI()
     with pytest.raises(RuntimeError, match="openfga unreachable"):
         async with Supervisor() as loops:
-            await attach_auth(app, _Settings(), service="t", loops=loops, fatal=True)
+            await attach_auth(app, _settings(), service="t", loops=loops, fatal=True)
 
 
 @pytest.mark.asyncio
@@ -204,7 +201,7 @@ async def test_fatal_True_reraises_a_failed_verifier_build(monkeypatch: pytest.M
     app = FastAPI()
     with pytest.raises(RuntimeError, match="discovery refused"):
         async with Supervisor() as loops:
-            await attach_auth(app, _Settings(fga_enabled=False), service="t", loops=loops, fatal=True)
+            await attach_auth(app, _settings(fga_enabled=False), service="t", loops=loops, fatal=True)
 
 
 @pytest.mark.asyncio
@@ -220,7 +217,7 @@ async def test_the_default_stays_NON_fatal(monkeypatch: pytest.MonkeyPatch, fga_
     monkeypatch.setattr(fga_provision, "resolve", boom)
     app = FastAPI()
     async with Supervisor() as loops:
-        await attach_auth(app, _Settings(), service="t", loops=loops)
+        await attach_auth(app, _settings(), service="t", loops=loops)
 
     assert getattr(app.state, "fga", None) is None
     assert getattr(app.state, "oidc", None) is not None, "the OIDC half must build independently — one failure must not take the other down"
@@ -242,7 +239,7 @@ async def test_provisioning_emits_the_structured_audit_event(caplog: pytest.LogC
     import logging
 
     with caplog.at_level(logging.INFO):
-        await build_fga_client(_Settings(), service="catalog", provision=True)
+        await build_fga_client(_settings(), service="catalog", provision=True)
     rec = next((r for r in caplog.records if r.getMessage() == "openfga_provisioned"), None)
     assert rec is not None, "openfga_provisioned is no longer emitted — obs.py raises it to OTLP as a severity-9 audit event"
     assert getattr(rec, "store_id", None) and getattr(rec, "model_id", None), "the event lost its store_id/model_id extra — a printf string would"
@@ -252,7 +249,7 @@ async def test_provisioning_emits_the_structured_audit_event(caplog: pytest.LogC
 @pytest.mark.asyncio
 async def test_resolve_by_name_emits_the_structured_diagnostic(caplog: pytest.LogCaptureFixture, fga_calls: _Recorder) -> None:
     with caplog.at_level(logging.INFO):
-        await build_fga_client(_Settings(), service="maintenance", provision=False)
+        await build_fga_client(_settings(), service="maintenance", provision=False)
     rec = next((r for r in caplog.records if r.getMessage() == "openfga_resolved_by_name"), None)
     assert rec is not None, "the unpinned resolve-by-name diagnostic (was maintenance's reconcile_fga_resolved_by_name) is gone"
     assert getattr(rec, "store_id", None) and getattr(rec, "model_id", None), "the diagnostic lost its store_id/model_id extra"
