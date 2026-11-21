@@ -29530,7 +29530,7 @@
     },
     "/v1/table/{id}/update_field_metadata": {
       "post": {
-        "description": "Merge or replace per-field metadata for the given field paths \u2014 wraps ``update_field_metadata``;\nemits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the event still\ncarries the schema, so every version the feed records has one).",
+        "description": "Merge or replace per-field metadata for the given field paths \u2014 wraps ``update_field_metadata``;\nemits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the event still\ncarries the schema, so every version the feed records has one).\n\nA body that changes governance keys (``rask.*``) and nothing else asks ``can_classify`` on the table, and\n``can_apply`` on each value it sets; one that changes any other key, or replaces a field's metadata, asks\n``can_write_data``, and ``can_classify`` too when it touches a governance key.",
         "operationId": "update_field_metadata_v1_table__id__update_field_metadata_post",
         "parameters": [
           {

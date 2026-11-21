@@ -30,6 +30,8 @@ from lance_namespace import (
     AlterTableDropColumnsRequest,
     AlterTableDropColumnsResponse,
     InvalidInputError,
+    ServiceUnavailableError,
+    TableColumnNotFoundError,
     UpdateFieldMetadataRequest,
     UpdateFieldMetadataResponse,
     UpdateTableSchemaMetadataResponse,
@@ -66,10 +68,10 @@ from lakehouse.naming import PLATFORM_PREFIX
 #: The GOVERNANCE namespace in field metadata: keys the estate acts on, not user properties.
 #:
 #: [[LH-058]]. `rask.classification` decides whether a table's bytes may be vended raw, so whoever can
-#: write it can decide that — and this door resolves to `can_write_data` (measured via
-#: `_action_relation("table", "update_field_metadata")`). A plain WRITER could therefore clear a
-#: classification and make their own table directly vendable again, which is the separation-of-duties
-#: hole the reference model's "classify without holding data/DDL rights" names.
+#: write it decides that. Classifying is separate from writing (ADR 0225): the router asks `can_classify` in
+#: `can_write_data`'s place for a body that changes governance keys alone, and `can_write_data` for any other,
+#: so a writer may not clear a classification and make their own table directly vendable again, and a
+#: classifier labels columns without holding the table's data or DDL rights.
 #:
 #: The gate is the platform's PREFIX rather than one key: the next governance key must not have to remember to add
 #: itself to a gate.
@@ -85,9 +87,11 @@ async def _require_classifier_for_governance_keys(
 ) -> None:
     """Refuse a governance-key write unless the caller holds ``can_classify`` on ``table``, the table the door resolved.
 
-    BODY-AUTHORIZED, like the write-tier check inside `vend_credentials` and `_authorize_grant`: the
-    router-wide guard has already cleared `can_write_data` by the time this runs, and the rung this
-    needs depends on WHAT the body touches rather than on which route it is.
+    BODY-AUTHORIZED, like the write-tier check inside `vend_credentials` and `_authorize_grant`: the rung
+    depends on WHAT the body touches rather than on which route it is. The router has asked `can_write_data`
+    for a body that changes any ordinary key, and `can_classify` alone for one that changes governance keys
+    and nothing else (`fga_deps._classifies_only`, ADR 0225); this asks the classifier's rung of every body
+    that touches the governance namespace either way, so the door holds the rule on its own.
 
     A DELETE COUNTS, AND IT HAS THREE SPELLINGS. `update_field_metadata` signals key removal with a
     `None` value — but `UpdateFieldMetadataEntry` carries a third field beside `path` and `metadata`,
@@ -121,6 +125,23 @@ async def _require_classifier_for_governance_keys(
     values = {str(v) for update in updates for key, v in (update.get("metadata") or {}).items() if key.startswith(PLATFORM_PREFIX) and v is not None}
     for value in sorted(values):
         await fga_deps.require_relation(client, settings, token, relation="can_apply", obj=f"classification:{value}")
+
+
+async def _sees_the_schema(client: OpenFgaClient | None, settings: FgaSettings, token: Caller | None, *, table: ResolvedTable) -> bool:
+    """Whether the caller holds ``can_get_metadata`` on ``table``, asked only when a missing path is refused.
+
+    A classifier is admitted on ``can_classify`` alone (ADR 0225), which sees no schema, and Lance's refusal of a missing
+    path lists the table's fields and suggests the nearest. Such a caller is told only the paths it sent. The probe writes
+    no denial, since nothing was attempted, and an outage answers as not seeing: the refusal stands either way.
+    """
+    authz = fga_deps.authorization(settings, client, token)
+    if authz is None:
+        return True
+    obj = fga_ids.table_object(table.require_uuid())
+    try:
+        return (await authz.batch_check("can_get_metadata", [obj])).get(obj, False)
+    except ServiceUnavailableError:
+        return False
 
 
 spec_router = APIRouter(prefix="/v1/table", tags=["columns"])
@@ -252,14 +273,26 @@ async def update_field_metadata(
 ) -> UpdateFieldMetadataResponse:
     """Merge or replace per-field metadata for the given field paths — wraps ``update_field_metadata``;
     emits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the event still
-    carries the schema, so every version the feed records has one)."""
+    carries the schema, so every version the feed records has one).
+
+    A body that changes governance keys (``rask.*``) and nothing else asks ``can_classify`` on the table, and
+    ``can_apply`` on each value it sets; one that changes any other key, or replaces a field's metadata, asks
+    ``can_write_data``, and ``can_classify`` too when it touches a governance key."""
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     updates = [u.model_dump() for u in (body.updates or [])]
     await _require_classifier_for_governance_keys(client, settings, token, table=table.resolved, updates=updates)
-    response = await run_in_threadpool(
-        partial(dataplane.update_field_metadata, table, so, updates, body.branch, transaction_properties=lineage_deps.door_stamp(token, UPDATE_FIELD_METADATA))
-    )
+    try:
+        response = await run_in_threadpool(
+            partial(
+                dataplane.update_field_metadata, table, so, updates, body.branch, transaction_properties=lineage_deps.door_stamp(token, UPDATE_FIELD_METADATA)
+            )
+        )
+    except TableColumnNotFoundError:
+        if await _sees_the_schema(client, settings, token, table=table.resolved):
+            raise
+        named = ", ".join(sorted({str(update["path"]) for update in updates if update.get("path")}))
+        raise TableColumnNotFoundError(f"update_field_metadata: a field this request names is not on the table ({named})") from None
     await lineage_deps.emit_measured_write(
         emitter,
         segments,

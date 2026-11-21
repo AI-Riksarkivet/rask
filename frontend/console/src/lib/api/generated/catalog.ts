@@ -4157,6 +4157,10 @@ export interface paths {
          * @description Merge or replace per-field metadata for the given field paths — wraps ``update_field_metadata``;
          *     emits an UPDATE_FIELD_METADATA event at the new version (columns unchanged, but the event still
          *     carries the schema, so every version the feed records has one).
+         *
+         *     A body that changes governance keys (``rask.*``) and nothing else asks ``can_classify`` on the table, and
+         *     ``can_apply`` on each value it sets; one that changes any other key, or replaces a field's metadata, asks
+         *     ``can_write_data``, and ``can_classify`` too when it touches a governance key.
          */
         post: operations["update_field_metadata_v1_table__id__update_field_metadata_post"];
         delete?: never;

@@ -27,13 +27,19 @@ a data-protection officer trusted to mark `pii` cannot mark a table `restricted`
 attaches and never detaches, so a clear asks the table rung alone, and a narrow grant strands no label its holder could
 attach and nobody present could remove.
 
+CLASSIFYING IS NOT WRITING (ADR 0225, owner 2026-11-21): a body that changes governance keys and nothing else asks
+``can_classify`` in ``can_write_data``'s place, so a classifier labels columns holding no writer rung; one that changes
+any ordinary key, alone or beside a label, or replaces a field's metadata, still asks ``can_write_data``. A caller
+holding nothing on the table is refused 403 code 15 whatever its body.
+
 Every decision is the real model's, on a store of this test's own: alice owns ``lance_catalog$db$t`` and has labelled
-its ``payload`` ``pii``; bob holds exactly the rungs a case names, ``writer`` among them, since the router asks
-``can_write_data`` before the door asks for a governance rung. A refused write leaves every field's metadata as it was.
+its ``payload`` ``pii``; bob holds exactly the rungs a case names. A refused write leaves every field's metadata as it
+was.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import lance
@@ -51,6 +57,13 @@ _CLEAR_BY_REPLACE = [{"path": "payload", "metadata": {}, "replace": True}]
 _LABEL_NOTE_RESTRICTED = [{"path": "note", "metadata": {KEY: "restricted"}}]
 _LABEL_BOTH = [{"path": "payload", "metadata": {KEY: "pii"}}, {"path": "note", "metadata": {KEY: "restricted"}}]
 _ORDINARY = [{"path": "payload", "metadata": {"unit": "bytes", "owner": "team-a"}}]
+_RELABEL_BY_REPLACE = [{"path": "payload", "metadata": {KEY: "pii"}, "replace": True}]
+_LABEL_AND_ORDINARY = [{"path": "note", "metadata": {KEY: "pii", "unit": "bytes"}}]
+
+
+def _field_metadata(location: str) -> dict[str, dict[bytes, bytes]]:
+    schema = lance.dataset(location).schema
+    return {name: dict(schema.field(name).metadata or {}) for name in schema.names}
 
 
 @pytest.mark.parametrize(
@@ -60,12 +73,24 @@ _ORDINARY = [{"path": "payload", "metadata": {"unit": "bytes", "owner": "team-a"
         pytest.param({"writer"}, _CLEAR_BY_REPLACE, 403, {"payload": "pii", "note": None}, id="a-writer-cannot-clear-a-label-by-a-replace"),
         pytest.param({"writer", "apply:restricted"}, _LABEL_NOTE_RESTRICTED, 403, {"payload": "pii", "note": None}, id="a-writer-cannot-label"),
         pytest.param(
-            {"writer", "classifier", "apply:restricted"}, _LABEL_NOTE_RESTRICTED, 200, {"payload": "pii", "note": "restricted"}, id="a-classifier-may-label"
+            {"classifier", "apply:restricted"},
+            _LABEL_NOTE_RESTRICTED,
+            200,
+            {"payload": "pii", "note": "restricted"},
+            id="a-classifier-labels-holding-no-writer-rung",
         ),
-        pytest.param({"writer", "classifier"}, _LABEL_NOTE_RESTRICTED, 403, {"payload": "pii", "note": None}, id="a-classifier-needs-the-value-too"),
-        pytest.param({"writer", "classifier"}, _CLEAR_BY_NULL, 200, {"payload": None, "note": None}, id="clearing-takes-the-table-rung-and-no-value-grant"),
-        pytest.param({"writer", "classifier", "apply:pii"}, _LABEL_BOTH, 403, {"payload": "pii", "note": None}, id="every-value-in-the-body-is-checked"),
+        pytest.param({"classifier"}, _LABEL_NOTE_RESTRICTED, 403, {"payload": "pii", "note": None}, id="a-classifier-needs-the-value-too"),
+        pytest.param({"classifier"}, _CLEAR_BY_NULL, 200, {"payload": None, "note": None}, id="clearing-takes-the-table-rung-and-no-value-grant"),
+        pytest.param({"classifier", "apply:pii"}, _LABEL_BOTH, 403, {"payload": "pii", "note": None}, id="every-value-in-the-body-is-checked"),
         pytest.param({"writer"}, _ORDINARY, 200, {"payload": "pii", "note": None}, id="an-ordinary-field-property-takes-no-governance-rung"),
+        pytest.param({"classifier"}, _ORDINARY, 403, {"payload": "pii", "note": None}, id="a-classifier-cannot-write-an-ordinary-key"),
+        pytest.param(
+            {"classifier", "apply:pii"}, _LABEL_AND_ORDINARY, 403, {"payload": "pii", "note": None}, id="a-classifier-cannot-write-one-beside-a-label"
+        ),
+        pytest.param(
+            {"classifier", "apply:pii"}, _RELABEL_BY_REPLACE, 403, {"payload": "pii", "note": None}, id="a-classifier-cannot-replace-a-fields-metadata"
+        ),
+        pytest.param(set(), _LABEL_NOTE_RESTRICTED, 403, {"payload": "pii", "note": None}, id="a-caller-holding-nothing-is-refused-as-before"),
     ],
 )
 def test_only_a_classifier_may_write_a_governance_key(
@@ -75,7 +100,47 @@ def test_only_a_classifier_may_write_a_governance_key(
     status: int,
     labels: dict[str, str | None],
 ) -> None:
-    catalog, alice = governed_catalog, governed_catalog.bearer("alice")
+    catalog = governed_catalog
+    location = _a_table_bob_holds(catalog, held)
+    before = _field_metadata(location)
+
+    answered = catalog.client.post(f"{TABLE}/update_field_metadata", json={"updates": updates}, headers=catalog.bearer("bob"))
+
+    assert answered.status_code == status, answered.text
+    if status == 403:
+        assert (answered.json()["code"], _field_metadata(location)) == (15, before), answered.text
+    schema = lance.dataset(location).schema
+    assert {name: (schema.field(name).metadata or {}).get(KEY.encode(), b"").decode() or None for name in labels} == labels
+
+
+@pytest.mark.parametrize(
+    ("held", "shown"),
+    [
+        pytest.param({"classifier"}, set(), id="a-classifier-who-cannot-see-the-table-is-told-only-its-own-path"),
+        pytest.param({"classifier", "reader"}, {"id", "payload", "note"}, id="a-classifier-who-sees-the-table-is-told-its-fields"),
+    ],
+)
+def test_a_missing_path_discloses_no_schema_the_caller_cannot_see(
+    governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
+    held: set[str],
+    shown: set[str],
+) -> None:
+    catalog = governed_catalog
+    location = _a_table_bob_holds(catalog, held)
+    before = _field_metadata(location)
+
+    answered = catalog.client.post(
+        f"{TABLE}/update_field_metadata", json={"updates": [{"path": "nope", "metadata": {KEY: None}}]}, headers=catalog.bearer("bob")
+    )
+
+    problem = answered.json()
+    assert (answered.status_code, problem["code"], _field_metadata(location)) == (404, 12, before), answered.text
+    assert {"nope"} | shown == {"nope", "id", "payload", "note"} & set(re.findall(r"\w+", problem["detail"])), problem["detail"]
+
+
+def _a_table_bob_holds(catalog: Any, held: set[str]) -> str:  # noqa: ANN401 — the catalog conftest's GovernedCatalog
+    """``lance_catalog$db$t``, alice's, its ``payload`` labelled ``pii``, with bob holding ``held``; its location."""
+    alice = catalog.bearer("alice")
     catalog.store.write((catalog.person("alice"), "apply", "classification:pii"))
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
     rows = pa.table({"id": pa.array([1], pa.int64()), "payload": pa.array(["x"]), "note": pa.array(["y"])})
@@ -88,11 +153,4 @@ def test_only_a_classifier_may_write_a_governance_key(
         granted = catalog.client.post("/management/v1/table/lance_catalog$db$t/access/grant", json={"user": "dex~bob", "relation": rung}, headers=alice)
         assert granted.status_code == 200, granted.text
     catalog.store.write(*((catalog.person("bob"), "apply", f"classification:{rung.removeprefix('apply:')}") for rung in held if rung.startswith("apply:")))
-
-    answered = catalog.client.post(f"{TABLE}/update_field_metadata", json={"updates": updates}, headers=catalog.bearer("bob"))
-
-    assert answered.status_code == status, answered.text
-    if status == 403:
-        assert answered.json()["code"] == 15, answered.text
-    schema = lance.dataset(location).schema
-    assert {name: (schema.field(name).metadata or {}).get(KEY.encode(), b"").decode() or None for name in labels} == labels
+    return location

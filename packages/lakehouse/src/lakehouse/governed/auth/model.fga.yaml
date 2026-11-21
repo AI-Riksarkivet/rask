@@ -805,8 +805,9 @@ tests:
         assertions: { reader_effective: true, can_delete: false, can_set_protection: false, can_get_protection: false, can_label: false }
   - name: classifying is INDEPENDENT of writing, in both directions
     # [[LH-058]]. The reference model's principle — "independent of `modify` (separation of duties:
-    # classify without holding data/DDL rights)" — as behaviour rather than as a comment. The hole it
-    # closes was measured: `update_field_metadata` resolves to `can_write_data`, so a plain writer could
+    # classify without holding data/DDL rights)" — as behaviour rather than as a comment. The catalog
+    # asks `can_classify` of an `update_field_metadata` that changes governance keys alone, and
+    # `can_write_data` beside it of one that changes any other key (ADR 0225), so a plain writer cannot
     # CLEAR the classification that makes their own table unvendable as raw object bytes.
     tuples:
       # A data-protection officer over the whole warehouse: may label, may not read or write a row.

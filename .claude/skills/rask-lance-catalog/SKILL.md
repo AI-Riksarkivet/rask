@@ -1119,7 +1119,10 @@ governing their data. The project-scoped surface is the console's project page, 
   which only the `reconciler` estate role opens. The census leaves out the deployment's own objects, and the catalog
   judges each candidate again on its own reads.
 - **A classified column is never vended raw** ([[LH-058]], [[LH-207]]). A label is field metadata `rask.classification`,
-  set and cleared only through `update_field_metadata` under `can_classify` (plus `can_apply` on each value). Both vend
+  set and cleared only through `update_field_metadata` under `can_classify` (plus `can_apply` on each value). Classifying
+  is not writing (ADR 0225): a body that changes `rask.*` keys and nothing else asks `can_classify` in `can_write_data`'s
+  place (the router's `fga_deps._classifies_only`), so a classifier holds no writer rung; any ordinary key or a `replace`
+  asks `can_write_data` too. Both vend
   doors (`/management/v1/table/{id}/credentials`, `DescribeTable(vend_credentials=true)`) answer server-mediated when
   `vending.classified_in_any_ref` finds a label on any field, nested ones included, on main or on any branch: a
   credential for any ref reads every ref's files (a stock client opens a branch with the table's credential; a branch

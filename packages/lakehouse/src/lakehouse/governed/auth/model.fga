@@ -264,9 +264,9 @@ type warehouse
     # CLASSIFYING A COLUMN IS NOT WRITING TO IT ([[LH-058]]). Attaching a classification to a field says
     # what the data IS; it neither reads nor changes a row. The reference model makes exactly this point
     # about its own vocabulary — "independent of `modify` (separation of duties: classify without holding
-    # data/DDL rights)" — and the hole it closes here was measured: `update_field_metadata` resolves to
-    # `can_write_data`, so any plain WRITER could clear a classification and make their own table
-    # vendable as raw object bytes again.
+    # data/DDL rights)". The catalog asks `can_classify` of an `update_field_metadata` that changes
+    # governance keys alone, and `can_write_data` beside it of one that changes any other key (ADR 0225),
+    # so no plain WRITER may clear a classification and make their own table vendable as raw object bytes.
     #
     # NOT A `tag` TYPE, which is what the reference calls this, and the deviation is Lance's rather than
     # a preference: `tag` already means a VERSION REF in this estate (`can_create_tag`, `can_update_tag`,

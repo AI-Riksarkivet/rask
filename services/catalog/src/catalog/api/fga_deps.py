@@ -69,7 +69,7 @@ from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.governed.subjects import is_person_subject
-from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.naming import CATALOG_DELIMITER, PLATFORM_PREFIX
 from lakehouse.problems.ns_errors import PartiallyApplied
 from lakehouse.problems.outage import store_refusal
 from lakehouse.records import object_records, trash
@@ -1056,6 +1056,31 @@ async def _rename_destination(request: Request, segments: list[str]) -> tuple[st
     return tuple(segments if destination is None else destination)
 
 
+#: The door whose rung its body decides, and the rung it asks for a body that classifies and changes nothing else (ADR
+#: 0225): a classifier labels a table's columns without holding its data or DDL rights.
+_CLASSIFYING_DOOR: Final = "update_field_metadata"
+_CLASSIFY_RELATION: Final = "can_classify"
+
+
+def _classifies_only(body: object) -> bool:
+    """Whether an ``update_field_metadata`` body changes governance keys (``rask.*``) and nothing else.
+
+    Every update names at least one key and every key it names is a governance key. A ``replace`` drops every key its
+    update does not name, ordinary ones among them, so it is never only a classification; nor is a body this cannot read,
+    which keeps the writer's rung and is refused or answered by the door's own model.
+    """
+    updates = body.get("updates") if isinstance(body, dict) else None
+    if not isinstance(updates, list) or not updates:
+        return False
+    for update in updates:
+        if not isinstance(update, dict) or update.get("replace"):
+            return False
+        metadata = update.get("metadata")
+        if not isinstance(metadata, dict) or not metadata or not all(isinstance(key, str) and key.startswith(PLATFORM_PREFIX) for key in metadata):
+            return False
+    return True
+
+
 async def _write_door(request: Request) -> write_judge.Write | None:
     """The write this route is about to make, or ``None`` for a door the write judge does not decide.
 
@@ -1093,6 +1118,8 @@ async def _write_door(request: Request) -> write_judge.Write | None:
         return None
     if relation in _READ_RELATIONS:
         return None
+    if fga_type == "table" and suffix == _CLASSIFYING_DOOR and _classifies_only(await _json_body_or_none(request)):
+        relation = _CLASSIFY_RELATION
     table = await _rename_destination(request, segments) if suffix == "rename" else tuple(segments)
     moved_from = tuple(segments) if suffix == "rename" else ()
     if moved_from:
