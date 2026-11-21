@@ -11,6 +11,7 @@ hands out the deliveries it holds at once.
 from __future__ import annotations
 
 import asyncio
+import threading
 import uuid
 from collections import Counter
 from collections.abc import Sequence
@@ -109,6 +110,49 @@ def test_a_burst_lands_in_two_commits_per_table_each_row_once_and_a_run_extended
     assert feed == Counter({**{(run, "COMPLETE"): 1 for run in completes}, (shared, "START"): 1})
     assert edges == Counter(dict.fromkeys(completes, 1))
     assert author == _ALICE
+
+
+def test_a_run_founded_by_two_replicas_at_once_is_extended_only_by_the_author_whose_binding_landed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    run = str(uuid.uuid4())
+    # A non-terminal state keeps a feed row per arrival, so Alice's event would land a row of its own.
+    alices = run_event(run, "RUNNING", "2026-10-23T10:00:00+00:00", outputs=["lance_catalog$acme-silver$alice"], inputs=(_SOURCE,), facets=_authored(_ALICE))
+    bobs = _complete(run, "lance_catalog$acme-silver$bob", author=_BOB)
+
+    with live_catalog(tmp_path / "catalog", monkeypatch) as url:
+        # Two replicas, each its own store and writer over the one catalog: neither sees the other's batch.
+        first, second = _store(url), _store(url)
+        read, release = threading.Event(), threading.Event()
+        authors_of = first._authors_of
+
+        def paused_after_the_read(runs: set[str]) -> dict[str, str | None]:
+            bound = authors_of(runs)
+            if not read.is_set():
+                # The first replica has read the run unbound; hold it there while the second founds the run for Bob.
+                read.set()
+                release.wait(30)
+            return bound
+
+        monkeypatch.setattr(first, "_authors_of", paused_after_the_read)
+        outcome: list[Verdict] = []
+        alice = threading.Thread(target=lambda: outcome.extend(_deliver(first, [alices])))
+        alice.start()
+        assert read.wait(30)
+        assert _deliver(second, [bobs]) == [_SUCCESS]
+        release.set()
+        alice.join(60)
+        assert not alice.is_alive(), "the first replica's delivery never settled"
+        feed = _feed(second)
+        edge_authors = set(_reader(url, EDGES).to_table(columns=["author"]).column("author").to_pylist())
+        author = asyncio.run(second.run_author(run))
+
+    # Alice's event is taken as the no-race path takes it (`ForeignRunError`), and none of its rows land under Bob's run.
+    assert outcome == [_SUCCESS]
+    assert [getattr(record, "run", None) for record in caplog.records if record.getMessage() == "lineage_event_foreign_run"] == [run]
+    assert author == _BOB
+    assert feed == Counter({(run, "COMPLETE"): 1})
+    assert edge_authors == {_BOB}
 
 
 def test_an_event_whose_edges_the_catalog_refuses_fails_alone_and_its_feed_row_never_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

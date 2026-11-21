@@ -644,7 +644,8 @@ class ProvenanceStore:
         A RUN IS EXTENDED ONLY BY ITS AUTHOR ([[LIN-5]]). The doors refuse an event of a run the table binds to another
         subject, but events delivered together were each authorized before any of them bound its run, so the commit asks
         again where the doors ask at all: a run is bound to the author of its first event, the table's binding or else the
-        batch's first, and an event of it naming another author is refused. With authorization off the doors take an
+        batch's first, and an event of it naming another author is refused. A binding another replica landed between the
+        read and this commit's founding insert is read again before any edge or feed row is written. With authorization off the doors take an
         author as claimed, and so does the commit.
 
         A key the batch repeats is sent once, its first delivery's row, since the catalog refuses a write that repeats one.
@@ -658,12 +659,18 @@ class ProvenanceStore:
                 if recording.run_id and recording.run_id not in bound:
                     founders.setdefault(recording.run_id, recording)
             authors = {**{run: founder.author for run, founder in founders.items()}, **bound}
+            if founders:
+                bindings = [{"run_id": run, "author": founder.author, "received_at": founder.received_at} for run, founder in founders.items()]
+                founded = self._writer(RUNS).merge_insert_only(pa.Table.from_pylist(bindings, schema=RUN_SCHEMA), on=["run_id"])
+                if founded < len(bindings):
+                    # Another replica bound one of these runs after the read. An insert-only merge that loses its race to a
+                    # held key inserts nothing (measured on pylance 14.0.3: 50 of 50 races of two founders of one key landed
+                    # one row, answering 1 and 0 inserted), as the catalog's commit, planned again on the newer version, does.
+                    # The binding that landed decides.
+                    authors.update(self._authors_of(set(founders)))
             foreign = [recording for recording in batch if self._refuse_foreign_runs and _extends_another_authors(recording, authors)]
             refused = {id(recording) for recording in foreign}
             landing = [recording for recording in batch if id(recording) not in refused]
-            if founders:
-                bindings = [{"run_id": run, "author": founder.author, "received_at": founder.received_at} for run, founder in founders.items()]
-                self._writer(RUNS).merge_insert_only(pa.Table.from_pylist(bindings, schema=RUN_SCHEMA), on=["run_id"])
             if landing:
                 edges = _first_of_each(pa.concat_tables([recording.edges for recording in landing]), "edge_key")
                 if edges.num_rows:

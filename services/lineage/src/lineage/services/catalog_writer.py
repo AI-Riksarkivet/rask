@@ -72,9 +72,10 @@ class RestCatalogWriteTransport:
                 _headers=self.request_headers(),
             )
 
-    def merge_insert_only(self, delta: pa.Table, on: list[str]) -> None:
+    def merge_insert_only(self, delta: pa.Table, on: list[str]) -> int:
+        """Insert the rows of ``delta`` whose ``on`` the table does not hold; how many it inserted (the spec's ``num_inserted_rows``)."""
         with translate_catalog_errors():
-            self._api.merge_insert_into_table(
+            answer = self._api.merge_insert_into_table(
                 self._id_str,
                 on,
                 encode_arrow_stream(delta),
@@ -84,6 +85,7 @@ class RestCatalogWriteTransport:
                 _request_timeout=self._timeout,
                 _headers=self.request_headers(),
             )
+        return answer.num_inserted_rows or 0
 
     def delete(self, predicate: str) -> None:
         from lance_namespace_urllib3_client import DeleteFromTableRequest
