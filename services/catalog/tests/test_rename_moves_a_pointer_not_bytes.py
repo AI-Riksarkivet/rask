@@ -61,20 +61,6 @@ def _written(ns, segments: list[str], *, appends: int = 2) -> str:  # noqa: ANN0
     return location
 
 
-def test_the_dataset_does_not_move(tmp_path: Path) -> None:
-    """The headline. The destination resolves to the SOURCE's own location."""
-    ns = _namespace(tmp_path)
-    source = _written(ns, ["ns1", "old"])
-
-    new_segments, location = dataplane.rename_table(
-        ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "old"]), "new", None, so=StorageOptions(), claims=_claims(tmp_path), root=str(tmp_path)
-    )
-
-    assert new_segments == ["ns1", "new"]
-    assert location == source, f"the rename relocated the dataset: {location} != {source}"
-    assert ns.describe_table(DescribeTableRequest(id=["ns1", "new"])).location == source
-
-
 def test_renaming_ACROSS_namespaces_still_moves_no_bytes(tmp_path: Path) -> None:
     """The spec allows a rename to change namespace, and under `<hash>_<object_id>` naming the
     namespace is part of the object_id — so this is the case that would most look like it needs a
@@ -173,6 +159,7 @@ def test_a_BRANCHED_table_renames_because_nothing_moves(tmp_path: Path) -> None:
         ns, table_claims.resolve(ns, _claims(tmp_path), ["ns1", "branched"]), "renamed", None, so=StorageOptions(), claims=_claims(tmp_path), root=str(tmp_path)
     )
 
+    assert new_segments == ["ns1", "renamed"]
     assert location == source, "the rename relocated a branched dataset"
     assert lance.dataset(location).branches.list() == before, "the branch listing changed under a pointer move"
     assert ns.describe_table(DescribeTableRequest(id=new_segments)).location == source

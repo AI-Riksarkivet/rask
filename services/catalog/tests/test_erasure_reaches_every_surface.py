@@ -93,14 +93,6 @@ def erase(erasure_job: Any) -> _Erase:  # noqa: ANN401 — conftest.ErasureJob
     return _erase
 
 
-def _follow(uri: str, report: ErasureReport) -> None:
-    """Delete every ref ``pinned_by`` names, in the order it names them."""
-    dataset = lance.dataset(uri)
-    for pin in report.pinned_by:
-        kind, name = pin.ref.split(":", 1)
-        (dataset.branches if kind == "branch" else dataset.tags).delete(name)
-
-
 @pytest.mark.parametrize("branch", ["work", "review"])
 def test_a_branch_the_job_leaves_is_named_and_the_others_are_clean(table: str, branch: str, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
     """EVERY branch is judged, not the ones a job chose to reach: an erasure is about the subject, not a ref."""
@@ -181,25 +173,6 @@ def test_the_window_is_judged_against_the_cutoff_the_cleanup_measured(tmp_path: 
 
     assert report.residual_versions == ["main@1"], "the failed tag delete must keep v1 for this to be the right test"
     assert (report.pinned_by, report.held_by_retention) == ([Pin(ref="tag:pinned", holds="main@1")], [])
-
-
-def test_the_report_names_the_TAG_that_keeps_the_residual(pinned: str, erase: _Erase) -> None:
-    """`residual_versions` says the erasure is incomplete; only this says what to delete to finish it.
-
-    Lance records the fork point in `_refs/branches/<name>.json` (`parentVersion`), so which branch
-    stands on main v1 is read rather than guessed — and its head was rewritten, so it is the tag keeping
-    work v2 that holds main v1, not the branch. Naming the branch would send an operator holding a legal
-    deadline to destroy a working ref that frees nothing. Work v2 is a residual too: the subject's row sits
-    in its data file behind the deletion vector work's delete wrote.
-    """
-    report = erase(pinned)
-
-    assert report.residual_versions == ["main@1", "work@2"]
-    assert [(pin.ref, pin.holds) for pin in report.pinned_by] == [("tag:trained", "work@2")]
-    assert report.settled is True, "every head is clean and only the tag keeps the residual, so its scheduled release finishes the erasure"
-    _follow(pinned, report)
-    assert erase(pinned).complete is True
-    assert "work" in lance.dataset(pinned).branches.list()
 
 
 def test_a_tag_the_erasure_already_removed_is_not_named(pinned: str, erase: _Erase) -> None:

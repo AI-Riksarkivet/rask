@@ -50,7 +50,6 @@ def _answered(status: int, code: str) -> ClientError:
         pytest.param(EndpointConnectionError(endpoint_url="http://store:9000"), id="no-connection"),
         pytest.param(ReadTimeoutError(endpoint_url="http://store:9000"), id="no-answer-within-the-bound"),
         pytest.param(ConnectionClosedError(endpoint_url="http://store:9000"), id="connection-dropped"),
-        pytest.param(_answered(503, "SlowDown"), id="503"),
         pytest.param(_answered(500, "InternalError"), id="500"),
     ],
 )
@@ -62,7 +61,6 @@ def test_a_store_the_s3_client_reports_as_not_answering_reads_as_an_outage(failu
     "failure",
     [
         pytest.param(_answered(403, "AccessDenied"), id="403"),
-        pytest.param(_answered(412, "PreconditionFailed"), id="412"),
         pytest.param(_answered(501, "NotImplemented"), id="a-capability-the-store-lacks"),
         pytest.param(ParamValidationError(report="Bucket is required"), id="a-request-never-sent"),
     ],

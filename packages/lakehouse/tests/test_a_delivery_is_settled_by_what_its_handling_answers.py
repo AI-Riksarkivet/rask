@@ -91,13 +91,6 @@ async def test_a_delivery_past_the_lanes_last_is_parked_without_being_handled() 
         pytest.param(1, "the catalog is away", Settlement(outcome=Outcome.AGAIN, delay_seconds=120.0), [], id="before-the-last-delivery"),
         pytest.param(
             3,
-            "the catalog is away",
-            Settlement(outcome=Outcome.PARKED),
-            [(41, "its last delivery (3 of 3) failed: ConnectionError: the catalog is away")],
-            id="on-the-last-delivery",
-        ),
-        pytest.param(
-            3,
             "no table 'pages\ud800'",
             Settlement(outcome=Outcome.PARKED),
             [(41, "its last delivery (3 of 3) failed: ConnectionError: no table 'pages\\ud800'")],

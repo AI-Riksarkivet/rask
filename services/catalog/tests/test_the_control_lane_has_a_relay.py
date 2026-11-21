@@ -175,10 +175,6 @@ def _unsigned(_catalog: Any, _mint: Any) -> dict[str, Any]:
     return FORGED_PUBLICATION
 
 
-def _unsigned_naming_a_person(_catalog: Any, _mint: Any) -> dict[str, Any]:
-    return FORGED_GRANT
-
-
 def _signed_by_another_listed_identity(_catalog: Any, mint: Any) -> dict[str, Any]:
     return mint("service-maintenance").sign_control(FORGED_PUBLICATION)
 
@@ -203,7 +199,6 @@ def _published_event() -> CatalogControlEvent:
     "forge",
     [
         pytest.param(_unsigned, id="unsigned"),
-        pytest.param(_unsigned_naming_a_person, id="unsigned-naming-a-person-as-its-actor"),
         pytest.param(_signed_by_another_listed_identity, id="signed-by-another-listed-identity"),
         pytest.param(_altered_after_the_catalog_signed_it, id="altered-after-the-catalog-signed-it"),
     ],

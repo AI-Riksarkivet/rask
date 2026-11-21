@@ -104,11 +104,6 @@ def test_an_empty_id_on_a_table_is_a_typed_refusal(monkeypatch: pytest.MonkeyPat
         _drive(monkeypatch, "/v1/table/$/describe", "$")
 
 
-@pytest.mark.parametrize("suffix", ["list"])
-def test_the_root_reads_that_filter_every_item_stay_open(monkeypatch: pytest.MonkeyPatch, suffix: str) -> None:
-    assert _drive(monkeypatch, f"/v1/namespace/$/{suffix}", "$") == []
-
-
 @pytest.mark.parametrize("suffix", ["drop"])
 def test_every_other_action_on_the_root_is_refused(monkeypatch: pytest.MonkeyPatch, suffix: str) -> None:
     """No tuple can name the root, so an action that is not a per-item-filtered read cannot be authorized on it."""

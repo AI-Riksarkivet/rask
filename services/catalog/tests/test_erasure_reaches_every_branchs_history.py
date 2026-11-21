@@ -343,6 +343,7 @@ def test_pinned_by_names_what_stands_on_the_residual(tmp_path: Path, names: tupl
     _follow(uri, report)
     again = erase(uri)
     assert (again.residual_versions, again.complete) == ([], True)
+    assert child in lance.dataset(uri).branches.list(), "following pinned_by deletes the tag, never the branch it stands on"
 
 
 def test_a_branch_whose_fork_point_cannot_be_read_is_still_erased(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:

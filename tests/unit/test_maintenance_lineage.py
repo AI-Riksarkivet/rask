@@ -3,8 +3,9 @@
 Drives the async emit with stdlib ``asyncio.run`` (the project convention). Covers:
 * the OpenLineage maintenance-event shapes (COMPLETE and FAIL) **round-tripped through the lineage
   ``RunEvent`` model** — the cross-service wire contract,
-* which datasets in a pass get which event (material work → COMPLETE; ``maintain:``-errored → FAIL;
-  ``open:``-errored / no-op / unnamed → nothing) and the location each names its table at,
+* that a pass's emit never raises, even for an emitter that predates the FAIL protocol (which dataset gets which
+  event is `services/maintenance/tests/test_a_pass_emits_each_dataset_on_its_lane.py`'s), and that a pass is named
+  only by the table its manifest row named,
 * the FAIL flood guard (deterministic per-dataset run id; COMPLETE keeps uuid4), the per-tick FAIL cap
   (logged, never silent) and the concurrent (bounded) FAIL fan-out,
 * the emitter factory (no-op when off or with no bus to publish on) and the best-effort publish (a bus
@@ -137,49 +138,9 @@ class _RecordingEmitter:
         self.failed_calls.append((table_id, location, error))
 
 
-def _result(uri: str, **kw: Any) -> DatasetResult:
-    """A dataset no ``__manifest`` row named, as maintenance reports one: no table id."""
-    return DatasetResult(uri=uri, **kw)
-
-
 def _named(table: str, **kw: Any) -> DatasetResult:
     """A dataset maintenance named ``table`` through ``__manifest`` ([[LH-520]])."""
     return DatasetResult(uri=f"s3://b/{table}", table_id=table, **kw)
-
-
-def test_emit_pass_lineage_emits_only_for_datasets_whose_versions_were_reclaimed() -> None:
-    emitter = _RecordingEmitter()
-    results = [
-        _named("ns$a", old_versions_removed=3),  # compacted → emit
-        _named("ns$b", old_versions_removed=2),  # GC'd → emit
-        _named("ns$c"),  # no-op tick → skip
-        _named("ns$d", old_versions_removed=1, error="open: boom"),  # transient noise → skip
-        _result("s3://b/nounderscore", old_versions_removed=1),  # no __manifest row names it → skip
-    ]
-    asyncio.run(emit_pass_lineage(cast(Any, emitter), results))
-    assert emitter.calls == [("ns$a", "s3://b/ns$a"), ("ns$b", "s3://b/ns$b")]
-    assert emitter.failed_calls == []  # an open:-errored dir NEVER produces an event (§4 selection)
-
-
-def test_emit_pass_lineage_fails_only_for_maintain_errors() -> None:
-    # §4 selection: maintain: (escaped compact/GC — post-auto-retry terminal) → FAIL; open: (unreadable /
-    # declared-only dir) → nothing; a maintain:-errored dataset that ALSO did partial material work gets
-    # the FAIL, not a COMPLETE (the pass did not complete); a dataset no __manifest row names → nothing either way.
-    emitter = _RecordingEmitter()
-    results = [
-        _named("ns$a", error="maintain: Commit conflict"),
-        _named("ns$b", old_versions_removed=2, error="maintain: cleanup blew up"),  # partial work
-        _named("ns$c", error="open: not a dataset"),
-        _named("ns$d", error="boom"),  # UNPREFIXED error → neither event (selection contract)
-        _result("s3://b/medallion", error="maintain: nope"),  # no __manifest row names it → skip
-        _named("ns$e", old_versions_removed=1),  # healthy → COMPLETE as before
-    ]
-    asyncio.run(emit_pass_lineage(cast(Any, emitter), results))
-    assert emitter.calls == [("ns$e", "s3://b/ns$e")]
-    assert emitter.failed_calls == [
-        ("ns$a", "s3://b/ns$a", "maintain: Commit conflict"),
-        ("ns$b", "s3://b/ns$b", "maintain: cleanup blew up"),
-    ]
 
 
 def test_emit_pass_lineage_never_raises_even_for_a_broken_emitter() -> None:

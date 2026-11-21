@@ -12,7 +12,7 @@ tells two refusals apart:
     answer, which a later try may complete.
 
 The per-refusal coverage — that every arm which refuses by shape sets `excluded` — lives beside those refusals in
-`tests/unit/test_orphan_files.py`.
+`services/maintenance/tests/test_orphan_files.py`.
 """
 
 from __future__ import annotations

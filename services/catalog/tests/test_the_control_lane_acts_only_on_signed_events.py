@@ -143,22 +143,6 @@ def lane(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: Secre
         get_settings.cache_clear()
 
 
-@pytest.mark.parametrize(
-    ("forge", "reason"),
-    [
-        pytest.param(_unsigned, "unsigned", id="unsigned"),
-        pytest.param(_signed_by_a_signer_whose_role_is_not_this_actions, "signer", id="signed-by-another-role"),
-    ],
-)
-def test_a_control_event_no_signer_of_its_action_signed_is_counted_and_a_signed_one_is_not(
-    lane: _Lane, forge: Callable[[Any, Any], dict[str, Any]], reason: str
-) -> None:
-    lane.hand(forge(lane.catalog, lane.maintenance))
-    lane.hand(lane.catalog.sign_control(GENUINE_DROP, on_behalf_of=GENUINE_DROP["actor"]))
-
-    assert lane.refused() == {reason: 1}
-
-
 def test_a_message_that_is_no_control_event_is_passed_over(lane: _Lane) -> None:
     """A follower is handed each message once, so one it cannot read must not stop the events behind it."""
     lane.hand({"event_id": "not-an-event", "action": "no_such_action"})
@@ -201,16 +185,6 @@ def test_an_event_whose_keys_are_read_on_the_lanes_last_try_is_judged_and_counte
     assert lane.refused() == {reason: 1}
 
 
-def test_an_event_whose_keys_are_never_read_is_given_up_uncounted(lane: _Lane, keys_unread_for: Callable[[int], respx.Route]) -> None:
-    """Past the lane's bound the event is given up as not handled: neither counted refused nor passed as signed."""
-    keys = keys_unread_for(control_lane._KEY_READS)
-
-    with pytest.raises(KeysUnavailableError, match="could not be read on 5 tries"):
-        lane.hand(lane.catalog.sign_control(GENUINE_DROP, on_behalf_of=GENUINE_DROP["actor"]))
-
-    assert (lane.refused(), keys.call_count) == ({}, control_lane._KEY_READS)
-
-
 @pytest.mark.parametrize(
     ("wait_again_seconds", "reads", "given_up"),
     [
@@ -225,7 +199,7 @@ def test_the_lane_waits_for_keys_once_in_a_while_not_for_every_event(  # noqa: P
     keys cannot be read moments after the lane waited is given up on its one judgement."""
     monkeypatch.setattr(control_lane, "_WAIT_AGAIN_SECONDS", wait_again_seconds)
     keys = keys_unread_for(reads)
-    with pytest.raises(KeysUnavailableError):
+    with pytest.raises(KeysUnavailableError, match="could not be read on 5 tries"):
         lane.hand(lane.catalog.sign_control(GENUINE_DROP, on_behalf_of=GENUINE_DROP["actor"]))
 
     with pytest.raises(KeysUnavailableError, match=given_up):

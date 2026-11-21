@@ -46,6 +46,7 @@ from lance_namespace import (
     connect,
 )
 from pydantic import SecretStr
+from tests.integration.maintenance_vend_doors import CATALOG_URL, end_door, trash_doors
 
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.records import base_registry, location_claims, trash
@@ -56,7 +57,6 @@ from maintenance.services import purge as mod
 from maintenance.services import trash_release
 from maintenance.services.reconcile import CATEGORIES, CategoryUnavailable, IncompleteScan, ReconcileReport
 from tests import seeding
-from tests.integration.maintenance_vend_doors import CATALOG_URL, end_door, trash_doors
 
 
 _NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)

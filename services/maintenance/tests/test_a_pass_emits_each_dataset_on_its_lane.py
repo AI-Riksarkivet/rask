@@ -24,18 +24,20 @@ class _RecordingEmitter:
         self.raise_on = raise_on
         self.completed: list[str] = []
         self.failed: list[str] = []
+        self.named: list[tuple[str | None, str | None]] = []
 
-    async def _publish(self, table_id: str, sink: list[str]) -> None:
+    async def _publish(self, table_id: str, sink: list[str], location: str | None, error: str | None) -> None:
         await asyncio.sleep(0)
-        if self.raise_on == table_id:
+        if self.raise_on is not None and self.raise_on == table_id:
             raise RuntimeError("mis-wired emitter")
         sink.append(table_id)
+        self.named.append((location, error))
 
     async def emit_maintenance(self, *, table_id: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
-        await self._publish(table_id, self.completed)
+        await self._publish(table_id, self.completed, location, None)
 
     async def emit_maintenance_failed(self, *, table_id: str, error: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
-        await self._publish(table_id, self.failed)
+        await self._publish(table_id, self.failed, location, error)
 
 
 def _material(n: int) -> list[DatasetResult]:
@@ -66,13 +68,34 @@ async def test_a_raising_complete_publish_does_not_abort_the_emit_phase() -> Non
             None,
             id="a-failed-disarm-that-reclaimed-nothing",
         ),
+        pytest.param(DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", old_versions_removed=1), "complete", id="a-reclaim"),
+        pytest.param(DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t"), None, id="a-pass-that-changed-nothing"),
+        pytest.param(DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", error="maintain: Commit conflict"), "fail", id="a-maintain-failure"),
+        pytest.param(
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", old_versions_removed=2, error="maintain: cleanup blew up"),
+            "fail",
+            id="a-maintain-failure-after-partial-work",
+        ),
+        pytest.param(
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", old_versions_removed=1, error="open: not a dataset"),
+            None,
+            id="an-open-error",
+        ),
+        pytest.param(DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", error="boom"), None, id="an-unprefixed-error"),
+        pytest.param(DatasetResult(uri="s3://b/medallion", old_versions_removed=1), None, id="a-reclaim-no-table-id-names"),
+        pytest.param(DatasetResult(uri="s3://b/medallion", error="maintain: nope"), None, id="a-maintain-failure-no-table-id-names"),
     ],
 )
 @pytest.mark.asyncio
 async def test_the_lane_is_decided_by_the_work_done_unless_the_pass_failed(result: DatasetResult, lane: str | None) -> None:
-    """A failed disarm leaves the commit path armed, but whatever the pass reclaimed still changed the table."""
+    """A ``maintain:`` failure is the FAIL lane, partial work or not; reclaimed versions are the COMPLETE lane, unless an
+    ``open:`` error says the dataset was never maintained; any other error, a pass that changed nothing and a dataset no
+    ``__manifest`` row names (no table id) emit nothing. A failed disarm leaves the commit path armed, but whatever the
+    pass reclaimed still changed the table."""
     emitter = _RecordingEmitter()
     await emit_pass_lineage(emitter, [result])
 
     reached = "complete" if emitter.completed else "fail" if emitter.failed else None
     assert reached == lane, (emitter.completed, emitter.failed)
+    if lane is not None:
+        assert emitter.named == [(result.uri, result.error if lane == "fail" else None)], "an event names its table's location, and a FAIL its error"

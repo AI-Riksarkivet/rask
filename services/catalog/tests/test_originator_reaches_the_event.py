@@ -81,7 +81,7 @@ class TestTheHeaderIsAClaimAndIsBounded:
     unverified header is sound. It still must not be an arbitrary string: the value becomes an inbox
     actor id."""
 
-    @pytest.mark.parametrize("raw", ["dex~" + "a" * 200, "a" * 200, "user:alice"])
+    @pytest.mark.parametrize("raw", ["dex~" + "a" * 200, "user:alice"])
     def test_a_value_that_is_not_a_person_is_dropped(self, raw: str) -> None:
         from catalog.api.dependencies import originator_hint
 

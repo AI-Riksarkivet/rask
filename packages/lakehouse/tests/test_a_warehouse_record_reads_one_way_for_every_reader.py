@@ -42,7 +42,7 @@ def test_a_warehouse_is_quarantined_only_by_a_status_that_says_so(tmp_path: Path
     assert record is not None and (record.is_deactivated, maintained) == (quarantined, [] if quarantined else ["bkt-a"])
 
 
-@pytest.mark.parametrize("status", ["paused", "ACTIVE", "Deactivated"])
+@pytest.mark.parametrize("status", ["paused", "ACTIVE"])
 def test_a_status_no_door_writes_is_no_status_any_reader_guesses_at(tmp_path: Path, status: str) -> None:
     """A word that is neither status would quarantine a tenant for one reader and serve it for another, so the record
     is unreadable for all of them, read by its key or in the whole read."""

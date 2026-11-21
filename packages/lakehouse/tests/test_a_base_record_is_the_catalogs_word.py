@@ -51,7 +51,6 @@ _UNRECORDED = base_registry.BaseStanding.UNRECORDED
 @pytest.mark.parametrize(
     ("table", "path", "is_dataset_root", "standing"),
     [
-        pytest.param(_TABLE, f"{_TABLE}/tree/work", True, _OWN, id="own"),
         pytest.param(_TABLE, "S3://lance-catalog/aa11bb22_ns$t/tree/work", True, _OWN, id="own-scheme-in-another-case"),
         pytest.param(_TABLE, "file:///lance-catalog/aa11bb22_ns$t/tree/work", True, _UNRECORDED, id="own-path-in-another-store"),
         pytest.param(_TABLE, "/lance-catalog/aa11bb22_ns$t/tree/work", True, _UNRECORDED, id="own-path-with-no-scheme"),

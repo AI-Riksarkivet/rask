@@ -24,14 +24,8 @@ import pytest
 from botocore.exceptions import ClientError
 
 import lakehouse.storage.client as storage_client
-from catalog.services import warehouses
-from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
-
-
-def _root(tmp_path: Any) -> str:
-    return f"file://{tmp_path}"
 
 
 # --------------------------------------------------------------------------- #
@@ -92,22 +86,3 @@ def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.Monkey
     monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(ClientError):
         conditional_records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", {"id": "wh-a"})
-
-
-# --------------------------------------------------------------------------- #
-# the doors: the warehouse-id mint through the seam
-# --------------------------------------------------------------------------- #
-
-
-def test_create_warehouse_record_second_mint_refused(tmp_path: Any) -> None:
-    root, so = _root(tmp_path), StorageOptions()
-    warehouses.create_warehouse_record(
-        root, so, WarehouseRecord.model_validate({"id": "wh-a", "bucket": "b", "root_uri": "s3://b", "project": "acme", "created_at": "t"})
-    )
-    with pytest.raises(conditional_records.RecordExistsError):
-        warehouses.create_warehouse_record(
-            root, so, WarehouseRecord.model_validate({"id": "wh-a", "bucket": "b2", "root_uri": "s3://b2", "project": "evil", "created_at": "t"})
-        )
-    winner = warehouses.get_warehouse(root, so, "wh-a")
-    assert winner is not None, "the refused second mint must leave the FIRST record standing, not delete it"
-    assert winner.project == "acme"

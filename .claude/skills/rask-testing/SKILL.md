@@ -169,7 +169,7 @@ from the root conftest.
 | Collaborator                  | In a test                                                                                                   |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | A service app                 | the real app under `with TestClient(app)`, set up per the service's settings shape: `references/fixtures.md` § A service app |
-| Lance / lance-namespace       | real pylance on `tmp_path`: `tests/integration/conftest.py::real_ns_client`, `tests/unit/test_orphan_files.py::_overlay_dataset`. The `MagicMock(spec=LanceNamespace)` behind `::client` cannot see what Lance writes (a table landed at the wrong file version passes), so it serves only routing and error-mapping claims |
+| Lance / lance-namespace       | real pylance on `tmp_path`: `tests/integration/conftest.py::real_ns_client`, `services/maintenance/tests/test_orphan_files.py::_overlay_dataset`. The `MagicMock(spec=LanceNamespace)` behind `::client` cannot see what Lance writes (a table landed at the wrong file version passes), so it serves only routing and error-mapping claims |
 | S3 through boto3 / `lakehouse.storage` | moto `mock_aws()`                                                                                           |
 | S3 read by pylance or pyarrow | a moto server, `tests/integration/test_moto_s3.py::moto_endpoint`: `mock_aws()` patches botocore, which the native Lance and Arrow clients never go through |
 | Outbound HTTPX                | `respx` (`services/maintenance/tests/test_a_table_the_catalog_does_not_govern_is_left_alone.py`)            |
