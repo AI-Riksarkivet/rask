@@ -38,6 +38,7 @@ the check lets any signed-in caller cascade-drop the whole default root.
 from __future__ import annotations
 
 import asyncio
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any, cast
 
@@ -48,6 +49,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import InvalidInputError, PermissionDeniedError
 
 from catalog.api import fga_deps
+from lakehouse.governed import fga_provision
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -91,10 +93,20 @@ def _drive(monkeypatch: pytest.MonkeyPatch, path: str, object_id: str) -> list[s
     return asked
 
 
-def test_a_named_namespace_is_still_checked(monkeypatch: pytest.MonkeyPatch) -> None:
-    """If the guard stopped checking named namespaces, the route would be open to everyone."""
-    asked = _drive(monkeypatch, "/v1/namespace/acme-bronze/list", "acme-bronze")
-    assert asked == [f"namespace:{uuid_of('namespace', ['acme-bronze'])}"], f"a named namespace must still be authorized, got {asked}"
+@pytest.mark.parametrize("held", [pytest.param(None, id="a-caller-holding-nothing-is-refused"), pytest.param("reader", id="a-reader-is-admitted")])
+def test_a_named_namespace_is_still_checked(openfga_store: Any, held: str | None) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """If the guard stopped checking named namespaces, the route would be open to everyone: on the real model a caller
+    holding nothing on ``acme-bronze`` is refused its listing, and its reader is admitted."""
+    if held is not None:
+        openfga_store.write(("user:dex~alice", held, f"namespace:{uuid_of('namespace', ['acme-bronze'])}"))
+    request = cast(Any, _Request("/v1/namespace/acme-bronze/list", "acme-bronze"))
+
+    async def _authorized() -> None:
+        async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
+            await fga_deps.authorize(request, cast(Any, _Settings()), _CALLER, client, NamedResolver())
+
+    with pytest.raises(PermissionDeniedError) if held is None else nullcontext():
+        asyncio.run(_authorized())
 
 
 def test_an_empty_id_on_a_table_is_a_typed_refusal(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -13,6 +13,7 @@ the ``test_fga_model_contract`` posture. The read door's filters are pinned agai
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from functools import partial
 from types import SimpleNamespace
 from typing import Any
@@ -36,7 +37,7 @@ from catalog.schemas import (
     TupleCondition,
 )
 from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.governed import fga_model, fga_reads, fga_writes
+from lakehouse.governed import fga_model, fga_provision, fga_reads, fga_writes
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -265,37 +266,38 @@ def test_model_returns_the_checked_in_dsl_and_the_id_the_catalog_checks_against(
     assert response.dsl == fga_model.load_model_dsl() and "type table" in response.dsl
 
 
-def test_check_probes_any_defined_relation_with_qualified_subject(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    seen: dict[str, Any] = {}
+def _on(store: Any, call: Callable[[Any], Awaitable[Any]]) -> Any:  # noqa: ANN401 — the root conftest's OpenFgaStore and the door's answer
+    """Run ``call`` with an OpenFGA client on ``store``, a store of the test's own on the pinned server."""
 
-    async def _fake_check(_client: Any, **kwargs: Any) -> bool:
-        seen.update(kwargs)
-        return True
+    async def _run() -> Any:  # noqa: ANN401 — the door's answer
+        async with fga_provision.make_client(store.url, store.store_id, store.model_id, token_file=None) as client:
+            return await call(client)
 
-    monkeypatch.setattr(ep.fga_reads, "check", _fake_check)
-    response = asyncio.run(
-        ep.check_access(
-            resolver=_RESOLVER,
-            settings=_settings(),
-            client=_fga_client(),
-            token=_token("root_admin"),
-            body=AccessCheckBody(user="dex~alice", relation="writer", object=NAMESPACE),
-        )
+    return asyncio.run(_run())
+
+
+@pytest.mark.parametrize(
+    ("subject", "allowed"), [pytest.param("dex~alice", True, id="the-subject-the-tuple-names"), pytest.param("dex~bob", False, id="another")]
+)
+def test_check_probes_any_defined_relation_with_qualified_subject(
+    gate_seen: dict[str, Any],
+    rec: _AuditRecorder,
+    openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
+    subject: str,
+    allowed: bool,
+) -> None:
+    """The verdict is the real model's for the subject as the store holds it: a principal key becomes its one user once
+    (a second ``user:`` prefix, the 2026-07-20 double-prefix regression, names nobody and answers false for everyone),
+    and the verdict echoes the exact tuple probed."""
+    openfga_store.write(("user:dex~alice", "writer", NAMESPACE))
+    body = AccessCheckBody(user=subject, relation="writer", object=NAMESPACE)
+
+    response = _on(
+        openfga_store, lambda client: ep.check_access(resolver=_RESOLVER, settings=_settings(), client=client, token=_token("root_admin"), body=body)
     )
-    # qualify=False + pre-resolved subject: fga_reads.check must see the full subject verbatim (the 2026-07-20
-    # double-prefix regression), and the verdict echoes the exact tuple probed.
-    # `context` is None with no condition in play. Asserted rather than ignored: passing `{}` instead
-    # would be a different request — OpenFGA treats an empty context as "evaluate with no operands",
-    # which errors any CEL expression on the path instead of leaving it unevaluated.
-    assert seen == {
-        "user": "user:dex~alice",
-        "relation": "writer",
-        "obj": NAMESPACE,
-        "qualify": False,
-        "context": None,
-    }
-    assert response.allowed is True
-    assert (response.checked.user, response.checked.relation) == ("user:dex~alice", "writer")
+
+    assert response.allowed is allowed
+    assert (response.checked.user, response.checked.relation) == (f"user:{subject}", "writer")
     assert rec.calls == [("access_simulate", "success", {"subject": "dex~root_admin", "resource": NAMESPACE})]
 
 
@@ -540,61 +542,37 @@ def test_expand_rejects_a_phantom_relation(gate_seen: dict[str, Any], rec: _Audi
         )
 
 
-def test_simulate_returns_the_delta_not_just_the_verdict(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    """`allowed` alone cannot be acted on — a no-op grant and an unlocking grant both answer true."""
-    seen: list[dict[str, Any]] = []
+@pytest.mark.parametrize(
+    ("held", "hypothetical", "verdicts"),
+    [
+        pytest.param([], AccessTuple(user="dex~alice", relation="reader", object=TABLE), (False, True), id="a-grant-that-unlocks"),
+        pytest.param([("user:dex~alice", "reader", TABLE)], AccessTuple(user="dex~bob", relation="reader", object=TABLE), (True, True), id="a-no-op-grant"),
+        pytest.param([], AccessTuple(user="dex~alice", relation="reader", object=OTHER_TABLE), (False, False), id="a-grant-elsewhere"),
+    ],
+)
+def test_simulate_returns_the_delta_not_just_the_verdict(
+    gate_seen: dict[str, Any],
+    rec: _AuditRecorder,
+    openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
+    held: list[tuple[str, str, str]],
+    hypothetical: AccessTuple,
+    verdicts: tuple[bool, bool],
+) -> None:
+    """`allowed` alone cannot be acted on — a no-op grant and an unlocking grant both answer true — so the door answers the
+    real model's verdict today (`baseline`, no hypothesis in play) beside the one with the hypothetical grant held. The
+    hypothetical is qualified the same way a real write would qualify it."""
+    if held:
+        openfga_store.write(*held)
+    body = AccessSimulateRequest(user="dex~alice", relation="can_read_data", object=TABLE, hypothetical=[hypothetical])
 
-    async def _fake_check(_client: Any, **kwargs: Any) -> bool:
-        seen.append(kwargs)
-        # Denied today; allowed once the hypothesis is in play.
-        return kwargs.get("contextual_tuples") is not None
-
-    monkeypatch.setattr(ep.fga_reads, "check", _fake_check)
-    response = asyncio.run(
-        ep.simulate_access(
-            resolver=_RESOLVER,
-            settings=_settings(),
-            client=_fga_client(),
-            token=_token("root_admin"),
-            body=AccessSimulateRequest(
-                user="dex~alice",
-                relation="can_read_data",
-                object=TABLE,
-                hypothetical=[AccessTuple(user="dex~alice", relation="reader", object=TABLE)],
-            ),
-        )
+    response = _on(
+        openfga_store, lambda client: ep.simulate_access(resolver=_RESOLVER, settings=_settings(), client=client, token=_token("root_admin"), body=body)
     )
-    assert (response.baseline, response.allowed) == (False, True)
+
+    assert (response.baseline, response.allowed) == verdicts
     assert response.checked.user == "user:dex~alice"  # resolved, echoed — never the bare input
-    # The hypothetical is qualified the same way a real write would qualify it.
-    assert response.hypothetical[0].user == "user:dex~alice"
-    # Baseline runs WITHOUT contextual tuples; the second call carries them.
-    assert seen[0].get("contextual_tuples") is None
-    assert seen[1]["contextual_tuples"] is not None
+    assert response.hypothetical[0].user == f"user:{hypothetical.user}"
     assert rec.calls[0][:2] == ("access_simulate_hypothetical", "success")
-
-
-def test_simulate_reports_a_no_op_grant_honestly(gate_seen: dict[str, Any], rec: _AuditRecorder, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Already allowed → the grant changes nothing. baseline == allowed is the finding, not a failure.
-    async def _always(_client: Any, **_kwargs: Any) -> bool:
-        return True
-
-    monkeypatch.setattr(ep.fga_reads, "check", _always)
-    response = asyncio.run(
-        ep.simulate_access(
-            resolver=_RESOLVER,
-            settings=_settings(),
-            client=_fga_client(),
-            token=None,
-            body=AccessSimulateRequest(
-                user="dex~alice",
-                relation="can_read_data",
-                object=TABLE,
-                hypothetical=[AccessTuple(user="dex~bob", relation="reader", object=TABLE)],
-            ),
-        )
-    )
-    assert response.baseline is True and response.allowed is True
 
 
 def test_simulate_rejects_a_hypothesis_it_would_refuse_to_write(gate_seen: dict[str, Any], rec: _AuditRecorder) -> None:

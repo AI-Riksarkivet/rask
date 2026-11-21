@@ -28,7 +28,7 @@ import pytest
 from fastapi import FastAPI
 from lance_namespace import PermissionDeniedError
 
-from lakehouse.governed import fga_reads
+from lakehouse.governed import fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings, Signing
@@ -111,10 +111,11 @@ class _EmptyFeed:
         return None
 
 
-async def _drive(event: dict[str, Any], settings: LineageSettings) -> None:
-    """Through the REAL door, as the bus drives it: the parsed model plus the bytes that arrived."""
+async def _drive(event: dict[str, Any], settings: LineageSettings, client: Any = None) -> None:  # noqa: ANN401 — an OpenFGA client
+    """Through the REAL door, as the bus drives it: the parsed model plus the bytes that arrived, decided on ``client`` where
+    the door asks OpenFGA."""
     app = FastAPI()
-    app.state.decider = OpenFgaDecider(cast("Any", object()))
+    app.state.decider = OpenFgaDecider(cast("Any", client or object()))
     app.state.published_keys = store_published_keys()
     # The feed lineage's lifespan always wires, which the door reads when it refuses.
     app.state.provenance = _EmptyFeed()
@@ -172,23 +173,21 @@ def _a_catalog_drop() -> dict[str, Any]:
 )
 @pytest.mark.asyncio
 async def test_an_estate_that_lists_no_signer_verifies_nothing_and_trusts_no_signature(
-    sign: bool, event: dict[str, Any], fga_enabled: bool, refused: bool, event_signer: Any, monkeypatch: pytest.MonkeyPatch
+    sign: bool,
+    event: dict[str, Any],
+    fga_enabled: bool,
+    refused: bool,
+    event_signer: Any,  # noqa: ANN401 — the root conftest's EventSigner
+    openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
 ) -> None:
     """The state the first deploy runs in: signing ships before it is enforced, so the door must admit what it admitted before and
     read no key, and a `rask_signature` it never verified must buy nothing. The second case is the attack: a drop that names the
-    catalog gets no grant bypass from a signature that was merely present."""
-
-    async def nobody_may_write(_client: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
-        return dict.fromkeys(objects, False)
-
-    async def no_tuples(_client: object, _obj: str) -> list[object]:
-        return []
-
-    monkeypatch.setattr(fga_reads, "batch_check", nobody_may_write)
-    monkeypatch.setattr(fga_reads, "read_object_tuples", no_tuples)
+    catalog gets no grant bypass from a signature that was merely present. Where the door asks OpenFGA it asks a store of the
+    test's own holding no tuple, so nobody may write anything."""
     arriving = event_signer(CATALOG).sign(event, on_behalf_of=PERSON) if sign else event
 
     with pytest.raises(PermissionDeniedError) if refused else nullcontext() as outcome:
-        await _drive(arriving, _settings(set(), set(), fga_enabled=fga_enabled))
+        async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
+            await _drive(arriving, _settings(set(), set(), fga_enabled=fga_enabled), client)
 
     assert not isinstance(getattr(outcome, "value", None), UnverifiedEventError), "the refusal came from the signature gate, which this estate does not run"

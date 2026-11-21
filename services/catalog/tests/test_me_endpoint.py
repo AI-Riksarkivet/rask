@@ -66,23 +66,18 @@ def _wire(
     *,
     estate: Any = True,
     lists: dict[str, Any] | None = None,
-    calls: list[tuple[str, str]] | None = None,
 ) -> None:
-    """Fake the two FGA wrappers: `estate`/`lists` values may be exceptions (raised) or results; an `estate` dict
-    answers each estate relation its own value."""
+    """Fake the two FGA wrappers for an outage: `estate`/`lists` values may be exceptions (raised) or results."""
     lists = lists or {}
 
     async def _fake_check(_client: Any, *, user: str, relation: str, obj: str, **kw: Any) -> bool:
-        if calls is not None:
-            calls.append((relation, obj))
         assert kw == {"retry": fga_resilience.ONE_ATTEMPT}  # single attempt under the tight budget (the /management/v1/projects rule)
         if isinstance(estate, Exception):
             raise estate
-        return bool(estate[relation] if isinstance(estate, dict) else estate)
+        return bool(estate)
 
     async def _fake_list(_client: Any, *, user: str, relation: str, object_type: str, **kw: Any) -> Any:
-        if calls is not None:
-            calls.append((relation, object_type))
+        del object_type
         assert kw == {"retry": fga_resilience.ONE_ATTEMPT}
         outcome = lists.get(relation, [])
         if isinstance(outcome, Exception):
@@ -95,38 +90,39 @@ def _wire(
     monkeypatch.setattr(ep.fga_reads, "list_objects", _fake_list)
 
 
-def test_governed_shape_and_admin_first_dedupe(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[str, str]] = []
-    # The model folds admins into members (`member: ... or admin`), so acme appears in BOTH lists — the
-    # admin row must win and the duplicate member row must be dropped.
-    # An estate owner who is no `admin`: the estate's standing and the create door's verb are asked apart.
-    _wire(
-        monkeypatch,
-        estate={"can_administer_estate": True, "can_create_project": False},
-        lists={
-            "can_administer": ["project:acme"],
-            "member": ["project:globex", "project:acme"],
-        },
-        calls=calls,
-    )
-    result = _me(_settings(fga_enabled=True), token=_token(), client=object())
-    assert (result.estate_admin, result.can_create_project) == (True, False)
-    assert [(p.project, p.role) for p in result.projects] == [("acme", "admin"), ("globex", "member")]
-    # The estate check asks the estate owner's standing on the FIXED root object; the lists run
-    # admin-first over the project type (the order the dedupe + budget-expiry semantics rely on).
-    assert calls == [
-        ("can_administer_estate", "warehouse:lance_catalog"),
-        ("can_create_project", "warehouse:lance_catalog"),
-        ("can_administer", "project"),
-        ("member", "project"),
-    ]
+@pytest.mark.parametrize(
+    ("held", "estate_admin", "can_create_project", "projects"),
+    [
+        pytest.param(
+            [("owner", "estate:rask"), ("admin", "project:acme"), ("member", "project:globex")],
+            True,
+            False,
+            [("acme", "admin"), ("globex", "member")],
+            id="an-estate-owner-who-is-no-estate-admin-lists-an-admin-row-once-and-its-member-rows",
+        ),
+        pytest.param([("member", "project:acme")], False, False, [("acme", "member")], id="a-member-holding-nothing-estate-wide"),
+        pytest.param([("admin", "estate:rask")], True, True, [], id="the-estate-admin-may-create-a-project"),
+    ],
+)
+def test_the_caller_is_told_their_standing_and_their_projects(
+    governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
+    held: list[tuple[str, str]],
+    estate_admin: bool,
+    can_create_project: bool,
+    projects: list[tuple[str, str]],
+) -> None:
+    """``estate_admin`` is ``can_administer_estate`` and ``can_create_project`` the create door's verb, both on the estate
+    root, asked apart; ``projects`` lists the caller's admin rows first and drops the member row an admin also holds (the
+    model folds ``admin`` into ``member``). Judged on the real model, carol holding exactly ``held``."""
+    catalog = governed_catalog
+    catalog.store.write(*((catalog.person("carol"), relation, obj) for relation, obj in held))
 
+    answered = catalog.client.get("/management/v1/me", headers=catalog.bearer("carol"))
 
-def test_non_admin_gets_estate_admin_false(monkeypatch: pytest.MonkeyPatch) -> None:
-    _wire(monkeypatch, estate=False, lists={"member": ["project:acme"]})
-    result = _me(_settings(fga_enabled=True), token=_token(), client=object())
-    assert result.estate_admin is False
-    assert [(p.project, p.role) for p in result.projects] == [("acme", "member")]
+    assert answered.status_code == 200, answered.text
+    me = answered.json()
+    assert (me["estate_admin"], me["can_create_project"]) == (estate_admin, can_create_project), me
+    assert [(project["project"], project["role"]) for project in me["projects"]] == projects, me
 
 
 # ── degradation: an FGA outage/brownout costs display fidelity, never the endpoint ───────────────────

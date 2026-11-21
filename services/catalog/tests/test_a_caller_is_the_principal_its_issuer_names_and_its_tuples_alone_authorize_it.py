@@ -29,9 +29,9 @@ percent-encoded. A user id may carry one `:` only (measured on the live store 20
 and a `#` makes it a userset, so neither reaches the store unencoded.
 
 The catalog app as deployed, on a real `dir` namespace, with authentication on: its lifespan builds the verifiers from
-these settings. OpenFGA is a stand-in at the client the catalog holds: it keeps a tuple set, answers a Check by it,
-records a Write, and refuses a user id the live store would not take as one user, so the user id the catalog sends is the
-one asserted on.
+these settings, and the deployed OpenFGA client against a store of the test's own on the pinned server, which holds one
+tuple per principal granted below and refuses a user id that is not one user as the live store does. A caller admitted is
+therefore the one user its tuple names, and a caller refused holds none.
 """
 
 from __future__ import annotations
@@ -51,8 +51,6 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest
-from openfga_sdk.client.models import ClientBatchCheckItem, ClientBatchCheckRequest, ClientCheckRequest, ClientWriteRequest
-from openfga_sdk.exceptions import ValidationException
 
 from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
@@ -88,66 +86,22 @@ _OPS_CLIENT_USER = f"user:ops-client~{_CLIENT_ID}"
 #: A person at the second provider, and the one user they are there.
 _PARTNER_SUBJECT = "f3a1c9e2-6b7d-4e2a-9c1f-8d3e2b4a5c6d"
 _PARTNER_PERSON_USER = f"user:partner~{_PARTNER_SUBJECT}"
-
-
-class _CheckResponse:
-    def __init__(self, allowed: bool) -> None:
-        self.allowed = allowed
-
-
-class _BatchItem:
-    def __init__(self, request: ClientBatchCheckItem, allowed: bool) -> None:
-        self.request, self.allowed, self.error = request, allowed, None
-
-
-class _BatchCheckResponse:
-    def __init__(self, result: list[_BatchItem]) -> None:
-        self.result = result
-
-
-class _OpenFga:
-    """OpenFGA's Check and BatchCheck over a tuple set, and its Write recorded, refusing a user id that is not one user, as
-    the store does.
-
-    A second `:` is malformed (measured 2026-10-14); a `#` reads as a userset of `user`, a type that defines no relation.
-    """
-
-    def __init__(self, tuples: set[tuple[str, str]]) -> None:
-        self.tuples = tuples
-        self.asked: list[str] = []
-        self.written: list[tuple[str, str, str]] = []
-
-    async def check(self, body: ClientCheckRequest, options: object = None) -> _CheckResponse:
-        del options
-        self.asked.append(body.user)
-        _refuse_a_user_that_is_not_one(body.user)
-        return _CheckResponse((body.user, body.object) in self.tuples)
-
-    async def batch_check(self, body: ClientBatchCheckRequest, options: object = None) -> _BatchCheckResponse:
-        """Asked by a refused read, about the namespace's warehouse: whether its caller sees above the name ([[LH-593]])."""
-        del options
-        for item in body.checks:
-            self.asked.append(item.user)
-            _refuse_a_user_that_is_not_one(item.user)
-        return _BatchCheckResponse([_BatchItem(item, (item.user, item.object) in self.tuples) for item in body.checks])
-
-    async def write(self, body: ClientWriteRequest, options: object = None) -> None:
-        del options
-        for tup in body.writes or []:
-            _refuse_a_user_that_is_not_one(tup.user)
-            self.written.append((tup.user, tup.relation, tup.object))
-
-    async def close(self) -> None:
-        return None
-
-
-def _refuse_a_user_that_is_not_one(user: str) -> None:
-    if user.partition(":")[2].count(":") or "#" in user:
-        raise ValidationException(reason="the 'user' field is malformed")
+#: Every user a tuple below grants the namespace's read to.
+_GRANTED = (
+    _PIPELINE_USER,
+    _PERSON_USER,
+    _HASHED_USER,
+    _CLIENT_USER,
+    _OIDC_PERSON_USER,
+    _OIDC_CLIENT_USER,
+    _PARTNER_CLIENT_USER,
+    _PARTNER_PERSON_USER,
+    _OPS_CLIENT_USER,
+)
 
 
 @contextmanager
-def _catalog(person_issuer: dict[str, str], sa_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, _OpenFga]]:
+def _catalog(person_issuer: dict[str, str], sa_issuer: Any, store: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Generator[tuple[TestClient, Any]]:
     env = {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": str(tmp_path),
@@ -162,6 +116,9 @@ def _catalog(person_issuer: dict[str, str], sa_issuer: Any, tmp_path: Any, monke
         "RASK_SA_AUDIENCE": "rask-catalog",
         "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),
         "RASK_SA_CA_FILE": str(sa_issuer.ca_file),
+        "RASK_FGA_ENABLED": "true",
+        "RASK_FGA_API_URL": store.url,
+        "RASK_FGA_STORE_ID": store.store_id,
     }
     for key, value in env.items():
         monkeypatch.setenv(key, value)
@@ -171,34 +128,32 @@ def _catalog(person_issuer: dict[str, str], sa_issuer: Any, tmp_path: Any, monke
     warehouses.ensure_catalog_row(estate, "lance_catalog")
     estate.create_namespace(CreateNamespaceRequest(id=["lance_catalog", "db"], properties={UUID_PROPERTY: db.removeprefix("namespace:")}))
 
-    from catalog.core.config import Settings, get_settings
+    from catalog.core.config import get_settings
 
     get_settings.cache_clear()
     from catalog.main import app
 
-    # The namespace the request reads, granted to the pipeline's account, the person and the user id carrying `#`; and the
-    # root object the access-admin door's gate checks, granted to the person.
-    openfga = _OpenFga(
-        {(_PIPELINE_USER, db), (_PERSON_USER, db), (_HASHED_USER, db), (_CLIENT_USER, db), (_PERSON_USER, "estate:rask"), (_OIDC_PERSON_USER, db)}
-        | {(_OIDC_CLIENT_USER, db), (_PARTNER_CLIENT_USER, db), (_PARTNER_PERSON_USER, db), (_OPS_CLIENT_USER, db)}
+    # The namespace the request reads, a reader's on it for the pipeline's account, the person, the user id carrying `#`
+    # and each client and person below; and the root object the access-admin door's gate checks, owned by the person.
+    store.write(
+        *((user, "reader", db) for user in _GRANTED),
+        (_PERSON_USER, "owner", "estate:rask"),
     )
     with TestClient(app, raise_server_exceptions=False) as client:
-        # Authorization on for the requests, after a lifespan that built the verifiers and no OpenFGA client.
-        monkeypatch.setenv("RASK_FGA_ENABLED", "true")
-        monkeypatch.setenv("RASK_FGA_API_URL", "http://openfga.invalid:8080")
-        governed = Settings()
-        app.dependency_overrides[get_settings] = lambda: governed
-        app.state.fga = openfga
-        yield client, openfga
+        yield client, store
     app.dependency_overrides.clear()
     get_settings.cache_clear()
 
 
 @pytest.fixture
-def catalog(sa_issuer: Any, dex_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, _OpenFga]]:
+def catalog(sa_issuer: Any, dex_issuer: Any, openfga_store: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[TestClient, Any]]:
     """The catalog whose people sign in through a Dex that brokers upstream providers, mapped connector by connector."""
     with _catalog(
-        {"RASK_OIDC_ISSUER": dex_issuer.issuer, "RASK_OIDC_IDP_ID": "dex", "RASK_OIDC_CONNECTORS": json.dumps(_CONNECTORS)}, sa_issuer, tmp_path, monkeypatch
+        {"RASK_OIDC_ISSUER": dex_issuer.issuer, "RASK_OIDC_IDP_ID": "dex", "RASK_OIDC_CONNECTORS": json.dumps(_CONNECTORS)},
+        sa_issuer,
+        openfga_store,
+        tmp_path,
+        monkeypatch,
     ) as served:
         yield served
 
@@ -221,8 +176,14 @@ def ops_issuer(oidc_issuer: Any) -> Iterator[Any]:
 
 @pytest.fixture
 def oidc_catalog(
-    sa_issuer: Any, oidc_issuer: Any, partner_issuer: Any, ops_issuer: Any, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
-) -> Iterator[tuple[TestClient, _OpenFga]]:
+    sa_issuer: Any,
+    oidc_issuer: Any,
+    partner_issuer: Any,
+    ops_issuer: Any,
+    openfga_store: Any,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[tuple[TestClient, Any]]:
     """The catalog whose people sign in at two OpenID providers that are not Dex: `corp`, naming each by `oid` where the
     token carries one and by `sub` otherwise; `partner`, whose client tokens carry `idtyp: app` as their mark; and `ops`,
     whose client tokens carry `client_id` as theirs, whatever its value."""
@@ -237,7 +198,7 @@ def oidc_catalog(
             ]
         ),
     }
-    with _catalog(person_issuer, sa_issuer, tmp_path, monkeypatch) as served:
+    with _catalog(person_issuer, sa_issuer, openfga_store, tmp_path, monkeypatch) as served:
         yield served
 
 
@@ -270,21 +231,21 @@ def _describe(client: TestClient, token: str) -> httpx.Response:
 
 
 @pytest.mark.parametrize(
-    ("caller", "status", "asked_about"),
+    ("caller", "status"),
     [
-        pytest.param("granted-account", 200, _PIPELINE_USER, id="an-arbitrary-namespaces-account-holding-a-tuple"),
-        pytest.param("ungranted-account", 403, "user:kubernetes~system%3Aserviceaccount%3Aetl-team%3Aother-job", id="an-account-holding-none"),
-        pytest.param("another-door", 401, None, id="a-token-minted-for-another-door"),
-        pytest.param("another-key", 401, None, id="a-token-claiming-the-issuer-signed-by-another-key"),
-        pytest.param("another-issuer", 401, None, id="a-token-another-clusters-issuer-signed"),
-        pytest.param("an-hour", 200, _PIPELINE_USER, id="the-granted-account-with-a-token-minted-for-the-longest-lifetime-admitted"),
-        pytest.param("a-year", 401, None, id="the-granted-account-with-a-token-minted-for-a-year"),
+        pytest.param("granted-account", 200, id="an-arbitrary-namespaces-account-holding-a-tuple"),
+        pytest.param("ungranted-account", 403, id="an-account-holding-none"),
+        pytest.param("another-door", 401, id="a-token-minted-for-another-door"),
+        pytest.param("another-key", 401, id="a-token-claiming-the-issuer-signed-by-another-key"),
+        pytest.param("another-issuer", 401, id="a-token-another-clusters-issuer-signed"),
+        pytest.param("an-hour", 200, id="the-granted-account-with-a-token-minted-for-the-longest-lifetime-admitted"),
+        pytest.param("a-year", 401, id="the-granted-account-with-a-token-minted-for-a-year"),
     ],
 )
 def test_a_service_account_token_is_its_subject_and_its_tuples_alone_authorize_it(
-    catalog: tuple[TestClient, _OpenFga], sa_issuer: Any, tmp_path: Any, caller: str, status: int, asked_about: str | None
+    catalog: tuple[TestClient, Any], sa_issuer: Any, tmp_path: Any, caller: str, status: int
 ) -> None:
-    client, openfga = catalog
+    client, _ = catalog
     token = {
         "granted-account": lambda: sa_issuer.mint(_PIPELINE_SA, audience="rask-catalog", namespace=_PIPELINE_NS),
         "ungranted-account": lambda: sa_issuer.mint("other-job", audience="rask-catalog", namespace=_PIPELINE_NS),
@@ -298,43 +259,41 @@ def test_a_service_account_token_is_its_subject_and_its_tuples_alone_authorize_i
     answered = _describe(client, token)
 
     assert answered.status_code == status, answered.text
-    assert set(openfga.asked) == ({asked_about} if asked_about else set()), f"OpenFGA was asked about {sorted(set(openfga.asked))}"
 
 
 @pytest.mark.parametrize(
-    ("connector", "user_id", "federated", "status", "asked_about"),
+    ("connector", "user_id", "federated", "status"),
     [
-        pytest.param("corp", _PERSON_ID, True, 200, _PERSON_USER, id="a-person-holding-a-tuple"),
-        pytest.param("corp-v2", _PERSON_ID, True, 200, _PERSON_USER, id="the-same-person-once-their-connector-is-renamed"),
-        pytest.param("corp", _HASHED_ID, True, 200, _HASHED_USER, id="a-user-id-carrying-a-hash-is-one-user-not-a-userset"),
-        pytest.param("stray", _PERSON_ID, True, 401, None, id="a-connector-the-deployment-does-not-map"),
-        pytest.param("corp", _PERSON_ID, False, 401, None, id="a-token-carrying-no-federated-claims"),
+        pytest.param("corp", _PERSON_ID, True, 200, id="a-person-holding-a-tuple"),
+        pytest.param("corp-v2", _PERSON_ID, True, 200, id="the-same-person-once-their-connector-is-renamed"),
+        pytest.param("corp", _HASHED_ID, True, 200, id="a-user-id-carrying-a-hash-is-one-user-not-a-userset"),
+        pytest.param("stray", _PERSON_ID, True, 401, id="a-connector-the-deployment-does-not-map"),
+        pytest.param("corp", _PERSON_ID, False, 401, id="a-token-carrying-no-federated-claims"),
     ],
 )
 def test_a_person_is_the_principal_their_connector_maps_so_a_renamed_connector_keeps_the_grants(
-    catalog: tuple[TestClient, _OpenFga], dex_issuer: Any, connector: str, user_id: str, federated: bool, status: int, asked_about: str | None
+    catalog: tuple[TestClient, Any], dex_issuer: Any, connector: str, user_id: str, federated: bool, status: int
 ) -> None:
-    client, openfga = catalog
+    client, _ = catalog
     token = dex_issuer.mint(user_id, connector=connector, audience="lance-catalog", federated=federated)
 
     answered = _describe(client, token)
 
     assert answered.status_code == status, answered.text
-    assert set(openfga.asked) == ({asked_about} if asked_about else set()), f"OpenFGA was asked about {sorted(set(openfga.asked))}"
 
 
 @pytest.mark.parametrize(
-    ("caller", "status", "asked_about"),
+    ("caller", "status"),
     [
-        pytest.param("granted-client", 200, _CLIENT_USER, id="a-client-signed-in-for-itself-holding-a-tuple"),
-        pytest.param("ungranted-client", 403, "user:dex-client~other-job", id="a-client-holding-none"),
-        pytest.param("person-for-another-audience", 401, None, id="a-persons-token-naming-its-client-but-no-federated-claims"),
+        pytest.param("granted-client", 200, id="a-client-signed-in-for-itself-holding-a-tuple"),
+        pytest.param("ungranted-client", 403, id="a-client-holding-none"),
+        pytest.param("person-for-another-audience", 401, id="a-persons-token-naming-its-client-but-no-federated-claims"),
     ],
 )
 def test_a_dex_client_signed_in_for_itself_is_its_client_principal_and_its_tuples_alone_authorize_it(
-    catalog: tuple[TestClient, _OpenFga], dex_issuer: Any, caller: str, status: int, asked_about: str | None
+    catalog: tuple[TestClient, Any], dex_issuer: Any, caller: str, status: int
 ) -> None:
-    client, openfga = catalog
+    client, _ = catalog
     token = {
         "granted-client": lambda: dex_issuer.mint_client(_CLIENT_ID, audience="lance-catalog"),
         "ungranted-client": lambda: dex_issuer.mint_client("other-job", audience="lance-catalog"),
@@ -344,7 +303,6 @@ def test_a_dex_client_signed_in_for_itself_is_its_client_principal_and_its_tuple
     answered = _describe(client, token)
 
     assert answered.status_code == status, answered.text
-    assert set(openfga.asked) == ({asked_about} if asked_about else set()), f"OpenFGA was asked about {sorted(set(openfga.asked))}"
 
 
 @pytest.mark.parametrize(
@@ -355,14 +313,17 @@ def test_a_dex_client_signed_in_for_itself_is_its_client_principal_and_its_tuple
     ],
 )
 def test_a_dex_client_is_a_machine_so_a_table_it_creates_is_owned_by_its_project_not_by_it(
-    catalog: tuple[TestClient, _OpenFga], dex_issuer: Any, caller: str, owner: str | None
+    catalog: tuple[TestClient, Any], dex_issuer: Any, caller: str, owner: str | None
 ) -> None:
     """A machine never owns what it creates: the project's admin owns it through the namespace (LH-433)."""
-    client, openfga = catalog
+    client, store = catalog
     token = {
         "person": lambda: dex_issuer.mint(_PERSON_ID, connector="corp", audience="lance-catalog"),
         "client": lambda: dex_issuer.mint_client(_CLIENT_ID, audience="lance-catalog"),
     }[caller]()
+    # The creator writes in the namespace it reads, the object its describe names.
+    db = f"namespace:{_describe(client, token).json()['properties'][UUID_PROPERTY]}"
+    store.write(({"person": _PERSON_USER, "client": _CLIENT_USER}[caller], "writer", db))
     rows = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
 
     created = client.post(
@@ -370,7 +331,7 @@ def test_a_dex_client_is_a_machine_so_a_table_it_creates_is_owned_by_its_project
     )
 
     assert created.status_code == 200, created.text
-    owners = [user for user, relation, obj in openfga.written if relation == "owner" and obj.startswith("table:")]
+    owners = [user for user, relation, obj in store.tuples() if relation == "owner" and obj.startswith("table:")]
     assert owners == ([owner] if owner else []), f"owner tuples written: {owners}"
 
 
@@ -397,11 +358,12 @@ _NOT_A_PRINCIPAL = "'alice' is not a principal: 'alice' names no identity provid
     ],
 )
 def test_a_seeded_tuple_names_a_principal_and_a_bare_name_is_refused(
-    catalog: tuple[TestClient, _OpenFga], dex_issuer: Any, user: str, status: int, media: str, answer: dict[str, str], written: list[tuple[str, str, str]]
+    catalog: tuple[TestClient, Any], dex_issuer: Any, user: str, status: int, media: str, answer: dict[str, str], written: list[tuple[str, str, str]]
 ) -> None:
     """The door every seed writes its grants through ([[LH-063]]): a grant names a principal, `<idp-id>~<subject>`, and is
     stored as the one OpenFGA user it is; a name no identity provider vouches for is refused before anything is written."""
-    client, openfga = catalog
+    client, store = catalog
+    before = store.tuples()
     admin = dex_issuer.mint(_PERSON_ID, connector="corp", audience="lance-catalog", federated=True)
 
     answered = client.post(
@@ -409,7 +371,7 @@ def test_a_seeded_tuple_names_a_principal_and_a_bare_name_is_refused(
     )
 
     body = answered.json()
-    assert (answered.status_code, answered.headers["content-type"], {key: body.get(key) for key in answer}, openfga.written) == (
+    assert (answered.status_code, answered.headers["content-type"], {key: body.get(key) for key in answer}, sorted(store.tuples() - before)) == (
         status,
         media,
         answer,
@@ -418,27 +380,27 @@ def test_a_seeded_tuple_names_a_principal_and_a_bare_name_is_refused(
 
 
 @pytest.mark.parametrize(
-    ("caller", "status", "asked_about"),
+    ("caller", "status"),
     [
-        pytest.param("granted-person-by-oid", 200, _OIDC_PERSON_USER, id="the-first-subject-claim-the-token-carries-names-them"),
-        pytest.param("not-a-string-claim", 200, _OIDC_PERSON_USER, id="a-subject-claim-that-is-no-string-yields-to-the-next"),
-        pytest.param("granted-client", 200, _OIDC_CLIENT_USER, id="a-client-signed-in-for-itself-is-its-issuers-client-principal"),
-        pytest.param("sub-equal-to-azp", 403, f"user:corp~{_CLIENT_ID}", id="a-person-whose-sub-is-their-clients-id-stays-a-person"),
-        pytest.param("partner-person", 200, _PARTNER_PERSON_USER, id="a-person-at-a-second-issuer-is-its-idp-id-and-their-subject"),
-        pytest.param("partner-marked-client", 200, _PARTNER_CLIENT_USER, id="a-client-a-second-issuer-marks-is-that-issuers-client"),
-        pytest.param("partner-marked-naming-no-client", 401, None, id="a-marked-token-naming-no-client-is-refused"),
-        pytest.param("ops-marked-client", 200, _OPS_CLIENT_USER, id="a-mark-with-no-value-is-a-claim-present"),
+        pytest.param("granted-person-by-oid", 200, id="the-first-subject-claim-the-token-carries-names-them"),
+        pytest.param("not-a-string-claim", 200, id="a-subject-claim-that-is-no-string-yields-to-the-next"),
+        pytest.param("granted-client", 200, id="a-client-signed-in-for-itself-is-its-issuers-client-principal"),
+        pytest.param("sub-equal-to-azp", 403, id="a-person-whose-sub-is-their-clients-id-stays-a-person"),
+        pytest.param("partner-person", 200, id="a-person-at-a-second-issuer-is-its-idp-id-and-their-subject"),
+        pytest.param("partner-marked-client", 200, id="a-client-a-second-issuer-marks-is-that-issuers-client"),
+        pytest.param("partner-marked-naming-no-client", 401, id="a-marked-token-naming-no-client-is-refused"),
+        pytest.param("ops-marked-client", 200, id="a-mark-with-no-value-is-a-claim-present"),
     ],
 )
 def test_a_person_at_any_openid_provider_is_its_idp_id_and_their_subject_and_their_tuples_alone_authorize_them(
-    oidc_catalog: tuple[TestClient, _OpenFga], oidc_issuer: Any, partner_issuer: Any, ops_issuer: Any, caller: str, status: int, asked_about: str | None
+    oidc_catalog: tuple[TestClient, Any], oidc_issuer: Any, partner_issuer: Any, ops_issuer: Any, caller: str, status: int
 ) -> None:
     """[[XC-214]], ADR 0208: OpenID Connect Core 1.0 § 2 makes `sub` unique and never reassigned within its issuer, so the
     issuer's idp id and that subject name one person whatever the provider; a deployment may name the claims read before
     it. Each issuer names its people and its clients under idp ids of its own, so one client id at two issuers is two
     machines, and a person at the second issuer whose token names its client in `azp` and a type other than the mark's
     value is a person."""
-    client, openfga = oidc_catalog
+    client, _ = oidc_catalog
     token = {
         "granted-person-by-oid": lambda: oidc_issuer.mint("pairwise-7f3e", audience="lance-catalog", oid=_OIDC_SUBJECT),
         "not-a-string-claim": lambda: oidc_issuer.mint(_OIDC_SUBJECT, audience="lance-catalog", oid=248289761001),
@@ -453,4 +415,3 @@ def test_a_person_at_any_openid_provider_is_its_idp_id_and_their_subject_and_the
     answered = _describe(client, token)
 
     assert answered.status_code == status, answered.text
-    assert set(openfga.asked) == ({asked_about} if asked_about else set()), f"OpenFGA was asked about {sorted(set(openfga.asked))}"

@@ -3,7 +3,9 @@
 Driven against a REAL local outbox (a tmp dir): stage events with ``lakehouse.events.outbox``, then exercise the
 handlers directly. Covers the happy path (list summaries oldest-first, replay re-ingests + drops), the
 poison object (surfaced in the view, un-replayable), the fail-closed auth ladder (FGA on + no token → 401),
-per-dataset governance of the list, and the replay writer gate (a non-writer of the event's outputs is 403).
+per-dataset governance of the list, and the replay writer gate (a non-writer of the event's outputs is 403). Who may see
+or replay what is judged by the real model on an OpenFGA store of the test's own, where bob owns the staged events'
+tables so each is governed.
 """
 
 from __future__ import annotations
@@ -24,10 +26,11 @@ from lance_namespace import (
     UnauthenticatedError,
     UnsupportedOperationError,
 )
+from lineage_lane import decided
 
 from lakehouse.events import outbox
 from lakehouse.events.cloud_events import lineage_envelope
-from lakehouse.governed import fga_ids, fga_reads
+from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -116,6 +119,16 @@ def _token(name: str = "alice") -> PersonPrincipal:
     return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss="i", sub=name, aud="lance", exp=0, iat=0))
 
 
+def _held(store: Any, *rungs: tuple[str, str, str]) -> Any:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """``store`` with bob owning every table a staged event below names, and ``rungs`` as ``(person, relation, table)``."""
+    names = ("mine", "hidden", "bronze$secret", "bronze$x")
+    store.write(
+        *((fga_ids.user_object("dex~bob"), "owner", fga_ids.table_object(_uuid(name))) for name in names),
+        *((fga_ids.user_object(f"dex~{who}"), relation, fga_ids.table_object(_uuid(name))) for who, relation, name in rungs),
+    )
+    return store
+
+
 def _filter(request: Any, settings: LineageSettings, token: Any) -> DatasetFilter:
     return DatasetFilter(request, settings, token)
 
@@ -166,18 +179,16 @@ def test_list_fails_closed_without_a_token_when_fga_on(tmp_path: Path) -> None:
         asyncio.run(dlq.list_dlq(s, None, _filter(_request(decider=OpenFgaDecider(cast("Any", object()))), s, None), limit=100))
 
 
-def test_list_filters_events_to_visible_datasets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_list_filters_events_to_visible_datasets(tmp_path: Path, openfga_store: Any) -> None:  # noqa: ANN401
     s = _settings(tmp_path, **_FULL_AUTH)
     _stage(s, "r1", _event_json("r1", outputs=(("bronze", "mine"),)))
     _stage(s, "r2", _event_json("r2", outputs=(("bronze", "hidden"),)))
-
-    async def only_mine(_client: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
-        return {o: o == fga_ids.table_object(_uuid("mine")) for o in objects}
-
-    monkeypatch.setattr(fga_reads, "batch_check", only_mine)
     token = _token()
-    flt = _filter(_request(decider=OpenFgaDecider(cast("Any", object()))), s, token)
-    out = asyncio.run(dlq.list_dlq(s, token, flt, limit=100))
+
+    async def listed(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the door's answer
+        return await dlq.list_dlq(s, token, _filter(_request(decider=decider), s, token), limit=100)
+
+    out = decided(_held(openfga_store, ("alice", "reader", "mine")), listed)
     assert out.depth == 2  # raw health signal unfiltered
     assert [e.run_id for e in out.events] == ["r1"]  # but only the visible dataset's event
 
@@ -187,10 +198,11 @@ def test_list_filters_events_to_visible_datasets(tmp_path: Path, monkeypatch: py
 # --------------------------------------------------------------------------- #
 
 
-def _replay(s: LineageSettings, run_id: str, repo: Any, token: Any = None) -> Any:
-    flt = _filter(_request(decider=OpenFgaDecider(cast("Any", object()))), s, token)
+def _replay(s: LineageSettings, run_id: str, repo: Any, token: Any = None, decider: Any = None) -> Any:  # noqa: ANN401 — a decider, or none with FGA off
+    decider = decider if decider is not None else OpenFgaDecider(cast("Any", object()))
+    flt = _filter(_request(decider=decider), s, token)
     # The door's feed is the one lineage's lifespan wires on its app, which the run-author check reads.
-    return dlq.replay_dlq(run_id, _request(decider=OpenFgaDecider(cast("Any", object())), provenance=repo), repo, s, token, flt, None)
+    return dlq.replay_dlq(run_id, _request(decider=decider, provenance=repo), repo, s, token, flt, None)
 
 
 def test_replay_reingests_and_drops(tmp_path: Path) -> None:
@@ -219,50 +231,37 @@ def test_replay_poison_is_unsupported_and_not_dropped_dev(tmp_path: Path) -> Non
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "bad") is not None
 
 
-def test_replay_poison_is_404_under_fga_no_oracle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    # FGA on: a poison object the governed list hides must NOT be distinguishable from missing (404, not 422).
+def test_replay_poison_is_404_under_fga_no_oracle(tmp_path: Path, openfga_store: Any) -> None:  # noqa: ANN401
+    # FGA on: a poison object the governed list hides must NOT be distinguishable from missing (404, not 422), to a
+    # caller who reads every table the outbox's events name.
     s = _settings(tmp_path, **_FULL_AUTH)
     _stage(s, "bad", "{not valid json")
-
-    async def any_visible(_c: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
-        return dict.fromkeys(objects, True)
-
-    monkeypatch.setattr(fga_reads, "batch_check", any_visible)
+    store = _held(openfga_store, *(("alice", "reader", name) for name in ("mine", "hidden", "bronze$secret", "bronze$x")))
     with pytest.raises(TransactionNotFoundError):
-        asyncio.run(_replay(s, "bad", _Repo(), _token()))
+        decided(store, lambda decider: _replay(s, "bad", _Repo(), _token(), decider))
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "bad") is not None
 
 
-def test_replay_hidden_event_is_404_not_a_name_disclosing_403(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_replay_hidden_event_is_404_not_a_name_disclosing_403(tmp_path: Path, openfga_store: Any) -> None:  # noqa: ANN401
     # A caller who can't SEE the event's datasets gets 404 (indistinguishable from missing), NOT a 403 that
     # echoes 'bronze$secret' — the disclosure gap list_dlq closes, now closed on replay too.
     s = _settings(tmp_path, **_FULL_AUTH)
     _stage(s, "r1", _event_json("r1", outputs=(("bronze", "bronze$secret"),)))
-
-    async def deny_all(_c: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
-        return dict.fromkeys(objects, False)
-
-    monkeypatch.setattr(fga_reads, "batch_check", deny_all)
     repo = _Repo()
     with pytest.raises(TransactionNotFoundError):
-        asyncio.run(_replay(s, "r1", repo, _token()))
+        decided(_held(openfga_store), lambda decider: _replay(s, "r1", repo, _token(), decider))
     assert repo.ingested == []
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "r1") is not None
 
 
-def test_replay_seen_but_not_writable_is_403(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_replay_seen_but_not_writable_is_403(tmp_path: Path, openfga_store: Any) -> None:  # noqa: ANN401
     # A caller who CAN see the dataset (can_get_metadata) but can't WRITE it → 403 (enforce_output_authz);
     # the name is one they can already see, so no new disclosure. Nothing ingested/dropped.
     s = _settings(tmp_path, **_FULL_AUTH)
     _stage(s, "r1", _event_json("r1", outputs=(("bronze", "bronze$x"),), author="dex~alice"))
-
-    async def see_not_write(_c: object, *, relation: str, objects: list[str], **_kw: object) -> dict[str, bool]:
-        return dict.fromkeys(objects, relation == "can_get_metadata")
-
-    monkeypatch.setattr(fga_reads, "batch_check", see_not_write)
     repo = _Repo()
     with pytest.raises(PermissionDeniedError, match=r"can_write_data required on outputs: bronze\$x"):
-        asyncio.run(_replay(s, "r1", repo, _token()))
+        decided(_held(openfga_store, ("alice", "reader", "bronze$x")), lambda decider: _replay(s, "r1", repo, _token(), decider))
     assert repo.ingested == []
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "r1") is not None
 

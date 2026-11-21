@@ -14,6 +14,7 @@ FACT".
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
@@ -327,28 +328,66 @@ class TestTheDoorGatesBeforeItWrites:
 
         return Settings(s3_access_key_id="k", s3_secret_access_key="s")
 
-    @pytest.mark.anyio
-    async def test_a_DENIED_caller_gets_the_same_answer_as_a_missing_warehouse(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from lance_namespace import PermissionDeniedError, TableNotFoundError
+    @pytest.mark.parametrize(
+        ("held", "admitted"),
+        [
+            pytest.param(None, False, id="a-caller-holding-nothing"),
+            pytest.param("member", False, id="a-member-of-the-warehouses-project"),
+            pytest.param("admin", True, id="the-projects-admin"),
+        ],
+    )
+    def test_a_DENIED_caller_gets_the_same_answer_as_a_missing_warehouse(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
+        held: str | None,
+        admitted: bool,
+    ) -> None:
+        """Judged on the real model: the gate is ``can_create_warehouse`` on the warehouse's project, its admin's alone, so
+        a member, the rung below, is answered exactly what a missing warehouse answers and the probe never writes."""
+        from lance_namespace import TableNotFoundError
 
-        monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: WarehouseRecord(id="wh", bucket="tenant", project="acme", root_uri=ROOT))
+        from catalog.core.config import Settings
+        from lakehouse.governed import fga_provision
 
-        async def _deny(*a: Any, **k: Any) -> None:
-            raise PermissionDeniedError("nope")
-
-        monkeypatch.setattr(endpoint.fga_deps, "require_can_create_warehouse", _deny)
+        if held is not None:
+            openfga_store.write(("user:dex~user-1", held, "project:acme"))
+        settings = Settings.model_validate(
+            {
+                "fga_enabled": True,
+                "oidc_enabled": True,
+                "oidc_issuer": "https://dex.test/dex",
+                "oidc_audience": "lance-catalog",
+                "oidc_idp_id": "dex",
+                "oidc_connectors": {"local": "dex"},
+                "s3_access_key_id": "k",
+                "s3_secret_access_key": "s",
+            }
+        )
         probed: list[str] = []
         monkeypatch.setattr(endpoint, "_run_scope_probe", lambda *a, **k: probed.append("ran") or [])
 
-        with pytest.raises(TableNotFoundError) as denied:
-            await endpoint.validate_warehouse_credentials("wh", self._settings(), _token(), None, _Vendor(credentials=None))
+        def _validate(record: WarehouseRecord | None) -> str:
+            monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: record)
 
-        monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: None)
-        with pytest.raises(TableNotFoundError) as missing:
-            await endpoint.validate_warehouse_credentials("wh", self._settings(), _token(), None, _Vendor(credentials=None))
+            async def _asked() -> str:
+                async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
+                    try:
+                        await endpoint.validate_warehouse_credentials("wh", settings, _token(), client, _Vendor(credentials=None))
+                    except TableNotFoundError as refused:
+                        return str(refused)
+                    return "probed"
 
-        assert str(denied.value) == str(missing.value), "a denial must not be distinguishable from a missing warehouse"
-        assert not probed, "the probe wrote to a tenant bucket before the gate answered"
+            return asyncio.run(_asked())
+
+        missing = _validate(None)
+        answered = _validate(WarehouseRecord(id="wh", bucket="tenant", project="acme", root_uri=ROOT))
+
+        if admitted:
+            assert (answered, probed) == ("probed", ["ran"])
+        else:
+            assert answered == missing, "a denial must not be distinguishable from a missing warehouse"
+            assert not probed, "the probe wrote to a tenant bucket before the gate answered"
 
     @pytest.mark.anyio
     async def test_a_PERMITTED_caller_probes_the_warehouses_OWN_root(self, monkeypatch: pytest.MonkeyPatch) -> None:

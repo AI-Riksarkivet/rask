@@ -1,9 +1,10 @@
 """`GET /management/v1/erasures` lists an erasure obligation only to a caller holding `can_maintain` on its table ([[LH-493]]).
 
 An obligation names its table and the person who asked for the erasure, so the list is filtered per table as the due
-list beside it is. On the real app with OIDC and FGA on, the OpenFGA store an in-memory double that allows exactly the
-grants named, so what is asserted is the filter. The erasure list names and judges
-its records only as a page fills ([[LH-576]] E10b), as the due list does.
+list beside it is. Who is shown what is judged against the catalog as deployed, a loopback Dex signing callers in and a
+real OpenFGA deciding on a store of the test's own where alice maintains the table named. The erasure list names and
+judges its records only as a page fills ([[LH-576]] E10b), as the due list does, which is counted with an in-memory store
+that allows exactly the grants named.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from catalog.core.identifiers import parse_identifier
 from catalog.services import erasure_obligations, table_claims
 from catalog.services.erasure_obligations import ErasureObligation
 from lakehouse.records import location_claims
+from tests.governed_catalog import GovernedCatalog
 from tests.integration.openfga_grants import Grants, act_as
 
 
@@ -74,15 +76,13 @@ def _obligation(settings: Settings, table: str, tmp_path: Path, *, deadline: dat
     return obligation
 
 
-def test_a_caller_sees_only_the_obligations_it_maintains(real_ns_client: TestClient, tmp_path: Path) -> None:
-    client = real_ns_client
-    settings, grants = _governed(client, tmp_path)
+def test_a_caller_sees_only_the_obligations_it_maintains(governed_catalog: GovernedCatalog, tmp_path: Path) -> None:
+    settings = get_settings()
     deadline = datetime.now(UTC) + timedelta(days=30)
     mine, _theirs = (_obligation(settings, table, tmp_path, deadline=deadline) for table in ("acme$mine", "acme$theirs"))
-    grants.grant("alice", ("can_maintain", f"table:{mine.table_uuid}"))
-    act_as(client, "alice")
+    governed_catalog.store.write((governed_catalog.person("alice"), "maintainer", f"table:{mine.table_uuid}"))
 
-    listed = client.get("/management/v1/erasures", headers=AUTH)
+    listed = governed_catalog.client.get("/management/v1/erasures", headers=governed_catalog.bearer("alice"))
 
     assert listed.status_code == 200, listed.text
     assert [(entry["table"], entry["state"]) for entry in listed.json()["obligations"]] == [("acme$mine", "open")]

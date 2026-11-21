@@ -1,8 +1,9 @@
 """OpenFGA stores held in memory, which the real catalog app asks through the real `lakehouse.governed.fga_reads` and `fga_writes` functions.
 
-``Grants`` is for a test whose claim is who may act: it answers each check from an explicit grant set, so a test
-names every grant it relies on and nothing else is allowed. ``TupleStore`` is for a test whose claim is which tuples a
-door leaves behind: it holds what the doors write and allows every check.
+Neither is for a test whose claim is who may act, or which tuples a door leaves behind: that test asks a real OpenFGA
+(the root conftest's ``openfga_store``, `tests/integration/governed_catalog.py`). ``Grants`` answers each check from an
+explicit grant set, for a test that counts what a door asks or whose claim is what lineage records. ``TupleStore`` holds
+what the doors write and allows every check, for a test whose claim is neither.
 """
 
 from __future__ import annotations
@@ -116,11 +117,6 @@ class TupleStore:
 
     async def close(self) -> None:
         return None
-
-    def naming(self, objects: list[str]) -> dict[str, set[Triple]]:
-        """The held tuples naming each of ``objects`` as their object or their user, for those any tuple names."""
-        named = {obj: {t for t in self.tuples if obj in (t[0], t[2])} for obj in objects}
-        return {obj: held for obj, held in named.items() if held}
 
 
 def _absent_delete() -> ApiException:

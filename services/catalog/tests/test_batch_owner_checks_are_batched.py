@@ -78,18 +78,18 @@ def _owner_body(n: int) -> dict[str, Any]:
     return {"operations": [{op: {"id": ["db1", f"t{i}"]}} for i in range(n)]}
 
 
-def _drive(body: dict[str, Any], *, allow: bool = True) -> tuple[list[str], list[tuple[str, int]]]:
+def _drive(body: dict[str, Any]) -> tuple[list[str], list[tuple[str, int]]]:
     """Run the real authorizer; return (single-check objects, [(relation, batch size)])."""
     singles: list[str] = []
     batches: list[tuple[str, int]] = []
 
     async def rec_check(_client: object, *, user: str, relation: str, obj: str) -> bool:
         singles.append(obj)
-        return allow
+        return True
 
     async def rec_batch(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
         batches.append((relation, len(objects)))
-        return dict.fromkeys(objects, allow)
+        return dict.fromkeys(objects, True)
 
     monkey = pytest.MonkeyPatch()
     try:
@@ -107,10 +107,25 @@ def test_twenty_owner_tier_ops_cost_one_round_trip_not_twenty() -> None:
     assert batches == [("can_deregister", 20)] or (len(batches) == 1 and batches[0][1] == 20), f"expected ONE batch of 20, got {batches}"
 
 
-def test_a_denied_owner_object_is_still_refused_by_name() -> None:
-    """The refusal names each table by the name the body gave, never by the uuid its grants are held by."""
+@pytest.mark.parametrize("owned", [pytest.param((), id="neither-owned"), pytest.param(("t0",), id="one-owned"), pytest.param(("t0", "t1"), id="both-owned")])
+def test_a_denied_owner_object_is_still_refused_by_name(openfga_store: Any, owned: tuple[str, ...]) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """On the real model: an owner-tier batch is admitted only when alice owns every table it names, and the refusal
+    names each table she does not own by the name the body gave, never by the uuid its grants are held by."""
     from lance_namespace import PermissionDeniedError
 
+    from lakehouse.governed import fga_provision
+
+    if owned:
+        openfga_store.write(*(("user:dex~alice", "owner", f"table:{uuid.uuid5(uuid.NAMESPACE_URL, f'db1${name}')}") for name in owned))
+
+    async def _authorized() -> None:
+        async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
+            await fga_deps._authorize_batch(cast("Request", _FakeRequest(_owner_body(2))), client, _EveryTableHolds(), user="dex~alice")
+
+    refused = {f"db1${name}" for name in ("t0", "t1") if name not in owned}
+    if not refused:
+        asyncio.run(_authorized())
+        return
     with pytest.raises(PermissionDeniedError) as denied:
-        _drive(_owner_body(2), allow=False)
-    assert "db1$t0" in str(denied.value) and "db1$t1" in str(denied.value), str(denied.value)
+        asyncio.run(_authorized())
+    assert {name for name in ("db1$t0", "db1$t1") if name in str(denied.value)} == refused, str(denied.value)

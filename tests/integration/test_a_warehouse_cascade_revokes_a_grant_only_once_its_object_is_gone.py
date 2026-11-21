@@ -8,21 +8,22 @@ through. Measured on the live estate 2026-10-15: `lh467-8ba7d771-bronze$t`, stil
 drop had detached: the grants that drop keeps for an undrop (#75) outlived the trash record the warehouse delete
 clears with the warehouse.
 
-ONE TENANT ON MOTO: the real catalog app, its warehouse bucket provisioned through the create door, its namespaces and
-tables created as `acme-wh$...` names through the namespace doors on real pylance, and the in-memory
-`TupleStore` behind the real `lakehouse.governed.fga_writes` seed and revoke. Every check is allowed, because who may act is
-not the claim: the tuples each call leaves behind are. A table's tuples are what its owner reads it through
-(`model.fga.yaml` pins that a project's admin owns a table through its parent edges).
+ONE TENANT ON MOTO: the catalog as deployed, its warehouse bucket provisioned through the create door, its namespaces and
+tables created as `acme-wh$...` names through the namespace doors on real pylance, a loopback Dex signing alice in and a
+real OpenFGA on a store of the test's own holding what the doors seed and revoke. alice administers the estate, so she
+makes the project and administers it, and owns everything in its warehouse through its parent edges. A table's tuples are
+what its owner reads it through. Where OpenFGA stops answering part-way, the client the catalog holds is wrapped to refuse
+the chosen revokes, every other call reaching the store.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import timedelta
-from typing import Any, override
-from unittest.mock import MagicMock
+from typing import Any
 from uuid import uuid4 as _uuid4
 
 import boto3
@@ -33,6 +34,7 @@ import pytest
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 from lance_namespace import ConcurrentModificationError, LanceNamespace, TableNotFoundError
+from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientWriteRequest
 
 from catalog.core.config import get_settings
@@ -46,7 +48,7 @@ from lakehouse.records.trash import TrashKind
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.options import StorageOptions
 from tests.bus_double import BusDouble
-from tests.integration.openfga_grants import Options, TupleStore, act_as
+from tests.governed_catalog import GovernedCatalog, StoreTuples
 
 
 PROJECT = "acme"
@@ -54,25 +56,36 @@ WAREHOUSE = "acme-wh"
 _ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 
 
-class _Outage(TupleStore):
-    """The store, refusing the revokes of ``down`` after the first ``spared`` as an OpenFGA that stopped answering does."""
+class _Outage:
+    """The catalog's OpenFGA client, refusing the revokes of ``down`` after the first ``spared`` as an OpenFGA that stopped
+    answering does; every other call reaches the real store, which :attr:`tuples` reads back as an auditor does."""
 
-    def __init__(self) -> None:
-        super().__init__()
+    def __init__(self, client: OpenFgaClient, store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+        self._held = StoreTuples(store)
+        self._client = client
         self.down: str | None = None
         self.spared = 0
+
+    def __getattr__(self, name: str) -> Any:  # noqa: ANN401 — every other call is the real client's
+        return getattr(self._client, name)
+
+    @property
+    def tuples(self) -> set[tuple[str, str, str]]:
+        return self._held.tuples
+
+    def naming(self, objects: list[str]) -> dict[str, set[tuple[str, str, str]]]:
+        return self._held.naming(objects)
 
     def stop_after_one(self, obj: str) -> None:
         """Refuse every revoke naming ``obj`` after the first, as an OpenFGA that stops answering part-way through them."""
         self.down, self.spared = obj, 1
 
-    @override
-    async def write(self, body: ClientWriteRequest, options: Options = None) -> None:
+    async def write(self, body: ClientWriteRequest, options: dict[str, Any] | None = None) -> Any:  # noqa: ANN401 — the SDK's own answer
         if self.down is not None and any(self.down in (t.user, t.object) for t in body.deletes or []):
             if self.spared == 0:
                 raise OSError("openfga did not answer")
             self.spared -= 1
-        await super().write(body, options)
+        return await self._client.write(body, options)
 
 
 class _Tenant:
@@ -163,8 +176,8 @@ class _Tenant:
         for obj in objects:
             kind, _, name = obj.partition(":")
             answer = self.client.get(f"/management/v1/warehouses/{name}") if kind == "warehouse" else self.client.post(f"/v1/{kind}/{name}/exists", json={})
-            # Every check is allowed, so a refusal means the name holds no object: an absent name is answered 404 only
-            # under a parent namespace that still holds one, whose read rung vouches for asking.
+            # alice owns everything the warehouse holds, so a refusal means the name holds no object: an absent name is
+            # answered 404 only under a parent namespace that still holds one, whose read rung vouches for asking.
             absent = (404,) if kind == "warehouse" else (404, 403)
             assert answer.status_code in (200, *absent), f"{obj}: {answer.status_code} {answer.text}"
             if answer.status_code == 200:
@@ -189,8 +202,8 @@ def _lifecycle(event: dict[str, Any]) -> str | None:
 
 
 @pytest.fixture
-def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
-    """The catalog on a control bucket of its own, with OIDC and FGA on once its lifespan has run, as alice."""
+def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch, openfga_store: Any, dex_issuer: Any) -> Iterator[_Tenant]:  # noqa: ANN401 — the root conftest's fixtures
+    """The catalog as deployed on a control bucket of its own, as alice, the estate's admin."""
     control = f"lh495-{uuid.uuid4().hex[:10]}"
     bucket = f"{control}-wh"
     s3: S3Client = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
@@ -204,28 +217,28 @@ def tenant(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Tenant]:
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
         "LANCE_TRASH_GRACE_DAYS": "7",
+        "RASK_OIDC_ENABLED": "true",
+        "RASK_OIDC_ISSUER": dex_issuer.issuer,
+        "RASK_OIDC_AUDIENCE": "lance-catalog",
+        "RASK_OIDC_ALLOW_INSECURE": "true",
+        "RASK_OIDC_IDP_ID": GovernedCatalog.IDP,
+        "RASK_OIDC_CONNECTORS": json.dumps({GovernedCatalog.CONNECTOR: GovernedCatalog.IDP}),
+        "RASK_FGA_ENABLED": "true",
+        "RASK_FGA_API_URL": openfga_store.url,
+        "RASK_FGA_STORE_ID": openfga_store.store_id,
     }.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
     from catalog.main import app
 
-    store = _Outage()
     bus = BusDouble()
+    # The estate's admin, and its reclaimer, which the clone-ending doors ask.
+    alice = f"user:{GovernedCatalog.IDP}~alice"
+    openfga_store.write((alice, "admin", "estate:rask"), (alice, "reclaimer", "estate:rask"))
+    bearer = {"Authorization": f"Bearer {dex_issuer.mint('alice', connector=GovernedCatalog.CONNECTOR, audience='lance-catalog')}"}
 
-    with TestClient(app, headers={"Authorization": "Bearer t"}) as client:
-        governed = get_settings().model_copy(
-            update={
-                "oidc_enabled": True,
-                "oidc_idp_id": "dex",
-                "oidc_connectors": {"local": "dex"},
-                "oidc_issuer": "https://idp.example",
-                "oidc_audience": "lance",
-                "fga_enabled": True,
-            }
-        )
-        app.dependency_overrides[get_settings] = lambda: governed
-        monkeypatch.setattr(app.state, "oidc", MagicMock())
-        act_as(client, "alice")
+    with TestClient(app, headers=bearer) as client:
+        store = _Outage(app.state.fga, openfga_store)
         monkeypatch.setattr(app.state, "fga", store)
         emitter = BusEmitter(
             bus,
@@ -522,7 +535,7 @@ def _a_backend_that_removes_the_row_and_answers_not_found(tenant: _Tenant) -> No
     [
         pytest.param(_a_store_that_will_not_delete_directories, (503, 17, 200), False, id="directory-delete-before-the-native-call"),
         pytest.param(_a_backend_that_will_not_deregister, (503, 17, 200), True, id="the-native-call-failed"),
-        pytest.param(_a_backend_that_removes_the_row_and_answers_not_found, (200, None, 404), True, id="the-native-call-answered-not-found"),
+        pytest.param(_a_backend_that_removes_the_row_and_answers_not_found, (200, None, 403), True, id="the-native-call-answered-not-found"),
     ],
 )
 def test_a_purging_cascade_that_fails_on_a_clone_removes_its_ending_only_if_it_never_reached_the_row(
@@ -532,8 +545,8 @@ def test_a_purging_cascade_that_fails_on_a_clone_removes_its_ending_only_if_it_n
     that fails leaves the row, and with it the clone's holds, its own, so the cascade removes the ending it filed. A native
     deregister that was attempted leaves the ending, whatever it answered (a failure with the row in place, or
     TableNotFound once another request removed it): no read tells the cascade whether the row it then finds is still the
-    clone's, and the finish judges it. Every check is allowed, so once the warehouse is gone its name still vouches for
-    asking and a describe answers the absent clone 404. A table the cascade did not detach keeps its location's claim, with the fence the
+    clone's, and the finish judges it. Once the warehouse is gone its grants are too, so alice sees nothing above the
+    clone's name and a describe of it is refused 403 rather than answered 404. A table the cascade did not detach keeps its location's claim, with the fence the
     cascade held it by lifted."""
     _, clone, _ = _registered_clone(tenant, moto_url)
     failing(tenant)

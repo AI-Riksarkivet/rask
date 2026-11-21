@@ -9,7 +9,7 @@ Measured on the live estate at helm rev 18, the reconcile ticks at 18:04 and 18:
 ONE ESTATE ON MOTO, TWO SERVICES (`catalog_and_maintenance`): the real catalog app drops the table through its door, so
 the trash record is the one that door writes, and maintenance runs its audit over the same control root, on what its worker stands on,
 with drift repair armed, asking the catalog's own grant doors for the census and the revokes (`catalog_doors`,
-[[XC-084]]). One in-memory `TupleStore` stands behind the catalog through the real `lakehouse.governed.fga_reads` and `fga_writes` functions. A ghost beside the trashed table, a grant on a table nothing names, is the control: the audit must revoke it,
+[[XC-084]]). A real OpenFGA on a store of the test's own decides for the catalog and holds what its doors write. A ghost beside the trashed table, a grant on a table nothing names, is the control: the audit must revoke it,
 so a pass that revokes nothing cannot pass. A live table and a renamed one are no ghosts: a rename keeps the uuid its
 grants are held by. Every object is a table's uuid (``table:<uuid>``, [[LH-524]]), and the trashed table's is the one
 its record keeps.
@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
+from typing import Any
 
 import pyarrow as pa
 import pytest
@@ -28,9 +29,10 @@ from catalog.core.config import get_settings as catalog_settings
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.fga_ids import user_object
 from lakehouse.records import trash
+from tests.governed_catalog import StoreTuples
 from tests.integration.catalog_and_maintenance import audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
-from tests.integration.openfga_grants import TupleStore, principal_key
+from tests.integration.openfga_grants import principal_key
 
 
 PROJECT = "acme"
@@ -40,7 +42,7 @@ _ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 class _Estate:
     """Project ``acme``'s warehouse, driven by its admin through the catalog, and the maintenance service beside it."""
 
-    def __init__(self, catalog: TestClient, maintenance: TestClient, store: TupleStore, warehouse: str) -> None:
+    def __init__(self, catalog: TestClient, maintenance: TestClient, store: StoreTuples, warehouse: str) -> None:
         self.catalog = catalog
         self.maintenance = maintenance
         self.store = store
@@ -73,7 +75,7 @@ class _Estate:
 
 
 @pytest.fixture
-def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
+def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch, openfga_store: Any, dex_issuer: Any) -> Iterator[_Estate]:  # noqa: ANN401 — the root conftest's fixtures
     """The catalog with a seven-day grace period, as alice, and maintenance reading the same control root with drift
     repair armed; both ask one OpenFGA store."""
     env = {
@@ -82,11 +84,12 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
         "MAINTENANCE_DRIFT_REPAIR_DRY_RUN": "false",
         "MAINTENANCE_CATALOG_URL": CATALOG_URL,
     }
-    with catalog_and_maintenance(moto_url, monkeypatch, env=env) as both:
+    with catalog_and_maintenance(moto_url, monkeypatch, env=env, openfga_store=openfga_store, dex_issuer=dex_issuer) as both:
         warehouse = f"lh516-{uuid.uuid4().hex[:10]}-wh"
         for path, body in (("/management/v1/projects", {"id": PROJECT}), ("/management/v1/warehouses", {"id": warehouse, "project": PROJECT})):
             answer = both.catalog.post(path, json=body)
             assert answer.status_code == 200, f"{path}: {answer.text}"
+        assert isinstance(both.store, StoreTuples), "the estate decides on a real OpenFGA store"
         yield _Estate(both.catalog, both.maintenance, both.store, warehouse)
 
 
@@ -99,7 +102,7 @@ def test_an_audit_revokes_a_ghost_and_keeps_the_grants_of_a_table_in_the_trash(e
     dropped = f"table:{estate.uuid_of(f'{bronze}$dropped')}"
     estate.drop_table(f"{bronze}$dropped")
     gone = str(uuid.uuid4())
-    estate.store.tuples.add((user_object(principal_key("alice")), "owner", f"table:{gone}"))
+    estate.store.write((user_object(principal_key("alice")), "owner", f"table:{gone}"))
     held = estate.store.naming([dropped])
     assert held and estate.in_trash(f"{bronze}$dropped"), "the drop kept nothing for an undrop, so keeping it would pass vacuously"
 

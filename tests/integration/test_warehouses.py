@@ -2,8 +2,8 @@
 
 Reuses the shared ``client`` fixture (mocked namespace backend). ``control_root`` points at a LOCAL temp
 dir so the registry round-trips on the local FS with no object storage. Covers: create → list → get
-(feature on, FGA off); the Unsupported answer when the feature is disabled; and the admin gate (FGA on) denying a
-non-project-admin with 403.
+(feature on, FGA off) and the Unsupported answer when the feature is disabled. Who may act on a warehouse is decided by
+the real model in `services/catalog/tests/test_a_door_the_router_leaves_open_decides_for_itself.py`.
 """
 
 from __future__ import annotations
@@ -13,7 +13,6 @@ from collections.abc import Iterator
 from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
@@ -26,18 +25,13 @@ from catalog.api.v1.endpoints import warehouses as wh_ep
 from catalog.core.config import Settings, get_settings
 from catalog.core.vending import EncryptionAtRest, SessionTier, VendedSession, build_session_policy, split_s3_location
 from catalog.services import warehouses as wh_svc
-from lakehouse.governed import fga_reads
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
-from tests import seeding
 
 
-def _settings(tmp_path: Any, store: str, *, fga: bool = False, reserved: str = "") -> Settings:
+def _settings(tmp_path: Any, store: str, *, reserved: str = "") -> Settings:
     data: dict[str, Any] = {
         "impl": "dir",
         "root": "s3://lance-catalog",
@@ -47,17 +41,6 @@ def _settings(tmp_path: Any, store: str, *, fga: bool = False, reserved: str = "
         "s3_access_key_id": "x",
         "s3_secret_access_key": "x",
     }
-    if fga:
-        data.update(
-            {
-                "fga_enabled": True,
-                "oidc_enabled": True,
-                "oidc_idp_id": "dex",
-                "oidc_connectors": {"local": "dex"},
-                "oidc_issuer": "https://idp",
-                "oidc_audience": "lance",
-            }
-        )
     return Settings.model_validate(data)
 
 
@@ -524,63 +507,6 @@ def test_a_purge_that_fails_is_finished_by_the_same_call_again(client: TestClien
 def test_deactivate_missing_warehouse_404(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
     assert client.post("/management/v1/warehouses/ghost/deactivate").status_code == 404
-
-
-def test_deactivate_hides_existence_from_non_admin_404(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    # AUDIT #4: deactivate/activate read the record BEFORE the admin gate (they need its project). A missing
-    # warehouse 404s; a present-but-unauthorized one must ALSO 404 (not 403) so a non-admin cannot probe which
-    # warehouse ids exist. The fix collapses denied → not-found.
-    s = _settings(tmp_path, store, fga=True)
-    client.app.dependency_overrides[get_settings] = lambda: s
-    # Registry seeded DIRECTLY: this test runs FGA-ON with a deny/mock client, so the estate gate
-    # on POST /management/v1/projects would interfere — and project existence is not the layer under test.
-    seeding.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed"})
-    seeding.put_warehouse(
-        s.registry_root,
-        s.storage_options(),
-        {
-            "id": "wh-real",
-            "bucket": "wh-real",
-            "root_uri": "s3://wh-real",
-            "project": "acme",
-            "status": "active",
-        },
-    )
-    verifier = MagicMock()
-    verifier.verify.return_value = PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="mallory"), claims=IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1)
-    )
-    client.app.state.oidc = verifier
-    client.app.state.fga = MagicMock()
-
-    async def deny(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
-        return False
-
-    monkeypatch.setattr(fga_reads, "check", deny)
-    r = client.post("/management/v1/warehouses/wh-real/deactivate", headers={"authorization": "Bearer t"})
-    assert r.status_code == 404, r.text  # NOT 403 — a non-admin cannot learn wh-real exists
-
-
-def test_create_denied_for_non_admin_403(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store, fga=True)
-    # Registry seeded DIRECTLY: this test runs FGA-ON with a deny/mock client, so the estate gate
-    # on POST /management/v1/projects would interfere — and project existence is not the layer under test.
-    seeding.put_project(f"file://{tmp_path}", StorageOptions(), {"id": "acme", "created_at": "t", "created_by": "seed"})
-    verifier = MagicMock()
-    verifier.verify.return_value = PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="mallory"), claims=IDToken(iss="i", sub="mallory", aud="lance", exp=1, iat=1)
-    )
-    client.app.state.oidc = verifier
-    fga_client = MagicMock()
-    fga_client.close = AsyncMock()
-    client.app.state.fga = fga_client
-
-    async def deny(_c: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
-        return False
-
-    monkeypatch.setattr(fga_reads, "check", deny)
-    resp = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"}, headers={"authorization": "Bearer t"})
-    assert resp.status_code == 403, resp.text
 
 
 # --------------------------------------------------------------------------- #

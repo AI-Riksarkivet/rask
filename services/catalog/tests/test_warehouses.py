@@ -8,6 +8,7 @@ mocked. The gate is driven through the real ``require_can_create_warehouse`` res
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -20,15 +21,17 @@ import pytest
 from botocore.exceptions import ClientError
 from lance_namespace import InternalError, InvalidInputError, LanceNamespace, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
 from moto.server import ThreadedMotoServer
+from openfga_sdk.client import OpenFgaClient
 from pydantic import SecretStr
 from unfiled_announcer import unfiled
 
 from catalog.api import dependencies, fga_deps
+from catalog.api.security import Caller
 from catalog.core.config import Settings
 from catalog.core.vending import ModeBVendor
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses
-from lakehouse.governed import fga_ids, fga_model, fga_reads, fga_writes
+from lakehouse.governed import fga_ids, fga_model, fga_provision, fga_reads, fga_writes
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -159,71 +162,11 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     assert ("project", "admin") in written  # the tenant's admin grant, minted at POST /management/v1/projects
 
 
-def test_seed_warehouse_never_grants_project_admin(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The escalation path is closed STRUCTURALLY: a warehouse create writes exactly the owner grant and
-    # the project edge — project admin cannot ride a warehouse create at all any more (it moved to
-    # seed_project_admin, behind the estate-gated POST /management/v1/projects), so a warehouse-owner can never
-    # quietly escalate to tenant admin.
-    captured: list[Any] = []
-
-    async def rec_write(_client: object, tuples: list[Any], **_kw: object) -> None:
-        captured.extend(tuples)
-
-    monkeypatch.setattr(fga_writes, "write_tuples", rec_write)
-    asyncio.run(fga_deps.seed_warehouse(MagicMock(), _fga_settings(), _TOKEN, warehouse_id="wh-a", project="acme"))
-    assert {(t.user, t.relation, t.object) for t in captured} == {
-        (f"user:{_TOKEN.subject}", "owner", "warehouse:wh-a"),
-        ("project:acme", "project", "warehouse:wh-a"),
-    }
-
-
 # --------------------------------------------------------------------------- #
 # tenant minting (Decision 1) — a tenant is born at POST /management/v1/projects: the estate door
 # writes the registry record + the creator's project#admin tuple in ONE operation, and
 # warehouse-create keeps a single door (the project's own rung, no bootstrap exception).
 # --------------------------------------------------------------------------- #
-
-#: The ESTATE ROOT every estate-admin gate (/management/v1/events, /management/v1/access, project creation) checks against.
-#: READ FROM THE SETTING rather than spelled out: the fake store below seeds `owner` here and the
-#: endpoints check here, so a literal that falls behind `fga_root_object` turns every one of those
-#: cases into a 403 whose message names an object the fixture never heard of. The default WAREHOUSE is
-#: a different object of a different type (`fga_default_warehouse_object`) and is not this.
-_ROOT_OBJECT = str(Settings.model_fields["fga_root_object"].default)
-
-
-class _FakeStore:
-    """A minimal stand-in for the OpenFGA store: it records the tuples the seed writes and resolves the two
-    relations this flow checks against them — ``project#can_create_warehouse`` from a direct ``project#admin``
-    tuple and ``estate#can_create_project`` from a direct ``admin`` on the root — both exactly as the
-    compiled model derives them. That makes the SEQUENCE provable offline: an estate admin mints a tenant,
-    and the tenant is then self-governing (the second warehouse passes on its OWN project rung, not the
-    estate door). A relation outside the pair is an error, so a silent gate change can't slip past."""
-
-    def __init__(self, *, estate_admins: tuple[str, ...] = ()) -> None:
-        self.tuples: set[tuple[str, str, str]] = {(fga_ids.user_object(sub), "admin", _ROOT_OBJECT) for sub in estate_admins}
-        self.checks: list[tuple[str, str, str]] = []
-
-    async def check(self, _client: object, *, user: str, relation: str, obj: str, **_kw: object) -> bool:
-        self.checks.append((user, relation, obj))
-        # The real `fga_reads.check` sends a principal key as the user it is (`user_object`, qualify=True) and a full
-        # subject verbatim (qualify=False); mirror that so a checked subject and a seeded tuple are the same string.
-        subject = user if _kw.get("qualify") is False else fga_ids.user_object(user)
-        if relation in ("can_create_project", "can_create_warehouse"):
-            return (subject, "admin", obj) in self.tuples
-        raise AssertionError(f"the warehouse-create gate checked an unexpected relation: {relation}")
-
-    async def write(self, _client: object, tuples: list[Any], **_kw: object) -> None:
-        self.tuples.update((t.user, t.relation, t.object) for t in tuples)
-
-    async def list_users(self, _client: object, *, relation: str, obj: str, **_kw: object) -> list[str]:
-        # `can_administer` derives from a direct `admin` tuple in the compiled model; the projects
-        # endpoint's display-only admins lookup resolves the same way here.
-        return sorted(u for u, rel, o in self.tuples if o == obj and rel == "admin")
-
-    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(fga_reads, "check", self.check)
-        monkeypatch.setattr(fga_writes, "write_tuples", self.write)
-        monkeypatch.setattr(fga_reads, "list_users", self.list_users)
 
 
 class _BucketCatalogs:
@@ -259,36 +202,44 @@ def _governed_settings(tmp_path: Any) -> Settings:
     )
 
 
-def _create_as(settings: Settings, sub: str, body: Any) -> Any:
+#: The ESTATE ROOT every estate-admin gate (/management/v1/events, /management/v1/access, project creation) checks against,
+#: read from the setting: a literal that falls behind `fga_root_object` would seed a grant on an object no gate asks about.
+_ROOT_OBJECT = str(Settings.model_fields["fga_root_object"].default)
+
+
+def _on(store: Any, call: Callable[[OpenFgaClient], Awaitable[Any]]) -> Any:  # noqa: ANN401 — the root conftest's OpenFgaStore and the door's answer
+    """Run ``call`` with an OpenFGA client on ``store``, the test's own store on the pinned server, as the catalog holds one."""
+
+    async def _run() -> Any:  # noqa: ANN401 — the door's answer
+        async with fga_provision.make_client(store.url, store.store_id, store.model_id, token_file=None) as client:
+            return await call(client)
+
+    return asyncio.run(_run())
+
+
+def _create_as(settings: Settings, sub: str, body: Any, store: Any) -> Any:  # noqa: ANN401 — the root conftest's OpenFgaStore
     from catalog.api.v1.endpoints import warehouses as wh_ep
     from lakehouse.events.control_emit import NoopControlEmitter
 
-    return asyncio.run(
-        wh_ep.create_warehouse(
+    return _on(
+        store,
+        lambda client: wh_ep.create_warehouse(
             request=_request(settings),
             settings=settings,
             token=_caller(sub),
-            client=MagicMock(),
+            client=client,
             control=NoopControlEmitter(),
             vendor=ModeBVendor(),  # the default `get_vendor` falls back to: no direct credentials, so the probe skips
             body=body,
-        )
+        ),
     )
 
 
-def _create_project_as(settings: Settings, sub: str, project_id: str) -> Any:
+def _create_project_as(settings: Settings, token: Caller, body: Any, store: Any) -> Any:  # noqa: ANN401 — the request body and the root conftest's OpenFgaStore
     from catalog.api.v1.endpoints import projects as proj_ep
     from lakehouse.events.control_emit import NoopControlEmitter
 
-    return asyncio.run(
-        proj_ep.create_project(
-            settings=settings,
-            token=_caller(sub),
-            client=MagicMock(),
-            announcer=unfiled(NoopControlEmitter()),
-            body=proj_ep.CreateProjectRequest(id=project_id),
-        )
-    )
+    return _on(store, lambda client: proj_ep.create_project(settings=settings, token=token, client=client, announcer=unfiled(NoopControlEmitter()), body=body))
 
 
 def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> None:
@@ -304,86 +255,81 @@ def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> Non
     asyncio.run(fga_deps.require_project_exists(settings, "acme"))
 
 
-def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # Decision 1 end to end: the estate admin mints the TENANT at POST /management/v1/projects (the estate door,
-    # can_create_project on the root) — record + her project#admin tuple in one operation — and every
-    # warehouse after that passes on the project's OWN rung. The warehouse door never probes the estate.
+def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_path: Any, monkeypatch: pytest.MonkeyPatch, openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """Decision 1 end to end, on the real model: the estate admin mints the TENANT at POST /management/v1/projects (the
+    estate door, ``can_create_project`` on the root), its record and her ``project#admin`` tuple in one operation, and every
+    warehouse after that passes on the project's OWN rung: with her estate standing withdrawn she still creates them, and a
+    member of the project, the rung below its admin, is refused."""
+    from catalog.api.v1.endpoints import projects as proj_ep
     from catalog.schemas import CreateWarehouseRequest
 
-    store = _FakeStore(estate_admins=("dex~alice",))
-    store.install(monkeypatch)
+    estate_admin = ("user:dex~alice", "admin", _ROOT_OBJECT)
+    openfga_store.write(estate_admin, ("user:dex~bob", "owner", _ROOT_OBJECT))
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
     settings = _governed_settings(tmp_path)
 
-    minted = _create_project_as(settings, "dex~alice", "acme")
-    assert store.checks == [("dex~alice", "can_create_project", _ROOT_OBJECT)]
-    assert ("user:dex~alice", "admin", "project:acme") in store.tuples
-    assert minted.admins == ["user:dex~alice"]  # existence and permission born together, and the response shows it
+    with pytest.raises(PermissionDeniedError):
+        _create_project_as(settings, _caller("dex~bob"), proj_ep.CreateProjectRequest(id="acme"), openfga_store)
+    minted = _create_project_as(settings, _caller("dex~alice"), proj_ep.CreateProjectRequest(id="acme"), openfga_store)
+    assert ("user:dex~alice", "admin", "project:acme") in openfga_store.tuples()
+    assert minted.admins == ["dex~alice"]  # existence and permission born together, and the response shows it
 
-    store.checks.clear()
-    first = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-wh", project="acme"))
-    assert first.id == "acme-wh"
-    assert ("user:dex~alice", "owner", "warehouse:acme-wh") in store.tuples
-    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
-
-    store.checks.clear()
-    second = _create_as(settings, "dex~alice", CreateWarehouseRequest(id="acme-two", project="acme"))
-    assert second.id == "acme-two"
-    assert store.checks == [("dex~alice", "can_create_warehouse", "project:acme")]
+    openfga_store.delete(estate_admin)
+    openfga_store.write(("user:dex~carol", "member", "project:acme"))
+    for warehouse_id in ("acme-wh", "acme-two"):
+        assert _create_as(settings, "dex~alice", CreateWarehouseRequest(id=warehouse_id, project="acme"), openfga_store).id == warehouse_id
+        assert ("user:dex~alice", "owner", f"warehouse:{warehouse_id}") in openfga_store.tuples()
+    with pytest.raises(PermissionDeniedError):
+        _create_as(settings, "dex~carol", CreateWarehouseRequest(id="acme-carol", project="acme"), openfga_store)
+    assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-carol") is None
 
 
-def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing(tmp_path: Any, openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
     """LH-433: a machine never becomes a tenant's admin. A provisioning identity (ADR 0143's operator) that
     creates a project must name the person who administers it; it is refused 400 before anything is written
     when it names nobody or a service account's subject, and when it names a person only that person is seeded."""
     from catalog.api.v1.endpoints import projects as proj_ep
-    from lakehouse.events.control_emit import NoopControlEmitter
     from lakehouse.governed.machine_identity import ServicePrincipal
 
-    provisioner = "kubernetes~system:serviceaccount:ops:provisioner"
-    store = _FakeStore(estate_admins=(provisioner,))
-    store.install(monkeypatch)
+    provisioner = fga_ids.user_object("kubernetes~system:serviceaccount:ops:provisioner")
+    openfga_store.write((provisioner, "admin", _ROOT_OBJECT))
     settings = _governed_settings(tmp_path)
     machine = ServicePrincipal.for_account("system:serviceaccount:ops:provisioner")
 
-    def create(admin: str | None) -> Any:
-        body = proj_ep.CreateProjectRequest(id="acme", admin=admin)
-        return asyncio.run(proj_ep.create_project(settings=settings, token=machine, client=MagicMock(), announcer=unfiled(NoopControlEmitter()), body=body))
-
     # A service account's subject, the provisioner's own or another release's, is a machine whatever its namespace.
-    for unnamed in (None, "kubernetes~system:serviceaccount:rask:rask-sa-web", provisioner):
+    for unnamed in (None, "kubernetes~system:serviceaccount:rask:rask-sa-web", "kubernetes~system:serviceaccount:ops:provisioner"):
         with pytest.raises(InvalidInputError):
-            create(unnamed)
+            _create_project_as(settings, machine, proj_ep.CreateProjectRequest(id="acme", admin=unnamed), openfga_store)
         assert proj_svc.list_projects(settings.registry_root, StorageOptions()) == [], f"a refused create ({unnamed!r}) wrote the tenant anyway"
 
-    minted = create("dex~alice")
+    minted = _create_project_as(settings, machine, proj_ep.CreateProjectRequest(id="acme", admin="dex~alice"), openfga_store)
 
-    assert minted.admins == ["user:dex~alice"]
-    assert not any(t[0] == "user:kubernetes~system%3Aserviceaccount%3Aops%3Aprovisioner" and t[2] == "project:acme" for t in store.tuples), (
+    assert minted.admins == ["dex~alice"]
+    assert {t for t in openfga_store.tuples() if t[2] == "project:acme"} == {("user:dex~alice", "admin", "project:acme")}, (
         "the machine holds a tuple on the tenant it minted"
     )
 
 
-def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, monkeypatch: pytest.MonkeyPatch, openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
     # Fail-closed at BOTH doors, before ANY side effect: the project door 403s a non-estate-admin, and
     # the warehouse door 404s the unknown tenant (there is no side door left that would mint it). No
     # bucket, no registry record, no tuple either way.
+    from catalog.api.v1.endpoints import projects as proj_ep
     from catalog.schemas import CreateWarehouseRequest
 
-    store = _FakeStore(estate_admins=("dex~alice",))
-    store.install(monkeypatch)
+    openfga_store.write(("user:dex~alice", "admin", _ROOT_OBJECT))
     provisioned: list[str] = []
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: provisioned.append(bucket))
     settings = _governed_settings(tmp_path)
 
     with pytest.raises(PermissionDeniedError):
-        _create_project_as(settings, "dex~mallory", "evil")
+        _create_project_as(settings, _caller("dex~mallory"), proj_ep.CreateProjectRequest(id="evil"), openfga_store)
     with pytest.raises(TableNotFoundError):
-        _create_as(settings, "dex~mallory", CreateWarehouseRequest(id="evil-wh", project="evil"))
+        _create_as(settings, "dex~mallory", CreateWarehouseRequest(id="evil-wh", project="evil"), openfga_store)
     assert provisioned == []
     assert proj_svc.list_projects(settings.registry_root, StorageOptions()) == []
     assert warehouses.list_warehouses(settings.registry_root, StorageOptions()) == []
-    assert not any(t[2] == "project:evil" for t in store.tuples)
+    assert openfga_store.tuples() == {("user:dex~alice", "admin", _ROOT_OBJECT)}
 
 
 # --------------------------------------------------------------------------- #

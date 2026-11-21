@@ -4,9 +4,10 @@ Lineage keeps its feed and its edge list as tables of the catalog's provenance n
 what it records is driven against the real catalog app on a real `dir` namespace, served by a live uvicorn
 because lineage reaches it through the spec's REST client.
 
-What stands in, and why each may: OpenFGA, as `openfga_grants.Grants` answering from a set of granted relations, and
-the verified caller, as lineage's `authenticate` reading the principal key a test names in a header. Authorization is the
-claim of none of the tests that use them; what the doors record is.
+What stands in, and why each may: the verified caller, as lineage's `authenticate` reading the principal key a test names
+in a header, and, for a test whose claim is what the doors record rather than who may record it, OpenFGA, as
+`openfga_grants.Grants` answering from a set of granted relations. A test whose claim is who is shown what names a real
+OpenFGA store instead.
 """
 
 from __future__ import annotations
@@ -30,6 +31,7 @@ from openfga_sdk import OpenFgaClient
 
 from lakehouse.events.bus import BusUnavailableError
 from lakehouse.events.bus_delivery import Handle, Lane, Park, Settlement
+from lakehouse.governed import fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.fga_ids import user_object
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -215,13 +217,20 @@ def service(name: str) -> ServicePrincipal:
 
 
 @contextmanager
-def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted: set[tuple[str, str, str]]) -> Generator[TestClient]:
+def governed_lineage(
+    catalog_url: str,
+    monkeypatch: pytest.MonkeyPatch,
+    granted: set[tuple[str, str, str]],
+    fga_store: Any = None,  # noqa: ANN401 — the root conftest's OpenFgaStore
+) -> Generator[TestClient]:
     """Lineage's router behind its real authentication-then-FGA gate, recording into the catalog at ``catalog_url``.
 
     The caller is the principal a request names by key in :data:`SUBJECT_HEADER`: a `kubernetes~` key is a service
     principal, any other a person, as a verified token would prove either; OpenFGA answers from ``granted`` (held as ``app.state.grants``, so a test can write a tuple mid-flow), whose
-    subjects are principal keys. The app holds the forward client lineage's lifespan builds when a graph backend is
-    configured, so :func:`relay_tick` runs the relay over it.
+    subjects are principal keys. With ``fga_store``, a real OpenFGA decides instead: ``granted`` are the rungs written to it
+    (`model.fga`'s relations, not its ``can_*`` actions), and the decider asks it through a client the app's lifespan
+    opens. The app holds the forward client lineage's lifespan builds when a graph backend is configured, so
+    :func:`relay_tick` runs the relay over it.
     """
     from lineage.api.security import authenticate
     from lineage.api.v1.router import api_router
@@ -254,7 +263,12 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.forward_client = httpx.AsyncClient(timeout=settings.forward_timeout_seconds) if settings.forward_url else None
         try:
-            yield
+            if fga_store is None:
+                yield
+            else:
+                async with fga_provision.make_client(fga_store.url, fga_store.store_id, fga_store.model_id, token_file=None) as fga:
+                    app.state.decider = OpenFgaDecider(fga)
+                    yield
         finally:
             if app.state.forward_client is not None:
                 await app.state.forward_client.aclose()
@@ -263,10 +277,13 @@ def governed_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch, granted:
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(api_router)
     app.dependency_overrides[authenticate] = caller
-    grants = Grants()
-    grants.allowed = {(user_object(subject), relation, obj) for subject, relation, obj in granted}
-    app.state.decider = OpenFgaDecider(cast(OpenFgaClient, grants))
-    app.state.grants = grants
+    if fga_store is None:
+        grants = Grants()
+        grants.allowed = {(user_object(subject), relation, obj) for subject, relation, obj in granted}
+        app.state.decider = OpenFgaDecider(cast(OpenFgaClient, grants))
+        app.state.grants = grants
+    elif granted:
+        fga_store.write(*((user_object(subject), relation, obj) for subject, relation, obj in granted))
     app.state.provenance = store
     app.state.names = CatalogNames.from_settings(settings)
     # The off value lineage's lifespan sets for a process the chart names no bus.

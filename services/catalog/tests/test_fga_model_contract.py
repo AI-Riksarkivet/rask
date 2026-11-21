@@ -23,6 +23,8 @@ from __future__ import annotations
 import asyncio
 from typing import Any, cast
 
+import httpx
+import pyarrow as pa
 import pytest
 from fastapi import Request
 from lance_namespace import InternalError
@@ -32,6 +34,7 @@ from catalog.api import fga_deps, read_actions
 from catalog.api.dependencies import Resolver
 from catalog.core import write_judge
 from catalog.core.config import Settings
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga_model
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -210,74 +213,83 @@ def test_every_relation_the_catalog_checks_exists_in_the_model(monkeypatch: pyte
     )
 
 
-def test_access_disclosure_routes_are_owner_tier() -> None:
-    """CONTRACT (security, #51/#68): the access-DISCLOSURE routes — ``access/list`` (enumerate who holds
-    access), ``access/check`` (simulate an arbitrary (user, relation)) and ``access/graph`` — must clear
-    the OWNER bar, never the writer rung. They reveal the authz graph; a mere writer must not reach them.
+#: alice's table and namespace, on which bob holds one rung when he sends a door's request.
+_TIER_TABLE, _TIER_NAMESPACE = "lance_catalog$db$t", "lance_catalog$db"
+_TIER_ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64()), "v": pa.array([10, 20], pa.int64())}))
+_TIER_QUERY = {"k": 10, "vector": {"single_vector": []}}
 
-    The pair-existence contract above canNOT catch a downgrade here: moving a suffix from the owner map to
-    the writer map resolves ``can_write_data`` — a real relation, so that test stays green while the gate
-    quietly weakens. This asserts the resolved tier directly, so such a refactor fails loudly."""
-    from catalog.api.fga_deps import _action_relation
+#: Each door whose tier is the claim: (the type bob is granted on, the rung that refuses him, the rung that admits him,
+#: method, path, keywords). An owner-tier door refuses a writer, the rung below it; a read door admits a reader and refuses
+#: a caller holding nothing.
+_TIERED: list[Any] = [
+    *[
+        pytest.param("table", "writer", "owner", "POST", f"/management/v1/table/{_TIER_TABLE}/{suffix}", {"json": body}, id=f"table-{suffix}")
+        for suffix, body in (("access/list", {}), ("access/check", {"user": "dex~carol", "relation": "can_read_data"}), ("access/graph", {}))
+    ],
+    *[
+        pytest.param("namespace", "writer", "owner", "POST", f"/management/v1/namespace/{_TIER_NAMESPACE}/{suffix}", {"json": body}, id=f"namespace-{suffix}")
+        for suffix, body in (("access/list", {}), ("access/check", {"user": "dex~carol", "relation": "can_get_metadata"}), ("access/graph", {}))
+    ],
+    pytest.param("table", "writer", "owner", "POST", f"/v1/table/{_TIER_TABLE}/branches/delete", {"json": {"name": "b"}}, id="branches-delete"),
+    pytest.param("table", "writer", "owner", "POST", f"/v1/table/{_TIER_TABLE}/tags/delete", {"json": {"tag": "t"}}, id="tags-delete"),
+    *[
+        pytest.param("table", None, "reader", method, path, sent, id=name)
+        for name, method, path, sent in (
+            ("query", "POST", f"/v1/table/{_TIER_TABLE}/query", {"json": _TIER_QUERY}),
+            ("count-rows", "POST", f"/v1/table/{_TIER_TABLE}/count_rows", {"json": {}}),
+            ("explain-plan", "POST", f"/v1/table/{_TIER_TABLE}/explain_plan", {"json": {"query": _TIER_QUERY}}),
+            ("analyze-plan", "POST", f"/v1/table/{_TIER_TABLE}/analyze_plan", {"json": _TIER_QUERY}),
+            ("changes", "POST", f"/management/v1/table/{_TIER_TABLE}/changes", {"json": {"begin_version": 0, "end_version": 1}}),
+            ("credentials", "POST", f"/management/v1/table/{_TIER_TABLE}/credentials", {"json": {}}),
+            ("blobs", "GET", f"/management/v1/table/{_TIER_TABLE}/blobs?column=v&row=0", {}),
+            ("describe", "POST", f"/v1/table/{_TIER_TABLE}/describe", {"json": {}}),
+            ("stats", "POST", f"/v1/table/{_TIER_TABLE}/stats", {"json": {}}),
+            ("tags-version", "POST", f"/v1/table/{_TIER_TABLE}/tags/version", {"json": {"tag": "t"}}),
+            ("version-list", "POST", f"/v1/table/{_TIER_TABLE}/version/list", {"json": {}}),
+            ("history", "GET", f"/management/v1/table/{_TIER_TABLE}/history", {}),
+        )
+    ],
+]
 
-    for suffix in ("access/list", "access/check", "access/graph"):
-        assert _action_relation("table", suffix, method="POST") == "can_drop", suffix
-        assert _action_relation("namespace", suffix, method="POST") == "can_delete", suffix
 
+@pytest.mark.parametrize(("on", "below", "rung", "method", "path", "sent"), _TIERED)
+def test_a_door_admits_the_rung_its_tier_names_and_refuses_the_one_below(
+    governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
+    on: str,
+    below: str | None,
+    rung: str,
+    method: str,
+    path: str,
+    sent: dict[str, Any],
+) -> None:
+    """CONTRACT (security, #51/#68): a door that discloses the authorization graph (``access/list``, ``access/check``,
+    ``access/graph``) or destroys a table's versions or their pins (``branches/delete``, ``tags/delete``) clears the OWNER
+    bar, so a writer is refused it; a door that returns a table's data or metadata is a READ, so a reader is admitted.
 
-@pytest.mark.parametrize("suffix", ["branches/delete", "tags/delete"])
-def test_a_destructive_door_is_owner_tier(suffix: str) -> None:
-    """CONTRACT (security): a door that destroys a table's versions or unpins them clears the OWNER bar
-    (``can_drop``), the same bar as ``maintenance/run``, which reclaims old versions and EXEMPTS tagged ones.
-
-    Undeclared a suffix is refused for every caller; on the writer map a plain data writer clears it.
-    ``tags/delete`` at the writer rung removes the pin a reader's tag is: the version it names becomes
-    reclaimable. A pipeline's ``stable`` is the pointer its readers open, and Lance keeps the CAS in the
-    object store, so the pointer is a tag INSIDE the dataset and authorization carries the weight a
-    catalog transaction would carry elsewhere. A branch FORKS HISTORY (``branches/create``), so refusing a
-    writer the pointer's delete while permitting the fork's is incoherent.
-
-    Measured on the deployed catalog 2026-09-11, with a writer on ``bronze$events`` holding no owner rung:
-    ``branches/delete`` answered 422 (cleared authz, failed body validation) while ``tags/delete`` and
-    ``deregister`` answered 403.
+    Judged on the real model: bob holds exactly one rung on alice's object, granted through its own door. Measured on the
+    deployed catalog 2026-09-11, with a writer on ``bronze$events`` holding no owner rung: ``branches/delete`` answered 422
+    (past the gate) while ``tags/delete`` and ``deregister`` answered 403. Measured 2026-09-08 on ``changes`` at the writer
+    rung: a change feed refused every reader who is not also a writer, its whole audience.
     """
-    from catalog.api.fga_deps import _action_relation
+    catalog, alice = governed_catalog, governed_catalog.bearer("alice")
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
+    created = catalog.client.post(f"/v1/table/{_TIER_TABLE}/create", content=_TIER_ROWS, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    assert created.status_code == 200, created.text
+    for ref, body in (("tags/create", {"tag": "t", "version": 1}), ("branches/create", {"name": "b"})):
+        assert catalog.client.post(f"/v1/table/{_TIER_TABLE}/{ref}", json=body, headers=alice).status_code == 200
+    grant_door = f"/management/v1/{on}/{_TIER_TABLE if on == 'table' else _TIER_NAMESPACE}/access/grant"
 
-    relation = _action_relation("table", suffix, method="POST")
+    def _as_bob_holding(relation: str | None) -> httpx.Response:
+        if relation is not None:
+            granted = catalog.client.post(grant_door, json={"user": "dex~bob", "relation": relation}, headers=alice)
+            assert granted.status_code == 200, granted.text
+        return catalog.client.request(method, path, headers=catalog.bearer("bob"), **sent)
 
-    assert relation == "can_drop", f"{suffix!r} resolved to {relation!r}: a destructive door clears the owner bar, never the writer rung"
-    assert relation == _action_relation("table", "maintenance/run", method="POST"), (
-        f"{suffix!r} is gated below the tag-respecting reclamation: the unguarded door must not be the cheaper one"
-    )
-
-
-def test_every_DATA_READ_door_is_gated_as_a_READ() -> None:
-    """CONTRACT (security): a door that returns table DATA is authorized with ``can_read_data``.
-
-    A read door is a read only when a read vocabulary names it: undeclared it is refused for every
-    caller, and at the writer rung it refuses every reader who is not also a writer — for a change feed,
-    its whole audience — while the audit trail describes a write that never happened. Measured
-    2026-09-08 on `POST /{id}/changes` at the writer rung: `can_write_data ALLOW` on
-    `table:bronze$pages` beside the `read_data` record for the same call.
-
-    Asserting the SET is not enough — membership can be true while `_action_relation` routes elsewhere —
-    so this resolves each one through the real classifier.
-    """
-    from catalog.api.fga_deps import _action_relation
-    from catalog.api.read_actions import DATA_READ_ACTIONS as _DATA_READ_ACTIONS
-    from catalog.api.read_actions import META_READ_ACTIONS as _META_READ_ACTIONS
-
-    assert "changes" in _DATA_READ_ACTIONS, "the change feed is the most disclosing read a table has"
-    for action in _DATA_READ_ACTIONS:
-        assert _action_relation("table", action, method="POST") == "can_read_data", action
-
-    # `history`'s endpoint runs its own `require_can_get_metadata`, a check that runs SECOND: any higher
-    # rung the router asks first leaves it reachable only by callers who already cleared that bar.
-    # Measured 2026-09-09 at the writer rung: one `GET /history` logged `can_write_data ALLOW` and then
-    # `can_get_metadata ALLOW`, in that order.
-    assert "history" in _META_READ_ACTIONS, "a commit log is metadata about the data, not a write"
-    for action in _META_READ_ACTIONS:
-        assert _action_relation("table", action, method="POST") == "can_get_metadata", action
+    refused = _as_bob_holding(below)
+    assert (refused.status_code, refused.json()["code"]) in {(403, 15), (404, 4)}, f"{path} admitted bob holding {below!r}: {refused.text}"
+    assert below is None or refused.status_code == 403, f"{path} hid itself from bob holding {below!r}: {refused.text}"
+    admitted = _as_bob_holding(rung)
+    assert admitted.status_code not in {401, 403, 404}, f"{path} refused bob holding {rung!r}: {admitted.status_code} {admitted.text}"
 
 
 def _types_served_by(suffix: str) -> set[str]:

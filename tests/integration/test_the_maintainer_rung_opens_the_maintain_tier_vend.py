@@ -20,29 +20,24 @@ ONE RUNG PER TIER ([[LH-202]]). The maintain tier reaches `_versions/` and delet
 any transaction around `version/create`.
 
 Owner ruling 2026-09-08. Driven through the REAL route rather than a helper, because what is being
-pinned is a credential-vending authorization decision.
+pinned is a credential-vending authorization decision, against the catalog as deployed with every decision the real
+model's on an OpenFGA store of the test's own. The maintenance identity holds ``maintenance`` on the estate's warehouse,
+the only rung that opens ``can_vend_maintain``; a maintainer, a writer and a reader each hold their rung on the table.
+The caller is authenticated as the maintenance identity, and the vendor mints a fixed credential.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator, Sequence
-from pathlib import Path
-from unittest.mock import MagicMock
 
-import lance
-import pyarrow as pa
 import pytest
-from fastapi.testclient import TestClient
-from lance_namespace import DescribeTableResponse
 from pydantic import SecretStr
 
 from catalog.core.vending import TableRecords, Tier, VendedSession
-from catalog.services import table_claims
+from lakehouse.governed.fga_ids import user_object
 from lakehouse.governed.machine_identity import ServicePrincipal
-from lakehouse.records import location_claims
 from lakehouse.storage.credential import S3KeyPair
-from lakehouse.storage.options import StorageOptions
-from tests.unit.named_resolver import NamedResolver, uuid_of
+from tests.governed_catalog import GovernedCatalog
 
 
 class _Vendor:
@@ -61,198 +56,55 @@ class _Vendor:
         return VendedSession(key_pair=key_pair, endpoint=None, region="us-east-1", expires_at_millis=1)
 
 
-@pytest.fixture
-def governed(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[tuple[TestClient, list[str]]]:
-    """The vend door with FGA ON and a caller identity, plus the list of relations actually checked."""
-    monkeypatch.setenv("LANCE_REST_IMPL", "dir")
-    monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path))
-    monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "test")
-    monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "test")
-
-    from catalog.core.config import get_settings
-
-    get_settings.cache_clear()
-
-    from catalog.api import security
-    from catalog.api.dependencies import get_fga_client, get_namespace, get_resolved_table, get_resolver, get_storage_options, get_vendor
-    from catalog.api.dependencies import get_settings as settings_dep
-    from catalog.main import app
-
-    # FGA ON via the DEPENDENCY, not the environment: `fga_enabled` refuses to construct without
-    # `oidc_enabled`, and standing up a whole OIDC posture would test the settings model rather than
-    # this door.
-    governed_settings = get_settings().model_copy(update={"fga_enabled": True})
-
-    # The double describes a real table, as the backend it stands in for does: a vend reads what the table holds first.
-    location = str(tmp_path / "t.lance")
-    lance.write_dataset(pa.table({"id": pa.array([0], pa.int64())}), location, data_storage_version="2.2", enable_stable_row_ids=True)
-    fake_ns.describe_table.return_value = DescribeTableResponse(location=location)
-    # Every name holds an object (``NamedResolver``): the claim here is which rung opens a tier, not how a name resolves.
-    # The door acts on the table its double describes, whose location's claim records the uuid the checks were asked on.
-    claims = table_claims.claim_store(governed_settings)
-    location_claims.take(claims, location, "lance_catalog$db$t", ["db", "t"], is_gone=lambda _claim: False, uuid=uuid_of("table", ["db", "t"]))
-    app.dependency_overrides[get_resolver] = lambda: NamedResolver()
-    app.dependency_overrides[get_resolved_table] = lambda: table_claims.resolve(fake_ns, claims, ["db", "t"])
-    app.dependency_overrides[get_namespace] = lambda: fake_ns
-    app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
-    app.dependency_overrides[get_vendor] = lambda: _Vendor()
-    app.dependency_overrides[get_fga_client] = lambda: object()
-    app.dependency_overrides[settings_dep] = lambda: governed_settings
-    app.dependency_overrides[security.authenticate] = lambda: _MAINTENANCE
-
-    checked: list[str] = []
-    with TestClient(app) as test_client:
-        yield test_client, checked
-    app.dependency_overrides.clear()
-    get_settings.cache_clear()
-
-
 #: The maintenance service's own principal, the caller every test here vends as.
 _MAINTENANCE = ServicePrincipal.for_account("system:serviceaccount:rask:maintenance")
+TABLE = "lance_catalog$db$t"
 
 
-#: The ROUTER's own rung, enforced by `fga_deps` before this door is reached. Always granted here and
-#: never recorded: it gates whether the caller may address the table at all, which is a different
-#: question from which rung opens the WRITE tier, and letting it deny would mask the answer under a 403
-#: from one layer up.
-_ROUTER_RUNG = "can_read_data"
+@pytest.fixture
+def governed(governed_catalog: GovernedCatalog) -> Iterator[tuple[GovernedCatalog, str]]:
+    """bob's ``db$t``, made through the doors; every later request is the maintenance identity's. Yields the catalog and
+    the table's object."""
+    from catalog.api import security
+    from catalog.api.dependencies import get_vendor
+
+    assert governed_catalog.create_in_the_estate("bob", "db").status_code == 200
+    governed_catalog.create_table("bob", TABLE)
+    table = f"table:{governed_catalog.uuid('table', TABLE, 'bob')}"
+    app = governed_catalog.client.app
+    app.dependency_overrides[get_vendor] = lambda: _Vendor()
+    app.dependency_overrides[security.authenticate] = lambda: _MAINTENANCE
+    yield governed_catalog, table
 
 
-def _grant(
-    monkeypatch: pytest.MonkeyPatch,
-    checked: list[str],
-    *,
-    allow: set[str],
-    router_grants: set[str] | None = None,
-) -> None:
-    """Stub the model, not the door: record the write-tier rungs asked about, allow only `allow`.
-
-    ``router_grants`` defaults to granting the router's own rung, so the tests about the DOOR are not
-    answered by the gate in front of it. Pass an explicit set to exercise the router itself.
-    """
-    from lakehouse.governed import fga_reads
-
-    granted_at_router = {_ROUTER_RUNG} if router_grants is None else router_grants
-
-    def _allowed(relation: str) -> bool:
-        if relation in granted_at_router:
-            return True
-        checked.append(relation)
-        return relation in allow
-
-    async def _check(_client: object, *, user: str, relation: str, obj: str, **_: object) -> bool:
-        return _allowed(relation)
-
-    async def _batch_check(_client: object, *, user: str, relation: str, objects: list[str], **_: object) -> dict[str, bool]:
-        """The same model asked of several objects at once, recorded once per object: a refused read asks it of the
-        namespaces above the name."""
-        return {obj: _allowed(relation) for obj in objects}
-
-    monkeypatch.setattr(fga_reads, "check", _check)
-    monkeypatch.setattr(fga_reads, "batch_check", _batch_check)
-
-
-def test_the_maintenance_identity_gets_the_maintain_tier_credential(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
-    client, checked = governed
-    _grant(monkeypatch, checked, allow={"can_maintain", "can_vend_maintain"})
-
-    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=maintain")
-
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["mode"] == "direct"
-    assert checked == ["can_vend_maintain"], f"the maintain tier asks its own rung only: {checked}"
+_CREDENTIALS = f"/management/v1/table/{TABLE}/credentials"
 
 
 @pytest.mark.parametrize(
-    "held",
+    ("held", "door", "status"),
     [
-        # An owner, who is a maintainer and holds no vend rung, is refused by the model itself: its own suite pins that
-        # (`model.fga.yaml`, `can_vend_maintain: false` for an owner; ADR 0156 C4, [[LH-473]]).
-        pytest.param({"can_write_data"}, id="a-writer"),
+        pytest.param({"maintenance": GovernedCatalog.ESTATE}, f"{_CREDENTIALS}?tier=maintain", 200, id="the-maintenance-identity-gets-the-maintain-tier"),
+        pytest.param({"maintainer": "table"}, f"{_CREDENTIALS}?tier=maintain", 403, id="a-maintainer-is-refused-the-maintain-tier"),
+        pytest.param({"writer": "table"}, f"{_CREDENTIALS}?tier=maintain", 403, id="a-writer-is-refused-the-maintain-tier"),
+        pytest.param({"maintainer": "table"}, f"{_CREDENTIALS}?tier=write", 403, id="a-maintainer-is-refused-the-write-tier"),
+        pytest.param({"writer": "table"}, f"{_CREDENTIALS}?tier=write", 200, id="a-writer-gets-the-write-tier"),
+        pytest.param({"reader": "table"}, _CREDENTIALS, 200, id="a-reader-gets-the-read-tier"),
+        pytest.param({}, f"{_CREDENTIALS}?tier=maintain", 403, id="holding-no-rung-is-refused-at-the-route"),
+        pytest.param({"maintainer": "table"}, f"/v1/table/{TABLE}/query", 403, id="can-maintain-opens-no-data-read"),
     ],
 )
-def test_only_the_maintenance_identity_obtains_the_maintain_tier(
-    governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch, held: set[str]
-) -> None:
-    """The escalation the split exists to close: neither writing nor owning opens the whole-prefix policy."""
-    client, checked = governed
-    _grant(monkeypatch, checked, allow=held)
+def test_each_writing_tier_opens_to_its_own_rung_only(governed: tuple[GovernedCatalog, str], held: dict[str, str], door: str, status: int) -> None:
+    """A maintainer holds no read rung, so the route opening to the maintain tier without one is what lets the
+    maintenance identity reach it at all (measured 2026-09-08: the route asked `can_read_data` and refused every rewrite);
+    `query` is a data read like `credentials`, and a maintainer must not gain it."""
+    catalog, table = governed
+    if held:
+        catalog.store.write(*((user_object(_MAINTENANCE.subject), rung, table if on == "table" else on) for rung, on in held.items()))
 
-    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=maintain")
+    resp = catalog.client.post(door, json={}) if door.endswith("/query") else catalog.client.post(door)
 
-    assert resp.status_code == 403, resp.text
-    assert checked == ["can_vend_maintain"]
-
-
-def test_a_maintainer_cannot_obtain_the_write_tier(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The model's separation holds at the door: a maintainer is not a logical writer."""
-    client, checked = governed
-    _grant(monkeypatch, checked, allow={"can_maintain"})
-
-    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=write")
-
-    assert resp.status_code == 403, resp.text
-    assert checked == ["can_write_data"]
-
-
-def test_the_READ_tier_never_consults_either_rung(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The guard is write-tier only; a read vend is gated by the router, not here."""
-    client, checked = governed
-    _grant(monkeypatch, checked, allow=set())
-
-    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials")
-
-    assert resp.status_code == 200, resp.text
-    assert checked == []
-
-
-# --------------------------------------------------------------------------- #
-# the ROUTER rung — the gate in front of the door above
-# --------------------------------------------------------------------------- #
-
-
-def test_a_maintainer_REACHES_the_vend_route_at_all(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The door above is unreachable without this, which is how it landed and changed nothing.
-
-    MEASURED 2026-09-08: `cd4697ab` deployed, 92 `maintainer` tuples written, `can_maintain` verified
-    TRUE on the live store — and the sweep tick was byte-identical (AMBIENT 207, SCOPED 78, 207 x 403).
-    `read_actions` lists `credentials` in `DATA_READ_ACTIONS`, so the ROUTER required `can_read_data` and
-    refused before the endpoint ran. Measured on a table that was falling back:
-
-        can_read_data=False  can_get_metadata=False  can_write_data=False  can_maintain=True
-
-    The model's own separation is what collided: a maintainer is deliberately not a reader, and this
-    route assumed every credential request implies a data read.
-    """
-    client, checked = governed
-    _grant(monkeypatch, checked, allow={"can_maintain", "can_vend_maintain"}, router_grants=set())
-
-    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=maintain")
-
-    assert resp.status_code == 200, resp.text
-    assert resp.json()["mode"] == "direct"
-
-
-def test_holding_NEITHER_router_rung_is_still_refused_at_the_route(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The half that makes the above mean something: the route still refuses a caller with no rung."""
-    client, checked = governed
-    _grant(monkeypatch, checked, allow=set(), router_grants=set())
-
-    resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=maintain")
-
-    assert resp.status_code == 403, resp.text
-
-
-def test_can_maintain_opens_NOTHING_ELSE_on_the_table(governed: tuple[TestClient, list[str]], monkeypatch: pytest.MonkeyPatch) -> None:
-    """The blast radius, and the reason this is a second door on one action at one tier rather than a wider rung.
-
-    `query` is a DATA READ like `credentials` is, and a maintainer must NOT gain it — that is the whole
-    content of "a maintainer is not a reader". If this ever passes, the alternative has leaked from one
-    action to the reader tier at large.
-    """
-    client, checked = governed
-    _grant(monkeypatch, checked, allow={"can_maintain"}, router_grants=set())
-
-    resp = client.post("/v1/table/lance_catalog$db$t/query", json={})
-
-    assert resp.status_code == 403, f"can_maintain must not open a data read: {resp.status_code} {resp.text[:200]}"
+    assert resp.status_code == status, resp.text
+    if status == 200:
+        assert resp.json()["mode"] == "direct"
+    else:
+        assert resp.json()["code"] == 15, resp.text

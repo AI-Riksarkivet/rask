@@ -1,16 +1,15 @@
 """A project defines its labels; an object's owner attaches them; a member finds the objects by them (ADR 0211).
 
-On the real catalog app over real pylance with OIDC and FGA on, in a registered warehouse of project ``acme``. The
-OpenFGA store is an in-memory double behind the real `lakehouse.governed.fga_reads` and `fga_writes` functions that answers a check from an
-explicit grant set, so who may act IS the claim here: alice administers the project, bob owns one table and reads the
-project, carol is a member who sees only what she is granted.
+Against the catalog as deployed over real pylance, a loopback Dex signing callers in and a real OpenFGA deciding on a store
+of the test's own, in a registered warehouse of project ``acme``. Who may act IS the claim here, so each caller holds
+only the rungs named: alice administers the project and owns everything in it, bob owns one table and is a member,
+carol is a member who reads one table.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Mapping
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import httpx
 import pyarrow as pa
@@ -18,17 +17,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.api.dependencies import get_control_emitter, get_namespace
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import get_settings
 from catalog.services import object_uuids, table_claims, warehouses
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids
-from lakehouse.storage.options import StorageOptions
 from tests import seeding
-from tests.integration.openfga_grants import Grants, act_as
+from tests.governed_catalog import GovernedCatalog
 
 
-AUTH = {"Authorization": "Bearer t"}
-ARROW = {**AUTH, "content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 WAREHOUSE = "acme-bucket"
 PROJECT = "acme"
 SALES = f"{WAREHOUSE}$sales"
@@ -37,50 +34,42 @@ REFUNDS = f"{SALES}$refunds"
 
 
 @pytest.fixture
-def estate(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Grants]:
-    """Project ``acme`` with warehouse ``WAREHOUSE``, namespace ``sales`` holding ``orders`` and ``refunds``.
+def estate(governed_catalog: GovernedCatalog, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> GovernedCatalog:
+    """Project ``acme`` with warehouse ``WAREHOUSE``, namespace ``sales`` holding ``orders`` and ``refunds``, drops kept a week.
 
-    alice administers the project and owns everything in it; bob owns ``orders`` alone; carol is a member reading
-    ``refunds`` alone.
+    alice administers the project and owns everything in it, as the doors that made it seed her; bob owns ``orders``
+    alone and is a member; carol is a member reading ``refunds`` alone. The project's and warehouse's records and the
+    warehouse's project edge are written where their doors write them, since the warehouse door provisions a bucket a
+    ``dir`` estate has none of.
     """
-    root = str(tmp_path)
-    settings = Settings.model_validate(
-        {
-            "root": root,
-            "oidc_enabled": True,
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "oidc_issuer": "https://idp.example",
-            "oidc_audience": "lance",
-            "fga_enabled": True,
-            "fga_api_url": "http://openfga:8080",
-            "trash_grace_days": 7,
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
-    client = real_ns_client
-    client.app.dependency_overrides[get_settings] = lambda: settings
-    client.app.state.oidc = MagicMock()
-    store = Grants()
-    client.app.state.fga = store
-    seeding.put_project(root, StorageOptions(), {"id": PROJECT, "created_at": "t"})
+    monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "7")
+    get_settings.cache_clear()
+    root, catalog, client = str(tmp_path), governed_catalog, governed_catalog.client
+    seeding.put_project(root, get_settings().storage_options(), {"id": PROJECT, "created_at": "t"})
     seeding.put_warehouse(
-        root, StorageOptions(), {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"}
+        root,
+        get_settings().storage_options(),
+        {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"},
     )
     warehouses.ensure_catalog_row(client.app.dependency_overrides[get_namespace](), WAREHOUSE)
-    store.grant("alice", ("can_create_namespace", f"warehouse:{WAREHOUSE}"), ("can_administer", f"project:{PROJECT}"), ("member", f"project:{PROJECT}"))
-    act_as(client, "alice")
-    assert client.post(f"/v1/namespace/{SALES}/create", json={}, headers=AUTH).status_code == 200
-    sales = _object(client, "namespace", SALES)
-    store.grant("alice", ("can_create_table", sales), ("can_label", sales), ("can_get_metadata", sales))
+    project = f"project:{PROJECT}"
+    catalog.store.write(
+        (project, "project", f"warehouse:{WAREHOUSE}"),
+        (catalog.person("alice"), "admin", project),
+        (catalog.person("alice"), "writer", f"warehouse:{WAREHOUSE}"),
+    )
+    catalog.act_as("alice")
+    assert client.post(f"/v1/namespace/{SALES}/create", json={}).status_code == 200
     for table in (ORDERS, REFUNDS):
         assert client.post(f"/v1/table/{table}/create?mode=create", content=_rows(), headers=ARROW).status_code == 200
-        store.grant("alice", ("can_label", _object(client, "table", table)), ("can_get_metadata", _object(client, "table", table)))
     orders, refunds = _object(client, "table", ORDERS), _object(client, "table", REFUNDS)
-    store.grant("bob", ("can_label", orders), ("can_get_metadata", orders), ("member", f"project:{PROJECT}"))
-    store.grant("carol", ("can_get_metadata", refunds), ("member", f"project:{PROJECT}"))
-    yield store
+    catalog.store.write(
+        (catalog.person("bob"), "owner", orders),
+        (catalog.person("bob"), "member", project),
+        (catalog.person("carol"), "reader", refunds),
+        (catalog.person("carol"), "member", project),
+    )
+    return catalog
 
 
 class _Announced:
@@ -107,17 +96,17 @@ def _object(client: TestClient, kind: str, name: str) -> str:
     segments = name.split("$")
     if kind == "namespace":
         return fga_ids.namespace_object(object_uuids.require_namespace_uuid(ns, segments))
-    table_uuid = object_uuids.table_uuid(ns, table_claims.claim_store(client.app.dependency_overrides[get_settings]()), segments)
+    table_uuid = object_uuids.table_uuid(ns, table_claims.claim_store(get_settings()), segments)
     assert table_uuid is not None, f"table {name} carries no uuid"
     return fga_ids.table_object(table_uuid)
 
 
 def _define(client: TestClient, body: Mapping[str, object]) -> httpx.Response:
-    return client.post(f"/management/v1/projects/{PROJECT}/labels/define", json=body, headers=AUTH)
+    return client.post(f"/management/v1/projects/{PROJECT}/labels/define", json=body)
 
 
 def _set(client: TestClient, kind: str, name: str, label: str, value: str | None = None) -> httpx.Response:
-    return client.post(f"/management/v1/{kind}/{name}/labels/set", json={"name": label, "value": value}, headers=AUTH)
+    return client.post(f"/management/v1/{kind}/{name}/labels/set", json={"name": label, "value": value})
 
 
 def _code(resp: httpx.Response) -> tuple[int, int]:
@@ -129,16 +118,16 @@ DOMAIN = {"name": "domain", "scope": ["table"], "kind": "enumerated", "allowed_v
 PII = {"name": "pii", "scope": ["namespace", "table"], "kind": "marker"}
 
 
-def test_only_the_projects_admin_defines_a_label_and_a_definition_only_grows(real_ns_client: TestClient, estate: Grants) -> None:
+def test_only_the_projects_admin_defines_a_label_and_a_definition_only_grows(estate: GovernedCatalog) -> None:
     """bob, a member, is refused PermissionDenied (15); alice defines ``domain``, and applying it again as it stands
     announces nothing, as a producer declaring its labels on every reconcile does. Evolving it may add a value and a kind
     of object, never drop one or change its kind (13); every member reads the definitions, and an outsider is answered
     the missing project's 404."""
-    client = real_ns_client
-    act_as(client, "bob")
+    client = estate.client
+    estate.act_as("bob")
     assert _code(_define(client, DOMAIN)) == (403, 15)
 
-    act_as(client, "alice")
+    estate.act_as("alice")
     announced = _Announced()
     client.app.dependency_overrides[get_control_emitter] = lambda: announced
     defined = _define(client, DOMAIN)
@@ -156,22 +145,22 @@ def test_only_the_projects_admin_defines_a_label_and_a_definition_only_grows(rea
     assert _code(_define(client, {**DOMAIN, "kind": "free_text", "allowed_values": None})) == (400, 13)
     assert _code(_define(client, {**PII, "name": "rask.tier"})) == (400, 13)
 
-    act_as(client, "carol")
-    assert [d["name"] for d in client.get(f"/management/v1/projects/{PROJECT}/labels", headers=AUTH).json()] == ["domain"]
-    act_as(client, "dave")
-    assert _code(client.get(f"/management/v1/projects/{PROJECT}/labels", headers=AUTH)) == (404, 4)
+    estate.act_as("carol")
+    assert [d["name"] for d in client.get(f"/management/v1/projects/{PROJECT}/labels").json()] == ["domain"]
+    estate.act_as("dave")
+    assert _code(client.get(f"/management/v1/projects/{PROJECT}/labels")) == (404, 4)
 
 
-def test_an_owner_attaches_a_label_the_project_defines_with_a_value_it_allows(real_ns_client: TestClient, estate: Grants) -> None:
+def test_an_owner_attaches_a_label_the_project_defines_with_a_value_it_allows(estate: GovernedCatalog) -> None:
     """bob owns ``orders``: he attaches ``domain=finance``, is refused a value the label does not allow, a label the
     project does not define and a marker with a value (13), and ``refunds``, which he does not own (15). A rename keeps
     the labels, since they are kept under the table's uuid."""
-    client = real_ns_client
-    act_as(client, "alice")
+    client = estate.client
+    estate.act_as("alice")
     assert _define(client, DOMAIN).status_code == 200
     assert _define(client, PII).status_code == 200
 
-    act_as(client, "bob")
+    estate.act_as("bob")
     attached = _set(client, "table", ORDERS, "domain", "finance")
     assert (attached.status_code, attached.json()["labels"]) == (200, {"domain": "finance"}), attached.text
     assert _code(_set(client, "table", ORDERS, "domain", "legal")) == (400, 13)
@@ -180,25 +169,24 @@ def test_an_owner_attaches_a_label_the_project_defines_with_a_value_it_allows(re
     assert _code(_set(client, "table", REFUNDS, "pii")) == (403, 15)
     assert _set(client, "table", ORDERS, "pii").json()["labels"] == {"domain": "finance", "pii": None}
 
-    act_as(client, "alice")
-    estate.grant("alice", ("can_drop", _object(client, "table", ORDERS)))
-    renamed = client.post(f"/v1/table/{ORDERS}/rename", json={"new_table_name": "ledger", "new_namespace_id": [WAREHOUSE, "sales"]}, headers=AUTH)
+    estate.act_as("alice")
+    renamed = client.post(f"/v1/table/{ORDERS}/rename", json={"new_table_name": "ledger", "new_namespace_id": [WAREHOUSE, "sales"]})
     assert renamed.status_code == 200, renamed.text
-    described = client.post(f"/management/v1/table/{SALES}$ledger/labels/describe", json={}, headers=AUTH)
+    described = client.post(f"/management/v1/table/{SALES}$ledger/labels/describe", json={})
     assert described.json()["labels"] == {"domain": "finance", "pii": None}
     # An owner who is no member of the project still reads what it may attach, on the object it reads.
-    estate.grant("erin", ("can_label", _object(client, "table", f"{SALES}$ledger")), ("can_get_metadata", _object(client, "table", f"{SALES}$ledger")))
-    act_as(client, "erin")
-    offered = client.post(f"/management/v1/table/{SALES}$ledger/labels/describe", json={}, headers=AUTH).json()["available"]
+    estate.store.write((estate.person("erin"), "owner", _object(client, "table", f"{SALES}$ledger")))
+    estate.act_as("erin")
+    offered = client.post(f"/management/v1/table/{SALES}$ledger/labels/describe", json={}).json()["available"]
     assert sorted(d["name"] for d in offered) == ["domain", "pii"]
 
 
-def test_a_member_finds_the_objects_carrying_a_label_among_those_it_may_see(real_ns_client: TestClient, estate: Grants) -> None:
-    """alice labels both tables and the namespace ``pii``. carol, who sees only ``refunds``, is listed only it; alice is
-    listed all three, and filtering by ``domain`` narrows to the table carrying it. A table dropped to the trash leaves
+def test_a_member_finds_the_objects_carrying_a_label_among_those_it_may_see(estate: GovernedCatalog) -> None:
+    """alice labels both tables and the namespace ``pii``. carol, who reads only ``refunds``, is listed it and the namespace
+    her grant on it lets her see (`model.fga`: `can_get_metadata from child`), never ``orders``; alice is listed all three, and filtering by ``domain`` narrows to the table carrying it. A table dropped to the trash leaves
     the list."""
-    client = real_ns_client
-    act_as(client, "alice")
+    client = estate.client
+    estate.act_as("alice")
     assert _define(client, DOMAIN).status_code == 200
     assert _define(client, PII).status_code == 200
     for kind, name in (("table", ORDERS), ("table", REFUNDS), ("namespace", SALES)):
@@ -206,59 +194,58 @@ def test_a_member_finds_the_objects_carrying_a_label_among_those_it_may_see(real
     assert _set(client, "table", ORDERS, "domain", "ops").status_code == 200
 
     def listed(user: str, query: str = "") -> list[tuple[str, str]]:
-        act_as(client, user)
-        resp = client.get(f"/management/v1/projects/{PROJECT}/labels/objects{query}", headers=AUTH)
+        estate.act_as(user)
+        resp = client.get(f"/management/v1/projects/{PROJECT}/labels/objects{query}")
         assert resp.status_code == 200, resp.text
         return sorted((o["kind"], o["id"]) for o in resp.json()["objects"])
 
-    assert listed("carol") == [("table", REFUNDS)]
+    assert listed("carol") == [("namespace", SALES), ("table", REFUNDS)]
     assert listed("alice") == [("namespace", SALES), ("table", ORDERS), ("table", REFUNDS)]
     assert listed("alice", "?label=domain") == [("table", ORDERS)]
 
     # A table in the trash is addressed by nobody, so it is listed to nobody.
-    act_as(client, "alice")
-    estate.grant("alice", ("can_drop", _object(client, "table", REFUNDS)))
-    assert client.post(f"/v1/table/{REFUNDS}/drop", json={}, headers=AUTH).status_code == 200
-    assert listed("carol") == []
+    estate.act_as("alice")
+    assert client.post(f"/v1/table/{REFUNDS}/drop", json={}).status_code == 200
+    # The table's grants are kept in the trash for its undrop, so carol still sees the namespace her grant on it lights.
+    assert listed("carol") == [("namespace", SALES)]
     assert listed("alice") == [("namespace", SALES), ("table", ORDERS)]
 
 
-def test_a_label_is_deleted_once_no_standing_object_carries_it_and_never_comes_back(real_ns_client: TestClient, estate: Grants, tmp_path: Path) -> None:
+def test_a_label_is_deleted_once_no_standing_object_carries_it_and_never_comes_back(estate: GovernedCatalog, tmp_path: Path) -> None:
     """Deleting ``pii`` while a table carries it is refused NamespaceNotEmpty (409, 3) naming the table as it is named
     now, and a member is refused the delete (15). A table in the trash does not hold the definition: once the standing
     table's label is removed the delete lands, and the trashed table, restored after ``pii`` is defined again, shows no
     label, since the one it kept was attached under the definition that is gone."""
-    client = real_ns_client
-    act_as(client, "alice")
+    client = estate.client
+    estate.act_as("alice")
     assert _define(client, PII).status_code == 200
     assert _set(client, "table", REFUNDS, "pii").status_code == 200
-    act_as(client, "bob")
+    estate.act_as("bob")
     assert _set(client, "table", ORDERS, "pii").status_code == 200
-    assert _code(client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete", headers=AUTH)) == (403, 15)
+    assert _code(client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete")) == (403, 15)
 
-    act_as(client, "alice")
-    estate.grant("alice", ("can_drop", _object(client, "table", ORDERS)), ("can_drop", _object(client, "table", REFUNDS)))
-    renamed = client.post(f"/v1/table/{ORDERS}/rename", json={"new_table_name": "ledger", "new_namespace_id": [WAREHOUSE, "sales"]}, headers=AUTH)
+    estate.act_as("alice")
+    renamed = client.post(f"/v1/table/{ORDERS}/rename", json={"new_table_name": "ledger", "new_namespace_id": [WAREHOUSE, "sales"]})
     assert renamed.status_code == 200, renamed.text
-    assert client.post(f"/v1/table/{REFUNDS}/drop", json={}, headers=AUTH).status_code == 200
-    refused = client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete", headers=AUTH)
+    assert client.post(f"/v1/table/{REFUNDS}/drop", json={}).status_code == 200
+    refused = client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete")
     assert _code(refused) == (409, 3)
     assert refused.json()["detail"] == f"label 'pii' is attached to 1 object(s) ({SALES}$ledger); remove it from each first"
 
-    act_as(client, "bob")
-    removed = client.post(f"/management/v1/table/{SALES}$ledger/labels/remove", json={"name": "pii"}, headers=AUTH)
+    estate.act_as("bob")
+    removed = client.post(f"/management/v1/table/{SALES}$ledger/labels/remove", json={"name": "pii"})
     assert removed.json()["labels"] == {}
     # A labels record that cannot be read may carry the label, so it is no evidence that nothing does: the delete is
     # refused as the record's own state (500, 18), and the definition stands until the record is read or written again.
-    act_as(client, "alice")
+    estate.act_as("alice")
     unreadable = tmp_path / "_labels" / "table-unreadable.json"
     unreadable.write_bytes(b"\xff not json")
-    assert _code(client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete", headers=AUTH)) == (500, 18)
-    assert [d["name"] for d in client.get(f"/management/v1/projects/{PROJECT}/labels", headers=AUTH).json()] == ["pii"]
+    assert _code(client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete")) == (500, 18)
+    assert [d["name"] for d in client.get(f"/management/v1/projects/{PROJECT}/labels").json()] == ["pii"]
     unreadable.unlink()
-    assert client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete", headers=AUTH).status_code == 200
-    assert client.get(f"/management/v1/projects/{PROJECT}/labels", headers=AUTH).json() == []
+    assert client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete").status_code == 200
+    assert client.get(f"/management/v1/projects/{PROJECT}/labels").json() == []
 
     assert _define(client, PII).status_code == 200
-    assert client.post(f"/management/v1/table/{REFUNDS}/undrop", json={}, headers=AUTH).status_code == 200
-    assert client.post(f"/management/v1/table/{REFUNDS}/labels/describe", json={}, headers=AUTH).json()["labels"] == {}
+    assert client.post(f"/management/v1/table/{REFUNDS}/undrop", json={}).status_code == 200
+    assert client.post(f"/management/v1/table/{REFUNDS}/labels/describe", json={}).json()["labels"] == {}

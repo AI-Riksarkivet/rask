@@ -20,11 +20,10 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.v1.endpoints import projects as ep
-from lakehouse.governed import fga_resilience
+from lakehouse.governed import fga_provision
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-from lakehouse.records.project_records import ProjectRecord
 from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.options import StorageOptions
 
@@ -98,45 +97,6 @@ def test_get_project_returns_list_shape(monkeypatch: pytest.MonkeyPatch) -> None
     assert [w.id for w in result.warehouses] == ["wh-a", "wh-b"] and result.admins == []
 
 
-# ── the gate: the list is the CALLER's projects ─────────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize(("estate_observer", "expected"), [(True, ["acme", "fresh", "globex"]), (False, ["fresh", "globex"])])
-def test_the_list_is_the_callers_projects(monkeypatch: pytest.MonkeyPatch, estate_observer: bool, expected: list[str]) -> None:
-    """An estate observer lists every tenant; anyone else lists the registry's projects they are a member of.
-
-    `fresh` has a registry record and no warehouse, so it comes from the project registry; `ghost` is a
-    membership FGA holds for a project no registry knows, which lists nothing.
-    """
-    _patch_records(monkeypatch, _RECORDS)
-    monkeypatch.setattr(ep.project_registry, "list_projects", lambda _root, _so: [ProjectRecord(id="fresh")])
-    checks: list[tuple[str, str, str]] = []
-
-    async def _fake_check(_client: Any, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
-        checks.append((user, relation, obj))
-        return estate_observer
-
-    members = {"project:globex", "project:fresh", "project:ghost"}
-    asked: list[list[str]] = []
-
-    async def _fake_batch_check(_client: Any, *, user: str, relation: str, objects: list[str], **_kw: Any) -> dict[str, bool]:
-        assert (user, relation) == ("dex~bob", "member")
-        asked.append(objects)
-        return {obj: obj in members for obj in objects}
-
-    async def _no_admins(*_a: Any, **_k: Any) -> list[str]:
-        return []
-
-    monkeypatch.setattr(ep.fga_reads, "check", _fake_check)
-    monkeypatch.setattr(ep.fga_reads, "batch_check", _fake_batch_check)
-    monkeypatch.setattr(ep.fga_reads, "list_users", _no_admins)
-    result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
-    assert [p.project for p in result] == expected
-    assert checks == [("dex~bob", "can_list_all_projects", "warehouse:lance_catalog")]
-    # A member's listing judges the registry's own candidates, never the projects FGA says the caller reaches.
-    assert asked == ([] if estate_observer else [["project:acme", "project:fresh", "project:globex"]])
-
-
 # ── admins: fga_reads.list_users on project:<id>#can_administer, degrading — never a 500 ───────────────────
 
 
@@ -150,22 +110,26 @@ def _an_estate_observer(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ep.fga_reads, "check", _observes)
 
 
-def test_admins_from_fga_list_users(monkeypatch: pytest.MonkeyPatch) -> None:
-    _an_estate_observer(monkeypatch)
+def test_admins_are_the_projects_effective_administrators(monkeypatch: pytest.MonkeyPatch, openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """``admins`` is ``can_administer`` on each project as the real model derives it: a direct admin and a role's
+    assignee alike, and nobody who is only a member. bob observes the estate, so he lists every tenant."""
     _patch_records(monkeypatch, _RECORDS)
-    calls: list[tuple[str, str]] = []
+    openfga_store.write(
+        ("user:dex~bob", "owner", "estate:rask"),
+        ("user:dex~alice", "admin", "project:acme"),
+        ("role:leads#assignee", "admin", "project:acme"),
+        ("user:dex~carol", "assignee", "role:leads"),
+        ("user:dex~dave", "member", "project:globex"),
+    )
+    settings: Any = SimpleNamespace(**{**vars(_settings(fga_enabled=True)), "fga_root_object": "estate:rask"})
 
-    async def _fake_list_users(_client: Any, *, relation: str, obj: str, **kw: Any) -> list[str]:
-        calls.append((relation, obj))
-        # Display-only path: a single attempt under the tight per-call budget — the wrapper's default
-        # bounded-retry ladder alone could exceed it, so the endpoint must pin one attempt.
-        assert kw == {"retry": fga_resilience.ONE_ATTEMPT}
-        return ["alice"] if obj == "project:acme" else []
+    async def _listed() -> list[ep.ProjectResponse]:
+        async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
+            return await ep.list_projects(settings=settings, token=_BOB, client=client)
 
-    monkeypatch.setattr(ep.fga_reads, "list_users", _fake_list_users)
-    result = _list(_settings(fga_enabled=True), token=_BOB, client=_client())
-    assert [(p.project, p.admins) for p in result] == [("acme", ["alice"]), ("globex", [])]
-    assert sorted(calls) == [("can_administer", "project:acme"), ("can_administer", "project:globex")]
+    result = asyncio.run(_listed())
+
+    assert [(p.project, sorted(p.admins)) for p in result] == [("acme", ["dex~alice", "dex~carol"]), ("globex", [])]
 
 
 def test_admins_degrade_on_fga_outage(monkeypatch: pytest.MonkeyPatch) -> None:

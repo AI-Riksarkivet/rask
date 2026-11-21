@@ -12,9 +12,9 @@ Driven through lineage's real router behind its real authentication-then-FGA gat
 * the provenance store, as a feed of two rows: what the feed holds is not this claim, who may read all of it is;
 * the verified caller, as lineage's `authenticate` overridden to the principal a client's projected token maps to (the
   token's own verification is [[LH-220]]'s, not this claim);
-* OpenFGA, as a client answering from the one relation the chart's grant derives for that subject. The derivation
-  itself, `event_reader` to `can_read_event_feed` and nothing wider, is `model.fga.yaml`'s claim, the one place authz is
-  checked against the real evaluator offline.
+
+and every decision is the real model's on an OpenFGA store of the test's own, where the reader holds the one tuple the
+chart's grant writes, `event_reader` on the estate root.
 
 The projection serves each row as lineage recorded it, and an outside producer's run is recorded under the uuid lineage
 resolved when it took the event in, never one its body claims ([[LH-522]]): driven through a live catalog and a live
@@ -24,21 +24,19 @@ lineage, with authentication off.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterator
+from collections.abc import AsyncGenerator, Iterator
+from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import cast
+from typing import Any
 
 import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from openfga_sdk import OpenFgaClient
-from openfga_sdk.client.models import ClientBatchCheckRequest, ClientCheckRequest, ClientTuple
-from openfga_sdk.client.models.batch_check_response import ClientBatchCheckResponse
-from openfga_sdk.client.models.batch_check_single_response import ClientBatchCheckSingleResponse
-from openfga_sdk.models.check_response import CheckResponse
 
+from lakehouse.governed import fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
+from lakehouse.governed.fga_ids import user_object
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lineage.api.security import authenticate
@@ -51,10 +49,6 @@ from tests.integration.lineage_app import live_catalog, live_lineage
 #: A client's service account holding `event_reader`, granted to its subject
 #: (`kubernetes~system:serviceaccount:rask:rask-sa-a-notifier`) at the estate admin's tuple door.
 READER = ServicePrincipal.for_account("system:serviceaccount:rask:rask-sa-a-notifier")
-
-#: Every relation OpenFGA answers true for, as `(user, relation, object)`: what the `event_reader` tuple on the estate
-#: root derives for the reader, and nothing else.
-GRANTED = frozenset({("user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-a-notifier", "can_read_event_feed", "estate:rask")})
 
 #: The uuids the catalog minted for the two runs' outputs, which every governed dataset's `rask_lance` facet carries (ADR 0173
 #: §10).
@@ -129,29 +123,10 @@ class _Feed:
         return _Window(rows, (self._rows[0].seq, self._rows[-1].seq) if self._rows else None)
 
 
-class _OpenFga:
-    """Check and BatchCheck answered from `GRANTED`, through the SDK's own request and response classes."""
-
-    async def check(self, body: ClientCheckRequest, options: dict[str, int | str | dict[str, int | str]] | None = None) -> CheckResponse:
-        del options
-        return CheckResponse(allowed=(body.user, body.relation, body.object) in GRANTED)
-
-    async def batch_check(self, body: ClientBatchCheckRequest, options: dict[str, int | str | dict[str, int | str]] | None = None) -> ClientBatchCheckResponse:
-        del options
-        return ClientBatchCheckResponse(
-            [
-                # The SDK hands the batch ITEM back as `request` (client.py `map_response`); its annotation says ClientTuple.
-                ClientBatchCheckSingleResponse(
-                    allowed=(item.user, item.relation, item.object) in GRANTED, request=cast("ClientTuple", item), correlation_id=f"c{index}", error=None
-                )
-                for index, item in enumerate(body.checks)
-            ]
-        )
-
-
 @pytest.fixture
-def lineage(monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:
-    """Lineage's real router behind its real gates, with authentication and FGA on as the chart deploys it, answering as `READER`."""
+def lineage(monkeypatch: pytest.MonkeyPatch, openfga_store: Any) -> Iterator[FastAPI]:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """Lineage's real router behind its real gates, with authentication and FGA on as the chart deploys it, answering as
+    `READER`, who holds `event_reader` on the estate root of a real OpenFGA store."""
     monkeypatch.setenv("RASK_FGA_ENABLED", "true")
     monkeypatch.setenv("RASK_OIDC_ENABLED", "true")
     monkeypatch.setenv("RASK_OIDC_ISSUER", "https://idp.invalid/dex")
@@ -159,11 +134,18 @@ def lineage(monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:
     monkeypatch.setenv("RASK_OIDC_IDP_ID", "dex")
     monkeypatch.setenv("RASK_OIDC_CONNECTORS", '{"local": "dex"}')
     get_settings.cache_clear()
-    app = FastAPI()
+    openfga_store.write((user_object(READER.subject), "event_reader", "estate:rask"))
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+        async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
+            app.state.decider = OpenFgaDecider(client)
+            yield
+
+    app = FastAPI(lifespan=lifespan)
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(api_router)
     app.dependency_overrides[authenticate] = lambda: READER
-    app.state.decider = OpenFgaDecider(cast(OpenFgaClient, _OpenFga()))
     app.state.provenance = _Feed(
         [
             EventRecord(seq=2, outputs=["acme$gold$catalog"], inputs=["acme$silver$pages"], event=TENANT_RUN),

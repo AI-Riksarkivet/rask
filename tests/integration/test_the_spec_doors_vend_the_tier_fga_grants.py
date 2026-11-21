@@ -13,8 +13,11 @@ straight past a catalog that refuses every write.
 Every credential either door mints writes the ``vend_credentials`` issuance record (#532), the record the
 management vend door already writes.
 
-FGA's answers are faked by relation (the offline suite has no OpenFGA); the doors, the write judge and the policy
-decision run for real, and the vendor records the tier it was asked for.
+Which tier a rung opens is judged against the catalog as deployed, a loopback Dex signing callers in and a real OpenFGA
+deciding on a store of the test's own: on a table ``can_get_metadata`` and ``can_read_data`` are the one ``reader`` rung,
+so a caller who may see a table may read it, and a maintainer who is no reader is refused the door. The vendor records
+the tier it was asked for. A vend that fails is driven with FGA's answers faked by relation, since what it pins is the
+store's STS failing, not who may act.
 """
 
 from __future__ import annotations
@@ -38,6 +41,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.storage.credential import S3KeyPair
+from tests.governed_catalog import GovernedCatalog
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
@@ -82,10 +86,7 @@ def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[st
     fake_ns.describe_namespace.return_value = DescribeNamespaceResponse(
         properties={"rask.requires_run": "true", "rask.uuid": uuid_of("namespace", ["lance_catalog", "db"])}
     )
-    recorder = MagicMock()
-    recorder.vend.side_effect = lambda **kw: VendedSession(
-        key_pair=S3KeyPair(access_key_id=f"AK-{kw['tier']}", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1
-    )
+    recorder = _recording_vendor()
     client.app.dependency_overrides[get_vendor] = lambda: recorder
     yield recorder
     client.app.dependency_overrides.pop(get_vendor, None)
@@ -106,46 +107,70 @@ def _grants(monkeypatch: pytest.MonkeyPatch, relations: set[str]) -> None:
 
 _READER = {"can_get_metadata", "can_read_data"}
 _WRITER = _READER | {"can_write_data"}
-_COMPACTOR = _READER | {"can_maintain"}
 _HEADERS = {"Authorization": "Bearer t"}
 
 
+def _recording_vendor() -> MagicMock:
+    """A vendor that records each tier it is asked for and mints a credential naming it."""
+    recorder = MagicMock()
+    recorder.vend.side_effect = lambda **kw: VendedSession(
+        key_pair=S3KeyPair(access_key_id=f"AK-{kw['tier']}", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1
+    )
+    return recorder
+
+
+@pytest.fixture
+def estate(governed_catalog: GovernedCatalog) -> Iterator[tuple[GovernedCatalog, MagicMock]]:
+    """bob's ``lance_catalog$db`` holding ``t``, made through the doors, and the catalog's vendor recording each tier."""
+    assert governed_catalog.create_in_the_estate("bob", "db").status_code == 200
+    governed_catalog.create_table("bob", "lance_catalog$db$t")
+    recorder = _recording_vendor()
+    governed_catalog.client.app.dependency_overrides[get_vendor] = lambda: recorder
+    yield governed_catalog, recorder
+    governed_catalog.client.app.dependency_overrides.pop(get_vendor, None)
+
+
 @pytest.mark.parametrize(
-    ("door", "relations", "body", "tier", "read_only"),
+    ("door", "rungs", "body", "tier", "read_only"),
     [
-        pytest.param("describe", _READER, {}, "read", False, id="a-reader-gets-the-read-tier"),
-        pytest.param("describe", _WRITER, {}, "write", False, id="a-writer-gets-the-write-tier"),
-        pytest.param("describe", _COMPACTOR, {}, "write", False, id="a-reader-who-maintains-gets-the-write-tier"),
-        pytest.param("describe", {"can_get_metadata", "can_maintain"}, {}, None, False, id="a-maintainer-who-may-not-read-gets-none"),
-        pytest.param("describe", _WRITER, {"vend_credentials": True}, "write", False, id="an-explicit-ask-gets-the-same-tier"),
-        pytest.param("describe", _WRITER, {"vend_credentials": False}, None, False, id="asking-for-none-gets-none"),
-        pytest.param("describe", {"can_get_metadata"}, {}, None, False, id="metadata-without-data-gets-none"),
-        pytest.param("describe", {"can_get_metadata"}, {"vend_credentials": True}, 403, False, id="metadata-without-data-that-asks-is-refused"),
-        pytest.param("declare", _WRITER, {}, "write", False, id="a-declarer-gets-the-write-tier"),
-        pytest.param("describe", _WRITER, {"vend_credentials": True}, "read", True, id="a-writer-in-a-read-only-window-gets-the-read-tier"),
+        pytest.param("describe", ("reader",), {}, "read", False, id="a-reader-gets-the-read-tier"),
+        pytest.param("describe", ("writer",), {}, "write", False, id="a-writer-gets-the-write-tier"),
+        pytest.param("describe", ("reader", "maintainer"), {}, "write", False, id="a-reader-who-maintains-gets-the-write-tier"),
+        pytest.param("describe", ("maintainer",), {}, 403, False, id="a-maintainer-who-may-not-read-is-refused"),
+        pytest.param("describe", ("writer",), {"vend_credentials": True}, "write", False, id="an-explicit-ask-gets-the-same-tier"),
+        pytest.param("describe", ("writer",), {"vend_credentials": False}, None, False, id="asking-for-none-gets-none"),
+        pytest.param("describe", (), {"vend_credentials": True}, 403, False, id="no-rung-that-asks-is-refused"),
+        pytest.param("declare", ("writer",), {}, "write", False, id="a-declarer-gets-the-write-tier"),
+        pytest.param("describe", ("writer",), {"vend_credentials": True}, "read", True, id="a-writer-in-a-read-only-window-gets-the-read-tier"),
     ],
 )
-def test_a_spec_door_vends_the_highest_tier_fga_grants(
-    client: TestClient,
-    fake_ns: MagicMock,
-    vendor: MagicMock,
+def test_a_spec_door_vends_the_highest_tier_fga_grants(  # noqa: PLR0913 - parametrized
+    estate: tuple[GovernedCatalog, MagicMock],
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     door: str,
-    relations: set[str],
+    rungs: tuple[str, ...],
     body: dict[str, bool],
     tier: str | int | None,
     read_only: bool,
 ) -> None:
-    client.app.dependency_overrides[get_settings] = lambda: _auth_settings(read_only=read_only)
-    _grants(monkeypatch, relations)
-    fake_ns.declare_table.return_value = DeclareTableResponse(location=fake_ns.describe_table.return_value.location)
+    catalog, vendor = estate
+    if read_only:
+        monkeypatch.setenv("LANCE_MAINTENANCE_READ_ONLY", "true")
+        get_settings.cache_clear()
+    # A declare is judged on the namespace it declares in, a describe on the table.
+    name, kind = ("lance_catalog$db$fresh", "namespace") if door == "declare" else ("lance_catalog$db$t", "table")
+    obj = f"{kind}:{catalog.uuid(kind, 'lance_catalog$db' if kind == 'namespace' else name, 'bob')}"
+    if rungs:
+        catalog.store.write(*((catalog.person("alice"), rung, obj) for rung in rungs))
+    vendor.vend.reset_mock()
+    caplog.clear()
 
     with caplog.at_level(logging.INFO, logger="lance.audit"):
-        response = client.post(f"/v1/table/lance_catalog$db$t/{door}", json=body, headers=_HEADERS)
+        response = catalog.client.post(f"/v1/table/{name}/{door}", json=body, headers=catalog.bearer("alice"))
 
     if tier == 403:
-        assert response.status_code == 403, response.text
+        assert (response.status_code, response.json()["code"]) == (403, 15), response.text
         assert not vendor.vend.called
         return
     assert response.status_code == 200, response.text

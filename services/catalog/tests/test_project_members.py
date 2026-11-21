@@ -2,126 +2,63 @@
 
 The gap: ``project#admin``/``member`` were writable only by ``seed_project_admin`` at create time and
 by the estate-gated raw tuple editor, so a project admin could not invite anyone into their own
-tenant. These pin how the grant door writes and how the door lists. The property that makes
+tenant. These pin how the grant door writes and who may make it write. The property that makes
 ``can_grant_admin: admin`` safe to ship, that a project always keeps an administrator, is driven against a real
 OpenFGA in ``services/catalog/tests/test_a_project_always_keeps_an_administrator.py``.
 
-Sync via ``asyncio.run`` — no async-plugin dependency (this repo does not set ``asyncio_mode``).
+On the catalog as deployed with authorization on (``governed_catalog``): root, the estate admin, creates ``acme`` and so
+administers it, and every tuple is read back off the real store.
 """
 
 from __future__ import annotations
 
-import asyncio
-from types import SimpleNamespace
-from typing import Any, cast
+from typing import Any
 
 import pytest
-from unfiled_announcer import unfiled
-
-from catalog.api.v1.endpoints import members
-from catalog.core.config import Settings
-from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
-from lakehouse.problems.domain_errors import ForbiddenError
 
 
-def _tuple(user: str, relation: str, obj: str) -> SimpleNamespace:
-    return SimpleNamespace(user=user, relation=relation, object=obj)
+MEMBERS = "/management/v1/projects/acme/members"
 
 
-class _Harness:
-    """Answers the gate and records the writes the endpoint issues."""
-
-    def __init__(self, existing: list[SimpleNamespace] | None = None, *, allow: bool = True) -> None:
-        self.existing = existing if existing is not None else []
-        self.allow = allow
-        self.written: list[Any] = []
-
-    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        from catalog.api import fga_deps
-
-        async def fake_require(_c: object, _s: object, _t: object, *, relation: str, obj: str) -> None:
-            if not self.allow:
-                raise ForbiddenError(f"{relation} required on {obj}")
-
-        async def fake_read(_c: object, _obj: str, **_kw: object) -> list[SimpleNamespace]:
-            return list(self.existing)
-
-        async def fake_write(_c: object, tuples: list[Any], **_kw: object) -> None:
-            self.written.extend(tuples)
-            self.existing.extend(_tuple(t.user, t.relation, t.object) for t in tuples)
-
-        monkeypatch.setattr(fga_deps, "require_relation", fake_require)
-        monkeypatch.setattr(members.fga_reads, "read_object_tuples", fake_read)
-        monkeypatch.setattr(members.fga_writes, "write_tuples", fake_write)
+@pytest.fixture
+def acme(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """``acme``, made through its door by root, who holds the estate's admin as the catalog's declaration grants it."""
+    catalog = governed_catalog
+    catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
+    assert catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("root")).status_code == 200
+    return catalog
 
 
-def _client() -> Any:
-    """The injected OpenFGA client (catalog-api-09): the doors take it as a dependency now rather than
-    reaching into ``request.app.state``. Loosely typed — every test that needs behaviour monkeypatches
-    ``members.fga_reads.*`` and ``members.fga_writes.*``."""
-    return object()
+@pytest.mark.parametrize(
+    ("caller", "status", "lands"),
+    [
+        pytest.param("root", 200, True, id="the-projects-admin-grants-and-a-bare-subject-is-the-user-it-names"),
+        pytest.param("mallory", 403, False, id="a-caller-who-administers-nothing-is-refused-and-writes-nothing"),
+    ],
+)
+def test_the_grant_door_writes_only_for_the_projects_admin(acme: Any, caller: str, status: int, lands: bool) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """The door asks ``can_grant_member`` on the project, so mallory is refused 403 code 15 and the store is left as it
+    was, and root's grant of the bare ``dex~bob`` is written as the one user it names and listed back."""
+    before = acme.store.tuples()
+
+    answered = acme.client.put(MEMBERS, json={"user": "dex~bob", "relation": "member"}, headers=acme.bearer(caller))
+
+    assert answered.status_code == status, answered.text
+    granted = ("user:dex~bob", "member", "project:acme")
+    assert acme.store.tuples() - before == ({granted} if lands else set())
+    if lands:
+        assert {"user": "user:dex~bob", "relation": "member"} in answered.json()["members"]
+    else:
+        assert answered.json()["code"] == 15, answered.text
 
 
-def _control() -> Any:
-    """The injected announcer, announcing into the void."""
-    return unfiled(NoopControlEmitter())
+def test_a_userset_is_granted_verbatim_and_a_held_grant_again_is_a_noop(acme: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """`role:x#assignee` must NOT become `user:role:x#assignee`, a subject that matches no tuple. And re-granting what
+    someone already holds is answered as the first grant was and leaves the store as it is."""
+    before = acme.store.tuples()
+    for _ in range(2):
+        for user in ("role:curators#assignee", "dex~bob"):
+            answered = acme.client.put(MEMBERS, json={"user": user, "relation": "member"}, headers=acme.bearer("root"))
+            assert answered.status_code == 200, answered.text
 
-
-def _settings(*, fga_enabled: bool = True) -> Settings:
-    return cast(Settings, SimpleNamespace(fga_enabled=fga_enabled))
-
-
-def _token() -> PersonPrincipal:
-    return PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
-
-
-def _grant(h: _Harness, user: str, relation: str) -> members.MemberList:
-    body = members.GrantRequest(user=user, relation=cast(Any, relation))
-    return asyncio.run(members.grant_member("acme", body, _client(), _control(), _settings(), _token()))
-
-
-def test_a_denied_gate_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
-    h = _Harness(allow=False)
-    h.install(monkeypatch)
-    with pytest.raises(ForbiddenError):
-        _grant(h, "dex~bob", "admin")
-    assert h.written == []
-
-
-# --------------------------------------------------------------------------- #
-# The gate, on the project object
-# --------------------------------------------------------------------------- #
-
-
-# --------------------------------------------------------------------------- #
-# Grant
-# --------------------------------------------------------------------------- #
-
-
-def test_grant_writes_the_tuple_and_normalises_a_bare_subject(monkeypatch: pytest.MonkeyPatch) -> None:
-    h = _Harness()
-    h.install(monkeypatch)
-    out = _grant(h, "dex~bob", "member")
-    assert len(h.written) == 1
-    assert (h.written[0].user, h.written[0].relation, h.written[0].object) == ("user:dex~bob", "member", "project:acme")
-    assert members.Member(user="user:dex~bob", relation="member") in out.members
-
-
-def test_a_qualified_userset_passes_through_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`role:x#assignee` must NOT become `user:role:x#assignee` — that subject matches no tuple."""
-    h = _Harness()
-    h.install(monkeypatch)
-    _grant(h, "role:curators#assignee", "member")
-    assert h.written[0].user == "role:curators#assignee"
-
-
-def test_regranting_what_someone_already_holds_is_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Not an optimisation: an OpenFGA Write is transactional and REJECTS an existing tuple, so without
-    the pre-read the second call would 400."""
-    h = _Harness([_tuple("user:dex~bob", "member", "project:acme")])
-    h.install(monkeypatch)
-    _grant(h, "dex~bob", "member")
-    assert h.written == []
+    assert acme.store.tuples() - before == {("role:curators#assignee", "member", "project:acme"), ("user:dex~bob", "member", "project:acme")}

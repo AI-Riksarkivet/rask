@@ -98,3 +98,23 @@ def test_a_caller_the_list_shows_nothing_is_answered_what_a_missing_project_answ
         (AuditAction.AUTHZ, AuditOutcome.DENY, "can_list_all_projects", ESTATE),
         (AuditAction.AUTHZ, AuditOutcome.DENY, "member", f"project:{PROJECT}"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("caller", "listed"),
+    [
+        pytest.param(OBSERVER, ["acme", "globex"], id="an-estate-observer-lists-every-tenant"),
+        pytest.param(MEMBER, ["acme"], id="a-member-lists-the-registrys-projects-they-are-a-member-of"),
+        pytest.param(STRANGER, [], id="a-caller-holding-nothing-lists-nothing"),
+    ],
+)
+def test_the_list_is_the_callers_projects(estate: Any, caller: str, listed: list[str]) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """The list judges the registry's own candidates, never the projects the store says the caller reaches: carol's
+    membership of ``ghost``, a project no registry knows, lists nothing."""
+    assert estate.client.post("/management/v1/projects", json={"id": "globex"}, headers=estate.bearer(OWNER)).status_code == 200
+    estate.store.write((estate.person(MEMBER), "member", "project:ghost"))
+
+    answered = estate.client.get("/management/v1/projects", headers=estate.bearer(caller))
+
+    assert answered.status_code == 200, answered.text
+    assert [project["project"] for project in answered.json()] == listed

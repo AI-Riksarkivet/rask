@@ -10,9 +10,10 @@ that record is how a commit that reached the catalog differs from one pylance fi
 A refused commit is not bypassed: the table stays at its version and the client sees the spec error.
 
 The store is the local filesystem, and a moto S3 server for the compaction: the claim is the commit path, not the
-credential (LH-229 pins that). OIDC is on with a stub verifier, and FGA's answers are faked by relation (the offline
-suite has no OpenFGA): every relation is granted except the ones a case denies, or only the ones a caller holds, so
-the door's own rung choice is what decides.
+credential (LH-229 pins that). OIDC is on with a stub verifier. Where the claim is the commit path alone every
+authorization decision allows (``served``); where it is who may make a commit, the catalog decides on a real OpenFGA
+(``served_governed``, ``served_on_s3``) and the caller holds only what the doors grant her, or exactly the rungs a case
+names (``_holding``).
 """
 
 from __future__ import annotations
@@ -68,24 +69,17 @@ from tests.integration import store_requests
 
 _TOKEN = {"Authorization": "Bearer t"}
 _TABLE = ["lance_catalog", "db", "t"]
-#: What ``writer`` and ``maintainer`` on a table grant (``model.fga``: writer -> reader -> can_read_data, can_get_metadata;
-#: either one -> can_create_version).
-_WRITER_AND_MAINTAINER = frozenset({"can_get_metadata", "can_read_data", "can_write_data", "can_maintain", "can_create_version"})
-#: What ``reader`` and ``maintainer`` grant: a compaction job's rungs, which read every row and change none, so it may
-#: commit a version and holds no ``can_write_data``.
-_READER_AND_MAINTAINER = frozenset({"can_get_metadata", "can_read_data", "can_maintain", "can_create_version"})
 
 
 class Served(BaseModel):
     url: str
-    #: Relations FGA denies: a bare relation everywhere, ``<relation> <object>`` on one object.
-    denied: set[str]
-    #: When set, the only relations FGA grants (the caller's grants); ``denied`` still applies.
-    granted: frozenset[str] | None = None
     #: The local root the tables live under, for reading a staged manifest back; ``None`` on an object store.
     root: Path | None
     #: What a client passes to reach the store itself: nothing on a local root.
     storage_options: dict[str, str] = {}
+    #: The test's own OpenFGA store when the catalog decides on it (``served_governed``, ``served_on_s3``); with none, every
+    #: authorization decision allows.
+    fga: Any = None
 
     def stock(self, context: dict[str, str] | None = None) -> lance_namespace.LanceNamespace:
         """pylance's REST namespace, sending ``context`` as request headers on every call (``headers.<name>``)."""
@@ -104,8 +98,44 @@ def _local_root(tmp_path: Path) -> dict[str, str]:
 
 @pytest.fixture
 def served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
-    """The real catalog on a local root under uvicorn, alice signed in, FGA granting all but ``denied``."""
-    yield from _serve(Served(url="", denied=set(), root=tmp_path / "root"), _local_root(tmp_path), monkeypatch)
+    """The real catalog on a local root under uvicorn, alice signed in, every authorization decision allowing: for a claim
+    about the commit path, not about who may make it."""
+    yield from _serve(Served(url="", root=tmp_path / "root"), _local_root(tmp_path), monkeypatch)
+
+
+@pytest.fixture
+def served_governed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, openfga_store: Any, dex_issuer: Any) -> Iterator[Served]:  # noqa: ANN401 — the root conftest's OpenFgaStore and DexIssuer
+    """``served`` deciding every authorization on a real OpenFGA, on a store of this test's own: the lifespan builds the
+    deployed client against it, and each create writes the tuples it writes in production. alice is still the one caller."""
+    served = Served(url="", root=tmp_path / "root", fga=openfga_store)
+    yield from _serve(served, {**_local_root(tmp_path), **_governed(openfga_store, dex_issuer)}, monkeypatch)
+
+
+def _governed(openfga_store: Any, dex_issuer: Any) -> dict[str, str]:  # noqa: ANN401 — the root conftest's OpenFgaStore and DexIssuer
+    """The settings a catalog deciding on ``openfga_store`` boots with, its people signing in at ``dex_issuer``."""
+    return {
+        "RASK_OIDC_ENABLED": "true",
+        "RASK_OIDC_ISSUER": dex_issuer.issuer,
+        "RASK_OIDC_AUDIENCE": "lance",
+        "RASK_OIDC_ALLOW_INSECURE": "true",
+        "RASK_OIDC_IDP_ID": "dex",
+        "RASK_OIDC_CONNECTORS": json.dumps({"local": "dex"}),
+        "RASK_FGA_ENABLED": "true",
+        "RASK_FGA_API_URL": openfga_store.url,
+        "RASK_FGA_STORE_ID": openfga_store.store_id,
+    }
+
+
+def _holding(served: Served, stock: lance_namespace.LanceNamespace, *, table: Iterable[str] = (), namespace: Iterable[str] = ()) -> None:
+    """alice holds exactly ``table``'s rungs on ``_TABLE`` and ``namespace``'s on ``lance_catalog$db``: every grant her creates
+    gave her is withdrawn first. The grants are held by the uuids the catalog minted, which the describes answer."""
+    on_namespace = (stock.describe_namespace(lance_namespace.DescribeNamespaceRequest(id=_TABLE[:2])).properties or {})["rask.uuid"]
+    on_table = (stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"]
+    served.fga.delete(*(held for held in served.fga.tuples() if held[0] == "user:dex~alice"))
+    served.fga.write(
+        *(("user:dex~alice", relation, f"table:{on_table}") for relation in table),
+        *(("user:dex~alice", relation, f"namespace:{on_namespace}") for relation in namespace),
+    )
 
 
 @pytest.fixture
@@ -122,7 +152,7 @@ def served_without_the_write_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     get_settings.cache_clear()
     importlib.reload(catalog.main)
     try:
-        yield from _serve(Served(url="", denied=set(), root=tmp_path / "root"), env, monkeypatch)
+        yield from _serve(Served(url="", root=tmp_path / "root"), env, monkeypatch)
     finally:
         monkeypatch.undo()
         get_settings.cache_clear()
@@ -140,8 +170,9 @@ def moto_url() -> Iterator[str]:
 
 
 @pytest.fixture
-def served_on_s3(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
-    """``served`` on a bucket of its own on a moto S3 server, which the client reaches with its own key."""
+def served_on_s3(moto_url: str, monkeypatch: pytest.MonkeyPatch, openfga_store: Any, dex_issuer: Any) -> Iterator[Served]:  # noqa: ANN401 — the root conftest's OpenFgaStore and DexIssuer
+    """``served`` on a bucket of its own on a moto S3 server, which the client reaches with its own key, deciding every
+    authorization on a real OpenFGA as ``served_governed`` does."""
     bucket = f"lh467-{uuid.uuid4().hex[:10]}"
     boto3.client("s3", endpoint_url=moto_url, region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test").create_bucket(Bucket=bucket)
     env = {
@@ -150,9 +181,10 @@ def served_on_s3(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[Ser
         "LANCE_S3_ENDPOINT": moto_url,
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
+        **_governed(openfga_store, dex_issuer),
     }
     own = {"aws_endpoint": moto_url, "aws_region": "us-east-1", "allow_http": "true", "aws_access_key_id": "test", "aws_secret_access_key": "test"}
-    yield from _serve(Served(url="", denied=set(), root=None, storage_options=own), env, monkeypatch)
+    yield from _serve(Served(url="", root=None, storage_options=own, fga=openfga_store), env, monkeypatch)
 
 
 @pytest.fixture
@@ -180,7 +212,7 @@ def served_through_a_proxy(moto_url: str, catalogs_store: store_requests.Counted
         "LANCE_DATA_STORE_MAX_RETRIES": "0",
     }
     own = {"aws_endpoint": moto_url, "aws_region": "us-east-1", "allow_http": "true", "aws_access_key_id": "test", "aws_secret_access_key": "test"}
-    yield from _serve(Served(url="", denied=set(), root=None, storage_options=own), env, monkeypatch)
+    yield from _serve(Served(url="", root=None, storage_options=own), env, monkeypatch)
 
 
 def _serve(served: Served, env: dict[str, str], monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
@@ -193,24 +225,34 @@ def _serve(served: Served, env: dict[str, str], monkeypatch: pytest.MonkeyPatch)
     }.items():
         monkeypatch.setenv(key, value)
 
-    async def check(_client: object, *, relation: str, obj: str, **_kw: object) -> bool:
-        if served.granted is not None and relation not in served.granted:
-            return False
-        return relation not in served.denied and f"{relation} {obj}" not in served.denied
+    async def check(_client: object, **_kw: object) -> bool:
+        return True
 
-    monkeypatch.setattr(fga_reads, "check", check)
-    monkeypatch.setattr(fga_writes, "grant_on_create", AsyncMock())
-    monkeypatch.setattr(fga_writes, "grant_before_arrival", AsyncMock())
-    monkeypatch.setattr(fga_writes, "name_child", AsyncMock())
-    monkeypatch.setattr(fga_writes, "revoke_object_tuples", AsyncMock(return_value=[]))
+    if served.fga is None:
+        monkeypatch.setattr(fga_reads, "check", check)
+        monkeypatch.setattr(fga_writes, "grant_on_create", AsyncMock())
+        monkeypatch.setattr(fga_writes, "grant_before_arrival", AsyncMock())
+        monkeypatch.setattr(fga_writes, "name_child", AsyncMock())
+        monkeypatch.setattr(fga_writes, "revoke_object_tuples", AsyncMock(return_value=[]))
     from catalog.core.config import Settings, get_settings
 
     get_settings.cache_clear()
     from catalog.main import app
 
-    # Auth is turned on after startup, as the TestClient suites do: the lifespan would otherwise dial the issuer.
-    signed_in = get_settings().model_copy(
-        update={"oidc_enabled": True, "oidc_issuer": "https://idp.example", "oidc_audience": "lance", "fga_enabled": True, "fga_api_url": "http://openfga:8080"}
+    # Auth is turned on after startup, as the TestClient suites do: the lifespan would otherwise dial the issuer. A
+    # governed catalog's lifespan dials its loopback issuer and builds its OpenFGA client itself.
+    signed_in = (
+        get_settings()
+        if served.fga is not None
+        else get_settings().model_copy(
+            update={
+                "oidc_enabled": True,
+                "oidc_issuer": "https://idp.example",
+                "oidc_audience": "lance",
+                "fga_enabled": True,
+                "fga_api_url": "http://openfga:8080",
+            }
+        )
     )
     assert isinstance(signed_in, Settings)
 
@@ -227,9 +269,10 @@ def _serve(served: Served, env: dict[str, str], monkeypatch: pytest.MonkeyPatch)
         principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
     )
     app.state.oidc = verifier
-    fga_client = MagicMock()
-    fga_client.close = AsyncMock()
-    app.state.fga = fga_client
+    if served.fga is None:
+        fga_client = MagicMock()
+        fga_client.close = AsyncMock()
+        app.state.fga = fga_client
     app.dependency_overrides[get_settings] = lambda: signed_in
     served.url = f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
     yield served
@@ -241,7 +284,15 @@ def _serve(served: Served, env: dict[str, str], monkeypatch: pytest.MonkeyPatch)
 
 def _created(served: Served) -> lance_namespace.LanceNamespace:
     stock = served.stock()
+    # Under a real OpenFGA alice makes the namespace on a grant of the estate's warehouse, given up once it is made, so she
+    # holds what her creates gave her and no more.
+    on_the_estate = ("user:dex~alice", "writer", "warehouse:lance_catalog")
+    lent = served.fga is not None and on_the_estate not in served.fga.tuples()
+    if lent:
+        served.fga.write(on_the_estate)
     stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "db"]))
+    if lent:
+        served.fga.delete(on_the_estate)
     lance.write_dataset(
         _keyed([1, 2, 3], ["a", "b", "c"]),
         namespace_client=stock,
@@ -401,7 +452,7 @@ def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_c
     stock = _created(served_on_s3)
     for row, value in ((4, "d"), (5, "e"), (6, "f")):
         lance.write_dataset(_keyed([row], [value]), namespace_client=stock, table_id=_TABLE, mode="append", storage_options=served_on_s3.storage_options)
-    served_on_s3.granted = _READER_AND_MAINTAINER
+    _holding(served_on_s3, stock, table=("reader", "maintainer"))
     caplog.clear()
 
     with caplog.at_level(logging.INFO, logger="lance.audit"):
@@ -414,11 +465,12 @@ def test_a_stock_compaction_by_a_reader_and_maintainer_commits_through_version_c
     assert committed == [(5, "ReserveFragments"), (6, "Rewrite")]
 
 
-def test_the_index_door_refuses_and_a_writers_own_index_build_commits_through_version_create(served: Served, caplog: pytest.LogCaptureFixture) -> None:
+def test_the_index_door_refuses_and_a_writers_own_index_build_commits_through_version_create(served_governed: Served, caplog: pytest.LogCaptureFixture) -> None:
     """The catalog builds no index (ADR 0162): its spec door answers 406 naming the bring-your-own path, and a writer's
     own pylance builds the index and later folds new fragments into it, each commit judged at ``version/create``."""
+    served = served_governed
     stock = _created(served)
-    served.granted = frozenset({"can_get_metadata", "can_read_data", "can_write_data", "can_create_version"})
+    _holding(served, stock, table=("writer",))
 
     refused = httpx.post(f"{served.url}/v1/table/lance_catalog$db$t/create_scalar_index", json={"column": "id", "index_type": "BTREE"}, headers=_TOKEN)
     assert refused.status_code == 406, refused.text
@@ -452,11 +504,11 @@ def test_an_erasure_job_commits_every_rewrite_through_version_create_and_the_cat
     lance.write_dataset(_keyed([4, 5], ["d", "e"]), namespace_client=stock, table_id=_TABLE, mode="append", storage_options=options)
     _opened(stock, options).create_scalar_index("v", index_type="BTREE", name="v_idx")
     stock.create_table_branch(lance_namespace.CreateTableBranchRequest(id=_TABLE, name="work"))
-    served_on_s3.granted = frozenset({*_WRITER_AND_MAINTAINER, "can_drop"})
+    _holding(served_on_s3, stock, table=("owner",))
     recorded = httpx.post(f"{served_on_s3.url}/management/v1/table/lance_catalog$db$t/erasure", json={"predicate": "id = 2"}, headers=_TOKEN)
     assert recorded.status_code == 202, recorded.text
     before = _opened(stock, options).version
-    served_on_s3.granted = _WRITER_AND_MAINTAINER
+    _holding(served_on_s3, stock, table=("writer", "maintainer"))
     caplog.clear()
 
     with caplog.at_level(logging.INFO, logger="lance.audit"):
@@ -535,7 +587,7 @@ def test_a_stock_client_commits_on_a_branch_through_version_create_and_main_is_u
     stock = _created(served_on_s3)
     options = served_on_s3.storage_options
     stock.create_table_branch(lance_namespace.CreateTableBranchRequest(id=_TABLE, name="work"))
-    served_on_s3.granted = _WRITER_AND_MAINTAINER
+    _holding(served_on_s3, stock, table=("writer", "maintainer"))
     caplog.clear()
 
     with caplog.at_level(logging.INFO, logger="lance.audit"):
@@ -871,53 +923,46 @@ def _staged_with(
 
 
 @pytest.mark.parametrize(
-    ("stage", "denied", "status", "code", "staged_at"),
+    ("stage", "status", "code", "staged_at"),
     [
-        pytest.param(_append_at_file_version_2_1, set(), 400, 13, ("lance_catalog$db$t", 4), id="foreign-data-file-versions-are-refused"),
-        pytest.param(_create_at_file_version_2_1, set(), 400, 13, ("lance_catalog$db$u", 1), id="a-create-is-at-2.2-with-stable-row-ids"),
-        pytest.param(_append_a_held_key, set(), 400, 13, ("lance_catalog$db$t", 4), id="a-held-primary-key-is-refused"),
-        pytest.param(_replace_a_key_with_a_held_one, set(), 400, 13, ("lance_catalog$db$t", 4), id="a-held-primary-key-is-refused-in-a-replaced-file"),
-        pytest.param(_drop_the_key_column, set(), 400, 13, ("lance_catalog$db$t", 4), id="the-key-column-is-kept"),
-        pytest.param(_re_append_a_held_file, set(), 400, 13, ("lance_catalog$db$t", 4), id="a-held-data-file-is-not-appended-again"),
-        pytest.param(_undelete_as_an_update, set(), 400, 13, ("lance_catalog$db$t", 4), id="a-deleted-row-does-not-come-back-whatever-the-label"),
-        pytest.param(_reuse_live_row_ids_as_an_update, set(), 400, 13, ("lance_catalog$db$t", 4), id="live-row-ids-are-not-reused-whatever-the-label"),
-        pytest.param(_staged_with(_an_append, 14, 1), set(), 400, 13, ("lance_catalog$db$t", 4), id="the-next-row-id-never-falls"),
-        pytest.param(_staged_with(_a_delete_of_the_newest_fragment, 11, 0), set(), 400, 13, ("lance_catalog$db$t", 4), id="the-max-fragment-id-never-falls"),
+        pytest.param(_append_at_file_version_2_1, 400, 13, ("lance_catalog$db$t", 4), id="foreign-data-file-versions-are-refused"),
+        pytest.param(_create_at_file_version_2_1, 400, 13, ("lance_catalog$db$u", 1), id="a-create-is-at-2.2-with-stable-row-ids"),
+        pytest.param(_append_a_held_key, 400, 13, ("lance_catalog$db$t", 4), id="a-held-primary-key-is-refused"),
+        pytest.param(_replace_a_key_with_a_held_one, 400, 13, ("lance_catalog$db$t", 4), id="a-held-primary-key-is-refused-in-a-replaced-file"),
+        pytest.param(_drop_the_key_column, 400, 13, ("lance_catalog$db$t", 4), id="the-key-column-is-kept"),
+        pytest.param(_re_append_a_held_file, 400, 13, ("lance_catalog$db$t", 4), id="a-held-data-file-is-not-appended-again"),
+        pytest.param(_undelete_as_an_update, 400, 13, ("lance_catalog$db$t", 4), id="a-deleted-row-does-not-come-back-whatever-the-label"),
+        pytest.param(_reuse_live_row_ids_as_an_update, 400, 13, ("lance_catalog$db$t", 4), id="live-row-ids-are-not-reused-whatever-the-label"),
+        pytest.param(_staged_with(_an_append, 14, 1), 400, 13, ("lance_catalog$db$t", 4), id="the-next-row-id-never-falls"),
+        pytest.param(_staged_with(_a_delete_of_the_newest_fragment, 11, 0), 400, 13, ("lance_catalog$db$t", 4), id="the-max-fragment-id-never-falls"),
         # The table's next row id is 4 and the appended row takes 4: the counter holds, and the next append would mint 4.
-        pytest.param(_staged_with(_an_append, 14, 4), set(), 400, 13, ("lance_catalog$db$t", 4), id="the-next-row-id-passes-every-new-row"),
-        pytest.param(_append_at_file_version_2_1, set(), 409, 14, ("lance_catalog$db$t", 3), id="a-version-the-table-already-holds-is-taken"),
-        pytest.param(_arm_auto_cleanup, set(), 400, 13, ("lance_catalog$db$t", 4), id="auto-cleanup-is-not-armed-by-a-commit"),
-        pytest.param(_steer_compaction, set(), 400, 13, ("lance_catalog$db$t", 4), id="compaction-is-not-steered-by-a-commit"),
-        pytest.param(_opt_into_managed_blobs, set(), 400, 13, ("lance_catalog$db$t", 4), id="managed-blobs-are-not-opted-into"),
-        pytest.param(_opt_into_spilled_row_lineage, set(), 400, 13, ("lance_catalog$db$t", 4), id="spilled-row-lineage-is-not-opted-into"),
-        pytest.param(_stamp_a_scheme_lance_does_not_know, set(), 400, 13, ("lance_catalog$db$t", 4), id="an-encoding-knob-lance-cannot-honour-is-not-stamped"),
-        pytest.param(_restore_version_1, {"can_restore"}, 403, 15, ("lance_catalog$db$t", 4), id="a-writer-cannot-stage-a-restore"),
-        pytest.param(_compact, {"can_maintain"}, 403, 15, ("lance_catalog$db$t", 4), id="a-writer-cannot-stage-a-compaction"),
-        pytest.param(_append_a_new_key, {"can_write_data"}, 403, 15, ("lance_catalog$db$t", 4), id="a-maintainer-cannot-stage-an-append"),
-        pytest.param(_create_a_table, {"can_write_data"}, 403, 15, ("lance_catalog$db$u", 1), id="a-maintainer-cannot-commit-a-tables-first-version"),
-        pytest.param(_create_a_labelled_table, {"can_classify"}, 403, 15, ("lance_catalog$db$u", 1), id="a-first-version-labels-a-field-only-for-a-classifier"),
-        pytest.param(_rewrite_losing_a_replaced_fragments_rows, set(), 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-loses-no-row"),
-        pytest.param(_rewrite_duplicating_a_carried_fragments_rows, set(), 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-duplicates-no-row"),
-        pytest.param(_rewrite_changing_a_carried_rows_value, set(), 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-changes-no-value"),
-        pytest.param(_index_read_through_a_base, set(), 400, 13, ("lance_catalog$db$t", 4), id="an-index-is-read-from-the-tables-own-indices"),
-        pytest.param(_index_with_no_files, set(), 400, 13, ("lance_catalog$db$t", 4), id="an-index-names-files-that-are-there"),
-        pytest.param(_initialise_mem_wal, set(), 406, 0, ("lance_catalog$db$t", 4), id="a-mem-wal-is-not-served"),
-        pytest.param(_data_staged_under_an_index_label, set(), 400, 13, ("lance_catalog$db$t", 4), id="an-index-commit-changes-no-data"),
+        pytest.param(_staged_with(_an_append, 14, 4), 400, 13, ("lance_catalog$db$t", 4), id="the-next-row-id-passes-every-new-row"),
+        pytest.param(_append_at_file_version_2_1, 409, 14, ("lance_catalog$db$t", 3), id="a-version-the-table-already-holds-is-taken"),
+        pytest.param(_arm_auto_cleanup, 400, 13, ("lance_catalog$db$t", 4), id="auto-cleanup-is-not-armed-by-a-commit"),
+        pytest.param(_steer_compaction, 400, 13, ("lance_catalog$db$t", 4), id="compaction-is-not-steered-by-a-commit"),
+        pytest.param(_opt_into_managed_blobs, 400, 13, ("lance_catalog$db$t", 4), id="managed-blobs-are-not-opted-into"),
+        pytest.param(_opt_into_spilled_row_lineage, 400, 13, ("lance_catalog$db$t", 4), id="spilled-row-lineage-is-not-opted-into"),
+        pytest.param(_stamp_a_scheme_lance_does_not_know, 400, 13, ("lance_catalog$db$t", 4), id="an-encoding-knob-lance-cannot-honour-is-not-stamped"),
+        pytest.param(_rewrite_losing_a_replaced_fragments_rows, 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-loses-no-row"),
+        pytest.param(_rewrite_duplicating_a_carried_fragments_rows, 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-duplicates-no-row"),
+        pytest.param(_rewrite_changing_a_carried_rows_value, 400, 13, ("lance_catalog$db$u", 4), id="a-rewrite-changes-no-value"),
+        pytest.param(_index_read_through_a_base, 400, 13, ("lance_catalog$db$t", 4), id="an-index-is-read-from-the-tables-own-indices"),
+        pytest.param(_index_with_no_files, 400, 13, ("lance_catalog$db$t", 4), id="an-index-names-files-that-are-there"),
+        pytest.param(_initialise_mem_wal, 406, 0, ("lance_catalog$db$t", 4), id="a-mem-wal-is-not-served"),
+        pytest.param(_data_staged_under_an_index_label, 400, 13, ("lance_catalog$db$t", 4), id="an-index-commit-changes-no-data"),
         pytest.param(
             _append_under_a_transaction_recorded_for_another_commit,
-            set(),
             400,
             13,
             ("lance_catalog$db$t", 4),
             id="another-commits-transaction-is-not-reused",
         ),
-        pytest.param(_append_under_a_transaction_whose_record_is_unreadable, set(), 500, 18, ("lance_catalog$db$t", 4), id="an-unreadable-record-is-no-retrys"),
+        pytest.param(_append_under_a_transaction_whose_record_is_unreadable, 500, 18, ("lance_catalog$db$t", 4), id="an-unreadable-record-is-no-retrys"),
     ],
 )
 def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_error(
     served: Served,
     stage: Callable[[lance_namespace.LanceNamespace], None],
-    denied: set[str],
     status: int,
     code: int,
     staged_at: tuple[str, int],
@@ -925,7 +970,6 @@ def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_err
     stock = _created(served)
     lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
     _opened(stock).delete("id = 2")
-    served.denied.update(denied)
 
     # pylance reports a refused finalize as an OSError; a manifest staged by hand asks nothing until it is answered below.
     with contextlib.suppress(OSError):
@@ -935,6 +979,76 @@ def test_a_refused_commit_leaves_the_table_at_its_version_and_answers_a_spec_err
     assert after.version == 3
     assert _rows(after) == [(1, "a"), (3, "c"), (4, "d")]
     assert _answer_to_the_staged_commit(served, *staged_at)[:2] == (status, code)
+    assert _opened(stock).version == 3
+
+
+#: Each commit whose rung is the claim: what it stages, the rungs that refuse it, the rungs that admit it (on ``_TABLE``,
+#: or on its namespace for a table's first version, and ``apply`` on each label value it attaches), and where the refused
+#: manifest waits.
+_RUNGED: list[Any] = [
+    pytest.param(_restore_version_1, {"table": ("writer", "maintainer")}, {"table": ("owner",)}, ("lance_catalog$db$t", 4), id="a-restore-is-the-owners"),
+    pytest.param(_compact, {"table": ("writer",)}, {"table": ("reader", "maintainer")}, ("lance_catalog$db$t", 4), id="a-compaction-is-a-maintainers"),
+    pytest.param(_append_a_new_key, {"table": ("reader", "maintainer")}, {"table": ("writer",)}, ("lance_catalog$db$t", 4), id="an-append-is-a-writers"),
+    pytest.param(
+        _create_a_table, {"namespace": ("reader", "maintainer")}, {"namespace": ("writer",)}, ("lance_catalog$db$u", 1), id="a-first-version-is-a-writers"
+    ),
+    pytest.param(
+        _create_a_labelled_table,
+        {"namespace": ("writer",)},
+        {"namespace": ("writer",), "apply": ("pii",)},
+        ("lance_catalog$db$u", 1),
+        id="a-first-version-labels-a-field-only-with-its-values-apply",
+    ),
+]
+
+
+@pytest.mark.parametrize("admitted", [pytest.param(False, id="the-rungs-below"), pytest.param(True, id="its-rungs")])
+@pytest.mark.parametrize(("stage", "below", "rungs", "staged_at"), _RUNGED)
+def test_a_commit_is_admitted_on_the_rungs_its_operation_takes_and_refused_on_those_below(
+    served_governed: Served,
+    stage: Callable[[lance_namespace.LanceNamespace], None],
+    below: dict[str, tuple[str, ...]],
+    rungs: dict[str, tuple[str, ...]],
+    staged_at: tuple[str, int],
+    admitted: bool,
+) -> None:
+    """``version/create`` asks the rung the staged operation takes, on the real model: a restore rewinds the table and is
+    its owner's, a compaction rewrites how it is stored and is a maintainer's (who holds no writer rung), an append or a
+    table's first version is a writer's, and a first version that labels a field needs ``apply`` on each value it attaches.
+    Its ``can_classify`` is asked on the table the create makes, which a person creating it owns, and an owner classifies,
+    so the value is the rung that decides. Held only the rungs below, alice is refused 403 code 15 and the table stays at
+    its version; held its rungs, the commit lands."""
+    served = served_governed
+    stock = _created(served)
+    lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
+    _opened(stock).delete("id = 2")
+    held = rungs if admitted else below
+    _holding(served, stock, table=held.get("table", ()), namespace=held.get("namespace", ()))
+    served.fga.write(*(("user:dex~alice", "apply", f"classification:{value}") for value in held.get("apply", ())))
+    creates = staged_at[0] != "$".join(_TABLE)
+    refused_at_the_declare: lance_namespace.PermissionDeniedError | None = None
+
+    # pylance reports a refused finalize as an OSError; the answer it was given is read back below. A first version a
+    # caller may not create is refused before anything is staged, at the declare.
+    try:
+        stage(stock)
+    except OSError:
+        pass
+    except lance_namespace.PermissionDeniedError as refused:
+        refused_at_the_declare = refused
+
+    after = _opened(stock)
+    assert after.version > 3 if admitted and not creates else after.version == 3, after.version
+    if admitted:
+        assert refused_at_the_declare is None, refused_at_the_declare
+        landed = lance.dataset(namespace_client=stock, table_id=staged_at[0].split("$")) if creates else after
+        assert landed.version == 1 or not creates, landed.version
+        return
+    assert _rows(after) == [(1, "a"), (3, "c"), (4, "d")]
+    if refused_at_the_declare is not None:
+        assert creates and refused_at_the_declare.code == 15, refused_at_the_declare
+    else:
+        assert _answer_to_the_staged_commit(served, *staged_at)[:2] == (403, 15)
     assert _opened(stock).version == 3
 
 
@@ -1857,10 +1971,15 @@ def _a_name_holding_no_table(served: Served, stock: lance_namespace.LanceNamespa
 
 
 def _a_table_the_caller_cannot_read(served: Served, stock: lance_namespace.LanceNamespace) -> list[str]:
-    # The input's grants are held by the uuid the catalog minted for it, which its describe answers (ADR 0173 §8).
-    source_uuid = (stock.describe_table(lance_namespace.DescribeTableRequest(id=["lance_catalog", "db", "src"])).properties or {})["rask.uuid"]
-    served.denied.add(f"can_read_data table:{source_uuid}")
-    return ["lance_catalog", "db", "src"]
+    """A table alice made in a namespace of its own, every grant the creates gave her there withdrawn."""
+    source = ["lance_catalog", "elsewhere", "src"]
+    stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=source[:2]))
+    lance.write_dataset(_keyed([1], ["s"]), namespace_client=stock, table_id=source, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
+    # The grants are held by the uuids the catalog minted, which the describes answer (ADR 0173 §8).
+    namespace = (stock.describe_namespace(lance_namespace.DescribeNamespaceRequest(id=source[:2])).properties or {})["rask.uuid"]
+    table = (stock.describe_table(lance_namespace.DescribeTableRequest(id=source)).properties or {})["rask.uuid"]
+    served.fga.delete(*(held for held in served.fga.tuples() if held[0] == "user:dex~alice" and held[2] in {f"namespace:{namespace}", f"table:{table}"}))
+    return source
 
 
 @pytest.mark.parametrize("commit", [pytest.param(_stock_append_naming, id="a-stock-commit"), pytest.param(_insert_door_naming, id="the-insert-door")])
@@ -1868,13 +1987,18 @@ def _a_table_the_caller_cannot_read(served: Served, stock: lance_namespace.Lance
     "named", [pytest.param(_a_name_holding_no_table, id="a-name-holding-no-table"), pytest.param(_a_table_the_caller_cannot_read, id="an-unreadable-table")]
 )
 def test_a_commit_declaring_an_input_that_is_no_table_the_caller_may_read_is_refused(
-    served: Served,
+    served_governed: Served,
     commit: Callable[[Served, str], tuple[int, str]],
     named: Callable[[Served, lance_namespace.LanceNamespace], list[str]],
 ) -> None:
-    """ADR 0183 §2: one refusal for both, so it tells no committer which tables exist."""
+    """ADR 0183 §2: one refusal for both, so it tells no committer which tables exist. alice makes the estate's
+    namespaces on a warehouse grant she gives up before she commits, so she holds what her creates gave her and no more."""
+    served = served_governed
+    on_the_estate = ("user:dex~alice", "writer", "warehouse:lance_catalog")
+    served.fga.write(on_the_estate)
     stock = _with_source(served)
     table = named(served, stock)
+    served.fga.delete(on_the_estate)
 
     code, detail = commit(served, json.dumps([{"table": table, "version": 1}]))
 

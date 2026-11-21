@@ -12,24 +12,28 @@ the maintenance sweep's, so this gate would have silently deleted the whole main
 provenance. Re-measured 2026-09-09 after the producer half landed: every maintenance run since the roll
 carries `service-maintenance`, and the only unauthored runs left were e2e fixture rows written straight
 to the store, which never pass through this door.
+
+Every check is the real model's on an OpenFGA store of the test's own, where bob owns the tables the events name, so
+each is governed and a refusal of anyone else is a denial rather than a table with nothing to grant on.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from lance_namespace import PermissionDeniedError
 from lineage_lane import Feed, governed, started
-from openfga_sdk import OpenFgaClient
 
 from lakehouse.events.bus_delivery import Outcome, Settlement
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
+from lakehouse.governed import fga_provision
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.decider import OpenFgaDecider
+from lakehouse.governed.fga_ids import user_object
 from lineage.api import fga_deps
 from lineage.api.fga_deps import relations_for_operation
 from lineage.core.config import LineageSettings, Signing
@@ -38,6 +42,13 @@ from lineage.models import RunEvent
 
 #: The uuids the catalog minted for the tables the events below name, which it stamps on every event it emits.
 _PAGES, _SOURCE = "0b5f8f6c-3d0a-4c39-9a51-8f0b6d1a2e01", "7c2e1d4b-5a6f-4b8e-8c1d-2f3a4b5c6d02"
+
+
+@pytest.fixture
+def store(openfga_store: Any) -> Any:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """A store of the test's own on which bob owns both tables, so each is governed."""
+    openfga_store.write(*((user_object("dex~bob"), "owner", f"table:{uuid}") for uuid in (_PAGES, _SOURCE)))
+    return openfga_store
 
 
 def _dataset(name: str, uuid: str) -> dict[str, Any]:
@@ -64,7 +75,7 @@ def test_a_DATA_write_demands_the_writer_rung() -> None:
     assert relations_for_operation("drop_table") == ("can_write_data",)
 
 
-def test_the_lane_parks_an_unauthorized_delivery_unrecorded(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_the_lane_parks_an_unauthorized_delivery_unrecorded(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, store: Any) -> None:  # noqa: ANN401
     """CONTRACT, and the only tier that can prove it: driven through lineage's own lane with the production wiring, so
     it fails if the lane stops passing the authorizer.
 
@@ -75,13 +86,12 @@ def test_the_lane_parks_an_unauthorized_delivery_unrecorded(monkeypatch: pytest.
     Who was refused is on the audit trail, and the gate's own log line of the refusal names no subject: the service's
     log is not where a person's identity is kept.
     """
-    governed(monkeypatch)
-    _deny_all(monkeypatch)
+    governed(monkeypatch, store)
     envelope = {"id": "evt-mallory", "data": _event(rask_author={"name": "mallory", "sub": "dex~mallory"}).model_dump(by_alias=True)}
 
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     caplog.set_level(logging.INFO, logger=fga_deps.log.name)
-    with started(monkeypatch, Feed(), decider=OpenFgaDecider(cast("OpenFgaClient", object()))) as lineage:
+    with started(monkeypatch, Feed()) as lineage:
         settled = lineage.deliver(envelope)
 
     assert settled == Settlement(outcome=Outcome.PARKED)
@@ -116,12 +126,18 @@ def _settings() -> LineageSettings:
     )
 
 
-def _app(provenance: object, decider: object | None = None) -> FastAPI:
-    """An app holding what the gate reads off its state: the decider and the feed."""
-    app = FastAPI()
-    app.state.decider = decider if decider is not None else OpenFgaDecider(cast("OpenFgaClient", object()))
-    app.state.provenance = provenance
-    return app
+def _gate(store: Any, event: RunEvent, stored: dict[str, Any] | None, delivered: dict[str, Any]) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """Run the bus door's gate over ``event`` as ``delivered``, the feed holding ``stored``, every check asked of ``store``."""
+    from lineage.api import fga_deps
+
+    async def gate() -> None:
+        async with fga_provision.make_client(store.url, store.store_id, store.model_id, token_file=None) as client:
+            app = FastAPI()
+            app.state.decider = OpenFgaDecider(client)
+            app.state.provenance = _Feed(stored)
+            await fga_deps.enforce_bus_authz(event, app, _settings(), delivered)
+
+    asyncio.run(gate())
 
 
 class _Feed:
@@ -137,94 +153,50 @@ class _Feed:
         return None
 
 
-def _deny_all(monkeypatch: pytest.MonkeyPatch) -> None:
-    from lakehouse.governed import fga_reads
-
-    async def deny(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        del user, relation
-        return dict.fromkeys(objects, False)
-
-    monkeypatch.setattr(fga_reads, "batch_check", deny)
-
-
-def test_a_BYTE_IDENTICAL_redelivery_is_not_a_new_assertion(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_BYTE_IDENTICAL_redelivery_is_not_a_new_assertion(store: Any) -> None:  # noqa: ANN401
     """A lineage restart re-presents the ENTIRE retained stream — the consumer is ephemeral with
     `deliverPolicy: all`, which is the estate's own recovery story. Measured 2026-09-09: a restart
     replayed all 2 161 retained messages and left the durable feed flat at 3 248 rows, because every one
     was already recorded. Refusing those loses nothing and turns each restart into a burst of refusals
     that reads exactly like a producer under attack.
     """
-    from lineage.api import fga_deps
-
-    _deny_all(monkeypatch)
     event = _event(rask_author={"name": "someone", "sub": "dex~someone"})
     stored = event.model_dump(by_alias=True)
-    asyncio.run(fga_deps.enforce_bus_authz(event, _app(_Feed(stored)), _settings(), event.model_dump(by_alias=True)))
+    _gate(store, event, stored, event.model_dump(by_alias=True))
 
 
-def test_a_replay_that_DIFFERS_IN_ANY_FIELD_is_still_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_replay_that_DIFFERS_IN_ANY_FIELD_is_still_refused(store: Any) -> None:  # noqa: ANN401
     """THE HOLE THIS AVOIDS, and it is the reason the check is byte-identical rather than a key match.
 
     Exempting anything whose `(run_id, event_type)` merely EXISTS would let a forger take a known run id,
     restamp it with their own author — or as a `drop_table` — and have the gate wave it through as a
     redelivery on the strength of the honest row beside it.
     """
-    from lineage.api import fga_deps
-
-    _deny_all(monkeypatch)
     event = _event(rask_author={"name": "mallory", "sub": "dex~mallory"})
     stored = _event(rask_author={"name": "the-real-author", "sub": "dex~the-real-author"}).model_dump(by_alias=True)
-    with pytest.raises(PermissionDeniedError):
-        asyncio.run(fga_deps.enforce_bus_authz(event, _app(_Feed(stored)), _settings(), event.model_dump(by_alias=True)))
+    with pytest.raises(PermissionDeniedError, match="can_write_data"):
+        _gate(store, event, stored, event.model_dump(by_alias=True))
 
 
-def test_an_UNAUTHORED_replay_is_still_exempt_but_an_unauthored_NEW_event_is_not(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_UNAUTHORED_replay_is_still_exempt_but_an_unauthored_NEW_event_is_not(store: Any) -> None:  # noqa: ANN401
     """The unauthored refusal takes the same path, and must: the 518 unauthored compactions in the
     retained stream predate the producer fix and replay on every restart. An unauthored event the feed
     has never seen is a new assertion with nothing to authorize, and stays refused."""
-    from lineage.api import fga_deps
-
-    _deny_all(monkeypatch)
     unauthored = _event()
-    asyncio.run(fga_deps.enforce_bus_authz(unauthored, _app(_Feed(unauthored.model_dump(by_alias=True))), _settings(), unauthored.model_dump(by_alias=True)))
+    _gate(store, unauthored, unauthored.model_dump(by_alias=True), unauthored.model_dump(by_alias=True))
     with pytest.raises(PermissionDeniedError, match="author"):
-        asyncio.run(fga_deps.enforce_bus_authz(unauthored, _app(_Feed(None)), _settings(), {}))
+        _gate(store, unauthored, None, {})
 
 
-class _Grants:
-    """A decider answering from the grants it holds, ``(relation, object)``, and recording what it was asked."""
-
-    def __init__(self, grants: set[tuple[str, str]]) -> None:
-        self.grants = grants
-        self.asked: list[tuple[str, str]] = []
-
-    async def check(self, *, user: str, relation: str, obj: str) -> bool:
-        return (await self.batch_check(user=user, relation=relation, objects=[obj]))[obj]
-
-    async def batch_check(self, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        del user
-        self.asked.extend((relation, obj) for obj in objects)
-        return {obj: (relation, obj) in self.grants for obj in objects}
-
-    async def list_users(self, *, relation: str, obj: str) -> list[str]:
-        raise AssertionError(f"the bus door lists no users ({relation} on {obj})")
-
-    async def governed(self, objects: list[str]) -> dict[str, bool]:
-        return {obj: any(held == obj for _, held in self.grants) for obj in objects}
-
-    async def close(self) -> None:
-        return None
-
-
-def test_a_write_naming_a_table_by_a_name_another_rename_took_is_authorized_on_the_uuid_it_carries() -> None:
+def test_a_write_naming_a_table_by_a_name_another_rename_took_is_authorized_on_the_uuid_it_carries(store: Any) -> None:  # noqa: ANN401
     """A rename keeps a table's uuid, and its grants with it (ADR 0173 §8, [[LH-524]]): an event the catalog emitted
     under a name the table has since given up still carries the uuid, and the door asks about that uuid, never the name.
     Measured on LH-522's read-back (rev 1), the door refused such an event `can_get_metadata required on inputs: <ns>$t`."""
-    from lineage.api import fga_deps
-
-    grants = _Grants({("can_write_data", f"table:{_PAGES}"), ("can_get_metadata", f"table:{_SOURCE}")})
     event = _event(inputs=[_dataset("bronze$renamed_since", _SOURCE)], rask_author={"name": "pipeline", "sub": "dex~pipeline"})
+    store.write((user_object("dex~pipeline"), "writer", f"table:{_PAGES}"))
+    with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: bronze\$renamed_since"):
+        _gate(store, event, None, event.model_dump(by_alias=True))
 
-    asyncio.run(fga_deps.enforce_bus_authz(event, _app(_Feed(None), grants), _settings(), event.model_dump(by_alias=True)))
+    store.write((user_object("dex~pipeline"), "reader", f"table:{_SOURCE}"))
 
-    assert sorted(grants.asked) == [("can_get_metadata", f"table:{_SOURCE}"), ("can_write_data", f"table:{_PAGES}")]
+    _gate(store, event, None, event.model_dump(by_alias=True))

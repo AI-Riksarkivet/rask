@@ -161,8 +161,9 @@ def _stamped(event: dict[str, Any], uuid_of: Mapping[str, DatasetUuids]) -> dict
 
 
 @pytest.fixture
-def governed_feed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
-    """Lineage's router behind its real authentication-then-FGA gate, over a feed the store wrote to the catalog."""
+def governed_feed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, openfga_store: Any) -> Iterator[TestClient]:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """Lineage's router behind its real authentication-then-FGA gate, over a feed the store wrote to the catalog, every
+    decision the real model's on a store of the test's own where the pipeline reads the visible tables."""
     feed = [
         run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:01+00:00", outputs=["lance_catalog$acme-silver$pages"]),
         run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:02+00:00", outputs=["lance_catalog$acme-silver$hidden"]),
@@ -181,8 +182,8 @@ def governed_feed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[T
     ]
     with live_catalog(tmp_path / "catalog", monkeypatch) as url:
         uuid_of = _declared(url, _TABLES)
-        granted = {(_PIPELINE, "can_get_metadata", f"table:{uuid_of[name].table_uuid}") for name in _VISIBLE}
-        with governed_lineage(url, monkeypatch, granted) as client:
+        granted = {(_PIPELINE, "reader", f"table:{uuid_of[name].table_uuid}") for name in _VISIBLE}
+        with governed_lineage(url, monkeypatch, granted, openfga_store) as client:
             store = client.app.state.provenance
 
             async def _seed() -> None:

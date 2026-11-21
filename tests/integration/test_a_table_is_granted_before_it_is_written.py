@@ -7,8 +7,9 @@ process killed between the two leaves either the table with its grants or the gr
 and the drift repair revokes them once nothing can still record a table under their uuid: no location claim does, or the
 one that does has outlived its lease with no table standing at it.
 
-ONE ESTATE ON MOTO, TWO SERVICES (`catalog_and_maintenance`): the real catalog app as alice, and the real maintenance
-audit with drift repair armed, asking the catalog's own grant doors for the census and the revokes. A kill is a
+ONE ESTATE ON MOTO, TWO SERVICES (`catalog_and_maintenance`): the real catalog app as alice, deciding on a real OpenFGA
+store of the test's own that holds what its doors write, and the real maintenance audit with drift repair armed, asking
+the catalog's own grant doors for the census and the revokes. A kill is a
 ``BaseException`` raised where the process stops, so no ``except Exception`` compensation in the door runs after it, as none
 runs after a SIGKILL: at the door's grant (its OpenFGA write) or at its backend write (the ``register_table`` call that
 records the table's row). The app's middleware answers it 500, which no caller reads. A door that fails once the table
@@ -37,9 +38,9 @@ from catalog.services import native
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga_writes
 from lakehouse.records import location_claims
+from tests.governed_catalog import StoreTuples
 from tests.integration.catalog_and_maintenance import audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
-from tests.integration.openfga_grants import TupleStore
 
 
 PROJECT = "acme"
@@ -51,7 +52,7 @@ class Killed(BaseException):
 
 
 class _Estate:
-    def __init__(self, catalog: TestClient, maintenance: TestClient, store: TupleStore, namespace: str) -> None:
+    def __init__(self, catalog: TestClient, maintenance: TestClient, store: StoreTuples, namespace: str) -> None:
         self.catalog = catalog
         self.maintenance = maintenance
         self.store = store
@@ -68,16 +69,17 @@ class _Estate:
 
 
 @pytest.fixture
-def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
+def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch, openfga_store: Any, dex_issuer: Any) -> Iterator[_Estate]:  # noqa: ANN401 — the root conftest's fixtures
     """Namespace ``bronze`` in project ``acme``'s warehouse, made by alice, and maintenance with drift repair armed."""
     env = {"MAINTENANCE_DRIFT_REPAIR_ENABLED": "true", "MAINTENANCE_DRIFT_REPAIR_DRY_RUN": "false", "MAINTENANCE_CATALOG_URL": CATALOG_URL}
-    with catalog_and_maintenance(moto_url, monkeypatch, env=env) as both:
+    with catalog_and_maintenance(moto_url, monkeypatch, env=env, openfga_store=openfga_store, dex_issuer=dex_issuer) as both:
         warehouse = f"lh588-{uuid.uuid4().hex[:10]}-wh"
         for path, body in (("/management/v1/projects", {"id": PROJECT}), ("/management/v1/warehouses", {"id": warehouse, "project": PROJECT})):
             answer = both.catalog.post(path, json=body)
             assert answer.status_code == 200, f"{path}: {answer.text}"
         namespace = f"{warehouse}$bronze"
         assert both.catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+        assert isinstance(both.store, StoreTuples), "the estate decides on a real OpenFGA store"
         yield _Estate(both.catalog, both.maintenance, both.store, namespace)
 
 

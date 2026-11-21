@@ -11,7 +11,8 @@ Staged the way the catalog stages it: its real builder's DatasetEvent, signed as
 authenticated, left in the outbox when the publish fails, and read back through the doors' own discriminator, so the producer
 and the relay cannot disagree unseen. The relay verifies that signature against the key the catalog publishes (served here by
 the suite's secret-store double), so every test below reaches its assertion through a verified event; the signature is made by the
-root conftest's `EventSigner`, which writes the wire format from the contract alone.
+root conftest's `EventSigner`, which writes the wire format from the contract alone. Where OpenFGA is consulted it is the pinned
+server, on a store of the test's own holding the tuples a case names.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ import asyncio
 import json
 import os
 import uuid
-from collections.abc import Collection
+from collections.abc import Awaitable, Callable, Collection
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast, override
@@ -36,7 +37,7 @@ from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.events.openlineage import run_id_for
 from lakehouse.events.signing import signature_of
-from lakehouse.governed import fga_reads
+from lakehouse.governed import fga_ids, fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
@@ -192,21 +193,35 @@ def _stage_hostile_first(settings: LineageSettings, body: str) -> str:
     return key
 
 
-def _arm_gate(monkeypatch: pytest.MonkeyPatch, *, writer: str | None) -> None:
-    """The real `enforce_bus_authz`: the catalog's real key, and an FGA that lets `writer` write the table."""
-
-    async def batch_check(_client: object, *, user: str, relation: str, objects: list[str], **_kw: object) -> dict[str, bool]:
-        return dict.fromkeys(objects, user == writer and relation in ("can_write_data", "can_get_metadata"))
-
-    async def read_object_tuples(_client: object, _obj: str) -> list[object]:
-        return [object()]  # governed, so a denial is repairable rather than unrepairable
-
-    monkeypatch.setattr(fga_reads, "batch_check", batch_check)
-    monkeypatch.setattr(fga_reads, "read_object_tuples", read_object_tuples)
+#: The object `_TABLE`'s grants are held by, the uuid its events carry.
+_TABLE_OBJECT = f"table:{_uuids(_TABLE).table_uuid}"
 
 
-def _request() -> Any:  # noqa: ANN401 — the drain and the routes read only app.state
-    return SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())), published_keys=store_published_keys())))
+def _arm_gate(store: Any, *, writer: str | None, readers: tuple[str, ...] = ("dex~curator",)) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """The real `enforce_bus_authz` on the test's own store: `writer` writes `_TABLE`, and each of `readers` reads it, so the
+    table is governed and a denial is repairable rather than unrepairable."""
+    store.write(
+        *((fga_ids.user_object(reader), "reader", _TABLE_OBJECT) for reader in readers),
+        *([(fga_ids.user_object(writer), "writer", _TABLE_OBJECT)] if writer else []),
+    )
+
+
+def _request(client: Any = None) -> Any:  # noqa: ANN401 — the drain and the routes read only app.state; an OpenFGA client
+    """The app state the drain and the routes read, its decider holding ``client``: one on the test's own store, or none
+    for a case authorization never reaches."""
+    return SimpleNamespace(
+        app=SimpleNamespace(state=SimpleNamespace(decider=OpenFgaDecider(cast("Any", client or object())), published_keys=store_published_keys()))
+    )
+
+
+def _decided[T](store: Any, call: Callable[[Any], Awaitable[T]]) -> T:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """Run ``call`` on a request whose decider asks the test's own OpenFGA store, on the loop its client is opened on."""
+
+    async def _run() -> T:
+        async with fga_provision.make_client(store.url, store.store_id, store.model_id, token_file=None) as client:
+            return await call(_request(client))
+
+    return asyncio.run(_run())
 
 
 def _rewrite_staged(settings: LineageSettings, key: str, doc: dict[str, Any]) -> None:
@@ -221,11 +236,17 @@ def _without_signature(staged_json: str) -> dict[str, Any]:
     return doc
 
 
-def _drain(settings: LineageSettings, repo: _Repo, publisher: BusDouble) -> relay.DrainOutcome:
-    app = _request().app
-    # The feed lineage's lifespan wires on its app, the one the relay hands the drain.
-    app.state.provenance = repo
-    return asyncio.run(relay._drain_outbox(app, cast("Any", repo), settings, StorageOptions(), publisher))
+def _drain(settings: LineageSettings, repo: _Repo, publisher: BusDouble, store: Any = None) -> relay.DrainOutcome:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """One drain of the outbox, its gate asking ``store`` where one is given."""
+
+    async def _once(request: Any) -> relay.DrainOutcome:  # noqa: ANN401 — the stand-in request
+        # The feed lineage's lifespan wires on its app, the one the relay hands the drain.
+        request.app.state.provenance = repo
+        return await relay._drain_outbox(request.app, cast("Any", repo), settings, StorageOptions(), publisher)
+
+    if store is None:
+        return asyncio.run(_once(_request()))
+    return _decided(store, _once)
 
 
 def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:
@@ -271,13 +292,13 @@ class _RefusalLedgerDown(_Repo):
 # --------------------------------------------------------------------------- #
 
 
-def test_the_drain_re_ingests_a_staged_create_through_the_dataset_door(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
+def test_the_drain_re_ingests_a_staged_create_through_the_dataset_door(tmp_path: Path, openfga_store: Any, catalog: Any) -> None:  # noqa: ANN401
     settings = _settings(tmp_path, fga_enabled=True)
     _, staged_json = _stage_a_create(settings, catalog)
-    _arm_gate(monkeypatch, writer=_AUTHOR)
+    _arm_gate(openfga_store, writer=_AUTHOR)
     repo, publisher = _Repo(), BusDouble()
 
-    outcome = _drain(settings, repo, publisher)
+    outcome = _drain(settings, repo, publisher, openfga_store)
 
     assert outcome.drained == 1, f"the staged create was not recovered: {outcome}"
     assert [e.dataset.name for e in repo.datasets] == [_TABLE] and repo.runs == [], "the create did not reach the dataset door"
@@ -286,17 +307,17 @@ def test_the_drain_re_ingests_a_staged_create_through_the_dataset_door(tmp_path:
     assert not list(outbox.list_events(settings.outbox_uri, StorageOptions())), "a recovered event must not stay staged"
 
 
-def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
+def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(tmp_path: Path, openfga_store: Any, catalog: Any) -> None:  # noqa: ANN401
     """The DatasetEvent path still runs `enforce_bus_authz`: a create no listed signer signed is refused, recorded and retired,
     never ingested and never announced, since a retry cannot change the answer."""
     settings = _settings(tmp_path, fga_enabled=True)
     key, staged_json = _stage_a_create(settings, catalog)
     staged_json = json.dumps(_without_signature(staged_json))
     _rewrite_staged(settings, key, json.loads(staged_json))
-    _arm_gate(monkeypatch, writer=_AUTHOR)
+    _arm_gate(openfga_store, writer=_AUTHOR)
     repo, publisher = _Repo(), BusDouble()
 
-    outcome = _drain(settings, repo, publisher)
+    outcome = _drain(settings, repo, publisher, openfga_store)
 
     assert outcome.refused == outcome.recorded == 1 and outcome.drained == 0, f"a refused create was not handled as a refusal: {outcome}"
     assert repo.datasets == [] and repo.runs == [] and publisher.events == [], "a refused create reached the feed or the bus"
@@ -315,7 +336,7 @@ def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(tmp_path
     ],
 )
 def test_the_relay_admits_a_delegators_drop_without_a_grant_and_no_other_signers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any, event_signer: Any, secret_store: SecretStoreDouble, by_the_catalog: bool, drained: int
+    tmp_path: Path, openfga_store: Any, catalog: Any, event_signer: Any, secret_store: SecretStoreDouble, by_the_catalog: bool, drained: int
 ) -> None:
     """The catalog revokes a table's grants in the request that drops it, so a drop delivered after the revoke asks FGA about a
     table nobody may write. A drop whose signature verifies as a delegator is the catalog's attestation that it enforced `can_drop`,
@@ -337,10 +358,10 @@ def test_the_relay_admits_a_delegators_drop_without_a_grant_and_no_other_signers
     )
     signed = catalog.sign(event, on_behalf_of=author) if by_the_catalog else other.sign(event)
     outbox.stage_envelope(settings.outbox_uri, StorageOptions(), lineage_envelope(signed))
-    _arm_gate(monkeypatch, writer=None)
+    _arm_gate(openfga_store, writer=None)
     repo = _Repo()
 
-    outcome = _drain(settings, repo, BusDouble())
+    outcome = _drain(settings, repo, BusDouble(), openfga_store)
 
     assert (outcome.drained, outcome.refused) == (drained, 1 - drained), f"the relay answered {outcome}"
     assert [(e.dataset.name, e.operation) for e in repo.datasets] == ([(_TABLE, "drop_table")] if drained else [])
@@ -348,18 +369,18 @@ def test_the_relay_admits_a_delegators_drop_without_a_grant_and_no_other_signers
 
 @pytest.mark.parametrize("body", _HOSTILE.values(), ids=_HOSTILE.keys())
 def test_bytes_no_parser_accepts_are_poison_and_do_not_wedge_the_create_behind_them(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str, catalog: Any
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, openfga_store: Any, body: str, catalog: Any
 ) -> None:
     """Read first, such an object is dropped as poison; one escaping the parse would abort every tick."""
     settings = _settings(tmp_path, fga_enabled=True)
     _stage_a_create(settings, catalog)
     hostile = _stage_hostile_first(settings, body)
-    _arm_gate(monkeypatch, writer=_AUTHOR)
+    _arm_gate(openfga_store, writer=_AUTHOR)
     poison: list[None] = []
     monkeypatch.setattr(outbox_metrics, "record_poison_dropped", lambda lane: poison.append(lane))
     repo = _Repo()
 
-    outcome = _drain(settings, repo, BusDouble())
+    outcome = _drain(settings, repo, BusDouble(), openfga_store)
 
     assert (outcome.drained, poison) == (1, ["lineage"]), f"the hostile object was not handled as poison of the lineage outbox: {outcome}, poison={poison}"
     assert [e.dataset.name for e in repo.datasets] == [_TABLE], "the create staged behind the hostile object was not recovered"
@@ -482,7 +503,7 @@ def test_a_poison_object_whose_delete_fails_does_not_stop_the_create_behind_it(t
 
 
 def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any, event_signer: Any, secret_store: SecretStoreDouble
+    tmp_path: Path, openfga_store: Any, catalog: Any, event_signer: Any, secret_store: SecretStoreDouble
 ) -> None:
     """A staged copy of a create the feed already holds byte-for-byte (published, then the stager's own
     delete failed) is a redelivery, even when its author has since lost the grant. It is signed by a listed signer that
@@ -492,7 +513,7 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(
     secret_store.hold(f"signing-public-{other.identity}", {"keys": other.public})
     settings = _settings(tmp_path, fga_enabled=True, signers=frozenset({_CATALOG, other.identity}))
     _, staged_json = _stage_a_create(settings, other, author=other.identity)
-    _arm_gate(monkeypatch, writer="dex~somebody-else")
+    _arm_gate(openfga_store, writer="dex~somebody-else")
     held = DatasetEvent.model_validate(json.loads(staged_json))
 
     class _FeedHoldsIt(_Repo):
@@ -500,10 +521,8 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(
             return held.model_dump(by_alias=True) if key == feed_key(held) else None
 
     repo = _FeedHoldsIt()
-    state = SimpleNamespace(decider=OpenFgaDecider(cast("Any", object())), provenance=repo, published_keys=store_published_keys())
-    app = SimpleNamespace(state=state)
 
-    outcome = asyncio.run(relay._drain_outbox(cast("Any", app), cast("Any", repo), settings, StorageOptions(), BusDouble()))
+    outcome = _drain(settings, repo, BusDouble(), openfga_store)
 
     assert (outcome.drained, outcome.refused) == (1, 0), f"a redelivered create was filed as lost provenance: {outcome}"
     assert repo.refusals == []
@@ -515,23 +534,22 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(
 
 
 @pytest.mark.parametrize("unsigned", [False, True], ids=["an-operator-who-may-not-write", "an-event-no-listed-signer-signed"])
-def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any, unsigned: bool
-) -> None:
+def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(tmp_path: Path, openfga_store: Any, catalog: Any, unsigned: bool) -> None:  # noqa: ANN401
+    """An operator who sees the table and may not write it is refused by the write rung; one who may write it is still
+    refused an event no listed signer signed."""
     settings = _settings(tmp_path, fga_enabled=True)
     key, staged_json = _stage_a_create(settings, catalog)
     if unsigned:
         _rewrite_staged(settings, key, _without_signature(staged_json))
-
-    async def see_not_write(_client: object, *, relation: str, objects: list[str], **_kw: object) -> dict[str, bool]:
-        return dict.fromkeys(objects, relation == "can_get_metadata" or unsigned)
-
-    monkeypatch.setattr(fga_reads, "batch_check", see_not_write)
+    _arm_gate(openfga_store, writer="dex~operator" if unsigned else None, readers=("dex~operator",))
     operator = _person("operator")
     repo, publisher = _Repo(), BusDouble()
 
     with pytest.raises(PermissionDeniedError) as refused:
-        asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", repo), settings, operator, fga_deps.DatasetFilter(_request(), settings, operator), publisher))
+        _decided(
+            openfga_store,
+            lambda request: dlq.replay_dlq(key, request, cast("Any", repo), settings, operator, fga_deps.DatasetFilter(request, settings, operator), publisher),
+        )
 
     assert isinstance(refused.value, UnverifiedEventError) is unsigned, f"the refusal came from the wrong gate: {refused.value!r}"
     assert repo.datasets == [] and repo.runs == [] and publisher.events == [], "a refused replay reached the feed or the bus"
@@ -598,19 +616,24 @@ def test_the_dlq_replay_answers_bytes_no_parser_accepts_as_poison(tmp_path: Path
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is not None, "a poison replay must leave the object for the relay"
 
 
-def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_replayable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, catalog: Any) -> None:
+def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_replayable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, openfga_store: Any, catalog: Any
+) -> None:
     """The view hides it, and the replay answers exactly as for an absent key: no 403 naming the table."""
     settings = _settings(tmp_path, fga_enabled=True)
     key, _ = _stage_a_create(settings, catalog)
-    _arm_gate(monkeypatch, writer=_AUTHOR)
+    _arm_gate(openfga_store, writer=_AUTHOR)
     stranger = _person("stranger")
     audited: list[tuple[str, str]] = []
     monkeypatch.setattr(dlq.audit, "audit", lambda action, outcome, **_kw: audited.append((action, outcome)))
     repo, publisher = _Repo(), BusDouble()
 
-    backlog = asyncio.run(dlq.list_dlq(settings, stranger, fga_deps.DatasetFilter(_request(), settings, stranger), limit=100))
+    backlog = _decided(openfga_store, lambda request: dlq.list_dlq(settings, stranger, fga_deps.DatasetFilter(request, settings, stranger), limit=100))
     with pytest.raises(TransactionNotFoundError, match=f"no staged lineage event for run {key}"):
-        asyncio.run(dlq.replay_dlq(key, _request(), cast("Any", repo), settings, stranger, fga_deps.DatasetFilter(_request(), settings, stranger), publisher))
+        _decided(
+            openfga_store,
+            lambda request: dlq.replay_dlq(key, request, cast("Any", repo), settings, stranger, fga_deps.DatasetFilter(request, settings, stranger), publisher),
+        )
 
     assert backlog.events == [], f"the view lists a create for a table the caller cannot see: {backlog.events}"
     assert repo.datasets == [] and publisher.events == [] and audited == []

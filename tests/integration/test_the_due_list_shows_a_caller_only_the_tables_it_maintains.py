@@ -1,9 +1,9 @@
 """`GET /management/v1/maintenance/due` lists a table's due record only to a caller holding `can_maintain` on it (ADR 0162).
 
 The records are maintenance's, written by the sweep on the control root, and each names a table and how many datasets
-resolve their files through it. The door is the catalog's: on the real app with OIDC and FGA on, the OpenFGA store an
-in-memory double that allows exactly the grants named, so what is asserted is the filter, and that a record's clone
-locations reach the caller only as a count.
+resolve their files through it. The door is the catalog's. Who is shown what is judged against the catalog as deployed, a
+loopback Dex signing callers in and a real OpenFGA deciding on a store of the test's own where alice maintains the tables
+named. How many records a walk reads is counted with an in-memory store that allows exactly the grants named.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from catalog.services import table_claims
 from lakehouse.records import location_claims, maintenance_due
 from lakehouse.records.maintenance_due import DUE_PREFIX, CompactionDue, DueRecord, write_due
 from lakehouse.storage.options import StorageOptions
+from tests.governed_catalog import GovernedCatalog
 from tests.integration.openfga_grants import Grants, act_as
 
 
@@ -61,22 +62,20 @@ def _recorded(settings: Settings, table: str, tmp_path: Path) -> DueRecord:
     return record
 
 
-def test_a_caller_sees_only_the_due_tables_it_maintains(real_ns_client: TestClient, tmp_path: Path) -> None:
-    client = real_ns_client
-    settings, grants = _governed(client, tmp_path)
+def test_a_caller_sees_only_the_due_tables_it_maintains(governed_catalog: GovernedCatalog, tmp_path: Path) -> None:
+    settings = get_settings()
     mine, _theirs, gone = (_recorded(settings, table, tmp_path) for table in ("acme$mine", "acme$theirs", "acme$gone"))
     # `acme$gone` was dropped and `acme$mine` is a name a table holds now ([[LH-523]]): the record's table is gone, so it
     # names no table and is shown to no one, whatever its name or its uuid could be granted. alice still holds a grant on
     # the gone table's uuid, as one a purge has not yet revoked would be.
     location_claims.release(table_claims.claim_store(settings), gone.location, "acme$gone")
     write_due(settings.registry_root, settings.storage_options(), gone.model_copy(update={"table": "acme$mine"}))
-    grants.grant("alice", ("can_maintain", f"table:{mine.uuid}"), ("can_maintain", f"table:{gone.uuid}"))
+    governed_catalog.store.write(*((governed_catalog.person("alice"), "maintainer", f"table:{record.uuid}") for record in (mine, gone)))
     # One object under the prefix that is no record at all: it is left out, and the list is still answered to everyone.
     (Path(settings.registry_root) / DUE_PREFIX / f"table-{uuid4()}.json").write_text("not json")
     (Path(settings.registry_root) / DUE_PREFIX / f"table-{uuid4()}.json").write_bytes(b"\xff\xfe")
-    act_as(client, "alice")
 
-    listed = client.get("/management/v1/maintenance/due", headers=AUTH)
+    listed = governed_catalog.client.get("/management/v1/maintenance/due", headers=governed_catalog.bearer("alice"))
 
     assert listed.status_code == 200, listed.text
     assert [(table["table"], table["uuid"]) for table in listed.json()["tables"]] == [("acme$mine", mine.uuid)]

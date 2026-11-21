@@ -8,7 +8,9 @@ on that signature with no grant re-derived ([[LH-551]]): the catalog authorized 
 revoked since, on its outputs or its inputs, takes nothing back. The commit reconciler's re-announcement of a lost one
 is the same: the catalog signs it only for the author it recorded authorizing the commit ([[LH-550]], ADR 0187).
 
-Driven through lineage's own app and lifespan, each event delivered to its ingest lane, FGA on. Public keys come from
+Driven through lineage's own app and lifespan, each event delivered to its ingest lane, every check the real model's on
+an OpenFGA store of the test's own: the event's author holding the rungs its write needs, another person holding the
+tables so they are governed, or nobody holding anything. Public keys come from
 the secret store, which the suite's double answers; signatures are built by the root conftest's `EventSigner` from the
 wire format alone.
 """
@@ -16,15 +18,13 @@ wire format alone.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from typing import Any, cast
+from typing import Any, Literal
 
 import pytest
 from lineage_lane import Feed, governed, started
-from openfga_sdk import OpenFgaClient
 
 from lakehouse.events.bus_delivery import Outcome, Settlement
-from lakehouse.governed.decider import OpenFgaDecider
+from lakehouse.governed.fga_ids import user_object
 from lakehouse.governed.signing_key import signing_public_secret
 from tests.secret_store_double import SecretStoreDouble
 
@@ -72,38 +72,27 @@ def _drop() -> dict[str, Any]:
     }
 
 
-def _everything(_object: str) -> bool:
-    return True
+#: Who holds the tables an event names: its author the rungs its write needs, another person both tables, or nobody.
+type Holders = Literal["author", "another", "nobody"]
 
 
-def _nothing(_object: str) -> bool:
-    return False
-
-
-def _answering(monkeypatch: pytest.MonkeyPatch, *, held: Callable[[str], bool], governed_objects: Callable[[str], bool]) -> None:
-    """OpenFGA answering ``held`` for every check and holding a tuple on each object ``governed_objects`` names."""
-    from lakehouse.governed import fga_reads
-
-    async def answer(_client: object, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        del user, relation
-        return {obj: held(obj) for obj in objects}
-
-    async def tuples(_client: object, obj: str) -> list[object]:
-        return [object()] if governed_objects(obj) else []
-
-    monkeypatch.setattr(fga_reads, "batch_check", answer)
-    monkeypatch.setattr(fga_reads, "read_object_tuples", tuples)
+def _hold(store: Any, holders: Holders, author: str) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """Seed ``store`` as ``holders`` says, for the event ``author`` names."""
+    if holders == "author":
+        store.write((user_object(author), "writer", f"table:{EVENTS_UUID}"), (user_object(author), "reader", f"table:{SOURCE_UUID}"))
+    elif holders == "another":
+        store.write(*((user_object("dex~bob"), "owner", f"table:{uuid}") for uuid in (EVENTS_UUID, SOURCE_UUID)))
 
 
 @pytest.mark.parametrize(
-    ("case", "held", "governed_objects", "recorded"),
+    ("case", "holders", "recorded"),
     [
-        pytest.param("stage-for-a-person", _everything, _everything, False, id="a-signer-that-is-not-a-delegator-signing-for-a-person"),
-        pytest.param("catalog-for-a-person", _nothing, _everything, True, id="the-delegator-signing-for-a-person-whose-grants-were-revoked-since"),
-        pytest.param("unlisted-signer", _everything, _everything, False, id="a-signer-the-chart-does-not-list"),
-        pytest.param("catalog-drop", _nothing, _nothing, True, id="a-catalog-drop-its-signature-verifies"),
-        pytest.param("forged-catalog-drop", _nothing, _nothing, False, id="a-catalog-drop-its-signature-does-not-verify"),
-        pytest.param("pipeline-own-run", _nothing, _nothing, False, id="a-non-delegators-write-whose-output-holds-no-tuple"),
+        pytest.param("stage-for-a-person", "author", False, id="a-signer-that-is-not-a-delegator-signing-for-a-person"),
+        pytest.param("catalog-for-a-person", "another", True, id="the-delegator-signing-for-a-person-whose-grants-were-revoked-since"),
+        pytest.param("unlisted-signer", "another", False, id="a-signer-the-chart-does-not-list"),
+        pytest.param("catalog-drop", "nobody", True, id="a-catalog-drop-its-signature-verifies"),
+        pytest.param("forged-catalog-drop", "nobody", False, id="a-catalog-drop-its-signature-does-not-verify"),
+        pytest.param("pipeline-own-run", "nobody", False, id="a-non-delegators-write-whose-output-holds-no-tuple"),
     ],
 )
 def test_lineage_takes_a_delegated_signature_only_from_the_listed_delegator(  # noqa: PLR0913 - parametrized
@@ -111,15 +100,15 @@ def test_lineage_takes_a_delegated_signature_only_from_the_listed_delegator(  # 
     event_signer: Any,
     secret_store: SecretStoreDouble,
     respx_allows_unused_routes: None,
+    openfga_store: Any,
     case: str,
-    held: Callable[[str], bool],
-    governed_objects: Callable[[str], bool],
+    holders: Holders,
     recorded: bool,
 ) -> None:
-    governed(monkeypatch)
+    governed(monkeypatch, openfga_store)
     monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([CATALOG, STAGE, PIPELINE]))
     monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps([CATALOG]))
-    _answering(monkeypatch, held=held, governed_objects=governed_objects)
+    _hold(openfga_store, holders, PIPELINE if case == "pipeline-own-run" else PERSON)
     catalog, stage, unlisted, impostor, pipeline = (event_signer(name) for name in (CATALOG, STAGE, UNLISTED, CATALOG, PIPELINE))
     for signer in (catalog, stage, pipeline):
         secret_store.hold(signing_public_secret(signer.identity), {"keys": signer.public})
@@ -133,7 +122,7 @@ def test_lineage_takes_a_delegated_signature_only_from_the_listed_delegator(  # 
         "pipeline-own-run": lambda: pipeline.sign(_run(PIPELINE)),
     }[case]()
 
-    with started(monkeypatch, Feed(), decider=OpenFgaDecider(cast("OpenFgaClient", object()))) as lineage:
+    with started(monkeypatch, Feed()) as lineage:
         settled = lineage.deliver({"data": event})
 
     assert settled == Settlement(outcome=Outcome.TAKEN), f"{case}: the lane settled {settled}"

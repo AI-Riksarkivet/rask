@@ -2,12 +2,15 @@
 
 For a test whose claim crosses the two services: the catalog writes what a door leaves (a trash record, a grant) and a
 maintenance audit acts on it, through the catalog's own doors (`audited`), on a loop that holds what the worker's start
-holds before it takes a task (`maintenance.runtime.standing`). The catalog runs with OIDC and FGA on once its lifespan has
-run, acting as alice, and the ``TupleStore`` behind it holds what the doors write (``openfga_grants``).
+holds before it takes a task (`maintenance.runtime.standing`). The catalog acts as alice with OIDC and FGA on: given a real
+OpenFGA store and the loopback Dex, as deployed, alice administering the estate and holding the rungs maintenance's
+doors ask; otherwise once its lifespan has run, over a ``TupleStore`` that holds what the doors write and allows every
+check (``openfga_grants``), for a test whose claim is not who may act.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager
@@ -27,6 +30,7 @@ from lakehouse.storage.client import S3Client
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.runtime import standing
 from tests.bus_double import BusDouble
+from tests.governed_catalog import GovernedCatalog, StoreTuples
 from tests.integration.openfga_grants import TupleStore, act_as
 
 
@@ -43,7 +47,7 @@ class TwoServices:
     """The catalog's client, a client whose loop runs on what maintenance's worker stands on, the store behind both,
     and an S3 client on the control bucket's store."""
 
-    def __init__(self, catalog: TestClient, maintenance: TestClient, store: TupleStore, s3: S3Client) -> None:
+    def __init__(self, catalog: TestClient, maintenance: TestClient, store: TupleStore | StoreTuples, s3: S3Client) -> None:
         self.catalog = catalog
         self.maintenance = maintenance
         self.store = store
@@ -57,13 +61,32 @@ def catalog_and_maintenance(
     *,
     env: dict[str, str],
     catalog_control: Any = None,  # noqa: ANN401 — the catalog app's ControlEmitter, as the test captures it
+    openfga_store: Any = None,  # noqa: ANN401 — the root conftest's OpenFgaStore
+    dex_issuer: Any = None,  # noqa: ANN401 — the root conftest's DexIssuer
 ) -> Generator[TwoServices]:
     """The catalog and maintenance's standing resources over a fresh control bucket, with ``env`` over the shared
     settings and project-less.
 
     ``catalog_control`` replaces the catalog's control emitter. Maintenance holds no OpenFGA client: it
-    asks the catalog's doors, which a test routes to this catalog (`maintenance_vend_doors.catalog_doors`).
+    asks the catalog's doors, which a test routes to this catalog (`maintenance_vend_doors.catalog_doors`), so they are
+    asked as alice. With ``openfga_store`` and ``dex_issuer`` the catalog decides on that store as deployed, and alice
+    holds the estate's ``admin``, and the ``reclaimer`` and ``reconciler`` rungs those doors ask.
     """
+    governed_env: dict[str, str] = {}
+    if openfga_store is not None:
+        governed_env = {
+            "RASK_OIDC_ENABLED": "true",
+            "RASK_OIDC_ISSUER": dex_issuer.issuer,
+            "RASK_OIDC_AUDIENCE": "lance-catalog",
+            "RASK_OIDC_ALLOW_INSECURE": "true",
+            "RASK_OIDC_IDP_ID": GovernedCatalog.IDP,
+            "RASK_OIDC_CONNECTORS": json.dumps({GovernedCatalog.CONNECTOR: GovernedCatalog.IDP}),
+            "RASK_FGA_ENABLED": "true",
+            "RASK_FGA_API_URL": openfga_store.url,
+            "RASK_FGA_STORE_ID": openfga_store.store_id,
+        }
+        alice = f"user:{GovernedCatalog.IDP}~alice"
+        openfga_store.write(*((alice, rung, "estate:rask") for rung in ("admin", "reclaimer", "reconciler")))
     bucket = f"two-{uuid.uuid4().hex[:10]}"
     s3: S3Client = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     s3.create_bucket(Bucket=bucket)
@@ -80,6 +103,7 @@ def catalog_and_maintenance(
         "MAINTENANCE_S3_SECRET_ACCESS_KEY": "test",
         "MAINTENANCE_S3_BUCKET": bucket,
         "MAINTENANCE_CONTROL_ROOT": f"s3://{bucket}",
+        **governed_env,
         **env,
     }.items():
         monkeypatch.setenv(key, value)
@@ -88,12 +112,19 @@ def catalog_and_maintenance(
     from catalog.main import app as catalog_app
 
     maintenance_app = FastAPI(lifespan=_standing)
-    store = TupleStore()
     lineage = BusEmitter(
         BusDouble(), "lineage.events.v1", job_namespace="lance-catalog", dataset_namespace="lance-namespace://localhost/api/catalog", timeout_seconds=5.0
     )
+    bearer = f"Bearer {dex_issuer.mint('alice', connector=GovernedCatalog.CONNECTOR, audience='lance-catalog')}" if openfga_store is not None else "Bearer t"
     try:
-        with TestClient(catalog_app, headers={"Authorization": "Bearer t"}) as catalog, TestClient(maintenance_app) as maintenance:
+        with TestClient(catalog_app, headers={"Authorization": bearer}) as catalog, TestClient(maintenance_app) as maintenance:
+            monkeypatch.setattr(catalog_app.state, "lineage_emitter", lineage, raising=False)
+            if catalog_control is not None:
+                monkeypatch.setattr(catalog_app.state, "control_emitter", catalog_control, raising=False)
+            if openfga_store is not None:
+                yield TwoServices(catalog, maintenance, StoreTuples(openfga_store), s3)
+                return
+            store = TupleStore()
             governed = catalog_settings().model_copy(
                 update={
                     "oidc_enabled": True,
@@ -108,9 +139,6 @@ def catalog_and_maintenance(
             monkeypatch.setattr(catalog_app.state, "oidc", MagicMock())
             act_as(catalog, "alice")
             monkeypatch.setattr(catalog_app.state, "fga", store)
-            monkeypatch.setattr(catalog_app.state, "lineage_emitter", lineage, raising=False)
-            if catalog_control is not None:
-                monkeypatch.setattr(catalog_app.state, "control_emitter", catalog_control, raising=False)
             yield TwoServices(catalog, maintenance, store, s3)
     finally:
         catalog_app.dependency_overrides.clear()

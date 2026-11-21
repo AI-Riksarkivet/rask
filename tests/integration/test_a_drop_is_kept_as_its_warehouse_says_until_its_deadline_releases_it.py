@@ -37,6 +37,7 @@ from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.trash_task import TrashUnreadableError, run_trash_task
 from tests import seeding
+from tests.governed_catalog import StoreTuples
 from tests.integration.catalog_and_maintenance import TwoServices, audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 from tests.integration.openfga_grants import principal_key
@@ -63,6 +64,7 @@ class _Estate:
     def __init__(self, both: TwoServices, control: _Captured) -> None:
         self.catalog = both.catalog
         self.maintenance = both.maintenance
+        assert isinstance(both.store, StoreTuples), "the estate decides on a real OpenFGA store"
         self.store = both.store
         self.s3 = both.s3
         self.control = control
@@ -109,12 +111,12 @@ class _Estate:
 
 
 @pytest.fixture
-def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
+def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch, openfga_store: Any, dex_issuer: Any) -> Iterator[_Estate]:  # noqa: ANN401 — the root conftest's fixtures
     """The catalog with the estate's seven-day grace period, as alice, and maintenance reading the same control root with
     the purge off, as the default chart ships it."""
     captured = _Captured()
     env = {"LANCE_TRASH_GRACE_DAYS": "7", "MAINTENANCE_TRASH_PURGE_ENABLED": "false", "MAINTENANCE_CATALOG_URL": CATALOG_URL}
-    with catalog_and_maintenance(moto_url, monkeypatch, env=env, catalog_control=captured) as both:
+    with catalog_and_maintenance(moto_url, monkeypatch, env=env, catalog_control=captured, openfga_store=openfga_store, dex_issuer=dex_issuer) as both:
         answer = both.catalog.post("/management/v1/projects", json={"id": PROJECT})
         assert answer.status_code == 200, answer.text
         yield _Estate(both, captured)
@@ -207,8 +209,10 @@ def test_an_audit_releases_the_grants_of_a_drop_past_its_deadline_and_keeps_its_
 
 
 def test_a_drop_the_audit_released_is_not_undropped(estate: _Estate) -> None:
+    """The release ended the drop's grants, and the record refuses the undrop even of a caller who holds its rung again."""
     drops = _PastDeadline(estate)
     _audit(estate)
+    estate.store.write((user_object(principal_key("alice")), "owner", f"table:{drops.expired}"))
 
     refused = estate.catalog.post(f"/management/v1/table/{drops.bronze}$expired/undrop", json={})
 

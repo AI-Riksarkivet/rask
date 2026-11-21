@@ -29,16 +29,20 @@ test written only for the first.
 from __future__ import annotations
 
 import uuid
-from typing import Any, cast
+from collections.abc import AsyncGenerator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
 from lance_namespace import PermissionDeniedError
 from lineage_lane import Feed
+from openfga_sdk import OpenFgaClient
+from openfga_sdk.client.models import ClientTuple, ClientWriteRequest
 
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE
-from lakehouse.governed import fga_ids, fga_reads
+from lakehouse.governed import fga_ids, fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lineage.api.fga_deps import Governed, enforce_output_authz, is_external_source
@@ -98,23 +102,6 @@ def _event(*, inputs: list[Dataset] | None = None, outputs: list[Dataset] | None
 _PIPELINE = ServicePrincipal.for_account("system:serviceaccount:etl:service-pipeline")
 
 
-class _FakeFGA:
-    """An OpenFGA that answers only for objects it was told about — like the real one.
-
-    The DEFAULT IS FALSE and that is the whole point: a real store returns `allowed=false` for an object
-    that does not exist, which is indistinguishable from a denial. A fake that raised on an unknown
-    object would make the bug impossible to reproduce here.
-    """
-
-    def __init__(self, allowed: set[str]) -> None:
-        self.allowed = allowed
-        self.asked: list[str] = []
-
-    async def batch_check(self, _client, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        self.asked.extend(objects)
-        return {o: (o in self.allowed) for o in objects}
-
-
 @pytest.fixture
 def settings() -> LineageSettings:
     # FGA refuses to enable without OIDC — it needs a VERIFIED subject to check, and an authz decision
@@ -135,7 +122,7 @@ class _Claims(OpenFgaDecider):
     location: those are the outside world. Which table a location holds is driven against the real catalog door in
     `tests/integration/test_a_service_account_records_lineage_on_the_tables_it_names.py`."""
 
-    def __init__(self, client: Any, held: dict[str, str]) -> None:
+    def __init__(self, client: OpenFgaClient, held: dict[str, str]) -> None:
         super().__init__(client)
         self._held = held
 
@@ -143,37 +130,47 @@ class _Claims(OpenFgaDecider):
         return {location: self._held.get(location) for location in locations}
 
 
+type AppWith = Callable[..., AbstractAsyncContextManager[FastAPI]]
+
+
 @pytest.fixture
-def app_with(monkeypatch):
-    """Wire a fake FGA into the app's decider, through the `fga` helper it reads."""
+def app_with(openfga_store: Any) -> AppWith:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """An app whose decider asks a real OpenFGA, on a store of the test's own holding the pipeline's ``granted`` rungs.
 
-    def _make(allowed: set[str], held: dict[str, str] | None = None) -> tuple[FastAPI, _FakeFGA]:
-        fake = _FakeFGA(allowed)
+    A real store answers `allowed=false` for an object no tuple names, which is indistinguishable from a denial: that is
+    what made the external source unauthorizable, and what each case here is judged by.
+    """
 
-        monkeypatch.setattr(fga_reads, "batch_check", fake.batch_check)
-        app = FastAPI()
-        app.state.decider = _Claims(cast("Any", object()), held or {})
-        # The feed lineage's lifespan always wires, here one holding no run, so each event founds its run.
-        app.state.provenance = Feed()
-        return app, fake
+    @asynccontextmanager
+    async def _make(granted: dict[str, str], held: dict[str, str] | None = None) -> AsyncGenerator[FastAPI]:
+        async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
+            if granted:
+                tuples = [ClientTuple(user=fga_ids.user_object(_PIPELINE.subject), relation=rung, object=_object(name)) for name, rung in granted.items()]
+                await client.write(ClientWriteRequest(writes=tuples))
+            app = FastAPI()
+            app.state.decider = _Claims(client, held or {})
+            # The feed lineage's lifespan always wires, here one holding no run, so each event founds its run.
+            app.state.provenance = Feed()
+            yield app
 
     return _make
 
 
 @pytest.mark.anyio
-async def test_a_GOVERNED_input_the_caller_cannot_see_is_STILL_refused(settings, app_with) -> None:
+async def test_a_GOVERNED_input_the_caller_cannot_see_is_STILL_refused(settings: LineageSettings, app_with: AppWith) -> None:
     """The half the fix must not cost. This is the forgery the guard exists to stop: an authenticated
     reader recording `I read gold$catalog` into the feed."""
-    app, fake = app_with(set())
     event = _event(inputs=[_table("gold", "gold$catalog")])
 
-    with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: gold\$catalog"):
+    async with app_with({}) as app:
+        with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: gold\$catalog"):
+            await enforce_output_authz(event, app, settings, _PIPELINE)
+    async with app_with({"gold$catalog": "reader"}) as app:
         await enforce_output_authz(event, app, settings, _PIPELINE)
-    assert fake.asked == [_object("gold$catalog")], "the refusal was not the check on the table the input names"
 
 
 @pytest.mark.anyio
-async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settings, app_with) -> None:
+async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settings: LineageSettings, app_with: AppWith) -> None:
     """The attack the exemption invites, and why it does not land.
 
     A caller could name `gold$catalog` under an `s3://` namespace to skip the check. It skips — and buys
@@ -182,11 +179,11 @@ async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settin
     edges. The assertion is on the identity edges are keyed on, not on the check being skipped, because the
     skip is the mechanism and the identity is the guarantee.
     """
-    app, _ = app_with(set())
     forged = _dataset("s3://anything", "gold$catalog")
     event = _event(inputs=[forged])
 
-    await enforce_output_authz(event, app, settings, _PIPELINE)
+    async with app_with({}) as app:
+        await enforce_output_authz(event, app, settings, _PIPELINE)
 
     # ASSERTED ON THE IDENTITY KEY the edges use, never on `(forged.namespace, forged.name)` against a literal,
     # which is unconditionally true and cannot fail.
@@ -195,28 +192,29 @@ async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settin
 
 
 @pytest.mark.anyio
-async def test_OUTPUTS_are_never_exempted(settings, app_with) -> None:
+async def test_OUTPUTS_are_never_exempted(settings: LineageSettings, app_with: AppWith) -> None:
     """Writing is the direction that mutates the estate. An output under an external namespace is a
     producer claiming to have written the outside world — not a case to make permissive, and the
     asymmetry is deliberate rather than an oversight in the filter. Beside it here, a governed table's location the
     caller may write, which is that table and admits no outside output sharing its key under another bucket ([[LH-553]])."""
-    app, _ = app_with({_object(GOVERNED)}, {f"s3://lake/{EXTERNAL_NAME}": _uuid(GOVERNED)})
-    event = _event(outputs=[_dataset("s3://lake", EXTERNAL_NAME), _dataset(EXTERNAL_NS, EXTERNAL_NAME)])
+    located = _dataset("s3://lake", EXTERNAL_NAME)
 
-    with pytest.raises(PermissionDeniedError, match="can_write_data"):
-        await enforce_output_authz(event, app, settings, _PIPELINE)
+    async with app_with({GOVERNED: "writer"}, {f"s3://lake/{EXTERNAL_NAME}": _uuid(GOVERNED)}) as app:
+        await enforce_output_authz(_event(outputs=[located]), app, settings, _PIPELINE)
+        with pytest.raises(PermissionDeniedError, match="can_write_data"):
+            await enforce_output_authz(_event(outputs=[located, _dataset(EXTERNAL_NS, EXTERNAL_NAME)]), app, settings, _PIPELINE)
 
 
 @pytest.mark.anyio
-async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_external_one(settings, app_with) -> None:
+async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_external_one(settings: LineageSettings, app_with: AppWith) -> None:
     """A run that reads a raw source AND a governed table must be judged on the governed half only."""
-    app, fake = app_with({_object(GOVERNED)})
     event = _event(inputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME), _table("bind86-bronze", GOVERNED)])
 
-    await enforce_output_authz(event, app, settings, _PIPELINE)
-
-    assert _object(GOVERNED) in fake.asked, "the governed input was not authorized"
-    assert not any(EXTERNAL_NAME in o for o in fake.asked), "the external input was authorized"
+    async with app_with({}) as app:
+        with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: bind86-bronze\$pages$"):
+            await enforce_output_authz(event, app, settings, _PIPELINE)
+    async with app_with({GOVERNED: "reader"}) as app:
+        await enforce_output_authz(event, app, settings, _PIPELINE)
 
 
 @pytest.mark.parametrize(
@@ -359,34 +357,32 @@ def _event_with_column_upstream(output: dict[str, Any], up_ns: str, up_name: str
 
 
 @pytest.mark.anyio
-async def test_a_GOVERNED_column_upstream_is_AUTHORIZED_not_written_blind(settings, app_with) -> None:
+async def test_a_GOVERNED_column_upstream_is_AUTHORIZED_not_written_blind(settings: LineageSettings, app_with: AppWith) -> None:
     """The defect: the caller may write `mine$table` and holds nothing on `gold$catalog`, yet naming it
     as a column upstream would record and forward a derivation from it."""
-    app, _fake = app_with({_object("mine$table")})  # write on the sandbox only
     event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "gold", GOVERNED)
 
-    with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: bind86-bronze\$pages"):
+    async with app_with({"mine$table": "writer"}) as app:  # write on the sandbox only
+        with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: bind86-bronze\$pages"):
+            await enforce_output_authz(event, app, settings, _PIPELINE)
+
+
+@pytest.mark.anyio
+async def test_a_column_upstream_the_caller_CAN_see_passes(settings: LineageSettings, app_with: AppWith) -> None:
+    """The mirror — the check must not refuse a legitimate cross-table derivation, which is the whole
+    point of column lineage."""
+    event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "gold", GOVERNED, inputs=[_table_payload("gold", GOVERNED)])
+
+    async with app_with({"mine$table": "writer", GOVERNED: "reader"}) as app:
         await enforce_output_authz(event, app, settings, _PIPELINE)
 
 
 @pytest.mark.anyio
-async def test_a_column_upstream_the_caller_CAN_see_passes(settings, app_with) -> None:
-    """The mirror — the check must not refuse a legitimate cross-table derivation, which is the whole
-    point of column lineage."""
-    app, fake = app_with({_object("mine$table"), _object(GOVERNED)})
-    event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "gold", GOVERNED, inputs=[_table_payload("gold", GOVERNED)])
-
-    await enforce_output_authz(event, app, settings, _PIPELINE)
-
-    assert _object(GOVERNED) in fake.asked, "the governed column upstream was never presented to a check"
-
-
-@pytest.mark.anyio
-async def test_an_EXTERNAL_column_upstream_stays_exempt(settings, app_with) -> None:
+async def test_an_EXTERNAL_column_upstream_stays_exempt(settings: LineageSettings, app_with: AppWith) -> None:
     """Same rule as inputs, and for the same reason: an external source has no `table:` object, so
     authorizing it is unsatisfiable rather than strict. Its identity is namespace-qualified, so it cannot
     name a governed table either way."""
-    app, _fake = app_with({_object("mine$table")})
     event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "s3://raw", "gold$catalog")
 
-    await enforce_output_authz(event, app, settings, _PIPELINE)
+    async with app_with({"mine$table": "writer"}) as app:
+        await enforce_output_authz(event, app, settings, _PIPELINE)

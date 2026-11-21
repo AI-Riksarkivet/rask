@@ -24,20 +24,14 @@ A PERSON who creates a table still owns it: pinned on a real OpenFGA by
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, cast
-
-import pytest
+import asyncio
+from typing import Any
 
 from catalog.api import fga_deps
-from catalog.api.security import Caller
 from catalog.core.config import Settings
-from lakehouse.governed import fga_writes
+from lakehouse.governed import fga_provision, fga_reads
 from lakehouse.governed.machine_identity import ServicePrincipal
 from tests.unit.named_resolver import NamedResolver, uuid_of
-
-
-if TYPE_CHECKING:
-    from openfga_sdk.client import OpenFgaClient
 
 
 def _settings() -> Settings:
@@ -55,40 +49,27 @@ def _settings() -> Settings:
     )
 
 
-async def _tuples_written(token: Caller, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, str]]:
-    """The TUPLES one table create actually writes, as (user, relation, object).
-
-    Captured at `write_tuples` rather than at `grant_on_create`, because the call still happens either
-    way — only its `grant_owner` argument differs — so asserting the call shape would pass against a
-    flag that was threaded and then ignored. The tuples are what OpenFGA ends up holding.
-    """
-    written: list[tuple[str, str, str]] = []
-
-    async def _capture(_client: object, tuples: Any, **_kw: Any) -> None:
-        written.extend((t.user, t.relation, t.object) for t in tuples)
-
-    monkeypatch.setattr(fga_writes, "write_tuples", _capture)
-    await fga_deps.seed_ownership(
-        cast("OpenFgaClient", object()),  # the capture never touches the client
-        _settings(),
-        token,
-        NamedResolver(),
-        resource="table",
-        segments=["acme-silver", "features"],
-        uuid=_TABLE_UUID,
-    )
-    return written
-
-
 #: The uuid the create minted for ``acme-silver$features``: the object its grants are held by (ADR 0173 §8).
 _TABLE_UUID = uuid_of("table", ["acme-silver", "features"])
 
 
-@pytest.mark.asyncio
-async def test_a_SERVICE_creating_a_table_is_not_granted_owner(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The withdrawal itself: a service registering its output does not become its owner."""
-    written = await _tuples_written(ServicePrincipal.for_account("system:serviceaccount:default:rask-sa-pipeline"), monkeypatch)
+def test_a_SERVICE_creating_a_table_is_not_granted_owner(openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """The withdrawal itself, on the real store: a service registering its output does not become its owner, and the
+    evaluator grants it no ``can_drop`` on it."""
+    service = ServicePrincipal.for_account("system:serviceaccount:default:rask-sa-pipeline")
+
+    async def _create() -> bool:
+        async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
+            await fga_deps.seed_ownership(
+                client, _settings(), service, NamedResolver(), resource="table", segments=["acme-silver", "features"], uuid=_TABLE_UUID
+            )
+            return await fga_reads.check(client, user=service.subject, relation="can_drop", obj=f"table:{_TABLE_UUID}")
+
+    may_drop = asyncio.run(_create())
+
+    written = openfga_store.tuples()
     assert not [t for t in written if t[1] == "owner"], f"the registering service was granted ownership of its output: {written}"
+    assert may_drop is False, "the registering service may drop its output"
     # The hierarchy edge is still written, and that is what keeps this a withdrawal rather than an
     # orphaning: ownership descends to the table from the project's admin through this link.
     parent = f"namespace:{uuid_of('namespace', ['acme-silver'])}"

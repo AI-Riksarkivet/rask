@@ -39,7 +39,6 @@ def _run(
     *,
     user: str,
     relation: str,
-    grant: bool,
     fga_type: str = "table",
     ident: str = "db1$users",
     outage: bool = False,
@@ -59,20 +58,14 @@ def _run(
             raise ServiceUnavailableError("fga down")
         captured.extend(tuples)
 
-    async def fake_delete(_client: object, tuples: list[object], **_kw: object) -> None:
-        if outage:
-            raise ServiceUnavailableError("fga down")
-        captured.extend(tuples)
-
     monkeypatch.setattr(access.fga_writes, "write_tuples", fake_write)
-    monkeypatch.setattr(access.fga_writes, "delete_tuples", fake_delete)
     # The FGA client and the control emitter are INJECTED now (catalog-api-09) — the helper no longer
     # digs either out of `request.app.state`, so the drive hands them over directly.
     client = cast(OpenFgaClient, object())
     settings = cast(Settings, SimpleNamespace(fga_enabled=True))
     token = _person("alice")
     body = access.AccessGrantRequest(user=user, relation=relation)
-    resp = asyncio.run(access._access_mutate(client, unfiled(NoopControlEmitter()), settings, token, NamedResolver(), fga_type, ident, body, grant=grant))
+    resp = asyncio.run(access._access_mutate(client, unfiled(NoopControlEmitter()), settings, token, NamedResolver(), fga_type, ident, body, grant=True))
     return resp, captured
 
 
@@ -119,21 +112,31 @@ def test_grantable_relations_are_the_base_rungs_only() -> None:
     assert access._grantable_relations("classification") == ("pass_grants", "apply")
 
 
-def test_revoke_deletes_the_tuple_and_reports_not_granted(monkeypatch: pytest.MonkeyPatch) -> None:
-    resp, captured = _run(monkeypatch, user="dex~bob", relation="writer", grant=False)
-    assert resp.granted is False
-    assert captured[0].relation == "writer"
+def test_a_grant_writes_its_grantee_as_named_and_a_revoke_deletes_the_tuple(governed_catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """On the real store: a qualified userset is written verbatim (never ``user:role:…``, which matches no tuple), a
+    principal key becomes the one user it is, and a revoke deletes exactly the tuple it names and reports it no longer
+    granted."""
+    catalog, alice = governed_catalog, governed_catalog.bearer("alice")
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
+    door = "/management/v1/namespace/lance_catalog$db/access"
+    namespace = f"namespace:{catalog.client.post('/v1/namespace/lance_catalog$db/describe', json={}, headers=alice).json()['properties']['rask.uuid']}"
+    before = catalog.store.tuples()
 
+    for user, relation in (("role:project_admin#assignee", "reader"), ("dex~bob", "writer")):
+        granted = catalog.client.post(f"{door}/grant", json={"user": user, "relation": relation}, headers=alice)
+        assert (granted.status_code, granted.json()["granted"]) == (200, True), granted.text
+    assert catalog.store.tuples() - before == {("role:project_admin#assignee", "reader", namespace), ("user:dex~bob", "writer", namespace)}
 
-def test_userset_grantee_passes_through_verbatim(monkeypatch: pytest.MonkeyPatch) -> None:
-    _, captured = _run(monkeypatch, user="role:project_admin#assignee", relation="reader", grant=True)
-    assert captured[0].user == "role:project_admin#assignee"  # NOT double-prefixed to user:role:…
+    revoked = catalog.client.post(f"{door}/revoke", json={"user": "dex~bob", "relation": "writer"}, headers=alice)
+
+    assert (revoked.status_code, revoked.json()["granted"]) == (200, False), revoked.text
+    assert catalog.store.tuples() - before == {("role:project_admin#assignee", "reader", namespace)}
 
 
 def test_derived_can_relation_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     # InvalidInput (400), not UnsupportedOperation (501): the rung NAME is client input — catalog-api-10.
     with pytest.raises(InvalidInputError):
-        _run(monkeypatch, user="dex~bob", relation="can_read_data", grant=True)
+        _run(monkeypatch, user="dex~bob", relation="can_read_data")
 
 
 # --------------------------------------------------------------------------- #
@@ -228,7 +231,7 @@ def test_the_grant_audit_row_carries_full_provenance(monkeypatch: pytest.MonkeyP
     logger.addHandler(handler)
     configure_audit(enabled=True)
     try:
-        _run(monkeypatch, user="dex~bob", relation="writer", grant=True, ident="db1$users")
+        _run(monkeypatch, user="dex~bob", relation="writer", ident="db1$users")
     finally:
         logger.removeHandler(handler)
 
@@ -251,7 +254,7 @@ def test_a_failed_grant_is_audited_too_so_attempts_are_reviewable(monkeypatch: p
     configure_audit(enabled=True)
     try:
         with pytest.raises(ServiceUnavailableError):
-            _run(monkeypatch, user="dex~bob", relation="writer", grant=True, outage=True)
+            _run(monkeypatch, user="dex~bob", relation="writer", outage=True)
     finally:
         logger.removeHandler(handler)
 

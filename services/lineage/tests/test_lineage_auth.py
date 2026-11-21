@@ -24,6 +24,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.security import HTTPAuthorizationCredentials
 from lance_namespace import PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
+from lineage_lane import decided
 from openfga_sdk import OpenFgaClient
 from pydantic import ValidationError
 
@@ -154,26 +155,20 @@ def test_gate_unauthenticated_raises() -> None:
         )
 
 
-def test_gate_denies_without_permission(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: dict[str, object] = {}
-
-    async def _deny(_client: object, *, user: str, relation: str, obj: str) -> bool:
-        captured.update(user=user, relation=relation, obj=obj)
-        return False
-
-    monkeypatch.setattr(fga_reads, "check", _deny)
-    client = cast(OpenFgaClient, object())
+def test_gate_denies_without_permission(openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """alice is refused the table she holds nothing on, named by its name, and admitted once she reads the uuid the name
+    resolved to as her: the decision is on that object, asked of the real model."""
     names = _Names()
+
+    def gate(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the gate's coroutine
+        return fga_deps.require_metadata_access("a$b", _request(decider=decider), _settings(**_FULL_AUTH), _token(), cast(CatalogNames, names), "tok")
+
+    openfga_store.write((fga_ids.user_object("dex~bob"), "owner", _object("a$b")))
     with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on table:a\$b"):
-        asyncio.run(
-            fga_deps.require_metadata_access(
-                "a$b", _request(decider=OpenFgaDecider(client)), _settings(**_FULL_AUTH), _token(), cast(CatalogNames, names), "tok"
-            )
-        )
-    # The denial must be on the right user/object/relation, not just "some" denial: the uuid the name resolved to as
-    # the caller, and the refusal names the table by its name.
-    assert captured == {"user": "dex~alice", "relation": "can_get_metadata", "obj": _object("a$b")}
-    assert names.bearers == ["tok"]
+        decided(openfga_store, gate)
+    openfga_store.write((fga_ids.user_object("dex~alice"), "reader", _object("a$b")))
+    decided(openfga_store, gate)
+    assert names.bearers == ["tok", "tok"]
 
 
 # --------------------------------------------------------------------------- #
@@ -202,11 +197,6 @@ def _event(claimed_author: str = "anon", outputs: list[str] | None = None, input
 # --------------------------------------------------------------------------- #
 # DatasetFilter — transitive-disclosure filtering (audit w8u4rc2tg, security medium)
 # --------------------------------------------------------------------------- #
-
-
-async def _batch_allow_a(_client: object, *, objects: list[str], **_kw: object) -> dict[str, bool]:
-    """Fake batch_check: only table ``a``'s object is visible."""
-    return {o: o == _object("a") for o in objects}
 
 
 # --------------------------------------------------------------------------- #
@@ -255,17 +245,21 @@ class _FakeStore:
         return _FakeWindow(list(self.events), bounds, self.log)
 
 
-def test_get_events_hides_dataset_less_events_when_governed(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_get_events_hides_dataset_less_events_when_governed(openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
     # #22 audit: a dataset-less event (empty inputs+outputs) must NOT pass the gate vacuously when FGA is
-    # on — it would otherwise leak the run/author/full event JSON to a caller with zero grants.
+    # on — it would otherwise leak the run/author/full event JSON to a caller, here one who reads a table.
     from lineage.api.v1.endpoints.events import get_events
 
-    monkeypatch.setattr(fga_reads, "batch_check", _batch_allow_a)
+    openfga_store.write((fga_ids.user_object("dex~alice"), "reader", _object("a")))
     settings = _settings(**_FULL_AUTH)
     repo = _FakeStore()
     repo.events = [EventRecord(seq=1, outputs=[], inputs=[], event={"run": {"runId": "secret"}})]
-    flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
-    result = asyncio.run(get_events(cast(ProvenanceStore, repo), flt, settings, names=NO_CATALOG_NAMES, bearer=None))
+
+    def read(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the door's coroutine
+        flt = fga_deps.DatasetFilter(_request(decider=decider), settings, _token())
+        return get_events(cast(ProvenanceStore, repo), flt, settings, names=NO_CATALOG_NAMES, bearer=None)
+
+    result = decided(openfga_store, read)
     assert result.events == []  # dataset-less event is hidden under governance
 
 
@@ -465,32 +459,30 @@ def _service_run() -> RunEvent:
 @pytest.mark.parametrize(
     ("held", "outcome"),
     [
-        pytest.param({(_SERVICE, "can_write_data", _object("gold$scores"))}, nullcontext(), id="the-service-writes-the-output"),
+        pytest.param({(_SERVICE, "writer", _object("gold$scores"))}, nullcontext(), id="the-service-writes-the-output"),
         pytest.param(set(), pytest.raises(PermissionDeniedError), id="the-service-holds-nothing-on-the-output"),
     ],
 )
-def test_enforce_output_authz_bounds_a_service_principal_by_its_own_rung(held: set[tuple[str, str, str]], outcome: AbstractContextManager[object]) -> None:
+def test_enforce_output_authz_bounds_a_service_principal_by_its_own_rung(
+    held: set[tuple[str, str, str]],
+    outcome: AbstractContextManager[object],
+    openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
+) -> None:
     """A service records provenance only for what its rung (`writer` on the output's namespace) permits.
 
     The bus route authorizes the subject the event's signature binds (`enforce_bus_authz`); this door authorizes the
     principal its bearer verified, so the decision is the service's own `can_write_data` on the output and never a
-    person's.
+    person's. bob owns the output, so it is governed and a refusal is the service's own.
     """
+    openfga_store.write((fga_ids.user_object("dex~bob"), "owner", _object("gold$scores")), *((fga_ids.user_object(u), r, o) for u, r, o in held))
 
-    async def _batch_check(_client: Any, *, user: str, relation: str, objects: list[str]) -> dict[str, bool]:
-        return {obj: (user, relation, obj) in held for obj in objects}
+    def authorize(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the gate's coroutine
+        # The feed lineage's lifespan always wires, here one holding no run, so the event founds its run.
+        app = _request(decider=decider, provenance=_FakeStore()).app
+        return fga_deps.enforce_output_authz(_service_run(), app, _settings(**_FULL_AUTH), security.ServicePrincipal.for_account(_SERVICE_ACCOUNT))
 
-    with pytest.MonkeyPatch.context() as mp, outcome:
-        mp.setattr(fga_reads, "batch_check", _batch_check)
-        asyncio.run(
-            fga_deps.enforce_output_authz(
-                _service_run(),
-                # The feed lineage's lifespan always wires, here one holding no run, so the event founds its run.
-                _request(decider=OpenFgaDecider(cast(OpenFgaClient, object())), provenance=_FakeStore()).app,
-                _settings(**_FULL_AUTH),
-                security.ServicePrincipal.for_account(_SERVICE_ACCOUNT),
-            )
-        )
+    with outcome:
+        decided(openfga_store, authorize)
 
 
 _SECRET = {"namespace": "bronze", "name": "bronze$secret", "field": "col"}

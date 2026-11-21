@@ -31,6 +31,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 import httpx
 import lance
@@ -322,15 +323,15 @@ def test_a_table_lineage_records_after_the_release_from_a_run_before_it_is_liste
     assert [(o["obligation_id"], o["late_derived"]) for o in listed] == [(source, [uuid_of["lance_catalog$acme-silver$late"]])]
 
 
-def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """The eraser reads the source and the table it fed, never the table that one fed in turn, on a real OpenFGA store of
+    the test's own."""
     from lineage.models import parse_event
 
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
         with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
             uuid_of = _declared(catalog, "lance_catalog$acme-bronze$events", "lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog")
-        granted = {
-            ("dex~eraser", "can_get_metadata", f"table:{uuid_of[name]}") for name in ("lance_catalog$acme-bronze$events", "lance_catalog$acme-silver$pages")
-        }
+        granted = {("dex~eraser", "reader", f"table:{uuid_of[name]}") for name in ("lance_catalog$acme-bronze$events", "lance_catalog$acme-silver$pages")}
         chain = [
             run_event(
                 str(uuid.uuid4()),
@@ -347,7 +348,7 @@ def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Pa
                 inputs=("lance_catalog$acme-silver$pages",),
             ),
         ]
-        with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
+        with governed_lineage(catalog_url, monkeypatch, granted, openfga_store) as lineage:
             for event in chain:
                 asyncio.run(lineage.app.state.provenance.record(parse_event(_stamped(event, uuid_of)), aliased=()))
 

@@ -9,8 +9,9 @@ the catalog's provenance namespace, and a test whose claim is what the catalog h
 
 from __future__ import annotations
 
+import asyncio
 import importlib.util
-from collections.abc import Callable, Collection, Generator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Collection, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from functools import partial
 from typing import Any, cast
@@ -25,7 +26,7 @@ from starlette.testclient import TestClient
 
 from lakehouse.events.bus_delivery import Lane, Settlement
 from lakehouse.governed import fga_provision
-from lakehouse.governed.decider import AccessDecider
+from lakehouse.governed.decider import AccessDecider, OpenFgaDecider
 from lineage import main
 from lineage.api.ingest_lane import CONSUMER
 from lineage.core import metrics
@@ -126,15 +127,22 @@ class Lineage:
         return portal.call(self.bus.lane_of, CONSUMER)
 
 
-def governed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Turn authorization on for the app :func:`started` builds, and OIDC on, which OpenFGA on requires. No OpenFGA
-    runs here: the store answers the lifespan's one question, which model this image's is, so it builds its client at
-    once, and a test's ``decider`` answers every check."""
+def governed(monkeypatch: pytest.MonkeyPatch, store: Any = None) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """Turn authorization on for the app :func:`started` builds, and OIDC on, which OpenFGA on requires.
 
-    async def _the_store_holds_this_images_model(*_args: object, **_kwargs: object) -> tuple[str, str]:
-        return "01JA0000000000000000000000", "01JA0000000000000000000001"
+    With ``store``, the lifespan builds the deployed OpenFGA client against it and every check is the real model's on
+    the tuples the test seeds there. Without one no OpenFGA runs: the store answers the lifespan's one question, which
+    model this image's is, so it builds its client at once, and a test's ``decider`` answers every check.
+    """
+    if store is not None:
+        monkeypatch.setenv("RASK_FGA_API_URL", store.url)
+        monkeypatch.setenv("RASK_FGA_STORE_ID", store.store_id)
+    else:
 
-    monkeypatch.setattr(fga_provision, "resolve", _the_store_holds_this_images_model)
+        async def _the_store_holds_this_images_model(*_args: object, **_kwargs: object) -> tuple[str, str]:
+            return "01JA0000000000000000000000", "01JA0000000000000000000001"
+
+        monkeypatch.setattr(fga_provision, "resolve", _the_store_holds_this_images_model)
     for key, value in {
         "RASK_FGA_ENABLED": "true",
         "RASK_OIDC_ENABLED": "true",
@@ -144,6 +152,16 @@ def governed(monkeypatch: pytest.MonkeyPatch) -> None:
         "RASK_OIDC_CONNECTORS": '{"local": "dex"}',
     }.items():
         monkeypatch.setenv(key, value)
+
+
+def decided[T](store: Any, call: Callable[[OpenFgaDecider], Awaitable[T]]) -> T:  # noqa: ANN401 — the root conftest's OpenFgaStore
+    """Run ``call`` with a decider asking the real OpenFGA ``store``, its client opened on the loop ``call`` runs on."""
+
+    async def run() -> T:
+        async with fga_provision.make_client(store.url, store.store_id, store.model_id, token_file=None) as client:
+            return await call(OpenFgaDecider(client))
+
+    return asyncio.run(run())
 
 
 @contextmanager

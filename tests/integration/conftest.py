@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -24,6 +25,7 @@ from pydantic import SecretStr
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
+from tests.governed_catalog import GovernedCatalog, governed_catalog_app
 
 
 @pytest.fixture(scope="module")
@@ -134,3 +136,10 @@ def claim_described(client: TestClient, fake_ns: MagicMock) -> Callable[[str], s
         return minted
 
     return _claim
+
+
+@pytest.fixture
+def governed_catalog(openfga_store: Any, dex_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[GovernedCatalog]:  # noqa: ANN401 — the root conftest's fixtures
+    """The catalog on a real ``dir`` namespace, signed-in callers only, each decision OpenFGA's on a store of this test's own."""
+    with governed_catalog_app(openfga_store, dex_issuer, tmp_path, monkeypatch, held_namespace=True) as catalog:
+        yield catalog

@@ -9,15 +9,14 @@ longer describe: its bytes are deleted in place ([[LH-532]]), so the first call 
 are ended only once the tables are gone, and each destroyed table's location is free again. A table in the trash is not
 destroyed by the cascade, and keeps its grants for an undrop into the namespace created again.
 
-The real catalog app over a real `dir` namespace on pylance, the in-memory `TupleStore` behind the real
-`lakehouse.governed.fga_writes` seed and revoke, and a backend whose second deregister fails once, before or after the row goes.
+The catalog as deployed over a real `dir` namespace on pylance, a loopback Dex signing alice in and a real OpenFGA on a
+store of the test's own holding what the doors seed and revoke, and a backend whose second deregister fails once, before
+or after the row goes. alice may create a namespace in the estate's warehouse and owns what she creates.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from typing import Any
-from unittest.mock import MagicMock
 
 import pyarrow as pa
 import pyarrow.fs as pafs
@@ -32,7 +31,7 @@ from lakehouse.records import location_claims, maintenance_policies
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 from maintenance.services.purge import objects_held
-from tests.integration.openfga_grants import TupleStore, act_as
+from tests.governed_catalog import GovernedCatalog
 
 
 _ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
@@ -59,19 +58,13 @@ class _SecondDeregisterFails:
 
 
 @pytest.fixture
-def governed(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Iterator[TupleStore]:
-    """The real catalog with OIDC and FGA on and recoverable drops, as alice, over an in-memory tuple store."""
-    app = real_ns_client.app
-    settings = get_settings().model_copy(
-        update={"oidc_enabled": True, "oidc_issuer": "https://idp.example", "oidc_audience": "lance", "fga_enabled": True, "trash_grace_days": 7}
-    )
-    app.dependency_overrides[get_settings] = lambda: settings
-    monkeypatch.setattr(app.state, "oidc", MagicMock())
-    act_as(real_ns_client, "alice")
-    store = TupleStore()
-    monkeypatch.setattr(app.state, "fga", store)
-    real_ns_client.headers["Authorization"] = "Bearer t"
-    yield store
+def governed(governed_catalog: GovernedCatalog, monkeypatch: pytest.MonkeyPatch) -> GovernedCatalog:
+    """The catalog as deployed with recoverable drops, as alice, who may create a namespace in the estate's warehouse."""
+    monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "7")
+    get_settings.cache_clear()
+    governed_catalog.store.write((governed_catalog.person("alice"), "writer", GovernedCatalog.ESTATE))
+    governed_catalog.act_as("alice")
+    return governed_catalog
 
 
 def _ok(client: TestClient, path: str, **kwargs: Any) -> None:  # noqa: ANN401 — the request's own keywords
@@ -93,9 +86,8 @@ def _uuid(client: TestClient, kind: str, name: str) -> str:
         pytest.param(True, 3, id="a-lost-answer-is-finished-in-place"),
     ],
 )
-def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroyed(
-    real_ns_client: TestClient, governed: TupleStore, row_goes: bool, deregisters: int
-) -> None:
+def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroyed(governed: GovernedCatalog, row_goes: bool, deregisters: int) -> None:
+    real_ns_client = governed.client
     _ok(real_ns_client, "/v1/namespace/lance_catalog$db/create", json={})
     tables = ["lance_catalog$db$a", "lance_catalog$db$b", "lance_catalog$db$c"]
     for table in [*tables, "lance_catalog$db$t"]:
@@ -109,7 +101,7 @@ def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroy
     _ok(real_ns_client, "/v1/table/lance_catalog$db$t/drop", json={})
     governed_objects = [f"namespace:{_uuid(real_ns_client, 'namespace', 'lance_catalog$db')}", *(f"table:{uuids[table]}" for table in tables)]
     assert len(governed.naming(governed_objects)) == len(governed_objects), "an object was seeded no tuple, so the revoke below would pass vacuously"
-    kept = {t for t in governed.tuples if t[2] == trashed}
+    kept = {t for t in governed.store.tuples() if t[2] == trashed}
     assert kept, "the trashed table kept no grant, so the claim that it keeps them would pass vacuously"
     failing = _SecondDeregisterFails(real_ns_client.app.dependency_overrides[get_namespace](), row_goes=row_goes)
     real_ns_client.app.dependency_overrides[get_namespace] = lambda: failing
@@ -134,19 +126,20 @@ def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroy
     assert {table: location_claims.holder(claims, location) for table, location in locations.items()} == dict.fromkeys(tables), (
         "a destroyed table's location stayed claimed"
     )
-    assert {t for t in governed.tuples if t[2] == trashed} == kept, "a trashed table lost the grants its undrop needs"
+    assert {t for t in governed.store.tuples() if t[2] == trashed} == kept, "a trashed table lost the grants its undrop needs"
 
 
-def test_a_cascade_that_cannot_read_a_trash_record_ends_no_grant_it_may_keep(real_ns_client: TestClient, governed: TupleStore) -> None:
+def test_a_cascade_that_cannot_read_a_trash_record_ends_no_grant_it_may_keep(governed: GovernedCatalog) -> None:
     """The walk finds a trashed table by its namespace's `child` edge alone, and only its trash record says it is
     trashed: a record that cannot be read may be its own, so the cascade refuses with the namespace's own state (500,
     code 18) rather than ending grants an undrop needs ([[LH-572]])."""
+    real_ns_client = governed.client
     _ok(real_ns_client, "/v1/namespace/lance_catalog$db/create", json={})
     for table in ("lance_catalog$db$a", "lance_catalog$db$t"):
         _ok(real_ns_client, f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
     trashed = f"table:{_uuid(real_ns_client, 'table', 'lance_catalog$db$t')}"
     _ok(real_ns_client, "/v1/table/lance_catalog$db$t/drop", json={})
-    kept = {t for t in governed.tuples if t[2] == trashed}
+    kept = {t for t in governed.store.tuples() if t[2] == trashed}
     assert kept, "the trashed table kept no grant, so the claim that it keeps them would pass vacuously"
     settings = get_settings()
     fs, base = fs_and_base(settings.registry_root, settings.storage_options())
@@ -157,4 +150,4 @@ def test_a_cascade_that_cannot_read_a_trash_record_ends_no_grant_it_may_keep(rea
     refused = real_ns_client.post("/v1/namespace/lance_catalog$db/drop", params={"purge": "true"}, json={"behavior": "Cascade"})
 
     assert (refused.status_code, refused.json().get("code")) == (500, 18), refused.text
-    assert {t for t in governed.tuples if t[2] == trashed} == kept, "a trashed table lost the grants its undrop needs"
+    assert {t for t in governed.store.tuples() if t[2] == trashed} == kept, "a trashed table lost the grants its undrop needs"

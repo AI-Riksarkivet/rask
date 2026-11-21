@@ -1,19 +1,17 @@
 """A namespace's `rask.requires_run` binds every write beneath it to name its run, only an admin declares it, and every
 write is judged under it.
 
-ADR 0156 C8 and ADR 0211, on the real catalog app over real pylance with OIDC and FGA on, in a registered warehouse. The
-OpenFGA store is an in-memory double behind the real `lakehouse.governed.fga_reads` and `fga_writes` functions that answers a
-check from an explicit grant set, so who may act IS the claim here. A namespace named `gold` that declares nothing is
-judged by what it declares, never by its name.
+ADR 0156 C8 and ADR 0211, against the catalog as deployed over real pylance, in a registered warehouse: a loopback Dex
+signs callers in and a real OpenFGA decides on a store of the test's own, so who may act IS the claim here and each
+caller holds only the rungs named. A namespace named `gold` that declares nothing is judged by what it declares, never by
+its name.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterator
 from pathlib import Path
-from unittest.mock import MagicMock
 
 import httpx
 import pyarrow as pa
@@ -21,17 +19,15 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.api.dependencies import get_namespace
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import get_settings
 from catalog.services import object_uuids, table_claims, warehouses
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AUDIT_LOGGER
-from lakehouse.storage.options import StorageOptions
 from tests import seeding
-from tests.integration.openfga_grants import Grants, act_as
+from tests.governed_catalog import GovernedCatalog
 
 
-AUTH = {"Authorization": "Bearer t"}
-ARROW = {**AUTH, "content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 WAREHOUSE = "acme-bucket"
 PROJECT = "acme"
 SALES = f"{WAREHOUSE}$sales"
@@ -39,40 +35,27 @@ LEDGER = f"{WAREHOUSE}$ledger"
 
 
 @pytest.fixture
-def grants(real_ns_client: TestClient, tmp_path: Path) -> Iterator[Grants]:
-    """The real catalog as the chart deploys it, with warehouse ``WAREHOUSE`` of project ``PROJECT`` at its root, its own
-    row in that root's catalog as the warehouse create door leaves it.
+def grants(governed_catalog: GovernedCatalog, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> GovernedCatalog:
+    """The catalog as deployed, drops kept a week, with warehouse ``WAREHOUSE`` of project ``PROJECT`` at its root, its own
+    row in that root's catalog and its project edge as the warehouse create door leaves them.
 
     alice administers the project; bob may only create namespaces in its warehouse.
     """
-    root = str(tmp_path)
-    settings = Settings.model_validate(
-        {
-            "root": root,
-            "oidc_enabled": True,
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "oidc_issuer": "https://idp.example",
-            "oidc_audience": "lance",
-            "fga_enabled": True,
-            "fga_api_url": "http://openfga:8080",
-            "trash_grace_days": 7,
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
-    real_ns_client.app.dependency_overrides[get_settings] = lambda: settings
-    real_ns_client.app.state.oidc = MagicMock()
-    store = Grants()
-    real_ns_client.app.state.fga = store
+    monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "7")
+    get_settings.cache_clear()
+    root, catalog = str(tmp_path), governed_catalog
     seeding.put_warehouse(
-        root, StorageOptions(), {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"}
+        root,
+        get_settings().storage_options(),
+        {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"},
     )
-    warehouses.ensure_catalog_row(real_ns_client.app.dependency_overrides[get_namespace](), WAREHOUSE)
-    for user in ("alice", "bob"):
-        store.grant(user, ("can_create_namespace", f"warehouse:{WAREHOUSE}"))
-    store.grant("alice", ("can_administer", f"project:{PROJECT}"))
-    yield store
+    warehouses.ensure_catalog_row(catalog.client.app.dependency_overrides[get_namespace](), WAREHOUSE)
+    catalog.store.write(
+        (f"project:{PROJECT}", "project", f"warehouse:{WAREHOUSE}"),
+        (catalog.person("alice"), "admin", f"project:{PROJECT}"),
+        *((catalog.person(user), "writer", f"warehouse:{WAREHOUSE}") for user in ("alice", "bob")),
+    )
+    return catalog
 
 
 def _object(client: TestClient, kind: str, name: str) -> str:
@@ -82,7 +65,7 @@ def _object(client: TestClient, kind: str, name: str) -> str:
     segments = name.split("$")
     if kind == "namespace":
         return fga_ids.namespace_object(object_uuids.require_namespace_uuid(ns, segments))
-    table_uuid = object_uuids.table_uuid(ns, table_claims.claim_store(client.app.dependency_overrides[get_settings]()), segments)
+    table_uuid = object_uuids.table_uuid(ns, table_claims.claim_store(get_settings()), segments)
     assert table_uuid is not None, f"table {name} carries no uuid"
     return fga_ids.table_object(table_uuid)
 
@@ -90,11 +73,11 @@ def _object(client: TestClient, kind: str, name: str) -> str:
 def _top_level(client: TestClient, name: str, properties: dict[str, str] | None = None) -> int:
     """Create ``name`` directly in the warehouse, where the warehouse's ``can_create_namespace`` is what is asked."""
     body: dict[str, object] = {"properties": properties} if properties is not None else {}
-    return client.post(f"/v1/namespace/{name}/create", json=body, headers=AUTH).status_code
+    return client.post(f"/v1/namespace/{name}/create", json=body).status_code
 
 
 def _properties(client: TestClient, namespace: str) -> dict[str, str]:
-    described = client.post(f"/v1/namespace/{namespace}/describe", json={}, headers=AUTH)
+    described = client.post(f"/v1/namespace/{namespace}/describe", json={})
     assert described.status_code == 200, described.text
     return described.json().get("properties") or {}
 
@@ -112,47 +95,42 @@ def _refused(resp: httpx.Response, code: int) -> None:
     assert resp.json()["code"] == code, resp.json()
 
 
-def test_only_the_projects_admin_declares_or_drops_the_run_rule(real_ns_client: TestClient, grants: Grants) -> None:
+def test_only_the_projects_admin_declares_or_drops_the_run_rule(grants: GovernedCatalog) -> None:
     """On a create in the warehouse, a nested create and an Overwrite: bob is refused PermissionDenied (15), alice lands it."""
-    client = real_ns_client
-    act_as(client, "bob")
-    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": RULE}, headers=AUTH), 15)
+    client = grants.client
+    grants.act_as("bob")
+    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": RULE}), 15)
     assert _top_level(client, SALES) == 200, "bob may still create the namespace without declaring the rule"
-    grants.grant("bob", ("can_create_namespace", _object(client, "namespace", SALES)))
-    _refused(client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": RULE}, headers=AUTH), 15)
+    _refused(client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": RULE}), 15)
 
-    act_as(client, "alice")
+    grants.act_as("alice")
     assert _top_level(client, LEDGER, RULE) == 200
     ledger = _object(client, "namespace", LEDGER)
-    for user in ("alice", "bob"):
-        grants.grant(user, ("can_get_metadata", ledger))
     assert _rule(client, LEDGER) == "true"
 
-    act_as(client, "bob")
-    grants.grant("bob", ("can_create_namespace", ledger), ("can_delete", ledger))
-    _refused(client.post(f"/v1/namespace/{WAREHOUSE}$ledger/create", json={"mode": "Overwrite", "properties": {}}, headers=AUTH), 15)
+    grants.act_as("bob")
+    grants.store.write((grants.person("bob"), "owner", ledger))
+    _refused(client.post(f"/v1/namespace/{WAREHOUSE}$ledger/create", json={"mode": "Overwrite", "properties": {}}), 15)
     assert _rule(client, LEDGER) == "true", "a refused Overwrite dropped the rule"
 
 
-def test_a_declaration_names_no_reserved_key_but_the_run_rule_as_true(real_ns_client: TestClient, grants: Grants) -> None:
+def test_a_declaration_names_no_reserved_key_but_the_run_rule_as_true(grants: GovernedCatalog) -> None:
     """A value other than "true", or another reserved key, the uuid the catalog mints among them ([[LH-519]]), is
     InvalidInput (13) in the warehouse and beneath it; a nested namespace may repeat the rule; an ExistOk naming the rule
     on a kept namespace that does not declare it is NamespaceAlreadyExists (2)."""
-    client = real_ns_client
-    act_as(client, "alice")
+    client = grants.client
+    grants.act_as("alice")
     forged = {"rask.uuid": "00000000-0000-4000-8000-000000000000"}
-    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.requires_run": "false"}}, headers=AUTH), 13)
-    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.tier": "silver"}}, headers=AUTH), 13)
-    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": forged}, headers=AUTH), 13)
+    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.requires_run": "false"}}), 13)
+    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.tier": "silver"}}), 13)
+    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": forged}), 13)
     assert _top_level(client, SALES, RULE) == 200
-    grants.grant("alice", ("can_create_namespace", _object(client, "namespace", SALES)))
 
-    _refused(client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": forged}, headers=AUTH), 13)
-    assert client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": RULE}, headers=AUTH).status_code == 200
+    _refused(client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": forged}), 13)
+    assert client.post(f"/v1/namespace/{WAREHOUSE}$sales$lane/create", json={"properties": RULE}).status_code == 200
     assert _top_level(client, f"{WAREHOUSE}$plain") == 200
-    grants.grant("alice", ("can_create_namespace", _object(client, "namespace", f"{WAREHOUSE}$plain")))
-    assert client.post(f"/v1/namespace/{WAREHOUSE}$plain$sub/create", json={}, headers=AUTH).status_code == 200
-    kept = client.post(f"/v1/namespace/{WAREHOUSE}$plain$sub/create", json={"mode": "ExistOk", "properties": RULE}, headers=AUTH)
+    assert client.post(f"/v1/namespace/{WAREHOUSE}$plain$sub/create", json={}).status_code == 200
+    kept = client.post(f"/v1/namespace/{WAREHOUSE}$plain$sub/create", json={"mode": "ExistOk", "properties": RULE})
     assert (kept.status_code, kept.json()["code"]) == (409, 2), "ExistOk kept the namespace, so the rule it named never landed"
 
 
@@ -173,30 +151,26 @@ _RUN = {
 }
 
 
-def test_a_write_names_its_run_where_a_namespace_above_it_requires_one(real_ns_client: TestClient, grants: Grants, caplog: pytest.LogCaptureFixture) -> None:
+def test_a_write_names_its_run_where_a_namespace_above_it_requires_one(grants: GovernedCatalog, caplog: pytest.LogCaptureFixture) -> None:
     """Without the writer rung the write is PermissionDenied (15). Under ``sales``, which declares the rule, and under
     ``sales$lane``, which inherits it, an insert naming no run is InvalidInput (13) and one naming its run lands; under
     ``gold``, which declares nothing, both land. Each decision is audited with the rule it was judged under."""
-    client = real_ns_client
-    act_as(client, "alice")
+    client = grants.client
+    grants.act_as("alice")
     assert _top_level(client, SALES, RULE) == 200
     assert _top_level(client, f"{WAREHOUSE}$gold") == 200
     assert _top_level(client, f"{WAREHOUSE}$src") == 200
-    grants.grant("alice", ("can_create_namespace", _object(client, "namespace", SALES)))
-    assert client.post(f"/v1/namespace/{SALES}$lane/create", json={}, headers=AUTH).status_code == 200
+    assert client.post(f"/v1/namespace/{SALES}$lane/create", json={}).status_code == 200
     spaces = (SALES, f"{SALES}$lane", f"{WAREHOUSE}$gold")
-    grants.grant("alice", *[("can_create_table", _object(client, "namespace", ns)) for ns in (*spaces, f"{WAREHOUSE}$src")])
     # The run's input is a table alice may read: a name that holds no table grants nothing to read.
     assert client.post(f"/v1/table/{WAREHOUSE}$src$a/create?mode=create", content=_rows(), headers=ARROW).status_code == 200
-    grants.grant("alice", ("can_read_data", _object(client, "table", f"{WAREHOUSE}$src$a")))
     for ns in spaces:
         assert client.post(f"/v1/table/{ns}$t/create?mode=create", content=_rows(), headers={**ARROW, **_RUN}).status_code == 200
-    grants.grant("alice", *[("can_write_data", _object(client, "table", f"{ns}$t")) for ns in spaces])
 
-    act_as(client, "dave")
+    grants.act_as("dave")
     _refused(client.post(f"/v1/table/{SALES}$t/insert", content=_rows(), headers={**ARROW, **_RUN}), 15)
 
-    act_as(client, "alice")
+    grants.act_as("alice")
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     caplog.clear()
     for ns in (SALES, f"{SALES}$lane"):
@@ -220,18 +194,18 @@ def test_a_write_names_its_run_where_a_namespace_above_it_requires_one(real_ns_c
     ]
 
 
-def test_a_recoverable_drop_and_its_undrop_keep_the_run_rule_and_the_uuid(real_ns_client: TestClient, grants: Grants) -> None:
+def test_a_recoverable_drop_and_its_undrop_keep_the_run_rule_and_the_uuid(grants: GovernedCatalog) -> None:
     """An owner who may drop and undrop is not an admin, so the round trip must bring the rule back with the namespace,
     and the namespace comes back as itself, under the uuid it was created with ([[LH-519]])."""
-    client = real_ns_client
-    act_as(client, "alice")
+    client = grants.client
+    grants.act_as("alice")
     assert _top_level(client, LEDGER, RULE) == 200
-    act_as(client, "bob")
+    grants.act_as("bob")
     ledger = _object(client, "namespace", LEDGER)
-    grants.grant("bob", ("can_delete", ledger), ("can_get_metadata", ledger))
+    grants.store.write((grants.person("bob"), "owner", ledger))
     minted = _properties(client, LEDGER)["rask.uuid"]
 
-    assert client.post(f"/v1/namespace/{WAREHOUSE}$ledger/drop", json={"behavior": "Cascade"}, headers=AUTH).status_code == 200
-    assert client.post(f"/management/v1/namespace/{WAREHOUSE}$ledger/undrop", json={}, headers=AUTH).status_code == 200
+    assert client.post(f"/v1/namespace/{WAREHOUSE}$ledger/drop", json={"behavior": "Cascade"}).status_code == 200
+    assert client.post(f"/management/v1/namespace/{WAREHOUSE}$ledger/undrop", json={}).status_code == 200
 
     assert _properties(client, LEDGER) == {"rask.requires_run": "true", "rask.uuid": minted}

@@ -11,21 +11,17 @@ creator's grant.
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any
 
 import pytest
 
 from catalog.api import fga_deps
 from catalog.core.config import Settings
-from lakehouse.governed import fga_ids, fga_provision, fga_writes
+from lakehouse.governed import fga_ids, fga_provision
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
-
-
-if TYPE_CHECKING:
-    from openfga_sdk.client import OpenFgaClient
 
 
 def _settings(**overrides: object) -> Settings:
@@ -47,23 +43,6 @@ def _fga_settings(**overrides: object) -> Settings:
         RASK_OIDC_CONNECTORS={"local": "dex"},
         **overrides,
     )
-
-
-async def _captured_tuples(fn, monkeypatch) -> list[fga_writes.ClientTuple]:
-    """Run `fn` with `write_tuples` stubbed, and return the tuples it tried to write.
-
-    This replaces an `inspect.getsource(...)` string match. That assertion broke the moment the tuple
-    set was extracted into `cascade_tuples` for the backfill to share — while the BEHAVIOUR it was
-    guarding was completely intact. Asserting the submitted tuples is strictly stronger.
-    """
-    seen: list[fga_writes.ClientTuple] = []
-
-    async def _capture(_client, tuples, **_kw) -> None:
-        seen.extend(tuples)
-
-    monkeypatch.setattr(fga_writes, "write_tuples", _capture)
-    await fn()
-    return seen
 
 
 def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
@@ -104,15 +83,18 @@ _PERSON = PersonPrincipal(
 _MACHINE = ServicePrincipal.for_account("system:serviceaccount:etl:loader")
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("creator", "owners"),
     [
-        pytest.param(_PERSON, [("user:dex~alice", "owner", "warehouse:wh1")], id="a-person-owns-the-warehouse-they-create"),
-        pytest.param(_MACHINE, [], id="a-machine-owns-nothing-its-project-administers-what-it-creates"),
+        pytest.param(_PERSON, {("user:dex~alice", "owner", "warehouse:wh1")}, id="a-person-owns-the-warehouse-they-create"),
+        pytest.param(_MACHINE, set(), id="a-machine-owns-nothing-its-project-administers-what-it-creates"),
     ],
 )
-async def test_creating_a_warehouse_grants_it(monkeypatch, creator: PersonPrincipal | ServicePrincipal, owners: list[tuple[str, str, str]]) -> None:
+def test_creating_a_warehouse_grants_it(
+    openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
+    creator: PersonPrincipal | ServicePrincipal,
+    owners: set[tuple[str, str, str]],
+) -> None:
     """A warehouse is maintainable the moment it exists, or its tenant's data is never compacted.
 
     [[LH-165]]. `warehouse.maintenance` has no `from parent`, so the sweep reaches a tenant's tables
@@ -123,17 +105,19 @@ async def test_creating_a_warehouse_grants_it(monkeypatch, creator: PersonPrinci
     97 warehouses without the tuple were the 4 newest, every one created after the hand-written grants.
 
     Only a person is made the owner ([[LH-433]], [[LH-585]]): a machine that creates a warehouse holds nothing on it by
-    creating it, as with a table or a project, and its project's admins own it through the project edge.
+    creating it, as with a table or a project, and its project's admins own it through the project edge. Nothing else is
+    written, a project admin grant least of all: that is minted only at POST /management/v1/projects, behind the estate
+    gate, so a warehouse's owner never escalates to its tenant's admin by creating one.
     """
     settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
 
-    seen = await _captured_tuples(
-        lambda: fga_deps.seed_warehouse(cast("OpenFgaClient", object()), settings, creator, warehouse_id="wh1", project="acme"),
-        monkeypatch,
-    )
+    async def _create() -> None:
+        async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:
+            await fga_deps.seed_warehouse(store, settings, creator, warehouse_id="wh1", project="acme")
 
-    assert [(t.user, t.relation, t.object) for t in seen] == [
-        *owners,
+    asyncio.run(_create())
+
+    assert openfga_store.tuples() == owners | {
         ("project:acme", "project", "warehouse:wh1"),
         ("user:kubernetes~system%3Aserviceaccount%3Arask%3Arask-sa-maintenance", "maintenance", "warehouse:wh1"),
-    ]
+    }

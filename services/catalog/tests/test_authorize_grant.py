@@ -23,29 +23,17 @@ import pytest
 from lance_namespace import PermissionDeniedError
 
 from catalog.api import fga_deps
-from tests.unit.named_resolver import NamedResolver, uuid_of
+from tests.unit.named_resolver import NamedResolver
 
 
-#: The object the namespace ``gold`` resolves to, which its grants are held by ([[LH-524]]).
-_GOLD = f"namespace:{uuid_of('namespace', ['gold'])}"
-
-
-def _run(
-    monkeypatch: pytest.MonkeyPatch,
-    body: Any,
-    *,
-    fga_type: str = "namespace",
-    segments: list[str] | None = None,
-    allow: bool = True,
-    revoking: bool = False,
-) -> list[tuple[str, str, str]]:
-    """Drive the gate against a fake Check. Returns every (user, relation, object) it asked about —
-    an empty list proves the gate refused WITHOUT consulting OpenFGA."""
+def _run(monkeypatch: pytest.MonkeyPatch, body: Any) -> list[tuple[str, str, str]]:
+    """Drive the gate on a grant of the namespace ``gold`` against a Check that allows. Returns every (user, relation,
+    object) it asked about — an empty list proves the gate refused WITHOUT consulting OpenFGA."""
     asked: list[tuple[str, str, str]] = []
 
     async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
         asked.append((user, relation, obj))
-        return allow
+        return True
 
     monkeypatch.setattr(fga_deps.fga_reads, "check", fake_check)
     request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro(body)))
@@ -55,9 +43,9 @@ def _run(
             cast(Any, object()),
             NamedResolver(),
             user="dex~alice",
-            fga_type=fga_type,
-            segments=segments if segments is not None else ["gold"],
-            revoking=revoking,
+            fga_type="namespace",
+            segments=["gold"],
+            revoking=False,
         )
     )
     return asked
@@ -67,14 +55,99 @@ async def _as_coro(value: Any) -> Any:
     return value
 
 
-def test_gates_on_the_rung_in_the_body_not_a_blanket_bar(monkeypatch: pytest.MonkeyPatch) -> None:
-    asked = _run(monkeypatch, {"user": "dex~bob", "relation": "reader"})
-    assert asked == [("dex~alice", "can_grant_reader", _GOLD)]
+#: alice's namespace, the object every grant below is asked on.
+_GRANTED_ON = "lance_catalog$db"
 
 
-def test_a_denied_check_raises(monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(PermissionDeniedError):
-        _run(monkeypatch, {"user": "dex~bob", "relation": "owner"}, allow=False)
+@pytest.mark.parametrize(
+    ("caller", "held", "door", "body", "status", "detail"),
+    [
+        pytest.param(
+            "kevin",
+            [("reader", None), ("pass_grants", None)],
+            "grant",
+            {"user": "dex~bob", "relation": "reader"},
+            200,
+            None,
+            id="a-delegate-may-grant-the-rung-it-holds",
+        ),
+        pytest.param(
+            "kevin",
+            [("reader", None), ("pass_grants", None)],
+            "grant",
+            {"user": "dex~bob", "relation": "writer"},
+            403,
+            None,
+            id="and-is-refused-the-rung-above-it",
+        ),
+        pytest.param("mallory", [], "grant", {"user": "dex~bob", "relation": "owner"}, 403, None, id="a-caller-holding-nothing-is-refused"),
+        pytest.param("alice", [], "grant", {"user": "dex~alice", "relation": "owner"}, 200, None, id="re-granting-yourself-what-you-hold-is-allowed"),
+        pytest.param(
+            "judy",
+            [("manage_grants", None), ("assignee", "role:stewards")],
+            "grant",
+            {"user": "role:stewards#assignee", "relation": "owner"},
+            403,
+            "may not raise your own access",
+            id="a-grant-to-a-userset-you-are-inside-raises-your-own-access",
+        ),
+        pytest.param(
+            "judy",
+            [("manage_grants", None), ("owner", None)],
+            "revoke",
+            {"user": "dex~judy", "relation": "owner"},
+            200,
+            None,
+            id="revoking-your-own-rung-is-never-an-elevation",
+        ),
+        pytest.param(
+            "judy",
+            [("manage_grants", None)],
+            "revoke",
+            {"user": "dex~judy", "relation": "writer"},
+            200,
+            None,
+            id="revoking-a-rung-you-do-not-hold-is-no-elevation-either",
+        ),
+    ],
+)
+def test_a_grant_is_gated_on_the_rung_in_its_body_and_never_raises_its_callers_own_access(
+    governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
+    caller: str,
+    held: list[tuple[str, str | None]],
+    door: str,
+    body: dict[str, str],
+    status: int,
+    detail: str | None,
+) -> None:
+    """The rung handed out lives in the BODY, so the gate asks ``can_grant_<rung>`` there (``can_revoke_grant`` on a
+    revoke), and a grant may not hand its caller a rung they do not already hold, directly or through a userset they are
+    inside. OpenFGA cannot express "the grantee is not the caller", so this separation of duties is the door's.
+
+    Judged on the real model: each caller holds the tuples ``held`` names on alice's namespace (or the object a pair
+    names), seeded as the catalog's declaration grants them. A refusal is 403 code 15 and writes nothing; an admitted
+    grant writes the tuple its body names unless it is already held, and an admitted revoke removes it if it is.
+    """
+    catalog = governed_catalog
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
+    described = catalog.client.post(f"/v1/namespace/{_GRANTED_ON}/describe", json={}, headers=catalog.bearer("alice"))
+    namespace = f"namespace:{described.json()['properties']['rask.uuid']}"
+    if held:
+        catalog.store.write(*((catalog.person(caller), relation, obj or namespace) for relation, obj in held))
+    before = catalog.store.tuples()
+
+    answered = catalog.client.post(f"/management/v1/namespace/{_GRANTED_ON}/access/{door}", json=body, headers=catalog.bearer(caller))
+
+    assert answered.status_code == status, answered.text
+    if status == 403:
+        assert answered.json()["code"] == 15, answered.text
+    if detail is not None:
+        assert detail in answered.json()["detail"], answered.text
+    grantee = body["user"] if body["user"].startswith("role:") else f"user:{body['user']}"
+    changed = catalog.store.tuples() ^ before
+    named = (grantee, body["relation"], namespace)
+    expected = {named} if status == 200 and (door == "grant") != (named in before) else set()
+    assert changed == expected, f"the door changed {changed}, not {expected}"
 
 
 # --------------------------------------------------------------------------- #
@@ -128,49 +201,3 @@ def test_a_phantom_rung_is_refused_before_reaching_openfga(monkeypatch: pytest.M
         )
 
     assert asked == [], "parent reached OpenFGA as a phantom relation"
-
-
-# --------------------------------------------------------------------------- #
-# A grant may not raise the CALLER's own access
-# --------------------------------------------------------------------------- #
-
-
-def test_re_granting_yourself_what_you_already_hold_is_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The rule is about ELEVATION, not about self-reference. An owner re-granting themselves `owner`
-    changes nothing, and refusing it would break an idempotent re-seed."""
-
-    async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
-        return True  # may grant it, and already holds it
-
-    monkeypatch.setattr(fga_deps.fga_reads, "check", fake_check)
-    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "dex~alice", "relation": "owner"})))
-
-    asyncio.run(
-        fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~alice", fga_type="namespace", segments=["gold"], revoking=False)
-    )
-
-
-def test_the_userset_indirection_is_closed_too(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Refusing only a literal `user:<principal>` would leave the same escalation one indirection away:
-    judy grants `owner` to `role:stewards#assignee`, a userset she is already inside."""
-
-    async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
-        if relation == "assignee":
-            return True  # the caller IS inside the userset being granted
-        return relation.startswith("can_grant_")  # may grant; does not hold the rung
-
-    monkeypatch.setattr(fga_deps.fga_reads, "check", fake_check)
-    request = cast(fga_deps.Request, SimpleNamespace(json=lambda: _as_coro({"user": "role:stewards#assignee", "relation": "owner"})))
-
-    with pytest.raises(PermissionDeniedError, match="may not raise your own access"):
-        asyncio.run(
-            fga_deps._authorize_grant(request, cast(Any, object()), NamedResolver(), user="dex~judy", fga_type="namespace", segments=["gold"], revoking=False)
-        )
-
-
-def test_the_self_grant_rule_never_runs_on_revoke(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Revoking your OWN rung is a de-escalation. Applying the elevation rule there would refuse a
-    grant-manager dropping their own access, which is the one self-directed act that is always safe."""
-    asked = _run(monkeypatch, {"user": "dex~alice", "relation": "owner"}, revoking=True)
-
-    assert asked == [("dex~alice", "can_revoke_grant", _GOLD)], "revoke consulted the self-grant guard"

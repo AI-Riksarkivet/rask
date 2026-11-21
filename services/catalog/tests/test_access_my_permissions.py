@@ -72,11 +72,31 @@ def test_answers_every_can_relation_the_model_defines_on_the_type(monkeypatch: p
     assert {o for _u, _r, o in asked} == {f"namespace:{uuid_of('namespace', ['gold'])}"}
 
 
-def test_reports_the_callers_own_verdicts(monkeypatch: pytest.MonkeyPatch) -> None:
-    resp, _ = _run(monkeypatch, allow={"can_get_metadata", "can_delete"})
-    assert resp.permissions["can_get_metadata"] is True
-    assert resp.permissions["can_delete"] is True
-    assert resp.permissions["can_create_table"] is False
+@pytest.mark.parametrize(
+    ("caller", "granted", "allowed"),
+    [
+        pytest.param("alice", None, {"can_get_metadata": True, "can_create_table": True, "can_delete": True}, id="the-owner"),
+        pytest.param("bob", "reader", {"can_get_metadata": True, "can_create_table": False, "can_delete": False}, id="a-reader"),
+    ],
+)
+def test_reports_the_callers_own_verdicts(
+    governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
+    caller: str,
+    granted: str | None,
+    allowed: dict[str, bool],
+) -> None:
+    """Each caller is answered the real model's verdict for themself, on alice's namespace: her own as its creator, and a
+    reader's."""
+    catalog = governed_catalog
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
+    if granted is not None:
+        door = "/management/v1/namespace/lance_catalog$db/access/grant"
+        assert catalog.client.post(door, json={"user": f"dex~{caller}", "relation": granted}, headers=catalog.bearer("alice")).status_code == 200
+
+    answered = catalog.client.post("/management/v1/namespace/lance_catalog$db/access/my-permissions", json={}, headers=catalog.bearer(caller))
+
+    assert answered.status_code == 200, answered.text
+    assert {relation: answered.json()["permissions"][relation] for relation in allowed} == allowed
 
 
 def test_no_token_is_refused_rather_than_answered_for_anonymous(monkeypatch: pytest.MonkeyPatch) -> None:
