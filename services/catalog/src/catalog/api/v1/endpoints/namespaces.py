@@ -53,10 +53,10 @@ from catalog.api.dependencies import (
     StorageOptionsDep,
     TrashedUuidQuery,
 )
-from catalog.api.pagination import ListLimit, paginate
+from catalog.api.pagination import ListLimit
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import write_judge
+from catalog.core import table_objects, write_judge
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, UUID_PROPERTY, parse_identifier, reconcile_body_id, with_minted_uuid
@@ -67,6 +67,7 @@ from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE
 # them drift apart again the moment one is tuned.
 from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
+from catalog.core.pagination import paginate
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import clone_endings, dataplane, native, object_uuids, protections, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves, Unregistered
@@ -1195,7 +1196,7 @@ async def _reregister_tables(ns: LanceNamespace, settings: CatalogStore, table_r
             # The RELATIVE key register_table accepts, the one the record's URL decodes to under the root, as at the
             # table undrop ([[LH-517]]).
             t_segments = parse_identifier(t_id)
-            body = RegisterTableRequest(id=t_segments, location=dataplane.relative_location(location, root=root))
+            body = RegisterTableRequest(id=t_segments, location=table_objects.relative_location(location, root=root))
             # The cascade kept each location's claim for its trashed id; another holder means another
             # table now resolves to these bytes, as at the table door ([[LH-204]]).
             try:

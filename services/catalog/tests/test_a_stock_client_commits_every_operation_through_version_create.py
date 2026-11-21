@@ -1193,7 +1193,7 @@ def test_a_commit_whose_store_read_fails_is_service_unavailable_and_leaves_the_t
 
 
 def test_a_commit_on_a_table_whose_latest_version_does_not_open_is_refused_as_internal_and_lands_nothing(served: Served) -> None:
-    """[[LH-545]]: only a table that holds no committed version follows version 0 (``dataplane.holds_a_version``). One whose
+    """[[LH-545]]: only a table that holds no committed version follows version 0 (``table_objects.holds_a_version``). One whose
     latest committed manifest Lance cannot read is no table with none: read as one, the version after none is the slot a
     reclaimed version 1 left, which the backend's put-if-not-exists would fill as a create."""
     stock = _created(served)

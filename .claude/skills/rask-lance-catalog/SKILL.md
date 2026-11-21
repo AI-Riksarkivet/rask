@@ -226,7 +226,7 @@ Two contracts stack here, and confusing them is how bugs happen:
   of a warehouse; `dir` resolves a root-level one by `<name>.lance`, never by its row), and create and declare `properties` are kept nowhere (RegisterTable keeps none, `spec.yaml:2719-2724`;
   create still stamps them on the schema metadata, [[LH-503]]). So no name reaches a vended prefix. A REGISTERED table
   keeps its registrar's location, which `describe_table` answers percent-encoded; every vend
-  (`vending.split_s3_location`) and every catalog read and write of a table object (`dataplane.dataset_fs`,
+  (`vending.split_s3_location`) and every catalog read and write of a table object (`table_objects.dataset_fs`,
   `object_store_path`, so `version/create` too) uses the key it decodes to once, and so does a destructive drop: the
   table door and the namespace cascade judge the bytes, remove the row with DeregisterTable and delete under the decoded
   key and the spelling themselves (`dataplane.destroy_table`, [[LH-532]]), since the backend's own drop deletes where
@@ -691,7 +691,7 @@ governing their data. The project-scoped surface is the console's project page, 
   `tests/integration/test_a_drop_is_kept_as_its_warehouse_says_until_its_deadline_releases_it.py`. `undrop` re-registers with a
   **RELATIVE** location: `register_table` refuses the absolute URI `describe_table` had just reported and keeps a
   relative one as the literal key it is given, so the undrop passes the key the recorded URL decodes to under the
-  connection's root (`catalog.services.trash_doors.relative_location`, [[LH-517]]), where a registered `räksmörgås`'s
+  connection's root (`catalog.core.table_objects.relative_location`, [[LH-517]]), where a registered `räksmörgås`'s
   bytes are. **A trash record is keyed by its object's uuid** ([[LH-525]], ADR 0173 §9): the name is free the moment
   its object is dropped, so a table or namespace created there is another uuid and nothing blocks the create. The
   undrop and tasks doors stay addressed by name: `trash.named` finds every record dropped under it, `?uuid=` names
@@ -964,7 +964,7 @@ governing their data. The project-scoped surface is the console's project page, 
 - **`drop_columns` / `alter_columns` refuse to drop, rename or re-type the table's key** ([[LH-208]]): every field carrying
   `lance-schema:unenforced-primary-key` plus its ancestors, by metadata, in any table. Measured on pylance
   12.0.0, Lance itself accepts all of those (a re-type strips the key); it refuses only `nullable=True` on
-  the key (mapped to 400 in `_column_op`) and changes to the key's field metadata.
+  the key (mapped to 400 in `lance_refusals.column_op`) and changes to the key's field metadata.
 - **`register` judges what it attaches: the location's spelling, its overlaps, reader flag 256 and the
   bases the dataset declares** ([[LH-279]], `catalog/services/table_bases.py`). The `dir` backend
   registers a location without opening it (measured on pylance 12.0.0: a mixed table, an absent location
@@ -1135,7 +1135,7 @@ governing their data. The project-scoped surface is the console's project page, 
   create, through the door (on the parent namespace's `can_classify`) or a first `version/create` (on the table's),
   that carries a label asks what labelling asks. A vend whose table cannot be opened is refused, never read as
   unlabelled (`vending._open_vended_ref`, [[LH-572]]): an outage answers 503 (code 17) and a committed version that
-  does not open 500 (code 18); only a table holding no committed version (`dataplane.holds_a_version`) has no labels.
+  does not open 500 (code 18); only a table holding no committed version (`table_objects.holds_a_version`) has no labels.
   Pinned by `services/catalog/tests/test_a_classified_column_is_never_vended_raw.py`. A copy made outside the catalog by
   a writer who reads the column is LH-288's.
 - **Stock clients commit through `version/create`** ([[LH-471]], ADR 0157). `DescribeTable` and `DeclareTable`
@@ -1150,7 +1150,7 @@ governing their data. The project-scoped surface is the console's project page, 
   before it is judged (`managed_versions.VersionTakenError`, the spec's 409 for a version that exists) and hands the
   writer the ref's next turn ([[LH-259]]); a version beyond the next answers 400. A read the judgment needs that the store
   cannot serve answers 503 code 17, in Lance's dialect and pyarrow's alike (`lakehouse.problems.outage`), never the 400
-  code 13 a stock client drops as its own malformed commit; only a ref `dataplane.holds_a_version` finds holding no
+  code 13 a stock client drops as its own malformed commit; only a ref `table_objects.holds_a_version` finds holding no
   committed version follows version 0, and one whose latest committed version does not open answers 500 code 18
   ([[LH-545]], `lance_docs/ns_catalog/namespace/operations/errors.md`). The door admits a writer or a maintainer (`can_create_version`), and the judge
   asks the operation's own rung (`fga_deps.require_staged_operation`: the writer operations and a table's first version `can_write_data`, restore

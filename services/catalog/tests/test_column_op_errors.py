@@ -1,4 +1,4 @@
-"""``_column_op`` classifies CLIENT mistakes and nothing else (#101).
+"""``column_op`` classifies CLIENT mistakes and nothing else (#101).
 
 The HTTP side of this contract is `tests/integration/test_column_errors.py`, driven through the real
 backend. This file pins the other half — the failures that must NOT be reclassified — because they cannot
@@ -6,7 +6,7 @@ be provoked through the real store: the whole point is what happens when the OBJ
 request.
 
 The discipline is an allowlist, not `except Exception`. `caller_sql` could key on Lance's single
-``Invalid user input`` marker; `_column_op` cannot, because `drop_columns` reports both of its user errors
+``Invalid user input`` marker; `column_op` cannot, because `drop_columns` reports both of its user errors
 as UNMARKED ``ValueError``s — so the match had to widen, and widening is exactly how a translator starts
 blaming callers for outages.
 """

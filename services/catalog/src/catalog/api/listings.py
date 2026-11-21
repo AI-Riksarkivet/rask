@@ -2,7 +2,7 @@
 
 ``include_declared=false`` lists "only tables with storage components" (`lance_docs/ns_catalog/spec.yaml:2356-2367`).
 The listing doors ask the backend for every table and judge each one's storage themselves, because the `dir` backend's
-own filter misjudges a table registered at a nested location (``dataplane.holds_a_version``).
+own filter misjudges a table registered at a nested location (``table_objects.holds_a_version``).
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ from collections.abc import Sequence
 from fastapi.concurrency import run_in_threadpool
 
 from catalog.api.dependencies import Resolver
-from catalog.services import dataplane
+from catalog.core import table_objects
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.storage.options import StorageOptions
 
@@ -31,4 +31,4 @@ async def holding_a_version(resolver: Resolver, so: StorageOptions, candidates: 
 
 
 async def _holds(table: ResolvedTable, so: StorageOptions) -> bool:
-    return table.location is not None and await run_in_threadpool(dataplane.holds_a_version, table.location, so)
+    return table.location is not None and await run_in_threadpool(table_objects.holds_a_version, table.location, so)

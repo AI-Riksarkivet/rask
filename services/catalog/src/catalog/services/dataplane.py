@@ -19,13 +19,12 @@ import io
 import itertools
 import json
 import logging
-import re
 import tempfile
 import time
 import uuid
 from collections import Counter
-from collections.abc import Callable, Generator, Iterable, Iterator, Sequence
-from contextlib import ExitStack, contextmanager, suppress
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from contextlib import ExitStack, suppress
 from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any, Final, NamedTuple, cast
@@ -76,7 +75,6 @@ from lance_namespace import (
     InvalidInputError,
     InvalidTableStateError,
     LanceNamespace,
-    LanceNamespaceError,
     ListTableBranchesRequest,
     ListTableBranchesResponse,
     ListTableTagsRequest,
@@ -94,11 +92,8 @@ from lance_namespace import (
     TableAlreadyExistsError,
     TableBranchAlreadyExistsError,
     TableBranchNotFoundError,
-    TableColumnNotFoundError,
     TableIndexNotFoundError,
     TableNotFoundError,
-    TableSchemaValidationError,
-    TableTagAlreadyExistsError,
     TableTagNotFoundError,
     TableVersion,
     TableVersionNotFoundError,
@@ -111,15 +106,26 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, ConfigDict
 
-from catalog.api.pagination import paginate
 from catalog.core import encoding, formats, json_arrow, manifest_bytes, provenance_guard
 from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import rename_destination
+from catalog.core.lance_refusals import caller_sql, clean_lance_message, column_op, raise_if_store_outage, ref_errors, write_schema_errors
 from catalog.core.modes import CreateMode, InsertMode
 from catalog.core.namespace import disarm_commit_path_cleanup, open_resolved_dataset, open_resolved_dataset_unchecked
+from catalog.core.pagination import paginate
 from catalog.core.provenance_stamp import declare_dataset_id
+from catalog.core.query_bounds import refuse_an_unbounded_boolean_chain
 from catalog.core.run_context import AUTHOR_PROPERTY, IDEMPOTENCY_ANSWER_PROPERTY, IDEMPOTENCY_KEY_PROPERTY, OPERATION_PROPERTY
 from catalog.core.schema_facet import SchemaFields, facet_fields
+from catalog.core.table_objects import (
+    RESERVED_MARKER,
+    dataset_fs,
+    delete_table_object,
+    discard_detached_manifest,
+    holds_a_version,
+    object_store_path,
+    relative_location,
+)
 from catalog.core.vending import classified_columns, labelled_fields
 from catalog.core.version_retention import MAIN_BRANCH, recorded_branch
 from catalog.services import changes, commit_authors, committed_files, contracts, native, primary_keys, table_bases, table_claims
@@ -141,7 +147,7 @@ from lakehouse.records.control_prefixes import CONTROL_PREFIXES
 from lakehouse.records.history_fences import HistoryWork
 from lakehouse.records.trash import TrashRecord
 from lakehouse.storage import stored_objects
-from lakehouse.storage.options import StorageOptions, object_client, on_s3, s3_filesystem
+from lakehouse.storage.options import StorageOptions, object_client, on_s3
 from lakehouse.storage.uri import split_s3_uri
 
 
@@ -563,11 +569,6 @@ def _json_values(path: str, values: pa.Array) -> Iterator[tuple[str, pa.Extensio
             yield from _json_values(f"{path}.{field.name}", struct.field(index))
     elif any(is_kind(kind) for is_kind in _LIST_LIKE):
         yield from _json_values(f"{path}[]", cast("pa.ListArray", values).values)
-
-
-#: The marker the `dir` catalog's DeclareTable writes at a table's location, so that a declared table's directory holds
-#: an object before any data lands (`lance_docs/ns_catalog/namespace/supported-catalogs/lance-dir.md:143`).
-RESERVED_MARKER: Final = ".lance-reserved"
 
 
 def declare_table(
@@ -1302,125 +1303,6 @@ def rename_table(
     return new_segments, source_uri
 
 
-def relative_location(location: str, *, root: str) -> str:
-    """The key ``location`` decodes to under ``root``: what RegisterTable takes to re-attach the table there.
-
-    Every re-registration makes this conversion, a rename's and both undrops'. The ``dir`` backend refuses an absolute
-    location and keeps a relative one as the literal key it is given, while ``describe_table`` answers an absolute URL
-    that percent-encodes a registered table's name (``…/r%C3%A4ksm%C3%B6rg%C3%A5s``). The store holds the table's bytes
-    under the key that decodes to once (``…/räksmörgås``), so that key, whole, is what the table re-attaches at
-    ([[LH-517]]). ``root`` is the root the namespace's connection is rooted at, its warehouse's
-    ([[LH-528]]): a location under another root has no key the backend resolves to it.
-
-    Raises:
-        InternalError: ``location`` names no place under ``root``, which no door attaches a table at.
-    """
-    under, base = decoded_segments(location), decoded_segments(root)
-    if under is None or base is None or len(under) <= len(base) or under[: len(base)] != base:
-        raise InternalError(f"the location {location!r} names no place under its namespace root {root!r}, so the table cannot be re-attached there")
-    return "/".join(under[len(base) :])
-
-
-def dataset_fs(uri: str, so: StorageOptions) -> tuple[pafs.FileSystem, str]:
-    """Resolve ``uri`` to a ``(filesystem, path)`` pair for a dataset relocation.
-
-    A local ``file://`` / bare-path location (the ``dir`` backend default) needs no credentials; an
-    ``s3://`` location builds an ``S3FileSystem`` from the SAME storage options the datasets are opened
-    with (path-style, http-ok endpoint) — mirroring the media head's filesystem so RustFS works.
-
-    The path is the key pylance opens: ``describe_table`` answers a registered location holding a non-ASCII character
-    or a ``%`` percent-encoded (``…/r%C3%A4ksm%C3%B6rg%C3%A5s``), the store keeps the key it decodes to once
-    (``base_refs.decoded_path``), and pyarrow's S3 filesystem takes a path literally ([[LH-520]]). A local URI pyarrow
-    decodes itself.
-    """
-    if on_s3(uri):
-        return s3_filesystem(so), decoded_path(uri)
-    resolved, path = pafs.FileSystem.from_uri(uri)
-    return resolved, path
-
-
-def holds_a_version(location: str, so: StorageOptions) -> bool:
-    """Does the table at ``location`` hold a committed version, as the store keeps it? A table that does not is only declared.
-
-    The catalog's own judgment ([[LH-528]]), at the key the location decodes to (:func:`dataset_fs`), for every door that
-    asks whether a table is only declared. The `dir` backend probes ``base_path.join(location)``, and object_store's
-    ``Path::join`` appends one segment, percent-encoding ``/`` and every non-ASCII byte, so for a table registered at
-    ``outside/held`` or ``räksmörgås`` it probes a key that does not exist and answers that the table has no storage
-    (``rust/lance-namespace-impls/src/dir/manifest.rs:2272`` at lance v13.0.0; measured on pylance 13.0.0 on a local root
-    and on S3). The backend also counts any object under ``_versions/`` as storage, so it answers that a declared table
-    whose first commit was staged and never finalized has storage; only a committed manifest's name counts here.
-    """
-    fs, path = dataset_fs(location, so)
-    listed = fs.get_file_info(pafs.FileSelector(f"{path.rstrip('/')}/_versions", allow_not_found=True))
-    return any(info.type == pafs.FileType.File and manifest_names.committed_version(info.base_name) is not None for info in listed)
-
-
-def verify_fragment_data_files(location: str, so: StorageOptions, fragments: list[dict[str, Any]]) -> None:
-    """Reject a commit that references data files ABSENT under ``<location>/data/`` (audit HIGH fix).
-
-    ``location`` is the ref's own directory (:func:`_ref_location`): a branch's appended files live under
-    ``tree/<branch>/data/``.
-
-    Each fragment's ``files[].path`` is a bare filename under the dataset's ``data/`` dir: a file naming a
-    base was already refused by :func:`_refuse_based_data_files`. A missing file means the client's direct
-    write targeted the wrong prefix — committing it would publish an unreadable version, so raise 400 and
-    leave the table as-is. A declared ``file_size_bytes`` must be the object's size: Lance reads the footer
-    at the declared size, so a larger one failed every read of the table (measured, [[LH-211]]). An absent
-    size is legitimate, and Lance asks the store.
-    """
-    fs, base = dataset_fs(location, so)
-    prefix = base.rstrip("/") + "/data/"
-    # Collect every root-relative data file first, then resolve them in ONE batched lookup: pyarrow's
-    # list overload runs the object-store lookups concurrently, so an N-fragment commit costs one round
-    # trip instead of N serial HEADs on the commit hot path.
-    declared = [
-        (str(rel), data_file.get("file_size_bytes"))
-        for frag in fragments
-        for data_file in (frag.get("files") if isinstance(frag, dict) else None) or []
-        if isinstance(data_file, dict) and (rel := data_file.get("path"))
-    ]
-    infos = fs.get_file_info([prefix + rel for rel, _ in declared]) if declared else []
-    missing = [rel for (rel, _), info in zip(declared, infos, strict=True) if info.type == pafs.FileType.NotFound]
-    if missing:
-        raise InvalidInputError(
-            f"commit references {len(missing)} data file(s) not present under the table location (did the direct write target the wrong prefix?): {missing[:5]}"
-        )
-    resized = [(rel, size, info.size) for (rel, size), info in zip(declared, infos, strict=True) if size is not None and size != info.size]
-    if resized:
-        raise InvalidInputError(
-            f"commit refused: {len(resized)} data file(s) declare a file_size_bytes the object does not have, as (path, declared, actual): {resized[:5]}"
-        )
-
-
-def object_sizes(uris: Sequence[str], *, so: StorageOptions) -> list[int | None]:
-    """Each object's size, ``None`` for one that is absent: one batched lookup per filesystem, as :func:`verify_fragment_data_files` does."""
-    if uris and all(on_s3(uri) for uri in uris):
-        infos = s3_filesystem(so).get_file_info([uri.removeprefix("s3://") for uri in uris])
-    else:
-        infos = [fs.get_file_info(path) for fs, path in (dataset_fs(uri, so) for uri in uris)]
-    return _file_sizes(infos)
-
-
-def _file_sizes(infos: Sequence[pafs.FileInfo]) -> list[int | None]:
-    return [None if info.type != pafs.FileType.File else int(info.size) for info in infos]
-
-
-def data_object_sizes(location: str, relative: Sequence[str], *, so: StorageOptions) -> list[int | None]:
-    """Each object's size under ``<location>/data/``, ``None`` for one that is absent, in one batched lookup.
-
-    ``location`` is the ref's own directory, resolved as :func:`verify_fragment_data_files` resolves it.
-    """
-    fs, base = dataset_fs(location, so)
-    prefix = base.rstrip("/") + "/data/"
-    return _file_sizes(fs.get_file_info([prefix + path for path in relative]))
-
-
-def object_store_path(location: str) -> str:
-    """``location`` as Lance's object store names it: no scheme, no bucket, no leading slash, decoded once as pylance opens it."""
-    decoded = decoded_path(location)
-    return decoded.partition("/")[2] if on_s3(location) else decoded
-
-
 #: How many times a stamped commit plans again after another writer took the version it followed.
 _STAMPED_COMMIT_ATTEMPTS: Final = 10
 
@@ -1945,32 +1827,6 @@ def _staged_transaction(location: str, so: StorageOptions, manifest_path: str) -
     return transaction
 
 
-def discard_detached_manifest(location: str, so: StorageOptions, version: int) -> None:
-    """Delete ``_versions/d<version>.manifest``, writing nothing else; the ``d`` prefix keeps the name apart from every
-    manifest on the version line."""
-    delete_table_object(location, so, f"_versions/{manifest_names.detached_name(version)}")
-
-
-def delete_table_object(location: str, so: StorageOptions, relative: str) -> None:
-    """Delete ``<location>/<relative>``, writing nothing else.
-
-    It deletes by key through :func:`lakehouse.storage.stored_objects.delete_objects`, which records the delete ([[LH-232]]):
-    pyarrow's ``S3FileSystem.delete_file`` PUTs the parent's directory marker after the delete, which left a
-    ``_versions/`` object beside the table's manifests (measured on moto). A delete that fails leaves an inert object,
-    never a wrong table, so it is logged rather than raised.
-    """
-    try:
-        if on_s3(location):
-            bucket, prefix = split_s3_uri(location.rstrip("/"))
-            path = f"{bucket}/{prefix}/{relative}"
-        else:
-            _, base = dataset_fs(location, so)
-            path = f"{base.rstrip('/')}/{relative}"
-        stored_objects.delete_objects(location, so, [path])
-    except Exception:
-        log.warning("catalog_table_object_left", extra={"location": location, "object": relative}, exc_info=True)
-
-
 #: The Lance table-layout directory a dataset holds; a location holding objects and none under it is no dataset.
 _VERSIONS_DIR: Final = "_versions"
 
@@ -2262,346 +2118,6 @@ def _delete_everything_under(location: str, so: StorageOptions, stored: str, spe
         raise OSError(f"{len(left)} object(s) remain under {location} after {_DELETE_PASSES} delete passes: {left[:5]}")
 
 
-#: Lance prefixes a caller-expression failure with this, whatever exception class it picks.
-_USER_INPUT_MARKER = "Invalid user input"
-#: The Rust source location Lance writes after each error it raises — ``, /home/runner/work/lance/lance/rust/…:150:14``.
-#: Useful in a server log, noise in an API response, and it publishes the build path of a vendored library
-#: to every caller. Removed from the detail wherever it sits: a nested error carries one per layer, and the outer
-#: layer's text follows the inner one's (measured live on pylance 13.0.0, explain_plan's parse error). The log line
-#: still carries the original exception.
-_RUST_SOURCE_LOCATION = re.compile(r",\s*/\S+?\.rs:\d+:\d+")
-
-
-def clean_lance_message(message: str) -> str:
-    """Lance's own text, minus the two things a caller must never receive.
-
-    The ``Invalid user input`` prefix is replaced by our own action wording, and the Rust source location
-    (``, /home/runner/work/lance/…/planner.rs:1019:20``) is trimmed: it is useful in a server log, noise in
-    an API response, and it publishes the build path of a vendored library to every caller. Everything else
-    survives — Lance frequently names the columns that DO exist, which is the whole value of the message.
-    """
-    body = message.split(_USER_INPUT_MARKER, 1)[1].lstrip(": ") if _USER_INPUT_MARKER in message else message
-    return _RUST_SOURCE_LOCATION.sub("", body).strip()
-
-
-#: The most AND/OR connectives a caller's SQL fragment may carry. Lance's planner recurses once per
-#: connective of a flat boolean chain with no bound: on pylance 12.0.0, 150,000 `id = n OR ...` terms end
-#: the process with SIGSEGV. Its parser already bounds nesting ("recursion limit exceeded"), and a large
-#: value set carries no connective as one `IN (...)` list, so the bound sits far below the crash and above
-#: any hand-written filter.
-MAX_CALLER_SQL_CONNECTIVES: Final = 1_000
-
-_QUOTED_SQL = re.compile(r"'(?:[^']|'')*'|\"(?:[^\"]|\"\")*\"|`[^`]*`")
-_CONNECTIVE = re.compile(r"\b(?:and|or)\b", re.IGNORECASE)
-
-
-def refuse_an_unbounded_boolean_chain(sql: str | None, *, field: str) -> None:
-    """Refuse a caller's SQL fragment whose AND/OR chain could exhaust Lance's planner, before Lance sees it.
-
-    Connectives inside quoted literals and identifiers are not counted: they are text, not structure.
-
-    Raises:
-        TypeError: ``sql`` is not a string.
-        InvalidInputError: ``sql`` joins more than ``MAX_CALLER_SQL_CONNECTIVES`` conditions.
-    """
-    if sql is None:
-        return
-    if not isinstance(sql, str):
-        raise TypeError(f"{field} must be a SQL string, got {type(sql).__name__}")
-    connectives = len(_CONNECTIVE.findall(_QUOTED_SQL.sub(" ", sql)))
-    if connectives > MAX_CALLER_SQL_CONNECTIVES:
-        raise InvalidInputError(
-            f"{field} joins {connectives} conditions with AND/OR; at most {MAX_CALLER_SQL_CONNECTIVES} are accepted — "
-            "pass a large set of values as one IN (...) list"
-        )
-
-
-#: The native query path carries `k` and `offset` as u32: MEASURED on pylance 12.0.0, `k=2**32` and
-#: `offset=10**12` raise `OverflowError` inside the native call, which answered 500.
-_U32_MAX: Final = 2**32 - 1
-#: Rows read to estimate a variable-width column's width, when the projection carries one.
-_WIDTH_SAMPLE_ROWS: Final = 16
-#: What the native answer adds beyond the projection: `_distance` or `_score` (float32) and `_rowid` (u64).
-_ANSWER_EXTRA_BYTES: Final = 16
-
-
-def refuse_an_unbounded_result(dataset: lance.LanceDataset, *, k: int, offset: int | None, columns: object, max_bytes: int) -> None:
-    """Refuse a native query whose answer could exceed ``max_bytes``, before the native backend reads a row ([[LH-247]]).
-
-    The native backend materialises the whole answer in one buffer before the first byte is sent, so
-    the only bound this door has is the row count it asks for. `k` has a minimum of 0 and no maximum in
-    the spec (`spec.yaml` QueryTableRequest), and `k=0` answers EVERY row. MEASURED on pylance 12.0.0
-    from outside a one-CPU catalog process, 164 MB table of 1024-dim float32 vectors on a moto store:
-    `k=0` returned 169,290,994 bytes and peaked at 822,192 kB against the pod's 524,288 kB limit, and a
-    68 MB answer (`k=16000`, 492 MB table) at 885,188 kB. A whole-table read belongs to `/changes` or a
-    credential vend, which stream.
-
-    `k` is capped by the projected row width: exact for fixed-width columns, and estimated from
-    :data:`_WIDTH_SAMPLE_ROWS` rows of the projection when it carries a variable-width one. `offset` is
-    not, so a reader pages a large read with a bounded `k` (`lineage.services.catalog_reader`): the rows an
-    offset skips are streamed past, not held. MEASURED on the same table and process: `k=1000,
-    offset=39000` (skipping 156 MB) peaked at 395,256 kB, beside 381,412 kB for `k=4000` with no offset.
-
-    Raises:
-        InvalidInputError: ``k`` is 0, ``k`` or ``offset`` exceeds u32, or ``k`` rows exceed ``max_bytes``.
-    """
-    skip = offset or 0
-    if k == 0:
-        raise InvalidInputError("k must be at least 1: k=0 asks for every row in one answer; read a whole table through /changes or a credential vend")
-    for name, value in (("k", k), ("offset", skip)):
-        if value > _U32_MAX:
-            raise InvalidInputError(f"{name}={value} exceeds {_U32_MAX}, the largest row count a query can carry")
-    row_bytes = _projected_row_bytes(dataset, columns)
-    ceiling = max(1, max_bytes // row_bytes)
-    if k > ceiling:
-        raise InvalidInputError(
-            f"k = {k} rows of about {row_bytes} bytes exceed this door's {max_bytes}-byte answer (at most {ceiling} rows); "
-            "page with a smaller k and an offset, or read a whole table through /changes or a credential vend"
-        )
-
-
-def _projected_row_bytes(dataset: lance.LanceDataset, columns: object) -> int:
-    """The in-memory bytes one native answer row of the request's ``columns`` holds, its own extra columns included.
-
-    Exact for fixed-width columns; a variable-width column's width is sampled from the table.
-    """
-    names = getattr(columns, "column_names", None)
-    aliases = getattr(columns, "column_aliases", None)
-    projection: list[str] | dict[str, str] | None = names or aliases or None
-    with caller_sql("invalid query columns"):
-        schema = dataset.scanner(columns=projection, limit=1).projected_schema
-        widths = [_fixed_width(field.type) for field in schema]
-        variable = [i for i, width in enumerate(widths) if width is None]
-        sampled = 0
-        if variable:
-            sample = dataset.scanner(columns=_narrowed(projection, schema, variable), limit=_WIDTH_SAMPLE_ROWS).to_table()
-            sampled = -(-sample.nbytes // sample.num_rows) if sample.num_rows else 0
-    return sum(width for width in widths if width is not None) + sampled + _ANSWER_EXTRA_BYTES
-
-
-def _narrowed(projection: list[str] | dict[str, str] | None, schema: pa.Schema, positions: list[int]) -> list[str] | dict[str, str]:
-    """``projection`` cut down to the output columns at ``positions``, in the form it was given.
-
-    A projected schema lists its fields in the projection's order, so a position names the same column
-    in both; the projection's own spelling (a nested field path, an alias) is what the scanner takes back.
-    """
-    if isinstance(projection, dict):
-        items = list(projection.items())
-        return dict(items[i] for i in positions)
-    if projection:
-        return [projection[i] for i in positions]
-    return [schema.field(i).name for i in positions]
-
-
-def _fixed_width(data_type: pa.DataType) -> int | None:
-    """The in-memory bytes one value of ``data_type`` takes, or ``None`` when that depends on the value."""
-    if pa.types.is_fixed_size_list(data_type):
-        inner = _fixed_width(data_type.value_type)
-        return None if inner is None else inner * data_type.list_size
-    if pa.types.is_struct(data_type):
-        widths = [_fixed_width(data_type.field(i).type) for i in range(data_type.num_fields)]
-        return None if None in widths else sum(w for w in widths if w is not None)
-    try:
-        return max(1, data_type.bit_width // 8)
-    except ValueError:
-        return None
-
-
-@contextmanager
-def caller_sql(action: str) -> Generator[None]:
-    """Translate Lance's expression-parse failures into a 4xx instead of letting them escape as a 500.
-
-    ``updates`` and ``predicate`` are SQL fragments the CALLER wrote, and Lance validates them at execution
-    time — an unknown column or a syntax slip surfaces as ``Invalid user input: Schema error: No field named
-    "Z". Valid fields are id, v.``. Uncaught, that became a 500 ``InternalError``, which is wrong in three
-    ways: it tells the caller the server broke when their expression was wrong, it hides Lance's genuinely
-    useful message (it lists the valid fields) behind a generic body, and it spends the error budget — a 500
-    is what alerting watches — on a client mistake. Found live 2026-07-26 driving
-    ``POST /v1/table/{id}/update`` with an unquoted string literal, which Lance reads as a column reference.
-
-    Discriminates on Lance's ``Invalid user input`` MARKER, not on the exception class, because the class is
-    not consistent across operations: the same bad predicate is a ``ValueError`` out of ``update()`` and an
-    ``OSError`` out of ``delete()`` (both observed here, identical message). Keying on the type would have
-    fixed update and left delete throwing 500s — and keying on ``except Exception`` would flip a genuine
-    object-store outage into "fix your query". Anything without the marker propagates untouched.
-    """
-    try:
-        yield
-    except (ValueError, OSError) as exc:
-        message = str(exc)
-        if _USER_INPUT_MARKER not in message:
-            raise  # a storage / IO failure: a real 5xx, and it stays one
-        # Keep Lance's text — it names the columns that do exist — minus its prefix, which we replace, and
-        # minus the Rust source location, which the caller can do nothing with.
-        detail = clean_lance_message(message)
-        log.info("user_sql_rejected", extra={"action": action, "error": message})
-        raise InvalidInputError(f"{action}: {detail}") from exc
-
-
-#: The two shapes a query-plane refusal of the caller's expression arrives in (measured on pylance 13.0.0, through the
-#: `dir` backend): ``query_table`` raises a typed ``InternalError`` whose text is Lance's Debug form,
-#: ``Failed to execute query: InvalidInput { source: "Error parsing statement: …", location: … }``, while
-#: ``explain_table_query_plan`` and ``analyze_table_query_plan`` raise a bare ``RuntimeError`` carrying
-#: ``Failed to explain query plan for table at '<location>': Invalid user input: …``.
-_QUERY_INPUT_MARKERS = (_USER_INPUT_MARKER, "InvalidInput {")
-#: A column the caller named that the table lacks, in either shape: Display ``No field named nope.`` and Debug
-#: ``FieldNotFound { field: Column { relation: None, name: "nope" }``.
-_QUERY_MISSING_FIELD = re.compile(r'No field named (?P<display>[^\s.]+)|FieldNotFound \{ field: Column \{ relation: [^,]*, name: "(?P<debug>[^"]+)"')
-#: The caller's own text in the Debug shape: ``InvalidInput { source: "<message>", location: … }``.
-_QUERY_DEBUG_SOURCE = re.compile(r'InvalidInput \{ source: "(?P<source>(?:[^"\\]|\\.)*)"')
-
-
-@contextmanager
-def caller_query(action: str) -> Generator[None]:
-    """Answer a query-plane refusal of the caller's request as the caller's mistake ([[LH-287]]).
-
-    A filter naming an absent column is the spec's 12 ``TableColumnNotFound`` (404), and any other expression Lance
-    refuses (a syntax slip, a literal of the wrong type) is 13 ``InvalidInput`` (400); everything without one of
-    Lance's input markers propagates untouched, so a store outage stays a 5xx. The detail names the column or carries
-    Lance's message with its location prefix and Rust source suffix removed: the raw text names the table's storage
-    location and Lance's build paths, so it is logged and never answered.
-    """
-    try:
-        yield
-    except (InternalError, RuntimeError, ValueError, OSError) as exc:
-        message = str(exc)
-        if not any(marker in message for marker in _QUERY_INPUT_MARKERS):
-            raise
-        log.info("caller_query_rejected", extra={"action": action, "error": message[:1000]})
-        if (missing := _QUERY_MISSING_FIELD.search(message)) is not None:
-            raise TableColumnNotFoundError(f"{action}: the table has no column {missing.group('display') or missing.group('debug')!r}") from exc
-        if (debug := _QUERY_DEBUG_SOURCE.search(message)) is not None:
-            detail = debug.group("source").replace('\\"', '"').replace("\\\\", "\\")
-        else:
-            detail = message.rsplit(_USER_INPUT_MARKER, 1)[-1]
-        raise InvalidInputError(f"{action}: {clean_lance_message(detail.lstrip(': '))}") from exc
-
-
-#: Lance's schema check on a write, raised as a bare `OSError`. A stable Rust error-variant prefix, not
-#: a path: "Append with different schema: `s` should have type string but type was int64" for a type
-#: mismatch, "…: fields did not match, missing=[], unexpected=[zz]" for a column the table lacks.
-_WRITE_SCHEMA_MARKER = "append with different schema:"
-
-#: Lance giving up on a write it kept rebasing: "Too many concurrent writers. Attempted N times, but failed on
-#: retry_timeout of 30.000 seconds." (pylance 13.0.0, `io/commit.rs`; measured 2026-11-16 with 32 clients appending to one
-#: table). Nothing was committed, so the write is safe to send again.
-_WRITE_GAVE_UP_MARKER = "too many concurrent writers"
-
-
-@contextmanager
-def _write_schema_errors() -> Generator[None]:
-    """Give the in-process write path the schema code the NATIVE path already answers.
-
-    `insert_into_table` and `merge_insert_into_table` split on `branch`: without one they delegate to
-    the native backend, which maps a schema mismatch to `TableSchemaValidationError` (20 -> 400); with
-    one they run pylance in-process, where the same mismatch escapes as a bare `OSError` and is
-    reported `Internal 18`. Measured 2026-09-07 across three payload shapes — wrong Arrow type, an
-    extra column, a wholly unrelated schema — main answered 20 for all three and the branch answered
-    500 for all three.
-
-    So this is PARITY with a correct implementation next door, not a fresh judgement about which code
-    a schema failure deserves: the branchless door already decided, and a caller must not get a
-    different answer for the same mistake because they staged it on a branch.
-
-    A write Lance gives up on because the table is too busy (`_WRITE_GAVE_UP_MARKER`) is answered here too, as
-    `ConcurrentModificationError` (14 -> 409): it committed nothing and is safe to send again.
-    """
-    try:
-        yield
-    except OSError as exc:
-        message = str(exc).lower()
-        if _WRITE_GAVE_UP_MARKER in message:
-            # Contention, not a fault of the server or the request: the caller's next attempt lands once the table is
-            # less busy, and 500 would have a client stop and an operator paged.
-            raise ConcurrentModificationError(
-                "the table took too many concurrent writes for this one to commit; nothing was written, so send the write again"
-            ) from exc
-        if _WRITE_SCHEMA_MARKER not in message:
-            raise  # a storage / IO failure: a real 5xx, and it stays one
-        raise TableSchemaValidationError(clean_lance_message(str(exc))) from exc
-
-
-#: A column op names a column that is not there. Lance says it four ways across three exception classes —
-#: ``Column nope does not exist in the dataset`` (drop, ValueError), ``Invalid user input: Column "nope"
-#: does not exist in the dataset`` (rename, OSError), ``Field 'nope' not found.\nAvailable fields: ['id']``
-#: (update_field_metadata, OSError) — and the SPEC has a code for exactly this: 12 TableColumnNotFound (404).
-#: Matched against pylance 9.0.0's real messages (probed, not guessed), so a pylance bump that rewords them
-#: reds a test rather than silently reverting these paths to 500s.
-_COLUMN_NOT_FOUND = re.compile(r"does not exist in the dataset|field '[^']*' not found", re.IGNORECASE)
-
-#: Client mistakes Lance reports WITHOUT its ``Invalid user input`` marker. Each is a refusal of a
-#: well-formed request the caller got wrong, i.e. 400 — never a server fault. The primary-key one is a
-#: ``LanceError(Schema)`` OSError on pylance 12.0.0 for ``nullable=True`` on the key or an ancestor
-#: ([[LH-208]]); it answered 500 Internal before this.
-_COLUMN_BAD_REQUEST = re.compile(r"cannot drop all columns|primary key column and all its ancestors must not be nullable", re.IGNORECASE)
-
-#: Messages that already enumerate the schema for the caller; appending our own list would just repeat it.
-_LISTS_FIELDS = re.compile(r"valid fields|available fields", re.IGNORECASE)
-
-
-@contextmanager
-def _column_op(action: str, fields: Sequence[str] = ()) -> Generator[None]:
-    """Translate a schema-evolution failure the CALLER caused into the spec's 4xx, not a 500.
-
-    The sibling of :func:`caller_sql` for the four column ops (add / alter / drop / update_field_metadata).
-    It is a separate translator rather than a widening of ``caller_sql`` because ``caller_sql``'s single
-    ``Invalid user input`` marker test is load-bearing for update/delete and would miss half of these:
-    ``drop_columns`` raises an unmarked ``ValueError`` for both of its user errors. Seven distinct client
-    mistakes answered 500 ``InternalError`` with detail "Internal Server Error" before this (#101) — the
-    lakehouse UI renders that detail verbatim, so a user who typed a wrong column name read that the server
-    had broken.
-
-    Classification, in order:
-
-    * ``LanceNamespaceError`` — already typed (``TableBranchNotFound`` out of the door's open, our own
-      ``InvalidInput`` for an unsupported cast target): re-raised untouched.
-    * a message naming a MISSING column → ``TableColumnNotFoundError`` (code 12 → 404). ``fields`` is the
-      live schema, appended when Lance's own text does not already list it, so the answer always tells the
-      caller both what was missing and what is there.
-    * Lance's ``Invalid user input`` marker, or an unmarked message on the known-bad-request list →
-      ``InvalidInputError`` (400).
-    * anything else propagates — an object-store outage stays a 5xx instead of being blamed on the caller.
-    """
-    try:
-        yield
-    except LanceNamespaceError:
-        raise
-    except (ValueError, OSError) as exc:
-        message = str(exc)
-        detail = clean_lance_message(message)
-        if _COLUMN_NOT_FOUND.search(message):
-            if fields and not _LISTS_FIELDS.search(detail):
-                detail = f"{detail}. Valid fields are {', '.join(fields)}"
-            log.info("column_op_rejected", extra={"action": action, "error": message})
-            raise TableColumnNotFoundError(f"{action}: {detail}") from exc
-        verdict = classify_commit_failure(exc)
-        if verdict is CommitVerdict.RETRYABLE_CONFLICT:
-            # A LOST RACE, NOT A BAD REQUEST — and the difference is what the caller should do next.
-            # Measured 2026-09-07: six concurrent `add_columns` on one table, five lose with
-            # `OSError("Retryable commit conflict for version 2: This Merge transaction was preempted by
-            # concurrent transaction ...")`. Reported as Internal 18 that reads as "the server broke", so
-            # a client retries nothing and an operator is paged for contention that resolves itself.
-            # Code 14 says re-read and re-commit, which is exactly what Lance calls it: retryable.
-            #
-            # AFTER the missing-column test on purpose: the conflict vocabulary carries the bare word
-            # `concurrent`, so a column actually NAMED `concurrent` would match here — it is caught above
-            # as the 12 it really is, and a genuine conflict never looks like a missing column (both
-            # directions verified against the two regexes).
-            raise ConcurrentModificationError(f"{action}: {detail} — re-read the table version and retry") from exc
-        if verdict is CommitVerdict.INCOMPATIBLE:
-            # The OTHER conflict, which this guard could not see while it matched a flat tuple: the table
-            # was REPLACED underneath the op, so retrying is what corrupts it. Sharing the ordered verdict
-            # is what makes the distinction reach every door at once rather than one at a time.
-            raise InvalidInputError(
-                f"{action}: {detail} — this is NOT retryable: the table changed underneath it (e.g. a concurrent overwrite). "
-                "Re-read the current version and re-plan; do not retry this operation"
-            ) from exc
-        if _USER_INPUT_MARKER in message or _COLUMN_BAD_REQUEST.search(message):
-            log.info("column_op_rejected", extra={"action": action, "error": message})
-            raise InvalidInputError(f"{action}: {detail}") from exc
-        raise  # not attributable to the request: a real 5xx, and it stays one
-
-
 def update_table(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTableRequest, *, transaction_properties: dict[str, str]) -> UpdateTableResponse:
     """Apply SQL ``[path, expression]`` updates to matching rows, committed with ``transaction_properties`` ([[LH-497]]).
 
@@ -2777,7 +2293,7 @@ def insert_into_table(
     mode = InsertMode.parse(req.mode)
     keys = primary_keys.key_columns(dataset.lance_schema)
     primary_keys.refuse_repeats_within(rows, keys, door="insert")
-    with _write_schema_errors():
+    with write_schema_errors():
         keyed_append = mode is InsertMode.APPEND and primary_keys.joinable(rows, keys)
         if keyed_append:
             # Planned on the latest version and finalized as exactly the next, so a racing insert of the same key is
@@ -2858,7 +2374,7 @@ def merge_insert_into_table(
     # `merge_insert(on)` is where Lance rejects a key column that does not exist, and it sat outside
     # `caller_sql`, so the one door whose whole job is matching on that column reported `Internal 18`
     # for naming it wrongly — while the branchless path answered 13.
-    with _write_schema_errors(), caller_sql("invalid merge_insert key or filter"):
+    with write_schema_errors(), caller_sql("invalid merge_insert key or filter"):
         version, stats = commit_stamped(
             table,
             so,
@@ -3108,7 +2624,7 @@ def add_columns(
         raise InvalidInputError(f"add_columns names each new column once, but names {twice} more than once")
     transforms = {column.name: column.expression for column in columns if column.expression}
     dataset = table.open(so, branch=req.branch)
-    with _column_op("add_columns", dataset.schema.names):
+    with column_op("add_columns", dataset.schema.names):
         version, _ = commit_stamped(
             table,
             so,
@@ -3151,7 +2667,7 @@ def alter_columns(
         # stub types each as `Iterable[AlterColumn]`.
         handle.alter_columns(*cast(list[Iterable[AlterColumn]], alterations))
 
-    with _column_op("alter_columns", schema.names):
+    with column_op("alter_columns", schema.names):
         version, _ = commit_stamped(
             table, so, transaction_properties, captured(table, so, alter, branch=req.branch), branch=req.branch, opened=dataset, keeps_labels=True
         )
@@ -3165,7 +2681,7 @@ def drop_columns(
     columns = list(req.columns or [])
     dataset = table.open(so, branch=req.branch)
     provenance_guard.refuse_provenance_drop(dataset.schema, columns)
-    with _column_op("drop_columns", dataset.schema.names):
+    with column_op("drop_columns", dataset.schema.names):
         version, _ = commit_stamped(
             table,
             so,
@@ -3399,7 +2915,7 @@ def _require_followable_window(spans: list[_WindowSpan], *, table: str) -> None:
             except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
                 if isinstance(exc, KeyboardInterrupt | SystemExit):
                     raise
-                _raise_if_store_outage(exc, table=table)
+                raise_if_store_outage(exc, table=table)
                 raise InvalidTableStateError(
                     f"the change window on table {table} cannot be followed: version {version}'s transaction is unreadable "
                     f"({type(exc).__name__}). Resynchronise from begin_version=0."
@@ -3417,24 +2933,11 @@ def _require_followable_window(spans: list[_WindowSpan], *, table: str) -> None:
     except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception
         if isinstance(exc, KeyboardInterrupt | SystemExit):
             raise
-        _raise_if_store_outage(exc, table=table)
+        raise_if_store_outage(exc, table=table)
         raise InvalidTableStateError(
             f"the change window on table {table} cannot be followed: its begin version {lowest.low} is no longer retained "
             f"({type(exc).__name__}). Resynchronise from begin_version=0."
         ) from exc
-
-
-def _raise_if_store_outage(exc: BaseException, *, table: str) -> None:
-    """Raise 503 for a read the store did not answer, which says nothing about whether the window can be followed.
-
-    Refusing it as unfollowable (409, "resynchronise from 0") would send a consumer to re-read the whole
-    table because the store blinked.
-
-    Raises:
-        ServiceUnavailableError: ``exc`` is an object-store outage (`lakehouse.problems.outage`).
-    """
-    if reads_as_store_outage(exc):
-        raise ServiceUnavailableError(f"the object store did not answer reading the change window on table {table}") from exc
 
 
 #: The deleted-row feed's schema: Lance's own answer is a single `_rowid` column.
@@ -3622,7 +3125,7 @@ def update_field_metadata(
     field_updates = {path: dict(entry.get("metadata") or {}) for path, entry in entries.items()}
     replacing = {path for path, entry in entries.items() if entry.get("replace")}
     dataset = table.open(so, branch=branch)
-    with _column_op("update_field_metadata", dataset.schema.names):
+    with column_op("update_field_metadata", dataset.schema.names):
         version, _ = commit_stamped(
             table,
             so,
@@ -3655,7 +3158,7 @@ def _merged_field_metadata(handle: lance.LanceDataset, path: str, metadata: dict
     """The metadata of the field at ``path`` on ``handle`` with ``metadata`` merged in.
 
     A ``None`` value stays in, and the replacing call drops its key as a merging one does (measured on pylance 13.0.0). A
-    path no field resolves is answered as given, for Lance's own call to refuse (code 12, :func:`_column_op`).
+    path no field resolves is answered as given, for Lance's own call to refuse (code 12, :func:`column_op`).
 
     Raises:
         TypeError: pylance answers the field's metadata as something other than a dict.
@@ -3785,31 +3288,6 @@ def table_history(table: table_claims.DoorTable, so: StorageOptions, limit: int 
     return out
 
 
-#: Substrings that PROVE a ref operation failed on the VERSION rather than on the ref. Two spellings
-#: because two layers answer: pylance's ref API raises `ValueError("Version not found error: version
-#: main:999999 does not exist")`, while `create_branch` reaches the object store first and raises
-#: `OSError("Dataset at path .../_versions/999999.manifest was not found")`. Measured on pylance 10.0.0.
-_REF_VERSION_MISSING_MARKERS = ("version not found", ".manifest was not found")
-
-#: The ref failure's own noun. pylance flattens every tag and branch failure into a bare
-#: `ValueError` whose only discriminator is its text, because the Rust layer's typed variants do not
-#: cross the pyo3 boundary.
-#:
-#: It captures the NOUN rather than testing `"branch" in message`, and that precision is load-bearing:
-#: a tag literally named `branch` would make the substring test report code 22 for a missing tag. The
-#: noun the message names also BEATS the caller's own kind, because a tag op scoped to a branch fails
-#: on the BRANCH — answering 8 there sends the caller hunting a tag that was never the problem.
-_REF_FAILURE_RE = re.compile(r"ref (?P<failure>not found|conflict) error:\s*(?P<noun>tag|branch)\b", re.IGNORECASE)
-
-#: The ref-NAME validator's variant, raised before anything is looked up — a malformed name is a
-#: malformed parameter, so it is `InvalidInput` (13 -> 400), never a not-found. Measured on pylance
-#: 10.0.0 for both refs and every rule it enforces: invalid characters, a `.lock` suffix, a leading or
-#: trailing `/`, consecutive `/`, and `..` inside a segment. The wording differs per ref ("Branch
-#: segment ... contains invalid characters" vs "Ref characters must be either alphanumeric ..."), so
-#: the shared PREFIX is what is matched.
-_REF_INVALID_MARKER = "ref is invalid:"
-
-
 #: The longest object-store key segment, in bytes, a store is held to: measured on RustFS 1.0.3 (the development store),
 #: a 255-byte segment is written and a 256-byte one refused.
 _KEY_SEGMENT_BYTES: Final = 255
@@ -3909,52 +3387,6 @@ def refuse_a_branch_name_that_nests_with_another(name: str, branches: Iterable[s
         )
 
 
-def _classify_ref_error(exc: Exception, *, kind: str, name: str, invalid_name: str | None = None) -> Exception:
-    """Map a pylance tag/branch failure onto the Lance Namespace spec's coded error.
-
-    Returns ``exc`` UNCHANGED when nothing matches, so an unrecognised failure stays an honest
-    Internal rather than being forced into a code that would misdirect the caller.
-    """
-    message = str(exc)
-    if _REF_INVALID_MARKER in message.lower():
-        # A branch create names its SOURCE for a missing version but the NEW name for a malformed one.
-        subject = name if invalid_name is None else invalid_name
-        return InvalidInputError(f"invalid {kind} name {subject!r}: {clean_lance_message(message)}")
-    if any(marker in message.lower() for marker in _REF_VERSION_MISSING_MARKERS):
-        # Lance's text names the manifest's storage path, so the caller is told the version, never the text.
-        return TableVersionNotFoundError(f"no such version for {kind} {name!r}")
-    match = _REF_FAILURE_RE.search(message)
-    if match is None:
-        return exc
-    noun = match.group("noun").lower()
-    if match.group("failure").lower() == "conflict":
-        if noun == "branch":
-            return TableBranchAlreadyExistsError(f"branch {name!r} already exists")
-        return TableTagAlreadyExistsError(f"tag {name!r} already exists")
-    if noun == "branch":
-        return TableBranchNotFoundError(f"branch {name!r} not found")
-    return TableTagNotFoundError(f"tag {name!r} not found")
-
-
-@contextmanager
-def _ref_errors(kind: str, name: str, *, invalid_name: str | None = None) -> Generator[None]:
-    """Translate the tag/branch failures inside the block into their spec-coded errors.
-
-    Without this every one of them reaches `install_problem_handlers` as a bare exception and is
-    reported as **Internal 18** — a generated client dispatches on `code`, so "your tag already
-    exists" arrives as "the server broke": unretryable, unactionable, and indistinguishable from a
-    real fault in an alerting pipeline.
-    """
-    try:
-        yield
-    except (ValueError, OSError) as exc:
-        translated = _classify_ref_error(exc, kind=kind, name=name, invalid_name=invalid_name)
-        if translated is exc:
-            raise
-        log.info("ref_operation_refused", extra={"kind": kind, "ref": name, "error": str(exc)[:500]})
-        raise translated from exc
-
-
 def list_tags(table: table_claims.DoorTable, so: StorageOptions, req: ListTableTagsRequest) -> ListTableTagsResponse:
     """List the table's tags as ``{name: TagContents{version, manifest_size, branch}}``, paged by name (``req.limit``,
     ``req.page_token``): pylance lists every tag at once, so the page is cut here."""
@@ -4003,7 +3435,7 @@ def create_tag(table: table_claims.DoorTable, so: StorageOptions, req: CreateTab
     """
     _refuse_a_ref_name_no_key_segment_holds("tag", req.tag)
     dataset = _open_with_branch(table, so, req.branch)
-    with table.history_held(HistoryWork.REFS), _ref_errors("tag", req.tag):
+    with table.history_held(HistoryWork.REFS), ref_errors("tag", req.tag):
         dataset.tags.create(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
     return CreateTableTagResponse()
 
@@ -4059,7 +3491,7 @@ def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTab
     """
     _require_a_tag_a_key_segment_can_hold(req.tag)
     dataset = _open_with_branch(table, so, req.branch)
-    with table.history_held(HistoryWork.REFS), _ref_errors("tag", req.tag):
+    with table.history_held(HistoryWork.REFS), ref_errors("tag", req.tag):
         dataset.tags.update(req.tag, _tag_reference(recorded_branch(req.branch), req.version))
     return UpdateTableTagResponse()
 
@@ -4067,7 +3499,7 @@ def update_tag(table: table_claims.DoorTable, so: StorageOptions, req: UpdateTab
 def delete_tag(table: table_claims.DoorTable, so: StorageOptions, req: DeleteTableTagRequest) -> DeleteTableTagResponse:
     """Delete a tag from the table."""
     _require_a_tag_a_key_segment_can_hold(req.tag)
-    with _ref_errors("tag", req.tag):
+    with ref_errors("tag", req.tag):
         table.open_unchecked(so).tags.delete(req.tag)
     return DeleteTableTagResponse()
 
@@ -4150,7 +3582,7 @@ def create_branch(table: table_claims.DoorTable, so: StorageOptions, req: Create
         if req.from_branch is not None and req.from_branch not in branches:
             raise TableBranchNotFoundError(f"source branch {req.from_branch!r} not found")
         try:
-            with _ref_errors("branch", source, invalid_name=req.name):
+            with ref_errors("branch", source, invalid_name=req.name):
                 dataset.create_branch(req.name, _branch_reference(req))
         except OSError:
             if req.name in table.open(so).branches.list():
@@ -4221,7 +3653,7 @@ def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: Delete
     removed: list[RemovedBranch] = []
     for name in doomed:
         try:
-            with _ref_errors("branch", name):
+            with ref_errors("branch", name):
                 dataset.branches.delete(name)
         except TableBranchAlreadyExistsError as exc:
             # The ref-conflict marker here is a pin made after the read above, not a name collision.

@@ -2,7 +2,7 @@
 
 [[LH-019]], the "insert pre-coercion" side effect — found by re-measuring the row's own clause 2 rather
 than by working it. That clause asks to reconcile `coerce_insert_arrow`'s `InvalidInputError` (13) with
-`_write_schema_errors`' `TableSchemaValidationError` (20) as "the same condition answered two ways".
+`write_schema_errors`' `TableSchemaValidationError` (20) as "the same condition answered two ways".
 **IT IS NOT THE SAME CONDITION.** `coerce_insert_arrow` runs at the DOOR (`data.py:294`), before
 `insert_into_table` splits on `branch`, so 13 is what BOTH arms answer for a payload that cannot be
 aligned at all. 20 is what the branch arm answers for a mismatch that SURVIVES coercion and reaches

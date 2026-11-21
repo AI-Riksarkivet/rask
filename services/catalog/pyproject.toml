@@ -33,3 +33,15 @@ packages = ["src/catalog"]
 
 [tool.uv.sources]
 lakehouse = { workspace = true }
+
+# The catalog's import contracts, run by `make lint-imports` (ADR 0224). Lance's failures read as the spec's refusals
+# (`core.lance_refusals`) are the floor a caller's expression is bounded on (`core.query_bounds`): the bound reads a
+# caller's SQL through the refusal that answers it, and no refusal asks a bound.
+[tool.importlinter]
+root_package = "catalog"
+
+[[tool.importlinter.contracts]]
+id = "catalog-lance-refusals-are-the-floor"
+name = "ADR 0224: a caller's expression is bounded on top of how Lance's failures read"
+type = "layers"
+layers = ["catalog.core.query_bounds", "catalog.core.lance_refusals"]

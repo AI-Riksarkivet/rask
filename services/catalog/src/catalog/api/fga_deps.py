@@ -1741,7 +1741,7 @@ async def authorized_page(
     A listing authorizes its own candidates, batch by batch, on the objects their names resolve to, and fills its page
     from them. It never asks OpenFGA which objects the caller reaches across the estate: that answer stops at the
     server's ceiling (1,000 objects), so a caller reaching more than that elsewhere would see a small namespace listed
-    short. The cursor is the last name served, as :func:`catalog.api.pagination.paginate` keeps it; a ``None`` token
+    short. The cursor is the last name served, as :func:`catalog.core.pagination.paginate` keeps it; a ``None`` token
     means every candidate was judged.
 
     A candidate that records no uuid holds no grant, so it is answered to no caller, and is left out rather than fail the

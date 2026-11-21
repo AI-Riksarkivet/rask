@@ -66,10 +66,10 @@ from catalog.api.dependencies import (
     VendorDep,
     namespace_for_warehouse,
 )
-from catalog.api.pagination import ListLimit, paginate
+from catalog.api.pagination import ListLimit
 from catalog.api.rask_params import RaskFlag
 from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken
-from catalog.core import json_arrow, provenance_guard
+from catalog.core import json_arrow, provenance_guard, table_objects
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.formats import refuse_properties_kept_nowhere, reject_unsupported_properties
@@ -84,6 +84,7 @@ from catalog.core.lineage_emit import (
 )
 from catalog.core.modes import RegisterMode
 from catalog.core.namespace import open_resolved_dataset_unchecked, registered_dataset_facts, warn_if_mixed_file_versions
+from catalog.core.pagination import paginate
 from catalog.core.vending import (
     CredentialVendor,
     ModeBVendor,
@@ -311,7 +312,7 @@ async def _vend_on_spec_door(
     return options
 
 
-# `paginate` lives in `catalog.api.pagination`, shared by every catalog listing: two keyset implementations in one
+# `paginate` lives in `catalog.core.pagination`, shared by every catalog listing: two keyset implementations in one
 # service is two things to keep in step.
 @spec_router.post("/{id}/declare", response_model_exclude_none=True)
 async def declare_table(
@@ -680,7 +681,7 @@ def _describe(
     WHETHER THE TABLE IS ONLY DECLARED IS THE CATALOG'S JUDGMENT ([[LH-528]]), and so is the detailed metadata that rides
     on it. The backend is asked only for the plain describe: its own verdict misjudges a table registered at a nested
     location, and with ``load_detailed_metadata`` it then answers no version and no schema
-    (``dataplane.holds_a_version``). ``is_only_declared`` is answered when ``check_declared`` or ``load_detailed_metadata``
+    (``table_objects.holds_a_version``). ``is_only_declared`` is answered when ``check_declared`` or ``load_detailed_metadata``
     asks for it, as the spec says (`lance_docs/ns_catalog/spec.yaml:2926-2934`).
     """
     segments = table.segments
@@ -702,7 +703,7 @@ def _describe(
         if response.location and load_detailed_metadata:
             _load_or_judge_declared(response, table, so, pinned=pinned)
         elif response.location and check_declared:
-            response.is_only_declared = not dataplane.holds_a_version(response.location, so)
+            response.is_only_declared = not table_objects.holds_a_version(response.location, so)
     except Exception:
         table.require_named()
         raise
@@ -717,7 +718,7 @@ def _load_or_judge_declared(response: DescribeTableResponse, table: DoorTable, s
 
     Lance finds a table's latest version by listing its ``_versions/`` on every open, and the store answers that listing
     with every manifest key, so the judgment rides the open the metadata needs rather than a listing of its own
-    ([[LH-529]]). Only an open that finds no dataset asks the storage itself (``dataplane.holds_a_version``), which tells
+    ([[LH-529]]). Only an open that finds no dataset asks the storage itself (``table_objects.holds_a_version``), which tells
     a table holding no committed version, only declared, from one whose committed version could not be opened.
 
     Raises:
@@ -729,7 +730,7 @@ def _load_or_judge_declared(response: DescribeTableResponse, table: DoorTable, s
         try:
             dataset = open_resolved_dataset_unchecked(table.location, so, table.segments)
         except TableNotFoundError:
-            if dataplane.holds_a_version(str(response.location), so):
+            if table_objects.holds_a_version(str(response.location), so):
                 raise
             response.is_only_declared = True
             # The only thing a declared table's detail holds: the format its first `version/create` must carry.
@@ -1768,7 +1769,7 @@ async def undrop_table(
     # percent-encodes a registered table's name, so the table re-attaches at the key that URL decodes to, under the
     # connection's root, where its bytes are ([[LH-517]]). The absolute URL stays on the record for an operator.
     location = record.location
-    body = RegisterTableRequest(id=segments, location=dataplane.relative_location(location, root=root))
+    body = RegisterTableRequest(id=segments, location=table_objects.relative_location(location, root=root))
     named = NameResolves(segments=segments, uuid=record_uuid)
     restored = _marker(
         announcer, token, named, segments, operation=REGISTER_TABLE, uuids=await uuids.table(segments, location=location, uuid=record_uuid), source_uri=location

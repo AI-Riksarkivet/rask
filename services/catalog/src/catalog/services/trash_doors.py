@@ -1,5 +1,5 @@
 """What the trash doors share: how long a drop stays recoverable, which trashed object an undrop restores, and which
-record no undrop restores. Where it re-attaches a table is ``dataplane.relative_location``, the rule every
+record no undrop restores. Where it re-attaches a table is ``table_objects.relative_location``, the rule every
 re-registration shares.
 
 A trash door stays addressed by name (ADR 0173 §9, [[LH-525]]). A name is free again the moment its object is

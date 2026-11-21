@@ -30,7 +30,7 @@ pylance 13.0.0, Lance reads `Y` and `on` as a key and ` true` as none. Measured 
 Lance itself refuses only `nullable=True` on the key or an ancestor ("Primary key column and all its
 ancestors must not be nullable") and any change to the key's field metadata ("the unenforced primary
 key is a reserved key and cannot be changed once set"). Those stay Lance's refusals, mapped to 400 by
-`dataplane._column_op`, and are not restated here.
+`catalog.core.lance_refusals.column_op`, and are not restated here.
 """
 
 from __future__ import annotations

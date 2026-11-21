@@ -19,7 +19,7 @@ seven-version table is served three rows and told the listing is COMPLETE, becau
 seven. A slice that reports neither a total nor a continuation is truncation wearing pagination's clothes.
 
 THE FIX IS THE HELPER THIS SERVICE ALREADY SHIPS, one layer up from the backend that cannot page.
-`catalog.api.pagination` states the pattern in its own docstring: "the native call is always made
+`catalog.core.pagination` states the pattern in its own docstring: "the native call is always made
 unpaginated, so no upstream cursor can ride through by accident". The version list is the same shape
 with an integer key and an order that `descending` may flip, so it gets a sibling keyset rather than a
 second cursor implementation that can drift from the first.

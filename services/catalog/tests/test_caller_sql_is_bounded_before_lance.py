@@ -11,7 +11,7 @@ from typing import cast
 import pytest
 from lance_namespace import InvalidInputError
 
-from catalog.services.dataplane import MAX_CALLER_SQL_CONNECTIVES, refuse_an_unbounded_boolean_chain
+from catalog.core.query_bounds import MAX_CALLER_SQL_CONNECTIVES, refuse_an_unbounded_boolean_chain
 
 
 def _chain(terms: int) -> str:

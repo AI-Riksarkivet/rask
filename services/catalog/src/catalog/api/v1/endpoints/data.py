@@ -50,7 +50,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.rask_params import RaskDataBase, RaskExternalBlobBase
 from catalog.api.security import Caller, CurrentToken
-from catalog.core import encoding, formats, provenance_guard
+from catalog.core import encoding, formats, lance_refusals, provenance_guard, query_bounds
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.core.lineage_emit import DELETE, INSERT, MERGE_INSERT, OVERWRITE_TABLE, UPDATE
@@ -704,13 +704,13 @@ def query_table(
     """
     body.id = reconcile_body_id(parse_identifier(id), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="query_table")
-    dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
+    query_bounds.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     # PINNED TO THE VERSION WHOSE BASES WERE JUDGED ([[LH-279]]): the native query opens the table inside
     # Rust, where a planted base answered with another table's rows (lh279 m2).
     judged = table.open(so, version=body.version)
-    dataplane.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
+    query_bounds.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
     body.version = int(judged.version)
-    with dataplane.caller_query("invalid query"):
+    with lance_refusals.caller_query("invalid query"):
         response = table.read_natively("query_table", body, via=data_ns)
     if not isinstance(response, QueryTableResponse) or not isinstance(response.data, bytes):
         raise TypeError(f"query_table must answer a QueryTableResponse carrying Arrow bytes, got {type(response).__name__}: {response!r:.200}")
@@ -806,11 +806,11 @@ def explain_table_query_plan(id: str, body: ExplainTableQueryPlanRequest, table:
     # about the branch the other names ([[LH-547]]).
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="explain_table_query_plan")
     dataplane.refuse_a_branch_this_door_cannot_honour(body.query.branch if body.query else None, door="explain_table_query_plan")
-    dataplane.refuse_an_unbounded_boolean_chain(body.query.filter if body.query else None, field="query.filter")
+    query_bounds.refuse_an_unbounded_boolean_chain(body.query.filter if body.query else None, field="query.filter")
     judged = int(table.open(so, version=body.query.version if body.query else None).version)
     if body.query is not None:
         body.query.version = judged
-    with dataplane.caller_query("invalid query"):
+    with lance_refusals.caller_query("invalid query"):
         result = table.read_natively("explain_table_query_plan", body)
     # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
     # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own
@@ -837,12 +837,12 @@ def analyze_table_query_plan(
     """Return the analyzed query plan with runtime metrics — ``analyze_table_query_plan``; plain text, served once the name still resolves to the door's location."""
     body.id = reconcile_body_id(parse_identifier(id), body.id)
     dataplane.refuse_a_branch_this_door_cannot_honour(body.branch, door="analyze_table_query_plan")
-    dataplane.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
+    query_bounds.refuse_an_unbounded_boolean_chain(body.filter, field="filter")
     # ANALYZE RUNS THE QUERY to report its metrics, so it spends what `/query` would and takes its bound.
     judged = table.open(so, version=body.version)
-    dataplane.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
+    query_bounds.refuse_an_unbounded_result(judged, k=body.k, offset=body.offset, columns=body.columns, max_bytes=settings.query_max_response_mb << 20)
     body.version = int(judged.version)
-    with dataplane.caller_query("invalid query"):
+    with lance_refusals.caller_query("invalid query"):
         result = table.read_natively("analyze_table_query_plan", body, via=data_ns)
     # A JSON-ENCODED STRING, per `components.responses`. It answered `text/plain`, which the 0.12.0
     # reqwest client rejects outright (the Python urllib3 client tolerates it, which is why rask's own

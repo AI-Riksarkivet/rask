@@ -94,7 +94,7 @@ def claim_store(settings: CatalogStore) -> ClaimStore:
 def resolve(ns: LanceNamespace, store: ClaimStore, segments: list[str]) -> ResolvedTable:
     """Resolve the table ``segments`` names to its location and that location's claim, once.
 
-    A declared table resolves too; whether it holds a version is ``dataplane.holds_a_version``'s to judge where a door
+    A declared table resolves too; whether it holds a version is ``table_objects.holds_a_version``'s to judge where a door
     asks, never the backend's verdict ([[LH-528]]). A name that names no table, in a namespace that exists or one that does
     not (the ``dir`` backend answers ``NamespaceNotFoundError`` for that, measured on pylance 13.0.0), resolves to no
     location rather than raising, so a door answers for that itself after the checks it makes first, an idempotent

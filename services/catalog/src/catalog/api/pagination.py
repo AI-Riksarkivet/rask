@@ -1,9 +1,7 @@
-"""Keyset pagination shared by the catalog's own listings.
+"""A spec listing's page size, read off its query, and the keyset pagination of a table's versions.
 
-It is a CATALOG module rather than a library one: the cursor is "the last name of the previous
-page", which is only stateless and stable because these listings are `sorted(set(...))` name lists.
-That is a property of this service's listings, not of pagination in general: an offset strategy has no such
-precondition.
+The page size is a door's concern (FastAPI's `Query` and `Depends`), so it stays with the doors. The name keyset every
+listing pages by, the doors' and the services' alike, is `catalog.core.pagination`.
 """
 
 from __future__ import annotations
@@ -58,25 +56,10 @@ def list_limit(
 ListLimit = Annotated[int, Depends(list_limit)]
 
 
-def paginate(names: list[str], page_token: str | None, limit: int | None) -> tuple[list[str], str | None]:
-    """Keyset pagination over an already-sorted, deduped name list.
-
-    The cursor is the last name of the previous page — stateless, and stable across calls because
-    the merged listing is ``sorted(set(...))``. A ``None`` next-token means the listing is complete;
-    the native call is always made unpaginated, so no upstream cursor can ride through by accident.
-    """
-    if page_token:
-        names = [name for name in names if name > page_token]
-    if limit is None or limit >= len(names):
-        return names, None
-    page = names[:limit]
-    return page, (page[-1] if page else None)
-
-
 def paginate_versions(versions: list[int], page_token: str | None, limit: int | None, *, descending: bool) -> tuple[list[int], str | None]:
     """Keyset pagination over a table's version numbers, in the order they are SERVED.
 
-    The sibling above keys on a name; a version list keys on an integer and its order is the caller's
+    Its sibling, `catalog.core.pagination.paginate`, keys on a name; a version list keys on an integer and its order is the caller's
     (`descending` is a spec query parameter on `ListTableVersions`). Sharing one function would have to
     choose a comparison for both, so this is a sibling rather than a generalisation — and the cursor
     still means the same thing: the last row served, resumed strictly after.

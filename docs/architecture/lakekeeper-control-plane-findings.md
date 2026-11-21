@@ -355,7 +355,7 @@ medium (one model per action); low risk.
   per-door seam scoped by a digest of the subject (`services/catalog/src/catalog/api/idempotency.py:1-21`), and a door's
   authorization runs before its replay, so no unauthorized replay needs its own audit shape.
 - **Pagination** (`server/mod.rs:251-333`). Covered by finding 2.5; rask's keyset cursor over a sorted name list is sound
-  (`services/catalog/src/catalog/api/pagination.py`).
+  (`services/catalog/src/catalog/core/pagination.py`).
 - **Data contract hook** (`crates/lakekeeper/src/service/contract_verification.rs`). rask judges commits at
   `version/create` and gates publication (ADR 0160, ADR 0161).
 - **Endpoint statistics** (`service/endpoint_statistics.rs`). Per-endpoint counts stored in the catalog database; rask's

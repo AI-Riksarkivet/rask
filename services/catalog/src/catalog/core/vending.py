@@ -42,6 +42,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.namespace import open_location
+from catalog.core.table_objects import holds_a_version
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError
 from lakehouse.lancekit.base_refs import decoded_path, location_within, names_a_location, normalise
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
@@ -701,7 +702,7 @@ def dataset_facts(location: str, storage_options: StorageOptions, *, branch: str
 def _open_vended_ref(location: str, storage_options: StorageOptions, *, branch: str) -> lance.LanceDataset | None:
     """The ref of the table at ``location`` a vend reads (``branch``, ``""`` for main), or ``None`` for a table holding no
     committed version: an open that fails says nothing about what a table holds, so only the storage tells a declared
-    table from one whose labels the open could not reach (:func:`catalog.services.dataplane.holds_a_version`, as
+    table from one whose labels the open could not reach (:func:`catalog.core.table_objects.holds_a_version`, as
     ``version/create`` asks it, [[LH-572]]); a branch is cut from a version, so one that does not open is never declared.
 
     Raises:
@@ -709,8 +710,6 @@ def _open_vended_ref(location: str, storage_options: StorageOptions, *, branch: 
         InternalError: The ref does not open while the table holds a committed version, or the storage cannot be listed, a
             state of the table's own the spec answers 18 for (`lance_docs/ns_catalog/namespace/operations/errors.md`).
     """
-    from catalog.services.dataplane import holds_a_version
-
     try:
         return open_location(location, storage_options, branch=branch or None)
     except (ValueError, OSError) as exc:

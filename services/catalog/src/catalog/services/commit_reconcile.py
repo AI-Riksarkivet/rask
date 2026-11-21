@@ -38,7 +38,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict
 
-from catalog.core import lineage_emit, run_context
+from catalog.core import lineage_emit, run_context, table_objects
 from catalog.core.config import CatalogStore, Settings
 from catalog.services import dataplane, maintenance_commits, managed_versions, provenance_namespace
 from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
@@ -217,7 +217,7 @@ def _registered_heads(location: str, so: StorageOptions) -> dict[str, int]:
     flags: the register's judge refuses such a dataset, 400 for mixed data file versions and 503 for any other flag
     (`table_bases.judge_registered_table`).
     """
-    if not dataplane.holds_a_version(location, so):
+    if not table_objects.holds_a_version(location, so):
         return {}
     try:
         dataset = open_dataset(location, storage_options=so.in_clear() or None, session=fresh_session())
@@ -488,7 +488,7 @@ def reconcile_table(
     (``LANCE_COMMIT_RECONCILE_HORIZON_SECONDS``, inside the feed's retention) at the old end. A ref whose log cannot be
     read keeps the mark it had and is named in ``unreadable``. A table only declared has no ref to read.
     """
-    if not dataplane.holds_a_version(location, so):
+    if not table_objects.holds_a_version(location, so):
         # A table only declared holds no version, so nothing of it was announced or lost.
         return TableReconcile()
     control, control_so = settings.registry_root, settings.storage_options()

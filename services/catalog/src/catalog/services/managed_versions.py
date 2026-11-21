@@ -38,7 +38,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, InstanceOf
 
-from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard
+from catalog.core import encoding, formats, lineage_emit, manifest_bytes, provenance_guard, table_objects
 from catalog.core.base_judge import BaseJudge, require_sanctioned_bases
 from catalog.core.config import shared_lance_session
 from catalog.core.namespace import overlapping_segments
@@ -165,7 +165,7 @@ def _staged_uri(location: str, manifest_path: str) -> str:
     no leading slash, then ``_versions/<n>.manifest-<uuid>``), so it is compared in that form.
     """
     root = location.rstrip("/")
-    prefix = f"{dataplane.object_store_path(root)}/_versions/"
+    prefix = f"{table_objects.object_store_path(root)}/_versions/"
     name = manifest_path.removeprefix(prefix) if manifest_path.startswith(prefix) else ""
     if "/" in name or manifest_names.staged_version(name) is None:
         raise InvalidInputError(f"manifest_path {manifest_path!r} is not a staged manifest under the ref's _versions/")
@@ -175,7 +175,7 @@ def _staged_uri(location: str, manifest_path: str) -> str:
 def _latest_version(location: str, so: StorageOptions) -> int:
     """The ref's latest committed version, 0 for a declared table with none.
 
-    Only an open that fails asks the store whether the ref holds a committed version (:func:`dataplane.holds_a_version`,
+    Only an open that fails asks the store whether the ref holds a committed version (:func:`table_objects.holds_a_version`,
     [[LH-528]]), which no staged manifest counts as: a declared table's first commit is staged beside it.
 
     Raises:
@@ -189,13 +189,13 @@ def _latest_version(location: str, so: StorageOptions) -> int:
     except (OSError, ValueError) as exc:
         if reads_as_store_outage(exc):
             raise ServiceUnavailableError("the object store did not answer reading the table's latest version") from exc
-        if dataplane.holds_a_version(location, so):
+        if table_objects.holds_a_version(location, so):
             raise InternalError("commit refused: the table's latest committed version cannot be opened, so no commit can follow it") from exc
         return 0
 
 
 def _write(location: str, so: StorageOptions, name: str, body: bytes) -> None:
-    fs, base = dataplane.dataset_fs(location, so)
+    fs, base = table_objects.dataset_fs(location, so)
     with fs.open_output_stream(f"{base.rstrip('/')}/_versions/{name}") as sink:
         sink.write(body)
 
@@ -243,9 +243,9 @@ def stage(ref: CommitRef, so: StorageOptions, request: CreateTableVersionRequest
         raise InvalidInputError(f"commit refused: version {request.version} does not follow the latest version {latest}")
     if request.naming_scheme not in (None, "V2"):
         raise InvalidInputError(f"commit refused: the table's manifests are named V2, not {request.naming_scheme}")
-    fs, _ = dataplane.dataset_fs(location, so)
+    fs, _ = table_objects.dataset_fs(location, so)
     try:
-        with fs.open_input_stream(dataplane.dataset_fs(staged, so)[1]) as source:
+        with fs.open_input_stream(table_objects.dataset_fs(staged, so)[1]) as source:
             manifest = source.read()
     except FileNotFoundError as exc:
         raise InvalidInputError(f"commit refused: no staged manifest is at {request.manifest_path}") from exc
@@ -501,7 +501,7 @@ def _refuse_forged_files(version: _Judged) -> None:
         raise InvalidInputError("commit refused: one data file is named twice; every field id it carries would be minted again")
     owners = {id(metadata): metadata for metadata, _ in added}
     location, so = version.staged.location, version.so
-    dataplane.verify_fragment_data_files(
+    table_objects.verify_fragment_data_files(
         location, so, [{"files": [{"path": data_file.path, "file_size_bytes": data_file.file_size_bytes}]} for _, data_file in added]
     )
     client_fragments.verify_against_footers(location, so, list(owners.values()), version.proposed)
@@ -518,8 +518,8 @@ def _refuse_unverified_blobs(version: _Judged, external_bases: Sequence[base_reg
         version.split.added_files,
         columns,
         external_bases=external_bases,
-        object_sizes=partial(dataplane.object_sizes, so=version.so),
-        sidecar_sizes=partial(dataplane.data_object_sizes, version.staged.location, so=version.so),
+        object_sizes=partial(table_objects.object_sizes, so=version.so),
+        sidecar_sizes=partial(table_objects.data_object_sizes, version.staged.location, so=version.so),
     )
 
 
@@ -545,7 +545,7 @@ def _held_counters(location: str, so: StorageOptions, version: int) -> _HeldCoun
     pylance exposes neither ``next_row_id`` nor ``max_fragment_id``. A V2-named manifest is
     ``_versions/<u64::MAX - version>.manifest`` and a V1-named one ``_versions/<version>.manifest`` (``lance_docs/lance/format/table/transaction.md``).
     """
-    fs, base = dataplane.dataset_fs(location, so)
+    fs, base = table_objects.dataset_fs(location, so)
     for name in manifest_names.committed_names(version):
         try:
             with fs.open_input_stream(f"{base.rstrip('/')}/_versions/{name}") as source:
@@ -805,7 +805,7 @@ def _declared_index_files(version: _Judged) -> dict[str, dict[str, int]]:
 
 def _index_directory(version: _Judged, uuid: str) -> dict[str, int]:
     """The files under the table's own ``_indices/<uuid>/``, by name and size."""
-    fs, base = dataplane.dataset_fs(version.staged.location, version.so)
+    fs, base = table_objects.dataset_fs(version.staged.location, version.so)
     selector = pafs.FileSelector(f"{base.rstrip('/')}/_indices/{uuid}", allow_not_found=True)
     return {info.path.rsplit("/", 1)[-1]: info.size or 0 for info in fs.get_file_info(selector) if info.is_file}
 
@@ -981,7 +981,7 @@ def lineage_operation(staged: StagedVersion) -> str:
 
 def _discard(location: str, so: StorageOptions, *ids: int) -> None:
     for planted in ids:
-        dataplane.discard_detached_manifest(location, so, planted)
+        table_objects.discard_detached_manifest(location, so, planted)
 
 
 def discard(staged: StagedVersion, so: StorageOptions) -> None:
@@ -1015,7 +1015,7 @@ def finalize(
     writer waits rather than being refused, since pylance fails a commit whose finalize answered 409 with no version at its
     target as of unknown outcome (measured on pylance 13.0.0).
     """
-    path = f"{dataplane.object_store_path(staged.location.rstrip('/'))}/_versions/{manifest_names.detached_name(staged.finalize_id)}"
+    path = f"{table_objects.object_store_path(staged.location.rstrip('/'))}/_versions/{manifest_names.detached_name(staged.finalize_id)}"
     judged = request.model_copy(update={"manifest_path": path})
     try:
         response = CreateTableVersionResponse.model_validate(table.finalize_staged_version(judged, writer=writer, kept=kept))
@@ -1045,4 +1045,4 @@ def forget_unlanded_author(table: table_claims.DoorTable, staged: StagedVersion,
 
 def _delete_staged(staged: StagedVersion, so: StorageOptions) -> None:
     """Delete the writer's staged manifest once its version landed."""
-    dataplane.delete_table_object(staged.location, so, f"_versions/{staged.staged_uri.rsplit('/', 1)[-1]}")
+    table_objects.delete_table_object(staged.location, so, f"_versions/{staged.staged_uri.rsplit('/', 1)[-1]}")

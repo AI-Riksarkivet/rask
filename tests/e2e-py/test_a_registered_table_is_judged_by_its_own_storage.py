@@ -3,7 +3,7 @@
 The `dir` backend judges whether a table holds storage by probing ``base_path.join(location)``, and its drop deletes
 there, which object_store encodes as one segment, so a table registered over data at ``<namespace>-outside/held`` reads
 to it as only declared, and a drop deletes none of its bytes (lance-format/lance#10281). The catalog judges and destroys
-each table's storage itself (``dataplane.holds_a_version``, ``dataplane.destroy_table``), so on the deployed estate a
+each table's storage itself (``table_objects.holds_a_version``, ``dataplane.destroy_table``), so on the deployed estate a
 stock client finds such a table among the tables that hold storage, every door that asks keeps it, and a destructive
 drop deletes it:
 

@@ -17,7 +17,8 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import ListNamespacesResponse
 
-from catalog.api.pagination import MAX_LIST_LIMIT, paginate
+from catalog.api.pagination import MAX_LIST_LIMIT
+from catalog.core.pagination import paginate
 
 
 NAMES = ["lance_catalog$a$one", "lance_catalog$b$two", "lance_catalog$c$three", "lance_catalog$d$four", "lance_catalog$e$five"]

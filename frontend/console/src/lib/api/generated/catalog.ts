@@ -4275,7 +4275,7 @@ export interface paths {
          *     told a caller asking for three of seven that it had seen everything — truncation wearing
          *     pagination's clothes.
          *
-         *     So the native call is made UNPAGINATED — the same rule `catalog.api.pagination` states for the name
+         *     So the native call is made UNPAGINATED — the same rule `catalog.core.pagination` states for the name
          *     listings — and the cursor is this layer's. The full list is what the backend returns unbounded
          *     (measured: no limit gives all seven), and `ListLimit` still bounds what leaves the door.
          */

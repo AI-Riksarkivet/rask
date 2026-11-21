@@ -119,7 +119,9 @@ from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, Field
 
 from catalog.core.blobs import EXTERNAL_KIND, blob_descriptors, holds_blob
-from catalog.services.dataplane import MAIN_BRANCH, caller_sql, clean_lance_message, recorded_branch, refuse_an_unbounded_boolean_chain
+from catalog.core.lance_refusals import caller_sql, clean_lance_message
+from catalog.core.query_bounds import refuse_an_unbounded_boolean_chain
+from catalog.services.dataplane import MAIN_BRANCH, recorded_branch
 from lakehouse.lancekit import branch_layout
 from lakehouse.lancekit.base_refs import normalise
 from lakehouse.lancekit.features import describe_gc_unsupported_flags, manifest_feature_flags

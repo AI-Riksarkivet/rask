@@ -354,7 +354,7 @@ def lost_staged_manifests(uri: str, storage_options: StorageOptions, *, version:
 
     A detached manifest (:func:`lakehouse.lancekit.manifest_names.is_detached`) is one of these whatever the version: every
     catalog commit writes one to judge the version before it finalizes it, and deletes it within the request
-    (`catalog.services.dataplane.discard_detached_manifest`), so one past :data:`DETACHED_MANIFEST_GRACE` belongs to a
+    (`catalog.core.table_objects.discard_detached_manifest`), so one past :data:`DETACHED_MANIFEST_GRACE` belongs to a
     commit that died, or whose delete the store refused, between the two. Lance's cleanup keeps it: measured on pylance
     13.0.0 (2026-11-17), `cleanup_old_versions(older_than=0, delete_unverified=True)` left a `d5.manifest` and one whose
     id has the top bit set ([[LH-401]]).

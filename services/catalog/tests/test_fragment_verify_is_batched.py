@@ -10,7 +10,7 @@ from __future__ import annotations
 import pyarrow.fs as pafs
 import pytest
 
-from catalog.services import dataplane
+from catalog.core import table_objects
 from lakehouse.storage.options import StorageOptions
 
 
@@ -39,9 +39,9 @@ def _fragments(names: list[str]) -> list[dict[str, object]]:
 
 def test_all_data_files_are_verified_in_one_batched_call(monkeypatch: pytest.MonkeyPatch) -> None:
     fs = _CountingFS(missing=set())
-    monkeypatch.setattr(dataplane, "dataset_fs", lambda location, so: (fs, "root"))
+    monkeypatch.setattr(table_objects, "dataset_fs", lambda location, so: (fs, "root"))
 
-    dataplane.verify_fragment_data_files("s3://b/t", StorageOptions(), _fragments(["a.lance", "b.lance", "c.lance"]))
+    table_objects.verify_fragment_data_files("s3://b/t", StorageOptions(), _fragments(["a.lance", "b.lance", "c.lance"]))
 
     # One batched lookup covering all three files — not three serial single-path HEADs.
     assert len(fs.calls) == 1, f"expected one batched get_file_info, got {len(fs.calls)} serial calls"
