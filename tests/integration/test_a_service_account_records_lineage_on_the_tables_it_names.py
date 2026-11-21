@@ -225,13 +225,29 @@ def _renamed_from(*dropped: str) -> dict[str, Any]:
             13,
             id="a-previous-identifier-without-its-namespace",
         ),
+        pytest.param(
+            {"outputs": [{"namespace": "lance_catalog", "name": _MINE, "facets": {"rask_lance": "x"}}]},
+            422,
+            13,
+            id="a-rask-lance-facet-that-is-a-string",
+        ),
+        pytest.param(
+            {
+                "outputs": [_carrying(_MINE)],
+                "inputs": [{"namespace": "lance_catalog", "name": _READ, "inputFacets": {"rask_lance": ["x"]}}],
+            },
+            422,
+            13,
+            id="a-rask-lance-input-facet-that-is-a-list",
+        ),
     ],
 )
 def test_every_dataset_a_facet_names_is_decided_before_it_is_recorded(estate: Estate, sa_issuer: Any, datasets: dict[str, Any], status: int, code: int) -> None:
     """The producer may write ``_MINE`` and read ``_READ``, and holds nothing on ``_THEIRS``. Its event names ``_THEIRS``
     wherever a facet naming another dataset can: as a column upstream of a ``columnLineage`` facet, and as the
     ``previousIdentifier`` of a ``lifecycleStateChange`` facet, under which a graph backend may join ``_THEIRS``'s node to
-    ``_MINE``'s. An entry lacking a member the OpenLineage spec requires is refused as malformed; a second copy of a facet
+    ``_MINE``'s. An entry lacking a member the OpenLineage spec requires is refused as malformed, as is a ``rask_lance``
+    facet that is no object, which has nowhere to hold the uuids the door stamps; a second copy of a facet
     in another slot, the column facet's whole-dataset list and an input's own facet are each decided as an output's own
     copy is. Nothing is recorded or forwarded as naming ``_THEIRS``."""
     event = run_event("0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a03", "COMPLETE", "2026-11-20T10:00:00+00:00", outputs=[]) | datasets

@@ -17,6 +17,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi import Request
+from moto.server import ThreadedMotoServer
 
 from catalog.core import namespace as namespace_module
 from catalog.core.config import Settings
@@ -39,14 +40,14 @@ def settings() -> Settings:
 
 @pytest.fixture
 def captured(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
-    """The properties handed to `lance_namespace.connect`, which is the whole contract under test."""
+    """The properties the directory namespace is built with, which is the whole contract under test."""
     seen: list[dict[str, str]] = []
 
-    def _connect(impl: str, properties: dict[str, str]) -> Any:
+    def _directory(session: object = None, **properties: str) -> Any:
         seen.append(dict(properties))
         return object()
 
-    monkeypatch.setattr(namespace_module, "connect", _connect)
+    monkeypatch.setattr(namespace_module, "DirectoryNamespace", _directory)
     return seen
 
 
@@ -96,47 +97,44 @@ async def test_the_resolver_carries_the_RECORDS_endpoint(
     assert resolved == dependencies.ServedWarehouse(root_uri="s3://tenant-bucket", endpoint=expected)
 
 
-def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500(settings: Settings, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500() -> None:
     """A store that will not answer is an OUTAGE, and a 500 says the catalog is broken when it is fine.
 
-    Measured live 2026-09-20 on the deployed catalog: a warehouse pointed at `http://127.0.0.1:1`
-    answered `500 InternalError code 18`, which sends whoever is on call to the wrong system. pylance
-    raises a BARE `ValueError` here — the same shape `open_resolved_dataset` already converts for a missing
-    dataset, and for the same reason.
+    Measured live 2026-09-20 on the deployed catalog: a warehouse pointed at `http://127.0.0.1:1` answered `500
+    InternalError code 18`, which sends whoever is on call to the wrong system. Built here on real pylance against that
+    address, where nothing listens.
 
-    WHICH STORE reaches the LOG, not the caller. `ns_errors` redacts every 5xx detail to "Internal
-    Server Error" on purpose — a 5xx is a fault and its text leaks, and an endpoint is exactly the
-    internal hostname that must not go out. So the assertion below is on the exception the handler
-    receives and on the log record, not on a wire body that will never carry it.
+    WHICH STORE reaches the exception the handler receives, not the wire: `ns_errors` redacts every 5xx detail.
     """
     from lance_namespace import ServiceUnavailableError
 
-    def _boom(impl: str, properties: dict[str, str]) -> Any:
-        raise ValueError(
-            "Failed to construct namespace impl lance.namespace.DirectoryNamespace: LanceError(IO): "
-            "Generic S3 error: Error performing list request: error sending request"
-        )
+    dead = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_S3_ENDPOINT="http://127.0.0.1:1", LANCE_REST_ROOT="s3://estate-root")
 
-    monkeypatch.setattr(namespace_module, "connect", _boom)
+    with pytest.raises(ServiceUnavailableError) as caught:
+        namespace_module.build_namespace_for_root(dead, "s3://tenant-bucket")
 
-    with pytest.raises(ServiceUnavailableError) as caught, caplog.at_level("WARNING"):
-        namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket")
-
-    assert "https://estate.example:9000" in str(caught.value), f"the refusal does not name the store: {caught.value}"
+    assert "http://127.0.0.1:1" in str(caught.value), f"the refusal does not name the store: {caught.value}"
 
 
-def test_a_NON_TRANSPORT_construction_failure_is_left_alone(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The control, and the reason the rule reads the error rather than catching ValueError.
+def test_a_store_that_ANSWERS_is_not_an_outage() -> None:
+    """The control, and the reason the rule reads the error rather than catching it: a store that answered said
+    something a retry will not change.
 
-    A bogus impl raises the same bare `ValueError` and is NOT an outage — measured, its message carries
-    no `LanceError(IO)`. Converting it to 503 would tell an operator to wait for a store to come back
-    when the configuration names a module that does not exist.
+    Measured on pylance 14.0.3 against a moto server: a root in a bucket that does not exist raises `LanceError(IO)`
+    carrying the store's `404 Not Found`. Converting it to 503 would tell an operator to wait for a store that is up; it
+    stays the error it is, which the app's handler answers 500 code 18 as it does on the estate's own root.
     """
+    from lance_namespace import ServiceUnavailableError
 
-    def _boom(impl: str, properties: dict[str, str]) -> Any:
-        raise ValueError("Failed to construct namespace impl no.such.Impl: No module named 'no'")
+    server = ThreadedMotoServer(port=0)
+    server.start()
+    try:
+        host, port = server.get_host_and_port()
+        store = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_S3_ENDPOINT=f"http://{host}:{port}", LANCE_REST_ROOT="s3://estate-root")
 
-    monkeypatch.setattr(namespace_module, "connect", _boom)
+        with pytest.raises(OSError, match="404 Not Found") as caught:
+            namespace_module.build_namespace_for_root(store, "s3://no-such-bucket")
+    finally:
+        server.stop()
 
-    with pytest.raises(ValueError, match="No module named"):
-        namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket")
+    assert not isinstance(caught.value, ServiceUnavailableError)

@@ -181,8 +181,8 @@ export const insertRows = command(
 // Schema evolution (#74: add / rename / drop / re-type a column, the field- and table-level property
 // writes) and index build/drop (#73) live in `remote/catalog.api.ts`, one function per operation.
 
-/** #74 tail — the scalar Arrow types the catalog's `_SCALAR_ARROW` map accepts as an alter_columns re-type
- * target. A cast Lance can't perform (e.g. string→int on non-numeric text) 400s at the catalog, surfaced. */
+/** #74 tail — scalar re-type targets for alter_columns, each spelled as DescribeTable spells a column's type
+ * (`JsonArrowDataType`). A cast Lance can't perform (e.g. utf8→int on non-numeric text) 400s at the catalog, surfaced. */
 export const RETYPE_TYPES = [
 	'int8',
 	'int16',
@@ -195,8 +195,8 @@ export const RETYPE_TYPES = [
 	'float16',
 	'float32',
 	'float64',
-	'string',
-	'large_string',
+	'utf8',
+	'large_utf8',
 	'bool',
 	'date32',
 	'date64',

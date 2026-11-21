@@ -13,6 +13,11 @@ Each field's metadata is read from Lance's own field, never from pyarrow's. pyar
 answers the storage type with ``ARROW:extension:name`` and ``ARROW:extension:metadata`` in the field's metadata, as Lance
 stores them (a tensor's ``{"shape":[2,2],"permutation":[0,1]}``). pylance's own ``schema_to_json`` is another format,
 which refuses a map.
+
+The alter door reads a column type in the same form (``AlterColumnsEntry.data_type``, "using JSON representation"), and
+:func:`arrow_type` reads it by the same tables. Every type the describe door answers reads back as itself, except a
+time, timestamp or duration (answered without its unit, so the name says no one type), a map (not read back), each of
+which a re-type refuses, and a dictionary (answered as its value type, so it reads back as that).
 """
 
 from __future__ import annotations
@@ -22,7 +27,7 @@ from typing import Any, Final, Protocol, cast
 
 import pyarrow as pa
 from lance.schema import LanceSchema
-from lance_namespace import InternalError
+from lance_namespace import InternalError, InvalidInputError
 
 
 class _LanceField(Protocol):
@@ -35,31 +40,33 @@ class _LanceField(Protocol):
     def children(self) -> Sequence[_LanceField]: ...
 
 
-#: The types the backend names alone, with no child fields and no length.
-_NAMED: Final[tuple[tuple[Callable[[pa.DataType], bool], str], ...]] = (
-    (pa.types.is_null, "null"),
-    (pa.types.is_boolean, "bool"),
-    (pa.types.is_int8, "int8"),
-    (pa.types.is_uint8, "uint8"),
-    (pa.types.is_int16, "int16"),
-    (pa.types.is_uint16, "uint16"),
-    (pa.types.is_int32, "int32"),
-    (pa.types.is_uint32, "uint32"),
-    (pa.types.is_int64, "int64"),
-    (pa.types.is_uint64, "uint64"),
-    (pa.types.is_float16, "float16"),
-    (pa.types.is_float32, "float32"),
-    (pa.types.is_float64, "float64"),
-    (pa.types.is_date32, "date32"),
-    (pa.types.is_date64, "date64"),
-    (pa.types.is_time32, "time32"),
-    (pa.types.is_time64, "time64"),
-    (pa.types.is_timestamp, "timestamp"),
-    (pa.types.is_duration, "duration"),
-    (pa.types.is_string, "utf8"),
-    (pa.types.is_large_string, "large_utf8"),
-    (pa.types.is_binary, "binary"),
-    (pa.types.is_large_binary, "large_binary"),
+#: The types the backend names alone, with no child fields and no length, each with the type the name alone reads back
+#: as. A time, timestamp or duration is named without its unit (and a timestamp without its zone), so its name reads
+#: back as no one type, and a re-type to it is refused rather than guessed.
+_NAMED: Final[tuple[tuple[Callable[[pa.DataType], bool], str, Callable[[], pa.DataType] | None], ...]] = (
+    (pa.types.is_null, "null", pa.null),
+    (pa.types.is_boolean, "bool", pa.bool_),
+    (pa.types.is_int8, "int8", pa.int8),
+    (pa.types.is_uint8, "uint8", pa.uint8),
+    (pa.types.is_int16, "int16", pa.int16),
+    (pa.types.is_uint16, "uint16", pa.uint16),
+    (pa.types.is_int32, "int32", pa.int32),
+    (pa.types.is_uint32, "uint32", pa.uint32),
+    (pa.types.is_int64, "int64", pa.int64),
+    (pa.types.is_uint64, "uint64", pa.uint64),
+    (pa.types.is_float16, "float16", pa.float16),
+    (pa.types.is_float32, "float32", pa.float32),
+    (pa.types.is_float64, "float64", pa.float64),
+    (pa.types.is_date32, "date32", pa.date32),
+    (pa.types.is_date64, "date64", pa.date64),
+    (pa.types.is_time32, "time32", None),
+    (pa.types.is_time64, "time64", None),
+    (pa.types.is_timestamp, "timestamp", None),
+    (pa.types.is_duration, "duration", None),
+    (pa.types.is_string, "utf8", pa.string),
+    (pa.types.is_large_string, "large_utf8", pa.large_string),
+    (pa.types.is_binary, "binary", pa.binary),
+    (pa.types.is_large_binary, "large_binary", pa.large_binary),
 )
 
 #: The types the backend answers with their child fields: a list's item, a struct's members, a map's entries struct.
@@ -99,7 +106,7 @@ def _field_json(field: pa.Field, stored: _LanceField | None) -> dict[str, Any]:
 def _type_json(data_type: pa.DataType, children: Sequence[_LanceField]) -> dict[str, Any]:
     if pa.types.is_dictionary(data_type):
         return _type_json(data_type.value_type, children)
-    for matches, name in _NAMED:
+    for matches, name, _ in _NAMED:
         if matches(data_type):
             return {"type": name}
     if pa.types.is_decimal128(data_type) or pa.types.is_decimal256(data_type):
@@ -117,6 +124,46 @@ def _type_json(data_type: pa.DataType, children: Sequence[_LanceField]) -> dict[
                 answered["length"] = data_type.list_size
             return answered
     raise InternalError(f"the column type {data_type} has no JSON form")
+
+
+def arrow_type(data_type: Mapping[str, Any]) -> pa.DataType:
+    """The Arrow type a ``JsonArrowDataType`` names, read by the tables :func:`table_schema_json` writes with: the named,
+    decimal, fixed-size binary, list, large list, fixed-size list and struct types. What the module docstring lists as
+    not round-tripping is refused or read as it says.
+
+    A name is read case aside, and ``boolean`` as ``bool``, as the namespace's own parser reads them: measured on pylance
+    14.0.3, ``DirectoryNamespace.alter_table_alter_columns`` parses ``INT64``, ``Int64``, ``FLOAT16`` and ``boolean`` and
+    refuses ``double`` and ``string``, which this refuses too.
+
+    Raises:
+        InvalidInputError: The name is no type this form spells, a nested type's fields are not the ones it holds, or the
+            name alone does not say which type it is.
+    """
+    spelled = data_type.get("type")
+    name = spelled.lower() if isinstance(spelled, str) else None
+    name = "bool" if name == "boolean" else name
+    length = data_type.get("length")
+    fields = [_arrow_field(field) for field in data_type.get("fields") or []]
+    for _, named, build in _NAMED:
+        if name == named and build is not None:
+            return build()
+    if name in ("decimal128", "decimal256") and isinstance(length, int):
+        return (pa.decimal128 if name == "decimal128" else pa.decimal256)(length // 1000, length % 1000)
+    if name == "fixed_size_binary" and isinstance(length, int):
+        return pa.binary(length)
+    if name in ("list", "large_list") and len(fields) == 1:
+        return pa.list_(fields[0]) if name == "list" else pa.large_list(fields[0])
+    if name == "fixed_size_list" and len(fields) == 1 and isinstance(length, int):
+        return pa.list_(fields[0], length)
+    if name == "struct" and fields:
+        return pa.struct(fields)
+    raise InvalidInputError(f"no column type is spelled {dict(data_type)!r}")
+
+
+def _arrow_field(field: Mapping[str, Any]) -> pa.Field:
+    if not isinstance(field, Mapping) or not isinstance(field.get("name"), str) or not isinstance(field.get("type"), Mapping):
+        raise InvalidInputError(f"a nested type's field is spelled {field!r}, not as a JsonArrowField")
+    return pa.field(field["name"], arrow_type(field["type"]), nullable=field.get("nullable", True) is not False)
 
 
 def _text(metadata: Mapping[bytes, bytes]) -> dict[str, str]:

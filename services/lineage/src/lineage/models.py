@@ -195,7 +195,13 @@ class Dataset(BaseModel):
         Every slot, not the first that holds it: the event is stored and forwarded whole, so a second copy is as much a
         claim as the first, and a reading that stopped at one would leave the other unchecked. A producer may repeat a
         facet across slots; what it names is the union. An entry with an empty name names no dataset and is left out.
+
+        The catalog's own ``rask_lance`` facet is refused in any slot unless it is an object, as a dataset facet is one
+        (``openlineage-python``'s ``Dataset.facets: dict[str, DatasetFacet]``): the ingest door stamps the uuids it
+        resolved into that object, and a value of another shape has none to hold them.
         """
+        if any(not isinstance(copy, dict) for copy in self.facet_copies(LANCE_FACET)):
+            raise ValueError(f"the {LANCE_FACET} facet of dataset {self.name!r} is not an object")
         self._column_upstreams = [entry for copy in self.facet_copies(_COLUMN_LINEAGE_FACET) for entry in _ColumnLineageFacet.model_validate(copy).upstreams]
         symlinked = [(entry.namespace, entry.name) for copy in self.facet_copies(SYMLINKS_FACET) for entry in _SymlinksFacet.model_validate(copy).identifiers]
         lifecycles = [_LifecycleStateChangeFacet.model_validate(copy).previous for copy in self.facet_copies(_LIFECYCLE_FACET)]

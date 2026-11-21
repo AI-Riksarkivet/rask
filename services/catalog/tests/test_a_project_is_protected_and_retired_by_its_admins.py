@@ -15,8 +15,10 @@ own ([[LH-235]]).
 from __future__ import annotations
 
 import logging
+from hashlib import blake2s
 from typing import Any
 
+import pyarrow.fs as pafs
 import pytest
 from announcement_filings import age_filings
 
@@ -25,7 +27,7 @@ from catalog.core.config import get_settings
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
 from lakehouse.naming import CONTROL_ID_RE
-from lakehouse.records import maintenance_policies
+from lakehouse.records import control_prefixes, maintenance_policies
 from lakehouse.storage import conditional_records
 from lakehouse.storage.objectfs import fs_and_base
 from tests import seeding
@@ -127,17 +129,26 @@ def test_only_its_admins_arm_and_clear_it(
 
 
 @pytest.mark.parametrize(
-    ("force", "answered", "read_after", "policy_after"),
+    ("force", "answered", "read_after", "left_behind"),
     [
         pytest.param("false", (409, "application/problem+json", 3, REFUSED_UNLESS_FORCED), 200, True, id="refused-unless-forced"),
         pytest.param("true", (200, {"project": PROJECT, "tuples_revoked": 3}), 404, False, id="forced"),
     ],
 )
-def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force: str, answered: tuple[Any, ...], read_after: int, policy_after: bool) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
-    """A delete that retires the project ends its maintenance policy too ([[LH-562]]): a project created again under the
-    id is another tenant, which a policy kept for the id would govern as soon as it named a bucket."""
+def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force: str, answered: tuple[Any, ...], read_after: int, left_behind: bool) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """A delete that retires the project ends its maintenance policy and its label definitions too ([[LH-562]], ADR 0211): a
+    project created again under the id is another tenant, which a policy kept for the id would govern as soon as it named a
+    bucket, and which a definition kept for the id would answer for. A definition record that cannot be read goes with the
+    project as well: it is the project's, whatever it holds, so the re-created project answers its name as one never
+    defined."""
     settings = get_settings()
-    seeding.put_policy(settings.registry_root, settings.storage_options(), {"kind": "project", "id": PROJECT, "buckets": ["acme-lake"], "retain_versions": 1})
+    root, so = settings.registry_root, settings.storage_options()
+    seeding.put_policy(root, so, {"kind": "project", "id": PROJECT, "buckets": ["acme-lake"], "retain_versions": 1})
+    fs, base = fs_and_base(root, so)
+    definitions = f"{base}/{control_prefixes.LABEL_DEFINITIONS}/{PROJECT}"
+    fs.create_dir(definitions)
+    with fs.open_output_stream(f"{definitions}/{blake2s(b'pii').hexdigest()}.json") as unreadable:
+        unreadable.write(b"\xff not json")
     armed = estate.client.post(f"/management/v1/projects/{PROJECT}/protection", json={"protected": True}, headers=estate.bearer(CO_ADMIN))
     assert armed.status_code == 200, armed.text
 
@@ -148,7 +159,16 @@ def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force
     else:
         assert (answer.status_code, answer.headers["content-type"], answer.json()["code"], answer.json()["detail"]) == answered
     assert estate.client.get(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(ADMIN)).status_code == read_after
-    assert (maintenance_policies.get_policy(settings.registry_root, settings.storage_options(), "project", PROJECT) is not None) is policy_after
+    assert (maintenance_policies.get_policy(root, so, "project", PROJECT) is not None) is left_behind
+    stored = [info for info in fs.get_file_info(pafs.FileSelector(definitions, allow_not_found=True)) if info.type == pafs.FileType.File]
+    assert bool(stored) is left_behind
+    if not left_behind:
+        assert estate.client.post("/management/v1/projects", json={"id": PROJECT}, headers=estate.bearer(ADMIN)).status_code == 200
+        assert estate.client.get(f"/management/v1/projects/{PROJECT}/labels", headers=estate.bearer(ADMIN)).json() == []
+        deleting = {
+            name: estate.client.post(f"/management/v1/projects/{PROJECT}/labels/{name}/delete", headers=estate.bearer(ADMIN)) for name in ("pii", "never")
+        }
+        assert [(resp.status_code, resp.json()["code"]) for resp in deleting.values()] == [(404, 4), (404, 4)], deleting["pii"].text
 
 
 @pytest.mark.parametrize(

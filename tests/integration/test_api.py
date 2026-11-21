@@ -539,15 +539,46 @@ def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, 
 
 
 def test_alter_columns_converts_json_arrow_type_to_pyarrow(real_ns_client: TestClient) -> None:
-    # A re-type carries `data_type` as a JsonArrowDataType dict; it must reach pylance as a real pa.DataType,
-    # not the JSON dict (which would 500 at the Rust boundary). float32→float16 is the documented vector case.
+    # A re-type carries `data_type` in the spec's JSON form (`JsonArrowDataType`), the form DescribeTable answers a
+    # column's type in; it must reach pylance as a real pa.DataType. float32→float16 is the documented vector case
+    # (`lance_docs/lance/guide/data_evolution.md` § Casting column data types); utf8→large_utf8 and
+    # list<int32>→large_list<int32> are casts pylance 14.0.3 performs (measured), each spelled as DescribeTable itself
+    # spells the type of a column that already holds it. A name is read as the namespace's own parser reads it, case
+    # aside and `boolean` for `bool`; `double` is a spelling that parser refuses, and so does the door (400, 13).
     _ensure_namespace(real_ns_client, "lance_catalog$db")
-    body = _arrow_ipc(pa.table({"id": pa.array([1, 2], pa.int64()), "embedding": pa.array([0.5, 1.5], pa.float32())}))
-    assert real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=body, headers=ARROW_STREAM).status_code == 200
-    resp = real_ns_client.post("/v1/table/lance_catalog$db$t/alter_columns", json={"alterations": [{"path": "embedding", "data_type": {"type": "float16"}}]})
+    rows = pa.table(
+        {
+            "embedding": pa.array([0.5, 1.5], pa.float32()),
+            "text": pa.array(["a", "b"], pa.string()),
+            "large_text": pa.array(["a", "b"], pa.large_string()),
+            "items": pa.array([[1], [2]], pa.list_(pa.int32())),
+            "large_items": pa.array([[1], [2]], pa.large_list(pa.int32())),
+            "count": pa.array([1, 2], pa.int32()),
+            "flag": pa.array([True, False]),
+        }
+    )
+    assert real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(rows), headers=ARROW_STREAM).status_code == 200
+    described = real_ns_client.post("/v1/table/lance_catalog$db$t/describe", json={"load_detailed_metadata": True}).json()
+    spelled = {field["name"]: field["type"] for field in described["schema"]["fields"]}
+    alterations = [
+        {"path": "embedding", "data_type": {"type": "float16"}},
+        {"path": "text", "data_type": spelled["large_text"]},
+        {"path": "items", "data_type": spelled["large_items"]},
+        {"path": "count", "data_type": {"type": "INT64"}},
+        {"path": "flag", "data_type": {"type": "boolean"}},
+    ]
+    refused = real_ns_client.post("/v1/table/lance_catalog$db$t/alter_columns", json={"alterations": [{"path": "embedding", "data_type": {"type": "double"}}]})
+    assert (refused.status_code, refused.json()["code"]) == (400, 13), refused.text
+    resp = real_ns_client.post("/v1/table/lance_catalog$db$t/alter_columns", json={"alterations": alterations})
     assert resp.status_code == 200, resp.text
-    location = real_ns_client.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["location"]
-    assert lance.dataset(location).schema.field("embedding").type == pa.float16()
+    schema = lance.dataset(described["location"]).schema
+    assert [schema.field(name).type for name in ("embedding", "text", "items", "count", "flag")] == [
+        pa.float16(),
+        pa.large_string(),
+        pa.large_list(pa.int32()),
+        pa.int64(),
+        pa.bool_(),
+    ]
 
 
 def test_alter_columns_unsupported_type_is_400_not_500(client: TestClient, monkeypatch) -> None:

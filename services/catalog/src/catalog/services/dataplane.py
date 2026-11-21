@@ -112,7 +112,7 @@ from lance_namespace import (
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api.pagination import paginate
-from catalog.core import encoding, formats, manifest_bytes, provenance_guard
+from catalog.core import encoding, formats, json_arrow, manifest_bytes, provenance_guard
 from catalog.core.config import shared_lance_session
 from catalog.core.identifiers import rename_destination
 from catalog.core.modes import CreateMode, InsertMode
@@ -2262,55 +2262,6 @@ def _delete_everything_under(location: str, so: StorageOptions, stored: str, spe
         raise OSError(f"{len(left)} object(s) remain under {location} after {_DELETE_PASSES} delete passes: {left[:5]}")
 
 
-# Scalar Arrow type names → pyarrow factory, for the alter_columns re-type path. A ``JsonArrowDataType``
-# carries a ``type`` name (+ optional ``fields``/``length`` for complex types); pylance's ``alter_columns``
-# needs a real ``pa.DataType``, so we convert. Covers the documented re-types (e.g. float32→float16 on an
-# embedding column); an unsupported/complex type raises a clear 400 instead of a silent Rust-boundary 500.
-_SCALAR_ARROW: dict[str, Callable[[], pa.DataType]] = {
-    "null": pa.null,
-    "bool": pa.bool_,
-    "boolean": pa.bool_,
-    "int8": pa.int8,
-    "int16": pa.int16,
-    "int32": pa.int32,
-    "int64": pa.int64,
-    "uint8": pa.uint8,
-    "uint16": pa.uint16,
-    "uint32": pa.uint32,
-    "uint64": pa.uint64,
-    "float16": pa.float16,
-    "halffloat": pa.float16,
-    "float32": pa.float32,
-    "float": pa.float32,
-    "float64": pa.float64,
-    "double": pa.float64,
-    "string": pa.string,
-    "utf8": pa.string,
-    "large_string": pa.large_string,
-    "binary": pa.binary,
-    "large_binary": pa.large_binary,
-    "date32": pa.date32,
-    "date64": pa.date64,
-}
-
-
-def _json_arrow_to_pa_type(dt: dict[str, Any]) -> pa.DataType:
-    """Convert a ``JsonArrowDataType`` dict (``{type, fields?, length?}``) to a ``pyarrow.DataType``.
-
-    Handles scalars + fixed-size-list (vector embeddings). An unsupported/complex type raises
-    ``InvalidInputError`` (400) rather than letting a dict reach pylance and fail as a 500 at the boundary.
-    """
-    name = str(dt.get("type") or "").lower()
-    factory = _SCALAR_ARROW.get(name)
-    if factory is not None:
-        return factory()
-    if name in ("fixed_size_list", "fixedsizelist"):
-        fields, length = dt.get("fields") or [], dt.get("length")
-        if fields and length:
-            return pa.list_(_json_arrow_to_pa_type(fields[0].get("type") or {}), int(length))
-    raise InvalidInputError(f"unsupported alter_columns data_type: {dt.get('type')!r}")
-
-
 #: Lance prefixes a caller-expression failure with this, whatever exception class it picks.
 _USER_INPUT_MARKER = "Invalid user input"
 #: The Rust source location Lance writes after each error it raises — ``, /home/runner/work/lance/lance/rust/…:150:14``.
@@ -3188,8 +3139,8 @@ def alter_columns(
             alteration["nullable"] = entry.nullable
         dt = getattr(entry, "data_type", None)
         if dt is not None:
-            # data_type is a JsonArrowDataType dict; pylance needs a real pa.DataType, not the JSON dict.
-            alteration["data_type"] = _json_arrow_to_pa_type(dt if isinstance(dt, dict) else dt.model_dump())
+            # data_type is the spec's JSON form of a type, read as the describe door writes it; pylance needs a pa.DataType.
+            alteration["data_type"] = json_arrow.arrow_type(dt if isinstance(dt, dict) else dt.model_dump())
         alterations.append(alteration)
     dataset = table.open(so, branch=req.branch)
     schema = dataset.schema

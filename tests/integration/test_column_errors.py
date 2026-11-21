@@ -114,7 +114,7 @@ def test_renaming_a_missing_column_is_a_404_column_not_found(table: TestClient) 
 def test_an_impossible_cast_is_a_400_that_names_the_cast(table: TestClient) -> None:
     """The column exists; the CAST is what cannot be done. The message names both types, which is what
     tells the caller whether to pick a different target type or rewrite the column."""
-    r = table.post("/v1/table/lance_catalog$c1$t/alter_columns", json={"alterations": [{"path": "id", "data_type": {"type": "string"}}]})
+    r = table.post("/v1/table/lance_catalog$c1$t/alter_columns", json={"alterations": [{"path": "id", "data_type": {"type": "utf8"}}]})
     assert r.status_code == 400, r.text
     body = _problem(r)
     assert body["code"] == 13, body

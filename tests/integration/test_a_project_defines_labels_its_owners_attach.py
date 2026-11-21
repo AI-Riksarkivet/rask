@@ -223,7 +223,7 @@ def test_a_member_finds_the_objects_carrying_a_label_among_those_it_may_see(real
     assert listed("alice") == [("namespace", SALES), ("table", ORDERS)]
 
 
-def test_a_label_is_deleted_once_no_standing_object_carries_it_and_never_comes_back(real_ns_client: TestClient, estate: Grants) -> None:
+def test_a_label_is_deleted_once_no_standing_object_carries_it_and_never_comes_back(real_ns_client: TestClient, estate: Grants, tmp_path: Path) -> None:
     """Deleting ``pii`` while a table carries it is refused NamespaceNotEmpty (409, 3) naming the table as it is named
     now, and a member is refused the delete (15). A table in the trash does not hold the definition: once the standing
     table's label is removed the delete lands, and the trashed table, restored after ``pii`` is defined again, shows no
@@ -248,7 +248,14 @@ def test_a_label_is_deleted_once_no_standing_object_carries_it_and_never_comes_b
     act_as(client, "bob")
     removed = client.post(f"/management/v1/table/{SALES}$ledger/labels/remove", json={"name": "pii"}, headers=AUTH)
     assert removed.json()["labels"] == {}
+    # A labels record that cannot be read may carry the label, so it is no evidence that nothing does: the delete is
+    # refused as the record's own state (500, 18), and the definition stands until the record is read or written again.
     act_as(client, "alice")
+    unreadable = tmp_path / "_labels" / "table-unreadable.json"
+    unreadable.write_bytes(b"\xff not json")
+    assert _code(client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete", headers=AUTH)) == (500, 18)
+    assert [d["name"] for d in client.get(f"/management/v1/projects/{PROJECT}/labels", headers=AUTH).json()] == ["pii"]
+    unreadable.unlink()
     assert client.post(f"/management/v1/projects/{PROJECT}/labels/pii/delete", headers=AUTH).status_code == 200
     assert client.get(f"/management/v1/projects/{PROJECT}/labels", headers=AUTH).json() == []
 

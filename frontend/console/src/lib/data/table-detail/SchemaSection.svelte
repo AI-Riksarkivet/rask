@@ -154,8 +154,8 @@
 								>
 								<button class="btn ghost" onclick={() => (renaming = null)}>×</button>
 							{:else if retyping === f.name}
-								<!-- #74 tail — re-type via alter_columns; the target is a scalar Arrow type the
-							     catalog's _SCALAR_ARROW map accepts. An impossible cast 400s and surfaces. -->
+								<!-- #74 tail — re-type via alter_columns; the target is a scalar type spelled as
+							     DescribeTable spells it. An impossible cast 400s and surfaces. -->
 								<div class="retype">
 									<Select
 										bind:value={retypeTo}

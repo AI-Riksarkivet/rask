@@ -38,10 +38,12 @@ from lance_namespace import InternalError, InvalidInputError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from lakehouse.naming import PLATFORM_PREFIX
+from lakehouse.problems.outage import store_refusal
 from lakehouse.records import control_prefixes
 from lakehouse.records.record_store import delete_record, get_record, list_records, record_key
 from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.stored_objects import list_under
 
 
 log = logging.getLogger(__name__)
@@ -235,14 +237,29 @@ def definitions(control_root: str, storage_options: StorageOptions, project: str
     return sorted(found, key=lambda defined: defined.name)
 
 
-def attachments(control_root: str, storage_options: StorageOptions, *, project: str) -> list[Attachment]:
-    """Every attachment record of ``project``'s objects, unordered. A record that cannot be read is skipped and logged."""
+def attachments(control_root: str, storage_options: StorageOptions, *, project: str, strict: bool = False) -> list[Attachment]:
+    """Every attachment record of ``project``'s objects, unordered.
+
+    A record that cannot be read is skipped and logged, which a listing of what is labelled may do. A caller deciding on a
+    label's ABSENCE passes ``strict``: an unreadable record names no project it can be left out of, and may carry the
+    label, so it is refused instead.
+
+    Raises:
+        ServiceUnavailableError: ``strict``, and the store did not answer the listing.
+        InternalError: ``strict``, and a record is there and cannot be read as one.
+    """
+    try:
+        records = list_records(control_root, storage_options, control_prefixes.LABELS, event="labels", strict=strict)
+    except (OSError, ValueError) as exc:
+        raise store_refusal(exc, reading="the labels records", so="which objects carry a label is not known") from exc
     found: list[Attachment] = []
-    for record in list_records(control_root, storage_options, control_prefixes.LABELS, event="labels"):
+    for record in records:
         try:
             attachment = Attachment.model_validate(record)
-        except ValidationError:
+        except ValidationError as exc:
             log.warning("labels_record_unreadable", extra={"uuid": record.get("uuid")})
+            if strict:
+                raise InternalError(f"the labels record of {record.get('uuid')!r} cannot be read as one; write the labels again") from exc
             continue
         if attachment.project == project:
             found.append(attachment)
@@ -250,8 +267,11 @@ def attachments(control_root: str, storage_options: StorageOptions, *, project: 
 
 
 def carriers(control_root: str, storage_options: StorageOptions, defined: LabelDefinition) -> list[Attachment]:
-    """Every attachment record of the project that carries the label ``defined``, judged against that definition."""
-    return [attachment for attachment in attachments(control_root, storage_options, project=defined.project) if carries(attachment, defined)]
+    """Every attachment record of the project that carries the label ``defined``, judged against that definition.
+
+    Read strictly (:func:`attachments`): its caller deletes the definition when this answers none.
+    """
+    return [attachment for attachment in attachments(control_root, storage_options, project=defined.project, strict=True) if carries(attachment, defined)]
 
 
 def carries(attachment: Attachment, defined: LabelDefinition) -> bool:
@@ -265,11 +285,19 @@ def delete_definition(control_root: str, storage_options: StorageOptions, define
 
 
 def end_definitions(control_root: str, storage_options: StorageOptions, project: str) -> int:
-    """Delete every definition ``project`` holds, once the project goes; how many went."""
-    ended = 0
-    for defined in definitions(control_root, storage_options, project):
-        ended += delete_record(control_root, storage_options, _definition_key(project, defined.name))
-    return ended
+    """Delete every definition record ``project`` holds, once the project goes; how many went.
+
+    By key, never by what a record says: every key under ``_label_definitions/<project>/`` is the project's, so a record
+    that cannot be read goes with it, and a project created again under the id finds none.
+
+    Raises:
+        OSError: The store refused the listing or a delete; the project's delete stays recorded for its retry.
+    """
+    prefix = f"{control_prefixes.LABEL_DEFINITIONS}/{project}"
+    names = [
+        name for stored in list_under(f"{control_root.rstrip('/')}/{prefix}", storage_options) if (name := stored.path.rsplit("/", 1)[-1]).endswith(".json")
+    ]
+    return sum(delete_record(control_root, storage_options, f"{prefix}/{name}") for name in names)
 
 
 def _attachment(record: Mapping[str, Any], *, key: str) -> Attachment:

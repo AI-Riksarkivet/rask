@@ -57,14 +57,38 @@ _DIRECTORY = "dir"
 def build_namespace(settings: Settings, *, plane: StorePlane = "metadata") -> LanceNamespace:
     """The estate-rooted namespace connection, its object-store calls bounded for ``plane`` (`CatalogReadBounds`).
 
-    The directory namespace opens on the process's shared Lance session, which pylance 13.0.0's ``DirectoryNamespace``
-    takes to share its object stores with every table the catalog opens (``lance.namespace.DirectoryNamespace``);
-    ``lance_namespace.connect`` passes none, so each connection kept stores of its own.
+    Built as every connection is (:func:`_connected`), on the process's shared Lance session.
     """
-    properties = settings.namespace_properties(plane=plane)
-    if settings.impl == _DIRECTORY:
-        return DirectoryNamespace(session=shared_lance_session(), **properties)
-    return connect(settings.impl, properties)
+    return _connected(settings, settings.namespace_properties(plane=plane), root=settings.root)
+
+
+def _connected(settings: Settings, properties: dict[str, str], *, root: str) -> LanceNamespace:
+    """The connection ``properties`` describe, on the process's shared Lance session, with a store that did not answer as 503.
+
+    ONE SESSION FOR EVERY CONNECTION: a directory namespace built without one opens its manifest table on a session of its
+    own at Lance's default ceilings (`lance_docs/lance/guide/performance.md` § Metadata Cache, § Index Cache: 1 GiB and
+    6 GiB). Measured on pylance 14.0.3: a create and three list-and-describe rounds through
+    ``DirectoryNamespace(session=s)`` grew ``s.size_bytes()`` from 152 to 51,883, and the same through
+    ``lance_namespace.connect("dir", ...)``, which constructs with properties alone, left it at 152.
+
+    A STORE THAT WILL NOT ANSWER IS AN OUTAGE, NOT A BROKEN CATALOG, judged as every other store call is
+    (:func:`lakehouse.problems.outage.reads_as_store_outage`). An answer the store gave is not one: measured on pylance
+    14.0.3 against a moto server, a root in a bucket that does not exist raises ``LanceError(IO)`` carrying the store's
+    ``404 Not Found``, which a retry will not clear, so it stays the fault it is. Which store reaches the log, not the
+    caller: ``ns_errors`` redacts every 5xx detail, and an endpoint is an internal hostname.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer the connection.
+    """
+    try:
+        if settings.impl == _DIRECTORY:
+            return DirectoryNamespace(session=shared_lance_session(), **properties)
+        return connect(settings.impl, properties)
+    except (OSError, ValueError) as exc:
+        if not reads_as_store_outage(exc):
+            raise
+        log.warning("namespace_store_unreachable", extra={"root": root, "endpoint": settings.s3_endpoint, "error": str(exc)[:200]})
+        raise ServiceUnavailableError(f"the object store for {root!r} is unreachable at {settings.s3_endpoint!r}") from exc
 
 
 type _ConnectionKey = tuple[S3KeyPair, str, str | None, StorePlane]
@@ -150,30 +174,7 @@ def build_namespace_for_root(settings: Settings, root_uri: str, *, endpoint: str
         ServiceUnavailableError: The estate's store did not answer the connection.
     """
     require_estate_store(endpoint, estate=settings.s3_endpoint, subject=f"the warehouse rooted at {root_uri!r}")
-    target = settings.s3_endpoint
-    try:
-        return connect(settings.impl, settings.namespace_properties(root=root_uri, plane=plane))
-    except ValueError as exc:
-        # A STORE THAT WILL NOT ANSWER IS AN OUTAGE, NOT A BROKEN CATALOG. pylance raises a bare
-        # `ValueError` for every construction failure, so an unreachable warehouse store surfaced as
-        # `500 InternalError` — measured on the deployed catalog 2026-09-20, a warehouse pointed at a
-        # dead endpoint — which sends whoever is on call to the wrong system. Same conversion, and the
-        # same reasoning, as the missing-dataset case below.
-        #
-        # READ THE ERROR, never just the type: `LanceError(IO)` marks the transport failure, and a
-        # construction failure WITHOUT it is not an outage (measured: a bogus impl says "No module
-        # named 'no'"). Telling an operator to wait for a store to come back when the configuration
-        # names a module that does not exist is the wrong answer delivered confidently.
-        #
-        # WHICH STORE reaches the LOG, not the caller, and that split is the estate's rule rather than
-        # an oversight: `ns_errors` redacts every 5xx detail to "Internal Server Error" because those
-        # are faults whose text leaks — and an endpoint is exactly the internal hostname that must not
-        # go out on the wire. So the caller learns the store is unavailable (which is what 503 is FOR,
-        # and what a 500 got wrong) and the operator gets the address from here.
-        if "LanceError(IO)" not in str(exc):
-            raise
-        log.warning("warehouse_store_unreachable", extra={"root": root_uri, "endpoint": target, "error": str(exc)[:200]})
-        raise ServiceUnavailableError(f"the object store for {root_uri!r} is unreachable at {target!r}") from exc
+    return _connected(settings, settings.namespace_properties(root=root_uri, plane=plane), root=root_uri)
 
 
 def _branch_checkout_error(

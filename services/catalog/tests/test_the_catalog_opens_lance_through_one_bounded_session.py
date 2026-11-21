@@ -22,6 +22,8 @@ What this file pins is what is specific to the catalog's own session.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 
@@ -46,3 +48,24 @@ def test_the_session_is_ONE_object_across_calls(catalog_env: None) -> None:
     from catalog.core.config import shared_lance_session
 
     assert shared_lance_session() is shared_lance_session()
+
+
+def test_a_warehouse_rooted_namespace_caches_in_the_shared_session(catalog_env: None, tmp_path: Path) -> None:
+    """A warehouse's connection reads its manifest table through the bounded session, not a session of its own.
+
+    `lance.Session.size_bytes()` is the only reading pylance 14.0.3 exposes of a session's caches, so the claim is read
+    off it: a namespace built on another session leaves the shared one exactly where it was.
+    """
+    from lance_namespace import CreateNamespaceRequest, ListNamespacesRequest
+
+    from catalog.core.config import get_settings, shared_lance_session
+    from catalog.core.namespace import build_namespace_for_root
+
+    session = shared_lance_session()
+    before = session.size_bytes()
+
+    namespace = build_namespace_for_root(get_settings(), str(tmp_path / "warehouse"))
+    namespace.create_namespace(CreateNamespaceRequest(id=["a"]))
+    namespace.list_namespaces(ListNamespacesRequest(id=[]))
+
+    assert session.size_bytes() > before
