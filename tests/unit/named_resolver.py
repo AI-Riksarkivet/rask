@@ -14,9 +14,11 @@ import uuid
 from collections.abc import Callable
 from typing import override
 
+from fastapi import Request
 from lance_namespace import LanceNamespace
 
 from catalog.api.dependencies import Resolver
+from catalog.core.config import Settings
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.records.trash import TrashRecord
 
@@ -57,7 +59,7 @@ class NamedResolver(Resolver):
         )
 
     @override
-    async def namespace_uuid(self, segments: list[str]) -> str | None:
+    async def namespace_uuid(self, segments: list[str], *, ns: LanceNamespace | None = None) -> str | None:
         return None if not segments or tuple(segments) in self._absent else uuid_of("namespace", segments)
 
     @override
@@ -79,3 +81,9 @@ class NamedResolver(Resolver):
     @override
     async def admitted_trash(self, kind: str, segments: list[str]) -> list[TrashRecord]:
         return self._admitted_trash.get((kind, tuple(segments)), await self.trashed(kind, segments))
+
+
+def door_resolver(settings: Settings) -> Resolver:
+    """The catalog's own resolver for a request no router resolved a name for, for a test that calls a door directly:
+    the door reads each name once, through the connection it hands the resolver."""
+    return Resolver(Request({"type": "http"}), settings)

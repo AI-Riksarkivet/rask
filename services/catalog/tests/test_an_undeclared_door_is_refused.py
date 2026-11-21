@@ -135,7 +135,7 @@ class _EveryNameHolds(Resolver):
     async def table(self, segments: list[str], *, ns: LanceNamespace | None = None) -> ResolvedTable:
         return ResolvedTable(segments=segments, location=f"memory://{self._uuid('table', segments)}")
 
-    async def namespace_uuid(self, segments: list[str]) -> str | None:
+    async def namespace_uuid(self, segments: list[str], *, ns: LanceNamespace | None = None) -> str | None:
         return self._uuid("namespace", segments) if segments else None
 
     async def object(self, kind: str, segments: list[str]) -> str | None:

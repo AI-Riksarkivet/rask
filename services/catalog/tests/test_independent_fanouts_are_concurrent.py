@@ -36,6 +36,7 @@ from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
 from catalog.services import table_claims
 from lakehouse.events.control_events import ControlUuids
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import location_claims
 from lakehouse.storage.options import StorageOptions
 
@@ -117,15 +118,17 @@ def test_the_trash_subtree_describes_every_table_concurrently(tmp_path: Path, mo
             claims, f"s3://bkt/{item.segments[-1]}.lance", "$".join(item.segments), item.segments, is_gone=lambda _claim: False, uuid=item.uuid
         )
 
+    own = ControlUuids(object_uuid=str(uuid4()))
+
     def native_call(_ns: Any, op: str, req: Any) -> Any:
         calls.append(op)
         if op == "describe_table":
             return _slow(tracker, SimpleNamespace(location=f"s3://bkt/{req.id[-1]}.lance"))()
-        return SimpleNamespace(properties=None)
+        # The cascaded namespace, as it stands under the uuid the door identified it by.
+        return SimpleNamespace(properties={UUID_PROPERTY: own.object_uuid})
 
     monkeypatch.setattr(n_ep.native, "call", native_call)
     monkeypatch.setattr(n_ep.trash, "put", lambda *_a, **_kw: None)
-    own = ControlUuids(object_uuid=str(uuid4()))
 
     asyncio.run(n_ep._trash_subtree(cast("LanceNamespace", object()), settings, None, ["bronze"], descendants, own=own, grace_days=7))
 

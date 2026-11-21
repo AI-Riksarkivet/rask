@@ -144,9 +144,24 @@ Two contracts stack here, and confusing them is how bugs happen:
   backend's own resolution of the name, one describe later; a native read is unguarded only against the name leaving the
   location and returning to it within the one call: a recoverable drop (of the table, or of its namespace's cascade),
   another table created under the name and gone again, then the undrop, which leave the claim's bytes, and so its ETag,
-  as they were. Pinned by `services/catalog/tests/test_a_door_acts_only_on_the_table_its_name_resolved_to.py`, which
+  as they were. Pinned by `services/catalog/tests/test_a_door_acts_only_on_the_object_its_name_resolved_to.py`, which
   lands a drop and a re-create after the router authorized each door, and, on a handle write and a native read, a
-  recoverable drop and a create, and a deregister and a register at the same location.
+  recoverable drop and a create, and a deregister and a register at the same location. A namespace door reads its
+  namespace through `fga_deps.identify_namespace(resolver, …)`, the uuid the router judged, and asks
+  `fga_deps.require_namespace_as_identified` before it acts (409 code 14 once the name holds another); the same file
+  races its drop, protection and policy doors, and a cascade raced after that check at its root. A cascade asks again
+  as its walk reaches each namespace: the recoverable one compares what it describes before each drop with the uuid it
+  listed, the destroying one re-reads its root before the root's drop. `fga_deps.standing` reads afresh, for a walker
+  under an authorized container and a door confirming after its write. Residual, stated: the backend drops a namespace
+  by name only (`DropNamespaceRequest` has no identity condition, `lance_docs/ns_catalog/spec.yaml:2600`), so a drop
+  and a create landing within the one read before a native drop still reach the new namespace: at the Restrict drop
+  (its check precedes the announcement's filing and the drop's describe, because a refusal inside the filing would leave
+  it for the finish to announce the replaced namespace's drop under this door), at Overwrite's drop, and at each
+  namespace a cascade drops. The destroying cascade's descendant namespaces are dropped unchecked by name. A refusal
+  part-way through a cascade leaves the tables and namespaces already removed as the walk listed them (each table under
+  its fence), and its filing is settled by the finish from what the store shows: each table it removed is announced, and
+  so is the root's drop, under this door, though another request dropped the root (`NamespaceResolves` holds once the
+  name names another namespace).
 - **Every table and namespace has a uuid the catalog mints** ([[LH-519]], ADR 0173). A table's lives in its location
   claim: create, declare and register mint it (`table_claims.claim_new_table`; a declaration takes its claim before any
   backend call, and a failed one removes its marker and releases the claim, [[LH-520]]), a create into a table an
@@ -742,7 +757,8 @@ governing their data. The project-scoped surface is the console's project page, 
   maintenance's due record, an erasure obligation and its release (each naming `uuid`/`table_uuid`),
   maintenance's policy cadence stamps and its copy of the table's commit records (`_maintenance_files/`, which
   `file_identities.end` deletes with the records). A door resolves the uuid from the name it is addressed by
-  (`ResolvedTable.require_uuid`, `fga_deps.identify`) and refuses `InternalError` for an object that records none,
+  as the request resolved it (`ResolvedTable.require_uuid`, `fga_deps.identify_namespace`; a deliberate fresh read is
+  `fga_deps.standing`) and refuses `InternalError` for an object that records none,
   never reading it as unprotected. A rename moves no record and no grant, only its data directories' claims (and, into
   another namespace, its parent edge); a table created later under a dropped name holds a new uuid and inherits nothing,
   even where an ending was lost. Every door that ends an object (drop, deregister, a cascade, the trash purge) ends that

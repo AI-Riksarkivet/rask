@@ -35,7 +35,7 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, ResolvedTableDep, SettingsDep
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, ResolvedTableDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
@@ -109,7 +109,7 @@ async def _describe(settings: CatalogStore, *, kind: LabelScope, segments: Seque
 async def _uuid_now(ns: LanceNamespace, settings: CatalogStore, kind: LabelScope, segments: Sequence[str]) -> str | None:
     """The uuid of the object the name holds now, ``None`` when it holds none."""
     try:
-        return (await fga_deps.identify(ns, settings, kind, list(segments))).uuid
+        return (await fga_deps.standing(ns, settings, kind, list(segments))).uuid
     except (TableNotFoundError, NamespaceNotFoundError):
         return None
 
@@ -206,35 +206,37 @@ async def remove_table_label(
     return await _remove(settings, control, token, body, kind="table", segments=table.segments, uuid=table.require_uuid())
 
 
-async def _namespace(id: str, ns: NamespaceDep, settings: CatalogStore) -> fga_deps.GovernedObject:
+async def _namespace(id: str, resolver: Resolver, ns: LanceNamespace) -> fga_deps.GovernedObject:
     segments = parse_identifier(id)
     if len(segments) < 2:
         raise InvalidInputError("labels attach to a namespace inside a warehouse, not to the root or a warehouse")
-    return await fga_deps.identify(ns, settings, "namespace", segments)
+    return await fga_deps.identify_namespace(resolver, ns, segments)
 
 
 @namespace_router.post("/{id}/labels/describe", response_model_exclude_none=True)
-async def describe_namespace_labels(id: str, ns: NamespaceDep, settings: SettingsDep) -> ObjectLabelsResponse:
+async def describe_namespace_labels(id: str, ns: NamespaceDep, settings: SettingsDep, resolver: ResolverDep) -> ObjectLabelsResponse:
     """The labels the namespace carries. Read at ``can_get_metadata``."""
-    namespace = await _namespace(id, ns, settings)
+    namespace = await _namespace(id, resolver, ns)
     return await _describe(settings, kind="namespace", segments=namespace.segments, uuid=namespace.uuid)
 
 
 @namespace_router.post("/{id}/labels/set", response_model_exclude_none=True)
 async def set_namespace_label(
-    id: str, body: SetLabelRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep
+    id: str, body: SetLabelRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
 ) -> ObjectLabelsResponse:
     """Attach a label the namespace's project defines; the namespace's labels after. Asked at ``can_label``."""
-    namespace = await _namespace(id, ns, settings)
+    namespace = await _namespace(id, resolver, ns)
+    await fga_deps.require_namespace_as_identified(ns, namespace)
     return await _set(ns, settings, control, token, body, kind="namespace", segments=namespace.segments, uuid=namespace.uuid, location=None)
 
 
 @namespace_router.post("/{id}/labels/remove", response_model_exclude_none=True)
 async def remove_namespace_label(
-    id: str, body: RemoveLabelRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep
+    id: str, body: RemoveLabelRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
 ) -> ObjectLabelsResponse:
     """Remove a label from the namespace (idempotent). Asked at ``can_label``."""
-    namespace = await _namespace(id, ns, settings)
+    namespace = await _namespace(id, resolver, ns)
+    await fga_deps.require_namespace_as_identified(ns, namespace)
     return await _remove(settings, control, token, body, kind="namespace", segments=namespace.segments, uuid=namespace.uuid)
 
 

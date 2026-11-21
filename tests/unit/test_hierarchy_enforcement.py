@@ -17,6 +17,7 @@ from typing import Any
 from lance_namespace import NamespaceNotFoundError
 
 from catalog.api.fga_deps import GovernedObject
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import base_registry, location_claims
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
@@ -54,6 +55,12 @@ class _RecordingNs:
         if ident not in self._existing:
             raise NamespaceNotFoundError(f"Namespace not found: {ident}")
         return type("R", (), {"model_fields_set": set()})()
+
+    def describe_namespace(self, request: Any) -> Any:
+        from lance_namespace import DescribeNamespaceResponse
+
+        # The uuid the tests below name each namespace by: `uuid-<name>`.
+        return DescribeNamespaceResponse(properties={UUID_PROPERTY: f"uuid-{'$'.join(request.id)}"})
 
     def describe_table(self, request: Any) -> Any:
         from lance_namespace import DescribeTableResponse

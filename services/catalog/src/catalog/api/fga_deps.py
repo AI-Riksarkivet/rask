@@ -2005,8 +2005,55 @@ class GovernedObject(BaseModel):
         return fga_ids.object_of(self.kind, self.uuid)
 
 
-async def identify(ns: LanceNamespace, settings: CatalogStore, kind: Literal["table", "namespace"], segments: list[str]) -> GovernedObject:
-    """The object ``segments`` names now, with its uuid.
+async def identify_namespace(resolver: Resolver, ns: LanceNamespace, segments: list[str]) -> GovernedObject:
+    """The namespace ``segments`` names as this request resolved it, with its uuid: the one the router authorized, so a
+    door keeps every record under the uuid its caller was judged on (ADR 0173 §7), as a table door does through
+    ``ResolvedTableDep``; ``ns``, the door's connection, is read only where the request resolved no such name yet. A
+    door that acts on the namespace by name asks :func:`require_namespace_as_identified` first.
+
+    Raises:
+        NamespaceNotFoundError: No such namespace.
+        UnidentifiedObjectError: The namespace carries no uuid, which no door leaves.
+    """
+    uuid = await resolver.namespace_uuid(segments, ns=ns)
+    if uuid is None:
+        raise NamespaceNotFoundError(f"namespace not found: {segments}")
+    return GovernedObject(kind="namespace", segments=segments, uuid=uuid)
+
+
+async def require_namespace_as_identified(ns: LanceNamespace, namespace: GovernedObject) -> None:
+    """Refuse a door about to act on ``namespace`` by name once that name holds another namespace, or none.
+
+    The backend addresses a namespace by name alone (``DropNamespaceRequest`` names no uuid, `spec.yaml`), so a drop and
+    a create landing after the request was authorized would have the door act on a namespace its caller was never
+    judged on. The same refusal as a create's parent that changed (:class:`ParentChangedError`): a retry is judged
+    afresh, on the namespace the name holds then.
+
+    Raises:
+        ConcurrentModificationError: The name holds another namespace, or none.
+    """
+    standing = await run_in_threadpool(object_uuids.resolve_namespace_uuid, ns, namespace.segments)
+    require_standing_as_identified(namespace.segments, identified=namespace.uuid, standing=standing)
+
+
+def require_standing_as_identified(segments: list[str], *, identified: str, standing: str | None) -> None:
+    """:func:`require_namespace_as_identified` on a uuid its caller has just read for ``segments`` (``standing``), for a
+    walk that describes each namespace before it drops it.
+
+    Raises:
+        ConcurrentModificationError: ``standing`` is not ``identified``.
+    """
+    if standing != identified:
+        name = fga_ids.canonical_object_id(segments)
+        log.warning("door_refused_namespace_changed", extra={"object": name, "identified": identified, "standing": standing})
+        raise ConcurrentModificationError(f"namespace {name} was dropped or replaced while this request acted on it; retry")
+
+
+async def standing(ns: LanceNamespace, settings: CatalogStore, kind: Literal["table", "namespace"], segments: list[str]) -> GovernedObject:
+    """The object ``segments`` names now, read afresh: for a walker enumerating what lies under the container its
+    request was authorized on, and for a door confirming after it acted that the name still holds its object. A door
+    acting on the object its request names reads it as the request resolved it: :func:`identify_namespace`, or
+    ``ResolvedTableDep`` for a table.
 
     Raises:
         TableNotFoundError: No such table.

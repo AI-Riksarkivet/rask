@@ -15,6 +15,12 @@ a door that judged the location alone would act on it. A write Lance serves only
 again as it is made, so a drop and a create also land as the door makes one, after every open it made. A route mounted
 for both POST and GET is one handler, so it is driven once.
 
+A namespace door is held to the same rule: the router authorizes it on the uuid the request's resolution read, and the
+door keeps every record under that uuid and acts by name only while the name still holds it. Bob, granted `owner` on
+alice's `lance_catalog$db`, drops it, protects it or sets its policy once the router has authorized him, and alice drops
+and re-creates `lance_catalog$db` in that gap: the door answers 409 code 14 and the namespace alice created is left as
+she made it. Unraced, the same door acts.
+
 Every decision is the real model's, on a store of this test's own ([[LH-235]]); every tuple is the one the door writes.
 """
 
@@ -226,3 +232,95 @@ def test_a_door_raced_by_a_drop_and_a_re_create_acts_on_no_other_table(
     assert answered.status_code == 409, f"the door acted on the table created under the name after it resolved: {answered.status_code} {answered.text}"
     assert answered.json().get("code") == ConcurrentModificationError.code, answered.json()
     assert _as_alice_made_it(estate) == made[0], "the door changed the table alice created under the name"
+
+
+_NAMESPACE = "/v1/namespace/lance_catalog$db"
+_MANAGED_NAMESPACE = "/management/v1/namespace/lance_catalog$db"
+
+#: Every door that acts on a namespace the router judged by its name, as bob sends it: (path, body).
+_NAMESPACE_DOORS = [
+    pytest.param(f"{_NAMESPACE}/drop", {}, id="drop"),
+    pytest.param(f"{_NAMESPACE}/drop", {"behavior": "Cascade"}, id="cascade-drop"),
+    pytest.param(f"{_MANAGED_NAMESPACE}/protection", {"protected": True}, id="protect"),
+    pytest.param(f"{_MANAGED_NAMESPACE}/policy/set", {"retain_versions": 3}, id="set-policy"),
+    pytest.param(f"{_MANAGED_NAMESPACE}/policy/delete", {}, id="delete-policy"),
+]
+
+
+def _namespace_as_alice_made_it(catalog: Any) -> dict[str, Any]:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """What alice reads of the namespace `lance_catalog$db` names: its properties (its uuid among them), its protection and its policy."""
+    alice = catalog.bearer("alice")
+    answers = {
+        "described": catalog.client.post(f"{_NAMESPACE}/describe", json={}, headers=alice),
+        "protection": catalog.client.get(f"{_MANAGED_NAMESPACE}/protection", headers=alice),
+        "policy": catalog.client.post(f"{_MANAGED_NAMESPACE}/policy/describe", json={}, headers=alice),
+    }
+    return {read: (answer.status_code, answer.json()) for read, answer in answers.items()}
+
+
+@pytest.mark.parametrize(
+    ("path", "sent", "race"),
+    [pytest.param(*door.values, "router", id=str(door.id)) for door in _NAMESPACE_DOORS]
+    + [
+        pytest.param(f"{_NAMESPACE}/drop", {"behavior": "Cascade"}, "door", id="cascade-drop-raced-at-its-root"),
+        pytest.param(f"{_NAMESPACE}/drop", {}, None, id="drop-unraced"),
+    ],
+)
+def test_a_namespace_door_raced_by_a_drop_and_a_re_create_acts_on_no_other_namespace(
+    governed_catalog: Any,  # noqa: ANN401 — the conftest's GovernedCatalog
+    monkeypatch: pytest.MonkeyPatch,
+    path: str,
+    sent: dict[str, Any],
+    race: str | None,
+) -> None:
+    """``race`` is where alice's drop and re-create land: after the router (``router``), or after the door's own check
+    of the name and before the cascade's walk reaches its root (``door``), so the walk's last read is what refuses it."""
+    from catalog.main import app
+
+    catalog = governed_catalog
+    assert catalog.create_in_the_estate("alice", "db").status_code == 200
+    _ok(catalog, f"{_MANAGED_NAMESPACE}/access/grant", json={"user": "dex~bob", "relation": "owner"})
+    _ok(catalog, f"{_MANAGED_NAMESPACE}/policy/set", json={"retain_versions": 5})
+    before = _namespace_as_alice_made_it(catalog)
+    pending = [True] if race is not None else []
+    made: list[dict[str, Any]] = []
+
+    def _drop_and_create_again() -> None:
+        # One shot, disarmed before it sends anything: alice's own requests are authorized through here too.
+        if not pending:
+            return
+        pending.clear()
+        _ok(catalog, f"{_NAMESPACE}/drop", json={})
+        assert catalog.create_in_the_estate("alice", "db").status_code == 200
+        _ok(catalog, f"{_MANAGED_NAMESPACE}/policy/set", json={"retain_versions": 5})
+        made.append(_namespace_as_alice_made_it(catalog))
+
+    async def _authorize_then_race(request: Request, settings: SettingsDep, token: CurrentToken, injected: FgaClientDep, resolver: ResolverDep) -> None:
+        await fga_deps.authorize(request, settings, token, injected, resolver)
+        await run_in_threadpool(_drop_and_create_again)
+
+    if race == "door":
+        checked = fga_deps.require_namespace_as_identified
+
+        async def _checked_then_race(*args: Any, **kwargs: Any) -> None:  # noqa: ANN401 — forwards the check's own arguments
+            await checked(*args, **kwargs)
+            await run_in_threadpool(_drop_and_create_again)
+
+        monkeypatch.setattr(fga_deps, "require_namespace_as_identified", _checked_then_race)
+    else:
+        app.dependency_overrides[fga_deps.authorize] = _authorize_then_race
+
+    answered = catalog.client.post(path, json=sent, headers=catalog.bearer("bob"))
+
+    if race is None:
+        assert answered.status_code == 200, f"the door refused the namespace it was authorized on: {answered.status_code} {answered.text}"
+        # Alice holds nothing above the name, so its absence is answered her as a refusal ([[LH-236]]).
+        assert _namespace_as_alice_made_it(catalog)["described"][0] == 403, "the drop left the namespace standing"
+        return
+    assert made, f"the rival never landed between bob's authorization and the door: {answered.status_code} {answered.text}"
+    assert made[0] != before, "the rival left the namespace it replaced"
+    assert answered.status_code == 409, (
+        f"the door acted on the namespace created under the name after it was authorized: {answered.status_code} {answered.text}"
+    )
+    assert answered.json().get("code") == ConcurrentModificationError.code, answered.json()
+    assert _namespace_as_alice_made_it(catalog) == made[0], "the door changed the namespace alice created under the name"

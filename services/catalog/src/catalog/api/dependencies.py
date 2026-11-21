@@ -346,17 +346,20 @@ class Resolver:
         reads, which this request's earlier resolution of the name would not."""
         return await run_in_threadpool(table_claims.resolve, await self._connection(segments), table_claims.claim_store(self._settings), list(segments))
 
-    async def namespace_uuid(self, segments: list[str]) -> str | None:
-        """The uuid of the namespace ``segments`` names, or ``None`` when no namespace has that name (or for the root).
+    async def namespace_uuid(self, segments: list[str], *, ns: LanceNamespace | None = None) -> str | None:
+        """The uuid of the namespace ``segments`` names, or ``None`` when no namespace has that name (or for the root)
+        (``ns``: the connection to read it through).
 
         Raises:
             UnidentifiedObjectError: The namespace carries no uuid, which no door leaves.
         """
         key = tuple(segments)
         if key not in self._namespaces:
-            self._namespaces[key] = (
-                await run_in_threadpool(object_uuids.resolve_namespace_uuid, await self._connection(segments), list(segments)) if segments else None
-            )
+            if segments:
+                connection = ns if ns is not None else await self._connection(segments)
+                self._namespaces[key] = await run_in_threadpool(object_uuids.resolve_namespace_uuid, connection, list(segments))
+            else:
+                self._namespaces[key] = None
         return self._namespaces[key]
 
     async def object(self, kind: str, segments: list[str]) -> str | None:

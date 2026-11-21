@@ -812,7 +812,7 @@ async def _cascade_subtrees(ns: LanceNamespace, settings: CatalogStore, held: li
     for name in held:
         segments = parse_identifier(name)
         try:
-            namespace = await fga_deps.identify(ns, settings, "namespace", segments)
+            namespace = await fga_deps.standing(ns, settings, "namespace", segments)
             listed = await run_in_threadpool(namespaces_api._collect_descendants, ns, segments)  # noqa: SLF001 — one walker, deliberately
         except NamespaceNotFoundError:
             subtrees.append(_NamespaceSubtree(segments=segments, uuid=None, descendants=[]))

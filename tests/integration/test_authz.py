@@ -133,7 +133,7 @@ class _DoubleResolver(NamedResolver):
         return await run_in_threadpool(table_claims.resolve, self._ns, table_claims.claim_store(_auth_settings()), list(segments))
 
     @override
-    async def namespace_uuid(self, segments: list[str]) -> str | None:
+    async def namespace_uuid(self, segments: list[str], *, ns: LanceNamespace | None = None) -> str | None:
         return await run_in_threadpool(object_uuids.resolve_namespace_uuid, self._ns, list(segments)) if segments else None
 
     @override

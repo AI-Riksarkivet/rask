@@ -40,7 +40,7 @@ from lance_namespace import (
 )
 
 from catalog.api import fga_deps
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, ResolvedTableDep, SettingsDep
+from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, NamespaceDep, ResolvedTableDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import CatalogStore
 from catalog.core.identifiers import parse_identifier
@@ -205,11 +205,12 @@ async def delete_table_policy(id: str, table: ResolvedTableDep, settings: Settin
 
 @namespace_router.post("/{id}/policy/set", response_model_exclude_none=True)
 async def set_namespace_policy(
-    id: str, body: PolicyRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep
+    id: str, body: PolicyRequest, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
 ) -> PolicyResponse:
     """Set (or replace) a namespace-level policy — applies to every table under the namespace, at any depth, unless
     a table policy or a nearer namespace's overrides it. Owner-gated by the router (``can_delete``)."""
-    namespace = await _namespace(id, ns, settings)
+    namespace = await _namespace(id, resolver, ns)
+    await fga_deps.require_namespace_as_identified(ns, namespace)
     canonical = fga_ids.canonical_object_id(namespace.segments)
     record = await _set(settings, "namespace", namespace.uuid, lambda stored: _record("namespace", canonical, body, stored, uuid=namespace.uuid))
     log.info("maintenance_policy_set", extra={"kind": "namespace", "id": canonical})
@@ -226,25 +227,28 @@ async def set_namespace_policy(
 
 
 @namespace_router.post("/{id}/policy/describe", response_model_exclude_none=True)
-async def describe_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep) -> PolicyResponse | PolicyUnset:
+async def describe_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep, resolver: ResolverDep) -> PolicyResponse | PolicyUnset:
     """The namespace's maintenance policy (reader-gated), or ``set: false`` when none is set."""
-    namespace = await _namespace(id, ns, settings)
+    namespace = await _namespace(id, resolver, ns)
     return await _describe(settings, kind="namespace", key=namespace.uuid, canonical=fga_ids.canonical_object_id(namespace.segments), uuid=namespace.uuid)
 
 
 @namespace_router.post("/{id}/policy/delete", response_model_exclude_none=True)
-async def delete_namespace_policy(id: str, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep) -> PolicyDeleteResponse:
+async def delete_namespace_policy(
+    id: str, ns: NamespaceDep, settings: SettingsDep, token: CurrentToken, control: ControlEmitterDep, resolver: ResolverDep
+) -> PolicyDeleteResponse:
     """Remove the namespace's maintenance policy (idempotent) — owner-gated by the router."""
-    namespace = await _namespace(id, ns, settings)
+    namespace = await _namespace(id, resolver, ns)
+    await fga_deps.require_namespace_as_identified(ns, namespace)
     return await _delete(settings, control, token, "namespace", key=namespace.uuid, canonical=fga_ids.canonical_object_id(namespace.segments))
 
 
-async def _namespace(id: str, ns: LanceNamespace, settings: CatalogStore) -> fga_deps.GovernedObject:
-    """The namespace ``id`` names, with the uuid its policy is kept under; the root holds no policy."""
+async def _namespace(id: str, resolver: Resolver, ns: LanceNamespace) -> fga_deps.GovernedObject:
+    """The namespace ``id`` names as the request resolved it, with the uuid its policy is kept under; the root holds no policy."""
     segments = parse_identifier(id)
     if not segments:
         raise InvalidInputError("a policy needs a concrete namespace, not the root")
-    return await fga_deps.identify(ns, settings, "namespace", segments)
+    return await fga_deps.identify_namespace(resolver, ns, segments)
 
 
 def _validated_project(id: str) -> str:

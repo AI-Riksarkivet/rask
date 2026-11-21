@@ -35,6 +35,7 @@ from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import location_claims, protection
 from lakehouse.storage.options import StorageOptions
+from tests.unit.named_resolver import door_resolver
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -304,6 +305,7 @@ def test_a_protected_namespace_refuses_drop(tmp_path: Any) -> None:
                 id="bronze",
                 keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
                 ns=ns,
+                resolver=door_resolver(settings),
                 settings=settings,
                 token=None,
                 client=None,
@@ -558,6 +560,7 @@ def test_a_cascade_refuses_when_a_descendant_is_protected(tmp_path: Any) -> None
                 id="bronze",
                 keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
                 ns=ns,
+                resolver=door_resolver(settings),
                 settings=settings,
                 token=None,
                 client=None,
@@ -584,6 +587,7 @@ def test_force_lets_a_cascade_through(tmp_path: Any) -> None:
             id="bronze",
             keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=ns,
+            resolver=door_resolver(settings),
             settings=settings,
             token=None,
             client=None,
@@ -643,6 +647,7 @@ def _drop_namespace_cascade(settings: Settings, ns: Any, *, force: bool = False,
             id="bronze",
             keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
             ns=ns,
+            resolver=door_resolver(settings),
             settings=settings,
             token=None,
             client=None,
@@ -801,5 +806,5 @@ def test_the_protection_flag_is_READABLE_on_both_rungs(tmp_path: Any) -> None:
     protection.set_protection(
         settings.registry_root, so, protection.ProtectionRecord(kind="namespace", id="bronze", uuid=_uuid("bronze"), protected=True, set_by="user:bob")
     )
-    ns_read = asyncio.run(n_ep.get_namespace_protection("bronze", ns=ns, settings=settings))
+    ns_read = asyncio.run(n_ep.get_namespace_protection("bronze", ns=ns, settings=settings, resolver=door_resolver(settings)))
     assert (ns_read.protected, ns_read.set_by) == (True, "user:bob")

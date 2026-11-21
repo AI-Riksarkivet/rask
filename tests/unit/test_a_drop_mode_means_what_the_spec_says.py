@@ -44,6 +44,7 @@ from catalog.core.modes import DropMode
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.options import StorageOptions
+from tests.unit.named_resolver import door_resolver
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -107,11 +108,13 @@ async def _drop(
 
     monkeypatch.setattr(ns_ep.native, "call", _native)
 
+    ns, settings = MagicMock(), cast(Settings, _Settings())
     return await ns_ep.drop_namespace(
         id="ghost",
         keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
-        ns=MagicMock(),
-        settings=cast(Settings, _Settings()),
+        ns=ns,
+        resolver=door_resolver(settings),
+        settings=settings,
         token=None,
         client=None,
         announcer=unfiled(_Announced()),
