@@ -30,7 +30,6 @@ from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
-from lakehouse.problems.domain_errors import register_handlers
 from lakehouse.problems.ns_errors import install_problem_handlers
 
 
@@ -47,7 +46,7 @@ def unreachable_issuer() -> Iterator[str]:
 
 
 def _client(verifier: IdpVerifier | None, issuer: str) -> TestClient:
-    """The catalog's door behind the handler pair `build_service_app` installs, in its order."""
+    """The catalog's door behind the problem handlers `build_service_app` installs."""
     settings = Settings.model_validate(
         {
             "LANCE_S3_ACCESS_KEY_ID": "x",
@@ -61,7 +60,6 @@ def _client(verifier: IdpVerifier | None, issuer: str) -> TestClient:
         }
     )
     app = FastAPI()
-    register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
     app.state.oidc = verifier
     app.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings

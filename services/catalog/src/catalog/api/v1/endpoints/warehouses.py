@@ -104,7 +104,7 @@ from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids, fga_writes
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
-from lakehouse.problems.ns_errors import PartiallyApplied, status_for
+from lakehouse.problems.ns_errors import PartiallyAppliedError, status_for
 from lakehouse.records import base_registry, clone_sources, data_directories, location_claims, trash
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.records.trash import TrashRecord
@@ -1142,7 +1142,7 @@ async def _run_the_cascade(steps: AsyncGenerator[_Step], delete: _WarehouseDelet
         # blip) — and the caller then gets a problem body that says nothing about what is already
         # gone. The error is deliberately NOT swallowed (fail-closed; every primitive is idempotent, so the
         # recovery path is to re-issue the same call), but what DID land is recorded here or it is lost.
-        if isinstance(exc, fga_writes.RevokeInterrupted):
+        if isinstance(exc, fga_writes.RevokeInterruptedError):
             # The object whose revoke the outage stopped lost these before it.
             landed = landed.added(_Landed(revoked=len(exc.removed)))
         if _a_refusal(exc) and not (landed.namespaces_dropped or landed.tables_removed or landed.trash_ended or landed.revoked):
@@ -1401,7 +1401,7 @@ async def _remove_subtree(subtree: _NamespaceSubtree, delete: _WarehouseDelete, 
         yield _Step(landed=_Landed(revoked=count))
 
 
-def _partially_deleted(landed: _Landed, delete: _WarehouseDelete) -> PartiallyApplied:
+def _partially_deleted(landed: _Landed, delete: _WarehouseDelete) -> PartiallyAppliedError:
     """The refusal a delete that failed part-way answers, naming what landed before it, logged with the failure."""
     log.error(
         "warehouse_delete_partial",
@@ -1427,12 +1427,12 @@ def _partially_deleted(landed: _Landed, delete: _WarehouseDelete) -> PartiallyAp
     # primitive here is idempotent, so the recovery is to re-issue the SAME call — which is
     # precisely what a 503 asks a client to do. The cause is chained, so the real failure is still
     # in the traceback and the log.
-    return PartiallyApplied(
+    return PartiallyAppliedError(
         f"warehouse {delete.warehouse_id!r} was PARTIALLY deleted: {len(landed.namespaces_dropped)} namespace(s) dropped, "
         f"{len(landed.tables_removed)} table(s) removed, {len(landed.trash_ended)} trashed object(s) ended and {landed.revoked} tuple(s) "
         "revoked before the failure. Every step is "
         "idempotent — re-issue this call to finish it.",
-        problem_extra={
+        extensions={
             "warehouse": delete.warehouse_id,
             "namespaces_dropped": landed.namespaces_dropped,
             "tables_removed": landed.tables_removed,

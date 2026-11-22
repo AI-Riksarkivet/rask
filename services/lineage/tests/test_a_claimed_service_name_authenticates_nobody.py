@@ -24,7 +24,6 @@ from fastapi.testclient import TestClient
 
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.auth_lifespan import attach_auth
-from lakehouse.problems.domain_errors import register_handlers
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.process.supervision import Supervisor
 from lineage.api import security
@@ -55,7 +54,6 @@ def door(sa_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient
             yield
 
     app = FastAPI(lifespan=lifespan)
-    register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
 
     @app.get("/who")

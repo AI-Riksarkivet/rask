@@ -10,22 +10,35 @@ unsupported operations surface as the spec's 406 (code 0).
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
 
-from lakehouse.problems.envelope import PROBLEM_JSON, problem_body
+from lakehouse.problems.envelope import problem_response
 from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.problems.spec_routes import SPEC_ERROR_STATUSES, UNSUPPORTED_STATUS, is_spec_route, structural
 
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
+    from starlette.responses import JSONResponse
 
 #: The body and its media type are `lakehouse.problems.envelope`'s, which holds the Lance-free half of the answer and is
 #: imported from there by every site that builds a response.
-__all__ = ["PartiallyApplied", "as_unsupported_if_stub", "install_problem_handlers", "problem_detail", "status_for"]
+__all__ = [
+    "PartiallyAppliedError",
+    "ProblemExtensions",
+    "as_unsupported_if_stub",
+    "error_response",
+    "install_problem_handlers",
+    "status_for",
+]
+
+#: The ``detail`` every 5xx answers, whatever raised it: the message names paths, URLs and driver text, so it reaches the
+#: log only.
+_REDACTED: Final = "Internal Server Error"
 
 _STATUS: dict[ErrorCode, int] = {
     # 406, NOT 501, and the spec is explicit about it: `UnsupportedOperationErrorResponse` is status
@@ -92,53 +105,52 @@ def as_unsupported_if_stub(exc: Exception) -> Exception:
     return exc
 
 
-class PartiallyApplied(ServiceUnavailableError):
+class ProblemExtensions:
+    """RFC 9457 extension members a raised error adds to its problem body, never redefining a reserved member.
+
+    A declared carrier, so :func:`error_response` narrows by type and a raising site typechecks. An extension is assembled
+    by the raising code from what it already knows about the caller's own objects, which is how a 5xx tells the caller
+    something true while its ``detail`` stays redacted. The envelope leaves out one that names a member it owns
+    (:func:`lakehouse.problems.envelope.problem_body`).
+    """
+
+    #: The members to add, keyed by their wire names.
+    extensions: dict[str, object]
+
+
+class PartiallyAppliedError(ProblemExtensions, ServiceUnavailableError):
     """A destructive operation that landed some of its steps and then failed.
 
-    A DECLARED carrier rather than an attribute stapled onto a base error: `problem_extra` has to be
-    part of a type for the raising code to typecheck, and the shape is worth naming anyway — "partly
-    done" is a distinct outcome from "refused" and from "done", and it is the one the caller can least
-    afford to guess at.
-
-    ``ServiceUnavailable`` is the honest code for it here: the steps are idempotent, so the recovery is
-    to re-issue the SAME call, which is exactly what a 503 asks of a client. Chain the real failure
-    (``raise … from exc``) so the cause survives in the log and the traceback while the response stays
-    redacted.
+    "Partly done" is a distinct outcome from "refused" and from "done", and the one the caller can least afford to guess
+    at, so the extension members name what landed. ``ServiceUnavailable`` is the honest code for it: the steps are
+    idempotent, so the recovery is to re-issue the SAME call, which is what a 503 asks of a client. Chain the real
+    failure (``raise … from exc``) so the cause survives in the log while the response stays redacted.
     """
 
-    #: RFC 9457 extension members describing what DID land — merged into the problem body by
-    #: :func:`problem_detail`, which refuses to let them redefine a reserved field.
-    problem_extra: dict[str, object]
-
-    def __init__(self, message: str, *, problem_extra: dict[str, object]) -> None:
+    def __init__(self, message: str, *, extensions: dict[str, object]) -> None:
         super().__init__(message)
-        self.problem_extra = problem_extra
+        self.extensions = extensions
 
 
-def problem_detail(exc: LanceNamespaceError) -> tuple[int, dict[str, object]]:
-    """Build (status, RFC 9457 problem+json body) for a domain error.
+def error_response(exc: LanceNamespaceError) -> JSONResponse:
+    """The answer to a raised error: its status and the RFC 9457 problem+json body, titled by the error's class name, with
+    the error's extension members where it carries any.
 
-    A 5xx-mapped error uses a GENERIC ``detail`` — never ``str(exc)`` — so internals (paths, DSNs, driver
-    messages) leak via logs only, not the response body. Client (4xx) errors keep their message: it is
-    actionable and self-authored, not an internal leak. The envelope is :func:`problem_body`'s, titled by the error's
-    class name.
+    A 5xx-mapped error answers a GENERIC ``detail``, never ``str(exc)``, so internals (paths, DSNs, driver messages)
+    reach the log only. A client (4xx) error keeps its message: it is actionable and self-authored, not an internal
+    leak. The app's handler answers with this, and so does a request layer that answers before or outside the app's
+    handlers, since an exception raised from a layer passes none of them.
     """
     status = status_for(int(exc.code))
-    detail = str(exc) if status < 500 else "Internal Server Error"
-    body = problem_body(exc.code, status=status, title=exc.__class__.__name__, detail=detail)
-    # EXTENSION MEMBERS (RFC 9457 §3.2), the one way a 5xx can tell the caller something true about
-    # THEIR OWN objects without breaking the redaction rule above. `detail` stays generic because it
-    # can carry paths, DSNs and driver text; an extension is assembled by the raising endpoint from
-    # what it already knows, so it leaks nothing the caller did not send or own.
-    #
-    # THE CASE IT EXISTS FOR is a partially-applied destructive operation: once the first step lands,
-    # a later one can still fail, and a bare problem body tells the caller nothing about what is
-    # already gone. Reserved names are not overwritable — an extension may ADD to the body, never
-    # redefine `status`, `detail` or `code`.
-    extra = getattr(exc, "problem_extra", None)
-    if isinstance(extra, dict):
-        body.update({key: value for key, value in extra.items() if key not in body})
-    return status, body
+    return problem_response(exc.code, status=status, title=type(exc).__name__, detail=_detail(exc, status), extensions=_extensions(exc))
+
+
+def _detail(exc: LanceNamespaceError, status: int) -> str:
+    return str(exc) if status < 500 else _REDACTED
+
+
+def _extensions(exc: LanceNamespaceError) -> Mapping[str, object] | None:
+    return exc.extensions if isinstance(exc, ProblemExtensions) else None
 
 
 #: The spec code to stamp on a status the framework produced, where the spec HAS one for it.
@@ -167,7 +179,6 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
     """
     from fastapi import Request
     from fastapi.exceptions import RequestValidationError
-    from fastapi.responses import JSONResponse
     from starlette.exceptions import HTTPException as StarletteHTTPException
 
     @app.exception_handler(LanceNamespaceError)
@@ -176,7 +187,7 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
         # it is the same outage `handle_unexpected_error` answers 503 for, in the backend's own dialect.
         if int(exc.code) == ErrorCode.INTERNAL and reads_as_store_outage(exc):
             return _store_unavailable(request, exc)
-        status, body = problem_detail(exc)
+        status = status_for(int(exc.code))
         # Same split as the redaction: Unsupported is the backend answering "I don't do that", so it gets
         # a plain info line. A traceback at ERROR is for faults — spending one on a capability answer is
         # what makes an unsupported op look like an outage on the dashboard.
@@ -186,15 +197,11 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
             log.info("unsupported_operation", extra={"method": request.method, "path": request.url.path, "status": status})
         elif status >= 500:
             log.exception("domain_error", extra={"method": request.method, "path": request.url.path, "status": status})
-        return JSONResponse(status_code=status, content=body, media_type=PROBLEM_JSON)
+        return error_response(exc)
 
     def _store_unavailable(request: Request, exc: Exception) -> JSONResponse:
         log.warning("object_store_unavailable", extra={"method": request.method, "path": request.url.path, "error": str(exc)[:300]})
-        return JSONResponse(
-            status_code=503,
-            content=problem_body(ErrorCode.SERVICE_UNAVAILABLE, status=503, title="ServiceUnavailable", detail="Service Unavailable"),
-            media_type=PROBLEM_JSON,
-        )
+        return problem_response(ErrorCode.SERVICE_UNAVAILABLE, status=503, title="ServiceUnavailable", detail="Service Unavailable")
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -210,13 +217,10 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
         # no image carries `lance_docs/`; a test re-derives it from the spec so it cannot drift.
         route = request.scope.get("route")
         status = 400 if is_spec_route(request.method, getattr(route, "path_format", "") or "") else 422
-        return JSONResponse(
-            status_code=status,
-            # The shared envelope PLUS the field list. `code` is required on the generated client's
-            # `ErrorResponse`, so this body makes the client raise just as the hand-built ones do.
-            content=problem_body(ErrorCode.INVALID_INPUT, status=status, title="Validation Error", detail="Validation Error", slug="validation")
-            | {"errors": [{"field": ".".join(str(p) for p in e["loc"]), "message": e["msg"], "type": e["type"]} for e in exc.errors()]},
-            media_type=PROBLEM_JSON,
+        # The shared envelope PLUS the field list as an extension member.
+        errors = [{"field": ".".join(str(p) for p in e["loc"]), "message": e["msg"], "type": e["type"]} for e in exc.errors()]
+        return problem_response(
+            ErrorCode.INVALID_INPUT, status=status, title="Validation Error", detail="Validation Error", slug="validation", extensions={"errors": errors}
         )
 
     @app.exception_handler(StarletteHTTPException)
@@ -243,8 +247,7 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
         phrase = HTTPStatus(exc.status_code).phrase
         # An explicit slug, because the default derives the `type` URI from the title and the phrases
         # carry spaces — `.../problems/method not allowed` is not a URI a client can key on.
-        body = problem_body(code, status=exc.status_code, title=phrase, detail=detail, slug=phrase.lower().replace(" ", "-"))
-        return JSONResponse(status_code=exc.status_code, content=body, headers=dict(exc.headers or {}), media_type=PROBLEM_JSON)
+        return problem_response(code, status=exc.status_code, title=phrase, detail=detail, slug=phrase.lower().replace(" ", "-"), headers=exc.headers)
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
@@ -256,13 +259,9 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
             return _store_unavailable(request, exc)
         # Internals (native/Arrow/S3 error text, paths) leak via logs only — never the body.
         log.exception("unhandled_error", extra={"method": request.method, "path": request.url.path})
-        return JSONResponse(
-            status_code=500,
-            content=problem_body(ErrorCode.INTERNAL, status=500, title="InternalError", detail="Internal Server Error"),
-            media_type=PROBLEM_JSON,
-        )
+        return problem_response(ErrorCode.INTERNAL, status=500, title="InternalError", detail=_REDACTED)
 
-    _declare_spec_responses(app)
+    _declare_problem_responses(app)
 
 
 #: How the published schema names each error status a spec operation lists (``spec.yaml``'s own response names).
@@ -277,8 +276,9 @@ _SPEC_ERROR_DESCRIPTIONS: Final = {
     "5XX": "Server Error",
 }
 
-#: The problem body every refusal carries (:func:`lakehouse.problems.envelope.problem_body`): RFC 9457's keys and the spec's
-#: ``ErrorResponse`` ``code`` and ``error``.
+#: The problem body every refusal carries (:func:`lakehouse.problems.envelope.problem_body`): RFC 9457's keys, the spec's
+#: ``ErrorResponse`` ``code`` and ``error``, the optional ``instance`` (the request's trace id, while a span is active), and
+#: the ``errors`` a rask-only door's validation failure lists.
 _PROBLEM_SCHEMA: Final = {
     "type": "object",
     "required": ["type", "title", "status", "detail", "code", "error"],
@@ -289,42 +289,46 @@ _PROBLEM_SCHEMA: Final = {
         "detail": {"type": "string"},
         "code": {"type": "integer", "description": "The spec's error code, which a client dispatches on"},
         "error": {"type": "string"},
+        "instance": {"type": "string", "description": "The W3C trace id of the request, which finds the error's log line"},
+        "errors": {
+            "type": "array",
+            "description": "Each field a request failed validation on",
+            "items": {
+                "type": "object",
+                "required": ["field", "message", "type"],
+                "properties": {"field": {"type": "string"}, "message": {"type": "string"}, "type": {"type": "string"}},
+            },
+        },
     },
 }
 
 _PROBLEM_RESPONSE_SCHEMA_NAME: Final = "ProblemDetails"
+_PROBLEM_CONTENT: Final = {"application/problem+json": {"schema": {"$ref": f"#/components/schemas/{_PROBLEM_RESPONSE_SCHEMA_NAME}"}}}
+#: FastAPI's own validation schemas, which no operation names once every 422 names the problem body.
+_FRAMEWORK_VALIDATION_SCHEMAS: Final = ("HTTPValidationError", "ValidationError")
 
 
-def _declare_spec_responses(app: FastAPI) -> None:
-    """Make the published schema say what a spec operation answers: each error status ``spec.yaml`` lists for it and the
-    406 any of them may answer (:data:`lakehouse.problems.spec_routes.UNSUPPORTED_STATUS`), with the problem body, and 400 where
-    FastAPI declares 422.
+def _declare_problem_responses(app: FastAPI) -> None:
+    """Make the published schema say what every operation answers on failure: the problem body.
 
-    FastAPI declares a 422 on every operation that validates anything and no other error, so `docs/catalog-openapi.json`
-    carried 200 and 400 per spec operation where the spec lists 400, 401, 403, 404, 503 and 5XX, and 406 and 409 on some
-    (:data:`lakehouse.problems.spec_routes.SPEC_ERROR_STATUSES`). A spec operation's 400 is the problem body
-    `handle_validation_error` serves, not FastAPI's validation schema.
-
-    Operations outside :data:`SPEC_ROUTES` are untouched — a rask-only door still declares and serves 422 — and an
-    app that serves no spec route (lineage) is left byte-identical, which is why this can live in the shared installer.
+    A spec operation declares each error status ``spec.yaml`` lists for it and the 406 any of them may answer
+    (:data:`lakehouse.problems.spec_routes.SPEC_ERROR_STATUSES`, :data:`UNSUPPORTED_STATUS`), and no 422, which a spec
+    operation answers 400. Any other operation's 422 is the problem body with its ``errors``, which
+    `handle_validation_error` serves, not FastAPI's validation schema. Every operation declares a ``default`` naming the
+    problem body for the statuses it does not list. A status an operation declares itself (a probe's 503) is kept.
     """
     generate = app.openapi
 
     def openapi() -> dict[str, Any]:
         schema = generate()
-        problem = {"application/problem+json": {"schema": {"$ref": f"#/components/schemas/{_PROBLEM_RESPONSE_SCHEMA_NAME}"}}}
-        declared = False
         for path, item in schema.get("paths", {}).items():
             for method, operation in item.items():
-                if not isinstance(operation, dict) or not is_spec_route(method, path):
-                    continue
-                responses = operation.setdefault("responses", {})
-                responses.pop("422", None)
-                for status in sorted(SPEC_ERROR_STATUSES.get((method.upper(), structural(path)), frozenset()) | {UNSUPPORTED_STATUS}):
-                    responses[status] = {"description": _SPEC_ERROR_DESCRIPTIONS[status], "content": problem}
-                declared = True
-        if declared:
-            schema.setdefault("components", {}).setdefault("schemas", {})[_PROBLEM_RESPONSE_SCHEMA_NAME] = _PROBLEM_SCHEMA
+                if isinstance(operation, dict):
+                    _declare(method, path, operation.setdefault("responses", {}))
+        components = schema.setdefault("components", {}).setdefault("schemas", {})
+        for name in _FRAMEWORK_VALIDATION_SCHEMAS:
+            components.pop(name, None)
+        components[_PROBLEM_RESPONSE_SCHEMA_NAME] = _PROBLEM_SCHEMA
         return schema
 
     # FastAPI's own documented override point is this attribute (its `openapi()` is looked up on the
@@ -333,3 +337,14 @@ def _declare_spec_responses(app: FastAPI) -> None:
     # zero-argument callable FastAPI will actually call — a type-level mismatch the framework's own
     # contract creates, not one this code could narrow away.
     cast(Any, app).openapi = openapi
+
+
+def _declare(method: str, path: str, responses: dict[str, Any]) -> None:
+    """Name the problem body for ``method path``'s errors in its ``responses``."""
+    if is_spec_route(method, path):
+        responses.pop("422", None)
+        for status in sorted(SPEC_ERROR_STATUSES.get((method.upper(), structural(path)), frozenset()) | {UNSUPPORTED_STATUS}):
+            responses[status] = {"description": _SPEC_ERROR_DESCRIPTIONS[status], "content": _PROBLEM_CONTENT}
+    elif "422" in responses:
+        responses["422"] = {"description": "Validation Error", "content": _PROBLEM_CONTENT}
+    responses["default"] = {"description": "Error", "content": _PROBLEM_CONTENT}

@@ -622,6 +622,9 @@ The group's debts:
   classes, `problem_detail`'s body equals `problem_body(exc.code, status=…, title=<class>, detail=…, slug=<class lower>)`
   key for key and in order, so building it through `problem_body` is a refactor with no wire change, proposed for a commit
   of its own. Giving the domain body the spec's `code` changes what a rask-only door answers, and is decided on its own.
+  **2026-11-22:** decided by the owner and done in [ADR 0226](0226-every-lakehouse-door-answers-the-specs-error-response.md):
+  the domain family is deleted, every door answers `problem_body`'s body with its `code`, and every built response goes
+  through `envelope.problem_response`.
 
 `problems/__init__.py` is a docstring with no import. Every module of the group declares `__all__`: three did not
 (`envelope`, `spec_routes`, `domain_errors`). Names a module is imported for that are not in its `__all__`: the

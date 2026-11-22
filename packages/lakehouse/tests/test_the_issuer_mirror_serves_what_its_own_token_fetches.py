@@ -88,7 +88,8 @@ def test_a_verifier_with_no_credential_reads_the_discovery_and_keys_through_the_
 
 def test_the_mirror_is_ready_while_the_issuer_answers_it_and_never_once_it_drains(issuer: tuple[str, Path, list[str]], tmp_path: Path) -> None:
     """`/readyz` is what the chart probes: ready while the issuer serves the mirror its discovery document, out of
-    rotation while it does not, and draining without asking the issuer anything."""
+    rotation while it does not, naming nothing of the issuer's address or answer, and draining without asking the issuer
+    anything."""
     url, token, seen = issuer
     app = create_app(IssuerMirrorSettings(issuer=url, public_url="http://rask-issuer-mirror:8080", token_file=str(token)))
     refused = tmp_path / "refused"
@@ -105,21 +106,33 @@ def test_the_mirror_is_ready_while_the_issuer_answers_it_and_never_once_it_drain
 
     assert (not_started.status_code, not_started.json()["status"]) == (503, "starting")
     assert (ready.status_code, ready.json()) == (200, {"status": "ready", "components": {"issuer": "healthy"}})
-    assert (out_of_rotation.status_code, out_of_rotation.json()["status"]) == (503, "unhealthy"), out_of_rotation.text
+    assert (out_of_rotation.status_code, out_of_rotation.json()) == (503, {"status": "unhealthy", "components": {"issuer": "unavailable"}})
     assert (draining.status_code, draining.json()["status"], len(seen)) == (503, "shutting_down", asked)
 
 
-def test_an_issuer_that_refuses_the_mirror_is_answered_as_a_bad_gateway_problem(issuer: tuple[str, Path, list[str]], tmp_path: Path) -> None:
+def test_an_issuer_that_refuses_the_mirror_is_the_specs_outage_and_its_address_stays_in_the_log(
+    issuer: tuple[str, Path, list[str]], tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The mirror answers callers with no credential, so the issuer's address and answer go to the operator's log and
+    the caller reads the spec's 503, code 17."""
     url, _token, _seen = issuer
     refused = tmp_path / "refused"
     refused.write_text("a token the issuer does not admit\n")
     settings = IssuerMirrorSettings(issuer=url, public_url="http://rask-issuer-mirror:8080", token_file=str(refused))
+    caplog.set_level(logging.WARNING)
 
     with TestClient(create_app(settings)) as verifier:
         answer = verifier.get("/.well-known/openid-configuration")
 
-    assert (answer.status_code, answer.headers["content-type"]) == (502, "application/problem+json")
-    assert answer.json()["detail"] == f"the issuer answered 401 to {url}/.well-known/openid-configuration"
+    assert (answer.status_code, answer.headers["content-type"]) == (503, "application/problem+json"), answer.text
+    assert (answer.json()["code"], answer.json()["type"]) == (17, "https://lance.org/problems/issuerunanswerederror")
+    assert url not in answer.text
+    told = [
+        (record.levelname, vars(record)["url"], vars(record)["status"])
+        for record in caplog.records
+        if record.getMessage() == "issuer_mirror_upstream_unanswered"
+    ]
+    assert told == [("WARNING", f"{url}/.well-known/openid-configuration", 401)]
 
 
 @pytest.fixture
@@ -145,5 +158,6 @@ def test_a_mirror_whose_own_token_cannot_be_read_says_so_and_names_no_file(
         answer = verifier.get("/.well-known/openid-configuration")
 
     own = [" ".join(line.split()[2:]) for line in capsys.readouterr().out.splitlines() if re.match(r"\S+ \S+ \S+ +lakehouse\.governed\.issuer_mirror ", line)]
-    assert (answer.status_code, answer.json()["detail"], seen) == (503, "the mirror's own token cannot be read", [])
-    assert own == ["ERROR lakehouse.governed.issuer_mirror [-] — issuer_mirror_token_unreadable"]
+    assert (answer.status_code, answer.json()["code"], seen) == (503, 17, [])
+    assert str(tmp_path) not in answer.text
+    assert [line for line in own if "issuer_mirror_token_unreadable" in line] == ["ERROR lakehouse.governed.issuer_mirror [-] — issuer_mirror_token_unreadable"]

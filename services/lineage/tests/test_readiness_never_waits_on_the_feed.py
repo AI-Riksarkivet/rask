@@ -15,9 +15,9 @@ from functools import partial
 import pytest
 from starlette.testclient import TestClient
 
-from lakehouse.problems.domain_errors import ServiceUnavailableError
 from lakehouse.process.health import HealthWatch
 from lineage import main
+from lineage.services.catalog_reader import CatalogAnsweredError
 
 
 #: Longer than the one second the chart's probe allows.
@@ -37,7 +37,7 @@ class _Feed:
     async def ready(self) -> None:
         await asyncio.sleep(self.delay)
         if self.failing:
-            raise ServiceUnavailableError("the catalog does not answer")
+            raise CatalogAnsweredError("the catalog does not answer")
 
 
 def _until(client: TestClient, status: int, *, within: float) -> int:

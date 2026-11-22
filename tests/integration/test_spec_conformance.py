@@ -91,3 +91,42 @@ def test_the_v1_surface_holds_only_spec_operations(client: TestClient) -> None:
         f"meets them:\n  " + "\n  ".join(f"{m} {p}" for m, p in sorted(intruders)) + "\n"
         "Mount them on the management prefix instead."
     )
+
+
+_PROBLEM_BODY = {"application/problem+json": {"schema": {"$ref": "#/components/schemas/ProblemDetails"}}}
+#: The probes answer 503 with their own model: a probe's body is the process's answer, not an error's.
+_PROBES = frozenset({"/livez", "/readyz"})
+
+
+def _undeclared_problems(schema: dict[str, Any]) -> list[str]:
+    """Each operation whose published errors do not name the problem body: a 4xx or 5xx carrying another body (but a
+    probe's 503), or no ``default`` for the statuses the operation does not list."""
+    offenders: list[str] = []
+    for path, item in schema.get("paths", {}).items():
+        for method, operation in item.items():
+            if method.lower() not in _METHODS:
+                continue
+            responses = operation.get("responses", {})
+            offenders += [
+                f"{method.upper()} {path} {status}: {sorted(response['content'])}"
+                for status, response in responses.items()
+                if (str(status)[0] in "45" or status == "default")
+                and response.get("content")
+                and response["content"] != _PROBLEM_BODY
+                and not (path in _PROBES and status == "503")
+            ]
+            if "default" not in responses:
+                offenders.append(f"{method.upper()} {path}: no default")
+    return offenders
+
+
+def test_every_error_both_documents_publish_is_the_problem_body(client: TestClient) -> None:
+    """Every door of the catalog and lineage answers a failure in the one body (`install_problem_handlers`), so the
+    published documents say so: a rask-only door's 422 is the problem body with its ``errors``, and every operation's
+    ``default`` names it."""
+    from lineage.main import app as lineage
+
+    documents = {"catalog": cast(FastAPI, client.app).openapi(), "lineage": lineage.openapi()}
+
+    assert {name: _undeclared_problems(schema)[:3] for name, schema in documents.items()} == {"catalog": [], "lineage": []}
+    assert "instance" in documents["lineage"]["components"]["schemas"]["ProblemDetails"]["properties"]

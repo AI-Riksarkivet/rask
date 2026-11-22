@@ -49,6 +49,7 @@ from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER, BRANCH_FILE_DIRS
 from lakehouse.lancekit.features import CREATE_FORMAT, BasePathRef, TableFileFormat, manifest_base_path_refs, table_file_format
 from lakehouse.lancekit.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, WRITER_PUT_GLOBS
 from lakehouse.naming import PLATFORM_PREFIX
+from lakehouse.problems.ns_errors import ProblemExtensions
 from lakehouse.problems.outage import reads_as_store_outage, store_refusal
 from lakehouse.records import file_identities, history_fences
 from lakehouse.records.base_registry import BaseJudgement, BaseRole, BaseStanding
@@ -340,19 +341,16 @@ _KMS_WRITE_ACTIONS = ("kms:Decrypt", "kms:GenerateDataKey")
 SESSION_POLICY_LIMIT: Final = 2048
 
 
-class SessionPolicyTooLong(InternalError):
+class SessionPolicyTooLongError(ProblemExtensions, InternalError):
     """A vend whose session policy STS would refuse: its table's location, bases or KMS key are too long ([[LH-262]]).
 
-    A 5xx's ``detail`` is redacted (``ns_errors.problem_detail``), so the cause travels in the problem's title (this class's
+    A 5xx's ``detail`` is redacted (``ns_errors.error_response``), so the cause travels in the problem's title (this class's
     name) and in extension members the catalog wrote itself: the policy's length and the limit.
     """
 
-    #: RFC 9457 extension members, merged into the problem body by ``ns_errors.problem_detail``.
-    problem_extra: dict[str, object]
-
     def __init__(self, message: str, *, characters: int) -> None:
         super().__init__(message)
-        self.problem_extra = {"session_policy_characters": characters, "session_policy_limit": SESSION_POLICY_LIMIT}
+        self.extensions = {"session_policy_characters": characters, "session_policy_limit": SESSION_POLICY_LIMIT}
 
 
 #: What AWS lets a RoleSessionName hold (2 to 64 of `[\w+=,.@-]`); RustFS accepts the name and keeps none of it.
@@ -1235,7 +1233,7 @@ class WebIdentityVendor:
         """The session the catalog's token is exchanged for under the policy ``scope`` writes: one trashed table's bytes.
 
         Raises:
-            SessionPolicyTooLong: The policy is past what STS takes.
+            SessionPolicyTooLongError: The policy is past what STS takes.
             IdentityTokenUnavailableError: The catalog's projected token cannot be read.
             botocore.exceptions.ClientError: The store refused the exchange.
         """
@@ -1245,13 +1243,13 @@ class WebIdentityVendor:
         """The session the catalog's token is exchanged for under ``policy``.
 
         Raises:
-            SessionPolicyTooLong: ``policy`` is past what STS takes.
+            SessionPolicyTooLongError: ``policy`` is past what STS takes.
         """
         text = json.dumps(policy, separators=(",", ":"))
         if len(text) > SESSION_POLICY_LIMIT:
             # Refused here, naming the cause: past the limit the store refuses the exchange, which the caller would read as
             # an outage to retry, when no retry can shorten the locations, bases or key the policy names ([[LH-262]]).
-            raise SessionPolicyTooLong(
+            raise SessionPolicyTooLongError(
                 f"{policy_of} is {len(text)} characters, past the {SESSION_POLICY_LIMIT:,} STS accepts: "
                 "the locations, bases or KMS key it names are too long for a direct credential",
                 characters=len(text),

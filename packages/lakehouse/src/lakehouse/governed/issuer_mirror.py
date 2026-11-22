@@ -30,17 +30,18 @@ import logging
 import ssl
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from http import HTTPStatus
 from typing import Annotated, Any, Final
 
 import httpx
 from fastapi import Depends, FastAPI, Request
+from lance_namespace import ServiceUnavailableError
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
-from lakehouse.problems.domain_errors import DomainError, ServiceUnavailableError, register_handlers
+from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.process.draining import arm_drain_on_sigterm
+from lakehouse.process.health import Verdict
 from lakehouse.process.lifecycle import mark_draining, mark_started
 from lakehouse.process.log_handler import setup_logging
 from lakehouse.process.probes import make_probes_router
@@ -74,11 +75,12 @@ def _upstream(request: Request) -> httpx.AsyncClient:
 UpstreamDep = Annotated[httpx.AsyncClient, Depends(_upstream)]
 
 
-class IssuerUnansweredError(DomainError):
-    """The issuer did not answer the mirror's own fetch with the document: the fault is upstream of the mirror."""
+class IssuerUnansweredError(ServiceUnavailableError):
+    """The issuer did not answer the mirror's own fetch with the document: the fault is upstream of the mirror.
 
-    status_code = HTTPStatus.BAD_GATEWAY
-    title = "Bad Gateway"
+    The spec's outage, 503 with code 17: its error table has no 502, and one code rides one status. The issuer's address
+    and answer are logged before the raise, since the body a caller reads is redacted.
+    """
 
 
 async def _fetch(client: httpx.AsyncClient, url: str, token_file: str) -> dict[str, Any]:
@@ -95,8 +97,10 @@ async def _fetch(client: httpx.AsyncClient, url: str, token_file: str) -> dict[s
         log.error("issuer_mirror_token_unreadable", exc_info=True)
         raise ServiceUnavailableError("the mirror's own token cannot be read") from exc
     except httpx.HTTPError as exc:
+        log.warning("issuer_mirror_upstream_unanswered", extra={"url": url, "error": f"{type(exc).__name__}: {exc}"[:300]})
         raise IssuerUnansweredError(f"the issuer did not answer {url}: {exc}") from exc
     if response.status_code != 200:
+        log.warning("issuer_mirror_upstream_unanswered", extra={"url": url, "status": response.status_code})
         raise IssuerUnansweredError(f"the issuer answered {response.status_code} to {url}")
     return response.json()
 
@@ -124,12 +128,13 @@ def create_app(settings: IssuerMirrorSettings | None = None) -> FastAPI:
     async def ready(request: Request) -> Readiness:
         try:
             await _fetch(request.app.state.upstream, f"{issuer}{DISCOVERY_PATH}", resolved.token_file)
-        except DomainError as exc:
-            return Readiness(status=ReadinessStatus.unhealthy, components={"issuer": exc.detail})
-        return Readiness(status=ReadinessStatus.ready, components={"issuer": "healthy"})
+        except ServiceUnavailableError:
+            # The verdict alone, as every process names a dependency: the fetch logged the issuer's address and answer.
+            return Readiness(status=ReadinessStatus.unhealthy, components={"issuer": Verdict.unavailable})
+        return Readiness(status=ReadinessStatus.ready, components={"issuer": Verdict.healthy})
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
-    register_handlers(app)
+    install_problem_handlers(app, log)
     app.include_router(make_probes_router(ready))
 
     @app.get(DISCOVERY_PATH)

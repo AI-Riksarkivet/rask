@@ -23,13 +23,12 @@ from pathlib import Path
 from typing import Self
 
 import jwt
-from lance_namespace import UnauthenticatedError
+from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.principal import CLIENT_IDP_SUFFIX, SERVICE_ACCOUNT_IDP, Principal
 from lakehouse.governed.projected_token import EmptyTokenFileError, read_token_file
-from lakehouse.problems.domain_errors import ServiceUnavailableError
 
 
 log = logging.getLogger(__name__)

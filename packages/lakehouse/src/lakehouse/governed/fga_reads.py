@@ -33,7 +33,7 @@ from openfga_sdk.models.user_type_filter import UserTypeFilter
 from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse.governed.fga_ids import is_object_id, subject_of, user_object
-from lakehouse.governed.fga_resilience import DEFAULT_RETRY, RetryPolicy, UnansweredBatchItems, guarded
+from lakehouse.governed.fga_resilience import DEFAULT_RETRY, RetryPolicy, UnansweredBatchItemsError, guarded
 
 
 log = logging.getLogger(__name__)
@@ -225,7 +225,7 @@ async def batch_check(
         response = await client.batch_check(ClientBatchCheckRequest(checks=items), options=options)
         unanswered = {r.request.object: r.error for r in response.result if r.error is not None}
         if unanswered:
-            raise UnansweredBatchItems(unanswered)
+            raise UnansweredBatchItemsError(unanswered)
         return unaskable | {r.request.object: bool(r.allowed) for r in response.result}
 
     return await guarded(

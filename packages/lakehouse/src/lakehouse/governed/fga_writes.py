@@ -255,7 +255,7 @@ class TupleStore(Protocol):
     async def __call__(self, client: OpenFgaClient, tuples: list[ClientTuple], /, *, actor: str, origin: TupleOrigin) -> object: ...
 
 
-class RevokeInterrupted(ServiceUnavailableError):
+class RevokeInterruptedError(ServiceUnavailableError):
     """A revoke OpenFGA stopped answering part-way, carrying the tuples it had already removed.
 
     :func:`delete_tuples` deletes one tuple per write, so an outage can land between two of them, and the
@@ -287,7 +287,7 @@ async def delete_tuples(
     400 the WHOLE call and leave EVERY grant in place while looking like success. Per-tuple, one absent
     tuple can't block the rest, and an absent tuple is idempotent success (the post-condition — gone —
     already holds), left out of what this returns. Transient failures are retried; on outage we fail
-    closed with :class:`RevokeInterrupted` (a ``ServiceUnavailableError``) so the caller does not believe a
+    closed with :class:`RevokeInterruptedError` (a ``ServiceUnavailableError``) so the caller does not believe a
     revoke succeeded when it did not (stale grants would silently linger).
 
     A PARTIAL revoke still audits what it removed, and the error carries it. The 503 says the call did not
@@ -331,7 +331,7 @@ async def delete_tuples(
 
 
 async def _delete_unless_absent(delete_one: Callable[[ClientTuple], Awaitable[None]], t: ClientTuple, *, removed: list[ClientTuple]) -> bool:
-    """Delete ``t``: whether the server removed it, False where it was already absent; ``RevokeInterrupted`` on an outage."""
+    """Delete ``t``: whether the server removed it, False where it was already absent; ``RevokeInterruptedError`` on an outage."""
     try:
         await delete_one(t)
     except FAIL_CLOSED as exc:
@@ -339,7 +339,7 @@ async def _delete_unless_absent(delete_one: Callable[[ClientTuple], Awaitable[No
             log.debug("openfga_delete_absent_skipped")
             return False
         log.error("openfga_delete_unavailable", exc_info=True)
-        raise RevokeInterrupted(removed=list(removed)) from exc
+        raise RevokeInterruptedError(removed=list(removed)) from exc
     return True
 
 
@@ -501,7 +501,7 @@ async def revoke_object_tuples(
 
     Scope: revokes the object's OWN tuples and its inverse ``child`` edge. A cascade that removes a subtree
     revokes each object in it through the catalog's ``object_grants.end_removed_subtree``, which finds them by
-    those ``child`` edges. An outage part-way raises :class:`RevokeInterrupted` naming the tuples removed.
+    those ``child`` edges. An outage part-way raises :class:`RevokeInterruptedError` naming the tuples removed.
     """
     tuples = await fga_reads.read_object_tuples(client, obj, retry=retry)
     if not tuples:
@@ -529,7 +529,7 @@ async def revoke_object_tuples(
 __all__ = [
     "ClientTuple",
     "RelationshipCondition",
-    "RevokeInterrupted",
+    "RevokeInterruptedError",
     "TupleOrigin",
     "TupleStore",
     "commit_unless_changed",

@@ -113,7 +113,7 @@ from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.lancekit.features import CREATE_FORMAT, table_file_format
 from lakehouse.naming import uuid_of
-from lakehouse.problems.ns_errors import PartiallyApplied
+from lakehouse.problems.ns_errors import PartiallyAppliedError
 from lakehouse.process.supervision import is_fault
 from lakehouse.records import base_registry, location_claims, object_records, protection, trash
 from lakehouse.records.protection import ProtectionRecord
@@ -1282,10 +1282,10 @@ async def _detach(ns: LanceNamespace, settings: CatalogStore, table: ResolvedTab
         await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location, uuid=table.uuid))
     except (OSError, ValueError, base_registry.UnreadableBaseRecordError) as exc:
         log.error("deregister_clone_tags_kept", extra={"table": canonical, "location": fenced.location, "error": f"{type(exc).__name__}: {exc}"[:300]})
-        raise PartiallyApplied(
+        raise PartiallyAppliedError(
             f"table {canonical} was detached, and its tag on a table it clones could not be deleted: its location stays held, and "
             "maintenance's hourly audit releases the tag and the location from the record of the clone's end this door filed",
-            problem_extra={"table": canonical, "detached": True},
+            extensions={"table": canonical, "detached": True},
         ) from exc
     await run_in_threadpool(location_claims.release, claims, fenced.location, canonical)
     if ending is not None:
@@ -1759,9 +1759,9 @@ async def _admit_or_detach(registration: _Registration, claimed_location: str, a
             await _detach_the_registration(registration, claimed_location)
         except Exception as undo_exc:
             log.error("register_refusal_compensation_failed", extra={"table": table_id, "error": str(undo_exc)})
-            raise PartiallyApplied(
+            raise PartiallyAppliedError(
                 f"the dataset at {table_id} was refused ({refusal}) but its registration could not be detached",
-                problem_extra={
+                extensions={
                     "table": table_id,
                     "attached": True,
                     "refused": "refused" if isinstance(refusal, InvalidInputError) else "unjudged",

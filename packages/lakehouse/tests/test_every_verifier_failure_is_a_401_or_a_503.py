@@ -62,7 +62,6 @@ from lakehouse.governed.door_caller import caller_of
 from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import UNKNOWN_KID_REFRESH_INTERVAL_SECONDS, OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
-from lakehouse.problems.domain_errors import register_handlers
 from lakehouse.problems.ns_errors import install_problem_handlers
 
 
@@ -233,9 +232,8 @@ class _Clock:
 
 
 def _client(idp: _IdP, *, clock: Callable[[], float] = time.monotonic) -> TestClient:
-    """A governed app wired as every governed service wires one: BOTH handler installers, one verifier."""
+    """A governed app wired as every governed service wires one: the problem handlers, one verifier."""
     app = FastAPI()
-    register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
     app.state.oidc = IdpVerifier(
         OIDCVerifier(idp.issuer, AUDIENCE, cache_ttl=300, allow_insecure=True, clock=clock), [OidcProvider(issuer=idp.issuer, idp_id="corp")]

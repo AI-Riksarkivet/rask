@@ -26,7 +26,7 @@ from lakehouse.governed import fga_ids, fga_reads, fga_writes
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.governed.subjects import is_person_subject
-from lakehouse.problems.ns_errors import PartiallyApplied
+from lakehouse.problems.ns_errors import PartiallyAppliedError
 from lakehouse.records import object_records
 
 
@@ -279,15 +279,15 @@ async def undo_a_create_whose_parent_is_unread(
     (:func:`require_parent_as_authorized` refused it, or could not read the parent), for the door to raise what stopped it.
 
     Raises:
-        PartiallyApplied: The undo failed, so the object stands, with its grants, where nobody confirmed it belongs: a
+        PartiallyAppliedError: The undo failed, so the object stands, with its grants, where nobody confirmed it belongs: a
             retry would meet it as already there, so the answer names it and its remedy.
     """
     if await undo_then_take_back(context, segments=segments, uuid=uuid, undo=undo, reason="parent_unconfirmed", resource=resource):
         return
     name = fga_ids.canonical_object_id(segments)
-    raise PartiallyApplied(
+    raise PartiallyAppliedError(
         f"the {resource} {name} was recorded, its parent namespace could not be confirmed as the one authorized, and it could not be removed",
-        problem_extra={resource: name, "recorded": True, "remedy": remedy},
+        extensions={resource: name, "recorded": True, "remedy": remedy},
     )
 
 
@@ -578,7 +578,7 @@ async def revoke_removed_object(
 
     Distinct from :func:`revoke_ownership` in two ways that matter to a cascade: the audit origin is
     ``lifecycle_delete`` (a deletion of the hierarchy, not one object's drop), and the count comes back for the door to
-    report. 0 when FGA is off; a 503 when it is on with no client wired. An outage part-way raises :class:`fga_writes.RevokeInterrupted` naming what went.
+    report. 0 when FGA is off; a 503 when it is on with no client wired. An outage part-way raises :class:`fga_writes.RevokeInterruptedError` naming what went.
     """
     if (client := wired(context.settings, context.client)) is None:
         return 0
@@ -626,7 +626,7 @@ async def revoke_expired_object(
 
     The origin is ``trash_expired`` (ADR 0146): nobody revoked them and nothing was destroyed, the grace period ended
     and the bytes wait for the purge. The tuples come back so the door can tell each person who lost one. Empty when
-    FGA is off; a 503 when it is on with no client wired. An outage part-way raises :class:`fga_writes.RevokeInterrupted` naming what went.
+    FGA is off; a 503 when it is on with no client wired. An outage part-way raises :class:`fga_writes.RevokeInterruptedError` naming what went.
     """
     if (client := wired(context.settings, context.client)) is None:
         return []

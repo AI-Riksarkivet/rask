@@ -11,30 +11,102 @@ name there and answers the uuids of a table the caller may see ([[LH-531]]), and
 would refuse the caller too. One question rather than a describe per name, so a producer that may see none of the
 tables it names costs the catalog that question, however many it names. Elsewhere (authorization off, or decided from
 the store, which holds no names) a name is resolved by the catalog's DescribeTable and DescribeNamespace under the
-caller's own bearer. A name the catalog does not hold, or will not resolve for this caller, resolves to no uuid. Any
-other failure raises: an event recorded under a name it should have been keyed by a uuid would split the table's
+caller's own bearer. A name the catalog does not hold, or will not resolve for this caller, resolves to no uuid. What
+the catalog refuses the name itself with (it is no name, the table changed under the read) is the caller's answer. Any
+other failure is the outage: an event recorded under a name it should have been keyed by a uuid would split the table's
 lineage, so the producer's retry is the better answer.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import Final
+from collections.abc import Generator
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Final
+
+from lance_namespace import ErrorCode
+from pydantic import BaseModel, ConfigDict
 
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.governed.decider import AccessDecider
 from lakehouse.naming import CATALOG_DELIMITER, identifier_location, uuid_of
-from lakehouse.problems.domain_errors import ForbiddenError, NotFoundError, UnauthorizedError
+from lakehouse.problems.ns_errors import status_for
 from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, RunEvent
 from lineage.services.catalog_client import CATALOG_CALLS, catalog_read_client, request_headers
-from lineage.services.catalog_reader import translate_catalog_errors
+from lineage.services.catalog_reader import CatalogAnsweredError, logged_outage
 
 
-#: The catalog's answers that mean "no object the caller may see by this name": the name names none, the caller may
-#: not see it, or the catalog does not take the caller's credential.
-_UNSEEN: Final = (NotFoundError, ForbiddenError, UnauthorizedError)
+if TYPE_CHECKING:
+    from lance_namespace_urllib3_client.exceptions import ApiException
+
+
+#: The codes of the catalog's refusals that mean "no object the caller may see by this name": the name names none, the
+#: caller may not see it, or the catalog does not take the caller's credential (a token minted for lineage's audience,
+#: whose names the decision door resolves). Read by the code, which identifies an error across every Lance namespace
+#: (`lance_docs/ns_catalog/namespace/operations/errors.md`).
+_UNSEEN: Final = frozenset({ErrorCode.NAMESPACE_NOT_FOUND, ErrorCode.TABLE_NOT_FOUND, ErrorCode.PERMISSION_DENIED, ErrorCode.UNAUTHENTICATED})
+#: The codes of the other refusals a describe owes its caller, which lineage passes on: the name is no name, the table
+#: changed under the read, or it is in no state to be described.
+_RELAYED: Final = frozenset({ErrorCode.INVALID_INPUT, ErrorCode.CONCURRENT_MODIFICATION, ErrorCode.INVALID_TABLE_STATE})
+
+
+def _unseen(refused: CatalogAnsweredError) -> bool:
+    """Whether the catalog's answer says the caller may see no object by the name it asked for."""
+    return refused.code in _UNSEEN
+
+
+class _CatalogProblem(BaseModel):
+    """What lineage reads of a refusal the catalog wrote: the spec's required ``code`` and the refusal's ``detail``."""
+
+    model_config = ConfigDict(frozen=True)
+
+    code: int
+    detail: str
+
+
+def _catalog_refusal(exc: ApiException) -> CatalogAnsweredError | None:
+    """The refusal ``exc`` holds that a describe owes its caller, or ``None`` when the catalog's answer is none.
+
+    Such a refusal is a 4xx whose body is a problem body carrying one of the codes above at the status the spec maps that
+    code to, so lineage answers the catalog's own status and code or the outage, never a status of its own for the
+    catalog's code. Any other answer says nothing about the caller's name: a 5xx or another body may come from whatever
+    stands in front of the catalog, a throttle is no judgement of the name, and code 0 is the catalog serving no such
+    operation, which is lineage's address for the catalog, or its request, being wrong.
+    """
+    status = exc.status or 0
+    if not 400 <= status < 500 or exc.body is None:
+        return None
+    try:
+        problem = _CatalogProblem.model_validate_json(exc.body)
+        code = ErrorCode(problem.code)
+    except ValueError:
+        return None
+    if code not in _UNSEEN | _RELAYED or status_for(code) != status:
+        return None
+    return CatalogAnsweredError(problem.detail, code=code)
+
+
+@contextmanager
+def _as_the_caller() -> Generator[None]:
+    """Relay what the catalog refuses a describe asked under the caller's own bearer with.
+
+    A refusal a describe owes its caller is the caller's to read, so it keeps the catalog's status, ``code`` and
+    ``detail`` (:func:`_catalog_refusal`). Any other answer is the outage, logged and never relayed
+    (`catalog_reader.logged_outage`). Kept in this module, the one place lineage asks the catalog as its caller: every
+    call it makes as itself answers the outage alone (`catalog_reader.translate_catalog_errors`).
+    """
+    from lance_namespace_urllib3_client import exceptions as _api_exc  # optional dep
+
+    try:
+        yield
+    except _api_exc.ApiException as exc:
+        refusal = _catalog_refusal(exc)
+        if refusal is None:
+            raise logged_outage(exc) from exc
+        raise refusal from exc
+
 
 #: The rung the catalog's DescribeTable asks, which a name is resolved on at the decision door: a caller resolves there
 #: exactly the tables it could describe.
@@ -65,7 +137,7 @@ class CatalogNames:
         from lance_namespace_urllib3_client.models import DescribeTableRequest
 
         try:
-            with translate_catalog_errors():
+            with _as_the_caller():
                 described = TableApi(catalog_read_client(self._url)).describe_table(
                     # The uuid is all this reads, so no credential is minted for the caller's location.
                     name,
@@ -74,7 +146,9 @@ class CatalogNames:
                     _request_timeout=self._timeout,
                     _headers=request_headers(bearer),
                 )
-        except _UNSEEN:
+        except CatalogAnsweredError as refused:
+            if not _unseen(refused):
+                raise
             return DatasetUuids()
         table_uuid = uuid_of(described.properties)
         parent = name.rpartition(CATALOG_DELIMITER)[0]
@@ -85,11 +159,13 @@ class CatalogNames:
         from lance_namespace_urllib3_client.models import DescribeNamespaceRequest
 
         try:
-            with translate_catalog_errors():
+            with _as_the_caller():
                 described = NamespaceApi(catalog_read_client(self._url)).describe_namespace(
                     name, DescribeNamespaceRequest(), delimiter=CATALOG_DELIMITER, _request_timeout=self._timeout, _headers=request_headers(bearer)
                 )
-        except _UNSEEN:
+        except CatalogAnsweredError as refused:
+            if not _unseen(refused):
+                raise
             return None
         return uuid_of(described.properties)
 

@@ -3,7 +3,7 @@
 open_fastapi-audit — "Seven hand-built problem+json bodies omit the numeric `code` the lance plane's
 own error model calls required".
 
-`ns_errors.problem_detail` emits SIX keys — `type,title,status,detail,code,error` — and the last two
+`ns_errors.error_response` emits SIX keys — `type,title,status,detail,code,error` — and the last two
 are not decoration. `code` is a REQUIRED, no-default field on the generated Lance-Namespace client's
 `ErrorResponse` model, so a client validating one of these bodies RAISES; it does not quietly get a
 `None`. Seven places built the envelope by hand with four keys.

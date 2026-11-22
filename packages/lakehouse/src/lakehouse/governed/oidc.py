@@ -82,11 +82,10 @@ from urllib.parse import urlsplit
 
 import httpx
 import jwt
-from lance_namespace import UnauthenticatedError
+from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from pydantic import AfterValidator, BaseModel, ConfigDict, InstanceOf, SkipValidation, ValidationError
 
 from lakehouse.governed.projected_token import read_token_file
-from lakehouse.problems.domain_errors import ServiceUnavailableError
 from lakehouse.process.own_threads import on_own_threads
 
 
@@ -320,7 +319,7 @@ class _RefreshPace:
         try:
             yield _Turn(fetches=True, flight=fetching)
         except BaseException as exc:
-            failure = str(exc.detail) if isinstance(exc, ProviderUnavailableError) else "The OIDC issuer's fetch failed"
+            failure = str(exc) if isinstance(exc, ProviderUnavailableError) else "The OIDC issuer's fetch failed"
             raise
         finally:
             with self._lock:
@@ -331,10 +330,9 @@ class _RefreshPace:
 class ProviderUnavailableError(ServiceUnavailableError):
     """The provider could not be used — its documents or this deployment's configuration of it, never the token.
 
-    A fleet `ServiceUnavailableError`, so the fleet doors render it with the URL or setting that failed. A
-    door that answers in the Lance taxonomy catches this type and raises its own `lance_namespace` 503
-    instead: that body carries the spec's `code` and redacts the message. Named here so such a door can
-    catch it without importing the fleet taxonomy.
+    The spec's `ServiceUnavailableError`, so any door answers it 503 with code 17 and a redacted detail; the message,
+    which names the URL or setting that failed, reaches the log only. A door that audits the outage catches this type
+    and raises the plain spec class, so the wire's title names the outage rather than the verifier.
     """
 
 

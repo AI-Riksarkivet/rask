@@ -66,7 +66,6 @@ from lakehouse.storage.store_session import require_env_pair, start_store_sessio
 
 log = logging.getLogger(__name__)
 
-PROBLEM_JSON = "application/problem+json"
 #: The backoff of the provenance namespace's boot task: doubling from the first delay, capped at the second.
 _PROVENANCE_RETRY_FIRST_SECONDS = 1.0
 _PROVENANCE_RETRY_MAX_SECONDS = 60.0

@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 
 class LivenessStatus(StrEnum):
     ok = "ok"
+    #: The process's own liveness check failed (its work no longer turns), answered 503 so the kubelet restarts it.
+    stalled = "stalled"
 
 
 class ReadinessStatus(StrEnum):

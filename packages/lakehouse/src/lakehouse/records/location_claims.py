@@ -480,16 +480,16 @@ def lift_fence(store: ClaimStore, location: str, token: str) -> None:
     def _lifted(raw: dict[str, object]) -> dict[str, object]:
         current = LocationClaim.model_validate(raw)
         if current.fence is None or current.fence.token != token:
-            raise _NotHeld
+            raise _NotHeldError
         return current.model_copy(update={"fence": None}).model_dump(mode="json")
 
     try:
         conditional_records.mutate_json(store.control_root, store.storage_options, claim_key(location), mutate=_lifted)
-    except (conditional_records.RecordMissingError, _NotHeld):
+    except (conditional_records.RecordMissingError, _NotHeldError):
         return
 
 
-class _NotHeld(Exception):
+class _NotHeldError(Exception):
     """The claim a lift read carries no fence of its request's."""
 
 

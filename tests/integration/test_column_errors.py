@@ -136,7 +136,7 @@ def test_field_metadata_on_an_unknown_path_is_a_404_column_not_found(table: Test
 
 
 def test_backfill_tells_the_caller_what_is_unsupported(table: TestClient) -> None:
-    """``backfill_columns`` is a genuine native stub, and Unsupported is the HONEST answer — but ``problem_detail``
+    """``backfill_columns`` is a genuine native stub, and Unsupported is the HONEST answer — but ``error_response``
     redacted every ``>= 500`` detail, so the one sentence the caller needs ("this backend does not implement
     it") was replaced with "Internal Server Error". The lakehouse ships a backfill button, so a user pressed
     it and was told the server had broken. It names an operation and leaks nothing; it is not redacted.

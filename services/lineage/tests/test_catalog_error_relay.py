@@ -1,74 +1,144 @@
-"""A 5xx from the catalog leg must not carry whatever answered into the browser.
+"""What lineage's caller reads when a describe lineage asked the catalog under the caller's own bearer fails.
 
-open_fastapi-audit — "lancekit's catalog-error translator relays the upstream response body into the
-client-visible detail on the 5xx branch, defeating ns_errors' 5xx redaction".
+A refusal a describe owes its caller is the caller's to read: its status, its `code`, which a Lance client dispatches on
+(`lance_docs/ns_catalog/spec.yaml`, `ErrorResponse` requires it), and its `detail`, passed on rather than reclassified.
+Any other answer says nothing about the caller's name. A 5xx, a 429 or a body that is no problem body of the spec's may
+come from whatever stands in front of the catalog (an ingress or a proxy with an HTML page or a diagnostic of its own),
+and code 0 is the catalog serving no such operation, which is lineage's request being wrong. The caller then reads code
+17 and a stable sentence, and the answer reaches the operator through the log only (`exception-handlers.md`: "Never
+include exception internals in the response body").
 
-`ns_errors.problem_detail` deliberately replaces `str(exc)` with a fixed "Internal Server Error" on
-every 5xx so paths, DSNs and driver text cannot reach a client. The catch-all branch here routed around
-that: `ServiceUnavailableError(f"catalog unavailable: {exc.body or exc.reason}")` is a 503 whose detail
-is the raw body of whatever answered, and `lakehouse`'s own handler keeps a 4xx-style message
-verbatim.
-
-WHY THAT BRANCH SPECIFICALLY, and why the others stay. The module comment — "the catalog's own problem
-detail rides in the message" — is a real and defensible decision for the four 4xx branches: there the
-upstream body IS the catalog's own redacted problem+json, and relaying it is what turns an opaque 500
-into the answer the direct path would have given. It does not hold for the catch-all, which is the
-branch that fires when the upstream is NOT the catalog: on the failure this actually catches, the
-responder is usually an ingress or a proxy returning an HTML error page or a diagnostic of its own, and
-that text was being served to the browser.
-
-`exception-handlers.md`: "Never include exception internals in the response body — those leak via logs
-only." The body goes to `log.exception`; the caller gets a sentence.
+A call lineage makes as itself is the other half, driven against a live catalog by
+`tests/integration/test_a_burst_of_deliveries_is_recorded_in_one_commit_per_table.py`: whatever the catalog answers it,
+the caller reads the outage.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
+from collections.abc import Iterator
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
 
 import pytest
+from lance_namespace import ErrorCode
+from lineage_lane import Feed, started
 
-from lakehouse.problems.domain_errors import ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError, UnauthorizedError
 from lineage.services import catalog_reader
+from lineage.services.catalog_client import reset_catalog_clients
 
 
-def _exc(kind: str, body: str):
-    from lance_namespace_urllib3_client import exceptions as api_exc
+_UPSTREAM = "<html>nginx/1.25.3 upstream 10.42.0.7:2333 connect() failed</html>"
+_PROBLEM_JSON = "application/problem+json"
+#: An event naming one governed table, which lineage's HTTP door describes at the catalog as its caller before it records.
+_EVENT: dict[str, Any] = {
+    "eventType": "COMPLETE",
+    "eventTime": "2026-11-22T12:00:00Z",
+    "producer": "https://example.invalid/etl",
+    "schemaURL": "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent",
+    "run": {"runId": "b1b2c3d4-0000-4000-8000-000000000001"},
+    "job": {"namespace": "etl", "name": "daily"},
+    "outputs": [{"namespace": "acme", "name": "acme$raw$pages"}],
+}
 
-    cls = getattr(api_exc, kind)
-    instance = cls.__new__(cls)
-    instance.body = body
-    instance.reason = "Bad Gateway"
-    instance.status = 502
-    return instance
+
+def _problem(code: int, status: int, detail: str) -> str:
+    return json.dumps({"type": "https://lance.org/problems/x", "title": "X", "status": status, "detail": detail, "code": code, "error": detail})
 
 
-def test_the_catch_all_does_not_relay_the_upstream_body(caplog: pytest.LogCaptureFixture) -> None:
-    """The branch that fires when the responder is NOT the catalog."""
-    secret = "<html>nginx/1.25.3 upstream 10.42.0.7:2333 connect() failed</html>"
-    with caplog.at_level(logging.ERROR), pytest.raises(ServiceUnavailableError) as caught, catalog_reader.translate_catalog_errors():
-        raise _exc("ApiException", secret)
+class _Catalog:
+    """A catalog on a loopback port answering every POST with ``status`` and ``body``."""
 
-    assert secret not in str(caught.value), f"the 503's client-visible detail carried the upstream body: {caught.value}"
-    # On the RECORD, not in `caplog.text`: `extra=` fields do not appear in the default format, so a
-    # text match would fail against a log line that does carry them. What reaches the log pipeline is
-    # the attribute.
-    assert any(getattr(r, "body", None) == secret for r in caplog.records), "the body must still reach the operator — via the log, not the wire"
+    def __init__(self) -> None:
+        self.status = 200
+        self.body = b"{}"
+        self.content_type = _PROBLEM_JSON
+        answer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                self.rfile.read(int(self.headers.get("content-length", 0)))
+                self.send_response(answer.status)
+                self.send_header("content-type", answer.content_type)
+                self.send_header("content-length", str(len(answer.body)))
+                self.end_headers()
+                self.wfile.write(answer.body)
+
+            def log_message(self, format: str, *args: object) -> None:  # noqa: A002 — the stdlib's own parameter name
+                del format, args
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.url = f"http://127.0.0.1:{self._server.server_port}"
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+@pytest.fixture
+def catalog(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Catalog]:
+    reset_catalog_clients()
+    stub = _Catalog()
+    monkeypatch.setenv("LINEAGE_CATALOG_URL", stub.url)
+    yield stub
+    stub.close()
+    reset_catalog_clients()
+
+
+def test_lineages_door_answers_the_catalogs_refusal_of_the_callers_describe_as_the_catalog_sent_it(catalog: _Catalog, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Through lineage's own app: what the catalog refuses the caller's name with reaches the caller in the spec's body
+    as the catalog sent it, and the event is not recorded."""
+    catalog.status, catalog.body = 400, _problem(ErrorCode.INVALID_INPUT, 400, "a table id has three segments").encode()
+
+    with started(monkeypatch, Feed()) as lineage:
+        refused = lineage.client.post("/api/v1/lineage", json=_EVENT)
+
+    assert (refused.status_code, refused.headers["content-type"]) == (400, _PROBLEM_JSON), refused.text
+    body = refused.json()
+    assert (body["type"], body["status"], body["code"], body["detail"]) == (
+        "https://lance.org/problems/cataloganswerederror",
+        400,
+        ErrorCode.INVALID_INPUT,
+        "a table id has three segments",
+    )
+    assert lineage.feed.recorded == []
 
 
 @pytest.mark.parametrize(
-    ("kind", "error"),
+    ("status", "answer", "content_type"),
     [
-        ("ConflictException", ConflictError),
-        ("UnauthorizedException", UnauthorizedError),
-        ("ForbiddenException", ForbiddenError),
-        ("NotFoundException", NotFoundError),
+        pytest.param(502, _UPSTREAM, "text/html", id="a-proxys-page"),
+        pytest.param(502, _UPSTREAM * 20, "text/html", id="a-page-longer-than-the-log-keeps"),
+        pytest.param(404, _UPSTREAM, "text/html", id="a-404-that-is-no-problem-body"),
+        pytest.param(400, _problem(99, 400, "no such code"), _PROBLEM_JSON, id="a-code-the-spec-does-not-define"),
+        pytest.param(406, _problem(ErrorCode.UNSUPPORTED, 406, "Not Acceptable"), _PROBLEM_JSON, id="an-operation-the-catalog-does-not-serve"),
+        pytest.param(422, _problem(ErrorCode.INVALID_INPUT, 422, "Validation Error"), _PROBLEM_JSON, id="a-status-its-code-does-not-map-to"),
     ],
 )
-def test_the_4xx_branches_still_relay_the_catalogs_own_detail(kind: str, error: type[Exception]) -> None:
-    """Their rationale is recorded and correct: the upstream body IS the catalog's redacted
-    problem+json, and relaying it is what turns an opaque 500 into the answer the direct path gives.
-    A blanket redaction here would have been the easy over-correction."""
-    detail = "table bronze$pages is not registered"
-    with pytest.raises(error) as caught, catalog_reader.translate_catalog_errors():
-        raise _exc(kind, detail)
-    assert detail in str(caught.value)
+def test_lineages_door_answers_anything_but_a_catalog_refusal_as_the_outage_and_keeps_the_answer_in_the_log(
+    status: int, answer: str, content_type: str, catalog: _Catalog, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Through lineage's own app: an answer that is no refusal a describe owes its caller reaches the caller as code 17
+    naming nothing of what answered, whose first 512 characters the log keeps as one warning."""
+    caplog.set_level(logging.WARNING, logger=catalog_reader.__name__)
+    catalog.status, catalog.body, catalog.content_type = status, answer.encode(), content_type
+
+    with started(monkeypatch, Feed()) as lineage:
+        unanswered = lineage.client.post("/api/v1/lineage", json=_EVENT)
+
+    assert (unanswered.status_code, unanswered.headers["content-type"]) == (503, _PROBLEM_JSON), unanswered.text
+    body = unanswered.json()
+    assert {member: value for member, value in body.items() if member != "instance"} == {
+        "type": "https://lance.org/problems/cataloganswerederror",
+        "title": "CatalogAnsweredError",
+        "status": 503,
+        "detail": "Internal Server Error",
+        "code": ErrorCode.SERVICE_UNAVAILABLE,
+        "error": "Internal Server Error",
+    }
+    kept = [(record.levelname, getattr(record, "body", None)) for record in caplog.records if record.name == catalog_reader.__name__]
+    assert kept == [("WARNING", answer[:512])]
+    assert lineage.feed.recorded == []

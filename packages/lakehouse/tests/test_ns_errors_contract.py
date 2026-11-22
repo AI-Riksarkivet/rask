@@ -13,10 +13,19 @@ of failing a client with a 500.
 
 from __future__ import annotations
 
-from lance_namespace import ErrorCode, ServiceUnavailableError, UnsupportedOperationError
+import json
+from typing import Any
+
+from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
 from lance_namespace.errors import InternalError
 
-from lakehouse.problems.ns_errors import _STATUS, problem_detail, status_for
+from lakehouse.problems.ns_errors import _STATUS, error_response, status_for
+
+
+def _answered(exc: LanceNamespaceError) -> tuple[int, dict[str, Any]]:
+    """The status and body a door answers ``exc`` with."""
+    response = error_response(exc)
+    return response.status_code, json.loads(bytes(response.body))
 
 
 def test_every_sdk_error_code_is_mapped() -> None:
@@ -36,7 +45,7 @@ def test_an_unsupported_answer_keeps_its_message_because_it_is_a_capability_answ
     """An Unsupported message names an operation and leaks nothing — it is the one thing that tells the caller to
     stop asking. The blanket ``>= 500`` redaction replaced it with "Internal Server
     Error", so a user pressing the lakehouse's backfill button was told the server had broken (#101)."""
-    status, body = problem_detail(UnsupportedOperationError("alter_table_backfill_columns not implemented"))
+    status, body = _answered(UnsupportedOperationError("alter_table_backfill_columns not implemented"))
     # The spec's UnsupportedOperationErrorResponse is 406, and Lance's own reference server maps ErrorCode::Unsupported
     # to NOT_ACCEPTABLE.
     assert status == 406
@@ -49,6 +58,6 @@ def test_every_other_5xx_is_still_redacted() -> None:
     needs no exemption at all — but a genuine 5xx fault's message carries paths, DSNs and driver text,
     and that redaction is what this pins."""
     for exc in (InternalError("psycopg: connection to 10.0.0.4:5432 failed"), ServiceUnavailableError("s3://rask-work unreachable")):
-        _, body = problem_detail(exc)
+        _, body = _answered(exc)
         assert body["detail"] == "Internal Server Error", body
         assert body["error"] == "Internal Server Error", body

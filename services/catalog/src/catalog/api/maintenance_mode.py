@@ -29,11 +29,10 @@ from catalog.api.read_actions import READ_ACTIONS, TABLE_VEND_ROUTE
 from catalog.api.route_path import route_path
 from catalog.core import vending
 from catalog.core.config import Settings
-from lakehouse.problems.envelope import problem_body
-from lakehouse.problems.ns_errors import problem_detail
+from lakehouse.problems.envelope import problem_response
+from lakehouse.problems.ns_errors import error_response
 
 
-PROBLEM_JSON = "application/problem+json"
 RETRY_AFTER_SECONDS = 60
 _SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
@@ -95,20 +94,14 @@ def _matched_route(request: Request) -> str | None:
 
 def maintenance_response() -> JSONResponse:
     """Build the standardized 503 + ``Retry-After`` problem+json response."""
-    return JSONResponse(
-        status_code=503,
-        # SHARED builder: the spec's `code` is required on the generated client's ErrorResponse, and
-        # this body is emitted on `/v1` routes those clients call. The response is still built here
-        # rather than raised, because `Retry-After` carries the maintenance WINDOW (60s, not the
-        # draining 5s) and the installed handler emits no headers at all.
-        content=problem_body(
-            ErrorCode.SERVICE_UNAVAILABLE,
-            status=503,
-            title="MaintenanceMode",
-            slug="maintenance",
-            detail="Catalog is in read-only maintenance mode; retry after the window.",
-        ),
-        media_type=PROBLEM_JSON,
+    # Built rather than raised, because `Retry-After` carries the maintenance WINDOW (60s, not the draining 5s), and no
+    # raised error carries a header.
+    return problem_response(
+        ErrorCode.SERVICE_UNAVAILABLE,
+        status=503,
+        title="MaintenanceMode",
+        slug="maintenance",
+        detail="Catalog is in read-only maintenance mode; retry after the window.",
         headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
     )
 
@@ -139,7 +132,6 @@ async def maintenance_middleware(
 
 def fault_response(fault: InternalError) -> JSONResponse:
     """A request layer's answer to a server fault it found, as the app's own handler answers one a door raises: the
-    spec's InternalError as problem+json, its detail redacted (`lakehouse.problems.ns_errors.problem_detail`). Answered here, as
+    spec's InternalError as problem+json, its detail redacted (`lakehouse.problems.ns_errors.error_response`). Answered here, as
     a refusal of this layer's own is, because an exception raised from a layer passes no handler of the app's."""
-    status, body = problem_detail(fault)
-    return JSONResponse(status_code=status, content=body, media_type=PROBLEM_JSON)
+    return error_response(fault)

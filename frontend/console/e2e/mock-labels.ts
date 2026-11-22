@@ -58,8 +58,29 @@ const worldOf = (bearer: string): World => {
 const json = (data: unknown, status = 200): Response =>
 	new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 
-const problem = (status: number, code: number, detail: string): Response =>
-	json({ type: 'about:blank', title: 'LabelError', status, code, detail }, status);
+/** The spec's error class each code the mock answers names, the problem body's title. */
+const TITLES: Record<number, string> = {
+	1: 'NamespaceNotFoundError',
+	3: 'NamespaceNotEmptyError',
+	13: 'InvalidInputError',
+};
+
+/** The catalog's problem body (`lakehouse.problems.envelope.problem_body`): RFC 9457 plus the spec's `code` and `error`. */
+const problem = (status: number, code: number, detail: string): Response => {
+	const title = TITLES[code] ?? 'InternalError';
+	const body = {
+		type: `https://lance.org/problems/${title.toLowerCase()}`,
+		title,
+		status,
+		detail,
+		code,
+		error: detail,
+	};
+	return new Response(JSON.stringify(body), {
+		status,
+		headers: { 'content-type': 'application/problem+json' },
+	});
+};
 
 const objectKey = (kind: Scope, id: string): string => `${kind}:${id}`;
 

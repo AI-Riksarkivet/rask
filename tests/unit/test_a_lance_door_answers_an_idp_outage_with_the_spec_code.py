@@ -2,9 +2,8 @@
 
 `lance_docs/ns_catalog/spec.yaml` requires `code` on `ErrorResponse`, which `ServiceUnavailableErrorResponse`
 references, and a generated Lance client dispatches on it. Every door here raises `lance_namespace` errors for its own
-refusals, so an outage that left one as the fleet's four-key `about:blank#` body would be the one answer on that door a
-Lance client cannot read. The same body would also carry the in-cluster URL the verifier could not use, past the 5xx
-redaction every other Lance-shaped 503 gets.
+refusals, so an outage answers in the same body, with the in-cluster URL the verifier could not use redacted as every
+5xx detail is.
 
 EVERY DOOR. Each door catches the verifier's `ProviderUnavailableError` by type, so every door meets an unreachable
 discovery document. The key-set fault runs at one door: its discovery document names no signing algorithms, so it
@@ -14,8 +13,8 @@ AND ITS LOG LINE. The Lance body redacts the message, so the warning each site l
 which fault it was. Each case asserts that event, which also proves the case reached the site it is named for.
 
 THE VERIFIER IS REAL, and so is the IdP: a loopback HTTP server serving the broken document, or a port nothing accepts
-on. Each door sits behind both handler installers in the order both app factories install them
-(`register_handlers`, then `install_problem_handlers`), so the body asserted is the one a client receives. The
+on. Each door sits behind the problem handlers every app factory installs (`install_problem_handlers`), so the body
+asserted is the one a client receives. The
 catalog's door also has its own file, `services/catalog/tests/test_an_unreachable_idp_is_audited_as_ours.py`, because
 it also audits the refusal.
 """
@@ -29,6 +28,7 @@ import threading
 from collections.abc import Awaitable, Callable, Iterator
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 
 import jwt
 import pytest
@@ -44,10 +44,10 @@ from lakehouse.governed import oidc
 from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
-from lakehouse.problems.domain_errors import register_handlers
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lineage.api import security as lineage_security
 from lineage.core.config import LineageSettings
+from lineage.services.provenance import ProvenanceStore
 
 
 AUDIENCE = "rask"
@@ -173,7 +173,6 @@ def broken_provider(request: pytest.FixtureRequest) -> Iterator[_BrokenProvider]
 
 def _client(door: _Door, provider: _BrokenProvider) -> TestClient:
     app = FastAPI()
-    register_handlers(app)
     install_problem_handlers(app, logging.getLogger(__name__))
     app.state.oidc = IdpVerifier(provider.verifier, [OidcProvider(issuer=provider.issuer, idp_id="dex", connectors={"local": "dex"})])
     # Never verified: every fault is met before a signature is checked. The `kid` carries it to the key-set fetch.
@@ -205,3 +204,23 @@ def test_a_provider_the_door_cannot_use_is_a_503_with_the_spec_code(door: _Door,
     assert response.json()["code"] == ErrorCode.SERVICE_UNAVAILABLE, response.text
     assert broken_provider.issuer not in response.text
     assert [record.getMessage() for record in caplog.records if record.name == oidc.__name__] == [LOGGED_AS[broken_provider.fault]]
+
+
+def test_a_lineage_door_whose_catalog_token_cannot_be_read_is_a_503_with_the_spec_code(tmp_path: Path) -> None:
+    """Lineage reads its own token for the catalog on every call; a token it cannot read is the spec's outage, and the
+    body names no path the pod keeps it at."""
+    missing = tmp_path / "catalog-token"
+    settings = LineageSettings.model_validate({"LINEAGE_CATALOG_URL": "http://catalog.invalid", "RASK_CATALOG_IDENTITY_TOKEN_FILE": str(missing)})
+    app = FastAPI()
+    install_problem_handlers(app, logging.getLogger(__name__))
+
+    @app.get("/door")
+    async def _door() -> dict[str, str]:
+        await ProvenanceStore.from_settings(settings).ensure()
+        return {"door": "open"}
+
+    response = TestClient(app, raise_server_exceptions=False).get("/door")
+
+    assert (response.status_code, response.headers["content-type"]) == (503, "application/problem+json"), response.text
+    assert (response.json()["code"], response.json()["type"]) == (ErrorCode.SERVICE_UNAVAILABLE, "https://lance.org/problems/identitytokenunavailableerror")
+    assert str(missing) not in response.text

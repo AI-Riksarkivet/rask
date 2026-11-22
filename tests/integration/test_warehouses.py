@@ -480,7 +480,7 @@ def test_a_replayed_delete_answers_the_first_one_and_leaves_a_warehouse_register
 
 
 def test_a_purge_that_fails_is_finished_by_the_same_call_again(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The warehouse's record goes after its bucket's purge, so a purge that fails answers PartiallyApplied with the
+    """The warehouse's record goes after its bucket's purge, so a purge that fails answers PartiallyAppliedError with the
     warehouse still standing, and the same call issued again purges the bucket and removes the warehouse."""
     purged: list[str] = []
 

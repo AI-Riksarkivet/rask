@@ -32,8 +32,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from catalog.core.config import Settings
-from lakehouse.problems.envelope import PROBLEM_JSON
-from lakehouse.problems.ns_errors import problem_detail
+from lakehouse.problems.ns_errors import error_response
 
 
 #: `/` escaped, in either case.
@@ -78,5 +77,4 @@ def _without_prefix(raw: bytes, prefix: bytes) -> bytes:
 
 def _escaped_slash_refusal() -> JSONResponse:
     """The spec's InvalidInput for a path holding ``%2F``, rendered here: this layer answers before the app's handlers."""
-    status, body = problem_detail(InvalidInputError("a path segment holds '/', escaped as %2F: no name holds '/' (ADR 0173 §4), and no route carries one"))
-    return JSONResponse(status_code=status, content=body, media_type=PROBLEM_JSON)
+    return error_response(InvalidInputError("a path segment holds '/', escaped as %2F: no name holds '/' (ADR 0173 §4), and no route carries one"))

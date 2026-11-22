@@ -264,7 +264,12 @@ def test_a_vend_whose_policy_sts_would_refuse_is_refused_naming_why(sessions: _R
     refused = sessions.catalog.post(f"/management/v1/table/{table}/credentials", params={"tier": "write"})
 
     body = refused.json()
-    assert (refused.status_code, refused.headers["content-type"], body["code"], body["title"]) == (500, "application/problem+json", 18, "SessionPolicyTooLong")
+    assert (refused.status_code, refused.headers["content-type"], body["code"], body["title"]) == (
+        500,
+        "application/problem+json",
+        18,
+        "SessionPolicyTooLongError",
+    )
     assert body["session_policy_limit"] == 100 < body["session_policy_characters"]
     assert len(sessions.sessions()) == exchanged, "the store was asked to take a policy the catalog knew it refuses"
 

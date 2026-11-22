@@ -2,8 +2,9 @@
 
 :class:`RestCatalogWriteTransport` writes through ``POST /v1/table/{id}/merge_insert`` and ``/delete``, so the catalog
 governs the write (its authorization, the table's contract and the announcement on lineage). The base URL comes from the
-caller and the transport carries a urllib3 ``Retry``; catalog errors are translated onto the DomainError hierarchy so a
-denial or a conflict keeps its status through the caller.
+caller and the transport carries a urllib3 ``Retry``. Lineage writes its own tables as itself, so a write the catalog
+refuses or cannot serve raises the outage, the catalog's answer in the log and in the cause
+(`catalog_reader.translate_catalog_errors`).
 """
 
 from __future__ import annotations
@@ -24,9 +25,8 @@ if TYPE_CHECKING:
 class RestCatalogWriteTransport:
     """Live REST catalog transport — ``POST /v1/table/{id}/merge_insert`` + ``/delete``
     via the lance-ns client's ``DataApi.merge_insert_into_table`` / ``delete_from_table``.
-    Host-agnostic (base URL from settings) + retry-friendly; catalog errors are
-    translated onto the DomainError hierarchy so denials/conflicts keep their
-    status through our services."""
+    Host-agnostic (base URL from settings) + retry-friendly; a write the catalog refuses or cannot
+    serve raises the outage (`catalog_reader.translate_catalog_errors`)."""
 
     def __init__(
         self,

@@ -11,6 +11,7 @@ hands out the deliveries it holds at once.
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 import uuid
 from collections import Counter
@@ -18,15 +19,18 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
+from lance_namespace import ErrorCode
 
 from catalog.core.config import get_settings
 from lakehouse.events.bus_delivery import Verdict
 from lineage.core.metrics import Door
+from lineage.services import catalog_reader
 from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.provenance import EDGES, FEED, RUNS, ProvenanceStore
-from tests.integration.lineage_app import ensure_tables, live_catalog, run_event
+from tests.integration.lineage_app import ensure_tables, live_catalog, live_lineage, run_event
 from tests.open_gate import admits_everything
 
 
@@ -155,23 +159,31 @@ def test_a_run_founded_by_two_replicas_at_once_is_extended_only_by_the_author_wh
     assert edge_authors == {_BOB}
 
 
-def test_an_event_whose_edges_the_catalog_refuses_fails_alone_and_its_feed_row_never_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    fresh = [_complete(str(uuid.uuid4()), f"lance_catalog$acme-silver$t{n}") for n in range(12)]
-    # 64 inputs to 64 outputs, lineage's bound on each (`lineage.models.MAX_DATASETS`): 4,096 edges, about 1 MB of rows
-    # against a catalog whose body cap is 256 KiB, while the event itself weighs about 15 kB.
-    wide = _complete(
+#: The body cap the catalog is given below, which the edges of :func:`_wide` exceed and the event itself does not.
+_BODY_CAP = 256 * 1024
+
+
+def _wide() -> dict[str, Any]:
+    """An event whose edges the catalog refuses: 64 inputs to 64 outputs, lineage's bound on each
+    (`lineage.models.MAX_DATASETS`), so 4,096 edges, about 1 MB of rows against :data:`_BODY_CAP`, while the event itself
+    weighs about 15 kB."""
+    return _complete(
         str(uuid.uuid4()),
         "lance_catalog$acme-silver$w0",
         inputs=tuple(f"lance_catalog$acme-bronze$i{n}" for n in range(64)),
         outputs=[f"lance_catalog$acme-silver$w{n}" for n in range(1, 64)],
     )
-    burst = [*fresh[:6], wide, *fresh[6:]]
+
+
+def test_an_event_whose_edges_the_catalog_refuses_fails_alone_and_its_feed_row_never_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    fresh = [_complete(str(uuid.uuid4()), f"lance_catalog$acme-silver$t{n}") for n in range(12)]
+    burst = [*fresh[:6], _wide(), *fresh[6:]]
 
     with live_catalog(tmp_path / "catalog", monkeypatch) as url:
         store = _store(url)
         # Set once the app is built, for the cap its doors read per request: the body-limit middleware takes its own
         # when `catalog.main` is first imported, and would hold this one for every later test in the worker.
-        monkeypatch.setenv("LANCE_MAX_BODY_BYTES", str(256 * 1024))
+        monkeypatch.setenv("LANCE_MAX_BODY_BYTES", str(_BODY_CAP))
         get_settings.cache_clear()
         outcomes = _deliver(store, burst)
         feed = _feed(store)
@@ -182,3 +194,30 @@ def test_an_event_whose_edges_the_catalog_refuses_fails_alone_and_its_feed_row_n
     # The edges commit before the feed row that asserts them, so the refused event left neither.
     assert feed == Counter({(run, "COMPLETE"): 1 for run in runs})
     assert edges == Counter(dict.fromkeys(runs, 1))
+
+
+def test_an_event_whose_edges_the_catalog_refuses_is_answered_at_the_http_door_as_the_outage_naming_nothing_of_the_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Lineage writes its tables as itself, so what the catalog refuses that write with is no answer for the producer
+    whose event lineage took: the door answers the spec's outage, and the refusal reaches the operator through the log."""
+    caplog.set_level(logging.WARNING, logger=catalog_reader.__name__)
+
+    with live_catalog(tmp_path / "catalog", monkeypatch) as url, live_lineage(url, monkeypatch) as lineage:
+        # Set once both apps are built, as above.
+        monkeypatch.setenv("LANCE_MAX_BODY_BYTES", str(_BODY_CAP))
+        get_settings.cache_clear()
+        answered = httpx.post(f"{lineage}/api/v1/lineage", json=_wide(), timeout=120)
+
+    assert (answered.status_code, answered.headers["content-type"]) == (503, "application/problem+json"), answered.text
+    body = answered.json()
+    assert {member: value for member, value in body.items() if member != "instance"} == {
+        "type": "https://lance.org/problems/cataloganswerederror",
+        "title": "CatalogAnsweredError",
+        "status": 503,
+        "detail": "Internal Server Error",
+        "code": ErrorCode.SERVICE_UNAVAILABLE,
+        "error": "Internal Server Error",
+    }
+    refused_with = {getattr(record, "status", None) for record in caplog.records if record.name == catalog_reader.__name__}
+    assert refused_with == {400}

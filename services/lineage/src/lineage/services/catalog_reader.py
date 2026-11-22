@@ -17,18 +17,11 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Final, Protocol
 
 import pyarrow as pa
+from lance_namespace import ErrorCode, LanceNamespaceError
 from pydantic import BaseModel
 
 from lakehouse.arrow_ipc import decode_arrow_response
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.problems.domain_errors import (
-    ConflictError,
-    ForbiddenError,
-    NotFoundError,
-    ServiceUnavailableError,
-    UnauthorizedError,
-    ValidationError,
-)
 from lineage.services.catalog_client import catalog_read_client
 from lineage.services.catalog_client import request_headers as _request_headers
 
@@ -38,6 +31,30 @@ log = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from lance_namespace_urllib3_client import QueryTableRequest
+    from lance_namespace_urllib3_client.exceptions import ApiException
+
+
+#: What lineage answers in place of a catalog answer its caller may not read; the answer itself goes to the log.
+_UNAVAILABLE: Final = "the catalog is unavailable"
+#: How much of the catalog's answer the log keeps: a problem body whole, or the head of a proxy's page.
+_LOGGED_BODY: Final = 512
+
+
+class CatalogAnsweredError(LanceNamespaceError):
+    """The catalog refused, or could not serve, a call lineage made through its doors.
+
+    ``code`` is 17, the outage, for every answer to a call lineage made as itself (:func:`translate_catalog_errors`) and
+    for any answer that is no refusal a describe owes its caller. It is the catalog's own only for such a refusal of a
+    describe asked under the caller's own bearer, which is the caller's to read (`lineage.services.names`).
+
+    One class rather than the spec's class for the code, so nothing of lineage's reads the catalog's answer as a
+    refusal of lineage's own: its lanes park a ``PermissionDeniedError`` as lineage's refusal of an event, while a
+    catalog 403 to lineage's own identity is an outage of lineage's grant there, which a delivery asks for again.
+    """
+
+    def __init__(self, message: str, *, code: ErrorCode = ErrorCode.SERVICE_UNAVAILABLE) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class CatalogVersion(BaseModel):
@@ -134,8 +151,8 @@ class CatalogTableReader:
         version: int | None = None,
     ) -> pa.Table:
         """Scan the table, page by page — ``version`` pins a HISTORICAL snapshot (catalog time-travel;
-        a bad/reclaimed version is the catalog's 404, translated to ``NotFoundError``), and an unpinned
-        read pins the version current when it starts, so its pages cannot straddle a commit.
+        a bad/reclaimed version is the catalog's 404, raised as the outage a :class:`CatalogAnsweredError` is), and an
+        unpinned read pins the version current when it starts, so its pages cannot straddle a commit.
         """
         pinned = version if version is not None else self.table_version()
         start = offset or 0
@@ -177,44 +194,34 @@ class CatalogTableReader:
         return self.to_table(limit=0).schema
 
 
+def logged_outage(exc: ApiException) -> CatalogAnsweredError:
+    """The outage lineage answers in place of ``exc``, the catalog's answer, which is logged here: an ingress's HTML page,
+    a diagnostic or a refusal of lineage's own identity, it goes to the operator and never to the wire.
+
+    A warning carrying the answer's status, reason and the head of its body, with no traceback: the failure itself is
+    logged by whatever handles the outage, which holds ``exc`` as its cause.
+    """
+    log.warning("catalog_unavailable", extra={"status": exc.status, "reason": exc.reason, "body": (exc.body or "")[:_LOGGED_BODY]})
+    return CatalogAnsweredError(_UNAVAILABLE)
+
+
 @contextmanager
 def translate_catalog_errors() -> Generator[None]:
-    """Map the generated client's typed HTTP exceptions onto our DomainError
-    hierarchy, so a catalog 409/403/404/400/5xx renders as the SAME problem+json
-    the direct path produces instead of an opaque 500. The catalog's own problem
-    detail rides in the message."""
+    """Answer the failure of a call lineage made through the generated client AS ITSELF as the outage, whatever the
+    catalog said.
+
+    Lineage reads and writes its provenance tables under its own identity, so what the catalog refuses there is lineage's
+    own grant, token, rows or tables: nothing lineage's caller asked for, and nothing it may read. The caller is answered
+    code 17 with a stable sentence and the catalog's answer goes to the log (:func:`logged_outage`). The client's
+    exception is the cause, carrying the HTTP status. A describe asked under the caller's own bearer relays the
+    catalog's refusal instead (`lineage.services.names`).
+    """
     from lance_namespace_urllib3_client import exceptions as _api_exc  # optional dep
 
     try:
         yield
-    except _api_exc.ConflictException as exc:
-        raise ConflictError(f"catalog write conflict: {exc.body}") from exc
-    except _api_exc.UnauthorizedException as exc:
-        # 401 is NOT 403, and collapsing them cost real debugging time: a client sent no
-        # bearer, the catalog answered 401, and the browser was told 403 — which reads as "you lack
-        # a grant" and sends you looking for a missing FGA tuple that was never the problem. A
-        # missing/invalid credential must stay 401 so the next reader can tell authn from authz.
-        raise UnauthorizedError(f"catalog rejected the credential: {exc.body}") from exc
-    except _api_exc.ForbiddenException as exc:
-        raise ForbiddenError(f"catalog denied the request: {exc.body}") from exc
-    except _api_exc.NotFoundException as exc:
-        raise NotFoundError(f"catalog table not found: {exc.body}") from exc
-    except (_api_exc.BadRequestException, _api_exc.UnprocessableEntityException) as exc:
-        raise ValidationError(f"catalog rejected the request: {exc.body}") from exc
     except _api_exc.ApiException as exc:
-        # A STABLE SENTENCE, not the upstream body — and this branch specifically, not the four above.
-        #
-        # `ns_errors.problem_detail` replaces `str(exc)` with a fixed "Internal Server Error" on every
-        # 5xx so paths, DSNs and driver text cannot reach a client. Relaying `exc.body` here routed around that: a 503 whose detail is
-        # whatever answered, rendered verbatim because `lakehouse`'s handler keeps 4xx-style messages.
-        #
-        # The 4xx branches above are DIFFERENT and stay as they are: there the body IS the catalog's own
-        # redacted problem+json, and relaying it is what turns an opaque 500 into the answer the direct
-        # path gives — their rationale is recorded and correct. This branch is the one that fires when
-        # the responder is NOT the catalog, and on the failure it actually catches that is usually an
-        # ingress or proxy returning an HTML error page or a diagnostic of its own.
-        log.exception("catalog_unavailable", extra={"reason": exc.reason, "body": exc.body})
-        raise ServiceUnavailableError("the catalog is unavailable") from exc
+        raise logged_outage(exc) from exc
 
 
 class RestCatalogTransport:
@@ -286,7 +293,7 @@ class RestCatalogTransport:
                 _headers=self.request_headers(),
             )
         if response.version is None:
-            raise ServiceUnavailableError(f"catalog describe returned no version for {table_id}")
+            raise CatalogAnsweredError(f"catalog describe returned no version for {table_id}")
         return int(response.version)
 
     def list_versions(self, table_id: list[str], *, limit: int | None = None) -> list[CatalogVersion]:

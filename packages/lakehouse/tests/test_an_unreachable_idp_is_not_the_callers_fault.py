@@ -16,7 +16,7 @@ WHAT THAT PRODUCED at the door (`door_caller.caller_of`), whose handler is
 
   * the AUDIT TRAIL records `invalid_token` against a real subject — the estate's evidence of who was
     refused and why, asserting that a caller presented a bad bearer when the bearer was never read;
-  * the CALLER gets a 500, because an `httpx` error is not a `DomainError` and no handler maps it.
+  * the CALLER gets a 500, because an `httpx` error is no error the problem handlers map to a refusal.
 
 Both are wrong in the same direction: an outage in the estate's own configuration is reported as the
 user's mistake, which hides the outage and slanders the user. N failed requests during an IdP blip

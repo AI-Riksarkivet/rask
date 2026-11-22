@@ -23,7 +23,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from lakehouse.process.lifecycle import is_draining, is_started
-from lakehouse.schemas.health import Liveness, Readiness, ReadinessStatus
+from lakehouse.schemas.health import Liveness, LivenessStatus, Readiness, ReadinessStatus
 
 
 #: A service-specific readiness check, run only AFTER the lifecycle gates pass. Returns the
@@ -45,14 +45,16 @@ def make_probes_router(ready_check: ReadyCheck, live_check: LiveCheck | None = N
     """Build the probe router around the service's readiness check, and its liveness check when it has one."""
     probes = APIRouter(tags=["health"])
 
-    @probes.get("/livez", response_model=Liveness)
+    # A probe's body is the process's answer, not an error's, so its 503 is the same model as its 200.
+    @probes.get("/livez", response_model=Liveness, responses={HTTPStatus.SERVICE_UNAVAILABLE: {"model": Liveness}})
     async def livez() -> JSONResponse:
         # async, not sync def: the probe must run ON the event loop, never queued behind the
         # blocking data-plane threadpool — no I/O happens here, so there is nothing to yield for.
-        alive = live_check is None or live_check()
-        return JSONResponse(status_code=HTTPStatus.OK if alive else HTTPStatus.SERVICE_UNAVAILABLE, content=Liveness().model_dump(mode="json") if alive else {})
+        if live_check is None or live_check():
+            return JSONResponse(status_code=HTTPStatus.OK, content=Liveness().model_dump(mode="json"))
+        return JSONResponse(status_code=HTTPStatus.SERVICE_UNAVAILABLE, content=Liveness(status=LivenessStatus.stalled).model_dump(mode="json"))
 
-    @probes.get("/readyz", response_model=Readiness)
+    @probes.get("/readyz", response_model=Readiness, responses={HTTPStatus.SERVICE_UNAVAILABLE: {"model": Readiness}})
     async def readyz(request: Request) -> JSONResponse:
         state = request.app.state
         # Drain first: once the lifespan flips the drain flag, that is the answer regardless of

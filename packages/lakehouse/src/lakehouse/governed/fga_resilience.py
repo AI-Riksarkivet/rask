@@ -82,7 +82,7 @@ _TRANSIENT_NETWORK: tuple[type[BaseException], ...] = (
 )
 
 
-class UnansweredBatchItems(Exception):
+class UnansweredBatchItemsError(Exception):
     """BatchCheck answered, but not for every item: each one named here carries its own ``CheckError``.
 
     The SDK reports such an item as ``allowed=False``, so reading the verdict alone turns an OpenFGA
@@ -100,7 +100,7 @@ class UnansweredBatchItems(Exception):
 
 
 # Every exception class the read/write paths fail CLOSED on (→ 503), never propagate.
-FAIL_CLOSED: Final[tuple[type[BaseException], ...]] = (ApiException, UnansweredBatchItems, *_TRANSIENT_NETWORK)
+FAIL_CLOSED: Final[tuple[type[BaseException], ...]] = (ApiException, UnansweredBatchItemsError, *_TRANSIENT_NETWORK)
 
 
 # --------------------------------------------------------------------------- #
@@ -120,7 +120,7 @@ def _is_transient(exc: BaseException) -> bool:
     """
     if isinstance(exc, _TRANSIENT_NETWORK):
         return True
-    if isinstance(exc, UnansweredBatchItems):
+    if isinstance(exc, UnansweredBatchItemsError):
         return exc.transient
     if not isinstance(exc, ApiException):
         return False
@@ -250,7 +250,7 @@ __all__ = [
     "FAIL_CLOSED",
     "ONE_ATTEMPT",
     "RetryPolicy",
-    "UnansweredBatchItems",
+    "UnansweredBatchItemsError",
     "guarded",
     "reset_circuit",
     "retrying",

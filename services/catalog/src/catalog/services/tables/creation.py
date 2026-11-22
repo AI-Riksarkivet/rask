@@ -39,7 +39,7 @@ from catalog.services import commit_authors, committed_files, contracts, table_b
 from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.lancekit.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base_path_refs
 from lakehouse.lancekit.lance_session import open_dataset
-from lakehouse.problems.ns_errors import PartiallyApplied
+from lakehouse.problems.ns_errors import PartiallyAppliedError
 from lakehouse.process.supervision import is_fault
 from lakehouse.records import base_registry, commit_records, file_identities, location_claims
 from lakehouse.storage.options import StorageOptions, object_client, on_s3
@@ -247,7 +247,7 @@ def declare_table(
             table by its ``<name>.lance`` directory, never by its row (measured on pylance 13.0.0).
         ConcurrentModificationError: Another table holds the location.
         TableAlreadyExistsError: A table already holds the name.
-        PartiallyApplied: ``after_register`` refused the row and the backend kept it.
+        PartiallyAppliedError: ``after_register`` refused the row and the backend kept it.
     """
     if len(segments) < 2:
         raise InvalidInputError(f"table {segments!r} names no namespace; a table the catalog makes lives in one")
@@ -272,9 +272,9 @@ def declare_table(
             # The row stands, so its marker and claim stay with it: a table never stands at a location no claim holds.
             # A retry would meet it as already there, so the answer names it and its remedy.
             name = "$".join(segments)
-            raise PartiallyApplied(
+            raise PartiallyAppliedError(
                 f"the table {name} was recorded, its declaration was then refused ({exc}), and its row could not be removed",
-                problem_extra={"table": name, "recorded": True, "remedy": "drop it before retrying"},
+                extensions={"table": name, "recorded": True, "remedy": "drop it before retrying"},
             ) from exc
         _unreserve(location, so, claims=claims, holder=holder)
         # The `dir` backend keeps namespaces and tables in one object-id space and arbitrates the add by

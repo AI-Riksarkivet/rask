@@ -14,15 +14,6 @@ root_packages =
     lakehouse
 include_external_packages = True
 
-[importlinter:contract:catalog-api-speaks-the-spec-taxonomy]
-name = catalog.api raises the Lance Namespace spec taxonomy, never the fleet exceptions
-type = forbidden
-source_modules =
-    catalog.api
-forbidden_modules =
-    lakehouse.problems.domain_errors
-allow_indirect_imports = True
-
 # The lakehouse knows no client (XC-175): a client and a compute engine (ADR 0155) reach the lakehouse only through its
 # public doors, so deleting every client changes nothing in the lakehouse. No lakehouse service and nothing in the
 # library they run imports Ray, lance-ray or lancedb, by any chain. Each is forbidden as an external name, not a root
@@ -172,10 +163,10 @@ ignore_imports =
     lakehouse.process.probes -> lakehouse.schemas.health
 
 # The problems are how a lakehouse service answers an error (ADR 0224): the RFC 9457 body and its media type, the spec's
-# error mapping and the handlers every service app installs, the committed set of spec routes, the store-outage reading
-# and the domain errors a rask-only door raises. The service app installs them, the auth plane raises the domain errors,
-# and the services raise and answer through them, so they import nothing else in the library, directly or through another
-# module, beyond the request's trace id the body names as its `instance` (`process.correlation`).
+# error mapping and the handlers every service app installs, the committed set of spec routes and the store-outage
+# reading. The service app installs them and the services answer through them, so they import nothing else in the
+# library, directly or through another module, beyond the request's trace id the body names as its `instance`
+# (`process.correlation`).
 [importlinter:contract:the-problems-import-nothing-else-in-the-library]
 name = ADR 0224: lakehouse.problems imports nothing else in the library beyond the request's trace id
 type = forbidden

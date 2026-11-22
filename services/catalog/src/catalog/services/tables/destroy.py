@@ -26,7 +26,7 @@ from catalog.core import native
 from catalog.core.table_objects import RESERVED_MARKER, dataset_fs
 from lakehouse.lancekit.base_refs import decoded_path, decoded_segments, location_in_store, normalise, store_of
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.problems.ns_errors import PartiallyApplied
+from lakehouse.problems.ns_errors import PartiallyAppliedError
 from lakehouse.records import base_registry, clone_sources, data_directories, location_claims, trash
 from lakehouse.records.control_prefixes import CONTROL_PREFIXES
 from lakehouse.records.trash import TrashRecord
@@ -54,7 +54,7 @@ _VERSIONS_DIR: Final = "_versions"
 _DELETE_PASSES: Final = 3
 
 
-class TableBytesLeftError(PartiallyApplied):
+class TableBytesLeftError(PartiallyAppliedError):
     """A destructive drop removed the table from ``__manifest`` and could not delete every object at its location."""
 
 
@@ -222,7 +222,7 @@ def _bytes_left(table: str, location: str, cause: Exception, *, held: bool) -> T
     )
     return TableBytesLeftError(
         f"table {table} was removed from the catalog and objects remain at {location}",
-        problem_extra={"table": table, "location": location, "removed_from_catalog": True, "bytes_left": True, "remedy": remedy},
+        extensions={"table": table, "location": location, "removed_from_catalog": True, "bytes_left": True, "remedy": remedy},
     )
 
 

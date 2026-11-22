@@ -93,7 +93,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
   web_identity vending (refused at boot otherwise), and each session policy grants `kms:Decrypt` on it at every tier and
   `kms:GenerateDataKey` at write and maintain, only through S3 (`kms:ViaService`); the key policy trusting the catalog's
   role is the platform's. A vended policy, sent as compact JSON, over 2,048 characters is refused before the exchange:
-  500 code 18 titled `SessionPolicyTooLong`, its length and the limit as extension members (a 5xx's detail is redacted).
+  500 code 18 titled `SessionPolicyTooLongError`, its length and the limit as extension members (a 5xx's detail is redacted).
 - **Session duration is 900–43,200 s**, default 3,600; a shorter request is clamped UP to 900
   (`sts.rs:64-83`). rask vends at 900 (`vending.ttlSeconds`, `chart/values.yaml`). rask cannot vend a credential shorter than 15 minutes.
 - **Session policies**: `Version` must be present and `2012-10-17` (`session_policy.rs:30-32`;

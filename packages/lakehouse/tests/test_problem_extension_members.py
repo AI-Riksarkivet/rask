@@ -1,95 +1,42 @@
-"""A problem body may carry EXTENSION MEMBERS, and the shared builder must not drop them.
+"""A problem body may carry EXTENSION MEMBERS, and none of them may redefine a member the body's builder owns.
 
-RFC 9457 §3.2 says a problem detail object may carry additional members beyond the five it
-standardises, and that consumers must ignore ones they do not recognise. `_problem` built exactly
-four keys and nothing else, so a refusal whose whole point is a STRUCTURED payload (a `422` carrying the
-list of problems a client highlights) could not use the hierarchy at all, and a route had to hand-build its
-own body and declare `-> Model | JSONResponse`, an escape hatch around the estate's one error plane.
-
-Two properties, and the second is the one that makes this safe to have:
-
-* an extension member reaches the wire, and
-* it can never SHADOW a standard member — `type`, `title`, `status` and `detail` are the contract
-  every client in the estate parses, and an extension that could overwrite one would turn a
-  convenience into a way to lie about the status code.
+RFC 9457 §3.2 lets a problem detail object carry members beyond the ones it standardises, and tells consumers to ignore
+ones they do not recognise. A partly applied operation needs them: its 5xx `detail` is redacted, so what landed of the
+caller's own objects can only travel as extensions. The members the builder owns, RFC 9457's, the spec's `code` and
+`error`, and the `instance` a span puts there, are what every client parses, and an extension that could overwrite one
+would turn a convenience into a way to lie about the status or un-redact the detail.
 """
 
 from __future__ import annotations
 
-from http import HTTPStatus
+import logging
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from lakehouse.problems.domain_errors import DomainError, register_handlers
 from lakehouse.problems.envelope import PROBLEM_JSON
+from lakehouse.problems.ns_errors import PartiallyAppliedError, install_problem_handlers
 
 
-class UnprocessableEntityError(DomainError):
-    """A 422 refusal as a service declares one on the hierarchy."""
-
-    status_code = HTTPStatus.UNPROCESSABLE_ENTITY
-    title = "Unprocessable Entity"
-
-
-class _Refused(UnprocessableEntityError):
-    """A refusal with its own problem `type`, the way a domain names its own failure."""
-
-    problem_type = "about:blank#test-invalid"
-
-
-def _app() -> FastAPI:
+def test_a_lance_error_extension_cannot_name_a_reserved_member() -> None:
+    """A partly applied operation's extension members reach the wire, and none of them may redefine a member the spec
+    or RFC 9457 reserves, `instance` included while no span is active to put one there."""
     app = FastAPI()
-    register_handlers(app)
+    install_problem_handlers(app, logging.getLogger("test"))
 
-    @app.get("/refuse")
-    async def refuse() -> None:
-        raise _Refused("2 problem(s)", extensions={"problems": ["a", "b"]})
+    @app.get("/partial")
+    async def partial() -> None:
+        raise PartiallyAppliedError("half done at s3://b/k", extensions={"instance": "forged", "code": 0, "error": "leaked", "status": 200, "table": "a"})
 
-    @app.get("/shadow")
-    async def shadow() -> None:
-        raise UnprocessableEntityError("nope", extensions={"status": 200, "detail": "all good", "extra": 1})
+    response = TestClient(app).get("/partial")
 
-    return app
-
-
-def test_an_extension_member_reaches_the_wire() -> None:
-    response = TestClient(_app()).get("/refuse")
-
-    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
-    assert response.headers["content-type"].startswith(PROBLEM_JSON)
+    assert (response.status_code, response.headers["content-type"]) == (503, PROBLEM_JSON)
     assert response.json() == {
-        "type": "about:blank#test-invalid",
-        "title": "Unprocessable Entity",
-        "status": 422,
-        "detail": "2 problem(s)",
-        "problems": ["a", "b"],
-    }
-
-
-def test_an_extension_member_cannot_shadow_a_standard_one() -> None:
-    response = TestClient(_app()).get("/shadow")
-
-    body = response.json()
-    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
-    assert body["status"] == 422, "an extension member overwrote the status the client dispatches on"
-    assert body["detail"] == "nope"
-    assert body["extra"] == 1
-
-
-def test_the_default_problem_type_is_unchanged_for_a_plain_error() -> None:
-    """No `problem_type` declared → the class-name form every existing refusal already answers."""
-    app = FastAPI()
-    register_handlers(app)
-
-    @app.get("/plain")
-    async def plain() -> None:
-        raise UnprocessableEntityError("plain")
-
-    body = TestClient(app).get("/plain").json()
-    assert body == {
-        "type": "about:blank#unprocessableentityerror",
-        "title": "Unprocessable Entity",
-        "status": 422,
-        "detail": "plain",
+        "type": "https://lance.org/problems/partiallyappliederror",
+        "title": "PartiallyAppliedError",
+        "status": 503,
+        "detail": "Internal Server Error",
+        "code": 17,
+        "error": "Internal Server Error",
+        "table": "a",
     }

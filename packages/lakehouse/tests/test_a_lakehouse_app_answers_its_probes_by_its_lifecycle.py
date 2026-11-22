@@ -71,6 +71,33 @@ def test_a_lakehouse_app_is_alive_and_not_ready_until_it_has_started_and_while_i
     assert (ready.status_code, ready.json()) == (503, {"status": readiness, "components": {}})
 
 
+def test_a_process_whose_own_liveness_fails_answers_the_declared_body_at_503() -> None:
+    """A probe's body is the process's answer, not an error's: a stalled process answers the `Liveness` model the
+    schema declares for `/livez`, naming its state."""
+
+    @asynccontextmanager
+    async def _lifespan(app: FastAPI) -> AsyncGenerator[None]:
+        mark_started(app)
+        yield
+
+    app = build_service_app(
+        title="t",
+        docs_enabled=False,
+        audit_enabled=False,
+        lifespan=_lifespan,
+        log=logging.getLogger("t"),
+        ready_check=_ready,
+        live_check=lambda: False,
+        max_body_bytes=1024,
+        request_deadline_seconds=30.0,
+    )
+    with TestClient(app) as client:
+        alive = client.get("/livez")
+
+    assert (alive.status_code, alive.json()) == (503, {"status": "stalled"})
+    assert app.openapi()["paths"]["/livez"]["get"]["responses"]["503"]["content"]["application/json"]["schema"] == {"$ref": "#/components/schemas/Liveness"}
+
+
 async def _answers() -> None:
     return None
 

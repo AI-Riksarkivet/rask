@@ -293,13 +293,27 @@ The spec defines **24 numeric error codes (0–23)** — 22/23 are `TableBranchN
 clients dispatch on the **code**, not the HTTP status. On the wire they are **RFC 9457 problem
 bodies** (`application/problem+json`).
 
-**The one rule:** an endpoint raises `lance_namespace` typed errors
-(`InvalidInputError`, `NamespaceNotFoundError`, …) and lets
+**The one rule, at every door** (the catalog's, lineage's, maintenance's and the issuer mirror's; ADR 0226): a door
+raises `lance_namespace` typed errors (`InvalidInputError`, `NamespaceNotFoundError`, …) and lets
 `lakehouse/problems/ns_errors.py::install_problem_handlers` translate — it maps all 24 codes
 (not-founds → 404, already-exists/not-empty/concurrent → 409, `InvalidInput` → 400,
 `PermissionDenied` → 403, `Unauthenticated` → 401, `Unsupported` → **406** (the spec's own status; Q3, 2026-09-02), `Throttling` → 429).
+There is no second exception family: every failure body is `lakehouse.problems.envelope.problem_body`'s, with `code`,
+and a 5xx `detail` is `Internal Server Error` whatever raised it, its message in the log only. A rask error that needs
+its own name subclasses the spec class whose code it answers (`IdentityTokenUnavailableError`, `ProviderUnavailableError`
+and the mirror's `IssuerUnansweredError` are `ServiceUnavailableError`s, 503 code 17); one that carries what landed of
+the caller's own objects mixes in `ns_errors.ProblemExtensions`, whose members may never name one the envelope owns.
+Lineage answers a failed call through the catalog as one `CatalogAnsweredError`: 503 code 17, the catalog's answer in its log, for
+every call it makes as itself (its provenance tables) and for any answer that is no refusal a describe owes its caller
+(code 0 among them); only a describe asked under the caller's own bearer (`lineage.services.names`) relays what the
+catalog refuses the caller's name with (codes 13, 14 and 19, at the status the code maps to), with the catalog's status,
+`code` and `detail`. It is deliberately not a `PermissionDeniedError`, which lineage's lanes park.
+A refusal that sets `Retry-After` (maintenance mode, the signing gate, the write shed) is built, with
+`envelope.problem_response` or, in a pure-ASGI layer, `envelope.send_problem`, never raised. The probes are not error
+bodies: `/livez` answers `Liveness` (`stalled` at 503) and `/readyz` `Readiness`.
 The published OpenAPI declares on every spec operation the error statuses `spec.yaml` lists for it, with the problem
-body, and 406, which any of them may answer (`lakehouse.problems.spec_routes.UNSUPPORTED_STATUS`, ADR 0020 row 11).
+body, and 406, which any of them may answer (`lakehouse.problems.spec_routes.UNSUPPORTED_STATUS`, ADR 0020 row 11);
+every other operation's 422 names the same `ProblemDetails`, and every operation's `default` does.
 The branch codes were MISSING until 2026-08-04 — a missing branch answered 500 on endpoints rask
 ships. `packages/lakehouse/tests/test_ns_errors_contract.py` now pins the map against the ENUM, so the next
 spec-added code fails a test instead of a client.
@@ -366,7 +380,7 @@ and the backend records the object by name, so once the row stands each door rea
 and the namespace door after their native call) and, where a drop and a re-create left another namespace under the
 name, or the parent cannot be read, removes what it recorded and takes its grants back. A changed parent answers 409
 code 14 (`ParentChangedError`, which an ExistOk create never reads as a race it lost); an undo the store refuses
-answers 503 `PartiallyApplied` naming what stands and its remedy. Pinned by
+answers 503 `PartiallyAppliedError` naming what stands and its remedy. Pinned by
 `services/catalog/tests/test_a_create_lands_only_in_the_namespace_its_request_was_authorized_on.py`.
 Guards run BEFORE `native.call` — rejecting after leaves a real Lance object with no authz parent.
 
@@ -654,9 +668,9 @@ governing their data. The project-scoped surface is the console's project page, 
   those it removed itself, each under its claim's fence ([[LH-586]], "A cascade removes each table as that door does"
   above): one a rename carried out before its turn keeps its grants. The namespace door's destroyed cascade
   (`_destroy_subtree`, a generator) announces each table to lineage as it goes and ends the subtree through the same
-  walk, as do its Restrict, Skip and Overwrite paths. A part-way failure answers 503 `PartiallyApplied` naming
+  walk, as do its Restrict, Skip and Overwrite paths. A part-way failure answers 503 `PartiallyAppliedError` naming
   `namespaces_dropped` (nested ones included), `tables_removed`, `trash_ended` and `tuples_revoked`, which counts each
-  revoke as it lands and a partly revoked object's removed tuples through `fga_writes.RevokeInterrupted`; re-issuing the call
+  revoke as it lands and a partly revoked object's removed tuples through `fga_writes.RevokeInterruptedError`; re-issuing the call
   finishes it. A guard's refusal (a spec error answered 4xx, `endpoints.warehouses._a_refusal`) raised before any step
   counted answers as itself, since a guard refuses before its step writes; a store's or OpenFGA's failure is partial even
   with nothing counted, since the step it stopped may have landed ([[LH-572]]). A destroyed table's base record and location claim are keyed by its location, which nothing names once
@@ -992,7 +1006,7 @@ governing their data. The project-scoped surface is the console's project page, 
   instead of refusing, so a governed table is never stranded in the trash. A re-register that lands on
   the 409 path writes no tuple ([[LH-586]]); it converges the table's base record, never for a flag-256 dataset or one
   declaring a base nothing sanctions, and a refusal
-  whose detach fails is a 503 `PartiallyApplied` naming `attached: true`. A registration whose claim another request
+  whose detach fails is a 503 `PartiallyAppliedError` naming `attached: true`. A registration whose claim another request
   holds fenced answers 409 code 14, never the occupied-location 400: the same call is judged afresh once that
   request has ended. Only
   `main` is judged. Pinned by `services/catalog/tests/test_a_register_refuses_a_table_that_mixes_file_versions.py`
@@ -1030,7 +1044,7 @@ governing their data. The project-scoped surface is the console's project page, 
   the branch's commits with it, and `can_write_data` writes every branch. Measured on MinIO
   `RELEASE.2025-04-22T22-12-26Z`, that grant leaves a write credential fitting a table prefix of 89 characters at a
   63-character bucket, inside a 2,048-byte session policy; RustFS enforces the same 2,048-byte limit, counted after it
-  re-serialises the policy, and its boundary is unmeasured (measured 2026-10-18; `rask-rustfs` §2). The catalog sends the policy as compact JSON and refuses one past 2,048 characters before any exchange, 500 code 18 titled `SessionPolicyTooLong` with its length and the limit as extension members; with `vending.encryption` naming an SSE-KMS key (its key ARN, refused at boot otherwise) every tier's session may `kms:Decrypt` with that key, and write, maintain and probe also `kms:GenerateDataKey`, only through S3 (`kms:ViaService`). The warehouse create door's probe then writes and reads back an object encrypted with it (`encrypted_write`), so a store whose role holds no grant on the key is refused 400 code 13 ([[LH-262]]). The
+  re-serialises the policy, and its boundary is unmeasured (measured 2026-10-18; `rask-rustfs` §2). The catalog sends the policy as compact JSON and refuses one past 2,048 characters before any exchange, 500 code 18 titled `SessionPolicyTooLongError` with its length and the limit as extension members; with `vending.encryption` naming an SSE-KMS key (its key ARN, refused at boot otherwise) every tier's session may `kms:Decrypt` with that key, and write, maintain and probe also `kms:GenerateDataKey`, only through S3 (`kms:ViaService`). The warehouse create door's probe then writes and reads back an object encrypted with it (`encrypted_write`), so a store whose role holds no grant on the key is refused 400 code 13 ([[LH-262]]). The
   Deny is load-bearing, measured on MinIO (LH-469, #594) and enforced by RustFS's Deny-first evaluation (R3): the
   staged Allow also matches
   `<n>.manifest-<uuid>.manifest`, which pylance reads as a final manifest, and `tree/*` reaches every branch's
@@ -1201,7 +1215,7 @@ governing their data. The project-scoped surface is the console's project page, 
   14 while a reclaim holds its history. Every door that ends the clone releases the tag BEFORE the location's claim
   (`base_registry.release_clone_sources`, `forget_base_record`), and keeps a tag the location's claim names another
   table for (a clone registered there since holds one of the same name); a deregister that cannot delete it answers
-  503 PartiallyApplied with the location still held. While a tag stands, a destructive drop of the source refuses 409
+  503 PartiallyAppliedError with the location still held. While a tag stands, a destructive drop of the source refuses 409
   code 19 (`tables.destroy.require_no_clone_reading`), a destroying cascade removes each source after the clones it removes
   with it and refuses 409 code 19 while a clone outside it reads one of its tables (`clone_sources.destroy_order`), and
   the trash credentials door vends no session to delete a trashed source's bytes. **A failed end is finished by the

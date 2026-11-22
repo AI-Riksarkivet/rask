@@ -27,22 +27,23 @@ from lance_namespace import PermissionDeniedError, ServiceUnavailableError
 from pydantic import ValidationError
 
 from lakehouse.events.bus_delivery import Verdict
-from lakehouse.problems import domain_errors
+from lakehouse.governed.machine_identity import IdentityTokenUnavailableError
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome, refusal_outcome
 from lineage.core.refusals import ForeignRunError
 from lineage.models import DatasetEvent, RunEvent, parse_event
+from lineage.services.catalog_reader import CatalogAnsweredError
 from lineage.services.provenance import ProvenanceStore
 
 
 log = logging.getLogger(__name__)
 
-#: What a recording meets that its delivery is asked for again over, counted ``retried``: every answer the catalog gave
-#: the feed's read or write, translated into the ``DomainError`` family (`catalog_reader.translate_catalog_errors`: a
-#: 5xx or 429, a conflict another writer won, a row it refused, which the writer's halving leaves to the one event that
-#: carries it), this service's token unreadable (`machine_identity.read_identity_token`, a ``DomainError`` too), and a
+#: What a recording meets that its delivery is asked for again over, counted ``retried``: every failure the catalog
+#: answered the feed's read or write with, raised as a ``CatalogAnsweredError`` (`catalog_reader.translate_catalog_errors`: a 5xx
+#: or 429, a conflict another writer won, a row it refused, which the writer's halving leaves to the one event that
+#: carries it, a 403 to lineage's own identity), this service's token unreadable (`machine_identity.read_identity_token`), and a
 #: catalog the transport did not reach (urllib3's ``HTTPError``). Anything else is a defect and reaches the delivery
 #: seam, which asks for the delivery again with its traceback and parks it on its last (`lakehouse.events.bus_delivery`).
-FEED_FAILURES: Final = (domain_errors.DomainError, urllib3.exceptions.HTTPError)
+FEED_FAILURES: Final = (CatalogAnsweredError, IdentityTokenUnavailableError, urllib3.exceptions.HTTPError)
 #: The outages an authorization meets, each asked for again and counted ``retried``: OpenFGA, the catalog's decision
 #: doors or the signers' published keys not answering (``ServiceUnavailableError``: `fga_resilience.guarded`,
 #: `decider`, `signature.verify_arrived_event`), and the feed read a replay's check makes (:data:`FEED_FAILURES`).

@@ -63,7 +63,6 @@ from lakehouse.events.signing import SIGNATURE_FACET
 from lakehouse.governed.machine_identity import read_identity_token
 from lakehouse.lancekit.filters import in_lists, sql_literal
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
-from lakehouse.problems.domain_errors import ServiceUnavailableError
 from lakehouse.process.own_threads import on_own_threads
 from lineage.core.config import LineageSettings
 from lineage.core.refusals import ForeignRunError
@@ -71,7 +70,7 @@ from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, RunEvent, author_sub_from_payload, parse_event
 from lineage.schemas import DerivedTable, EventRecord, ParkedDelivery
 from lineage.services.catalog_client import CATALOG_CALLS, catalog_api_client, catalog_read_client, request_headers
-from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
+from lineage.services.catalog_reader import CatalogAnsweredError, CatalogTableReader, RestCatalogTransport, translate_catalog_errors
 from lineage.services.catalog_writer import RestCatalogWriteTransport
 
 
@@ -829,7 +828,7 @@ class ProvenanceStore:
         keep it (`lineage.services.forward`).
 
         Raises:
-            ServiceUnavailableError: the catalog described the feed without a uuid, which no table it made lacks.
+            CatalogAnsweredError: the catalog described the feed without a uuid, which no table it made lacks.
         """
         return await self._run(self._feed_incarnation)
 
@@ -848,7 +847,7 @@ class ProvenanceStore:
             )
         incarnation = uuid_of(described.properties)
         if incarnation is None:
-            raise ServiceUnavailableError("the catalog described the feed table without the uuid it mints for every table")
+            raise CatalogAnsweredError("the catalog described the feed table without the uuid it mints for every table")
         return incarnation
 
     async def run_author(self, run_id: str) -> str | None:

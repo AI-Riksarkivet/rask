@@ -26,7 +26,7 @@ from fastapi.responses import JSONResponse
 from lance_namespace import ErrorCode, InternalError
 
 from catalog.api.dependencies import app_wire
-from catalog.api.maintenance_mode import GATED_MOUNTS, PROBLEM_JSON, fault_response, is_mutating
+from catalog.api.maintenance_mode import GATED_MOUNTS, fault_response, is_mutating
 from catalog.api.route_path import route_path
 from catalog.core.commit_ids import STATE as COMMIT_IDS_STATE
 from catalog.core.commit_ids import CommitIds
@@ -35,7 +35,7 @@ from catalog.core.identifiers import parse_identifier
 from catalog.services.provenance_namespace import is_provenance
 from lakehouse.governed import fga_ids
 from lakehouse.governed.signing_key import SIGNING_STATE, SigningKeyHolder
-from lakehouse.problems.envelope import problem_body
+from lakehouse.problems.envelope import problem_response
 from lakehouse.process.probes import ReadyCheck
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 
@@ -60,16 +60,12 @@ def announces(path: str, settings: Settings) -> bool:
 def unsigned_response() -> JSONResponse:
     """The refusal: the spec's ServiceUnavailable as problem+json, with how soon the key is read again. Why the key is
     missing is the readiness check's to say, not every caller's to read."""
-    return JSONResponse(
-        status_code=503,
-        content=problem_body(
-            ErrorCode.SERVICE_UNAVAILABLE,
-            status=503,
-            title="SigningUnavailable",
-            slug="signing",
-            detail="The catalog cannot sign the announcement this write would make; retry once its signing key is back.",
-        ),
-        media_type=PROBLEM_JSON,
+    return problem_response(
+        ErrorCode.SERVICE_UNAVAILABLE,
+        status=503,
+        title="SigningUnavailable",
+        slug="signing",
+        detail="The catalog cannot sign the announcement this write would make; retry once its signing key is back.",
         headers={"Retry-After": str(RETRY_AFTER_SECONDS)},
     )
 
