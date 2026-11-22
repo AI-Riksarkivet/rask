@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import NamedTuple
 
 from lance_namespace import (
     NamespaceNotFoundError,
@@ -20,6 +19,7 @@ from lance_namespace import (
     UnsupportedOperationError,
 )
 from openfga_sdk import OpenFgaClient
+from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.api import idempotency
 from catalog.api.authz.context import AuthzContext
@@ -220,13 +220,13 @@ def require_fga(settings: FgaSettings, client: OpenFgaClient | None, *, feature:
     return require_wired(client)
 
 
-class Authorization(NamedTuple):
-    """The authorization a request is decided under while FGA is on: the wired client, and the subject it decides for.
+class Authorization(BaseModel):
+    """The authorization a request is decided under while FGA is on: the wired client, and the subject it decides for."""
 
-    An internal value bundle, never boundary input, so a ``NamedTuple``: immutable and typed, with nothing to validate.
-    """
+    # `arbitrary_types_allowed` for `client`: the OpenFGA client is a live collaborator, kept as the very object wired.
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
-    client: OpenFgaClient
+    client: SkipValidation[OpenFgaClient]
     subject: str
 
     async def require(self, relation: str, obj: str, *, label: str | None = None) -> None:

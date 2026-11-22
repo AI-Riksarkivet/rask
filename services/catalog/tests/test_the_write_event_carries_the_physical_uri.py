@@ -28,6 +28,7 @@ from typing import Any, cast
 
 import pytest
 
+from catalog.core.lineage_emit import NO_FIELDS, EmitFields
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.storage.options import StorageOptions
 
@@ -51,11 +52,11 @@ class _Recording:
     async def project_for(self, warehouse_id: str) -> str | None:
         return None
 
-    async def emit_create(self, **kwargs: Any) -> None:
-        self.writes.append(kwargs)
+    async def emit_create(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
+        self.writes.append({**required, **dict(fields)})
 
-    async def emit_write(self, **kwargs: Any) -> None:
-        self.writes.append(kwargs)
+    async def emit_write(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
+        self.writes.append({**required, **dict(fields)})
 
 
 def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:

@@ -16,7 +16,9 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
-from typing import Final, NamedTuple
+from typing import Final
+
+from pydantic import BaseModel, ConfigDict
 
 from lakehouse.events.signing import KeySourceUnavailableError, PublicKeySource, parse_published_keys
 
@@ -48,7 +50,11 @@ KEY_REFRESH_INTERVAL_SECONDS: Final = 30.0
 MAX_UNKNOWN_KEY_IDS: Final = 8192
 
 
-class _Read(NamedTuple):
+class _Read(BaseModel):
+    """One read of an identity's published list, kept as it was read."""
+
+    model_config = ConfigDict(frozen=True)
+
     keys: tuple[str, ...]
     #: When the read BEGAN. An unknown key id is judged only on a read that began after the key id was first met, since
     #: a list read earlier may predate the key that signed it.

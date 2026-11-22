@@ -16,7 +16,7 @@ and ``test_a_rewrite_that_rewrote_an_index_reads_back.py`` says when the stand-i
 
 from __future__ import annotations
 
-from dataclasses import field, make_dataclass
+from dataclasses import field, make_dataclass  # noqa: TID251 — extends pylance's own RewrittenIndex dataclass, which its binding builds by name
 from typing import Any, Protocol
 
 from lance import LanceOperation

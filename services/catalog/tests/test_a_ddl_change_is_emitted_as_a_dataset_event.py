@@ -65,6 +65,6 @@ def test_a_DDL_change_that_DERIVED_the_table_keeps_its_run() -> None:
     """A `DatasetEvent` has only `dataset` — no `inputs` — and every `DERIVED_FROM` edge is built from a
     run's inputs. A create whose run names an input derived the table from it, so moving it would sever the
     edge the input declares. Not a phantom either: something did derive one table from another."""
-    event = _event("create_table", inputs=[InputRef("alpha$bronze$old", 3)])
+    event = _event("create_table", inputs=[InputRef(name="alpha$bronze$old", version=3)])
     assert "run" in event and "job" in event, "a derived create lost the run that carries its source"
     assert [(i["namespace"], i["name"], i["facets"]["version"]["datasetVersion"]) for i in event["inputs"]] == [("alpha$bronze", "alpha$bronze$old", "3")]

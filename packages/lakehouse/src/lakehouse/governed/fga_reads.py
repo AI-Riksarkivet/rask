@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Collection, Iterable
 from datetime import UTC, datetime
-from typing import Any, Final, NamedTuple
+from typing import Any, Final, NoReturn
 
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
@@ -30,7 +30,7 @@ from openfga_sdk.models.consistency_preference import ConsistencyPreference
 from openfga_sdk.models.fga_object import FgaObject
 from openfga_sdk.models.read_request_tuple_key import ReadRequestTupleKey
 from openfga_sdk.models.user_type_filter import UserTypeFilter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse.governed.fga_ids import is_object_id, subject_of, user_object
 from lakehouse.governed.fga_resilience import DEFAULT_RETRY, RetryPolicy, UnansweredBatchItems, guarded
@@ -236,7 +236,7 @@ async def batch_check(
     )
 
 
-class ObjectListing(NamedTuple):
+class ObjectListing(BaseModel):
     """What the caller may reach, AND whether that answer is complete.
 
     A bare `list[str]` cannot express the difference between "this subject holds three tables" and
@@ -245,12 +245,18 @@ class ObjectListing(NamedTuple):
     recover the hidden rows either. `pagination.md`'s rule is that the CLIENT must be able to learn
     the answer was cut; a log tells an operator, which is a different person at a different time.
 
-    A `NamedTuple` so the existing `set(...)`/iteration idioms fail LOUDLY at every call site rather
-    than silently producing a two-element set of `[objects]` and `False`.
+    Iterating it raises, so a `set(...)`, `in` or `for` written against the bare list fails LOUDLY at its call site
+    rather than silently walking the model's `(name, value)` pairs: a caller names `.objects` and `.truncated`.
     """
+
+    model_config = ConfigDict(frozen=True)
 
     objects: list[str]
     truncated: bool
+
+    def __iter__(self) -> NoReturn:
+        """Refuse iteration: the listing is read by field, never walked."""
+        raise TypeError("an ObjectListing is not iterable: read .objects, and .truncated for whether it is complete")
 
 
 async def list_objects(
@@ -530,6 +536,95 @@ def _object_of(userset: str, fallback: str) -> str:
     return obj or fallback
 
 
+class _ExpandWalk:
+    """One :func:`expand_tree` walk: the client it reads through, the retry each read takes, and its hop budget."""
+
+    def __init__(self, client: OpenFgaClient, *, retry: RetryPolicy, depth_budget: int) -> None:
+        self._client = client
+        self._retry = retry
+        self._depth_budget = depth_budget
+
+    async def walk(self, rel: str, target: str, *, depth: int, path: frozenset[str]) -> dict[str, Any]:
+        """Expand ``rel`` on ``target`` and resolve every leaf of the answer that continues somewhere."""
+        key = f"{target}#{rel}"
+        # PATH-scoped, never walk-global (SKG-03). A cycle is an `object#relation` that appears on the
+        # way to ITSELF; an `object#relation` reached twice down two different branches is a DIAMOND,
+        # which a concentric model produces constantly (`can_read` → `writer` → `owner` and
+        # `can_read` → `reader` → `owner`). A single visited set for the whole walk cannot tell them
+        # apart, so it stamped the second arm `cycle: True` and dropped its subtree — the one branch a
+        # reader opened `expand_tree` to see. An IMMUTABLE path handed down, rather than a shared set
+        # marked on entry and un-marked on exit: the un-mark is the half that gets forgotten on an
+        # early return, and this walk has several. Cost is bounded by the hop budget (max 6) — the same
+        # rung may now be expanded once per branch that reaches it, which is what makes each branch
+        # answerable.
+        if key in path:
+            return {"name": key, "cycle": True}
+        node = await expand(
+            self._client,
+            relation=rel,
+            obj=target,
+            retry=self._retry,
+        )
+        await self._resolve(node, target, depth=depth, path=path | {key})
+        return node
+
+    async def _resolve(self, node: dict[str, Any], target: str, *, depth: int, path: frozenset[str]) -> None:
+        """Walk the normalised tree in place, expanding every leaf that continues somewhere."""
+        await self._resolve_operands(node, target, depth=depth, path=path)
+        leaf = node.get("leaf")
+        if not leaf:
+            return
+        if depth >= self._depth_budget:
+            _mark_continuing(leaf)
+            return
+        if (computed := leaf.get("computed")) is not None:
+            # `computed.userset` comes back as a FULL `object#relation` ("table:db1$t#reader"), not a
+            # bare relation name. Feeding the whole string back as a relation makes the next Expand
+            # malformed and OpenFGA answers 500 — which this module dutifully fails closed into a 503,
+            # so the symptom was "the derivation is unavailable" on every relation that resolves
+            # through a rung, i.e. all of the interesting ones. Verified against the live store:
+            # expand(can_read_data, table:bronze$pages) → {"computed":{"userset":"table:bronze$pages#reader"}}.
+            leaf["expanded"] = [await self.walk(_relation_of(computed), _object_of(computed, target), depth=depth + 1, path=path)]
+            return
+        if (ttu := leaf.get("tuple_to_userset")) is not None:
+            await self._expand_tuple_to_userset(leaf, ttu, target, depth=depth, path=path)
+
+    async def _resolve_operands(self, node: dict[str, Any], target: str, *, depth: int, path: frozenset[str]) -> None:
+        """Resolve the node's union, intersection and difference operands, in that order."""
+        for branch in ("union", "intersection"):
+            for child in node.get(branch) or []:
+                await self._resolve(child, target, depth=depth, path=path)
+        if (difference := node.get("difference")) is not None:
+            for side in ("base", "subtract"):
+                if (child := difference.get(side)) is not None:
+                    await self._resolve(child, target, depth=depth, path=path)
+
+    async def _expand_tuple_to_userset(self, leaf: dict[str, Any], ttu: dict[str, Any], target: str, *, depth: int, path: frozenset[str]) -> None:
+        """Expand each computed relation of an ``X from Y`` leaf on every object ``target``'s tupleset edge names."""
+        # `tupleset` arrives as "<object>#<relation>"; the relation half is the edge to follow, and
+        # the tuples holding it name the parent objects (`table:x#parent@namespace:db1` → namespace:db1).
+        tupleset_relation = str(ttu.get("tupleset") or "").rpartition("#")[2]
+        if not tupleset_relation:
+            return
+        edges = await read_object_tuples(self._client, target, retry=self._retry)
+        parents = [t.user for t in edges if t.relation == tupleset_relation]
+        expanded: list[dict[str, Any]] = []
+        for parent in parents:
+            for computed_relation in ttu.get("computed") or []:
+                # Same normalisation as the `computed` leaf above: these arrive qualified too.
+                expanded.append(await self.walk(_relation_of(computed_relation), parent, depth=depth + 1, path=path))
+        leaf["expanded"] = expanded
+
+
+def _mark_continuing(leaf: dict[str, Any]) -> None:
+    """Mark a leaf the hop budget stopped at as one that continues."""
+    # Out of budget: mark that this leaf CONTINUES and stop — before spending a tuple read
+    # whose only product would be a truncation stub. The flag is what lets a UI offer "expand
+    # further" instead of drawing a dead end that is not one.
+    if leaf.get("computed") is not None or leaf.get("tuple_to_userset") is not None:
+        leaf["continues"] = True
+
+
 async def expand_tree(
     client: OpenFgaClient,
     *,
@@ -572,75 +667,7 @@ async def expand_tree(
     :func:`expand` and :func:`read_object_tuples`, so a partial tree is never returned in place of a 503.
     """
     depth_budget = max(1, min(max_depth, MAX_EXPAND_TREE_DEPTH))
-
-    async def _walk(rel: str, target: str, depth: int, *, path: frozenset[str]) -> dict[str, Any]:
-        key = f"{target}#{rel}"
-        # PATH-scoped, never walk-global (SKG-03). A cycle is an `object#relation` that appears on the
-        # way to ITSELF; an `object#relation` reached twice down two different branches is a DIAMOND,
-        # which a concentric model produces constantly (`can_read` → `writer` → `owner` and
-        # `can_read` → `reader` → `owner`). A single visited set for the whole walk cannot tell them
-        # apart, so it stamped the second arm `cycle: True` and dropped its subtree — the one branch a
-        # reader opened `expand_tree` to see. An IMMUTABLE path handed down, rather than a shared set
-        # marked on entry and un-marked on exit: the un-mark is the half that gets forgotten on an
-        # early return, and this walk has several. Cost is bounded by the hop budget (max 6) — the same
-        # rung may now be expanded once per branch that reaches it, which is what makes each branch
-        # answerable.
-        if key in path:
-            return {"name": key, "cycle": True}
-        node = await expand(
-            client,
-            relation=rel,
-            obj=target,
-            retry=retry,
-        )
-        await _resolve(node, target, depth, path=path | {key})
-        return node
-
-    async def _resolve(node: dict[str, Any], target: str, depth: int, *, path: frozenset[str]) -> None:
-        """Walk the normalised tree in place, expanding every leaf that continues somewhere."""
-        for branch in ("union", "intersection"):
-            for child in node.get(branch) or []:
-                await _resolve(child, target, depth, path=path)
-        if (difference := node.get("difference")) is not None:
-            for side in ("base", "subtract"):
-                if (child := difference.get(side)) is not None:
-                    await _resolve(child, target, depth, path=path)
-
-        leaf = node.get("leaf")
-        if not leaf:
-            return
-        if depth >= depth_budget:
-            # Out of budget: mark that this leaf CONTINUES and stop — before spending a tuple read
-            # whose only product would be a truncation stub. The flag is what lets a UI offer "expand
-            # further" instead of drawing a dead end that is not one.
-            if leaf.get("computed") is not None or leaf.get("tuple_to_userset") is not None:
-                leaf["continues"] = True
-            return
-        if (computed := leaf.get("computed")) is not None:
-            # `computed.userset` comes back as a FULL `object#relation` ("table:db1$t#reader"), not a
-            # bare relation name. Feeding the whole string back as a relation makes the next Expand
-            # malformed and OpenFGA answers 500 — which this module dutifully fails closed into a 503,
-            # so the symptom was "the derivation is unavailable" on every relation that resolves
-            # through a rung, i.e. all of the interesting ones. Verified against the live store:
-            # expand(can_read_data, table:bronze$pages) → {"computed":{"userset":"table:bronze$pages#reader"}}.
-            leaf["expanded"] = [await _walk(_relation_of(computed), _object_of(computed, target), depth + 1, path=path)]
-            return
-        if (ttu := leaf.get("tuple_to_userset")) is not None:
-            # `tupleset` arrives as "<object>#<relation>"; the relation half is the edge to follow, and
-            # the tuples holding it name the parent objects (`table:x#parent@namespace:db1` → namespace:db1).
-            tupleset_relation = str(ttu.get("tupleset") or "").rpartition("#")[2]
-            if not tupleset_relation:
-                return
-            edges = await read_object_tuples(client, target, retry=retry)
-            parents = [t.user for t in edges if t.relation == tupleset_relation]
-            expanded: list[dict[str, Any]] = []
-            for parent in parents:
-                for computed_relation in ttu.get("computed") or []:
-                    # Same normalisation as the `computed` leaf above: these arrive qualified too.
-                    expanded.append(await _walk(_relation_of(computed_relation), parent, depth + 1, path=path))
-            leaf["expanded"] = expanded
-
-    return await _walk(relation, obj, 1, path=frozenset())
+    return await _ExpandWalk(client, retry=retry, depth_budget=depth_budget).walk(relation, obj, depth=1, path=frozenset())
 
 
 async def read_changes(

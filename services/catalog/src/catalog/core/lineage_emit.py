@@ -27,13 +27,12 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass  # noqa: TID251
 from datetime import UTC, datetime
-from typing import Any, NamedTuple, Protocol, TypedDict, Unpack, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 import lance
 from opentelemetry import metrics
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, InstanceOf, SkipValidation
 
 from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, lifecycle_run_id
 from catalog.core.identifiers import warehouse_of
@@ -186,15 +185,17 @@ class InputPin(BaseModel):
     branch: str | None = None
 
 
-class InputRef(NamedTuple):
+class InputRef(BaseModel):
     """A resolved input edge for the wire builder: the table's canonical id, pinned version, its branch and its uuids.
 
     Named in the event's own dataset namespace, the catalog's: an input the catalog names is one of its tables."""
 
+    model_config = ConfigDict(frozen=True)
+
     name: str
     version: int
     branch: str | None = None
-    uuids: DatasetUuids = DatasetUuids()
+    uuids: InstanceOf[DatasetUuids] = DatasetUuids()
     #: The incarnation of ``branch`` when the event was built ([[LH-413]]): a branch deleted and created again under the
     #: name restarts its numbering, so ``(table, branch, version)`` names two commits without it.
     branch_identifier: str | None = None
@@ -204,11 +205,11 @@ async def input_refs(pins: list[InputPin] | None, *, uuids: UuidReader) -> list[
     """``pins`` resolved to the canonical ids FGA keys on and the uuids the edge list keys on, so an edge names the real table."""
     refs = [
         InputRef(
-            fga_ids.canonical_object_id(pin.segments),
-            pin.version,
-            pin.branch,
-            await uuids.table(pin.segments),
-            await uuids.branch_identifier(pin.segments, pin.branch) if pin.branch is not None else None,
+            name=fga_ids.canonical_object_id(pin.segments),
+            version=pin.version,
+            branch=pin.branch,
+            uuids=await uuids.table(pin.segments),
+            branch_identifier=await uuids.branch_identifier(pin.segments, pin.branch) if pin.branch is not None else None,
         )
         for pin in pins or []
     ]
@@ -533,50 +534,53 @@ def _output_dataset_of(write: _Write) -> dict[str, Any]:
 type ProjectResolver = Callable[[str], Awaitable[str | None]]
 
 
-class EmitFields(TypedDict, total=False):
+class EmitFields(BaseModel):
     """The OPTIONAL metadata every emit accepts, declared ONCE (CAT-CORE-07).
 
     All eight emitter methods (the Protocol's two, and ``OriginatorBoundEmitter``'s, ``NoopEmitter``'s and
-    ``_BaseLineageEmitter``'s pairs) name this bundle rather than restating it, because a copy that misses a keyword
-    does not fail to type: it silently DROPS the field. ``originator`` names the person a service wrote FOR, so
-    dropping it puts the row in the wrong inbox.
-
-    PEP 692 ``Unpack``, so every caller keeps the identical keyword call syntax — nothing at any call
-    site changes — while each implementation names the bundle instead of restating it.
+    ``_BaseLineageEmitter``'s pairs) take this one model as ``fields`` rather than restating its members, because a copy
+    that misses a keyword does not fail to type: it silently DROPS the field. ``originator`` names the person a service
+    wrote FOR, so dropping it puts the row in the wrong inbox. A forwarding layer hands the model on whole.
 
     The REQUIRED arguments (``table_id``, ``namespace``, ``author``, ``version``, and ``operation`` on
     the write side) stay explicit: they differ between ``emit_create`` and ``emit_write``, and a
-    required field in a ``total=False`` bundle would be an optional one.
+    required member of an all-optional bundle would be an optional one.
 
     The tenant is no field here: the emitter resolves it from the warehouse the table's name begins with in ``emit_write``,
     so an event names the project the warehouse's record names and no other.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     #: When the commit was made (``tables.versions.CommitReadback.committed_at``), the event's ``eventTime``; now when unknown.
-    event_time: str | None
+    event_time: str | None = None
     #: The physical Lance URI → the standard ``dataSource`` facet.
-    source_uri: str | None
+    source_uri: str | None = None
     #: The per-version column schema → the standard ``schema`` facet (#24).
-    schema_fields: SchemaFields | None
+    schema_fields: SchemaFields | None = None
     #: The version-pinned source dataset(s) this write DERIVES FROM.
-    inputs: list[InputRef] | None
+    inputs: list[InstanceOf[InputRef]] | None = None
     #: The run the writer named, the event's standard ``parent`` run.
-    run: RunContext | None
+    run: InstanceOf[RunContext] | None = None
     #: The person a SERVICE made this write for, when ``author`` is the service.
-    originator: str | None
+    originator: str | None = None
     #: The Lance REF the write committed to (``None`` = main). Absent for main rather than the literal
     #: "main": every historical write carries none, so a literal would make them all read as a different
     #: ref, and a consumer testing PRESENCE would answer "was this a branch write?" with yes for every one.
-    branch: str | None
+    branch: str | None = None
     #: The incarnation of ``branch`` the write committed to (pylance's ``branch_identifier``): a recreated
     #: branch restarts its version numbering, so the ref and version alone name two commits.
-    branch_identifier: str | None
+    branch_identifier: str | None = None
     #: Whether the commit added rows, which makes a create a write (:func:`build_write_event`).
-    commits_rows: bool
+    commits_rows: bool = False
     #: The table's and its namespace's uuids (ADR 0173 §10), which the output names beside its name.
-    uuids: DatasetUuids | None
+    uuids: InstanceOf[DatasetUuids] | None = None
     #: The canonical id a rename moved the table from, the lifecycle facet's ``previousIdentifier``.
-    renamed_from: str | None
+    renamed_from: str | None = None
+
+
+#: An emit that carries none of the optional metadata.
+NO_FIELDS: Final = EmitFields()
 
 
 @runtime_checkable
@@ -594,7 +598,7 @@ class LineageEmitter(Protocol):
         namespace: str,
         author: str | None,
         version: int,
-        **fields: Unpack[EmitFields],
+        fields: EmitFields = NO_FIELDS,
     ) -> None: ...
 
     async def emit_write(
@@ -605,12 +609,11 @@ class LineageEmitter(Protocol):
         author: str | None,
         version: int | None,
         operation: str,
-        **fields: Unpack[EmitFields],
+        fields: EmitFields = NO_FIELDS,
     ) -> None: ...
 
 
-@dataclass(frozen=True, slots=True)
-class OriginatorBoundEmitter:
+class OriginatorBoundEmitter(BaseModel):
     """One request's ORIGINATOR claim bound to the app-scoped emitter.
 
     `enforce_author` overwrites `author` with the authenticating service's sub, so a write a service
@@ -620,14 +623,17 @@ class OriginatorBoundEmitter:
     A wrapper rather than a field on the emitter, because the two have different lifetimes: the emitter
     is built ONCE in the lifespan and shared by every concurrent request, so a claim stored on it would
     ride onto a different caller's event — a row in the wrong person's inbox, which is worse than the
-    silence. Frozen and slotted so that is not merely a convention. The transport stays shared; only the
+    silence. Frozen so that is not merely a convention. The transport stays shared; only the
     binding is per-request.
 
     An explicitly passed `originator` still wins: a producer that resolved a better answer than the
     header is not overruled by the door.
     """
 
-    inner: LineageEmitter
+    # `arbitrary_types_allowed` for `inner`: the emitter is a live collaborator, shared as the very object the app holds.
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    inner: SkipValidation[LineageEmitter]
     originator: str | None
 
     def _bind(self, fields: EmitFields) -> EmitFields:
@@ -636,7 +642,7 @@ class OriginatorBoundEmitter:
         An explicitly passed ``originator`` still wins: a producer that resolved a better answer than
         the header is not overruled by the door.
         """
-        return {**fields, "originator": fields.get("originator") or self.originator}
+        return fields.model_copy(update={"originator": fields.originator or self.originator})
 
     async def project_for(self, warehouse_id: str) -> str | None:
         return await self.inner.project_for(warehouse_id)
@@ -648,9 +654,9 @@ class OriginatorBoundEmitter:
         namespace: str,
         author: str | None,
         version: int,
-        **fields: Unpack[EmitFields],
+        fields: EmitFields = NO_FIELDS,
     ) -> None:
-        await self.inner.emit_create(table_id=table_id, namespace=namespace, author=author, version=version, **self._bind(fields))
+        await self.inner.emit_create(table_id=table_id, namespace=namespace, author=author, version=version, fields=self._bind(fields))
 
     async def emit_write(
         self,
@@ -660,9 +666,9 @@ class OriginatorBoundEmitter:
         author: str | None,
         version: int | None,
         operation: str,
-        **fields: Unpack[EmitFields],
+        fields: EmitFields = NO_FIELDS,
     ) -> None:
-        await self.inner.emit_write(table_id=table_id, namespace=namespace, author=author, version=version, operation=operation, **self._bind(fields))
+        await self.inner.emit_write(table_id=table_id, namespace=namespace, author=author, version=version, operation=operation, fields=self._bind(fields))
 
 
 class NoopEmitter:
@@ -678,7 +684,7 @@ class NoopEmitter:
         namespace: str,
         author: str | None,
         version: int,
-        **fields: Unpack[EmitFields],
+        fields: EmitFields = NO_FIELDS,
     ) -> None:
         return None
 
@@ -690,7 +696,7 @@ class NoopEmitter:
         author: str | None,
         version: int | None,
         operation: str,
-        **fields: Unpack[EmitFields],
+        fields: EmitFields = NO_FIELDS,
     ) -> None:
         return None
 
@@ -745,12 +751,12 @@ class _BaseLineageEmitter:
         namespace: str,
         author: str | None,
         version: int,
-        **fields: Unpack[EmitFields],
+        fields: EmitFields = NO_FIELDS,
     ) -> None:
         # The whole optional bundle rides through verbatim: a create can DERIVE FROM a version-pinned
         # source (a client's publish, a job's first write) and carry producer run facets, the
         # same metadata merge_insert accepts, and the bundle is named rather than restated so no field is dropped here.
-        await self.emit_write(table_id=table_id, namespace=namespace, author=author, version=version, operation=CREATE_TABLE, **fields)
+        await self.emit_write(table_id=table_id, namespace=namespace, author=author, version=version, operation=CREATE_TABLE, fields=fields)
 
     async def emit_write(
         self,
@@ -760,7 +766,7 @@ class _BaseLineageEmitter:
         author: str | None,
         version: int | None,
         operation: str,
-        **fields: Unpack[EmitFields],
+        fields: EmitFields = NO_FIELDS,
     ) -> None:
         # HERE, the one place every catalog emit passes through, so no door can announce a provenance row.
         if self._unannounced is not None and self._unannounced(namespace, operation):
@@ -784,19 +790,19 @@ class _BaseLineageEmitter:
             version=version,
             operation=operation,
             run_id=run_id,
-            event_time=fields.get("event_time") or datetime.now(UTC).isoformat(),
+            event_time=fields.event_time or datetime.now(UTC).isoformat(),
             job_namespace=self._job_namespace,
-            source_uri=fields.get("source_uri"),
-            schema_fields=fields.get("schema_fields"),
-            inputs=fields.get("inputs"),
-            run=fields.get("run"),
+            source_uri=fields.source_uri,
+            schema_fields=fields.schema_fields,
+            inputs=fields.inputs,
+            run=fields.run,
             project=project,
-            originator=fields.get("originator"),
-            branch=fields.get("branch"),
-            branch_identifier=fields.get("branch_identifier"),
-            commits_rows=fields.get("commits_rows", False),
-            uuids=fields.get("uuids"),
-            renamed_from=fields.get("renamed_from"),
+            originator=fields.originator,
+            branch=fields.branch,
+            branch_identifier=fields.branch_identifier,
+            commits_rows=fields.commits_rows,
+            uuids=fields.uuids,
+            renamed_from=fields.renamed_from,
             catalog_impl=self._catalog_impl,
             warehouse_uri=self._warehouse_uri,
         )
@@ -811,15 +817,15 @@ class _BaseLineageEmitter:
         Raises:
             SigningKeyUnavailableError: The catalog reads its key from the store and does not hold it.
         """
-        uuids = fields.get("uuids")
+        uuids = fields.uuids
         table_uuid = uuids.table_uuid if uuids is not None else None
-        event_time = fields.get("event_time")
+        event_time = fields.event_time
         if version is None and table_uuid and event_time and operation in LIFECYCLE_MARKERS:
             return lifecycle_run_id((self._commit_ids or UnkeyedCommitIds()).key(), table_uuid=table_uuid, operation=operation, announced_at=event_time)
         if version is None or not table_uuid:
             return str(uuid.uuid4())
         key = (self._commit_ids or UnkeyedCommitIds()).key()
-        return commit_run_id(key, table_uuid=table_uuid, branch=fields.get("branch"), branch_identifier=fields.get("branch_identifier"), version=version)
+        return commit_run_id(key, table_uuid=table_uuid, branch=fields.branch, branch_identifier=fields.branch_identifier, version=version)
 
     async def _send(self, event: dict[str, Any], *, operation: str, table_id: str) -> None:  # pragma: no cover — abstract
         raise NotImplementedError
@@ -1022,15 +1028,17 @@ async def emit_write_event(
         author=author,
         version=version,
         operation=operation,
-        source_uri=source_uri,
-        schema_fields=schema_fields,
-        inputs=refs,
-        run=run,
-        branch=branch,
-        branch_identifier=branch_identifier,
-        commits_rows=commits_rows,
-        uuids=table_uuids,
-        event_time=event_time,
-        renamed_from=fga_ids.canonical_object_id(renamed_from) if renamed_from is not None else None,
-        originator=originator,
+        fields=EmitFields(
+            source_uri=source_uri,
+            schema_fields=schema_fields,
+            inputs=refs,
+            run=run,
+            branch=branch,
+            branch_identifier=branch_identifier,
+            commits_rows=commits_rows,
+            uuids=table_uuids,
+            event_time=event_time,
+            renamed_from=fga_ids.canonical_object_id(renamed_from) if renamed_from is not None else None,
+            originator=originator,
+        ),
     )

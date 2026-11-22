@@ -46,7 +46,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
 
@@ -56,77 +56,15 @@ if TYPE_CHECKING:
     from openfga_sdk import OpenFgaClient
 
     from lakehouse.governed.decider import AccessDecider
-    from lakehouse.governed.settings import OidcProvider
+    from lakehouse.governed.settings import FgaSettings, GovernedAuthSettings, OidcProvider
     from lakehouse.process.supervision import Supervisor
 
 
 log = logging.getLogger(__name__)
 
 
-class _FgaSettings(Protocol):
-    """The FGA half alone — `maintenance` reaches the client without an OIDC door in front of it.
-
-    READ-ONLY members (properties, not annotations) because a mutable protocol member is INVARIANT,
-    which would make this signature reject a settings class whose field is declared even slightly
-    differently. Nothing here writes to settings, so read-only is correct rather than lax.
-    """
-
-    @property
-    def fga_enabled(self) -> bool: ...
-    @property
-    def fga_api_url(self) -> str: ...
-    @property
-    def fga_store_id(self) -> str | None: ...
-    @property
-    def fga_timeout_seconds(self) -> float: ...
-    @property
-    def fga_token_file(self) -> str | None: ...
-
-
-class _DeciderSettings(_FgaSettings, Protocol):
-    """Where a service that writes no tuple asks its authorization questions ([[LH-442]])."""
-
-    @property
-    def fga_decider_url(self) -> str | None: ...
-    @property
-    def fga_decider_token_file(self) -> str | None: ...
-
-
-class _GovernedSettings(_DeciderSettings, Protocol):
-    """The subset of `GovernedAuthSettings` this needs. A Protocol, so a settings class satisfies it
-    structurally without importing a base — which is what lets a class that mixes the two halves directly rather
-    than the composed `GovernedAuthSettings` pass without a cast."""
-
-    @property
-    def oidc_enabled(self) -> bool: ...
-    @property
-    def oidc_issuer(self) -> str | None: ...
-    @property
-    def oidc_audience(self) -> str | None: ...
-    @property
-    def oidc_discovery_url(self) -> str | None: ...
-    @property
-    def oidc_person_providers(self) -> Sequence[OidcProvider]: ...
-    @property
-    def sa_issuer(self) -> str | None: ...
-    @property
-    def sa_audience(self) -> str | None: ...
-    @property
-    def sa_fetch_token_file(self) -> str | None: ...
-    @property
-    def sa_ca_file(self) -> str | None: ...
-    @property
-    def sa_max_token_seconds(self) -> int: ...
-    @property
-    def oidc_cache_ttl(self) -> int: ...
-    @property
-    def oidc_leeway(self) -> int: ...
-    @property
-    def oidc_allow_insecure(self) -> bool: ...
-
-
 async def build_fga_client(
-    settings: _FgaSettings,
+    settings: FgaSettings,
     *,
     service: str,
     provision: bool = False,
@@ -187,7 +125,7 @@ async def build_fga_client(
 
 async def attach_auth(
     app: FastAPI,
-    settings: _GovernedSettings,
+    settings: GovernedAuthSettings,
     *,
     service: str,
     loops: Supervisor,
@@ -242,7 +180,7 @@ async def attach_auth(
         app.state.decider = OpenFgaDecider(client)
 
 
-async def _attach_person_verifier(app: FastAPI, settings: _GovernedSettings, *, providers: Sequence[OidcProvider], service: str, loops: Supervisor) -> None:
+async def _attach_person_verifier(app: FastAPI, settings: GovernedAuthSettings, *, providers: Sequence[OidcProvider], service: str, loops: Supervisor) -> None:
     """Put ``app.state.oidc`` in place over the person issuers ``providers`` names when an audience is set, keys kept fresh."""
     audience = settings.oidc_audience
     if not audience:
@@ -286,7 +224,7 @@ async def _attach_person_verifier(app: FastAPI, settings: _GovernedSettings, *, 
         log.info("%s: OIDC verifier ready (issuers=%s, discovery reached)", service, ", ".join(provider.issuer for provider in providers))
 
 
-async def _attach_service_account_verifier(app: FastAPI, settings: _GovernedSettings, *, service: str, loops: Supervisor) -> None:
+async def _attach_service_account_verifier(app: FastAPI, settings: GovernedAuthSettings, *, service: str, loops: Supervisor) -> None:
     """Put ``app.state.sa_oidc`` in place for the configured service-account issuer, if any, its keys kept fresh on ``loops``."""
     sa_issuer, sa_audience = settings.sa_issuer, settings.sa_audience
     if not (sa_issuer and sa_audience):
@@ -311,7 +249,7 @@ async def _attach_service_account_verifier(app: FastAPI, settings: _GovernedSett
         log.info("%s: service-account verifier ready (issuer=%s, discovery reached)", service, sa_issuer)
 
 
-def build_catalog_decider(settings: _DeciderSettings, *, service: str) -> AccessDecider | None:
+def build_catalog_decider(settings: FgaSettings, *, service: str) -> AccessDecider | None:
     """The catalog's decision door for a service that writes no tuple, or `None` for one of the store's clients ([[LH-442]]).
 
     A service given `fga_decider_url` builds no OpenFGA client at all, so it holds no credential that could write a

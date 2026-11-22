@@ -25,7 +25,9 @@ from catalog.core.lineage_emit import (
     DROP_TABLE,
     INSERT,
     MERGE_INSERT,
+    NO_FIELDS,
     BusEmitter,
+    EmitFields,
     InputPin,
     InputRef,
     LineageEmitter,
@@ -206,8 +208,8 @@ class _RecordingEmitter:
     def __init__(self) -> None:
         self.writes: list[dict[str, Any]] = []
 
-    async def emit_write(self, **kwargs: Any) -> None:
-        self.writes.append(kwargs)
+    async def emit_write(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
+        self.writes.append({**required, **dict(fields)})
 
 
 def test_emit_write_event_maps_segments_to_canonical_ids_and_awaits_inline() -> None:
@@ -247,7 +249,7 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch_under_t
         run_id="r1",
         event_time="2026-07-21T00:00:00Z",
         job_namespace="catalog",
-        inputs=[InputRef("db$silver", 4), InputRef("db$review", 2, "draft")],
+        inputs=[InputRef(name="db$silver", version=4), InputRef(name="db$review", version=2, branch="draft")],
         run=RunContext(run_id=_PIPELINE_RUN, job_namespace="pipelines", job="nightly"),
     )
     parent = {key: value for key, value in event["run"]["facets"]["parent"].items() if not key.startswith("_")}
@@ -284,7 +286,7 @@ def test_emit_write_event_carries_the_pinned_source_version_through() -> None:
             uuids=NO_OBJECT_UUIDS,
         )
     )
-    assert em.writes[0]["inputs"] == [InputRef("db1$src", 5)]  # the pin survives resolution
+    assert em.writes[0]["inputs"] == [InputRef(name="db1$src", version=5)]  # the pin survives resolution
 
 
 def test_emit_write_event_root_table_has_empty_namespace() -> None:
@@ -442,7 +444,7 @@ def test_a_write_is_announced_with_its_operation_and_version_under_the_commits_r
 
     def announce() -> str:
         uuids = DatasetUuids(table_uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
-        asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author="alice", version=4, operation=MERGE_INSERT, uuids=uuids))
+        asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author="alice", version=4, operation=MERGE_INSERT, fields=EmitFields(uuids=uuids)))
         return str(bus.events[-1]["run"]["runId"])
 
     first, second = announce(), announce()
@@ -467,7 +469,7 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
     bus = BusDouble()
 
     await _emitting(bus).emit_create(
-        table_id="acme-silver$annotations", namespace="acme-silver", author="service-publisher", version=1, originator="dex~08a8684b-db88"
+        table_id="acme-silver$annotations", namespace="acme-silver", author="service-publisher", version=1, fields=EmitFields(originator="dex~08a8684b-db88")
     )
 
     [event] = bus.events
@@ -483,7 +485,7 @@ async def test_a_NON_PERSONAL_originator_is_DROPPED(junk: str) -> None:
     carrying it would address whatever it names (`lakehouse.governed.subjects.is_person_subject`)."""
     bus = BusDouble()
 
-    await _emitting(bus).emit_create(table_id="db$t", namespace="db", author="svc", version=1, originator=junk)
+    await _emitting(bus).emit_create(table_id="db$t", namespace="db", author="svc", version=1, fields=EmitFields(originator=junk))
 
     [event] = bus.events
     assert "originator" not in _facets(event)["rask_lance"]

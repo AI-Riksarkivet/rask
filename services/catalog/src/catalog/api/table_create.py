@@ -62,7 +62,7 @@ from catalog.core import encoding, native, provenance_guard, run_context
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
 from catalog.core.identifiers import parse_identifier
-from catalog.core.lineage_emit import CREATE_TABLE, OVERWRITE_TABLE, LineageEmitter, UuidReader, input_refs, run_inputs
+from catalog.core.lineage_emit import CREATE_TABLE, OVERWRITE_TABLE, EmitFields, LineageEmitter, UuidReader, input_refs, run_inputs
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata
 from catalog.core.modes import CreateMode
 from catalog.core.run_context import RunContext
@@ -379,12 +379,14 @@ async def _announce_the_create_on_lineage(created: _Created, *, emitter: Lineage
             author=created_by,
             version=response.version,
             operation=OVERWRITE_TABLE,
-            source_uri=response.location,
-            schema_fields=schema_fields,
-            inputs=inputs,
-            run=run,
-            uuids=table_uuids,
-            event_time=readback.committed_at,
+            fields=EmitFields(
+                source_uri=response.location,
+                schema_fields=schema_fields,
+                inputs=inputs,
+                run=run,
+                uuids=table_uuids,
+                event_time=readback.committed_at,
+            ),
         )
     else:
         await emitter.emit_create(
@@ -392,14 +394,16 @@ async def _announce_the_create_on_lineage(created: _Created, *, emitter: Lineage
             namespace=namespace,
             author=created_by,
             version=response.version or 1,
-            source_uri=response.location,  # the real Lance URI → #23 reconcile can read the on-disk file
-            schema_fields=schema_fields,
-            inputs=inputs,
-            run=run,
-            # The payload's rows landed at v1 only when this request wrote the table.
-            commits_rows=table.num_rows > 0 and not existok_kept_existing,
-            uuids=table_uuids,
-            event_time=readback.committed_at,
+            fields=EmitFields(
+                source_uri=response.location,  # the real Lance URI → #23 reconcile can read the on-disk file
+                schema_fields=schema_fields,
+                inputs=inputs,
+                run=run,
+                # The payload's rows landed at v1 only when this request wrote the table.
+                commits_rows=table.num_rows > 0 and not existok_kept_existing,
+                uuids=table_uuids,
+                event_time=readback.committed_at,
+            ),
         )
 
 

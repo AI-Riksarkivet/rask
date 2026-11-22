@@ -11,6 +11,7 @@ import pytest
 from lance.lance import CleanupStats
 from lance.optimize import CompactionMetrics
 
+from catalog.schemas import GcRunResult
 from catalog.services import maintenance
 from lakehouse.lancekit.manifest_wire import encode_varint
 from lakehouse.storage.options import StorageOptions
@@ -100,7 +101,7 @@ def test_run_gc_passes_bounds_and_reports_stats() -> None:
     stats.old_versions, stats.bytes_removed = 2, 4096
     ds = _FakeDs(version=3, versions=_versions(3), tags={}, stats=stats)
     out = maintenance.run_gc(ds, retention_days=7, retain_versions=1)
-    assert out == {"ok": True, "old_versions_removed": 2, "bytes_removed": 4096}
+    assert out == GcRunResult(ok=True, old_versions_removed=2, bytes_removed=4096)
     # tagged versions are exempt exactly like the sweep, and the retain bound is forwarded
     assert ds.cleaned is not None
     assert ds.cleaned["error_if_tagged_old_versions"] is False
@@ -164,6 +165,6 @@ def test_run_gc_PERMITS_a_clone_the_SWEEP_reclaims_on_EVERY_TICK(tmp_path: Any) 
 
     result = maintenance.run_gc(ds, retention_days=0, retain_versions=1)
 
-    assert result["ok"] is True
+    assert result.ok is True
     assert sorted(p.name for p in (tmp_path / "src.lance" / "data").iterdir()) == source_files, "the reclaim deleted the SOURCE's files"
     assert len(lance.dataset(clone).to_table()) == 20, "the clone stopped resolving its rows after the reclaim"

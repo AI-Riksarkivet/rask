@@ -575,7 +575,7 @@ def get_lineage_emitter(
     them in a frozen wrapper keeps the transport shared without letting one caller's identity ride onto
     another caller's event.
     """
-    return OriginatorBoundEmitter(app_wire(request, "lineage_emitter", LineageEmitter), originator_hint(x_lance_originator))
+    return OriginatorBoundEmitter(inner=app_wire(request, "lineage_emitter", LineageEmitter), originator=originator_hint(x_lance_originator))
 
 
 LineageEmitterDep = Annotated[LineageEmitter, Depends(get_lineage_emitter)]

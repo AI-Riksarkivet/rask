@@ -19,6 +19,7 @@ from lance_namespace import CreateTableResponse
 
 from catalog.api.authz.context import AuthzContext
 from catalog.core.config import Settings
+from catalog.core.lineage_emit import NO_FIELDS, EmitFields
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -50,8 +51,8 @@ class _RecordingEmitter:
     def __init__(self) -> None:
         self.create: dict[str, Any] | None = None
 
-    async def emit_create(self, **kwargs: Any) -> None:
-        self.create = kwargs
+    async def emit_create(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
+        self.create = {**required, **dict(fields)}
 
 
 def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -47,7 +47,7 @@ from collections import deque
 from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
 from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final, Protocol, TypeVar
+from typing import Any, Final, Protocol
 
 import pyarrow as pa
 from opentelemetry import trace
@@ -77,8 +77,6 @@ from lineage.services.catalog_writer import RestCatalogWriteTransport
 log = logging.getLogger(__name__)
 
 tracer = trace.get_tracer(__name__)
-
-_T = TypeVar("_T")
 
 #: The field metadata Lance reads a table's unenforced primary key from (`lance_docs/lance/format/table/index.md`, "Unenforced Primary Key").
 _PRIMARY_KEY: Final = {"lance-schema:unenforced-primary-key": "true"}
@@ -511,7 +509,7 @@ class ProvenanceStore:
     def table_id(self, table: str) -> list[str]:
         return [*self._namespace, table]
 
-    async def _run(self, call: Callable[[], _T]) -> _T:
+    async def _run[T](self, call: Callable[[], T]) -> T:
         return await asyncio.to_thread(call)
 
     def _reader(self, table: str) -> CatalogTableReader:

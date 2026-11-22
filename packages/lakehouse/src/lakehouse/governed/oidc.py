@@ -77,13 +77,13 @@ import threading
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Annotated, Any, Final, NamedTuple
+from typing import Annotated, Any, Final
 from urllib.parse import urlsplit
 
 import httpx
 import jwt
 from lance_namespace import UnauthenticatedError
-from pydantic import AfterValidator, BaseModel, ConfigDict, ValidationError
+from pydantic import AfterValidator, BaseModel, ConfigDict, InstanceOf, SkipValidation, ValidationError
 
 from lakehouse.governed.projected_token import read_token_file
 from lakehouse.problems.domain_errors import ServiceUnavailableError
@@ -171,19 +171,23 @@ class _Discovery(BaseModel):
     id_token_signing_alg_values_supported: list[str] = []
 
 
-class _Provider(NamedTuple):
+class _Provider(BaseModel):
     """A provider as one fetch found it: its discovery document, the key-set URL it was fetched from, the safe
     algorithm set, the signing keys the set held (at least one), and where that fetch began in the verifier's order of
     fetches (`OIDCVerifier._install` keeps the latest).
 
-    An internal value bundle (not boundary input), so a ``NamedTuple`` is the right container: immutable, and holding no
-    client, so a request that reads it can fetch nothing (the module docstring's rule 1).
+    Frozen and holding no client, so a request that reads it can fetch nothing (the module docstring's rule 1).
     """
 
-    spec: _Discovery
+    # `arbitrary_types_allowed` for `keys`: a PyJWK is no pydantic type.
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+
+    #: The document `_fetch` validated, kept as that same object.
+    spec: InstanceOf[_Discovery]
     jwks_uri: str
     algorithms: list[str]
-    keys: tuple[jwt.PyJWK, ...]
+    #: The keys PyJWT parsed from the set, kept as it built them.
+    keys: SkipValidation[tuple[jwt.PyJWK, ...]]
     began: int
 
 
@@ -249,13 +253,16 @@ class _Flight:
         return self._ended.wait(timeout)
 
 
-class _Turn(NamedTuple):
+class _Turn(BaseModel):
     """What `_RefreshPace.turn` gives a request. An internal value, like `_Provider`."""
+
+    # `arbitrary_types_allowed` for `flight`: a `_Flight` is a live collaborator, kept as the very object others join.
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
     #: This request fetches; the pace's interval starts now.
     fetches: bool
     #: The flight this request runs, or joined and saw end: the request records, or reads, what it installed.
-    flight: _Flight | None = None
+    flight: SkipValidation[_Flight | None] = None
     #: Set when the request joined a fetch that failed, or that outlasted its wait: why the IdP's answer is not to be
     #: had, which the request answers as the fetch's own request does (`ProviderUnavailableError`).
     unavailable: str | None = None
@@ -663,7 +670,9 @@ class OIDCVerifier:
             if turn.fetches and turn.flight is not None:
                 base = self._held.get(issuer, provider)
                 began = self._begin_fetch()
-                turn.flight.landed = self._install(issuer, base._replace(keys=self._fetch_keys(base.jwks_uri), began=began))
+                turn.flight.landed = self._install(
+                    issuer, _Provider(spec=base.spec, jwks_uri=base.jwks_uri, algorithms=base.algorithms, keys=self._fetch_keys(base.jwks_uri), began=began)
+                )
         if turn.unavailable is not None:
             raise ProviderUnavailableError(turn.unavailable)
         landed = turn.flight.landed if turn.flight is not None else None

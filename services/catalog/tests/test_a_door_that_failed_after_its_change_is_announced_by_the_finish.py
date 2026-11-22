@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import contextlib
 from collections.abc import Callable, Iterator
-from typing import Any, Unpack
+from typing import Any
 
 import lance
 import pyarrow as pa
@@ -23,7 +23,7 @@ from announcement_filings import age_filings
 
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
-from catalog.core.lineage_emit import EmitFields
+from catalog.core.lineage_emit import NO_FIELDS, EmitFields
 from catalog.services import announcement_intents
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.control_events import CatalogControlEvent
@@ -60,7 +60,7 @@ class _Lanes:
         del warehouse_id
         return None
 
-    async def emit_create(self, *, table_id: str, namespace: str, author: str | None, version: int, **fields: Unpack[EmitFields]) -> None:
+    async def emit_create(self, *, table_id: str, namespace: str, author: str | None, version: int, fields: EmitFields = NO_FIELDS) -> None:
         del table_id, namespace, author, version, fields
 
     async def emit_write(
@@ -71,15 +71,15 @@ class _Lanes:
         author: str | None,
         version: int | None,
         operation: str,
-        **fields: Unpack[EmitFields],
+        fields: EmitFields = NO_FIELDS,
     ) -> None:
         del namespace, version
-        uuids = fields.get("uuids")
+        uuids = fields.uuids
         self.markers.append(
             (
                 operation,
                 table_id,
-                fields.get("event_time"),
+                fields.event_time,
                 uuids.table_uuid if uuids is not None else None,
                 uuids.namespace_uuid if uuids is not None else None,
             )

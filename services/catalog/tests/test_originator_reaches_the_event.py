@@ -18,11 +18,11 @@ event, which is worse than the silence it replaces: a row in the wrong person's 
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Unpack
+from typing import Any
 
 import pytest
 
-from catalog.core.lineage_emit import EmitFields, InputRef, OriginatorBoundEmitter, _BaseLineageEmitter, emit_write_event
+from catalog.core.lineage_emit import NO_FIELDS, EmitFields, InputRef, OriginatorBoundEmitter, _BaseLineageEmitter, emit_write_event
 from catalog.core.run_context import RunContext
 from lakehouse.events.lineage_events import DatasetUuids
 
@@ -46,11 +46,11 @@ class _Recording:
     async def project_for(self, warehouse_id: str) -> str | None:
         return None
 
-    async def emit_create(self, **kwargs: Any) -> None:
-        self.writes.append(kwargs)
+    async def emit_create(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
+        self.writes.append({**required, **dict(fields)})
 
-    async def emit_write(self, **kwargs: Any) -> None:
-        self.writes.append(kwargs)
+    async def emit_write(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
+        self.writes.append({**required, **dict(fields)})
 
 
 def _emit(bound: Any) -> None:
@@ -70,9 +70,9 @@ class TestTheBindingCannotCrossRequests:
     def test_two_bindings_over_one_emitter_do_not_see_each_other(self) -> None:
         """The exact hazard that rules out stashing the claim on the app-scoped emitter."""
         inner = _Recording()
-        _emit(OriginatorBoundEmitter(inner, "dex~alice"))
-        _emit(OriginatorBoundEmitter(inner, "dex~bob"))
-        _emit(OriginatorBoundEmitter(inner, None))
+        _emit(OriginatorBoundEmitter(inner=inner, originator="dex~alice"))
+        _emit(OriginatorBoundEmitter(inner=inner, originator="dex~bob"))
+        _emit(OriginatorBoundEmitter(inner=inner, originator=None))
         assert [w["originator"] for w in inner.writes] == ["dex~alice", "dex~bob", None]
 
 
@@ -91,10 +91,9 @@ class TestTheHeaderIsAClaimAndIsBounded:
 # --------------------------------------------------------------------------- #
 # CAT-CORE-07 — the optional-metadata keywords are ONE bundle (`EmitFields`), and it must THREAD
 # --------------------------------------------------------------------------- #
-# `LineageEmitter` is a four-implementation seam, and its optional keywords are a PEP 692
-# `Unpack[EmitFields]` that every implementation states by name. A bundle can type cleanly and still
-# stop threading a field: an implementation that misses one silently DROPS it, which for `originator`
-# is a row in the wrong person's inbox.
+# `LineageEmitter` is a four-implementation seam, and its optional metadata is the one `EmitFields` model
+# every implementation takes as `fields`. A bundle can type cleanly and still stop threading a field: an
+# implementation that misses one silently DROPS it, which for `originator` is a row in the wrong person's inbox.
 
 
 class _RecordingEmitter(_BaseLineageEmitter):
@@ -116,19 +115,19 @@ def _optional() -> EmitFields:
         event_time="2026-10-25T12:00:00+00:00",
         source_uri="s3://bkt/t.lance",
         schema_fields=[],
-        inputs=[InputRef("acme$src", 2)],
+        inputs=[InputRef(name="acme$src", version=2)],
         run=RunContext(run_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", job_namespace="pipelines", job="nightly"),
         originator="dex~bob",
     )
 
 
-async def _create(emitter: Any, **optional: Unpack[EmitFields]) -> None:
-    await emitter.emit_create(table_id="acme$t", namespace="acme", author="dex~alice", version=4, **optional)
+async def _create(emitter: Any, optional: EmitFields) -> None:
+    await emitter.emit_create(table_id="acme$t", namespace="acme", author="dex~alice", version=4, fields=optional)
 
 
 def test_every_field_in_the_bundle_reaches_the_emitted_event() -> None:
     emitter = _RecordingEmitter()
-    asyncio.run(_create(emitter, **_optional()))
+    asyncio.run(_create(emitter, _optional()))
     [event] = emitter.events
     facets = event["run"]["facets"]
     assert event["eventTime"] == "2026-10-25T12:00:00+00:00"
@@ -143,9 +142,8 @@ def test_every_field_in_the_bundle_reaches_the_emitted_event() -> None:
 
 def test_the_originator_binding_still_overrides_only_an_absent_claim() -> None:
     inner = _RecordingEmitter()
-    asyncio.run(_create(OriginatorBoundEmitter(inner, "dex~carol"), **_optional()))
+    asyncio.run(_create(OriginatorBoundEmitter(inner=inner, originator="dex~carol"), _optional()))
     assert inner.events[-1]["run"]["facets"]["rask_lance"]["originator"] == "dex~bob", "an explicit originator must win"
-    absent = _optional()
-    absent["originator"] = None
-    asyncio.run(_create(OriginatorBoundEmitter(inner, "dex~carol"), **absent))
+    absent = _optional().model_copy(update={"originator": None})
+    asyncio.run(_create(OriginatorBoundEmitter(inner=inner, originator="dex~carol"), absent))
     assert inner.events[-1]["run"]["facets"]["rask_lance"]["originator"] == "dex~carol", "the bound claim must fill an absent one"

@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import os
 from functools import cache
-from typing import TYPE_CHECKING, Any, Final, NotRequired, TypedDict
+from typing import TYPE_CHECKING, Any, Final
 
-from pydantic import Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.storage.credential import S3KeyPair
@@ -137,12 +137,14 @@ def aws_session() -> Session:
     return boto3.session.Session(botocore_session=BotocoreSession(session_vars=unread))
 
 
-class _Signing(TypedDict):
-    """The credential keywords a boto3 client is built with."""
+class _Signing(BaseModel):
+    """The credential keywords a boto3 client is built with; a session token of None is botocore's own default."""
+
+    model_config = ConfigDict(frozen=True)
 
     aws_access_key_id: str
-    aws_secret_access_key: str
-    aws_session_token: NotRequired[str]
+    aws_secret_access_key: str = Field(repr=False)
+    aws_session_token: str | None = Field(default=None, repr=False)
 
 
 def _signing(key_pair: S3KeyPair) -> _Signing:
@@ -161,10 +163,8 @@ def _signing(key_pair: S3KeyPair) -> _Signing:
     secret = key_pair.secret_access_key.get_secret_value()
     if missing := [name for name, value in (("access_key_id", key_pair.access_key_id), ("secret_access_key", secret)) if not value]:
         raise MissingStoreCredentialError(f"the key pair names no {' and no '.join(missing)}, so no store client is built")
-    signing: _Signing = {"aws_access_key_id": key_pair.access_key_id, "aws_secret_access_key": secret}
-    if key_pair.session_token is not None and (token := key_pair.session_token.get_secret_value()):
-        signing["aws_session_token"] = token
-    return signing
+    token = key_pair.session_token.get_secret_value() if key_pair.session_token is not None else None
+    return _Signing(aws_access_key_id=key_pair.access_key_id, aws_secret_access_key=secret, aws_session_token=token or None)
 
 
 def _client(endpoint: str | None, env: S3EnvSettings, *, key_pair: S3KeyPair, region: str | None, insecure: bool | None) -> S3Client:
@@ -196,7 +196,16 @@ def _client(endpoint: str | None, env: S3EnvSettings, *, key_pair: S3KeyPair, re
 
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         verify = False
-    return aws_session().client("s3", endpoint_url=endpoint, region_name=region or AwsRegionSettings().aws_region, config=cfg, verify=verify, **signing)
+    return aws_session().client(
+        "s3",
+        endpoint_url=endpoint,
+        region_name=region or AwsRegionSettings().aws_region,
+        config=cfg,
+        verify=verify,
+        aws_access_key_id=signing.aws_access_key_id,
+        aws_secret_access_key=signing.aws_secret_access_key,
+        aws_session_token=signing.aws_session_token,
+    )
 
 
 __all__ = [

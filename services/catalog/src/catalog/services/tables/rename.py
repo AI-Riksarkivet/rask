@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
-from typing import NamedTuple
 
 from lance_namespace import (
     ConcurrentModificationError,
@@ -35,20 +34,20 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
-class Reparent(NamedTuple):
+class Reparent(BaseModel):
     """How a rename into another namespace takes along where its table inherits from, a step at a time, each called
     from the rename's thread while it holds the location's claim fenced (:func:`rename_table`): ``leave`` before the
     name moves, ``arrive`` once the destination is registered, ``put_back`` for a rename that is undone.
-
-    An internal bundle of three calls, never boundary input, so a ``NamedTuple``.
     """
 
+    model_config = ConfigDict(frozen=True)
+
     #: Move it to the destination, before the name moves. When it raises, it has returned what it may have moved.
-    leave: Callable[[], None]
+    leave: SkipValidation[Callable[[], None]]
     #: Name the table a child of the destination, once its name is registered there.
-    arrive: Callable[[], None]
+    arrive: SkipValidation[Callable[[], None]]
     #: Return it to the source, for a rename that is undone.
-    put_back: Callable[[], None]
+    put_back: SkipValidation[Callable[[], None]]
 
 
 def rename_table(

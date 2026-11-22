@@ -18,11 +18,12 @@ from __future__ import annotations
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
-from typing import TYPE_CHECKING, Any, Final, Protocol, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 from lance_namespace import InvalidInputError, InvalidTableStateError, UnsupportedOperationError
 
 from catalog.core.version_retention import ExplainedDataset, fork_versions, reclaimable_versions, recorded_branch, tag_versions
+from catalog.schemas import GcPreview, GcRunResult
 from lakehouse.compaction_gate import compaction_refusal
 from lakehouse.lancekit import branch_layout
 from lakehouse.lancekit.features import FragmentCarrier, ManifestCarrier, describe_gc_unsupported_flags, manifest_feature_flags
@@ -132,37 +133,7 @@ def require_reclaimable(ds: ManifestCarrier) -> None:
         )
 
 
-class GcPreviewData(TypedDict):
-    """What `preview_gc` returns — the SERVICE's shape, declared where the service is.
-
-    A `TypedDict` and not the wire model, deliberately: no service module in this package imports
-    `catalog.schemas`, because services return plain data and the endpoints own the wire shape. Naming
-    the shape here keeps that layering and still lets `ty` see it.
-
-    THE SPLAT WAS NEVER UNSAFE, which is why this is a type fix and not a runtime one. Pydantic
-    validates types and required fields on `__init__`, so `GcPreview(**result)` already refuses a
-    drifted key — and refuses an EXTRA one, which `model_validate` would silently ignore. What was
-    missing is the failure arriving at the type checker rather than at the door. Verified: renaming one
-    key here produces `ty` errors where it previously produced none.
-    """
-
-    current_version: int
-    total_versions: int
-    eligible_versions: list[int]
-    protected_tags: dict[str, int]
-    retention_days: int | None
-    retain_versions: int | None
-
-
-class GcRunData(TypedDict):
-    """What `run_gc` returns — see :class:`GcPreviewData` for why these are TypedDicts."""
-
-    ok: bool
-    old_versions_removed: int
-    bytes_removed: int
-
-
-def preview_gc(ds: PreviewedDataset, *, branch: str | None, retention_days: int | None, retain_versions: int | None) -> GcPreviewData:
+def preview_gc(ds: PreviewedDataset, *, branch: str | None, retention_days: int | None, retain_versions: int | None) -> GcPreview:
     """Dry-run the old-version cleanup — the versions GC would reclaim, and the tags protecting others.
 
     ``branch`` names the ref ``ds`` is checked out on, and it is REQUIRED because the handle cannot say:
@@ -172,14 +143,14 @@ def preview_gc(ds: PreviewedDataset, *, branch: str | None, retention_days: int 
     current = int(ds.version)
     # The run's own arguments (:func:`run_gc`), so the versions offered are Lance's answer to the cleanup it makes.
     eligible = reclaimable_versions(ds, older_than=_age_bound(retention_days), retain_versions=retain_versions)
-    return {
-        "current_version": current,
-        "total_versions": len(ds.versions()),
-        "eligible_versions": eligible,
-        "protected_tags": tag_versions(ds, branch),
-        "retention_days": retention_days,
-        "retain_versions": retain_versions,
-    }
+    return GcPreview(
+        current_version=current,
+        total_versions=len(ds.versions()),
+        eligible_versions=eligible,
+        protected_tags=tag_versions(ds, branch),
+        retention_days=retention_days,
+        retain_versions=retain_versions,
+    )
 
 
 def refuse_a_reclaim_over_nested_branches(ds: VersionedDataset, branch: str | None) -> None:
@@ -202,7 +173,7 @@ def _age_bound(retention_days: int | None) -> timedelta:
     return timedelta(days=retention_days) if retention_days else timedelta(0)
 
 
-def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, branch: str | None = None) -> GcRunData:
+def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_versions: int | None, branch: str | None = None) -> GcRunResult:
     """Reclaim old versions (DESTRUCTIVE). Tagged versions are exempt, as in maintenance's own expiry.
 
     Tagged versions are what keeps a registered clone readable: its tag on this table pins the version it reads
@@ -212,11 +183,11 @@ def run_gc(ds: ReclaimableDataset, *, retention_days: int | None, retain_version
     require_reclaimable(ds)
     refuse_a_reclaim_over_nested_branches(ds, branch)
     stats: Any = ds.cleanup_old_versions(older_than=_age_bound(retention_days), retain_versions=retain_versions, error_if_tagged_old_versions=False)
-    return {
-        "ok": True,
-        "old_versions_removed": int(getattr(stats, "old_versions", 0) or 0),
-        "bytes_removed": int(getattr(stats, "bytes_removed", 0) or 0),
-    }
+    return GcRunResult(
+        ok=True,
+        old_versions_removed=int(getattr(stats, "old_versions", 0) or 0),
+        bytes_removed=int(getattr(stats, "bytes_removed", 0) or 0),
+    )
 
 
 #: ``VersionRange.end_version`` for "through the latest version" (``lance_docs/ns_catalog/spec.yaml``).

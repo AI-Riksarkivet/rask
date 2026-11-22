@@ -2,6 +2,8 @@
 
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the one package stands; "organised by module" becomes subpackages under a layers contract, and "swapped by Dapr component" is retired, since NATS is the one bus.
 
+**Carried out 2026-11-20 to 2026-11-21** by [ADR 0224](0224-the-library-holds-what-two-services-share.md): the one package is grouped by job into eight subpackages (`service_app`, `events`, `governed`, `storage`, `lancekit`, `records`, `process`, `problems`), beside `schemas` (the probe's body) and seven modules at its top level (`arrow_ipc`, `compaction_gate`, `derived_tables`, `lance_metrics`, `naming`, `table_paths`, `timers`); the import-linter contracts in `.importlinter` hold the groups' directions and each service holds a `layers` contract of its own; no publish interface was added, since a client reaches the lakehouse through its doors and events, never by importing the package.
+
 **Status:** accepted. Source: the owner's questions of 2026-11-07 ("all this _kit package? Any reason?", then "Should
 they be folded into one? How does Lakekeeper structure its code?"), answered with the evidence below and started as the
 first step of the XC-196 (#780) / XC-198 (#782) bundle on the owner's `/implement`. Builds on the owner's ruling of

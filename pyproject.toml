@@ -129,7 +129,8 @@ max-nested-blocks = 3
 #   RUF100 — the directives it flags are `# noqa: ANN001`, each carrying a written reason on its
 #            own line. They are dead only because rask does not select ANN001, so honouring RUF100
 #            would delete rationale comments to satisfy a rule about comments.
-#   the rest — C901/E501/PERF401/RUF012/RUF043/SIM108/S608: real, small, and per-glob below.
+#   the rest — E501/PERF401/RUF012/RUF043/SIM108/S608: real, small, and per-glob below. C901 is not among them in
+#            the three services or the governed library: every function there is held to `max-complexity`.
 #
 # NARROWED PER GLOB 2026-09-09 (§ Q3-37, `open_lakehouse_diff_left.md`), by the same measurement that
 # narrowed `governed/**`: each list holds ONLY the rules with a site in that tree, so adding one back
@@ -140,9 +141,12 @@ max-nested-blocks = 3
 # reading as an accepted exemption is the worst of both: it buys no silence and it pre-forgives the
 # next occurrence. The out-of-scope globs below keep the 21-rule form under the owner's 2026-09-07
 # lakehouse-first ruling; narrowing them needs the same per-tree measurement, not a copied list.
-"services/catalog/**" = ["A002", "ANN401", "RUF002", "RUF003", "RUF043", "RUF100", "C901", "PERF401", "E501"]
-"services/lineage/**" = ["ANN401", "RUF002", "RUF003", "RUF100", "C901", "S608", "E501"]
-"services/maintenance/**" = ["ANN401", "RUF100", "C901", "PERF401", "E501"]
+"services/catalog/**" = ["A002", "ANN401", "RUF002", "RUF003", "RUF043", "RUF100", "PERF401", "E501"]
+"services/lineage/**" = ["ANN401", "RUF002", "RUF003", "RUF100", "S608", "E501"]
+"services/maintenance/**" = ["ANN401", "RUF100", "PERF401", "E501"]
+# A service's tests are not held to `max-complexity`: a test reads as one scenario, as the PLR note above says. Two
+# functions in `services/catalog/tests` need it (measured 2026-11-22: 25 and 16); the library's tests need none and stay held.
+"services/*/tests/**" = ["C901"]
 # NARROWED 2026-08-22, and this row is now a DEBT LIST rather than a blanket. `governed/` is the
 # AUTHORIZATION KERNEL, and the 21-rule form suppressed four SECURITY rules there — S110
 # (try-except-pass), S112 (try-except-continue), S324 (insecure hash) and S608 (SQL injection) — none
@@ -151,7 +155,7 @@ max-nested-blocks = 3
 # That mattered because the same subtree was ALSO outside the CI lint scope until this commit
 # (.dagger/checks.go linted `services tests` only), so no automated check read the kernel for the
 # rule classes it most needs. Adding a rule back here now requires saying which site needs it.
-"packages/lakehouse/src/lakehouse/governed/**" = ["ANN401", "ANN202", "C901", "PERF401"]
+"packages/lakehouse/src/lakehouse/governed/**" = ["ANN401", "ANN202", "PERF401"]
 # The data plane's measured sites, one file each (2026-11-02, every data-plane module of the library): the typographic
 # minus sign in `lance_session`'s prose, the two loops PERF401 reads as a comprehension, and the four files whose
 # `# noqa: BLE001` / `SLF001` directives carry their written reason (RUF100, as the note above records).
@@ -187,10 +191,22 @@ max-nested-blocks = 3
 
 # The code-shape bans. Each message names the seam a caller goes through instead; the sanctioned sites
 # are the per-file ignores above and the line-level `# noqa: TID251` at each call site.
-# One `dataclasses.dataclass` noqa line is DEBT against the Pydantic-only rule, not a sanctioned use:
-# catalog/core/lineage_emit.py.
+# `dataclasses.make_dataclass` has one sanctioned site, a line-level noqa in `lakehouse/lancekit/transactions.py`: it extends
+# pylance's own `LanceOperation.RewrittenIndex` dataclass, which pylance's binding builds by name, and a BaseModel cannot.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "dataclasses.dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python)."
+"typing.NamedTuple".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python): frozen with ConfigDict(frozen=True)."
+"typing.TypedDict".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python): a dict shape is a model the caller builds."
+"dataclasses.make_dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python)."
+"typing.TypeVar".msg = "Generics use PEP 695 type parameters, `def f[T](...)` and `class C[T]` (writing-python, references/type-safety.md § Generics)."
+"typing.ParamSpec".msg = "Generics use PEP 695 type parameters, `def f[**P, R](...)` (writing-python, references/type-safety.md § Generics)."
+"collections.namedtuple".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python): frozen with ConfigDict(frozen=True)."
+"typing_extensions.NamedTuple".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python): frozen with ConfigDict(frozen=True)."
+"typing_extensions.TypedDict".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python): a dict shape is a model the caller builds."
+"pydantic.dataclasses.dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python), not a pydantic dataclass."
+"typing_extensions.TypeVar".msg = "Generics use PEP 695 type parameters, `def f[T](...)` and `class C[T]` (writing-python, references/type-safety.md § Generics)."
+"typing_extensions.ParamSpec".msg = "Generics use PEP 695 type parameters, `def f[**P, R](...)` (writing-python, references/type-safety.md § Generics)."
+"typing.TypeVarTuple".msg = "Generics use PEP 695 type parameters, `def f[*Ts](...)` (writing-python, references/type-safety.md § Generics)."
 "dapr".msg = "The lakehouse speaks to the bus through lakehouse.events.bus and to its secret store through lakehouse.governed.secrets, each on the process's own connection."
 "boto3".msg = "Build S3/STS clients through lakehouse.storage.client.s3_client / lakehouse.storage.sts.sts_client: a raw boto3 client carries no timeouts."
 "lance.write_dataset".msg = "Lance is written only at the registered write doors (the catalog dataplane)."

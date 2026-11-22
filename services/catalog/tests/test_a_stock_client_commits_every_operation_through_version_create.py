@@ -50,6 +50,7 @@ from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
 
 from catalog.core import manifest_bytes
+from catalog.core.lineage_emit import NO_FIELDS, EmitFields
 from catalog.services import table_claims
 from catalog.services.tables import commits
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
@@ -1791,11 +1792,11 @@ class _Recorder:
     async def project_for(self, warehouse_id: str) -> str | None:
         return None
 
-    async def emit_create(self, **fields: Any) -> None:
-        self.writes.append(fields)
+    async def emit_create(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
+        self.writes.append({**required, **dict(fields)})
 
-    async def emit_write(self, **fields: Any) -> None:
-        self.writes.append(fields)
+    async def emit_write(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
+        self.writes.append({**required, **dict(fields)})
 
 
 @pytest.mark.parametrize(("door", "operation"), [pytest.param(_insert, "insert", id="insert"), pytest.param(_merge_insert, "merge_insert", id="merge_insert")])
@@ -1822,7 +1823,7 @@ def test_a_catalog_write_door_commits_the_run_its_context_names(
     }
     assert json.loads(properties["rask.inputs"]) == [{"table": ["lance_catalog", "db", "src"], "version": 1}]
     (announced,) = recorder.writes
-    assert (announced["version"], [ref[:3] for ref in announced["inputs"]], str(announced["run"].run_id), announced["run"].job) == (
+    assert (announced["version"], [(ref.name, ref.version, ref.branch) for ref in announced["inputs"]], str(announced["run"].run_id), announced["run"].job) == (
         2,
         [("lance_catalog$db$src", 1, None)],
         "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
@@ -1937,7 +1938,9 @@ def test_a_commit_under_the_run_rule_lands_only_when_it_names_its_run_and_inputs
     lance.write_dataset(_keyed([2], ["b"]), namespace_client=stock, table_id=_SILVER, mode="overwrite", transaction_properties=_PROVENANCE)
     landed = lance.dataset(namespace_client=stock, table_id=_SILVER)
     assert (landed.version, _committed_properties(landed, 2)) == (2, _PROVENANCE)
-    assert [(write["version"], [ref[:3] for ref in write["inputs"]]) for write in recorder.writes] == [(2, [("lance_catalog$db$src", 1, None)])]
+    assert [(write["version"], [(ref.name, ref.version, ref.branch) for ref in write["inputs"]]) for write in recorder.writes] == [
+        (2, [("lance_catalog$db$src", 1, None)])
+    ]
     # A restore brings back rows the table held, here a fragment the overwrite dropped, so it names no run.
     landed.checkout_version(1).restore()
     assert _rows(lance.dataset(namespace_client=stock, table_id=_SILVER)) == [(1, "a")]
