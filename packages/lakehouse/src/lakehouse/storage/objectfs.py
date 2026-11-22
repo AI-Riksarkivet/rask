@@ -15,7 +15,6 @@ and become the flat map only at the call that signs with them, through that guar
 
 from __future__ import annotations
 
-import asyncio
 from functools import partial
 from typing import TYPE_CHECKING, Final
 
@@ -24,6 +23,7 @@ from pydantic import BaseModel, Field
 
 from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.process.health import Dependency
+from lakehouse.process.own_threads import on_own_threads
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import REGION, VIRTUAL_HOSTED, StorageOptions, on_s3, s3_filesystem
 
@@ -50,8 +50,8 @@ def lance_storage_options(
 
     EVERY KEY IS SPELLED AS LANCE READS THE ENVIRONMENT INTO IT (``aws_endpoint``, ``aws_region``,
     ``aws_virtual_hosted_style_request``), so an ambient ``AWS_ENDPOINT_URL``, ``AWS_REGION`` or
-    ``AWS_VIRTUAL_HOSTED_STYLE_REQUEST`` cannot stand in for it ([[LH-238]]; the measurement is at
-    :data:`lakehouse.storage.options._OPTION_ALIASES`), and a named endpoint is also set as the S3 service's own
+    ``AWS_VIRTUAL_HOSTED_STYLE_REQUEST`` cannot stand in for it ([[LH-238]]; the measurement is beside the spellings
+    in :mod:`lakehouse.storage.options`), and a named endpoint is also set as the S3 service's own
     (:data:`lakehouse.storage.options.S3_ENDPOINT`), which ``AWS_ENDPOINT_URL_S3`` would otherwise fill and which outranks
     it. An empty endpoint (AWS proper) names no endpoint at all: the client resolves the regional one, and an empty value
     would pin it to nothing.
@@ -271,9 +271,9 @@ def _where_a_root_may_be(uri: str) -> list[str]:
 def store_dependency(root_uri: str, options: Callable[[], StorageOptions], *, required: bool) -> Dependency:
     """The object store, read as one listing of ``root_uri`` under the options in force at each read (the process's own
     session, renewed as it runs), which a store that is down, or a session it no longer honours, refuses. The blocking
-    read runs on the event loop's own executor (``asyncio.to_thread``), never on the request threads Starlette lends a
-    sync door, since a burst holding all 40 of those is what the verdict must not wait behind."""
-    return Dependency(name="store", read=partial(asyncio.to_thread, _list_the_root, root_uri, options), required=required)
+    read runs on the process's own threads (:mod:`lakehouse.process.own_threads`), never behind a burst of sync doors
+    holding every thread of the request pool."""
+    return Dependency(name="store", read=partial(on_own_threads, _list_the_root, root_uri, options), required=required)
 
 
 def _list_the_root(root_uri: str, options: Callable[[], StorageOptions]) -> None:

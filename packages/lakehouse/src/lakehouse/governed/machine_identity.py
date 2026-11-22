@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Self
 
 import jwt
 from lance_namespace import UnauthenticatedError
@@ -69,7 +70,7 @@ class ServicePrincipal(BaseModel):
         return principal
 
     @classmethod
-    def for_account(cls, account: str) -> ServicePrincipal:
+    def for_account(cls, account: str) -> Self:
         """The service account `account` names; `UnauthenticatedError` for a username that names none."""
         return cls(principal=service_account_principal(account))
 

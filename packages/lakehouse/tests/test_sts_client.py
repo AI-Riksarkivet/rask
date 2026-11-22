@@ -17,9 +17,10 @@ def test_sts_client_carries_region_endpoint_and_timeouts_and_signs_nothing():
 
     assert client.meta.region_name == "eu-north-1"
     assert client.meta.endpoint_url == "http://rustfs:9000"
-    assert client.meta.config.connect_timeout == 5
-    assert client.meta.config.read_timeout == 15
-    assert client.meta.config.signature_version is UNSIGNED
+    # botocore sets each option on the instance, where the stub's `Config` declares none of them.
+    config = vars(client.meta.config)
+    assert (config["connect_timeout"], config["read_timeout"]) == (5, 15)
+    assert config["signature_version"] is UNSIGNED
 
 
 def test_sts_client_defaults_to_the_aws_endpoint_when_none_is_given():

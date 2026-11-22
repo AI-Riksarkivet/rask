@@ -39,8 +39,8 @@ log = logging.getLogger(__name__)
 
 #: How often every lakehouse process reads each of its dependencies, and how long one read may take: a verdict is at most
 #: one round old, and a dependency that stops answering turns its verdict within two (ADR 0203).
-HEALTH_INTERVAL_SECONDS: Final = 5.0
-HEALTH_BUDGET_SECONDS: Final = 5.0
+_INTERVAL_SECONDS: Final = 5.0
+_BUDGET_SECONDS: Final = 5.0
 
 
 class Verdict(StrEnum):
@@ -84,8 +84,8 @@ class HealthWatch:
         self,
         dependencies: Sequence[Dependency],
         *,
-        interval: float = HEALTH_INTERVAL_SECONDS,
-        budget: float = HEALTH_BUDGET_SECONDS,
+        interval: float = _INTERVAL_SECONDS,
+        budget: float = _BUDGET_SECONDS,
         clock: Callable[[], float] = monotonic,
     ) -> None:
         names = [dependency.name for dependency in dependencies]

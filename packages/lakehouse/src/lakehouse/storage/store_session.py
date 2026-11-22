@@ -8,13 +8,10 @@ credential. The kubelet replaces the projected token before it expires, so the f
 catalog, lineage, maintenance and each backup job hold their own, under their own ServiceAccount's policy.
 
 READS NEVER TOUCH THE STORE: `storage_options()` is built at every request, so `held_session` only peeks at what
-`SESSIONS` holds, and raises `StoreCredentialUnavailableError` (503) once the session is within `EXPIRY_MARGIN_SECONDS`
+`SESSIONS` holds, and raises `StoreCredentialUnavailableError` (503) once the session is within `_EXPIRY_MARGIN_SECONDS`
 of its expiry. `StoreSession` does the exchanging: once at boot, failing the boot closed, then in a background loop that
 exchanges again once half the session's life is used. A request that took the old session then still has half a session
 to finish, and an STS outage shorter than that half serves nobody a 503.
-
-A ONE-SHOT JOB EXCHANGES ONCE: `job_client` asks for one session at the run's start and signs the whole run with it
-(`JobStoreIdentity`), so a run never outlives `session_seconds`.
 """
 
 from __future__ import annotations
@@ -28,30 +25,32 @@ from contextlib import suppress
 from datetime import datetime
 from functools import cache
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any, Final
+from typing import TYPE_CHECKING, Annotated, Final
 
 from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings
 
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, read_identity_token
 from lakehouse.governed.secrets import secret_store_configured
-from lakehouse.storage.client import configured_endpoint
+from lakehouse.process.own_threads import on_own_threads
 from lakehouse.storage.credential import S3KeyPair, StoreCredentialUnavailableError
-from lakehouse.storage.options import DEFAULT_REGION, ENDPOINT, REGION, StorageOptions, object_client
+from lakehouse.storage.options import DEFAULT_REGION
 
 
 if TYPE_CHECKING:
+    from mypy_boto3_sts.client import STSClient
+    from mypy_boto3_sts.type_defs import AssumeRoleWithWebIdentityRequestTypeDef
+
     from lakehouse.process.supervision import Supervisor
-    from lakehouse.storage.client import S3Client
 
 
 log = logging.getLogger(__name__)
 
 #: Between the background loop's looks at whether the session is due. A due exchange that failed is retried at this cadence.
-WAKE_SECONDS: Final = 15.0
+_WAKE_SECONDS: Final = 15.0
 #: A session this close to its expiry is not handed out: a request signed with it could outlive it.
-EXPIRY_MARGIN_SECONDS: Final = 60.0
+_EXPIRY_MARGIN_SECONDS: Final = 60.0
 #: The boot exchange waits out a store, an identity provider and a provisioning hook that are still starting (the hook
 #: writes the policy the token's subject names), then fails the boot: a pod that never gets a session must not serve.
 _BOOT_ATTEMPTS: Final = 20
@@ -86,7 +85,7 @@ class IssuedSession(BaseModel):
 
 
 @cache
-def _sts(region: str, endpoint: str | None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+def _sts(region: str, endpoint: str | None) -> STSClient:
     """One unsigned STS client per endpoint; botocore clients are thread-safe, and building one costs a model load."""
     from lakehouse.storage.sts import sts_client
 
@@ -101,7 +100,7 @@ def exchange(identity: WebIdentity, *, session_name: str, duration_seconds: int,
         ClientError: STS refused the exchange.
         BotoCoreError: STS did not answer.
     """
-    request: dict[str, object] = {
+    request: AssumeRoleWithWebIdentityRequestTypeDef = {
         "RoleArn": identity.role_arn,
         "RoleSessionName": session_name,
         "WebIdentityToken": read_identity_token(identity.token_file),
@@ -154,9 +153,9 @@ class SessionCache:
             self._held = {**self._held, identity: held}
 
     def peek(self, identity: WebIdentity) -> S3KeyPair | None:
-        """The session ``identity`` holds, unless it is within `EXPIRY_MARGIN_SECONDS` of expiring."""
+        """The session ``identity`` holds, unless it is within `_EXPIRY_MARGIN_SECONDS` of expiring."""
         held = self._held.get(identity)
-        if held is None or self._clock() >= held.expires_at - EXPIRY_MARGIN_SECONDS:
+        if held is None or self._clock() >= held.expires_at - _EXPIRY_MARGIN_SECONDS:
             return None
         return held.key_pair
 
@@ -178,7 +177,7 @@ def held_session(identity: WebIdentity) -> S3KeyPair:
     """The session ``identity`` holds while it is unexpired. Never calls STS.
 
     Raises:
-        StoreCredentialUnavailableError: No session was exchanged, or it is within `EXPIRY_MARGIN_SECONDS` of expiring.
+        StoreCredentialUnavailableError: No session was exchanged, or it is within `_EXPIRY_MARGIN_SECONDS` of expiring.
     """
     key_pair = SESSIONS.peek(identity)
     if key_pair is None:
@@ -234,7 +233,7 @@ def require_one_store_identity(identity: WebIdentity | None, *, env_pair: S3KeyP
 
 
 #: The acknowledgement a service needs before it signs with a static key pair from its environment.
-STATIC_KEY_ACKNOWLEDGEMENT: Final = "RASK_INSECURE_ALLOW_STATIC_STORE_KEY"
+_STATIC_KEY_ACKNOWLEDGEMENT: Final = "RASK_INSECURE_ALLOW_STATIC_STORE_KEY"
 
 
 def require_env_pair(settings: StoreIdentitySettings, *, prefix: str) -> None:
@@ -249,7 +248,7 @@ def require_env_pair(settings: StoreIdentitySettings, *, prefix: str) -> None:
     refused too: any default for it would be the store's root account, whose credential reaches every tenant's bytes
     and the records that govern the services themselves. A credential is a pair, and refusing one half leaves the other
     unguarded. A whole pair is a static key that never rotates, where a deployment's identity is its ServiceAccount token
-    (ADR 0170), so it signs only where :data:`STATIC_KEY_ACKNOWLEDGEMENT` says an operator meant it: the offline and
+    (ADR 0170), so it signs only where :data:`_STATIC_KEY_ACKNOWLEDGEMENT` says an operator meant it: the offline and
     Dagger lanes and the side stacks, which project no token. The chart renders no pair and no acknowledgement.
 
     Raises:
@@ -267,7 +266,7 @@ def require_env_pair(settings: StoreIdentitySettings, *, prefix: str) -> None:
     if not settings.insecure_allow_static_store_key:
         raise ValueError(
             f"this service would sign with the static key pair {prefix}_S3_ACCESS_KEY_ID names, which never rotates: a deployment's "
-            f"store identity is its ServiceAccount token ({prefix}_S3_WEB_IDENTITY_TOKEN_FILE). Set {STATIC_KEY_ACKNOWLEDGEMENT}=true "
+            f"store identity is its ServiceAccount token ({prefix}_S3_WEB_IDENTITY_TOKEN_FILE). Set {_STATIC_KEY_ACKNOWLEDGEMENT}=true "
             "to declare that a static key is what you meant."
         )
 
@@ -303,7 +302,7 @@ class StoreIdentitySettings(BaseSettings):
     s3_secret_access_key: SecretStr = SecretStr("")
     #: AN ACKNOWLEDGEMENT, NOT A SWITCH: the pair signs only where an operator said a static key is what they meant
     #: (`require_env_pair`), as `RASK_INSECURE_ALLOW_UNAUTHENTICATED` says it of authentication off.
-    insecure_allow_static_store_key: bool = Field(default=False, alias=STATIC_KEY_ACKNOWLEDGEMENT)
+    insecure_allow_static_store_key: bool = Field(default=False, alias=_STATIC_KEY_ACKNOWLEDGEMENT)
     s3_region: str = DEFAULT_REGION
 
     @property
@@ -322,7 +321,7 @@ class StoreIdentitySettings(BaseSettings):
 class StoreSession:
     """Keeps a service's object-store session unexpired: exchanged at boot, exchanged again once half its life is used."""
 
-    def __init__(self, identity: WebIdentity, *, session_name: str, duration_seconds: int, wake_seconds: float = WAKE_SECONDS) -> None:
+    def __init__(self, identity: WebIdentity, *, session_name: str, duration_seconds: int, wake_seconds: float = _WAKE_SECONDS) -> None:
         self._identity = identity
         self._session_name = session_name
         self._duration_seconds = duration_seconds
@@ -386,7 +385,7 @@ class StoreSession:
         Raises:
             RuntimeError: The boot exchange failed; see `exchange_at_boot`.
         """
-        await asyncio.to_thread(self.exchange_at_boot)
+        await on_own_threads(self.exchange_at_boot)
         self._task = loops.keep("store-session", self._wake_forever)
 
     async def stop(self) -> None:
@@ -402,7 +401,7 @@ class StoreSession:
         while True:
             await asyncio.sleep(self._wake_seconds)
             try:
-                await asyncio.to_thread(self.refresh_if_due)
+                await on_own_threads(self.refresh_if_due)
             except Exception:
                 # A fault in one pass must not end the loop: the next pass is the only way the session is renewed.
                 log.exception("store_session_pass_failed")
@@ -424,54 +423,10 @@ async def start_store_session(identity: WebIdentity | None, *, session_name: str
     return session
 
 
-class JobStoreIdentity(BaseSettings):
-    """A one-shot job's identity at the store, from its pod's environment (`RASK_S3_*`): the token it projects and its STS.
-
-    A job holds no key ([[XC-084]]). The token file, the STS and the role are required, so a job missing one fails at its
-    start: a job that fell back to boto3's default chain would sign with whatever that finds, which on a cloud node is
-    the node's own role.
-    """
-
-    model_config = SettingsConfigDict(env_prefix="RASK_S3_", extra="ignore", frozen=True)
-
-    web_identity_token_file: Path
-    sts_endpoint: str
-    #: The role the token is exchanged for: AWS assumes it; a store granting the policy the token's subject names ignores it.
-    assume_role_arn: str
-    #: How long the run's session lasts.
-    session_seconds: SessionSeconds = 3600
-    region: str = DEFAULT_REGION
-
-    @property
-    def web_identity(self) -> WebIdentity:
-        """The token and the STS it is exchanged at, as the exchange takes them."""
-        return WebIdentity(token_file=self.web_identity_token_file, endpoint=self.sts_endpoint, region=self.region, role_arn=self.assume_role_arn)
-
-
-def job_client(identity: JobStoreIdentity, *, session_name: str) -> S3Client:
-    """The S3 client a one-shot job signs its whole run with: one session ``identity``'s token is exchanged for, at the
-    deployment's own store (``RASK_S3_ENDPOINT_URL``) or, where the job is given none, AWS in the identity's region.
-    Blocking.
-
-    Raises:
-        RuntimeError: The token could not be read, or STS issued no session.
-    """
-    try:
-        issued = exchange(identity.web_identity, session_name=session_name, duration_seconds=identity.session_seconds)
-    except EXCHANGE_FAILURES as exc:
-        raise RuntimeError(f"the object store exchanged no session for the token at {identity.web_identity_token_file}: {exc}") from exc
-    own = configured_endpoint()
-    return object_client(StorageOptions(key_pair=issued.key_pair, options={REGION: identity.region, **({ENDPOINT: own} if own else {})}))
-
-
 __all__ = [
     "EXCHANGE_FAILURES",
-    "EXPIRY_MARGIN_SECONDS",
     "SESSIONS",
-    "STATIC_KEY_ACKNOWLEDGEMENT",
-    "WAKE_SECONDS",
     "IssuedSession",
-    "JobStoreIdentity",
     "SessionCache",
     "SessionSeconds",
     "StoreIdentitySettings",
@@ -480,7 +435,6 @@ __all__ = [
     "env_alias",
     "exchange",
     "held_session",
-    "job_client",
     "key_pair_in_force",
     "require_env_pair",
     "require_one_store_identity",

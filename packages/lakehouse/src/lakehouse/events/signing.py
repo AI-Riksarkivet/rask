@@ -76,10 +76,10 @@ AUTHOR_FACET = "rask_author"
 #: after an event carries it: the git tag `facets-1.0.0` must exist before the first signed event is emitted.
 SIGNATURE_FACET_SCHEMA_URL = "https://raw.githubusercontent.com/AI-Riksarkivet/rask/facets-1.0.0/spec/facets/rask/RaskSignatureRunFacet.json"
 
-SIGNATURE_ALG = "Ed25519"
+_SIGNATURE_ALG = "Ed25519"
 
 #: The canonicalization the signed bytes use, carried in the facet so a future profile is a new number.
-CANON_VERSION = 1
+_CANON_VERSION = 1
 
 #: Containers nested deeper than this have no canonical form. A lineage event is a handful of levels deep, and an
 #: unbounded walk over a crafted one is a `RecursionError` where a refusal belongs.
@@ -447,8 +447,8 @@ def _signature_facet(key: SigningKey, identity: str, on_behalf_of: str | None) -
     facet: dict[str, Any] = {
         "_producer": PRODUCER,
         "_schemaURL": SIGNATURE_FACET_SCHEMA_URL,
-        "alg": SIGNATURE_ALG,
-        "canon": CANON_VERSION,
+        "alg": _SIGNATURE_ALG,
+        "canon": _CANON_VERSION,
         "kid": key.kid,
         "identity": identity,
     }
@@ -527,10 +527,10 @@ def _refused(reason: RefusalReason, message: str) -> SignatureRefusedError:
 
 def _check_claimed_signer(claim: Signature, *, signers: frozenset[str]) -> None:
     """The first checks, which need neither a key nor the event's author: the algorithm, the canonicalization and whether the signer may sign at all."""
-    if claim.alg != SIGNATURE_ALG:
-        raise _refused("alg", f"the signature names algorithm {claim.alg!r}, not {SIGNATURE_ALG}")
-    if claim.canon != CANON_VERSION:
-        raise _refused("canon", f"the signature names canonicalization {claim.canon}, not {CANON_VERSION}")
+    if claim.alg != _SIGNATURE_ALG:
+        raise _refused("alg", f"the signature names algorithm {claim.alg!r}, not {_SIGNATURE_ALG}")
+    if claim.canon != _CANON_VERSION:
+        raise _refused("canon", f"the signature names canonicalization {claim.canon}, not {_CANON_VERSION}")
     if claim.identity not in signers:
         raise _refused("signer", f"{claim.identity!r} is not an identity that may sign")
 
@@ -711,9 +711,7 @@ def verify_control_signature(envelope: Mapping[str, Any], *, source: PublicKeySo
 
 __all__ = [
     "AUTHOR_FACET",
-    "CANON_VERSION",
     "MAX_NESTING",
-    "SIGNATURE_ALG",
     "SIGNATURE_FACET",
     "SIGNATURE_FACET_SCHEMA_URL",
     "CanonError",

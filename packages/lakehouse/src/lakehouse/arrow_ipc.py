@@ -400,3 +400,14 @@ def _decode_metadata(metadata: dict[bytes, bytes] | None, where: str) -> None:
             value.decode("utf-8")
         except UnicodeDecodeError as exc:
             raise ArrowBodyError(f"{where} holds a key or value that is not UTF-8") from exc
+
+
+__all__ = [
+    "ARROW_STREAM_MEDIA_TYPE",
+    "ArrowBodyError",
+    "ArrowBodyTooLargeError",
+    "ArrowFraming",
+    "decode_arrow_body",
+    "decode_arrow_response",
+    "encode_arrow_stream",
+]

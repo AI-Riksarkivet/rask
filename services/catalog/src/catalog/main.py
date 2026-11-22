@@ -53,7 +53,7 @@ from lakehouse.governed.fga_provision import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
-from lakehouse.lance_metrics import instrument_lance_if_available
+from lakehouse.lance_metrics import register_lance_metrics
 from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
 from lakehouse.process.supervision import Supervisor
@@ -200,7 +200,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         oidc_enabled=settings.oidc_enabled,
         insecure_allow_unauthenticated=settings.insecure_allow_unauthenticated,
     )
-    instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
+    register_lance_metrics()  # Lance-native IO metrics onto the global MeterProvider
     bound_lance_scans(settings)
     # EVERYTHING ACQUIRED BELOW IS RELEASED BY THIS STACK, in reverse, whether the start completes or fails part-way
     # (ADR 0203), so a start that fails after the store session or the bus session is opened leaves neither open.

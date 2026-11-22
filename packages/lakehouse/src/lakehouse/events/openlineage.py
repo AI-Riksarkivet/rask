@@ -260,8 +260,8 @@ DATASET_TYPE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/Datase
 #: The two values this estate can claim truthfully. A governed dataset is a Lance TABLE; a source
 #: outside the estate is bytes at a location, which the spec spells FILE. The enum also admits VIEW,
 #: TOPIC, STREAM, MODEL and JOB_OUTPUT — none of which the catalog serves, so none is emitted.
-DATASET_TYPE_TABLE: Final = "TABLE"
-DATASET_TYPE_FILE: Final = "FILE"
+_DATASET_TYPE_TABLE: Final = "TABLE"
+_DATASET_TYPE_FILE: Final = "FILE"
 
 
 def dataset_type_facet(producer: str, *, external: bool) -> dict[str, object]:
@@ -278,7 +278,7 @@ def dataset_type_facet(producer: str, *, external: bool) -> dict[str, object]:
     return {
         "_producer": producer,
         "_schemaURL": DATASET_TYPE_FACET_SCHEMA_URL,
-        "datasetType": DATASET_TYPE_FILE if external else DATASET_TYPE_TABLE,
+        "datasetType": _DATASET_TYPE_FILE if external else _DATASET_TYPE_TABLE,
     }
 
 
@@ -306,7 +306,7 @@ SYMLINKS_FACET_SCHEMA_URL: Final = "https://openlineage.io/spec/facets/1-0-1/Sym
 
 #: The identifier type a storage location is named under, as OpenLineage's own clients name it
 #: (``DatasetIdentifier.SymlinkType.LOCATION``, client/java ``io.openlineage.client.utils``).
-SYMLINK_TYPE_LOCATION: Final = "LOCATION"
+_SYMLINK_TYPE_LOCATION: Final = "LOCATION"
 
 
 def symlinks_facet(producer: str, *, location: str) -> dict[str, object]:
@@ -319,7 +319,7 @@ def symlinks_facet(producer: str, *, location: str) -> dict[str, object]:
     return {
         "_producer": producer,
         "_schemaURL": SYMLINKS_FACET_SCHEMA_URL,
-        "identifiers": [{"namespace": namespace, "name": name, "type": SYMLINK_TYPE_LOCATION}],
+        "identifiers": [{"namespace": namespace, "name": name, "type": _SYMLINK_TYPE_LOCATION}],
     }
 
 
@@ -381,8 +381,6 @@ __all__ = [
     "CATALOG_FRAMEWORK",
     "DATASET_EVENT_SCHEMA_URL",
     "DATASET_TYPE_FACET_SCHEMA_URL",
-    "DATASET_TYPE_FILE",
-    "DATASET_TYPE_TABLE",
     "DATASOURCE_FACET_SCHEMA_URL",
     "DEFAULT_DATASET_NAMESPACE",
     "ERROR_MESSAGE_FACET_SCHEMA_URL",
@@ -395,7 +393,6 @@ __all__ = [
     "SCHEMA_FACET_SCHEMA_URL",
     "SYMLINKS_FACET",
     "SYMLINKS_FACET_SCHEMA_URL",
-    "SYMLINK_TYPE_LOCATION",
     "TERMINAL_STATES",
     "VERSION_FACET_SCHEMA_URL",
     "JobRef",

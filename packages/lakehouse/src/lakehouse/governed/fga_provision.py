@@ -27,6 +27,7 @@ from pydantic import BaseModel, ConfigDict
 from lakehouse.governed import fga_model
 from lakehouse.governed.fga_resilience import DEFAULT_RETRY, FAIL_CLOSED, ONE_ATTEMPT, RetryPolicy, guarded
 from lakehouse.governed.machine_identity import read_identity_token
+from lakehouse.process.own_threads import on_own_threads
 
 
 log = logging.getLogger(__name__)
@@ -365,7 +366,7 @@ async def provision(
     new model versions. A pinned ``store_id`` (``RASK_FGA_STORE_ID``) is used as is, the store the hook uses
     too.
     """
-    model = fga_model.load_model()
+    model = await on_own_threads(fga_model.load_model)
     store_is_new = False
     if store_id is None:
         async with OpenFgaClient(client_configuration(api_url, token_file=token_file)) as client:
@@ -449,7 +450,7 @@ async def resolve(
         OpenFgaModelAbsentError: at the deadline the store or this image's model was still absent, or OpenFGA was
             not answering; the message names which.
     """
-    model = fga_model.load_model()
+    model = await on_own_threads(fga_model.load_model)
     loop = asyncio.get_running_loop()
     started = loop.time()
     known_newest: str | None = None

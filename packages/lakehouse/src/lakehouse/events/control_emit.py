@@ -73,6 +73,8 @@ type ControlSign = Callable[[dict[str, Any]], dict[str, Any]]
 type _Undelivered = Literal["publish", "unsigned"]
 
 
+# Runtime-checkable because a pydantic field typed by it is validated with `isinstance` (`arbitrary_types_allowed`), and
+# maintenance's purge run holds its emitter in one.
 @runtime_checkable
 class ControlEmitter(Protocol):
     """Emit one control-plane change-event. Total (never raises) — a bus failure degrades to no live

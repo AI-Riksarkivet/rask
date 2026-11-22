@@ -69,7 +69,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
   caller). The fixture's provider (§5) sets `CLAIM_NAME=sub` and no role policy, so a verified token is granted the
   canned policy its `sub` names (`rustfs@1.0.3:crates/iam/src/federation/mapper.rs:257-298`), and the hook writes each
   identity's under `system:serviceaccount:<ns>:<release>-sa-<component>` with no user bound to it. Lineage, maintenance
-  and the backups exchange the same way (the backups once per run, `lakehouse.storage.store_session.job_client`); the policies
+  and the backups exchange the same way (the backups once per run, `scripts/_backup_store.py`'s `job_client`); the policies
   render in every mode in the ConfigMap `<release>-object-store-identities` (`lance.objectStorePolicy`). A `sub` naming no
   policy is refused 400 `InvalidRequest` (`rustfs@1.0.3:rustfs/src/admin/service/federated_identity.rs:322-440`), so
   another pod's token for the same audience gets nothing; a token failing verification is refused 403. A session is

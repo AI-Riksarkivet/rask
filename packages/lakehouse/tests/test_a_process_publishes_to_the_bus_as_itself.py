@@ -16,6 +16,8 @@ import asyncio
 import contextlib
 import json
 import logging
+import ssl
+import threading
 import time
 from collections.abc import AsyncIterator, Callable, Iterator
 from pathlib import Path
@@ -471,6 +473,14 @@ async def test_a_bus_dialled_over_tls_is_sent_nothing_until_it_has_proved_itself
     server = await asyncio.start_server(greet, "127.0.0.1", 0)
     port = server.sockets[0].getsockname()[1]
     settings = bus.BusSettings.model_validate({"RASK_BUS_URL": f"tls://127.0.0.1:{port}", "RASK_BUS_USER": "catalog", "RASK_BUS_TOKEN_FILE": str(as_catalog)})
+    trusted_on: list[int] = []
+    trust = bus.BusSettings.trust
+
+    def trusted(self: bus.BusSettings) -> ssl.SSLContext | None:
+        trusted_on.append(threading.get_ident())
+        return trust(self)
+
+    monkeypatch.setattr(bus.BusSettings, "trust", trusted)
     opened: Client | None = None
     try:
         async with asyncio.timeout(20):
@@ -484,6 +494,8 @@ async def test_a_bus_dialled_over_tls_is_sent_nothing_until_it_has_proved_itself
         server.close()
 
     assert (opened, b"the-pods-token" in received, b"auth_token" in received) == (None, False, False)
+    # The trust store is read from disk, so it is built on a thread and never holds the event loop.
+    assert trusted_on and threading.get_ident() not in trusted_on, "the bus's trust store was read on the event loop"
 
 
 @pytest.mark.asyncio
@@ -639,9 +651,12 @@ async def test_a_session_that_ends_leaves_a_connection_whose_socket_is_never_let
 
 
 @pytest.mark.asyncio
-async def test_a_session_that_ends_while_it_connects_ends_whatever_releasing_the_connection_raises(monkeypatch: pytest.MonkeyPatch, as_catalog: Path) -> None:
+async def test_a_session_that_ends_while_it_connects_ends_whatever_releasing_the_connection_raises(
+    monkeypatch: pytest.MonkeyPatch, as_catalog: Path, caplog: pytest.LogCaptureFixture
+) -> None:
     """A connect cancelled part-way releases its socket, and a release that raises must not stand in for the
-    cancellation: the loop would take it for one more failed attempt and never end, and the session with it."""
+    cancellation: the loop would take it for one more failed attempt and never end, and the session with it. The failed
+    release leaves a DEBUG record with its traceback."""
     del as_catalog
     client = create_autospec(Client, instance=True)
     connecting = asyncio.Event()
@@ -654,11 +669,14 @@ async def test_a_session_that_ends_while_it_connects_ends_whatever_releasing_the
     client.close.side_effect = OSError("the socket was already gone")
     monkeypatch.setattr(bus, "Client", lambda: client)
 
-    async with asyncio.timeout(5), Supervisor() as loops, bus.bus_session(loops) as session:
-        assert session is not None
-        await connecting.wait()
+    with caplog.at_level(logging.DEBUG, logger="lakehouse.process.lifecycle"):
+        async with asyncio.timeout(5), Supervisor() as loops, bus.bus_session(loops) as session:
+            assert session is not None
+            await connecting.wait()
 
     assert client.close.await_count == 1
+    failed = [r for r in caplog.records if r.name == "lakehouse.process.lifecycle" and r.getMessage() == "client_close_failed"]
+    assert [(r.levelno, r.exc_info is not None and isinstance(r.exc_info[1], OSError)) for r in failed] == [(logging.DEBUG, True)]
 
 
 @pytest.mark.asyncio

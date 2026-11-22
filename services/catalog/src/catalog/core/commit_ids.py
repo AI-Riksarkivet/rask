@@ -29,6 +29,7 @@ from typing import TYPE_CHECKING, Final
 
 from lakehouse.governed.secrets import read_secret, secret_store_configured
 from lakehouse.governed.signing_key import SigningKeyUnavailableError
+from lakehouse.process.own_threads import on_own_threads
 
 
 if TYPE_CHECKING:
@@ -133,7 +134,7 @@ class CommitIdKeyHolder:
 
     async def start(self, loops: Supervisor) -> None:
         """Resolve once now, then keep re-resolving on a loop of ``loops`` until :meth:`stop`; an unresolved key fails no start."""
-        await asyncio.to_thread(self.resolve)
+        await on_own_threads(self.resolve)
         self._task = loops.keep("commit-id-key", self._refresh_forever)
 
     async def stop(self) -> None:
@@ -147,7 +148,7 @@ class CommitIdKeyHolder:
         while True:
             await asyncio.sleep(_REFRESH_SECONDS if self.ready else _RETRY_SECONDS)
             try:
-                await asyncio.to_thread(self.resolve)
+                await on_own_threads(self.resolve)
             except Exception:
                 log.exception("commit_id_key_pass_failed")
 

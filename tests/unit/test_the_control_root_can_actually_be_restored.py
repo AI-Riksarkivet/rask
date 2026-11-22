@@ -28,20 +28,31 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any, cast
 
 import pytest
 from botocore.exceptions import ClientError
 
 from lakehouse.records.control_prefixes import CONTROL_PREFIXES, RECORD_PREFIXES
+from lakehouse.storage.errors import BucketNotFoundError
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-_SPEC = importlib.util.spec_from_file_location("control_root_backup", REPO_ROOT / "scripts" / "control_root_backup.py")
-assert _SPEC and _SPEC.loader
-crb = importlib.util.module_from_spec(_SPEC)
-sys.modules["control_root_backup"] = crb
-_SPEC.loader.exec_module(crb)
+
+
+def _load(name: str) -> ModuleType:
+    """``scripts/<name>.py`` under its own name, so the tool resolves its sibling as `python scripts/...` does."""
+    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "scripts" / f"{name}.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+backup_store = _load("_backup_store")
+crb = _load("control_root_backup")
 
 BUCKET = "lance-catalog"
 ROOT = f"s3://{BUCKET}"
@@ -246,3 +257,15 @@ def test_retention_keeps_everything_when_it_is_not_asked_for(s3: Any) -> None:
 
     assert result["pruned"] == []
     assert len(result["kept"]) == 2
+
+
+def test_the_listing_of_a_missing_bucket_raises_storages_own_error() -> None:
+    """The backups' key listing answers in storage's own taxonomy: a missing bucket reaches the tool as
+    `BucketNotFoundError`, not a raw botocore `ClientError` it cannot name (PS-02)."""
+    from moto import mock_aws
+
+    with mock_aws():
+        import boto3
+
+        with pytest.raises(BucketNotFoundError):
+            list(backup_store.iter_keys(boto3.client("s3", region_name="us-east-1"), "ghost"))

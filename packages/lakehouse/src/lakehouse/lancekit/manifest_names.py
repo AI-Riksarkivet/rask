@@ -15,7 +15,6 @@ from typing import Final
 
 __all__ = [
     "U64_MAX",
-    "VERSIONS_DIR",
     "committed_names",
     "committed_version",
     "detached_name",
@@ -23,9 +22,6 @@ __all__ = [
     "staged_version",
 ]
 
-
-#: The directory of a ref that holds its manifests.
-VERSIONS_DIR: Final = "_versions"
 
 #: ``u64::MAX``, which a V2 manifest's name counts its version down from.
 U64_MAX: Final = (1 << 64) - 1

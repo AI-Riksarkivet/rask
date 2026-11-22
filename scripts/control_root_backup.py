@@ -27,7 +27,7 @@ migration that went wrong — and NOT against losing the bucket. Point `--dest` 
 another store) for that, and the tool will say which of the two you got.
 
 EVERY RUN HOLDS NO KEY ([[XC-084]]): it signs with one session the ServiceAccount token at
-`RASK_S3_WEB_IDENTITY_TOKEN_FILE` is exchanged for (`lakehouse.storage.store_session.job_client`). The scheduled backup
+`RASK_S3_WEB_IDENTITY_TOKEN_FILE` is exchanged for (`_backup_store.job_client`). The scheduled backup
 presents its own account's token; a run by hand presents one minted for an account the store lets do what the run
 does (`docs/runbooks/RUNBOOK-restore.md`).
 
@@ -45,11 +45,11 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
+from _backup_store import JobStoreIdentity, job_client, prune_timestamped_prefixes
 from botocore.exceptions import ClientError
 from pydantic import ValidationError
 
 from lakehouse.records.control_prefixes import BACKUPS, CONTROL_PREFIXES, RECORD_PREFIXES
-from lakehouse.storage.store_session import JobStoreIdentity, job_client
 
 
 #: The record prefixes a restore must bring back: the registry's records (`lakehouse.records.control_prefixes`), never a glob
@@ -211,11 +211,8 @@ def do_prune(client: Any, *, dest: str, keep: int) -> dict[str, Any]:  # noqa: A
     backups identically on purpose: an operator reading one and reasoning about the other must not meet
     two different answers to "which is the newest".
     """
-    from lakehouse.storage.s3 import prune_timestamped_prefixes
-
-    # ONE IMPLEMENTATION FOR BOTH BACKUP LANES. The retention walk used to live here and, in shell,
-    # in the Postgres dump's CronJob — two answers to "which is the newest" held together by a
-    # comment. `lakehouse.storage.s3.prune_timestamped_prefixes` is now the only one, so they cannot drift.
+    # ONE IMPLEMENTATION FOR BOTH BACKUP LANES: `_backup_store.prune_timestamped_prefixes` answers "which is the
+    # newest" for this tool and the Postgres dump's uploader alike, so the two cannot drift.
     bucket, prefix = split_uri(dest)
     kept, pruned = prune_timestamped_prefixes(client, bucket=bucket, base=_join(prefix), keep=keep)
     return {"dest": dest, "keep": keep, "kept": [{"stamp": s} for s in kept], "pruned": pruned}

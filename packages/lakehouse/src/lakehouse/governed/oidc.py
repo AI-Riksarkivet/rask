@@ -87,6 +87,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, InstanceOf, SkipVali
 
 from lakehouse.governed.projected_token import read_token_file
 from lakehouse.problems.domain_errors import ServiceUnavailableError
+from lakehouse.process.own_threads import on_own_threads
 
 
 _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
@@ -619,7 +620,7 @@ class OIDCVerifier:
         """:meth:`refresh` every ``cache_ttl`` seconds, off the event loop, until cancelled; a failed fetch is logged."""
         while True:
             await asyncio.sleep(self._ttl)
-            for issuer, reason in await asyncio.to_thread(self.refresh):
+            for issuer, reason in await on_own_threads(self.refresh):
                 log.warning("oidc_refresh_failed_serving_held_keys", extra={"issuer": issuer, "reason": reason})
 
     def _provider_for(self, token: str) -> _Provider:
@@ -728,6 +729,7 @@ class OIDCVerifier:
 __all__ = [
     "DEFAULT_ALLOWED_ALGORITHMS",
     "HTTP_FETCH_TIMEOUT_SECONDS",
+    "REFRESH_FLIGHT_WAIT_SECONDS",
     "UNKNOWN_KID_REFRESH_INTERVAL_SECONDS",
     "IDToken",
     "OIDCVerifier",

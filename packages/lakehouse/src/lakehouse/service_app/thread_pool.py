@@ -1,10 +1,11 @@
 """How much of the request thread pool a lakehouse process is using, exported as gauges.
 
-Every blocking call a door makes (a store read, a Lance commit, a key fetch) runs on the event loop's default thread
-pool, through `run_in_threadpool` or as a plain ``def`` route. The pool is bounded (anyio's default limiter, 40
-threads), so once every thread is held each further call waits for one while its request holds its place: latency
-rises with no error anywhere. The three gauges say so before the latency does: the threads in use, the limit, and the
-calls waiting for a thread.
+Every sync door, and every blocking call a door hands to ``run_in_threadpool`` (a store read, a Lance commit, a key
+fetch), runs on a thread under anyio's default limiter. The limiter is bounded (40 threads), so once every thread is
+held each further call waits for one while its request holds its place: latency rises with no error anywhere. The three
+gauges say so before the latency does: the threads in use, the limit, and the calls waiting for a thread. What a
+process runs on thread sets instead (`lakehouse.process.own_threads`: its own renewals, timers and readiness reads, the
+commit turns' reads, lineage's calls through the catalog) is apart from this pool and not in the gauges.
 
 Observable gauges, read at each export from the limiter of the loop that called :func:`watch`. Only that process
 reports them: one that never serves (a script importing the library) exports no constant zero.

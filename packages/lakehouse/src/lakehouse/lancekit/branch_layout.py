@@ -29,7 +29,6 @@ from urllib.parse import quote
 __all__ = [
     "BRANCH_CONTAINER",
     "BRANCH_FILE_DIRS",
-    "RESERVED_SEGMENTS",
     "branch_named_by",
     "branches_enclosing",
     "branches_inside",
@@ -49,7 +48,7 @@ BRANCH_FILE_DIRS: Final = ("_versions", "_transactions", "_deletions", "_indices
 #: Segment names a branch may not carry: the directories above, plus the dataset-root names a branch
 #: directory would shadow (``_refs``, ``_mem_wal``, and ``tree`` itself). A segment equal to one of them
 #: puts the branch's files where Lance looks for another ref's.
-RESERVED_SEGMENTS: Final = frozenset({*BRANCH_FILE_DIRS, "_refs", "_mem_wal", "tree"})
+_RESERVED_SEGMENTS: Final = frozenset({*BRANCH_FILE_DIRS, "_refs", "_mem_wal", "tree"})
 
 #: The directory a dataset root keeps its branches under.
 BRANCH_CONTAINER: Final = "tree"
@@ -67,7 +66,7 @@ def ref_root(dataset_root: str, branch: str | None) -> str:
 
 def reserved_segment(name: str) -> str | None:
     """The first segment of ``name`` that is a layout name, or ``None``."""
-    return next((segment for segment in name.split("/") if segment in RESERVED_SEGMENTS), None)
+    return next((segment for segment in name.split("/") if segment in _RESERVED_SEGMENTS), None)
 
 
 def branches_inside(name: str, branches: Iterable[str]) -> list[str]:

@@ -1,4 +1,6 @@
-"""Estate-wide identifier naming — the delimiter governed table ids use, and the shape a control-plane id has."""
+"""Estate-wide naming: the delimiter governed ids join names with, the prefix of the keys the platform alone writes, the
+property a table's uuid is held under and the shape a control-plane id has; and the lineage half, how a table's location
+and its OpenLineage dataset name map to each other and which dataset namespaces name the world outside the catalog."""
 
 from __future__ import annotations
 
@@ -86,7 +88,7 @@ def is_safe_project(value: object) -> bool:
 #: Naming them EXPLICITLY rather than widening the shape test is the point. "Anything without a
 #: delimiter is external" would exempt every catalog namespace and reopen the forgery the input check
 #: exists to close — a reader claiming to have read a governed dataset it cannot see.
-EXTERNAL_SOURCE_NAMESPACES = frozenset({"file", "lance"})
+_EXTERNAL_SOURCE_NAMESPACES = frozenset({"file", "lance"})
 
 
 #: The scheme of the namespace a catalog names its tables' OpenLineage datasets under ([[LH-553]]): the catalog's endpoint,
@@ -133,7 +135,7 @@ def is_external_source_namespace(namespace: str, name: str, *, catalog: str) -> 
 
     TWO forms, because the estate's producers legitimately mint both: a store URI carrying a scheme
     (``s3://bucket``), which is the convention for a namespaced external system, and one of the bare
-    identifiers in :data:`EXTERNAL_SOURCE_NAMESPACES`. ``catalog`` is the dataset namespace of the catalog the reader
+    identifiers in :data:`_EXTERNAL_SOURCE_NAMESPACES`. ``catalog`` is the dataset namespace of the catalog the reader
     governs for (:data:`CATALOG_DATASET_SCHEME`): it names that catalog's tables, so it is never external, while another
     catalog's names another estate's tables, which are the outside world to this one: OpenLineage keys a dataset by its
     namespace and name together (https://openlineage.io/docs/spec/naming).
@@ -157,4 +159,20 @@ def is_external_source_namespace(namespace: str, name: str, *, catalog: str) -> 
         return namespace.rstrip("/") != catalog.rstrip("/")
     if "://" in namespace:
         return True
-    return namespace in EXTERNAL_SOURCE_NAMESPACES and CATALOG_DELIMITER not in name
+    return namespace in _EXTERNAL_SOURCE_NAMESPACES and CATALOG_DELIMITER not in name
+
+
+__all__ = [
+    "CATALOG_DATASET_SCHEME",
+    "CATALOG_DELIMITER",
+    "CONTROL_ID_PATTERN",
+    "CONTROL_ID_RE",
+    "PLATFORM_PREFIX",
+    "UUID_PROPERTY",
+    "identifier_location",
+    "is_catalog_dataset_namespace",
+    "is_external_source_namespace",
+    "is_safe_project",
+    "location_identifier",
+    "uuid_of",
+]

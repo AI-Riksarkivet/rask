@@ -28,6 +28,7 @@ import uuid
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import boto3
 import jwt
@@ -45,6 +46,10 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from pydantic import BaseModel, ConfigDict, Field
 
 from lakehouse.storage.client import S3Client
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_sts.type_defs import AssumeRoleWithWebIdentityRequestTypeDef
 
 
 ISSUER = "https://kubernetes.default.svc.cluster.local"
@@ -162,7 +167,7 @@ def s3(endpoint: str, creds: Session) -> S3Client:
 
 def exchange(endpoint: str, web_token: str, policy: Policy | None = None, *, duration: int = 900) -> Session:
     sts = boto3.client("sts", endpoint_url=endpoint, region_name=REGION, config=Config(signature_version=UNSIGNED, retries={"max_attempts": 1}))
-    kwargs: dict[str, object] = {
+    kwargs: AssumeRoleWithWebIdentityRequestTypeDef = {
         "RoleArn": "arn:aws:iam::000000000000:role/vend",
         "RoleSessionName": "measure",
         "WebIdentityToken": web_token,

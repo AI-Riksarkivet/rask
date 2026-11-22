@@ -311,6 +311,8 @@ class CatalogDecider:
         reraise=True,
     )
     async def _post(self, route: str, question: BaseModel) -> httpx.Response:
+        # One read of the projected token per decision, kept on the loop: 6 us on tmpfs against 47 us through a thread
+        # (measured 2026-11-22), so a hop would cost more than the read and make every decision wait for a thread.
         headers = {"Authorization": f"Bearer {self._token()}", "Content-Type": "application/json"}
         return await self._http.post(route, content=question.model_dump_json(), headers=headers)
 

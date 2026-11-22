@@ -53,6 +53,7 @@ from lakehouse.governed.secrets import (
     secret_store_login_held,
 )
 from lakehouse.process.health import Dependency
+from lakehouse.process.own_threads import on_own_threads
 from lakehouse.process.probes import ReadyCheck
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 
@@ -104,16 +105,6 @@ class SigningKeyLike(Protocol):
     def kid(self) -> str: ...
 
 
-class SigningStatus(Protocol):
-    """What the gate and the readiness check read of a holder, whatever key type it carries."""
-
-    @property
-    def ready(self) -> bool: ...
-
-    @property
-    def reason(self) -> str: ...
-
-
 def signing_key_name(identity: str) -> str:
     """The name `identity`'s key pair is stored under: a service account's name for its subject, else the identity.
 
@@ -141,9 +132,9 @@ def signing_public_secret(identity: str) -> str:
 def secret_store_dependency() -> Dependency:
     """The secret store as a dependency `/readyz` reports and never gates on (ADR 0203): whether the store still honours
     this process's own login, by the store's answer about its token. A service rides through the store's outage on the
-    keys it already holds. The blocking question runs on the event loop's own executor, never on the request threads a
-    sync door is lent."""
-    return Dependency(name="secret-store", read=partial(asyncio.to_thread, secret_store_answers), required=False)
+    keys it already holds. The blocking question runs on the process's own threads
+    (:mod:`lakehouse.process.own_threads`), never behind a burst of sync doors."""
+    return Dependency(name="secret-store", read=partial(on_own_threads, secret_store_answers), required=False)
 
 
 def published_key_fetch() -> Callable[[str], Mapping[str, str]]:
@@ -275,7 +266,7 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
         An unresolved key does not fail the start: a signer that is waiting for its key must still boot, so that its
         probes and its retry answers are served while it heals.
         """
-        await asyncio.to_thread(self.resolve)
+        await on_own_threads(self.resolve)
         self._task = loops.keep(f"signing-key-{self._identity}", self._refresh_forever)
 
     async def stop(self) -> None:
@@ -290,7 +281,7 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
         while True:
             await asyncio.sleep(self._refresh_seconds if self.ready else self._retry_seconds)
             try:
-                await asyncio.to_thread(self.resolve)
+                await on_own_threads(self.resolve)
             except Exception:
                 # A fault in a pass must not end the loop: the next pass is the only way a signer heals.
                 log.exception("signing_key_pass_failed", extra={"identity": self._identity})
@@ -321,7 +312,7 @@ class SigningNotWiredError(RuntimeError):
     """The process never published a signing holder (`attach_signing`), not even ``None``: a wiring fault, never "off"."""
 
 
-def attach_signing(app: FastAPI, holder: SigningStatus | None) -> None:
+def attach_signing[KeyT: SigningKeyLike](app: FastAPI, holder: SigningKeyHolder[KeyT] | None) -> None:
     """Publish the holder on `app.state`, where the gate and the readiness check find it. None means no signing.
 
     Every path that marks its process started publishes it first, ``None`` included: what was never published is a
@@ -330,7 +321,7 @@ def attach_signing(app: FastAPI, holder: SigningStatus | None) -> None:
     setattr(app.state, SIGNING_STATE, holder)
 
 
-def signing_of(app: FastAPI) -> SigningStatus | None:
+def signing_of(app: FastAPI) -> SigningKeyHolder[SigningKeyLike] | None:
     """The holder `attach_signing` published on ``app``, or None for a service that signs nothing by setting.
 
     The rule the catalog's ``app_wire(..., none_is_off=True)`` applies to the same wire, held here because the library
@@ -340,7 +331,7 @@ def signing_of(app: FastAPI) -> SigningStatus | None:
         SigningNotWiredError: Nothing was ever published, not even ``None``.
     """
     try:
-        holder: SigningStatus | None = getattr(app.state, SIGNING_STATE)
+        holder: SigningKeyHolder[SigningKeyLike] | None = getattr(app.state, SIGNING_STATE)
     except AttributeError as exc:
         raise SigningNotWiredError(NEVER_WIRED_REASON) from exc
     return holder
@@ -384,7 +375,6 @@ __all__ = [
     "SigningKeyLike",
     "SigningKeyUnavailableError",
     "SigningNotWiredError",
-    "SigningStatus",
     "attach_signing",
     "make_signing_holder",
     "published_key_fetch",

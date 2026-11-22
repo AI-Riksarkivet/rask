@@ -18,7 +18,7 @@ in step, and a ConfigMap copy would be a third place the same code lives.
 THE RUN HOLDS NO KEY ([[XC-084]], ADR 0170). The job runs as its own ServiceAccount,
 `<release>-sa-backup-control-root` (`lance.saComponents` renders it while `backups.controlRoot` is on), projects a token
 for `objectStore.identity.audience`, and exchanges it once per run at STS `AssumeRoleWithWebIdentity` for the session
-it signs the whole run with (`lakehouse.storage.store_session.JobStoreIdentity`, `job_client`; env `RASK_S3_*` from
+it signs the whole run with (`scripts/_backup_store.py`'s `JobStoreIdentity` and `job_client`; env `RASK_S3_*` from
 `lance.objectStoreSessionEnv`, role `objectStore.identity.roleArns.backup-control-root`). The token file, the STS
 endpoint and the role are required, so a run missing one fails at its start rather than signing with whatever boto3's
 default chain finds, which on a cloud node is the node's own role. The session's reach is the canned policy written

@@ -88,6 +88,7 @@ from lakehouse.governed.projected_token import read_token_file
 from lakehouse.process.correlation import continuing, current_trace_context
 from lakehouse.process.health import Dependency
 from lakehouse.process.lifecycle import closed_quietly
+from lakehouse.process.own_threads import on_own_threads
 
 
 if TYPE_CHECKING:
@@ -155,7 +156,7 @@ _PULL_SECONDS: Final = 5.0
 #: How often a connection the keeper has not yet let go of is looked at again by a consumer waiting for the next.
 _NEXT_CONNECTION_SECONDS: Final = 0.5
 #: How long a readiness read waits for the first connection of a process that has held none, well inside the watch's
-#: own budget for a read (`lakehouse.process.health.HEALTH_BUDGET_SECONDS`).
+#: own five-second budget for a read (`lakehouse.process.health`).
 _FIRST_CONNECTION_SECONDS: Final = 2.0
 #: How long past a pull's own wait the bus is given to end it before it is judged gone.
 _PULL_ANSWERED_WITHIN_SECONDS: Final = 10.0
@@ -326,10 +327,13 @@ async def _open(settings: BusSettings, session: _Session, *, said: set[str]) -> 
         # is one the loop never ends on.
         failed.push_async_callback(_released, client)
         opening = await failed.enter_async_context(asyncio.timeout(_OPEN_WITHIN_SECONDS))
+        trust = await on_own_threads(settings.trust)
         await client.connect(
             servers=[server.strip() for server in settings.url.split(",") if server.strip()],
+            # nats-py calls this as it builds each connect, inside its own coroutine: one read of the projected token,
+            # 7 us measured 2026-11-22, once a connect, which a read taken here ahead of it would leave stale on reconnect.
             token=settings.token,
-            tls=settings.trust(),
+            tls=trust,
             tls_handshake_first=settings.encrypted,
             name=settings.user,
             inbox_prefix=settings.inbox_prefix,

@@ -42,7 +42,7 @@ _CREDENTIAL_ALIASES: tuple[tuple[str, str], ...] = (
 #: Every key a credential may be spelled under. None is ever an option beside the key pair: object_store reads either
 #: spelling, so options carrying ``access_key_id`` beside a key pair would name two identities, and which one signs is
 #: not defined.
-CREDENTIAL_KEYS: frozenset[str] = frozenset(alias for aliases in _CREDENTIAL_ALIASES for alias in aliases)
+_CREDENTIAL_KEYS: frozenset[str] = frozenset(alias for aliases in _CREDENTIAL_ALIASES for alias in aliases)
 
 #: Where the store is, the region it signs for and its addressing, each under every spelling object_store reads, the
 #: canonical one first. The canonical spelling is the name Lance reads an ``AWS_*`` variable into, and it reads one only
@@ -68,7 +68,7 @@ VIRTUAL_HOSTED: Final = _OPTION_ALIASES[2][0]
 S3_ENDPOINT: Final = "aws_endpoint_url_s3"
 #: S3 Express One Zone resolves an endpoint of its own from the bucket, so it is pinned off wherever an endpoint is named:
 #: under an ambient ``AWS_S3_EXPRESS=true`` the same ten processes could open nothing.
-S3_EXPRESS: Final = "aws_s3_express"
+_S3_EXPRESS: Final = "aws_s3_express"
 #: Pinned off wherever a key pair signs: under an ambient ``AWS_SKIP_SIGNATURE=true`` the same ten processes sent every
 #: request unsigned, so the credential they held reached no store.
 _SKIP_SIGNATURE: Final = "aws_skip_signature"
@@ -129,7 +129,7 @@ class StorageOptions(BaseModel):
     @field_validator("options")
     @classmethod
     def _holds_no_credential(cls, options: dict[str, str]) -> dict[str, str]:
-        if held := sorted(CREDENTIAL_KEYS & options.keys()):
+        if held := sorted(_CREDENTIAL_KEYS & options.keys()):
             raise ValueError(f"{', '.join(held)}: a credential is one whole key pair, and only the key pair holds it")
         return _canonical({key: value for key, value in options.items() if key != _PROVIDER_SCHEME})
 
@@ -188,12 +188,12 @@ class StorageOptions(BaseModel):
 
         A key pair is pinned as the only credential Lance may sign with (``aws_provider_scheme``, :data:`_PROVIDER_SCHEME`),
         and every request is signed with it (:data:`_SKIP_SIGNATURE`). A named endpoint is pinned as the S3 service's own
-        too (:data:`S3_ENDPOINT`) with S3 Express off (:data:`S3_EXPRESS`), here rather than where the endpoint is set,
+        too (:data:`S3_ENDPOINT`) with S3 Express off (:data:`_S3_EXPRESS`), here rather than where the endpoint is set,
         so options read from the wire are pinned as the ones this module builds are ([[LH-238]]).
         """
         options = dict(self.options)
         if endpoint := self.endpoint:
-            options |= {S3_ENDPOINT: endpoint, S3_EXPRESS: "false"}
+            options |= {S3_ENDPOINT: endpoint, _S3_EXPRESS: "false"}
         if (pair := self.key_pair) is None:
             return options
         credential = {
@@ -243,11 +243,11 @@ def _split(flat: Mapping[str, str]) -> tuple[S3KeyPair | None, dict[str, str]]:
             place; two spellings name two identities. The message names keys, never their values.
     """
     access_key, secret_key, session_token = (_one_field(flat, aliases) for aliases in _CREDENTIAL_ALIASES)
-    options = {key: value for key, value in flat.items() if key not in CREDENTIAL_KEYS}
+    options = {key: value for key, value in flat.items() if key not in _CREDENTIAL_KEYS}
     if access_key is None and secret_key is None and session_token is None:
         return None, options
     if access_key is None or secret_key is None:
-        named = ", ".join(sorted(key for key in CREDENTIAL_KEYS if flat.get(key)))
+        named = ", ".join(sorted(key for key in _CREDENTIAL_KEYS if flat.get(key)))
         raise ValueError(f"{named} name part of a credential: a key id and its secret sign only together")
     token = None if session_token is None else SecretStr(session_token)
     return S3KeyPair(access_key_id=access_key, secret_access_key=SecretStr(secret_key), session_token=token), options
@@ -267,7 +267,7 @@ def _one_field(flat: Mapping[str, str], aliases: tuple[str, str]) -> str | None:
 
 def _masked(options: Mapping[str, str]) -> dict[str, str]:
     """``options`` with every credential key's value masked, for a refusal that must not echo it."""
-    return {key: "**********" if key in CREDENTIAL_KEYS else value for key, value in options.items()}
+    return {key: "**********" if key in _CREDENTIAL_KEYS else value for key, value in options.items()}
 
 
 def _canonical(options: Mapping[str, str]) -> dict[str, str]:
@@ -362,12 +362,10 @@ def s3_filesystem(storage_options: StorageOptions) -> pafs.S3FileSystem:
 
 
 __all__ = [
-    "CREDENTIAL_KEYS",
     "DEFAULT_REGION",
     "ENDPOINT",
     "REGION",
     "S3_ENDPOINT",
-    "S3_EXPRESS",
     "VIRTUAL_HOSTED",
     "StorageOptions",
     "object_client",

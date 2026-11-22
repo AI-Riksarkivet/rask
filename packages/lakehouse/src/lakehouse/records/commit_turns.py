@@ -57,6 +57,7 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.records import control_prefixes
 from lakehouse.records.record_store import record_key
 from lakehouse.storage import conditional_records
@@ -281,6 +282,11 @@ class _SharedReads:
 
 #: This process's shared reads of the tables' turn records.
 _SHARED_READS: Final = _SharedReads()
+#: The threads a door's wait for its turn reads the record on, a set of their own: a burst of writers waiting for one
+#: table holds no request thread, and queues none of the process's own work behind the read they share. As many
+#: waiters as the set seats, on one table whose read is slow, hold every seat until it answers, and another table's
+#: waiters then wait for one.
+_TURN_READS: Final = ThreadSet("commit-turn-reads")
 
 
 class TableTurns(BaseModel):
@@ -364,13 +370,14 @@ class TableTurns(BaseModel):
 
     async def wait_in_loop(self, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
         """:meth:`wait` from the event loop, holding no request thread: a fresh shared answer is taken in the loop itself
-        (:meth:`_SharedReads.peek`, no I/O and no lock), a read of the record runs on the loop's own executor for as long as
-        the read takes, and the pauses between them are the loop's, so a door awaiting this costs the same however many
-        writers wait, and stops waiting when its request is cancelled. Then answer whether the record keeps a turn under
-        ``mine`` (:meth:`keeps`), which the commit releases once it lands.
+        (:meth:`_SharedReads.peek`, no I/O and no lock); without one the waiter takes a thread of the turn reads' own set
+        (:data:`_TURN_READS`) until the record is read, by its own read or by the one in flight it queues behind; and the
+        pauses between polls are the loop's. So a door awaiting this holds none of the threads the doors run on, however
+        many writers wait, and stops waiting when its request is cancelled. Then answer whether the record keeps a turn
+        under ``mine`` (:meth:`keeps`), which the commit releases once it lands.
 
         Measured 2026-11-01 on a local control root: 53 waiters on one held turn cost the process 32-35 millicores of CPU
-        this way, against 60-62 with each poll sent to the executor.
+        this way, against 60-62 with each poll sent to a thread.
 
         Raises:
             botocore.exceptions.ClientError: The store refused a read.
@@ -381,7 +388,7 @@ class TableTurns(BaseModel):
         while True:
             turns = _SHARED_READS.peek(read)
             if turns is None:
-                turns = await asyncio.to_thread(_SHARED_READS.get, read, self._live_turns)
+                turns = await _TURN_READS.run(_SHARED_READS.get, read, self._live_turns)
             if not _holds(turns, ref, mine=mine, handed=handed):
                 break
             left = deadline - time.monotonic()
@@ -390,7 +397,7 @@ class TableTurns(BaseModel):
                 break
             await asyncio.sleep(min(backoff(attempt, first=_POLL_SECONDS, cap=_POLL_CAP_SECONDS), left))
             attempt += 1
-        return mine is not None and await asyncio.to_thread(self.keeps, mine)
+        return mine is not None and await _TURN_READS.run(self.keeps, mine)
 
     def _take(self, ref: str | None, *, token: str, hold: timedelta, deadline: float, handed_to: str | None) -> str:
         for _ in range(_ATTEMPTS):

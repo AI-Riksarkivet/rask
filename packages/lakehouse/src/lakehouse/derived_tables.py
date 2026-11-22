@@ -101,3 +101,15 @@ def _outputs(rows: EdgeRows, inputs: set[str], newest: dict[str, tuple[datetime,
 
 def _walked(depths: dict[str, int], newest: dict[str, tuple[datetime, str]], *, complete: bool) -> DerivedWalk:
     return DerivedWalk(depths=depths, names={key: newest[key][1] for key in depths if key in newest}, complete=complete)
+
+
+__all__ = [
+    "COLUMNS",
+    "EDGES",
+    "DerivedWalk",
+    "EdgeRows",
+    "filtered",
+    "is_table_uuid",
+    "joined",
+    "walk",
+]

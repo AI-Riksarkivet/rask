@@ -14,6 +14,7 @@ signal handed on without the default disposition terminating pytest. The real uv
 from __future__ import annotations
 
 import asyncio
+import logging
 import signal
 from collections.abc import Iterator
 from types import FrameType
@@ -144,6 +145,32 @@ async def test_DISARMING_stops_a_dead_app_from_being_flipped(sentinel: list[int]
 
     assert dead.state.shutting_down is False, "a disarmed app was still flipped"
     assert sentinel == [signal.SIGTERM], f"the restored handler must receive SIGTERM exactly once: {sentinel}"
+
+
+@pytest.mark.asyncio
+async def test_a_restore_step_that_fails_is_said_and_the_other_is_still_taken(
+    sentinel: list[int], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A restore step that fails leaves SIGTERM routed where the process no longer means it to go, so it is logged at
+    WARNING with its traceback, and the other step is taken all the same."""
+    del sentinel
+    loop = asyncio.get_running_loop()
+    remove = loop.remove_signal_handler
+    restore = arm_drain_on_sigterm(_app())
+
+    def _refuse(_signum: int) -> bool:
+        raise RuntimeError("the loop refused to remove the handler")
+
+    monkeypatch.setattr(loop, "remove_signal_handler", _refuse)
+    with caplog.at_level(logging.WARNING, logger=draining.__name__):
+        restore()
+    monkeypatch.undo()
+    put_back = signal.getsignal(signal.SIGTERM)
+    remove(signal.SIGTERM)
+
+    told = [(r.levelno, vars(r)["step"], r.exc_info is not None) for r in caplog.records if r.getMessage() == "drain_restore_failed"]
+    assert told == [(logging.WARNING, "remove_signal_handler", True)]
+    assert callable(put_back) and getattr(put_back, "__name__", "") == "_record", "the displaced handler was not put back"
 
 
 @pytest.mark.asyncio

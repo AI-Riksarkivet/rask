@@ -14,8 +14,8 @@ app claim readiness.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
-from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from starlette.datastructures import State
@@ -24,16 +24,17 @@ from starlette.datastructures import State
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+log = logging.getLogger(__name__)
 
 #: The two ``app.state`` attribute names. Named once so a rename cannot half-land.
-STARTED_FLAG = "startup_complete"
-DRAINING_FLAG = "shutting_down"
+_STARTED_FLAG = "startup_complete"
+_DRAINING_FLAG = "shutting_down"
 
 
 def mark_started(app: FastAPI) -> None:
     """Declare this process's startup finished — called once the base lifespan has entered."""
-    setattr(app.state, STARTED_FLAG, True)
-    setattr(app.state, DRAINING_FLAG, False)
+    setattr(app.state, _STARTED_FLAG, True)
+    setattr(app.state, _DRAINING_FLAG, False)
 
 
 def mark_draining(app: FastAPI) -> None:
@@ -42,18 +43,18 @@ def mark_draining(app: FastAPI) -> None:
     Clears ``started`` as well, because the two are read independently and a process that is both
     "started" and "draining" is only ever the second thing.
     """
-    setattr(app.state, DRAINING_FLAG, True)
-    setattr(app.state, STARTED_FLAG, False)
+    setattr(app.state, _DRAINING_FLAG, True)
+    setattr(app.state, _STARTED_FLAG, False)
 
 
 def is_started(app_or_state: FastAPI | State) -> bool:
     """Has startup completed? False for an app that never declared it."""
-    return bool(getattr(_state(app_or_state), STARTED_FLAG, False))
+    return bool(getattr(_state(app_or_state), _STARTED_FLAG, False))
 
 
 def is_draining(app_or_state: FastAPI | State) -> bool:
     """Is this process draining? False for an app that never declared it."""
-    return bool(getattr(_state(app_or_state), DRAINING_FLAG, False))
+    return bool(getattr(_state(app_or_state), _DRAINING_FLAG, False))
 
 
 def _state(app_or_state: FastAPI | State) -> State:
@@ -67,9 +68,12 @@ def _state(app_or_state: FastAPI | State) -> State:
 
 async def closed_quietly(close: Callable[[], Awaitable[object]]) -> None:
     """Close a client as a lifespan ends; a close its server no longer answers is the end it was closed for, so a failure
-    of it is passed over rather than raised over the other closes the lifespan still has to make."""
-    with suppress(Exception):
+    of it is passed over rather than raised over the other closes the lifespan still has to make. It is logged at DEBUG
+    with its traceback: it changes nothing an operator acts on, and a bus outage releases a failed client every attempt."""
+    try:
         await close()
+    except Exception:
+        log.debug("client_close_failed", extra={"close": getattr(close, "__qualname__", type(close).__name__)}, exc_info=True)
 
 
-__all__ = ["DRAINING_FLAG", "STARTED_FLAG", "closed_quietly", "is_draining", "is_started", "mark_draining", "mark_started"]
+__all__ = ["closed_quietly", "is_draining", "is_started", "mark_draining", "mark_started"]

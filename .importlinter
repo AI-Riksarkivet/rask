@@ -131,14 +131,15 @@ forbidden_modules =
     lakehouse.storage
 
 # The store is reached from everything above it and builds on almost nothing (ADR 0224): the clients, the credential and
-# options a process signs with, its filesystem, its session, objects by key and the writes the store arbitrates. Five
+# options a process signs with, its filesystem, its session, objects by key and the writes the store arbitrates. Seven
 # imports into the rest of the library are its own, each named here: the store session presents the pod's ServiceAccount
 # token (`governed.machine_identity`), asks whether a secret store is configured (`governed.secrets`) and runs its
 # exchange loop under the process's supervisor (`process.supervision`), and the filesystem compares a location in both
-# its spellings (`lancekit.base_refs`) and builds the store's readiness dependency (`process.health`). Any other import,
+# its spellings (`lancekit.base_refs`) and builds the store's readiness dependency (`process.health`); both run their
+# blocking calls on the process's own threads (`process.own_threads`). Any other import,
 # direct or through another module, is the store building on what builds on it.
 [importlinter:contract:the-store-imports-only-its-named-dependencies-in-the-library]
-name = ADR 0224: lakehouse.storage imports nothing in the library beyond its five named imports
+name = ADR 0224: lakehouse.storage imports nothing in the library beyond its seven named imports
 type = forbidden
 source_modules =
     lakehouse.storage
@@ -150,6 +151,8 @@ ignore_imports =
     lakehouse.storage.store_session -> lakehouse.process.supervision
     lakehouse.storage.objectfs -> lakehouse.lancekit.base_refs
     lakehouse.storage.objectfs -> lakehouse.process.health
+    lakehouse.storage.objectfs -> lakehouse.process.own_threads
+    lakehouse.storage.store_session -> lakehouse.process.own_threads
 
 # The process is what a lakehouse process is and says about itself while it runs (ADR 0203, ADR 0224): its supervised
 # loops and its end, its lifecycle flags and SIGTERM drain, its dependencies' latest answers and the probes that serve
@@ -197,12 +200,13 @@ forbidden_modules =
 
 # The catalog's records sit on the Lance table plane and the store (ADR 0224): the registries and governance records kept
 # on the control root, and the hashed-key layout and prefixes they are kept by. They read a table's locations and
-# feature flags through `lancekit`, read and write their records through `storage`, and check a warehouse's name by
-# `naming`; each such import is named below, one line per edge, and nothing else in the library is imported, directly or
-# through another module. The rest of the library builds on the records (`timers` claims its windows under their
+# feature flags through `lancekit`, read and write their records through `storage`, check a warehouse's name by
+# `naming`, and the commit turns read off the loop on a thread set of their own (`process.own_threads`); each such
+# import is named below, one line per edge, and nothing else in the library is imported, directly or through another
+# module. The rest of the library builds on the records (`timers` claims its windows under their
 # prefix, `compaction_gate` asks the base record), so an import of the rest here would make the two import each other.
 [importlinter:contract:the-records-import-only-the-table-plane-the-store-and-naming]
-name = ADR 0224: lakehouse.records imports nothing in the library beyond its named imports of lancekit, storage and naming
+name = ADR 0224: lakehouse.records imports nothing in the library beyond its named imports of lancekit, storage, naming and the thread sets
 type = forbidden
 source_modules =
     lakehouse.records
@@ -224,6 +228,7 @@ ignore_imports =
     lakehouse.records.commit_records -> lakehouse.storage.options
     lakehouse.records.commit_records -> lakehouse.storage.stored_objects
     lakehouse.records.commit_turns -> lakehouse.storage.conditional_records
+    lakehouse.records.commit_turns -> lakehouse.process.own_threads
     lakehouse.records.commit_turns -> lakehouse.storage.options
     lakehouse.records.data_directories -> lakehouse.lancekit.base_refs
     lakehouse.records.data_directories -> lakehouse.storage.options

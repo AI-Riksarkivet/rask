@@ -758,7 +758,7 @@ backup): `<PREFIX>_S3_WEB_IDENTITY_TOKEN_FILE` (its token for `objectStore.ident
 store's own, so boto3 never posts the token to the public AWS STS), `_ASSUME_ROLE_ARN`
 (`objectStore.identity.roleArns.<component>`, `required`; AWS assumes it, a store granting the policy the token's
 subject names ignores it) and `_SESSION_SECONDS` (`required`, since each reads it as a typed int). One include, so the services (`lakehouse.storage.store_session`) and the
-backups (`JobStoreIdentity`, `job_client`) cannot read the identity under different names. Call: include
+backups (`scripts/_backup_store.py`'s `JobStoreIdentity` and `job_client`) cannot read the identity under different names. Call: include
 "lance.objectStoreSessionEnv" (list $root <PREFIX> <component>).
 
 ## `{{- define "lance.serviceAccounts" -}}`

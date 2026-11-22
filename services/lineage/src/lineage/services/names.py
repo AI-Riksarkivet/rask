@@ -28,7 +28,7 @@ from lakehouse.problems.domain_errors import ForbiddenError, NotFoundError, Unau
 from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, RunEvent
-from lineage.services.catalog_client import catalog_read_client, request_headers
+from lineage.services.catalog_client import CATALOG_CALLS, catalog_read_client, request_headers
 from lineage.services.catalog_reader import translate_catalog_errors
 
 
@@ -54,11 +54,11 @@ class CatalogNames:
 
     async def table(self, name: str, *, bearer: str | None) -> DatasetUuids:
         """The uuids of the table ``name`` names now and of its namespace; none when it names no table the caller may see."""
-        return await asyncio.to_thread(self._table, name, bearer)
+        return await CATALOG_CALLS.run(self._table, name, bearer)
 
     async def namespace(self, name: str, *, bearer: str | None) -> str | None:
         """The uuid of the namespace ``name`` names now, or ``None`` when it names none the caller may see."""
-        return await asyncio.to_thread(self._namespace, name, bearer)
+        return await CATALOG_CALLS.run(self._namespace, name, bearer)
 
     def _table(self, name: str, bearer: str | None) -> DatasetUuids:
         from lance_namespace_urllib3_client.api.table_api import TableApi

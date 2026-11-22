@@ -17,7 +17,6 @@ import asyncio
 import logging
 import signal
 from collections.abc import Callable
-from contextlib import suppress
 from typing import TYPE_CHECKING
 
 from lakehouse.process.lifecycle import mark_draining
@@ -108,10 +107,16 @@ def arm_drain_on_sigterm(app: FastAPI) -> Callable[[], None]:
     def _restore() -> None:
         global _holder
         _holder = None
-        with suppress(Exception):
+        # Each step is tried whatever the other did, and a failed one is said: SIGTERM is then still routed to this app's
+        # drain, or not back to the handler it displaced, so the next signal may not stop the process as it should.
+        try:
             loop.remove_signal_handler(signal.SIGTERM)
-        with suppress(Exception):
+        except (RuntimeError, ValueError, OSError):
+            log.warning("drain_restore_failed", extra={"step": "remove_signal_handler"}, exc_info=True)
+        try:
             signal.signal(signal.SIGTERM, previous)
+        except (RuntimeError, ValueError, OSError):
+            log.warning("drain_restore_failed", extra={"step": "signal"}, exc_info=True)
 
     return _restore
 

@@ -38,7 +38,6 @@ if TYPE_CHECKING:
 
 
 __all__ = [
-    "EVIDENCE_CACHE_BYTES",
     "affordable_cache_bytes",
     "cache_budget_bytes",
     "fresh_session",
@@ -152,7 +151,7 @@ def lance_session(metadata_cache_bytes: int, index_cache_bytes: int) -> lance.Se
 
 #: Each cache of an evidence session, at the floor a service's own caps admit. Fixed, not clamped: see
 #: :func:`fresh_session`.
-EVIDENCE_CACHE_BYTES: Final = 8 << 20
+_EVIDENCE_CACHE_BYTES: Final = 8 << 20
 
 
 def fresh_session() -> lance.Session:
@@ -168,7 +167,7 @@ def fresh_session() -> lance.Session:
     """
     import lance
 
-    return lance.Session(metadata_cache_size_bytes=EVIDENCE_CACHE_BYTES, index_cache_size_bytes=EVIDENCE_CACHE_BYTES)
+    return lance.Session(metadata_cache_size_bytes=_EVIDENCE_CACHE_BYTES, index_cache_size_bytes=_EVIDENCE_CACHE_BYTES)
 
 
 def open_dataset(

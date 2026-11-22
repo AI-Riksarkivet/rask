@@ -267,7 +267,7 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     the rule that settles a delivery by what its handling answers, the outbox seams (`outbox`), the OpenLineage builders in
     `openlineage` with the parent run facet's model, and the Ed25519 signing and verifying seam in
     `signing`, `published_keys` and `door_verdict`; the address rule `governed.subjects` stays with the auth plane);
-    and the store (`lakehouse.storage`: the S3 and STS clients in `client` and `sts`, `iter_keys` in `s3`, `split_s3_uri`
+    and the store (`lakehouse.storage`: the S3 and STS clients in `client` and `sts`, `split_s3_uri`
     in `uri`, the `StorageError` family in `errors`, the key pair in `credential`, `options`, `endpoint_scheme`, `objectfs`,
     the store session in `store_session`, objects by key in `stored_objects`, and the writes the store arbitrates in
     `conditional_records`). A client reaches the

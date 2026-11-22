@@ -27,13 +27,21 @@ client, since a write the catalog may have applied is never sent twice.
 from __future__ import annotations
 
 from functools import cache
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from urllib3.util.retry import Retry
+
+from lakehouse.process.own_threads import ThreadSet
 
 
 if TYPE_CHECKING:
     from lance_namespace_urllib3_client import ApiClient
+
+
+#: The threads lineage's calls through the catalog run on, a door's, the ingest lane's and the relay's alike, a set of
+#: their own: a burst of them holds no request thread, and queues none of the process's own work (its renewals, and the
+#: feed read its readiness rests on, `ProvenanceStore.ready`).
+CATALOG_CALLS: Final = ThreadSet("catalog-calls")
 
 
 @cache
@@ -73,4 +81,4 @@ def reset_catalog_clients() -> None:
     catalog_read_client.cache_clear()
 
 
-__all__ = ["catalog_api_client", "catalog_read_client", "request_headers", "reset_catalog_clients"]
+__all__ = ["CATALOG_CALLS", "catalog_api_client", "catalog_read_client", "request_headers", "reset_catalog_clients"]

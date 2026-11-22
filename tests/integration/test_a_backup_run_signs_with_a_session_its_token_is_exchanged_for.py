@@ -2,7 +2,7 @@
 
 Both backup CronJobs run a script out of rask's image (`scripts/pg_dump_upload.py`, `scripts/control_root_backup.py`),
 and each asks STS `AssumeRoleWithWebIdentity` once, at the run's start, for a session under the policy the store binds to
-its account (`lakehouse.storage.store_session.job_client`). The store here is a moto server that serves S3 and STS. The run's
+its account (`scripts/_backup_store.py`'s `job_client`). The store here is a moto server that serves S3 and STS. The run's
 environment holds no credential at all, no key pair, no profile and no instance metadata, so a run that reached for
 boto3's default chain finds nothing to sign with, and what each exchange asked for is read back from moto's STS backend in
 this process.
@@ -25,6 +25,12 @@ from moto.sts import models as sts_models
 REPO_ROOT = Path(__file__).resolve().parents[2]
 #: The account moto files every role and session under.
 ACCOUNT = "123456789012"
+
+
+@pytest.fixture(autouse=True)
+def scripts_on_the_path(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The scripts' directory on the path, as `python /srv/<script>` puts it there, so each resolves its sibling."""
+    monkeypatch.syspath_prepend(str(REPO_ROOT / "scripts"))
 
 
 def _script(name: str) -> ModuleType:

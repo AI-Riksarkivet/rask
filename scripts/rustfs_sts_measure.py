@@ -19,6 +19,7 @@ import time
 import uuid
 from collections.abc import Callable
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import boto3
 import lance
@@ -34,6 +35,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from lakehouse.records.record_store import get_record, put_record
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.options import StorageOptions
+
+
+if TYPE_CHECKING:
+    from mypy_boto3_sts.type_defs import AssumeRoleRequestTypeDef
 
 
 ENDPOINT = sys.argv[1]
@@ -98,7 +103,7 @@ def wait_up() -> None:
 
 def assume(ak: str, sk: str, policy: Policy | None) -> Session:
     sts = boto3.client("sts", endpoint_url=ENDPOINT, aws_access_key_id=ak, aws_secret_access_key=sk, region_name=REGION, config=CFG)
-    kwargs: dict[str, object] = {"RoleArn": "arn:aws:iam::000000000000:role/vend", "RoleSessionName": "vend", "DurationSeconds": 900}
+    kwargs: AssumeRoleRequestTypeDef = {"RoleArn": "arn:aws:iam::000000000000:role/vend", "RoleSessionName": "vend", "DurationSeconds": 900}
     if policy is not None:
         kwargs["Policy"] = json.dumps(policy)
     return Session.model_validate(sts.assume_role(**kwargs)["Credentials"])

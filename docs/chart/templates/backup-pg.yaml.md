@@ -45,12 +45,12 @@ serve anonymously ([[XC-075]]). What this uploads is the authorization store
 (OpenFGA), so a CronJob that cannot pull its image backs the estate's most
 irreplaceable database up NOWHERE and says so once in an event nobody reads.
 Every verb is plain S3: `put_object`, and the retention walk that
-`lakehouse.storage.s3.prune_timestamped_prefixes` owns for both backup lanes.
+`scripts/_backup_store.py`'s `prune_timestamped_prefixes` owns for both backup lanes.
 
 ## `{{- include "lance.objectStoreSessionEnv" (list . "RASK" "backup-pg") | nindent 16 }}`
 
 THE RUN HOLDS NO KEY. The upload exchanges the token its pod projects for `objectStore.identity.audience` for one session
-(`lakehouse.storage.store_session.job_client`, `RASK_S3_*`) and signs the whole run with it; the role ARN is
+(`scripts/_backup_store.py`'s `job_client`, `RASK_S3_*`) and signs the whole run with it; the role ARN is
 `objectStore.identity.roleArns.backup-pg`, which RustFS ignores and AWS assumes. A run missing any of these fails at its
 start rather than signing with whatever boto3's default chain finds, which on a cloud node is the node's own role.
 

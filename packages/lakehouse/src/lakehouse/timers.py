@@ -31,6 +31,7 @@ from typing import Final
 from opentelemetry import metrics
 from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 
+from lakehouse.process.own_threads import on_own_threads
 from lakehouse.records import control_prefixes
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
@@ -184,7 +185,7 @@ class Timer:
             return self._ended(Outcome.HELD, None, self._period)
         began = monotonic()
         try:
-            asked = await asyncio.to_thread(self._ask)
+            asked = await on_own_threads(self._ask)
         except Exception as exc:
             log.warning("timer_claim_unread", extra={"timer": self.name, "error": str(exc)[:300]}, exc_info=exc)
             return self._ended(Outcome.UNREAD, None, min(self._period, RETRY_SECONDS))

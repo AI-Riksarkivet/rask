@@ -23,12 +23,11 @@ from lance import LanceOperation
 
 
 __all__ = [
-    "ReadsTransactions",
     "read_transaction",
 ]
 
 
-class ReadsTransactions(Protocol):
+class _ReadsTransactions(Protocol):
     """A dataset handle a version's transaction is read from."""
 
     def read_transaction(self, version: int) -> Any: ...  # noqa: ANN401 - pylance's own return, a Transaction or None
@@ -46,7 +45,7 @@ _REWRITTEN_INDEX = make_dataclass(
 )
 
 
-def read_transaction(dataset: ReadsTransactions, version: int) -> Any:  # noqa: ANN401 - pylance's own return
+def read_transaction(dataset: _ReadsTransactions, version: int) -> Any:  # noqa: ANN401 - pylance's own return
     """The transaction that committed ``version`` of ``dataset``, or None where the version keeps none."""
     # pylance resolves the class by name on each read, so it is named here, where a transaction is read, and nowhere a
     # caller could forget it.

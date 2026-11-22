@@ -34,8 +34,8 @@ no profile and no shared file, so no `AWS_PROFILE` or config file the environmen
 
 ## Listing and errors
 
-`iter_keys(client, bucket, prefix, suffix)` pages `list_objects_v2`, and `prune_timestamped_prefixes` keeps the newest
-N timestamped prefixes under a base. Every S3 call is wrapped in `s3_errors`, so a caller meets
-`BucketNotFoundError` / `ObjectNotFoundError` and never a raw botocore `ClientError`.
+Every S3 call is wrapped in `s3_errors`, so a caller meets `BucketNotFoundError` / `ObjectNotFoundError` and never a
+raw botocore `ClientError`. The backups' key listing and their retention walk (`prune_timestamped_prefixes`, which keeps
+the newest N timestamped prefixes under a base) are the backup scripts' own, in `scripts/_backup_store.py`.
 
 `split_s3_uri("s3://bucket/prefix/")` returns `("bucket", "prefix/")`.

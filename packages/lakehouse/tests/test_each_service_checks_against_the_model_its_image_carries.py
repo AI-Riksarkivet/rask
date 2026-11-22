@@ -18,6 +18,7 @@ import asyncio
 import copy
 import json
 import logging
+import threading
 import urllib.parse
 from typing import Any, Self
 
@@ -236,10 +237,19 @@ async def test_a_pinned_store_is_used_without_a_name_lookup(monkeypatch: pytest.
     written to one store and looked for in another."""
     fake = _OpenFga([[_SCRATCH]], [[_stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, OLDER)
+    read_on: list[int] = []
+
+    def image_model() -> dict[str, Any]:
+        read_on.append(threading.get_ident())
+        return copy.deepcopy(OLDER)
+
+    monkeypatch.setattr(fga_model, "load_model", image_model)
 
     assert await fga_provision.resolve("http://fga:8080", token_file=None, store_id="store-PINNED", deadline_seconds=0.0) == ("store-PINNED", "model-OLDER")
     assert await fga_provision.provision("http://fga:8080", token_file=None, store_id="store-PINNED") == ("store-PINNED", "model-OLDER")
     assert fake.listed == 0, "a pinned store was looked up by name"
+    # The image's model is a file read, so each is taken on a thread and none holds the event loop.
+    assert len(read_on) == 2 and threading.get_ident() not in read_on, "the image's model was read on the event loop"
 
 
 @pytest.mark.asyncio

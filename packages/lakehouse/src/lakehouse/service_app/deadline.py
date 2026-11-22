@@ -54,7 +54,10 @@ class RequestDeadlineMiddleware:
                 begun.set()
             await send(message)
 
-        door = asyncio.ensure_future(self._app(scope, receive, guarded))
+        async def serve() -> None:
+            await self._app(scope, receive, guarded)
+
+        door = asyncio.create_task(serve())
         try:
             await asyncio.wait_for(asyncio.shield(door), timeout=self._seconds)
             return

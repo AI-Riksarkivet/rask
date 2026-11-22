@@ -30,6 +30,7 @@ from collections.abc import Iterator
 from contextlib import suppress
 
 import pyarrow.fs as pafs
+from starlette.concurrency import run_in_threadpool
 
 from lakehouse.events import outbox_metrics
 from lakehouse.events.bus import Bus, publish_event  # noqa: TID251 — the outbox is a registered publish site
@@ -337,8 +338,6 @@ async def publish_with_outbox(
     Raises:
         UnpublishedEventError: The publish did not reach the bus; its ``staged`` says whether the relay holds the event.
     """
-    from fastapi.concurrency import run_in_threadpool
-
     staged = bool(outbox_uri)
     if staged:
         try:

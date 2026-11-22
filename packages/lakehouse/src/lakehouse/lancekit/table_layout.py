@@ -43,7 +43,6 @@ from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
 
 __all__ = [
     "BRANCH_STAGING_GLOB",
-    "DATA_DIR",
     "FINAL_MANIFEST_GLOB",
     "REFS_GLOB",
     "WRITER_PUT_GLOBS",
@@ -51,10 +50,10 @@ __all__ = [
 
 
 #: Where a client writes data files (and blob sidecars beneath them).
-DATA_DIR: Final = "data"
+_DATA_DIR: Final = "data"
 
 #: The object globs a writer-tier credential may put, relative to the ref it writes (the table, or ``tree/<branch>``).
-WRITER_PUT_GLOBS: Final = (f"{DATA_DIR}/*", "_versions/*.manifest-*", "_transactions/*", "_deletions/*", "_indices/*")
+WRITER_PUT_GLOBS: Final = (f"{_DATA_DIR}/*", "_versions/*.manifest-*", "_transactions/*", "_deletions/*", "_indices/*")
 
 #: What the table's own writer-tier credential may also put: every branch's files, which a stock client stages with it.
 BRANCH_STAGING_GLOB: Final = f"{BRANCH_CONTAINER}/*"

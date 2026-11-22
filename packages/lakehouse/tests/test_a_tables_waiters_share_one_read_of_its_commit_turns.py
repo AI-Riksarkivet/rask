@@ -21,12 +21,15 @@ from __future__ import annotations
 import asyncio
 import threading
 import time
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import anyio.to_thread
 import pytest
 from pydantic import SecretStr
 
+from lakehouse.process.own_threads import ThreadSet, on_own_threads
 from lakehouse.records import commit_turns
 from lakehouse.records.commit_turns import TableTurns, Writer
 from lakehouse.storage import conditional_records
@@ -44,6 +47,15 @@ SLOW_READ_SECONDS = 0.3
 HELD_FOR_THE_TEST_SECONDS = 60.0
 
 WAITERS = 20
+
+#: How long a call on the process's own threads is given to answer while writers wait: far past a thread's start.
+ANSWERED_WITHIN_SECONDS = 2.0
+
+#: How long writers arriving after those that gave up are watched for the threads they must not start.
+WATCHED_SECONDS = 0.3
+
+#: How the threads of the turn reads' set are named (`lakehouse.process.own_threads.ThreadSet`).
+TURN_READ_THREADS = "lakehouse-commit-turn-reads_"
 
 WRITER = Writer(caller="alice", transaction="0f6c1a52-8a39-4a46-9a3e-2f0d6f8b9c11")
 
@@ -182,3 +194,79 @@ def test_a_doors_take_beaten_to_the_record_by_another_replica_waits_out_that_tur
             timer.join()
 
     assert (len(theirs), here.keeps(ours), took >= 0.9) == (1, True, True), f"the take came back after {took:.2f} s"
+
+
+@pytest.fixture
+def slow_read(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[threading.Event, threading.Event]]:
+    """Every read of a record held in flight, as a slow store holds it: the first event is set once a read has begun, and
+    the second lets the reads answer (set at teardown too, so no thread is left waiting)."""
+    read = conditional_records.read_json_at
+    in_flight, answered = threading.Event(), threading.Event()
+
+    def _held_in_flight(root_uri: str, storage_options: StorageOptions, key: str) -> conditional_records.StoreRead:
+        in_flight.set()
+        answered.wait(timeout=30)
+        return read(root_uri, storage_options, key)
+
+    monkeypatch.setattr(conditional_records, "read_json_at", _held_in_flight)
+    yield in_flight, answered
+    answered.set()
+
+
+async def _begun(in_flight: threading.Event) -> None:
+    """Return once a waiter's read of the record is in flight."""
+    async with asyncio.timeout(10):
+        while not in_flight.is_set():
+            await asyncio.sleep(0.005)
+
+
+@pytest.mark.asyncio
+async def test_waiters_held_on_one_slow_read_hold_no_request_thread_and_none_of_the_processs_own(
+    tmp_path: Path, slow_read: tuple[threading.Event, threading.Event]
+) -> None:
+    """As many writers as their thread set seats wait for one table's turn while a slow store holds the record's read in
+    flight: they hold no thread of the request pool, and a call on the process's own set still answers, so neither a door
+    nor the store session's renewal nor a readiness read queues behind them."""
+    in_flight, answered = slow_read
+    turns = _turns(tmp_path, "AKIDCATALOG")
+    waiters = [asyncio.create_task(turns.wait_in_loop(None)) for _ in range(ThreadSet.seats)]
+    own: list[asyncio.Task[int]] = []
+    try:
+        await _begun(in_flight)
+        request_threads_held = anyio.to_thread.current_default_thread_limiter().borrowed_tokens
+        own = [asyncio.create_task(on_own_threads(threading.get_ident))]
+        seated, _ = await asyncio.wait(own, timeout=ANSWERED_WITHIN_SECONDS)
+    finally:
+        answered.set()
+        await asyncio.gather(*waiters, *own, return_exceptions=True)
+
+    assert request_threads_held == 0, f"writers waiting for a turn held {request_threads_held} of the request pool's threads"
+    assert seated == set(own), "a call on the process's own threads waited behind the writers waiting for a turn"
+
+
+@pytest.mark.asyncio
+async def test_writers_that_give_up_waiting_leave_their_set_no_thread_past_its_seats(
+    tmp_path: Path, slow_read: tuple[threading.Event, threading.Event]
+) -> None:
+    """Writers waiting on a slow read give up, their requests cancelled, and as many more arrive: each that gave up stops
+    waiting while the read is still in flight, and its thread keeps its seat until the read answers, so the waiters' set
+    runs no more threads than it seats however many writers come and go against a store that is not answering."""
+    in_flight, answered = slow_read
+    turns = _turns(tmp_path, "AKIDCATALOG")
+    gave_up = [asyncio.create_task(turns.wait_in_loop(None)) for _ in range(ThreadSet.seats)]
+    arrived_after: list[asyncio.Task[bool]] = []
+    try:
+        await _begun(in_flight)
+        for waiter in gave_up:
+            waiter.cancel()
+        _, still_waiting = await asyncio.wait(gave_up, timeout=ANSWERED_WITHIN_SECONDS)
+        arrived_after = [asyncio.create_task(turns.wait_in_loop(None)) for _ in range(ThreadSet.seats)]
+        await asyncio.sleep(WATCHED_SECONDS)
+        threads = [thread.name for thread in threading.enumerate() if thread.name.startswith(TURN_READ_THREADS)]
+    finally:
+        answered.set()
+        await asyncio.gather(*gave_up, *arrived_after, return_exceptions=True)
+
+    assert len(still_waiting) == 0, f"{len(still_waiting)} writers that gave up still waited on the read {ANSWERED_WITHIN_SECONDS} s later"
+    assert [waiter.cancelled() for waiter in gave_up] == [True] * ThreadSet.seats
+    assert len(threads) == ThreadSet.seats, f"the waiters' set ran {len(threads)} threads on its {ThreadSet.seats} seats"

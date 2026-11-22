@@ -90,6 +90,7 @@ class DueRecord(BaseModel):
 
 
 def due_key(table_uuid: str) -> str:
+    """The key the due record of the table ``table_uuid`` is stored under on the control root."""
     return record_key(DUE_PREFIX, "table", table_uuid)
 
 
@@ -104,10 +105,12 @@ def _parsed(raw: dict[str, Any] | None) -> DueRecord | None:
 
 
 def write_due(control_root: str, storage_options: StorageOptions, record: DueRecord) -> None:
+    """Write ``record`` as its table's due record, over whatever the table's last pass wrote."""
     put_record(control_root, storage_options, due_key(record.uuid), record=record.model_dump(mode="json"))
 
 
 def delete_due(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:
+    """Remove the due record of the table ``table_uuid``; ``False`` when it held none."""
     return delete_record(control_root, storage_options, due_key(table_uuid))
 
 

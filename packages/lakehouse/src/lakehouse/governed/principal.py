@@ -69,7 +69,7 @@ class Principal(BaseModel):
         return self
 
     @classmethod
-    def parse(cls, key: str) -> Principal:
+    def parse(cls, key: str) -> Self:
         """The principal `key` names. `ValueError` for a key naming no identity provider, or one that is not well formed."""
         idp_id, separator, subject = key.partition(SEPARATOR)
         if not separator:

@@ -98,6 +98,7 @@ from tenacity import (
 )
 
 from lakehouse.governed.projected_token import read_token_file
+from lakehouse.process.own_threads import on_own_threads
 
 
 if TYPE_CHECKING:
@@ -699,7 +700,7 @@ async def secret_store_session(loops: Supervisor, *, wake_seconds: float = _RENE
         return
     store = _PROCESS.get()
     try:
-        await asyncio.to_thread(store.log_in)
+        await on_own_threads(store.log_in)
         loop = loops.keep("secret-store-login", partial(_keep_logged_in, store, wake_seconds))
         try:
             yield
@@ -716,7 +717,7 @@ async def _keep_logged_in(store: SecretStore, wake_seconds: float) -> None:
     while True:
         await asyncio.sleep(wake_seconds)
         try:
-            await asyncio.to_thread(store.keep_logged_in)
+            await on_own_threads(store.keep_logged_in)
         except Exception:
             # A fault in one pass must not end the loop: while it passes, the next pass is the only way the login is
             # made again.

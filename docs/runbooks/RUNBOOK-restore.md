@@ -51,8 +51,9 @@ drop/recreate it first.
 1. **Fetch the dump** from S3 under the pg backup's own identity, a session its ServiceAccount's token is exchanged for
    (ADR 0197): write `kubectl create token <release>-sa-backup-pg --audience <objectStore.identity.audience>` to a file,
    then, with `RASK_S3_ENDPOINT_URL` and `RASK_S3_STS_ENDPOINT` at the store, `RASK_S3_ASSUME_ROLE_ARN` at
-   `objectStore.identity.roleArns.backup-pg` and `RASK_S3_WEB_IDENTITY_TOKEN_FILE` at that file,
-   `uv run python -c "from lakehouse.storage.store_session import JobStoreIdentity, job_client; job_client(JobStoreIdentity(), session_name='restore').download_file('<bucket>', '_backups/pg/<UTC>/openfga.sql.gz', 'openfga.sql.gz')"`.
+   `objectStore.identity.roleArns.backup-pg` and `RASK_S3_WEB_IDENTITY_TOKEN_FILE` at that file, run from `scripts/`,
+   where the backups' helper `_backup_store.py` lives:
+   `uv run python -c "from _backup_store import JobStoreIdentity, job_client; job_client(JobStoreIdentity(), session_name='restore').download_file('<bucket>', '_backups/pg/<UTC>/openfga.sql.gz', 'openfga.sql.gz')"`.
 2. **Recreate the target DB** clean (managed PG or the in-cluster `age-postgres`):
    `DROP DATABASE IF EXISTS openfga; CREATE DATABASE openfga;`
 3. **Ensure the extension is installable** in the target (the AGE image ships it):

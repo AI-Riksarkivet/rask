@@ -20,7 +20,7 @@ from lakehouse.events.control_emit import ControlEmitter, ControlSign, make_cont
 from lakehouse.events.signing import SigningKey, attach_control_signature, parse_published_keys
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency
-from lakehouse.lance_metrics import instrument_lance_if_available
+from lakehouse.lance_metrics import register_lance_metrics
 from lakehouse.process.health import Dependency, HealthWatch
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness, ReadinessStatus
@@ -84,7 +84,7 @@ def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
 async def standing(app: FastAPI, settings: MaintenanceSettings, loops: Supervisor) -> AsyncGenerator[None]:
     """The secret store's login and the object store's session, their loops on ``loops``, stopped on the way out."""
     async with AsyncExitStack() as stack:
-        instrument_lance_if_available()  # Lance-native IO metrics onto the global MeterProvider
+        register_lance_metrics()  # Lance-native IO metrics onto the global MeterProvider
         stack.callback(credentials.close_door_client)
         # MAINTENANCE LOGS IN TO ITS SECRET STORE ITSELF ([[XC-199]]), before it serves or takes a task, and its start
         # fails when the store never admits it. A loop of `loops` then logs in again once half the store token's lease

@@ -23,13 +23,13 @@ job is trying to fix the answer to. The registry under `LANCE_REST_ROOT` is the 
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING
 
 from catalog.api.authz import warehouse_grants
 from catalog.services import warehouses
 from lakehouse.governed.auth_lifespan import build_fga_client
+from lakehouse.process.own_threads import on_own_threads
 
 
 if TYPE_CHECKING:
@@ -81,7 +81,7 @@ async def backfill(settings: Settings) -> tuple[int, int, list[str]]:
 
 
 async def _reconcile(client: OpenFgaClient, settings: Settings) -> tuple[int, int, list[str]]:
-    records = await asyncio.to_thread(warehouses.list_warehouses, settings.registry_root, settings.storage_options())
+    records = await on_own_threads(warehouses.list_warehouses, settings.registry_root, settings.storage_options())
     seen = written = 0
     failures: list[str] = []
     for record in records:

@@ -11,14 +11,13 @@ from typing import Final
 
 
 __all__ = [
-    "IN_LIST_SIZE",
     "in_lists",
     "sql_literal",
 ]
 
 
 #: Values per ``IN`` list, so a wide set is read in bounded filters.
-IN_LIST_SIZE: Final = 500
+_IN_LIST_SIZE: Final = 500
 
 
 def sql_literal(value: str) -> str:
@@ -27,7 +26,7 @@ def sql_literal(value: str) -> str:
 
 
 def in_lists(column: str, values: Iterable[str]) -> Iterator[str]:
-    """``<column> IN (...)`` filters over ``values`` in sorted order, at most :data:`IN_LIST_SIZE` values each."""
+    """``<column> IN (...)`` filters over ``values`` in sorted order, at most :data:`_IN_LIST_SIZE` values each."""
     keys = sorted(values)
-    for start in range(0, len(keys), IN_LIST_SIZE):
-        yield f"{column} IN ({', '.join(sql_literal(key) for key in keys[start : start + IN_LIST_SIZE])})"
+    for start in range(0, len(keys), _IN_LIST_SIZE):
+        yield f"{column} IN ({', '.join(sql_literal(key) for key in keys[start : start + _IN_LIST_SIZE])})"

@@ -64,12 +64,13 @@ from lakehouse.governed.machine_identity import read_identity_token
 from lakehouse.lancekit.filters import in_lists, sql_literal
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
 from lakehouse.problems.domain_errors import ServiceUnavailableError
+from lakehouse.process.own_threads import on_own_threads
 from lineage.core.config import LineageSettings
 from lineage.core.refusals import ForeignRunError
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, RunEvent, author_sub_from_payload, parse_event
 from lineage.schemas import DerivedTable, EventRecord, ParkedDelivery
-from lineage.services.catalog_client import catalog_api_client, catalog_read_client, request_headers
+from lineage.services.catalog_client import CATALOG_CALLS, catalog_api_client, catalog_read_client, request_headers
 from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport, translate_catalog_errors
 from lineage.services.catalog_writer import RestCatalogWriteTransport
 
@@ -510,7 +511,10 @@ class ProvenanceStore:
         return [*self._namespace, table]
 
     async def _run[T](self, call: Callable[[], T]) -> T:
-        return await asyncio.to_thread(call)
+        """``call``, a blocking round trip to the catalog, on the threads lineage keeps for its calls through it
+        (`CATALOG_CALLS`), which its doors, its ingest lane and its relay share: apart from the request pool, and apart
+        from the process's own work."""
+        return await CATALOG_CALLS.run(call)
 
     def _reader(self, table: str) -> CatalogTableReader:
         return CatalogTableReader(RestCatalogTransport(self._url, token=self._token(), timeout=self._timeout), self.table_id(table))
@@ -540,8 +544,10 @@ class ProvenanceStore:
                 )
 
     async def ready(self) -> None:
-        """Raise unless the feed table answers: the one thing every door of this service needs."""
-        await self._run(lambda: self._reader(FEED).table_version())
+        """Raise unless the feed table answers: the one thing every door of this service needs. Read on the process's own
+        threads, never the ones its callers' calls hold (`CATALOG_CALLS`): a burst of them must not queue the read the
+        health watch judges this replica by."""
+        await on_own_threads(lambda: self._reader(FEED).table_version())
 
     # ---- writes -------------------------------------------------------------------------------------------
 

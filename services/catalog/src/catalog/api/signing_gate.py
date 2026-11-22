@@ -34,7 +34,7 @@ from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services.provenance_namespace import is_provenance
 from lakehouse.governed import fga_ids
-from lakehouse.governed.signing_key import SIGNING_STATE, SigningStatus
+from lakehouse.governed.signing_key import SIGNING_STATE, SigningKeyHolder
 from lakehouse.problems.envelope import problem_body
 from lakehouse.process.probes import ReadyCheck
 from lakehouse.schemas.health import Readiness, ReadinessStatus
@@ -93,7 +93,7 @@ def _unready(request: Request) -> bool:
     Raises:
         InternalError: The lifespan wired no signing holder or no commit id key holder.
     """
-    holder = app_wire(request, SIGNING_STATE, SigningStatus, none_is_off=True)
+    holder = app_wire(request, SIGNING_STATE, SigningKeyHolder, none_is_off=True)
     # An announcement also needs its commit's run id, derived under a key read from the store ([[LH-497]]).
     return (holder is not None and not holder.ready) or not commit_ids_of(request).ready
 

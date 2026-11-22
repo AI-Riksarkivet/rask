@@ -8,17 +8,18 @@ data-plane request — an endpoint that accepts the connection and never answers
 instead of failing the vend.
 """
 
-from typing import Any
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from lakehouse.storage.client import aws_session
 
 
-# Public alias for the boto3 STS client. `boto3-stubs` is a development dependency with its `s3` extra only, so no STS stub is
-# installed and this resolves to `Any` at the type level; callers get a name without reaching into `mypy_boto3_sts`.
-type STSClient = Any
+if TYPE_CHECKING:
+    from mypy_boto3_sts.client import STSClient
 
 
-def sts_client(*, region: str, endpoint: str | None = None) -> Any:  # noqa: ANN401 — boto3 client has no public stub
+def sts_client(*, region: str, endpoint: str | None = None) -> STSClient:
     """Build an unsigned boto3 STS client for AWS or an S3-compatible store's STS endpoint (RustFS/Ceph).
 
     ``endpoint`` ``None`` leaves botocore to resolve the regional AWS endpoint; a self-hosted store
@@ -49,7 +50,4 @@ def sts_client(*, region: str, endpoint: str | None = None) -> Any:  # noqa: ANN
     return aws_session().client("sts", region_name=region, endpoint_url=endpoint, config=cfg)
 
 
-__all__ = [
-    "STSClient",
-    "sts_client",
-]
+__all__ = ["sts_client"]

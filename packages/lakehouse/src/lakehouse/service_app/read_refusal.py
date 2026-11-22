@@ -19,7 +19,7 @@ from typing import NoReturn
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 
-class ReadRefusedError(Exception):
+class _ReadRefusedError(Exception):
     """Raised into the app from the read a layer refused, to stop it; the layer that refused swallows it."""
 
 
@@ -36,18 +36,18 @@ class ReadRefusal:
         """Send the refusal, unless the app has begun its answer, and stop the app's read.
 
         Raises:
-            ReadRefusedError: Always, into the app.
+            _ReadRefusedError: Always, into the app.
         """
         if not self._started:
             self._refused = True
             await self._answer(self._send)
-        raise ReadRefusedError
+        raise _ReadRefusedError
 
     async def run(self, app: ASGIApp, scope: Scope, receive: Receive) -> None:
         """Run ``app`` on the request, its body read through ``receive``; what it sends after a refusal is dropped."""
         try:
             await app(scope, receive, self._sent)
-        except* ReadRefusedError:
+        except* _ReadRefusedError:
             # Handed back grouped by a function middleware's task group, hence `except*`. Another layer's refusal, or
             # one with no answer sent, goes on up.
             if not self._refused:
@@ -60,4 +60,4 @@ class ReadRefusal:
         await self._send(message)
 
 
-__all__ = ["ReadRefusal", "ReadRefusedError"]
+__all__ = ["ReadRefusal"]

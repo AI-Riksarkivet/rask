@@ -15,10 +15,6 @@ overview see [Packages → Storage](../packages/storage.md).
 
 ::: lakehouse.storage.errors
 
-## Listing and retention
-
-::: lakehouse.storage.s3
-
 ## URI helpers
 
 ::: lakehouse.storage.uri

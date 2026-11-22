@@ -71,3 +71,6 @@ def _outside_the_table(ds: FragmentCarrier, gathered: CompactionBases, table_loc
         log.warning("compaction_data_file_bases_unread", extra={"location": table_location, "error": str(exc)})
         through = None
     return CompactionBases(bases=[base for base in gathered.bases if not _own(table_location, base.path)], data_resolves_through_a_base=through)
+
+
+__all__ = ["compaction_refusal"]

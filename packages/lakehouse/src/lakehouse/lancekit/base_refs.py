@@ -24,6 +24,12 @@ __all__ = [
 ]
 
 
+# PUBLIC because the catalog and maintenance compare spellings of one store's paths with it. It drops
+# the scheme and the edge slashes and decodes nothing, so two spellings of one path that differ in
+# percent-encoding compare equal only as :func:`decoded_path`, the form every base-reference verdict
+# here and the sweep's trash exclusion compare and key in ([[LH-318]]).
+# Re-implementing the compare at the call site is how a guard silently never matches, which this
+# function's own docstring names as the failure mode indistinguishable from having no guard at all.
 def normalise(uri: str) -> str:
     """Compare paths, not spellings: drop the scheme and any trailing slash.
 
@@ -40,15 +46,6 @@ def normalise(uri: str) -> str:
     without_scheme = uri.split("://", 1)[-1]
     return without_scheme.strip("/")
 
-
-#: PUBLIC because the catalog and maintenance compare spellings of one store's paths with it. It drops
-#: the scheme and the edge slashes and decodes nothing, so two spellings of one path that differ in
-#: percent-encoding compare equal only as :func:`decoded_path`, the form every base-reference verdict
-#: here and the sweep's trash exclusion compare and key in ([[LH-318]]).
-#: Re-implementing the compare at the call site is how a guard silently never matches, which this
-#: function's own docstring names as the failure mode indistinguishable from having no guard at all.
-#: The private alias stays so the in-module call sites read unchanged.
-_normalise = normalise
 
 #: Path segments that name no object of their own. `..` is the one that matters: pylance 12.0.0
 #: resolves ``<attacker>/../victim`` on a local root, and the attacker then reads the victim's rows
@@ -87,7 +84,7 @@ def _decoded_once(segment: str) -> str | None:
 
 def decoded_segments(uri: str) -> list[str] | None:
     """The segments of ``uri``'s path as pylance opens them, or ``None`` when it names no location (:func:`names_a_location`)."""
-    path = _normalise(uri)
+    path = normalise(uri)
     if not path:
         return None
     segments: list[str] = []
@@ -116,7 +113,7 @@ def decoded_path(uri: str) -> str:
     where it is, and every predicate here already answers it as naming nothing.
     """
     segments = decoded_segments(uri)
-    return _normalise(uri) if segments is None else "/".join(segments)
+    return normalise(uri) if segments is None else "/".join(segments)
 
 
 def names_a_location(uri: str) -> bool:
