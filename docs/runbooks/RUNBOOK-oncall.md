@@ -124,7 +124,11 @@ replay it ([DLQ parking](#dlq-parking--a-delivery-gave-up)). The bus, the secret
 store are reported in `components` the same way and never gate.
 
 **Diagnose.** Catalog pod health and logs; whether the catalog created the provenance namespace at boot (it
-retries until it holds); a 403 from the catalog means lineage's subject is not among `LANCE_PROVENANCE_WRITERS`
+retries until it holds, and every failed try is a `provenance_namespace_error` WARN line, with a traceback when the
+failure changes, and a `kind`: `outage` for the store or OpenFGA not answering, `fault` for anything else, such as a
+store refusing the catalog's credential or a policy record at the namespace's
+key that no reader can parse, which the policy door replaces; `CatalogEstateNamespacesFaulting` and
+`CatalogEstateNamespacesWaitingOnADependency` page on them); a 403 from the catalog means lineage's subject is not among `LANCE_PROVENANCE_WRITERS`
 or its projected `rask-catalog` token (`RASK_CATALOG_IDENTITY_TOKEN_FILE`) is not mounted.
 
 **Act.** Restore the catalog; lineage returns to Ready on its own and the bus redelivers. Replay what was parked
@@ -552,6 +556,9 @@ is `kubectl logs deploy/rask-maintenance-worker -c worker`).
   and the `control_emit_withheld_unsigned` and `control_publish_failed` logs.
 - `ControlEmitFailing` (warning): control emits have failed at the bus for 15 minutes and wait staged. First check:
   the bus.
+- `MaintenanceLineageEmitFailing` (warning): a maintenance pass's lineage event did not reach the bus (`reason`:
+  `unsigned` or `publish`). First check: the worker's `maintenance_event_withheld_unsigned` or
+  `maintenance_publish_failed` log, then the bus.
 - `LakehouseTimerFailing` (warning): a timer's work has raised on every window a replica claimed, none returning, for 20 minutes. First check: the
   service's `timer_work_failed` log.
 - `LineageForwardStalled`, `LineageForwardRefused` (warnings): the forwarder cannot reach the graph backend, or the
@@ -586,6 +593,11 @@ is `kubectl logs deploy/rask-maintenance-worker -c worker`).
   write load; then scale its replicas or raise `LANCE_MAX_CONCURRENT_WRITES`, watching pod memory.
 - `CatalogListingLoadReachedInteractiveFrequency` (warning): namespace, table or warehouse listing above 1 request/s for
   30 minutes. Nothing is broken: re-read the per-route rates against ADR 0217's parked query store (decision 3).
+- `CatalogEstateNamespacesFaulting` (warning): the catalog's estate-namespaces task has failed every try for 10 minutes
+  on a fault no wait clears; `CatalogEstateNamespacesWaitingOnADependency` (warning): for 30 minutes on the store or
+  OpenFGA not answering. The catalog keeps serving; where the provenance namespace exists nothing else is affected,
+  and on a fresh estate lineage restarts until it exists (its boot waits 120 s for its tables). First check: the
+  catalog's `provenance_namespace_error` lines (see [Lineage not ready](#lineage-not-ready--catalog-unreachable)).
 - `CommittedFilesUnrecorded` (warning): a one-call commit's added files could not be recorded on the control root, so
   maintenance never checks them. First check: the `committed_files_unrecorded` ERROR line (location, version, the
   store's error), then the object store.

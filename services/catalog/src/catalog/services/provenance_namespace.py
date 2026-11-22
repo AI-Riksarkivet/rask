@@ -42,7 +42,7 @@ import logging
 from collections.abc import Callable, Sequence
 
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import CreateNamespaceRequest, LanceNamespace, NamespaceAlreadyExistsError
+from lance_namespace import ConcurrentModificationError, CreateNamespaceRequest, LanceNamespace, NamespaceAlreadyExistsError
 from openfga_sdk import OpenFgaClient
 
 from catalog.core import native
@@ -143,11 +143,18 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
     canonical = fga_ids.canonical_object_id(segments)
     # The `dir` backend refuses an existing namespace in every create mode, `exist_ok` included (measured on pylance
     # 13.0.0, where the spec's ExistOk would keep it), so keeping one is catching that refusal, and a kept namespace keeps
-    # the uuid it was created with ([[LH-519]]).
+    # the uuid it was created with ([[LH-519]]). Two replicas booting on a store that does not hold it yet race on the
+    # create. The directory catalog fails an operation whose manifest entry a concurrent operation writes
+    # (`lance_docs/ns_catalog/catalog/dir/index.md` § Manifest Table Commits) and names error code 14,
+    # ConcurrentModification, for a concurrent creation attempt (`supported-catalogs/lance-dir.md` § DeclareTable; its
+    # § CreateNamespace lists only codes 2, 1 and 13). pylance 14.0.3 answers the loser of CreateNamespace with it too:
+    # `ConcurrentModificationError`, "Object '…' was concurrently created by another operation" (measured 2026-11-22 over
+    # moto, 10 of 10 two-replica rounds). The winner's namespace is kept the same way; either way its uuid is read next,
+    # which fails if no namespace is there after all.
     try:
         await run_in_threadpool(native.call, ns, "create_namespace", CreateNamespaceRequest(id=segments, properties=with_minted_uuid(None)))
         kept = False
-    except NamespaceAlreadyExistsError:
+    except (NamespaceAlreadyExistsError, ConcurrentModificationError):
         kept = True
     namespace_uuid = await run_in_threadpool(object_uuids.require_namespace_uuid, ns, segments)
     await run_in_threadpool(

@@ -18,16 +18,22 @@ import io
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
+from functools import partial
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
+from botocore.exceptions import ClientError
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import InternalError, LanceNamespace
+from lance_namespace import ConcurrentModificationError, DescribeNamespaceRequest, InternalError, LanceNamespace, connect
 
+from catalog.core.config import Settings
+from lakehouse.records import maintenance_policies
+from lakehouse.records.record_store import put_record, record_key
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event, served_relay_tick
 
 
@@ -154,55 +160,176 @@ def test_a_tick_fails_when_its_wire_is_missing(
     assert _faulted(caplog, wire), caplog.text
 
 
-#: What a `dir` connection that has opened its index answers when the store then stops answering: the backend's Debug
-#: form of the IO failure, under the spec's InternalError (its shape as measured on pylance 14.0.3 over moto stopped
-#: after a read: the staleness check's prefix and the store's IO source, here with a refused connection's text).
-_CACHED_CONNECTION_OUTAGE = (
-    'Internal error: Failed to check dataset staleness: IO { source: Generic { store: "S3", source: Reqwest { retries: 0, '
-    "max_retries: 0, elapsed: 2ms, retry_timeout: 1s, source: reqwest::Error { kind: Request, "
-    'source: hyper_util::client::legacy::Error(Connect, "error sending request") } } } }'
+#: The provenance namespace the estate-namespaces task keeps, with the retention the chart declares by default.
+_PROVENANCE = {"provenance_namespace": "lance_catalog$provenance", "provenance_retain_versions": 20}
+#: What a `dir` connection that has opened its index answers when the store throttles it: the backend's Debug form of
+#: the store's 429 under the spec's InternalError. Measured 2026-11-22 on pylance 14.0.3, a proxy in front of moto
+#: answering every request 429 `TooManyRequests` after the connection made the estate warehouse's row.
+_OPENED_CONNECTION_THROTTLED = (
+    'Internal error: Failed to check dataset staleness: IO { source: Generic { store: "S3", source: RetryError(RetryErrorImpl { method: HEAD, '
+    "uri: Some(http://127.0.0.1:37297/lance-moto/root429/__manifest/_versions/18446744073709551613.manifest), retries: 0, max_retries: 0, "
+    'elapsed: 546.224µs, retry_timeout: 5s, inner: Status { status: 429, body: Some("") } }) }, location: Location { file: '
+    '"/home/runner/work/lance/lance/rust/lance-table/src/io/commit.rs", line: 933, column: 29 }, backtrace: MaybeBacktrace }'
 )
 
 
-@pytest.mark.parametrize(
-    ("raised", "retried"),
-    [
-        pytest.param(_CACHED_CONNECTION_OUTAGE, True, id="a-store-outage-on-an-open-connection-is-retried"),
-        pytest.param("Internal error: the index holds a row no reader can parse", False, id="any-other-internal-error-ends-the-task"),
-    ],
-)
-def test_the_estate_namespaces_task_retries_only_a_store_outage(
-    real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, raised: str, retried: bool
-) -> None:
-    """The boot task outlasts a store the catalog's open connection can no longer reach, and ends on a permanent fault."""
+class _Tries:
+    """The task's failed-tries counter, holding what each add counted; ``repair`` runs at the ``repair_at``-th counted try,
+    as an operator would."""
+
+    def __init__(self, repair: Callable[[], object] = lambda: None, *, repair_at: int = 1) -> None:
+        self.counted: list[dict[str, str]] = []
+        self._repair = repair
+        self._repair_at = repair_at
+
+    def add(self, amount: int, attributes: dict[str, str]) -> None:
+        if amount:
+            self.counted.append(attributes)
+            if len(self.counted) == self._repair_at:
+                self._repair()
+
+
+def _declaring_provenance(app: FastAPI, monkeypatch: pytest.MonkeyPatch) -> Settings:
+    """The app's settings, naming the provenance namespace and its retention, as the task reads them."""
+    declared = app.state.settings.model_copy(update=_PROVENANCE)
+    assert isinstance(declared, Settings)
+    monkeypatch.setattr(app.state, "settings", declared)
+    return declared
+
+
+def _held_tries(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, tries: _Tries) -> Callable[[], object]:
+    """Run the estate-namespaces task on ``real_ns_client``'s app with no wait between tries, counting into ``tries``."""
     from catalog import main
-    from catalog.services import warehouses
 
     app = real_ns_client.app
     assert isinstance(app, FastAPI)
-    assert real_ns_client.portal is not None
-    keep = warehouses.ensure_catalog_row
-    calls: list[str] = []
-
-    def once_failing(ns: LanceNamespace, warehouse_id: str) -> None:
-        calls.append(warehouse_id)
-        if len(calls) == 1:
-            raise InternalError(raised)
-        keep(ns, warehouse_id)
-
-    monkeypatch.setattr(warehouses, "ensure_catalog_row", once_failing)
+    portal = real_ns_client.portal
+    assert portal is not None
     monkeypatch.setattr(main, "_PROVENANCE_RETRY_FIRST_SECONDS", 0.0)
+    monkeypatch.setattr(main, "_failed_tries", tries)
 
     async def run() -> object:
         return await main._ensure_estate_namespaces(app)
 
-    if retried:
-        real_ns_client.portal.call(run)
-        assert len(calls) == 2
-    else:
-        with pytest.raises(InternalError):
-            real_ns_client.portal.call(run)
-        assert len(calls) == 1
+    return partial(portal.call, run)
+
+
+def _provenance_uuid(settings: Settings) -> str:
+    properties = connect("dir", {"root": settings.root}).describe_namespace(DescribeNamespaceRequest(id=["lance_catalog", "provenance"])).properties or {}
+    return properties["rask.uuid"]
+
+
+def _logged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, bool]]:
+    """Each ``provenance_namespace_error`` line's kind, and whether it carries a traceback."""
+    return [(getattr(record, "kind", ""), record.exc_info is not None) for record in caplog.records if record.getMessage() == "provenance_namespace_error"]
+
+
+def test_the_estate_namespaces_task_keeps_the_namespace_another_replica_created_first(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Two replicas booting on a fresh store race on the create: the `dir` backend answers the loser that the namespace
+    "was concurrently created by another operation" (measured 2026-11-22, pylance 14.0.3 over moto, 10 of 10 rounds), and
+    the loser keeps the namespace the winner made, as it keeps one that already exists."""
+    from catalog.core import native
+
+    app = real_ns_client.app
+    assert isinstance(app, FastAPI)
+    settings = _declaring_provenance(app, monkeypatch)
+    tries = _Tries()
+    task = _held_tries(real_ns_client, monkeypatch, tries)
+    task()
+    created = _provenance_uuid(settings)
+    keep, raced = native.call, []
+
+    def losing_the_race(ns: LanceNamespace, method_name: str, *args: object) -> object:
+        if method_name == "create_namespace" and not raced:
+            raced.append(method_name)
+            raise ConcurrentModificationError("Concurrent modification: Object 'lance_catalog$provenance' was concurrently created by another operation")
+        return keep(ns, method_name, *args)
+
+    monkeypatch.setattr(native, "call", losing_the_race)
+
+    task()
+
+    assert (raced, tries.counted, _provenance_uuid(settings)) == (["create_namespace"], [], created)
+
+
+def test_the_estate_namespaces_task_holds_on_a_record_it_cannot_read_until_it_is_repaired(
+    real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A stored record at the provenance namespace's policy key that is no namespace policy is a fault every replica
+    meets on every boot: the task holds, counting each try as a fault and logging the traceback once for the same
+    failure, and the replica serves on, with the policy door that repairs the record; once it is removed, the next try
+    keeps the declared retention."""
+    app = real_ns_client.app
+    assert isinstance(app, FastAPI)
+    settings = _declaring_provenance(app, monkeypatch)
+    root, options = settings.registry_root, settings.storage_options()
+    _held_tries(real_ns_client, monkeypatch, _Tries())()
+    namespace_uuid = _provenance_uuid(settings)
+    put_record(root, options, record_key(maintenance_policies.PREFIX, "namespace", namespace_uuid), record={"kind": "table", "note": "no namespace policy"})
+    tries = _Tries(partial(maintenance_policies.delete_policy, root, options, "namespace", key=namespace_uuid), repair_at=2)
+    task = _held_tries(real_ns_client, monkeypatch, tries)
+
+    with caplog.at_level(logging.WARNING):
+        task()
+
+    kept = maintenance_policies.get_policy(root, options, "namespace", key=namespace_uuid)
+    fault = {"lance.catalog.kind": "fault"}
+    assert (tries.counted, _logged(caplog), kept.settings.retain_versions if kept else None) == ([fault, fault], [("fault", True), ("fault", False)], 20)
+
+
+def _answered(status: int, code: str) -> ClientError:
+    """The S3 client's report of a store that answered ``status``."""
+    answer: Any = {"Error": {"Code": code, "Message": code}, "ResponseMetadata": {"HTTPStatusCode": status}}
+    return ClientError(answer, "PutObject")
+
+
+def _reworded(cause: Exception) -> OSError:
+    """A record seam's ``OSError``, chained to the client's own failure as `record_store` chains it."""
+    try:
+        raise OSError("the store refused writing the record") from cause
+    except OSError as reworded:
+        return reworded
+
+
+@pytest.mark.parametrize(
+    ("raised", "kind"),
+    [
+        pytest.param(InternalError(_OPENED_CONNECTION_THROTTLED), "outage", id="a-429-on-an-opened-connection"),
+        pytest.param(_answered(503, "ServiceUnavailable"), "outage", id="a-503-the-s3-client-reports"),
+        pytest.param(ConnectionRefusedError(111, "Connection refused"), "outage", id="a-connection-refused"),
+        pytest.param(_reworded(_answered(503, "SlowDown")), "outage", id="a-seam-rewording-a-503"),
+        pytest.param(_answered(403, "AccessDenied"), "fault", id="a-403-the-s3-client-reports"),
+        pytest.param(
+            OSError("LanceError(IO): Generic S3 error: Error performing list request: Server returned non-2xx status code: 403 Forbidden"),
+            "fault",
+            id="a-403-on-a-fresh-connection",
+        ),
+    ],
+)
+def test_the_estate_namespaces_task_counts_a_failed_try_by_whether_a_dependency_answered(
+    real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, raised: Exception, kind: str
+) -> None:
+    """A failed try is retried whatever it is, and counted as an outage only where the store or OpenFGA did not answer (no
+    response, a 5xx, a 429 rate limit); a store that answered with a refusal is a fault."""
+    from catalog.services import warehouses
+
+    keep = warehouses.ensure_catalog_row
+    calls: list[str] = []
+
+    def failing_once(ns: LanceNamespace, warehouse_id: str) -> None:
+        calls.append(warehouse_id)
+        if len(calls) == 1:
+            raise raised
+        keep(ns, warehouse_id)
+
+    monkeypatch.setattr(warehouses, "ensure_catalog_row", failing_once)
+    tries = _Tries()
+    task = _held_tries(real_ns_client, monkeypatch, tries)
+
+    with caplog.at_level(logging.WARNING):
+        task()
+
+    assert (len(calls), tries.counted, _logged(caplog)) == (2, [{"lance.catalog.kind": kind}], [(kind, True)])
 
 
 @pytest.mark.parametrize(

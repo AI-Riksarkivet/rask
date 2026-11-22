@@ -266,6 +266,26 @@ groups:
             still be staged in the outbox, `derive` means its run id could not be derived while the catalog's key was away.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
+      # THE MAINTENANCE TWIN OF THE RULE ABOVE: a pass's lineage event describes a committed reclamation, so one that did
+      # not reach the bus leaves the feed under-reporting work that happened, and its log line alone reaches no alert.
+      # Every reason's series exists at 0 from the emitter's start (`maintenance.core.metrics.create_lineage_emit_series`),
+      # so the first failure is an increase the rate reads; the `for:` is the catalog twin's, for the same reason.
+      - alert: MaintenanceLineageEmitFailing
+        expr: sum(rate(maintenance_lineage_emit_failed_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+          service: maintenance
+        annotations:
+          summary: "Maintenance passes are reclaiming without recording their provenance"
+          description: >-
+            A maintenance pass committed its reclamation and its lineage event did not reach the bus, so lineage's feed
+            does not record that the pass happened. Read the `reason` label — `unsigned` means the worker had no signing
+            key or no canonical form for the event, `publish` means the publish failed and the event may still be staged
+            in the outbox — and the worker's `maintenance_event_withheld_unsigned` or `maintenance_publish_failed` log
+            lines for the table.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
       # LH-497: the commit is the outbox. A find is a write whose own announcement was lost between its commit and its
       # staging, which the catalog's commit reconcile has just announced from the version log: the feed now holds it, and a
       # pipeline following `/events` was late to hear of it. Any find pages, as the closes-when of the row asks.
@@ -657,6 +677,52 @@ groups:
             load-shedding) for 15m — it is persistently over capacity, not just riding out a burst. Scale
             catalog replicas or raise LANCE_MAX_CONCURRENT_WRITES (watch the pod memory: each write buffers
             up to 256MiB). Runbook: docs/runbooks/RUNBOOK-oncall.md
+
+      # THE CATALOG'S ESTATE-NAMESPACES TASK HOLDS INSTEAD OF ENDING THE REPLICA (ADR 0203, 2026-11-22): it keeps the
+      # estate warehouse's row and the provenance namespace from the replica's start, retrying every failed try with a
+      # doubling wait capped at 60 s, so a held task fails at least once a minute and the 5m rate stays above 0 while it
+      # holds. Every try is counted by `lance_catalog_kind`, each series at 0 from the task's start, so the first failure
+      # is an increase. A `fault` is one no wait clears (a record no reader can parse, a refused credential, a defect):
+      # the 10m `for:` outlasts the 5m window, so a try that failed once and then held does not page, and a fault still
+      # failing after it is one a person clears. An `outage` is a dependency not answering (the store, its key pair or
+      # OpenFGA), which shows first as NotReady catalog pods and the store's own rules (`LanceObjectStore*`) and which a
+      # starting estate waits out, so it waits the 30m its neighbours give a blocked reconcile.
+      - alert: CatalogEstateNamespacesFaulting
+        expr: sum(rate(catalog_estate_namespaces_failed_total{lance_catalog_kind="fault"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "The catalog cannot keep the provenance namespace: a fault no wait clears"
+          description: >-
+            The catalog's estate-namespaces task has failed every try for 10m on a fault no wait clears: a
+            store that answered with a refusal (a refused or expired credential, a missing bucket), a
+            record it cannot read (the provenance namespace's maintenance policy among them), or a defect.
+            The catalog keeps serving. Where the provenance namespace already exists, what the task keeps
+            on it (its protection, declared retention and writers' grants) is not reasserted and nothing
+            else is affected; on a fresh estate lineage's boot gives up waiting for its tables after 120
+            s, so lineage restarts until the namespace exists. Read the catalog's
+            `provenance_namespace_error` WARN lines with `kind=fault` for the error and its traceback.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#lineage-not-ready--catalog-unreachable
+
+      - alert: CatalogEstateNamespacesWaitingOnADependency
+        expr: sum(rate(catalog_estate_namespaces_failed_total{lance_catalog_kind="outage"}[5m])) > 0
+        for: 30m
+        labels:
+          severity: warning
+          service: catalog
+        annotations:
+          summary: "The catalog has waited 30m on the store or OpenFGA to keep the provenance namespace"
+          description: >-
+            The catalog's estate-namespaces task has failed every try for 30m because a dependency did not
+            answer: the object store (no response, a 5xx or its rate limit), its credential not yet
+            confirmed, or OpenFGA. The catalog keeps serving. Where the provenance namespace already
+            exists, what the task keeps on it is not reasserted and nothing else is affected; on a fresh
+            estate lineage restarts until the namespace exists. Read the catalog's
+            `provenance_namespace_error` WARN lines with `kind=outage` for which dependency, then that
+            dependency's own alerts. Runbook:
+            docs/runbooks/RUNBOOK-oncall.md#lineage-not-ready--catalog-unreachable
 
       # THE TRIPWIRE FOR ADR 0217 (decision 3), so the threshold re-reads itself. That decision parks a query store on a
       # NUMBER rather than a ruling: no listing cache exists because listing load is nowhere near

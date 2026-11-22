@@ -32,6 +32,12 @@ The NATIVE namespace backend says the same in another dialect: it raises a typed
     503 on every request         "IO { source: Generic { store: "S3", source: RetryError(... inner: Status { status: 503, ..."
     403 on every request         "IO { source: PermissionDenied { path: ..., ... inner: Status { status: 403, ..."
 
+Measured again on pylance 14.0.3 (2026-11-22), a proxy in front of moto answering every request with the status after a
+`dir` connection made a row, so the connection had opened its index: a 429 `TooManyRequests` raises the spec's
+``InternalError`` "Internal error: Failed to check dataset staleness: IO { source: Generic { store: "S3", source:
+RetryError(RetryErrorImpl { method: HEAD, ..., inner: Status { status: 429, body: Some("") } }) }, ...", and on a fresh
+connection the flattened "... - Server returned non-2xx status code: 429 Too Many Requests: ...".
+
 The catalog's own reads and writes of a table's objects go through pyarrow's S3 filesystem (aws-sdk-cpp), a third
 dialect: ``When <doing what> ... in bucket '<b>': AWS Error <CODE> during <Operation> operation: <message>``. Measured on
 pyarrow 25.0.0 against a store answering each fault to a HEAD, a multipart PUT and a listing ([[LH-545]]):
@@ -47,10 +53,11 @@ is a ``ConnectionError`` or an ``HTTPClientError`` (no connection, a connect or 
 closed), and an answer is a ``ClientError`` carrying the status. A seam that answers every store failure as an
 ``OSError`` chains the client's own (``raise ... from exc``), so the cause is read where the failure itself says nothing.
 
-The transport failures and the 5xx are outages. A 4xx is NOT: the store answered, and what it said (no
-such bucket, access denied) will be said again on retry, so it stays the fault it is rather than
-becoming a 503 that invites a retry loop against a misconfiguration. The native 403 is excluded twice
-over: its source is `PermissionDenied`, not `Generic`, and its status is not a 5xx.
+The transport failures, the 5xx and a 429 are outages. A 429 is the store's rate limit: it answered "not now", which a
+retry after a wait is for, in every dialect above. Any other 4xx is NOT: the store answered, and what it said (no such
+bucket, access denied, an expired token) will be said again on retry, so it stays the fault it is rather than becoming
+a 503 that invites a retry loop against a misconfiguration. The native 403 is excluded twice over: its source is
+`PermissionDenied`, not `Generic`, and its status is neither a 5xx nor a 429.
 """
 
 from __future__ import annotations
@@ -76,6 +83,10 @@ _SERVER_ERROR_MARKERS = (
     "AWS Error SERVICE_UNAVAILABLE",
     "AWS Error SLOW_DOWN",
 )
+#: The store answered with its rate limit, a 429, in each dialect's words.
+_THROTTLED_MARKERS = ("non-2xx status code: 429", "inner: Status { status: 429", "(HTTP status 429)")
+#: Every way the store did not answer the call itself: no response, a server error or its rate limit.
+_NO_ANSWER_MARKERS = _TRANSPORT_MARKERS + _SERVER_ERROR_MARKERS + _THROTTLED_MARKERS
 
 
 def reads_as_store_outage(exc: BaseException) -> bool:
@@ -84,7 +95,7 @@ def reads_as_store_outage(exc: BaseException) -> bool:
     Anything not recognised reads as NOT an outage, so it keeps the status it already had.
     """
     message = str(exc)
-    if any(marker in message for marker in _IO_MARKERS) and any(marker in message for marker in _TRANSPORT_MARKERS + _SERVER_ERROR_MARKERS):
+    if any(marker in message for marker in _IO_MARKERS) and any(marker in message for marker in _NO_ANSWER_MARKERS):
         return True
     if _s3_client_got_no_answer(exc):
         return True
@@ -92,7 +103,7 @@ def reads_as_store_outage(exc: BaseException) -> bool:
 
 
 def _s3_client_got_no_answer(exc: BaseException) -> bool:
-    """Whether ``exc`` is the S3 client's own report of no response, or of a 5xx one."""
+    """Whether ``exc`` is the S3 client's own report of no response, or of a 5xx or 429 one."""
     from botocore.exceptions import ClientError, HTTPClientError
     from botocore.exceptions import ConnectionError as NoConnectionError
 
@@ -102,7 +113,7 @@ def _s3_client_got_no_answer(exc: BaseException) -> bool:
         return False
     status = int(exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") or 0)
     # 501 is the store answering that it lacks what was asked (a conditional write it does not implement), which no retry clears.
-    return status >= 500 and status != HTTPStatus.NOT_IMPLEMENTED
+    return status == HTTPStatus.TOO_MANY_REQUESTS or (status >= 500 and status != HTTPStatus.NOT_IMPLEMENTED)
 
 
 def store_refusal(exc: BaseException, *, reading: str, so: str) -> ServiceUnavailableError | InternalError:

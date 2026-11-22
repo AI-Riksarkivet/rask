@@ -13,13 +13,13 @@ import os
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager, suppress
 from functools import partial
-from typing import Final
+from typing import Final, Literal, get_args
 
-from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespace, LanceNamespaceError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
+from opentelemetry import metrics
 from starlette.middleware import Middleware
 
 from catalog.api.authz import decisions
@@ -61,7 +61,6 @@ from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.factory import build_service_app
 from lakehouse.storage.conditional_records import RecordChangedError
-from lakehouse.storage.errors import StorageError
 from lakehouse.storage.objectfs import store_dependency
 from lakehouse.storage.store_session import require_env_pair, start_store_session
 
@@ -73,55 +72,80 @@ PROBLEM_JSON = "application/problem+json"
 #: The backoff of the provenance namespace's boot task: doubling from the first delay, capped at the second.
 _PROVENANCE_RETRY_FIRST_SECONDS = 1.0
 _PROVENANCE_RETRY_MAX_SECONDS = 60.0
-#: What the provenance namespace's boot task outlasts: the store, its key pair or OpenFGA not answering yet. Read from
-#: what its steps raise: an unanswered OpenFGA, a store credential not yet confirmed and a store that did not take the
-#: connection are ``ServiceUnavailableError`` (`fga_resilience.guarded`, `StoreCredentialUnavailableError`,
-#: `namespace._connected`); a record read or write the store failed is ``OSError`` or botocore's (`record_store`,
-#: `conditional_records`), or a ``StorageError`` for a pair not yet whole; a record another replica changed meanwhile
-#: is ``RecordChangedError``. A connection that has already opened its index answers a store that then stops answering
-#: under the spec's ``InternalError`` with the store's IO text (measured on pylance 14.0.3 over moto stopped after a
-#: read), so a namespace error is an outage where its text reads as one (`reads_as_store_outage`). Anything else (a
-#: refused input, a namespace the configuration names under no parent, a defect) is permanent, so it ends the task, and
-#: the supervisor the process, where a crash-loop shows it.
-_PROVENANCE_TRANSIENT: Final = (ServiceUnavailableError, OSError, ClientError, BotoCoreError, StorageError, RecordChangedError)
+#: What the boot task reads as an OUTAGE by type alone, a dependency that did not answer: an unanswered OpenFGA, a store
+#: credential not yet confirmed and a store that did not take the connection are ``ServiceUnavailableError``
+#: (`fga_resilience.guarded`, `StoreCredentialUnavailableError`, `namespace._connected`); a record another replica changed
+#: meanwhile is ``RecordChangedError``; a socket refused or timed out is Python's ``ConnectionError`` or ``TimeoutError``.
+#: Any other failure is an outage only where it SAYS the store did not answer (`reads_as_store_outage`: no response, a
+#: 5xx or a 429, in the native backend's, pylance's, pyarrow's or botocore's words, read through ``__cause__`` where a
+#: seam re-raised the client's error), and otherwise a FAULT: a store that answered 403 or 404 (a refused or expired
+#: credential, a missing bucket), a record no reader can parse, a defect. The kind is told only on the log line and the
+#: counter, never in what the task does, so an operator pages on a fault sooner than on a dependency still starting.
+_OUTAGE_TYPES: Final = (ServiceUnavailableError, RecordChangedError, ConnectionError, TimeoutError)
+#: How much of a failure's text a log line carries, as the catalog's other failure lines do.
+_ERROR_TEXT_CHARS: Final = 300
+
+_failed_tries = metrics.get_meter("lance.catalog").create_counter(
+    "catalog.estate_namespaces.failed",
+    unit="{try}",
+    description="Failed tries of the catalog's estate-namespaces boot task (the estate warehouse's row and the provenance "
+    "namespace), each retried, by kind: `outage` (the store or OpenFGA did not answer) or `fault` (anything else: an "
+    "answer refusing the call, a record no reader can parse, a defect).",
+)
+#: The kind of a failed try, each a series of `catalog.estate_namespaces.failed`.
+type _TryFailure = Literal["outage", "fault"]
+
+
+def _failure_kind(exc: Exception) -> _TryFailure:
+    """Whether a failed try of the boot task met a dependency that did not answer, or a fault no wait clears."""
+    if isinstance(exc, _OUTAGE_TYPES) or reads_as_store_outage(exc):
+        return "outage"
+    return "fault"
 
 
 async def _ensure_estate_namespaces(app: FastAPI) -> None:
-    """Keep the estate's own warehouse row and the namespace lineage's feed and edge list live in, retrying until both hold.
-
-    The row first ([[LH-593]]): every name served from the estate's own root begins with the estate warehouse's id,
-    and the provenance namespace is one of them (`services.provenance_namespace`). Retried rather than tried once:
-    lineage writes nothing until the namespace exists and grants it `writer`, and the store or OpenFGA this needs may
-    still be starting when the catalog is. Every step is idempotent.
-
-    Its wires are read once, before the first try: one the lifespan did not set is no outage a retry outlasts, so it
-    ends the task, and the supervisor ends the process with it (`app_wire`). An authorization client missing where
-    authorization is on is retried as the outage it may be (`decisions.wired`), never read as off: a namespace made
-    with no grant would leave lineage unable to write its feed.
-
-    Only the outages in :data:`_PROVENANCE_TRANSIENT` are retried; any other failure is permanent and ends the task.
+    """Keep the estate warehouse's row and the provenance namespace, retrying every failed try until both hold (ADR 0203).
 
     Raises:
         InternalError: The lifespan wired no settings, no connections or no authorization client, not even its ``None``.
     """
     from catalog.services.provenance_namespace import ensure_provenance_namespace
 
+    # A wire the lifespan did not set is no failure a retry outlasts: read once, it ends the task, and the supervisor the
+    # process (`app_wire`). A missing authorization client where authorization is on is retried as the outage it may be
+    # (`decisions.wired`), never read as off: a namespace made with no grant would leave lineage unable to write its feed.
     settings = app_wire(app, "settings", Settings)
     connections = app_wire(app, "connections", NamespaceConnections)
     client = app_wire(app, "fga", OpenFgaClient, none_is_off=True)
+    for kind in get_args(_TryFailure.__value__):
+        # Each kind's series exists at 0 from the task's start, so the first failed try is an increase a rule reads.
+        _failed_tries.add(0, {"lance.catalog.kind": kind})
     delay = _PROVENANCE_RETRY_FIRST_SECONDS
+    previous: tuple[type[Exception], _TryFailure] | None = None
     while True:
         try:
+            # The row first ([[LH-593]]): every name served from the estate's own root, the provenance namespace's
+            # among them, begins with the estate warehouse's id. Every step is idempotent.
             namespace = await run_in_threadpool(connections.connection, settings)
             await run_in_threadpool(warehouses.ensure_catalog_row, namespace, settings.estate_warehouse)
             await ensure_provenance_namespace(namespace, settings, decisions.wired(settings, client))
             return
-        except _PROVENANCE_TRANSIENT as exc:
-            log.warning("provenance_namespace_error", extra={"error": str(exc), "retry_in_seconds": delay})
-        except LanceNamespaceError as exc:
-            if not reads_as_store_outage(exc):
-                raise
-            log.warning("provenance_namespace_error", extra={"error": str(exc), "retry_in_seconds": delay})
+        # THE TASK HOLDS on every failure of converging and never ends the replica, which is Ready and serving and whose
+        # readiness does not wait on it: ending it would take away a serving replica, and for a fault every replica
+        # meets, every replica and the policy door that repairs it. What is no ``Exception`` (a request to stop, a
+        # native panic) is not caught here.
+        except Exception as exc:  # noqa: BLE001 — logged and counted, then retried
+            kind = _failure_kind(exc)
+            _failed_tries.add(1, {"lance.catalog.kind": kind})
+            # The traceback on the first failure and on each change of type or kind, so a task held for hours repeats one
+            # line a minute, not one traceback a minute.
+            changed = (type(exc), kind) != previous
+            previous = (type(exc), kind)
+            log.warning(
+                "provenance_namespace_error",
+                extra={"error": str(exc)[:_ERROR_TEXT_CHARS], "error_type": type(exc).__name__, "kind": kind, "retry_in_seconds": delay},
+                exc_info=exc if changed else None,
+            )
         await asyncio.sleep(delay)
         delay = min(delay * 2, _PROVENANCE_RETRY_MAX_SECONDS)
 

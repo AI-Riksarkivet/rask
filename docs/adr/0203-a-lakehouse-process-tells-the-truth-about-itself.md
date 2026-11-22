@@ -130,3 +130,47 @@ another date is given:
   `packages/lakehouse/tests/test_shared_body_cap.py`.
 - The logs operators read change: `readyz_catalog_unavailable` is now `dependency_unavailable` naming the dependency,
   and a loop's end is `background_work_ended` (exit 70); `docs/runbooks/RUNBOOK-oncall.md` says what each means.
+
+## Amendment (2026-11-22): the catalog's estate-namespaces task holds, and is seen
+
+The catalog's estate-namespaces task (`catalog.main._ensure_estate_namespaces`: the estate warehouse's row, then the
+provenance namespace, its protection, its declared retention and its writers' grants) is a one-shot task of a replica
+that is already Ready and serving: readiness does not wait on it. It never ends the process for a failure it meets
+while converging. It retries every `Exception` with its doubling wait (1 s, capped at 60 s) until the steps hold, and
+each failed try is counted (`catalog.estate_namespaces.failed`, by `lance.catalog.kind`) and logged
+(`provenance_namespace_error`, WARNING, the error's text cut at 300 characters, with the traceback on the first failure
+and on each change of the failure's type or kind, so a task held for hours repeats one line a minute). The kind says
+whether a dependency answered: `outage` where it did not (a `ServiceUnavailableError` for OpenFGA, a store credential
+not yet confirmed or a connection not taken; a `RecordChangedError`; Python's `ConnectionError` or `TimeoutError`; or a
+failure `reads_as_store_outage` reads as no response, a 5xx or a 429, through `__cause__` where a seam re-raised the
+client's error), and `fault` for everything else, a store that answered 403 or 404 included. It is reported, never acted
+on: `CatalogEstateNamespacesFaulting` pages after 10 minutes and `CatalogEstateNamespacesWaitingOnADependency` after 30.
+Only what is no failure of converging ends it: a wire the lifespan did not set (read before the first try) and a
+`BaseException` that is no `Exception` (a request to stop, a native panic), which go to the supervisor as decision 1
+says.
+
+Why: ending the process takes away a serving replica, and, for a fault every replica meets, every replica and the policy
+door that would repair it. A reconcile loop that retries with backoff and reports is the shape a declarative estate
+converges by: when the fault clears, the next try lands what git declares. What a held task costs: the catalog keeps
+serving; where the provenance namespace already exists nothing else is affected (what the task keeps on it is only not
+reasserted); on a fresh estate lineage's boot gives up waiting for its tables after 120 s (`lineage.main._ensure_tables`)
+and lineage restarts until the namespace exists. Three measurements on pylance 14.0.3 over moto (2026-11-22), each of
+which ended a replica under the narrower rule:
+
+- Two replicas booting on a store without the provenance namespace race on `create_namespace`, and the `dir` backend
+  answers the loser `ConcurrentModificationError` ("Object 'lance_catalog$provenance' was concurrently created by
+  another operation"), in 10 of 10 rounds. The directory catalog's spec makes a concurrent write of the same manifest
+  entry fail the operation (`lance_docs/ns_catalog/catalog/dir/index.md` § Manifest Table Commits), and names error code
+  14, ConcurrentModification, for a concurrent creation attempt (`lance_docs/ns_catalog/namespace/supported-catalogs/
+  lance-dir.md` § DeclareTable; § CreateNamespace lists only codes 2, 1 and 13). pylance 14.0.3 answers it on
+  CreateNamespace too. The loser now keeps the winner's namespace, as it keeps one that exists
+  (`catalog.services.provenance_namespace`).
+- A record at the provenance namespace's policy key that is no namespace policy raises `MalformedPolicyError` on every
+  boot that declares a retention (the chart's default does), on every replica. The task now holds on it as a `fault`
+  while the policy door, which replaces the record, serves.
+- On a connection that has opened its index, a store answering 429, 403 or 400 `ExpiredToken` raises the spec's
+  `InternalError` with the store's status in its text (`inner: Status { status: 429, body: Some("") }`); on a fresh
+  connection the same three arrive as a bare `OSError` with pylance's flattened text (`non-2xx status code: 429 Too Many
+  Requests`). A 429 is the store's rate limit and now reads as an outage in every dialect (`lakehouse.problems.outage`),
+  so a door that meets it answers 503 and the task counts an `outage`; a 403 or 400 is a refused or expired credential,
+  which the next try meets again, so it is a `fault` on either connection.

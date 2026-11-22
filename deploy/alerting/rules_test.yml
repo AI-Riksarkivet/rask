@@ -2204,3 +2204,74 @@ tests:
             exp_annotations:
               summary: "The gateway counts no admitted audit record"
               description: "No `audit_records_admitted_total` series exists, so nothing compares the audit records the services emit with the ones that reach the trail. The gateway counts none (its audit pipeline has no counter, or admits nothing), or no audit record was emitted since the store's retention began."
+
+  # The catalog's estate-namespaces task held on a fault, failing a try every minute (its backoff's cap) → it pages
+  # after 10m, while an outage failing the same way has not yet waited its 30m.
+  - interval: 1m
+    input_series:
+      - series: 'catalog_estate_namespaces_failed_total{lance_catalog_kind="fault"}'
+        values: "0+1x40"
+      - series: 'catalog_estate_namespaces_failed_total{lance_catalog_kind="outage"}'
+        values: "0+1x40"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: CatalogEstateNamespacesFaulting
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: catalog
+            exp_annotations:
+              summary: "The catalog cannot keep the provenance namespace: a fault no wait clears"
+              description: "The catalog's estate-namespaces task has failed every try for 10m on a fault no wait clears: a store that answered with a refusal (a refused or expired credential, a missing bucket), a record it cannot read (the provenance namespace's maintenance policy among them), or a defect. The catalog keeps serving. Where the provenance namespace already exists, what the task keeps on it (its protection, declared retention and writers' grants) is not reasserted and nothing else is affected; on a fresh estate lineage's boot gives up waiting for its tables after 120 s, so lineage restarts until the namespace exists. Read the catalog's `provenance_namespace_error` WARN lines with `kind=fault` for the error and its traceback. Runbook: docs/runbooks/RUNBOOK-oncall.md#lineage-not-ready--catalog-unreachable"
+      - eval_time: 12m
+        alertname: CatalogEstateNamespacesWaitingOnADependency
+        exp_alerts: []
+      - eval_time: 35m
+        alertname: CatalogEstateNamespacesWaitingOnADependency
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: catalog
+            exp_annotations:
+              summary: "The catalog has waited 30m on the store or OpenFGA to keep the provenance namespace"
+              description: "The catalog's estate-namespaces task has failed every try for 30m because a dependency did not answer: the object store (no response, a 5xx or its rate limit), its credential not yet confirmed, or OpenFGA. The catalog keeps serving. Where the provenance namespace already exists, what the task keeps on it is not reasserted and nothing else is affected; on a fresh estate lineage restarts until the namespace exists. Read the catalog's `provenance_namespace_error` WARN lines with `kind=outage` for which dependency, then that dependency's own alerts. Runbook: docs/runbooks/RUNBOOK-oncall.md#lineage-not-ready--catalog-unreachable"
+
+  # One fault that the next try got past must NOT page: the series exists from the task's start and rises once.
+  - interval: 1m
+    input_series:
+      - series: 'catalog_estate_namespaces_failed_total{lance_catalog_kind="fault"}'
+        values: "0 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1"
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: CatalogEstateNamespacesFaulting
+        exp_alerts: []
+
+  # A maintenance pass's lineage event that did not reach the bus pages as the catalog's twin does.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_lineage_emit_failed_total{reason="publish"}'
+        values: "0+1x11"
+      - series: 'maintenance_lineage_emit_failed_total{reason="unsigned"}'
+        values: "0+0x11"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: MaintenanceLineageEmitFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: maintenance
+            exp_annotations:
+              summary: "Maintenance passes are reclaiming without recording their provenance"
+              description: "A maintenance pass committed its reclamation and its lineage event did not reach the bus, so lineage's feed does not record that the pass happened. Read the `reason` label — `unsigned` means the worker had no signing key or no canonical form for the event, `publish` means the publish failed and the event may still be staged in the outbox — and the worker's `maintenance_event_withheld_unsigned` or `maintenance_publish_failed` log lines for the table. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+
+  # A healthy worker must NOT page: every reason's series exists at 0 and stays flat.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_lineage_emit_failed_total{reason="publish"}'
+        values: "0+0x11"
+      - series: 'maintenance_lineage_emit_failed_total{reason="unsigned"}'
+        values: "0+0x11"
+    alert_rule_test:
+      - eval_time: 7m
+        alertname: MaintenanceLineageEmitFailing
+        exp_alerts: []
