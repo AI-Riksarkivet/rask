@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import lance
 import pytest
 
 
@@ -41,6 +42,21 @@ def catalog_env(monkeypatch: pytest.MonkeyPatch) -> None:
     config.get_settings.cache_clear()
 
 
+@pytest.fixture
+def empty_shared_session(catalog_env: None) -> lance.Session:
+    """The process's shared session, built anew so that its caches are empty.
+
+    The session is process-wide and bounded, so a long run in one process fills its metadata cache to the cap, and from
+    there a read evicts as much as it adds: `size_bytes()` no longer grows. Measured in the serial lane, 2026-11-22: the
+    cache held 134,213,416 of its 134,217,728 bytes, and the read below left `size_bytes()` 2,182 bytes smaller.
+    """
+    from catalog.core.config import shared_lance_session
+    from lakehouse.lancekit.lance_session import lance_session
+
+    lance_session.cache_clear()
+    return shared_lance_session()
+
+
 def test_the_session_is_ONE_object_across_calls(catalog_env: None) -> None:
     """`lance_session` is `@cache`d on its cap pair, so equal caps share one session process-wide. If
     each caller built its own, every open would still mint a fresh cache and the conversion would be
@@ -50,7 +66,7 @@ def test_the_session_is_ONE_object_across_calls(catalog_env: None) -> None:
     assert shared_lance_session() is shared_lance_session()
 
 
-def test_a_warehouse_rooted_namespace_caches_in_the_shared_session(catalog_env: None, tmp_path: Path) -> None:
+def test_a_warehouse_rooted_namespace_caches_in_the_shared_session(empty_shared_session: lance.Session, tmp_path: Path) -> None:
     """A warehouse's connection reads its manifest table through the bounded session, not a session of its own.
 
     `lance.Session.size_bytes()` is the only reading pylance 14.0.3 exposes of a session's caches, so the claim is read
@@ -58,10 +74,10 @@ def test_a_warehouse_rooted_namespace_caches_in_the_shared_session(catalog_env: 
     """
     from lance_namespace import CreateNamespaceRequest, ListNamespacesRequest
 
-    from catalog.core.config import get_settings, shared_lance_session
+    from catalog.core.config import get_settings
     from catalog.core.namespace import build_namespace_for_root
 
-    session = shared_lance_session()
+    session = empty_shared_session
     before = session.size_bytes()
 
     namespace = build_namespace_for_root(get_settings(), str(tmp_path / "warehouse"))
