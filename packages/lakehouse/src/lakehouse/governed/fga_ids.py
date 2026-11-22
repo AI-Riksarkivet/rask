@@ -62,16 +62,20 @@ def is_object_id(obj: str) -> bool:
 
     Check refuses the whole request when an object has a space or other ASCII whitespace or is outside
     2..256 runes (``CheckRequestTupleKey.object``, ``^[^\\s]{2,256}$``), and refuses the item when it is
-    not ``<type>:<id>`` with exactly one ``:``, no ``#`` and no control character (``tuple.IsValidObject``).
-    Write applies the same grammar, so no tuple can name such an object: "not granted" is its true
-    answer, not a guess. Measured against v1.18.3 through Dagger (2026-09-27): a control character, a
-    second ``:`` and ``#`` fail the item, a space, a tab and 257 runes fail the request.
+    not ``<type>:<id>`` with exactly one ``:``, no ``#`` and no control character (``tuple.IsValidObject``),
+    or when its id is the typed wildcard ``*`` (an object cannot be one). Write applies the same grammar, so
+    no tuple can name such an object: "not granted" is its true answer, not a guess. Measured against v1.18.3
+    through Dagger (2026-09-27): a control character, a second ``:`` and ``#`` fail the item, a space, a tab
+    and 257 runes fail the request; measured on the suite's v1.18.3 Check (2026-11-22): ``<type>:`` (an empty
+    id) and ``<type>:*`` answer 400 ``validation_error``, while ``a*``, ``**``, a no-break space and an em
+    space are accepted.
     """
     kind, _, identifier = obj.partition(":")
     return (
         2 <= len(obj) <= 256
         and bool(kind)
         and bool(identifier)
+        and identifier != "*"
         and ":" not in identifier
         and "#" not in obj
         and " " not in obj

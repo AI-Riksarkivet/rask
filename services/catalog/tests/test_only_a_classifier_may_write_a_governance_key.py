@@ -39,6 +39,7 @@ was.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -47,6 +48,7 @@ import pyarrow as pa
 import pytest
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed.audit import AUDIT_LOGGER
 
 
 TABLE = "/v1/table/lance_catalog$db$t"
@@ -149,6 +151,50 @@ def test_a_missing_path_discloses_no_schema_the_caller_cannot_see(
         listed = re.search(r"Available fields: \[(.*)\]", problem["detail"])
         assert listed is not None, problem["detail"]
         assert re.findall(r"'(\w+)'", listed.group(1)) == fields, problem["detail"]
+
+
+@pytest.mark.parametrize(
+    ("value", "shown"),
+    [
+        pytest.param("", "''", id="an-empty-value"),
+        pytest.param("x" * 242, f"'{'x' * 64}'… (242 characters)", id="a-value-past-openfgas-256-rune-object"),
+        pytest.param("a b", "'a b'", id="a-space"),
+        pytest.param("a\tb", "'a\\tb'", id="a-control-character"),
+        pytest.param("a:b", "'a:b'", id="a-second-colon"),
+        pytest.param("a#b", "'a#b'", id="a-hash"),
+        pytest.param("*", "'*'", id="the-typed-wildcard"),
+    ],
+)
+def test_a_value_openfga_cannot_name_is_refused_as_bad_input_before_any_check(
+    governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
+    caplog: pytest.LogCaptureFixture,
+    value: str,
+    shown: str,
+) -> None:
+    """OpenFGA v1.18.3 refuses each of these as an object id (``classification:<value>``), which the door read as an outage:
+    503 and an ``authz_unavailable`` record for a caller's bad input. Each is refused 400 code 13 before ``can_apply`` is
+    asked, so no decision on it is recorded and the field keeps its metadata."""
+    catalog = governed_catalog
+    location = _a_table_bob_holds(catalog, {"classifier"})
+    before = _field_metadata(location)
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
+    caplog.clear()
+
+    answered = catalog.client.post(
+        f"{TABLE}/update_field_metadata", json={"updates": [{"path": "note", "metadata": {KEY: value}}]}, headers=catalog.bearer("bob")
+    )
+
+    asked = [r.__dict__ for r in caplog.records if r.name == AUDIT_LOGGER and r.__dict__.get("audit.relation") == "can_apply"]
+    outages = [r for r in caplog.records if r.name == AUDIT_LOGGER and r.__dict__.get("audit.reason") == "authz_unavailable"]
+    assert (answered.status_code, answered.json()["code"], answered.json()["detail"], _field_metadata(location), asked, outages) == (
+        400,
+        13,
+        f"update_field_metadata: {KEY} value {shown} cannot name a classification (OpenFGA takes 1 to 241 characters, none of them a space, "
+        "a control character, ':' or '#', and not the wildcard '*')",
+        before,
+        [],
+        [],
+    ), answered.text
 
 
 def _a_table_bob_holds(catalog: Any, held: set[str]) -> str:  # noqa: ANN401 — the catalog conftest's GovernedCatalog

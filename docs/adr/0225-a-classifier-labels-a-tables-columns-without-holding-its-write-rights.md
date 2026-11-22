@@ -53,3 +53,26 @@ judges the write as before: the read-only window and the run rule apply to a cla
   rung that sees the schema without reading data, parked as #790 (LH-570, "The privilege ladder lacks describe").
 - A client sees one change: a governance-only `update_field_metadata` refused names `can_classify required on table:…`
   where it named `can_write_data`.
+
+## What the decision also means (2026-11-22)
+
+An independent review of the merged change (2026-11-22, no blocking finding) named four further consequences of
+admitting a caller on `can_classify` alone. Each holds by design; none is a defect this ADR leaves open.
+
+- **What such a caller learns beyond the path limit.** A classifier holding no `can_get_metadata` also learns which
+  branches exist (a classify request on an absent branch answers 404 code 22), the table's current version (the 200
+  body names the version its write committed), and, when it holds the rung by inheritance from a namespace, which table
+  names exist beneath it (a name holding no table answers differently from one that does). What a caller may learn
+  about a table without reading it is the describe rung's question, parked as #790 (LH-570, "The privilege ladder lacks
+  describe"), and it is answered there for every door at once rather than per door here.
+- **Every classify request commits a version.** A label is field metadata, and Lance changes field metadata by
+  committing a new version, so a caller holding no write rung adds versions to the table and contends with its writers
+  on the commit like any other write (a conflicting commit is retried or refused as for a writer).
+- **A label pins its column.** Any `rask.<key>` the caller may apply is accepted with any value it holds `apply` on,
+  and every `rask.*` field key is a label the catalog keeps: alter and drop of that column are then refused until an
+  owner or a classifier clears it. A classifier can therefore stop a column being altered or dropped, which is what a
+  label is for.
+- **Lineage takes the catalog's word for the author.** Lineage records the catalog-attested announcement of a
+  classify-only commit without re-deriving the author's write rung, because the catalog already decided it. An estate
+  that enforced no event signing would make lineage ask `can_write_data` of the author instead, and refuse the
+  announcement of a classifier's commit; the chart always lists signers, so the estate it renders signs.

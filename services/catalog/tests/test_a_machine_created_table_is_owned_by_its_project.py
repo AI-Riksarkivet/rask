@@ -27,11 +27,17 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+import pytest
+from pydantic import ValidationError
+
 from catalog.api.authz import object_grants
 from catalog.api.authz.context import AuthzContext
 from catalog.core.config import Settings
 from lakehouse.governed import fga_provision, fga_reads
+from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
+from lakehouse.governed.oidc import IDToken
+from lakehouse.governed.principal import Principal
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
@@ -79,3 +85,19 @@ def test_a_SERVICE_creating_a_table_is_not_granted_owner(openfga_store: Any) -> 
     # orphaning: ownership descends to the table from the project's admin through this link.
     parent = f"namespace:{uuid_of('namespace', ['acme-silver'])}"
     assert (parent, "parent", f"table:{_TABLE_UUID}") in written, f"the parent edge was dropped with the owner grant: {written}"
+
+
+def test_the_context_keeps_the_principal_the_authenticator_built_and_builds_none_itself() -> None:
+    """The type the ownership rule reads is the one the verifier proved: a principal passes as the same object, and its
+    fields as a dict, which no verifier built, are refused rather than made into a ``ServicePrincipal``."""
+    service = ServicePrincipal.for_account("system:serviceaccount:default:rask-sa-pipeline")
+    person = PersonPrincipal(principal=Principal(idp_id="dex", subject="bob"), claims=IDToken(iss="https://dex", sub="bob", aud="rask", exp=1, iat=1))
+
+    kept = [AuthzContext(client=None, settings=_settings(), token=caller).token for caller in (service, person)]
+    with pytest.raises(ValidationError) as refused:
+        AuthzContext(client=None, settings=_settings(), token=service.model_dump())
+
+    assert ([k is c for k, c in zip(kept, (service, person), strict=True)], [(e["type"], e["ctx"]["class"]) for e in refused.value.errors()]) == (
+        [True, True],
+        [("is_instance_of", "PersonPrincipal"), ("is_instance_of", "ServicePrincipal")],
+    )
