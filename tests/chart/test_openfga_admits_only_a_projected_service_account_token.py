@@ -27,7 +27,7 @@ def _openfga(docs: tuple[dict, ...]) -> dict[str, str]:
 
 
 def test_openfga_runs_oidc_against_the_mirrored_cluster_issuer_with_no_playground() -> None:
-    docs = render(*DEFAULT_ARGS)
+    docs = render(*DEFAULT_ARGS, "--set-string", "observability.logLevel=ERROR")
     server = _openfga(docs)
     host, port = server.get("OPENFGA_AUTHN_OIDC_ISSUER", "").removeprefix("http://").partition(":")[::2]
     mirror_service = next((d for d in docs if d.get("kind") == "Service" and d["metadata"]["name"] == host), None)
@@ -40,6 +40,7 @@ def test_openfga_runs_oidc_against_the_mirrored_cluster_issuer_with_no_playgroun
     }
     assert mirror_service is not None and [p["port"] for p in mirror_service["spec"]["ports"]] == [int(port)], f"no Service {host}:{port} for OpenFGA's issuer"
     assert mirror.get("RASK_ISSUER_MIRROR_ISSUER") == server.get("OPENFGA_AUTHN_OIDC_ISSUER_ALIASES") == "https://kubernetes.default.svc.cluster.local"
+    assert mirror.get("RASK_LOG_LEVEL") == "ERROR", "the mirror logs at a level the release does not name"
     assert server.get("OPENFGA_HTTP_CORS_ALLOWED_ORIGINS", "*") != "*"
 
 

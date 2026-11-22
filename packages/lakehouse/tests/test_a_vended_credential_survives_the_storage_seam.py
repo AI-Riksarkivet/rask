@@ -14,6 +14,10 @@ credential does not survive one hop and die at the next:
 * ``s3_filesystem`` — the pyarrow half, used by ``fs_and_base`` and by the catalog's own commit-time
   file verification.
 
+A filesystem from the resolver carries the credential's rights and no more: it may not create a bucket. Buckets are the
+platform's, made by the chart's provisioning hook, and a lakehouse process given a write on a missing one has been pointed
+at the wrong store, which a created bucket would hide while widening what the process can do to the store.
+
 The token's spelling is pinned against object_store's ACTUAL behaviour rather than against a doc: it
 silently ignores storage-option keys it does not recognise (verified 2026-09-03 — a deliberately
 invented key produced no error and no signature change), so a mis-spelled option would drop the token
@@ -24,14 +28,27 @@ from __future__ import annotations
 
 import contextlib
 import threading
+from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
+import boto3
 import pytest
+from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
 from lakehouse.storage.credential import S3KeyPair
-from lakehouse.storage.objectfs import lance_storage_options
+from lakehouse.storage.objectfs import fs_and_base, lance_storage_options
+
+
+@pytest.fixture
+def moto_url() -> Iterator[str]:
+    """An S3 store of the test's own, holding no bucket, that pyarrow's native client reaches over HTTP."""
+    server = ThreadedMotoServer(port=0)
+    server.start()
+    host, port = server.get_host_and_port()
+    yield f"http://{host}:{port}"
+    server.stop()
 
 
 @pytest.mark.parametrize("absent", [""])
@@ -89,3 +106,15 @@ def test_a_built_option_set_actually_signs_with_the_token(token: str) -> None:
 
     assert captured, "Lance never reached the endpoint, so nothing was signed"
     assert captured[0].get("x-amz-security-token") == token
+
+
+def test_a_filesystem_from_the_resolver_is_refused_a_bucket(moto_url: str) -> None:
+    """A bucket-level create through the resolver's filesystem fails, and the store holds no bucket afterwards."""
+    options = lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
+    fs, base = fs_and_base("s3://unprovisioned/control", options)
+
+    with pytest.raises(OSError, match="allow_bucket_creation"):
+        fs.create_dir(base.split("/", 1)[0])
+
+    store = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    assert store.list_buckets()["Buckets"] == []

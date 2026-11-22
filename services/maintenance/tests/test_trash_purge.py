@@ -627,16 +627,12 @@ def test_the_purge_is_capped_per_tick_oldest_first(tmp_path: Path) -> None:
 def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
     """A reclamation is a governance change, so it lands on the control stream — one event per record.
 
-    The verbs are the PURGE's own — `table_purged` / `namespace_purged`, not the drop actions (diff2
-    F10 item 6). Under `table_dropped` an automated reclamation reads as a person deleting the table to
-    every consumer that does not read `extra.reason`: a governance feed shows a deletion with a service
-    identity in the actor column. Two different
-    facts — "someone decided to remove this" and "the grace period ran out" — differ in cause, in
-    appealability, and in finality, so they get two names.
+    The verbs are the PURGE's own, `table_purged` / `namespace_purged`, not the drop actions: under `table_dropped` an
+    automated reclamation would read as a person deleting the table, a deletion with a service identity in the actor
+    column. "Someone decided to remove this" and "the grace period ran out" differ in cause, in appealability and in
+    finality, so they get two names, and the action alone says which.
 
-    ``extra`` stays a pointer payload (claim-check): the reason, the deadline, the size. ``reason`` is
-    UNCHANGED and still says `trash_expired`, so a consumer keying on it keeps working — the verbs are
-    purely additive.
+    ``extra`` is a pointer payload (claim-check): the deadline and the size, and nothing the action already says.
 
     Each event names its object's uuid and its namespace's (ADR 0173 §10), both as the trash record keeps them from the
     drop: a namespace dropped since names no live row to read its uuid from.
@@ -657,7 +653,11 @@ def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
         ("namespace_purged", "namespace", f"namespace:{_ARCHIVE_UUID}", "archive", _ARCHIVE_UUID, None),
     }
     assert all(e.actor == "service:maintenance" for e in control.events)
-    assert all(e.extra["reason"] == "trash_expired" for e in control.events)
+    # The deadline that ran out and what the purge reclaimed; the action already says it was the trash's expiry.
+    expired = (_NOW - timedelta(days=30) + timedelta(days=7)).isoformat()
+    assert {e.object_name: e.extra for e in control.events} == {
+        p.id: {"expires_at": expired, "bytes_deleted": p.bytes_deleted, "tuples_revoked": p.tuples_revoked} for p in out.purged
+    }
     # Claim-check: pointers, never data.
     assert all(len(json.dumps(e.extra)) < 512 for e in control.events)
 

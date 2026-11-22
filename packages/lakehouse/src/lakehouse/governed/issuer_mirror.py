@@ -18,7 +18,8 @@ verifier names this mirror as its issuer URL and the cluster issuer as an alias 
 ``authn.oidc.issuerAliases``).
 
 A plain FastAPI app rather than `lakehouse.service_app.factory`'s: it has no governed door and no
-state, and the chart runs it from the catalog image with ``uvicorn --factory``. Its probes are the library's
+state, and the chart runs it from the catalog image with ``uvicorn --factory``. It logs as every lakehouse process does
+(`lakehouse.process.log_handler.setup_logging`), so its lines reach stdout in the one format, at the one level. Its probes are the library's
 (`lakehouse.process.probes`): ``/readyz`` is ready while the issuer serves this pod its discovery document, the one thing
 the mirror depends on.
 """
@@ -41,6 +42,7 @@ from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, i
 from lakehouse.problems.domain_errors import DomainError, ServiceUnavailableError, register_handlers
 from lakehouse.process.draining import arm_drain_on_sigterm
 from lakehouse.process.lifecycle import mark_draining, mark_started
+from lakehouse.process.log_handler import setup_logging
 from lakehouse.process.probes import make_probes_router
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 
@@ -101,6 +103,7 @@ async def _fetch(client: httpx.AsyncClient, url: str, token_file: str) -> dict[s
 
 def create_app(settings: IssuerMirrorSettings | None = None) -> FastAPI:
     """The mirror app; ``settings`` defaults to the environment's (``uvicorn --factory`` passes none)."""
+    setup_logging()
     resolved = settings or IssuerMirrorSettings()
     issuer = resolved.issuer.rstrip("/")
 

@@ -1975,3 +1975,5 @@ observability:
   # and a create line names its file bare (a manifest's by a placeholder), so the record is whole for data files and manifests.
   # -- `LANCE_LOG` on the catalog and maintenance containers: Lance's per-file and per-dataset events, at env_logger's syntax; empty turns them off.
   lanceLog: "warn,lance::events::file_audit=info,lance::events::dataset_events=info"
+  # -- `RASK_LOG_LEVEL` on every lakehouse container (the catalog, lineage, the maintenance worker, the issuer mirror and the OpenFGA model Job): the level the lakehouse's own loggers write at, to stdout and the OTLP log copy alike. A library's records stay at INFO or above, and the audit trail is armed by `auth.audit`, not by this.
+  logLevel: INFO # @schema enum: [DEBUG, INFO, WARNING, ERROR, CRITICAL]

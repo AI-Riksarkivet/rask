@@ -34,6 +34,7 @@ spec:
             - "--port=8080"
             {{- include "rask.shutdownArg" . | nindent 12 }}
           env:
+            {{- include "lance.logLevelEnv" (list .) | nindent 12 }}
             - { name: RASK_ISSUER_MIRROR_ISSUER, value: {{ .Values.auth.serviceAccountIssuer | quote }} }
             - { name: RASK_ISSUER_MIRROR_PUBLIC_URL, value: "http://{{ $name }}:8080" }
             - { name: RASK_ISSUER_MIRROR_TOKEN_FILE, value: /var/run/secrets/rask/sa-fetch/token }

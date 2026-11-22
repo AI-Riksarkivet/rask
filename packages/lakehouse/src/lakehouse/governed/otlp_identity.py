@@ -10,13 +10,23 @@ issuer, so no telemetry credential is configured anywhere.
 
 from __future__ import annotations
 
-import os
 from typing import override
 
 import requests
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from requests.auth import AuthBase
 
 from lakehouse.governed.machine_identity import identity_bearer
+
+
+class OtlpIdentitySettings(BaseSettings):
+    """Where this pod's projected token for the OTLP gateway's audience sits, as the chart renders it."""
+
+    model_config = SettingsConfigDict(extra="ignore", frozen=True)
+
+    #: Empty when the chart named none, which no export may be sent under.
+    token_file: str = Field(default="", alias="RASK_OTLP_TOKEN_FILE")
 
 
 class _ProjectedToken(AuthBase):
@@ -31,7 +41,7 @@ class _ProjectedToken(AuthBase):
 
 def session() -> requests.Session:
     """The session every OTLP/HTTP exporter of this process sends with, presenting the pod's token on each request."""
-    path = os.environ.get("RASK_OTLP_TOKEN_FILE", "")
+    path = OtlpIdentitySettings().token_file
     if not path:
         raise RuntimeError("RASK_OTLP_TOKEN_FILE names no token file, so an export could not say who sent it")
     sender = requests.Session()
@@ -40,5 +50,6 @@ def session() -> requests.Session:
 
 
 __all__ = [
+    "OtlpIdentitySettings",
     "session",
 ]

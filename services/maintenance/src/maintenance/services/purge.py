@@ -632,25 +632,11 @@ def _remove_emptied_directories(location: str, storage_options: StorageOptions, 
             fs.delete_dir(place)
 
 
-#: The control-plane vocabulary for a purge — its OWN verbs since diff2 F10 item 6.
-#:
-#: It reused the drop actions, for a stated reason that has now been discharged rather than overruled:
-#: ``ControlAction`` is a wire contract across three files (the Literal, ``docs/catalog-openapi.json``,
-#: ``frontend/console/src/lib/api/generated/catalog.ts``), adding a member without regenerating all three
-#: leaves the TS client unable to NAME an event the backend publishes, and "the regen could not be done
-#: in this change". It has been done (``make openapi`` + ``bun run gen:types:catalog``, with
-#: ``make openapi-check`` green), so the reuse no longer buys anything.
-#:
-#: WHY THE REUSE WAS WORTH UNDOING. The old argument — a consumer that re-reads state on either action
-#: is correct either way, because an event is a refresh hint and never data — is true and is not the
-#: whole job. These events are also the estate's governance FEED, read by humans at
-#: ``/lakehouse/admin/events``, and there the two facts are not interchangeable: "someone decided to
-#: remove this" and "the grace period ran out and maintenance collected it" differ in cause, in
-#: appealability, and in finality (a purge is the last event an object ever emits). The distinguishing
-#: `reason` lived in ``extra``, which that feed does not read — so a reclamation rendered as a person's
-#: deletion, with ``ACTOR`` (a service identity) in the actor column.
-#:
-#: ``extra.reason`` is unchanged, so a consumer keying on it keeps working; this is purely additive.
+#: A purge's own actions, never the drop actions: "someone decided to remove this" and "the grace period ran out and
+#: maintenance collected it" differ in cause, in appealability and in finality (a purge is the last event an object ever
+#: emits), and the governance feed a person reads shows the action and the actor, so a reclamation announced as a drop
+#: would read as a person's deletion with a service identity in the actor column. The action alone says it was the
+#: trash's expiry; ``extra`` carries the deadline and the size.
 _PURGE_ACTION: dict[str, ControlAction] = {"table": "table_purged", "namespace": "namespace_purged"}
 
 
@@ -898,7 +884,6 @@ async def _purge_one(
         namespace_uuid=uuids.namespace_uuid,
         actor=ACTOR,
         extra={
-            "reason": "trash_expired",
             "expires_at": (record.expires_at or ""),
             "bytes_deleted": deleted_bytes,
             "tuples_revoked": revoked,

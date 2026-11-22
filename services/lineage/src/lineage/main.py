@@ -24,7 +24,6 @@ from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import secret_store_dependency
 from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
 from lakehouse.process.lifecycle import closed_quietly
-from lakehouse.process.log_levels import configure_app_logging
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.factory import build_service_app
@@ -42,7 +41,6 @@ from lineage.services.signature import store_published_keys
 
 
 log = logging.getLogger(__name__)
-configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
 
 #: How long boot waits for the catalog to create this service's tables. The catalog keeps the provenance
 #: namespace itself and may still be starting when this pod is; a pod that gives up sooner crash-loops on a

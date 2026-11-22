@@ -1232,6 +1232,11 @@ activeDeadlineSeconds: 1800
 - { name: ARROW_DEFAULT_MEMORY_POOL, value: {{ $root.Values.allocator.arrowMemoryPool | quote }} }
 {{- end -}}
 
+{{- define "lance.logLevelEnv" -}}
+{{- $root := index . 0 -}}
+- { name: RASK_LOG_LEVEL, value: {{ required "observability.logLevel is unset — upgrade with --reset-then-reuse-values, not --reuse-values" $root.Values.observability.logLevel | quote }} }
+{{- end -}}
+
 {{- define "lance.fileAuditEnv" -}}
 {{- $root := index . 0 -}}
 {{- with $root.Values.observability.lanceLog }}

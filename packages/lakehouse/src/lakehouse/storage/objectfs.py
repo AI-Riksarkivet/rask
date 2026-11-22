@@ -178,7 +178,7 @@ def fs_and_base(root_uri: str, storage_options: StorageOptions) -> tuple[pafs.Fi
     be read under another identity ([[LH-572]]).
     """
     if on_s3(root_uri):
-        fs = s3_filesystem(storage_options, allow_bucket_creation=True)
+        fs = s3_filesystem(storage_options)
         return fs, root_uri[len("s3://") :].rstrip("/")
     resolved, path = pafs.FileSystem.from_uri(root_uri)
     return resolved, path.rstrip("/")

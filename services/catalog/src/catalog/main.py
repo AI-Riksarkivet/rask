@@ -56,7 +56,6 @@ from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, mak
 from lakehouse.lance_metrics import instrument_lance_if_available
 from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
-from lakehouse.process.log_levels import configure_app_logging
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.factory import build_service_app
@@ -66,7 +65,6 @@ from lakehouse.storage.store_session import require_env_pair, start_store_sessio
 
 
 log = logging.getLogger(__name__)
-configure_app_logging()  # INFO audit/lifecycle logs reach OTLP (obs audit 2026-07-13)
 
 PROBLEM_JSON = "application/problem+json"
 #: The backoff of the provenance namespace's boot task: doubling from the first delay, capped at the second.

@@ -42,7 +42,6 @@ from fastapi import FastAPI
 
 from lakehouse.governed.signing_key import attach_signing, signing_ready_check
 from lakehouse.process.lifecycle import mark_draining, mark_started
-from lakehouse.process.log_levels import configure_app_logging
 from lakehouse.process.supervision import FLUSH_SECONDS, Supervisor, flush_telemetry
 from lakehouse.service_app.factory import build_service_app
 from maintenance.core.config import MaintenanceSettings, get_settings
@@ -50,7 +49,6 @@ from maintenance.runtime import collaborators, reported_health, reported_readine
 from maintenance.services.tasks import running_worker
 
 
-configure_app_logging()
 log = logging.getLogger(__name__)
 
 #: How long the probes' server is given to start, and then to stop.

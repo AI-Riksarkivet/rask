@@ -146,7 +146,7 @@ def _emit(client: TestClient, kind: str) -> None:
                 object_uuid=UUIDS.table_uuid,
                 namespace_uuid=UUIDS.namespace_uuid,
                 actor=ACTOR,
-                extra={"reason": "trash_expired"},
+                extra={"expires_at": "2026-07-13T12:00:00+00:00", "bytes_deleted": 0, "tuples_revoked": 0},
             )
         )
     elif kind == "failure":

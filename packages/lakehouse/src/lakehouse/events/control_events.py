@@ -69,15 +69,11 @@ ControlAction = Literal[
     "table_undropped",
     # #96 the recoverable CASCADE: recovering a whole subtree is one governance event on its root.
     "namespace_undropped",
-    # diff2 F10 item 6 — the EXPIRY PURGE has its own verbs. It reused `table_dropped` /
-    # `namespace_dropped` with `extra.reason="trash_expired"`, which made an automated reclamation
-    # indistinguishable from a person deleting the table unless a consumer thought to read `extra` —
-    # and a feed reader may not. Two different facts were arriving under one name: "someone
-    # decided to remove this" and "the grace period ran out and the sweep collected it". The second
-    # has no actor (the emitter stamps `None`), is not appealable, and is the LAST event an object
-    # ever produces, so conflating them mis-reports both the cause and the finality.
-    #
-    # Additive: `extra.reason` stays, so a consumer keying on it keeps working.
+    # The trash's expiry: maintenance reclaimed a dropped object once its grace period ran out. Its own actions, apart
+    # from `table_dropped` / `namespace_dropped`, because "someone decided to remove this" and "the grace period ran out
+    # and the sweep collected it" differ in cause and finality: no person acted, nothing appeals it, and it is the LAST
+    # event an object ever produces. A consumer tells an expiry from a person's drop by the action alone; `extra` carries
+    # `expires_at` (the deadline that ran out), `bytes_deleted` and `tuples_revoked`.
     "table_purged",
     "namespace_purged",
     # THE REF PLANE ([[LH-056]]), and UNTARGETED for the reason the rule states: a control event is

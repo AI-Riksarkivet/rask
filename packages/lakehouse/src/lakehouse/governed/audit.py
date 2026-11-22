@@ -116,7 +116,8 @@ def configure_audit(*, enabled: bool) -> None:
 
     Enabled → ``INFO`` (records emit through the OTLP handler on root). Disabled → a level above ``CRITICAL``
     so the ``INFO`` audit records are dropped at the logger, before any handler. Call once per service at
-    startup. Without this call the logger inherits root (``WARNING``), so audit is OFF unless explicitly on.
+    startup. Without this call the logger follows the root's level, the one ``RASK_LOG_LEVEL`` sets, and the log level
+    would decide the compliance trail.
     """
     _log.setLevel(logging.INFO if enabled else logging.CRITICAL + 1)
 

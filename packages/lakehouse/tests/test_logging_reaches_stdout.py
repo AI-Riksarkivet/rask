@@ -1,31 +1,22 @@
-"""Application logs must actually reach stdout — they did not, for every service in the estate.
+"""What a lakehouse process writes to stdout, and at which level: the one setup every process runs.
 
-`_setup_logging` attached its stdout handler to two logger names, `"core"` and `"backends"`, and its
-docstring says why: it "mirrors core.main". That monolith is gone. Every module in every service now
-uses `logging.getLogger(__name__)` — `lineage.services.consumer`, `maintenance.services.discovery`,
-`catalog.api.v1.endpoints.tables` — and not one of those names sits under `core.*` or `backends.*`.
-So the handler was attached to two trees nobody logs to, every record propagated to a root logger
-with no handlers, and was discarded.
+Every module in every service logs through ``logging.getLogger(__name__)``, so the handler sits on the ROOT logger and
+every one of them inherits it. A record that reaches no handler is discarded without a trace, which is how a swallowed
+diagnostic (a failure caught by design and reported with a WARNING) stays invisible while the path fails for a week
+(measured live 2026-08-17: a lineage ingest that dropped a malformed event logged nothing at all).
 
-Nothing was red, because the code that logs is never the code that fails. Measured live
-2026-08-17 and verified three times: a malformed event POSTed to the running ingest returned
-`{"status":"DROP"}` — returned on the single line immediately after
-`log.error("lineage_event_invalid")`, so the branch demonstrably ran — and produced no log line
-at all. After the fix the identical request logs it.
-
-The class this closes is the SWALLOWED DIAGNOSTIC: any handler that catches a failure by design and
-reports it with a WARNING that had nowhere to go — so the one signal distinguishing a healthy path
-from one that has been failing all week did not exist.
-
-The fix is what the function already intended: configure the ROOT logger, so `getLogger(__name__)`
-anywhere inherits a handler. These tests pin the property rather than the implementation — a future
-refactor may attach handlers wherever it likes, as long as a service module's log record comes out.
+``RASK_LOG_LEVEL`` is the one lever, and the lakehouse's own loggers follow it whatever level an import left on them:
+``WARNING`` quiets the lakehouse's INFO, ``DEBUG`` opens its DEBUG, and a value that names no level stops the process at
+boot rather than leaving it at a level nobody chose. These tests read the formatted line the installed handler writes,
+never a probe handler of their own: a handler attached to root receives propagated records whether or not the setup did
+its job.
 """
 
 from __future__ import annotations
 
 import io
 import logging
+import re
 from collections.abc import Iterator
 
 import pytest
@@ -33,71 +24,75 @@ import pytest
 from lakehouse.process.log_handler import setup_logging
 
 
-#: A real service module's logger name. Named explicitly rather than generated, because the defect
-#: was precisely that the configured names did not match the used ones.
-SERVICE_LOGGERS = [
-    "lineage.services.consumer",
-]
+#: The loggers these tests move: the root, the lakehouse's own packages and a third-party library's.
+_TOUCHED = ("", "catalog", "lineage", "maintenance", "lakehouse", "botocore")
+#: The timestamp a line opens with, which is not the claim.
+_TIMESTAMP = re.compile(r"^\S+ \S+ ")
 
 
 @pytest.fixture(autouse=True)
 def _restore_logging() -> Iterator[None]:
-    """Leave global logging exactly as found — this module mutates it, and pytest's own capture
-    handlers live on the root logger."""
-    root = logging.getLogger()
-    saved_handlers, saved_level = list(root.handlers), root.level
-    saved_named = {name: (list(logging.getLogger(name).handlers), logging.getLogger(name).level) for name in ("core", "backends")}
+    """Leave global logging exactly as found: this module mutates it, and pytest's own capture handlers live on root."""
+    saved = {name: (list(logging.getLogger(name).handlers), logging.getLogger(name).level) for name in _TOUCHED}
     yield
-    root.handlers, root.level = saved_handlers, saved_level
-    for name, (handlers, level) in saved_named.items():
+    for name, (handlers, level) in saved.items():
         logging.getLogger(name).handlers, logging.getLogger(name).level = handlers, level
 
 
-def _captured(logger_name: str, level: int = logging.WARNING, *, monkeypatch: pytest.MonkeyPatch) -> str:
-    """Emit one record and return what reached the handler `_setup_logging` INSTALLED.
-
-    Capturing through a probe handler of our own would prove nothing — a handler attached to root
-    receives propagated records whether or not setup did its job, which is exactly how the first
-    version of this test passed against the broken code. So: strip every existing handler, point
-    `sys.stdout` at a buffer, and let setup build its own handler over that buffer.
-    """
+def _stdout_after(record: tuple[str, int], *, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """Run the setup over a stdout of the test's own, emit ``record`` (logger name, level), and return each line written
+    without its timestamp and with its padding collapsed."""
     stream = io.StringIO()
     monkeypatch.setattr("sys.stdout", stream)
-    root = logging.getLogger()
-    root.handlers = []
-    for name in ("core", "backends"):
-        logging.getLogger(name).handlers = []
+    logging.getLogger().handlers = []
 
     setup_logging()
 
-    logging.getLogger(logger_name).log(level, "canary-%s", logger_name)
-    for handler in root.handlers:
+    name, level = record
+    logging.getLogger(name).log(level, "canary")
+    for handler in logging.getLogger().handlers:
         handler.flush()
-    return stream.getvalue()
+    return [" ".join(_TIMESTAMP.sub("", line).split()) for line in stream.getvalue().splitlines()]
 
 
-@pytest.mark.parametrize("name", SERVICE_LOGGERS)
-def test_a_service_module_logger_REACHES_a_handler(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The property the estate actually needs: a module's log record comes out on stdout."""
-    assert f"canary-{name}" in _captured(name, monkeypatch=monkeypatch), (
-        f"a WARNING from {name!r} reached no handler.\n"
-        "Every service module uses getLogger(__name__); if setup only configures specific logger "
-        "names, records propagate to a root with no handlers and are discarded — which is how a "
-        "two-day lineage feed outage produced zero log lines."
-    )
+def test_a_service_module_record_reaches_stdout_at_the_default_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    """At the default level a lakehouse INFO record comes out on stdout, and so reaches the root's other handlers too
+    (the OTLP copy the audit and lifecycle tier rides)."""
+    monkeypatch.delenv("RASK_LOG_LEVEL", raising=False)
+
+    assert _stdout_after(("lineage.services.consumer", logging.INFO), monkeypatch=monkeypatch) == ["INFO lineage.services.consumer [-] — canary"]
 
 
-def test_the_root_logger_is_configured_at_or_below_INFO() -> None:
-    """`log.info` is load-bearing here — `warehouse_created` and `maintenance_policy_set` are INFO,
-    and they are how an operator sees that a change happened at all."""
-    setup_logging()
-    root = logging.getLogger()
+@pytest.mark.parametrize(
+    ("setting", "record", "lines"),
+    [
+        pytest.param("WARNING", ("catalog.api", logging.INFO), [], id="warning-quiets-the-lakehouse-info"),
+        pytest.param("WARNING", ("catalog.api", logging.WARNING), ["WARNING catalog.api [-] — canary"], id="warning-keeps-a-warning"),
+        pytest.param("debug", ("lakehouse.storage", logging.DEBUG), ["DEBUG lakehouse.storage [-] — canary"], id="debug-opens-the-lakehouse-debug"),
+        pytest.param("DEBUG", ("botocore.endpoint", logging.DEBUG), [], id="debug-leaves-a-library-at-info"),
+    ],
+)
+def test_the_lakehouse_loggers_follow_the_level_whatever_an_import_left(
+    setting: str, record: tuple[str, int], lines: list[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lever decides the lakehouse's loggers even where an import pinned them at INFO before the setup ran. A library
+    stays at INFO under ``DEBUG``: botocore's DEBUG writes each request's headers, a session token among them."""
+    monkeypatch.setenv("RASK_LOG_LEVEL", setting)
+    for name in ("catalog", "lineage", "maintenance", "lakehouse"):
+        logging.getLogger(name).setLevel(logging.INFO)
 
-    assert root.level <= logging.INFO, f"root is at {logging.getLevelName(root.level)}; INFO-level operational logs are discarded"
-    assert root.handlers, "the root logger has no handlers — every propagated record is dropped"
+    assert _stdout_after(record, monkeypatch=monkeypatch) == lines
 
 
-def test_setup_is_IDEMPOTENT_so_repeated_app_builds_do_not_duplicate_lines() -> None:
+def test_a_level_that_names_no_level_stops_the_process(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A typo in the lever fails the boot, naming the variable and the levels it takes."""
+    monkeypatch.setenv("RASK_LOG_LEVEL", "VERBOSE")
+
+    with pytest.raises(ValueError, match=r"RASK_LOG_LEVEL\n  Input should be 'DEBUG', 'INFO', 'WARNING', 'ERROR' or 'CRITICAL'"):
+        setup_logging()
+
+
+def test_setup_is_idempotent_so_repeated_app_builds_do_not_duplicate_lines() -> None:
     """The app factory runs it per app, and a test process may build several."""
     setup_logging()
     first = len(logging.getLogger().handlers)

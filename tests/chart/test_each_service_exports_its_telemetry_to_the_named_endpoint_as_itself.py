@@ -1,11 +1,14 @@
-"""Each lakehouse service sends its telemetry to the endpoint the deployer names, presenting its own ServiceAccount token.
+"""Each lakehouse service sends its telemetry to the endpoint the deployer names, presenting its own ServiceAccount token,
+at the log level the deployer names.
 
 The telemetry pipeline (the Collector, the store, how the audit trail is routed) is the platform's (ADR 0153, ADR 0199),
 so the product chart renders none of it, and its contract is the service's half alone: every process launched under
 `opentelemetry-instrument` exports OTLP to `observability.export.endpoint`, and its exporters load the
 `rask_service_account` session, which presents the token the kubelet projects for `observability.identity.audience`
 from the file `RASK_OTLP_TOKEN_FILE` names. That file must sit in a projected token volume of that audience mounted into
-the same container, or every export is refused at the platform's gateway (or, with no file, never sent).
+the same container, or every export is refused at the platform's gateway (or, with no file, never sent). The level its
+own loggers write at is `observability.logLevel`, rendered as `RASK_LOG_LEVEL`: a level set any other way is one no
+reconcile from git restores.
 """
 
 from __future__ import annotations
@@ -22,10 +25,11 @@ _NAMED = (
     "--set", "observability.enabled=true",
     "--set-string", f"observability.export.endpoint={_ENDPOINT}",
     "--set-string", f"observability.identity.audience={_AUDIENCE}",
+    "--set-string", "observability.logLevel=WARNING",
 )  # fmt: skip
 
 
-def test_every_instrumented_process_exports_to_the_named_endpoint_with_its_own_projected_token() -> None:
+def test_every_instrumented_process_exports_to_the_named_endpoint_with_its_own_projected_token_at_the_named_level() -> None:
     docs = chart_render.render(*DEFAULT_ARGS, *_NAMED)
     pods = {f"{doc['kind']}/{doc['metadata']['name']}": doc["spec"]["template"]["spec"] for doc in docs if doc.get("kind") == "Deployment"}
 
@@ -47,9 +51,10 @@ def test_every_instrumented_process_exports_to_the_named_endpoint_with_its_own_p
                 env.get("OTEL_EXPORTER_OTLP_ENDPOINT"),
                 env.get("OTEL_PYTHON_EXPORTER_OTLP_HTTP_CREDENTIAL_PROVIDER"),
                 mounted,
+                env.get("RASK_LOG_LEVEL"),
             )
 
     assert found == dict.fromkeys(
         ("Deployment/rask-catalog/catalog", "Deployment/rask-lineage/lineage", "Deployment/rask-maintenance-worker/worker"),
-        (_ENDPOINT, "rask_service_account", [_AUDIENCE]),
+        (_ENDPOINT, "rask_service_account", [_AUDIENCE], "WARNING"),
     )

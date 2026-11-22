@@ -10,6 +10,8 @@ IP. A verifier must be pointed back at the mirror for the keys, and the file is 
 from __future__ import annotations
 
 import json
+import logging
+import re
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -23,6 +25,8 @@ from lakehouse.governed.issuer_mirror import IssuerMirrorSettings, create_app
 from lakehouse.process.lifecycle import mark_draining
 
 
+#: The loggers the mirror's log setup moves, restored after the test that runs it.
+_LOGGERS = ("", "catalog", "lineage", "maintenance", "lakehouse")
 _KEYS: dict[str, Any] = {"keys": [{"kty": "RSA", "kid": "k3s-1", "alg": "RS256", "use": "sig", "n": "AQAB", "e": "AQAB"}]}
 
 
@@ -118,12 +122,28 @@ def test_an_issuer_that_refuses_the_mirror_is_answered_as_a_bad_gateway_problem(
     assert answer.json()["detail"] == f"the issuer answered 401 to {url}/.well-known/openid-configuration"
 
 
-def test_a_mirror_whose_own_token_cannot_be_read_says_so_and_names_no_file(issuer: tuple[str, Path, list[str]], tmp_path: Path) -> None:
-    """The door answers a caller with no credential, so what it says of the pod's own files stays in the log."""
+@pytest.fixture
+def unconfigured_logging(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """No handler on the root logger until the app's own setup adds one, at the default level; restored after."""
+    saved = {name: (list(logging.getLogger(name).handlers), logging.getLogger(name).level) for name in _LOGGERS}
+    monkeypatch.delenv("RASK_LOG_LEVEL", raising=False)
+    logging.getLogger().handlers = []
+    yield
+    for name, (handlers, level) in saved.items():
+        logging.getLogger(name).handlers, logging.getLogger(name).level = handlers, level
+
+
+def test_a_mirror_whose_own_token_cannot_be_read_says_so_and_names_no_file(
+    issuer: tuple[str, Path, list[str]], tmp_path: Path, capsys: pytest.CaptureFixture[str], unconfigured_logging: None
+) -> None:
+    """The door answers a caller with no credential, so what it says of the pod's own files stays in the log, which the
+    mirror writes to stdout in the format every lakehouse process writes."""
     url, _token, seen = issuer
     settings = IssuerMirrorSettings(issuer=url, public_url="http://rask-issuer-mirror:8080", token_file=str(tmp_path / "absent"))
 
     with TestClient(create_app(settings)) as verifier:
         answer = verifier.get("/.well-known/openid-configuration")
 
+    own = [" ".join(line.split()[2:]) for line in capsys.readouterr().out.splitlines() if re.match(r"\S+ \S+ \S+ +lakehouse\.governed\.issuer_mirror ", line)]
     assert (answer.status_code, answer.json()["detail"], seen) == (503, "the mirror's own token cannot be read", [])
+    assert own == ["ERROR lakehouse.governed.issuer_mirror [-] — issuer_mirror_token_unreadable"]

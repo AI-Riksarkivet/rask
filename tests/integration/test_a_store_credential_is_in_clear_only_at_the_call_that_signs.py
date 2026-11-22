@@ -29,7 +29,7 @@ from pydantic import BaseModel, SecretStr
 from catalog.api import idempotency
 from catalog.core.config import Settings
 from catalog.services import table_claims
-from lakehouse.process.correlation import DiagnosticFormatter
+from lakehouse.process.log_handler import DiagnosticFormatter
 from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.records.history_fences import TableHistory
 from lakehouse.storage import store_session

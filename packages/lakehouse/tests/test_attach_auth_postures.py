@@ -227,8 +227,8 @@ async def test_the_default_stays_NON_fatal(monkeypatch: pytest.MonkeyPatch, fga_
 #
 # When the ten inline bootstraps collapsed onto this one helper, the first cut replaced their
 # structured `log.info(event, extra=...)` events with printf message strings — silently narrowing
-# telemetry: `openfga_provisioned` is a documented severity-9 INFO audit event (`lakehouse.process.log_levels`)
-# that `obs.setup` raises to OTLP, and maintenance's four `reconcile_fga_*` diagnostics carried
+# telemetry: `openfga_provisioned` is a documented severity-9 INFO audit event (`lakehouse.process.log_handler`)
+# that reaches OTLP at the default level, and maintenance's four `reconcile_fga_*` diagnostics carried
 # `extra` payloads (store_id, the pin-for-production hint, the unpinned reason). A message string
 # drops all of it. The single emitter must keep them structured — one emitter is the improvement,
 # not fewer events.

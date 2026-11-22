@@ -1202,6 +1202,17 @@
                 "lanceLog": {
                     "description": "`LANCE_LOG` on the catalog and maintenance containers: Lance's per-file and per-dataset events, at env_logger's syntax; empty turns them off.",
                     "type": "string"
+                },
+                "logLevel": {
+                    "description": "`RASK_LOG_LEVEL` on every lakehouse container (the catalog, lineage, the maintenance worker, the issuer mirror and the OpenFGA model Job): the level the lakehouse's own loggers write at, to stdout and the OTLP log copy alike. A library's records stay at INFO or above, and the audit trail is armed by `auth.audit`, not by this.",
+                    "type": "string",
+                    "enum": [
+                        "DEBUG",
+                        "INFO",
+                        "WARNING",
+                        "ERROR",
+                        "CRITICAL"
+                    ]
                 }
             },
             "additionalProperties": false

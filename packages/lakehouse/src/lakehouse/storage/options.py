@@ -322,7 +322,7 @@ def object_client(storage_options: StorageOptions) -> S3Client:
     return s3_client(storage_options.endpoint, key_pair=key_pair, region=region)
 
 
-def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: bool = False) -> pafs.S3FileSystem:
+def s3_filesystem(storage_options: StorageOptions) -> pafs.S3FileSystem:
     """An ``S3FileSystem`` from lance-style storage options, reaching the endpoint over the scheme
     ``endpoint_scheme`` reads — the rule ``allow_http`` follows too, so pyarrow and Lance agree on
     which stores are plaintext. pyarrow accepts only a lowercase ``http``/``https`` (measured on pyarrow
@@ -339,6 +339,10 @@ def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: boo
     the catalog scoped, not narrower. Dropping it fails open, and so would options with no whole pair, which build no
     filesystem.
 
+    It may create no bucket, and delete none: buckets are the platform's, made by the chart's provisioning hook, so a
+    write under a missing bucket is a misconfigured store, refused rather than hidden behind a bucket the credential's
+    holder would then own.
+
     Raises:
         MissingStoreCredentialError: The options carry no whole key pair (:meth:`StorageOptions.signing_pair`).
     """
@@ -352,7 +356,8 @@ def s3_filesystem(storage_options: StorageOptions, *, allow_bucket_creation: boo
         endpoint_override=(parts.netloc + parts.path).rstrip("/"),
         scheme=endpoint_scheme(endpoint),
         region=storage_options.region or DEFAULT_REGION,
-        allow_bucket_creation=allow_bucket_creation,
+        allow_bucket_creation=False,
+        allow_bucket_deletion=False,
     )
 
 

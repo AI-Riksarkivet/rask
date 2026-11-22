@@ -94,7 +94,7 @@ async def build_fga_client(
         if provision:
             store_id, model_id = await fga_provision.provision(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)  # noqa: TID251
             # Structured, not a printf: `openfga_provisioned` is a documented INFO audit-tier event
-            # (`lakehouse.process.log_levels`), and its fields are what the audit reads.
+            # (`lakehouse.process.log_handler`), and its fields are what the audit reads.
             log.info("openfga_provisioned", extra={"service": service, "store_id": store_id, "model_id": model_id})
         else:
             store_id, model_id = await fga_provision.resolve(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)
