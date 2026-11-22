@@ -1,8 +1,9 @@
 """#3-A — warehouse registry, runtime bucket provisioning, and the admin FGA gate (unit).
 
 The registry round-trips against a LOCAL filesystem root (``lakehouse.storage.objectfs.fs_and_base`` falls back to
-the local FS for a non-``s3://`` uri), so no object storage is needed here. Provisioning is boto3,
-mocked. The gate is driven through the real ``require_can_create_warehouse`` resolver.
+the local FS for a non-``s3://`` uri), so no object storage is needed here. A warehouse's bucket is created and purged
+against moto, which answers a create, a refused create and a delete as S3 does.
+The gate is driven through the real ``require_can_create_warehouse`` resolver.
 """
 
 from __future__ import annotations
@@ -11,15 +12,15 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 from uuid import uuid4
 
 import boto3
 import lance_namespace
 import pytest
-from botocore.exceptions import ClientError
 from fastapi import Request
 from lance_namespace import InternalError, InvalidInputError, LanceNamespace, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
+from moto import mock_aws
 from moto.server import ThreadedMotoServer
 from openfga_sdk.client import OpenFgaClient
 from pydantic import SecretStr
@@ -38,6 +39,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.errors import StoreRefusedError
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
@@ -55,33 +57,59 @@ def _root(tmp_path: Any) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# provisioning (idempotent: an owned bucket is a no-op)
+# the warehouse's bucket: provisioned (an owned bucket is a no-op) and purged
 # --------------------------------------------------------------------------- #
 
 _SO = StorageOptions.from_flat({"endpoint": "http://rf:9000", "access_key_id": "k", "secret_access_key": "s", "region": "us-east-1"})
+#: The catalog's options against moto, outside us-east-1: where S3 refuses a create naming no LocationConstraint and
+#: answers a second create of one's own bucket ``BucketAlreadyOwnedByYou`` (us-east-1 answers that one 200).
+_WEST = StorageOptions.from_flat({"access_key_id": "k", "secret_access_key": "s", "region": "eu-west-1"})
 
 
-def test_provision_adds_location_constraint_off_us_east_1() -> None:
-    # Real AWS S3 rejects create_bucket without a LocationConstraint outside us-east-1 (RustFS ignores it).
-    fake = MagicMock()
-    with patch("lakehouse.storage.client.s3_client", return_value=fake):
-        warehouses.provision_bucket("bkt-a", _SO.with_options({"region": "eu-west-1"}))
-    fake.create_bucket.assert_called_once_with(Bucket="bkt-a", CreateBucketConfiguration={"LocationConstraint": "eu-west-1"})
+@mock_aws
+def test_provisioning_creates_the_bucket_in_the_stores_region() -> None:
+    warehouses.provision_bucket("bkt-a", _WEST)
+
+    assert boto3.client("s3", region_name="eu-west-1").get_bucket_location(Bucket="bkt-a")["LocationConstraint"] == "eu-west-1"
 
 
-@pytest.mark.parametrize("code", ["BucketAlreadyOwnedByYou"])
-def test_provision_idempotent_on_existing(code: str) -> None:
-    fake = MagicMock()
-    fake.create_bucket.side_effect = ClientError({"Error": {"Code": code}}, "CreateBucket")
-    with patch("lakehouse.storage.client.s3_client", return_value=fake):
-        warehouses.provision_bucket("bkt-a", _SO)  # must NOT raise — a re-provision is a no-op
+@mock_aws
+def test_provisioning_a_bucket_the_catalog_already_owns_changes_nothing() -> None:
+    """A retry of a warehouse create provisions again, and must find the bucket as it left it."""
+    warehouses.provision_bucket("bkt-a", _WEST)
+    boto3.client("s3", region_name="eu-west-1").put_object(Bucket="bkt-a", Key="kept", Body=b"x")
+
+    warehouses.provision_bucket("bkt-a", _WEST)
+
+    assert [held["Key"] for held in boto3.client("s3", region_name="eu-west-1").list_objects_v2(Bucket="bkt-a")["Contents"]] == ["kept"]
 
 
-def test_provision_reraises_real_errors() -> None:
-    fake = MagicMock()
-    fake.create_bucket.side_effect = ClientError({"Error": {"Code": "AccessDenied"}}, "CreateBucket")
-    with patch("lakehouse.storage.client.s3_client", return_value=fake), pytest.raises(ClientError):
-        warehouses.provision_bucket("bkt-a", _SO)
+@mock_aws
+def test_a_create_the_store_refuses_is_the_stores_refusal() -> None:
+    """S3 refuses a bucket name of fewer than three characters, which the warehouse door never sends."""
+    with pytest.raises(StoreRefusedError):
+        warehouses.provision_bucket("b", _WEST)
+
+
+@pytest.mark.parametrize(
+    ("held", "removed"),
+    [
+        pytest.param(["top", "table/data/0.lance", "table/_versions/1.manifest"], 3, id="a-bucket-holding-objects"),
+        pytest.param(None, 0, id="a-bucket-already-gone"),
+    ],
+)
+@mock_aws
+def test_a_purge_deletes_every_object_and_then_the_bucket_and_counts_the_objects(held: list[str] | None, removed: int) -> None:
+    """A re-issued delete, after a purge that finished or that another request finished, finds no bucket and converges."""
+    client = boto3.client("s3", region_name="eu-west-1")
+    if held is not None:
+        client.create_bucket(Bucket="bkt-a", CreateBucketConfiguration={"LocationConstraint": "eu-west-1"})
+    for key in held or []:
+        client.put_object(Bucket="bkt-a", Key=key, Body=b"x")
+
+    purged = warehouses.purge_bucket("bkt-a", _WEST)
+
+    assert (purged, [bucket["Name"] for bucket in client.list_buckets()["Buckets"]]) == (removed, [])
 
 
 # --------------------------------------------------------------------------- #

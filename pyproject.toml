@@ -183,6 +183,7 @@ max-nested-blocks = 3
 # can express.
 "packages/lakehouse/src/lakehouse/storage/client.py" = ["TID251"]  # boto3: the S3 client seam
 "packages/lakehouse/src/lakehouse/storage/sts.py" = ["TID251"]  # boto3: the STS client seam
+"packages/lakehouse/src/lakehouse/storage/errors.py" = ["TID251"]  # botocore.exceptions: the seam that reads the S3 client's failures
 "packages/lakehouse/src/lakehouse/process/draining.py" = ["TID251"]  # signal: the drain seam
 "packages/lakehouse/src/lakehouse/events/bus.py" = ["TID251"]  # nats: the lakehouse's one seam to the bus
 "services/maintenance/src/maintenance/services/queue.py" = ["TID251"]  # nats: the work queue's own seam (ADR 0198 decision 5)
@@ -209,6 +210,7 @@ max-nested-blocks = 3
 "typing.TypeVarTuple".msg = "Generics use PEP 695 type parameters, `def f[*Ts](...)` (writing-python, references/type-safety.md § Generics)."
 "dapr".msg = "The lakehouse speaks to the bus through lakehouse.events.bus and to its secret store through lakehouse.governed.secrets, each on the process's own connection."
 "boto3".msg = "Build S3/STS clients through lakehouse.storage.client.s3_client / lakehouse.storage.sts.sts_client: a raw boto3 client carries no timeouts."
+"botocore.exceptions".msg = "Read the S3 client's failures at one seam: wrap the store call in lakehouse.storage.errors.store_call and catch its StorageError family, which tells a refusal from a call the store did not answer."
 "lance.write_dataset".msg = "Lance is written only at the registered write doors (the catalog dataplane)."
 "lance.dataset".msg = "Open a dataset through lakehouse.lancekit.lance_session.open_dataset, which takes the session the open reads through: an open that names none takes Lance's default 1 GiB + 6 GiB cache caps for that one handle."
 "lance.fragment.write_fragments".msg = "Lance is written only at the registered write doors (the catalog dataplane)."

@@ -34,7 +34,7 @@ from datetime import datetime, timedelta
 from typing import Any, Final
 
 import lance
-from lance_namespace import InvalidInputError, ServiceUnavailableError
+from lance_namespace import InvalidInputError
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.core import lineage_emit, run_context, table_objects
@@ -55,7 +55,6 @@ from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.problems.outage import store_refusal
 from lakehouse.records import commit_records
 from lakehouse.storage import stored_objects
-from lakehouse.storage.errors import StorageError
 from lakehouse.storage.options import StorageOptions, on_s3
 
 
@@ -201,20 +200,17 @@ def mark_registered_heads(settings: CatalogStore, so: StorageOptions, *, locatio
     committed version has no head to mark, and a pass finds nothing there until a commit lands.
 
     Raises:
-        ServiceUnavailableError: A ref's head could not be read, or the store did not answer the mark's write; no mark
+        ServiceUnavailableError: The store did not answer a read of a ref's head or the mark's write; no mark was written.
+        InternalError: A ref's head could not be read, or the mark could not be written, for any other reason; no mark
             was written.
-        InternalError: The store refused the mark's write; no mark was written.
     """
     try:
         heads = _registered_heads(location, so)
         if heads:
             commit_records.write_marks(settings.registry_root, settings.storage_options(), table_uuid, marks=commit_records.CommitMarks(refs=heads))
-    except StorageError as exc:
-        log.warning("registered_heads_unmarked", extra={"location": location, "error": str(exc)[:300]})
-        raise store_refusal(exc, reading=f"marking the heads of the dataset at {location!r}", so="it was not registered") from exc
     except (OSError, ValueError) as exc:
         log.warning("registered_heads_unmarked", extra={"location": location, "error": str(exc)[:300]})
-        raise ServiceUnavailableError(f"the heads of the dataset at {location!r} could not be read and marked, so it was not registered") from exc
+        raise store_refusal(exc, reading=f"marking the heads of the dataset at {location!r}", so="it was not registered") from exc
 
 
 def _registered_heads(location: str, so: StorageOptions) -> dict[str, int]:

@@ -22,7 +22,7 @@ from lakehouse.lancekit import manifest_names
 from lakehouse.lancekit.base_refs import decoded_path, decoded_segments
 from lakehouse.storage import stored_objects
 from lakehouse.storage.options import StorageOptions, on_s3, s3_filesystem
-from lakehouse.storage.uri import split_s3_uri
+from lakehouse.storage.uri import s3_object
 
 
 __all__ = [
@@ -181,8 +181,8 @@ def delete_table_object(location: str, so: StorageOptions, relative: str) -> Non
     """
     try:
         if on_s3(location):
-            bucket, prefix = split_s3_uri(location)
-            path = f"{bucket}/{prefix}/{relative}"
+            bucket, key = s3_object(location, relative)
+            path = f"{bucket}/{key}"
         else:
             _, base = dataset_fs(location, so)
             path = f"{base.rstrip('/')}/{relative}"

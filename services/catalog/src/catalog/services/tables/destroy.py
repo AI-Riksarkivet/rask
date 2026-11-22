@@ -30,7 +30,7 @@ from lakehouse.records import base_registry, clone_sources, data_directories, lo
 from lakehouse.records.control_prefixes import CONTROL_PREFIXES
 from lakehouse.records.trash import TrashRecord
 from lakehouse.storage import stored_objects
-from lakehouse.storage.options import StorageOptions, object_client, on_s3
+from lakehouse.storage.options import StorageOptions, on_s3
 
 
 __all__ = [
@@ -235,11 +235,13 @@ def _table_paths(location: str) -> tuple[str, str]:
 
 
 def _objects_under(location: str, so: StorageOptions, path: str) -> list[str]:
-    """Every object under ``path/``, as a store path; on S3 a directory marker is one."""
+    """Every object under ``path/``, as a store path; on S3 a directory marker is one.
+
+    Raises:
+        OSError: The store refused the listing, or did not answer it.
+    """
     if on_s3(location):
-        bucket, _, key = path.partition("/")
-        pages = object_client(so).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/")
-        return [f"{bucket}/{entry['Key']}" for page in pages for entry in page.get("Contents", [])]
+        return [stored.path for stored in stored_objects.iter_under(f"s3://{path}", so)]
     fs, _ = dataset_fs(location, so)
     listed = fs.get_file_info(pafs.FileSelector(path, recursive=True, allow_not_found=True))
     return [info.path for info in listed if info.type == pafs.FileType.File]

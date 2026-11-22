@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from botocore.exceptions import EndpointConnectionError
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeNamespaceRequest, LanceNamespace, ListNamespacesRequest, connect
 from moto.server import ThreadedMotoServer
@@ -29,6 +30,7 @@ from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
+from tests.store_answers import answered
 
 
 def _settings(tmp_path: Any, store: str, *, reserved: str = "") -> Settings:
@@ -137,7 +139,8 @@ class _VendingStore:
     ``deny`` one that evaluates Allows alone, so a writer puts the final manifest only the catalog may;
     ``conditional-put`` one on which two writers both commit one Lance version; ``write-tier`` one that answers a
     writer's credential nothing at all. Its role holds no grant on any KMS key, so it refuses every write encrypting
-    with one.
+    with one. It fails as the S3 client fails: a refusal is a ``ClientError`` carrying its status and code, a request
+    never answered a transport error.
     """
 
     def __init__(self, *, ignores: str | None) -> None:
@@ -181,23 +184,25 @@ class _Signed:
 
     def _check(self, action: str, key: str) -> None:
         if self._tier == "write" and self._store.ignores == "write-tier":
-            raise ConnectionError("the store did not answer the write tier")
+            raise EndpointConnectionError(endpoint_url="http://store:9000")
         if not self._store.admits(self._tier, action, key):
-            raise PermissionError(f"AccessDenied: {action} on {key}")
+            raise answered(403, "AccessDenied")
 
     def put_object(  # noqa: N803 — boto3's casing
         self, *, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None, SSEKMSKeyId: str | None = None, **_sse: object
     ) -> dict[str, Any]:
         self._check("s3:PutObject", Key)
         if SSEKMSKeyId is not None:
-            raise PermissionError(f"AccessDenied: kms:GenerateDataKey on {SSEKMSKeyId} is not granted")
+            raise answered(403, "AccessDenied")
         if IfNoneMatch is not None and self._store.ignores != "conditional-put" and Key in self._store.keys:
-            raise FileExistsError("PreconditionFailed")
+            raise answered(412, "PreconditionFailed")
         self._store.keys[Key] = Body
         return {}
 
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
         self._check("s3:GetObject", Key)
+        if Key not in self._store.keys:
+            raise answered(404, "NoSuchKey")
         return {"Body": self._store.keys[Key]}
 
     def delete_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803

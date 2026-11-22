@@ -15,6 +15,7 @@ from botocore.exceptions import ClientError, EndpointConnectionError, ParamValid
 from moto import mock_aws
 
 from lakehouse.storage.errors import (
+    BucketExistsError,
     BucketNotFoundError,
     ObjectNotFoundError,
     PreconditionFailedError,
@@ -24,6 +25,7 @@ from lakehouse.storage.errors import (
     WriteConflictError,
     store_call,
 )
+from tests.store_answers import answered
 
 
 def _get_from_a_missing_bucket(client: Any) -> None:
@@ -41,12 +43,27 @@ def _put_over_a_moved_record(client: Any) -> None:
     client.put_object(Bucket="bkt", Key="k", Body=b"{}", IfMatch='"not-its-etag"')
 
 
+def _create_a_bucket_it_owns(_client: Any) -> None:
+    # Outside us-east-1, where S3 answers a second create of one's own bucket 200.
+    west = boto3.client("s3", region_name="eu-west-1")
+    for _ in range(2):
+        west.create_bucket(Bucket="bkt", CreateBucketConfiguration={"LocationConstraint": "eu-west-1"})
+
+
+def _delete_a_bucket_holding_an_object(client: Any) -> None:
+    client.create_bucket(Bucket="bkt")
+    client.put_object(Bucket="bkt", Key="k", Body=b"{}")
+    client.delete_bucket(Bucket="bkt")
+
+
 @pytest.mark.parametrize(
     ("call", "raised"),
     [
         pytest.param(_get_from_a_missing_bucket, BucketNotFoundError, id="no-such-bucket"),
         pytest.param(_get_a_missing_key, ObjectNotFoundError, id="no-such-key"),
         pytest.param(_put_over_a_moved_record, PreconditionFailedError, id="precondition-failed"),
+        pytest.param(_create_a_bucket_it_owns, BucketExistsError, id="bucket-already-there"),
+        pytest.param(_delete_a_bucket_holding_an_object, StoreRefusedError, id="bucket-not-empty"),
     ],
 )
 @mock_aws
@@ -58,20 +75,18 @@ def test_each_answer_the_store_gives_is_its_own_class_chained_to_the_clients(cal
     assert isinstance(caught.value.__cause__, ClientError)
 
 
-def _answered(status: int, code: str) -> ClientError:
-    answer: Any = {"Error": {"Code": code, "Message": code}, "ResponseMetadata": {"HTTPStatusCode": status}}
-    return ClientError(answer, "PutObject")
-
-
 @pytest.mark.parametrize(
     ("failure", "raised"),
     [
-        pytest.param(_answered(503, "SlowDown"), StoreUnansweredError, id="a-server-error"),
-        pytest.param(_answered(501, "NotImplemented"), StoreRefusedError, id="a-capability-the-store-lacks"),
+        pytest.param(answered(503, "SlowDown"), StoreUnansweredError, id="a-server-error"),
+        pytest.param(answered(501, "NotImplemented"), StoreRefusedError, id="a-capability-the-store-lacks"),
+        pytest.param(answered(400, "RequestTimeout"), StoreUnansweredError, id="a-request-the-store-gave-up-receiving"),
     ],
 )
-def test_a_server_error_is_no_answer_and_a_501_is_a_refusal(failure: ClientError, raised: type[StorageError]) -> None:
-    """The two sides of the outage rule's one exception: a 501 is the store saying it lacks what was asked."""
+def test_what_the_store_did_not_get_to_is_no_answer_and_a_501_is_a_refusal(failure: ClientError, raised: type[StorageError]) -> None:
+    """The outage rule's two exceptions to reading the status alone. A 501 is a server error that is an answer: the store
+    lacks what was asked. A 400 ``RequestTimeout`` is a client error that is none: the store gave up on a request it had
+    not finished receiving, which the S3 client itself retries as transient."""
     with pytest.raises(StorageError) as caught, store_call("writing b/k"):
         raise failure
 
@@ -82,7 +97,7 @@ def test_a_server_error_is_no_answer_and_a_501_is_a_refusal(failure: ClientError
 def test_a_409_is_a_write_that_met_another_in_flight_whatever_code_names_it() -> None:
     """Neither the condition's verdict (412) nor a refusal: a replace reads it as a record that changed, and a create
     lets it out, since the write it met may yet fail."""
-    failure = _answered(409, "OperationAborted")
+    failure = answered(409, "OperationAborted")
     with pytest.raises(StorageError) as caught, store_call("replacing b/k"):
         raise failure
 
@@ -101,7 +116,7 @@ def test_no_connection_is_no_answer() -> None:
 def test_a_missing_object_is_caught_as_a_file_not_found() -> None:
     """What the catchers written for an absent file on a filesystem already name, the outbox's drop among them."""
     with pytest.raises(FileNotFoundError) as caught, store_call("reading b/k"):
-        raise _answered(404, "NoSuchKey")
+        raise answered(404, "NoSuchKey")
 
     assert type(caught.value) is ObjectNotFoundError
 

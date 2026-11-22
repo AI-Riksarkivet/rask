@@ -62,6 +62,11 @@ REF_CHECK: Final = "ref_put_refused"
 WRITE_TIER_ISSUE: Final = "issue_write_tier"
 STAGED_MANIFEST: Final = "staged_manifest"
 
+#: The check a step leaves beside its own when the store did not answer its request. The step measured nothing, so its
+#: own check is ``skip``, and this one fails, naming the step in its detail. It describes reachability, as the setup
+#: steps do: a report holding it says the probe did not finish, never that the store broke a guarantee.
+STORE_ANSWERED: Final = "store_answered"
+
 
 class ProbeCheck(BaseModel):
     """One step of the probe, with its own outcome — never folded into a neighbour's."""

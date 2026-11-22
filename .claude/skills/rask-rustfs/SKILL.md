@@ -286,8 +286,11 @@ proves the same primitive, plus prefix scope, against any warehouse's store thro
 `POST /management/v1/warehouses/{warehouse_id}/validate` writes inside the prefix, is refused outside it, and sends two
 `If-None-Match: *` PUTs at one key expecting the second refused, and then, under a WRITE-tier credential for the same
 prefix, stages a manifest and expects a final manifest and a `_refs/` put refused ([[LH-511]]: the final one at a key
-the tier's Allow matches too, so only an honoured Deny refuses it; `versions_guarded` in the report). The warehouse
-create door runs the same probe and registers no warehouse on a store that fails it
+the tier's Allow matches too, so only an honoured Deny refuses it; `versions_guarded` in the report). A verdict is
+only ever the store's own answer: a request it does not answer leaves its check `skip` and fails `store_answered`
+beside it, so an outage neither passes a refusal the probe wanted nor fails a store that broke nothing. The warehouse
+create door runs the same probe, registers no warehouse on a store that fails it, and answers a retry (503) where the
+store did not answer
 (`services/catalog/src/catalog/api/v1/endpoints/warehouses.py`, `_run_scope_probe`, `_probe_the_write_tier`). Run it against a platform
 store before rask relies on it; it is not a contention test, so the CAS harness still decides exclusivity.
 

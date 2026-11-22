@@ -95,6 +95,7 @@ from catalog.services.vend_probe import (
     REF_CHECK,
     SCOPE_CHECK,
     STAGED_MANIFEST,
+    STORE_ANSWERED,
     WRITE_TIER_ISSUE,
     ProbeCheck,
     ProbeReport,
@@ -111,6 +112,7 @@ from lakehouse.records.trash import TrashRecord
 from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.client import S3Client, s3_client
 from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError
+from lakehouse.storage.errors import StorageError, StoreUnansweredError, store_call
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.uri import split_s3_uri
 
@@ -119,8 +121,12 @@ log = logging.getLogger(__name__)
 
 #: The probe checks whose failure is a verdict on the STORE: it ignored a credential's scope, a conditional put, or
 #: the write tier's Deny. Every other failing check (`issue`, `write_inside`, `read_inside`, `issue_write_tier`,
-#: `staged_manifest`, `cleanup`) means the probe could not reach the store or its STS, which says nothing about the store.
+#: `staged_manifest`, `cleanup`, `store_answered`) means the probe could not reach the store or its STS, which says
+#: nothing about the store.
 _CONFORMANCE_CHECKS: Final = frozenset({SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, ENCRYPTED_WRITE, FINAL_MANIFEST_CHECK, REF_CHECK})
+
+#: How much of a failure's text a probe check's detail carries.
+_PROBE_DETAIL_CHARS: Final = 160
 
 #: The checks of the probe's write-tier leg, in the order it makes them.
 _WRITE_TIER_CHECKS: Final = (WRITE_TIER_ISSUE, STAGED_MANIFEST, FINAL_MANIFEST_CHECK, REF_CHECK)
@@ -1593,7 +1599,7 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     def _step(name: str, fn: Callable[[], object], *, accepted_is: str = "") -> bool:
         # Records the check, and answers whether it got the outcome it wanted.
         check = _probe_step(name, fn, accepted_is=accepted_is)
-        checks.append(check)
+        checks.extend(_as_reported(check))
         return check.outcome == "pass"
 
     wrote = _step("write_inside", lambda: s3.put_object(Bucket=bucket, Key=inside, Body=b"scope-probe"))
@@ -1608,11 +1614,7 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     # on the vended KMS key fails here, a verdict on the store, not the first write to the warehouse's first table
     # ([[LH-262]]). The read back asks the key's decrypt as a reader would.
     _probe_encryption(_step, s3, bucket=bucket, sealed=sealed, options=options)
-    # `_step` returns "the step got the outcome we wanted", so a False here means the out-of-scope
-    # write LANDED and left an object at the warehouse root. Cleaned below — but only in that case:
-    # a correctly scoped credential is refused the delete too, and reporting that refusal as a
-    # cleanup failure would raise a false alarm about the store that just passed.
-    scope_refused = _step(
+    _step(
         SCOPE_CHECK,
         lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"),
         accepted_is="the store accepted a write OUTSIDE the credential's prefix",
@@ -1638,7 +1640,12 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
         # Under the probe tier: the write tier deletes nothing, what it landed included.
         for key in (inside, cas, sealed, *landed):
             s3.delete_object(Bucket=bucket, Key=key)
-        if not scope_refused:
+        # Only a write the store ACCEPTED, the scope check failed, left an object at the warehouse root, and only then
+        # is it deleted: a correctly scoped credential is refused the delete too, and reporting that refusal as a
+        # cleanup failure would raise a false alarm about the store that just passed. A write the store never answered
+        # is not chased either: nothing says it landed, and a store that took it is found, and the object removed, by
+        # the next run.
+        if any(check.name == SCOPE_CHECK and check.outcome == "fail" for check in checks):
             s3.delete_object(Bucket=bucket, Key=outside)
 
     _step("cleanup", _clean)
@@ -1673,14 +1680,32 @@ def _vend_the_probe(vendor: CredentialVendor, *, bucket: str, probe_prefix: str,
 
 
 def _probe_step(name: str, fn: Callable[[], object], *, accepted_is: str = "") -> ProbeCheck:
-    """Run one check, ``fn``, which must go through, or be refused where ``accepted_is`` says why accepting it is wrong."""
+    """Run one check, ``fn``, which must go through, or which the store must refuse where ``accepted_is`` says why
+    accepting it is wrong. The check is ``skip`` where the store did not answer the step, and only there.
+
+    A VERDICT IS ONLY EVER THE STORE'S OWN ANSWER. A request it did not answer measured nothing: read as the refusal a
+    check wanted, an outage would pass a control nothing tested, and read as a failure it would fail a store that broke
+    no guarantee. The report says beside such a check that the probe did not finish (:func:`_as_reported`).
+    """
     expect_refusal = bool(accepted_is)
     try:
-        fn()
-    except Exception as exc:  # noqa: BLE001 — the store's refusal is the RESULT here, not an error
-        detail = f"{type(exc).__name__}: {str(exc)[:120]}"
-        return ProbeCheck(name=name, outcome="pass" if expect_refusal else "fail", detail="" if expect_refusal else detail)
+        with store_call(f"the probe's {name}"):
+            fn()
+    except StoreUnansweredError as exc:
+        return ProbeCheck(name=name, outcome="skip", detail=str(exc)[:_PROBE_DETAIL_CHARS])
+    except StorageError as exc:
+        if expect_refusal:
+            return ProbeCheck(name=name, outcome="pass")
+        return ProbeCheck(name=name, outcome="fail", detail=f"{type(exc).__name__}: {exc}"[:_PROBE_DETAIL_CHARS])
     return ProbeCheck(name=name, outcome="fail", detail=accepted_is) if expect_refusal else ProbeCheck(name=name, outcome="pass")
+
+
+def _as_reported(check: ProbeCheck) -> list[ProbeCheck]:
+    """``check`` as the report holds it: beside a step the store did not answer, a failed :data:`STORE_ANSWERED` carrying
+    what the step's own check says of it, so the report fails on a probe that did not finish and on no verdict."""
+    if check.outcome != "skip":
+        return [check]
+    return [check, ProbeCheck(name=STORE_ANSWERED, outcome="fail", detail=check.detail)]
 
 
 def _probe_encryption(step: Callable[..., bool], s3: S3Client, *, bucket: str, sealed: str, options: StorageOptions) -> None:
@@ -1698,10 +1723,10 @@ def _probe_put_if_not_exists(step: Callable[..., bool], s3: S3Client, *, bucket:
     """Two conditional puts at ``cas``, the first accepted and the second refused; the check left unmeasured, if any."""
     reserved = step(CAS_RESERVE, lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"first", IfNoneMatch="*"))
     if not reserved:
-        # The store refused the HEADER, not a racing writer. That is a real failure — recorded by
-        # the step above — but it measures nothing about a second writer, so the claim stays
-        # UNKNOWN rather than becoming a verdict the probe never reached.
-        return ProbeCheck(name=CAS_CHECK, outcome="skip", detail="the store refused the conditional header itself")
+        # The first conditional put did not go through: the store refused the HEADER, or did not answer. Either is
+        # recorded by the step above, and measures nothing about a second writer, so the claim stays UNKNOWN
+        # rather than becoming a verdict the probe never reached.
+        return ProbeCheck(name=CAS_CHECK, outcome="skip", detail="the first conditional put did not go through")
     step(
         CAS_CHECK,
         lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"second", IfNoneMatch="*"),

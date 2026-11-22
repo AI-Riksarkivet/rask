@@ -27,7 +27,7 @@ from functools import cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Final
 
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError, ClientError  # noqa: TID251 — an exchange with STS, which is no store call
 from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from pydantic_settings import BaseSettings
 

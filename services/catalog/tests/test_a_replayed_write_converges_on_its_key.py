@@ -37,6 +37,7 @@ from lance_namespace import LanceNamespace
 
 from catalog.services.idempotency_records import PREFIX, InFlightError, KeyBinding, KeyReusedError, Replay, TakenOver, claim, reclaim, record_outcome, release
 from lakehouse.storage import conditional_records
+from lakehouse.storage.errors import StoreUnansweredError
 from lakehouse.storage.options import StorageOptions
 
 
@@ -182,6 +183,10 @@ def _keyed(catalog: Any, who: str, key: str | None, door: str, query: dict[str, 
     return catalog.client.post(f"{table}/{door}", params=query, json=body, headers=headers)
 
 
+#: What the drop's warning says of a stamp the store failed, by the case that fails it.
+_UNSTAMPED = {"stamp-refused": "the store refused the stamp", "stamp-unanswered": "the store did not answer the stamp"}
+
+
 def _seen(answer: Any) -> tuple[int, dict[str, Any]]:  # noqa: ANN401 — an httpx response
     """What a caller is told, less the per-request ``instance`` a problem names."""
     return answer.status_code, {name: value for name, value in answer.json().items() if name != "instance"}
@@ -208,11 +213,13 @@ def _seen(answer: Any) -> tuple[int, dict[str, Any]]:  # noqa: ANN401 — an htt
         pytest.param("another-request", "drop", {}, None, id="16-the-key-with-another-request"),
         pytest.param("another-name", "drop", {}, None, id="17-the-key-on-another-name"),
         pytest.param("stamp-refused", "drop", {}, None, id="18-a-drop-whose-stamp-the-store-refuses"),
+        pytest.param("stamp-unanswered", "drop", {}, None, id="19-a-drop-whose-stamp-the-store-does-not-answer"),
     ],
 )
 def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
     governed_catalog: Any,  # noqa: ANN401 — the conftest's GovernedCatalog
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
     case: str,
     door: str,
     query: dict[str, str],
@@ -226,7 +233,8 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
     takeover the evidence does not prove runs again against the state it finds (a drop another request landed first
     refuses 404; a create lost before it changed anything creates; a drop lost before its detach, its table renamed since,
     is not answered as done), and is refused as of unknown outcome where a second run would apply again (a restore) or the
-    evidence cannot be read."""
+    evidence cannot be read. A drop whose stamp the store fails answers all the same, and its warning says whether the
+    store refused the stamp or did not answer it."""
     from catalog.api import idempotency as keyed_doors
     from catalog.core import native
     from catalog.core.config import get_settings
@@ -263,6 +271,9 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
     def store_refuses(*_args: object, **_kwargs: object) -> bool:
         raise OSError("the store refused the write")
 
+    def store_does_not_answer(*_args: object, **_kwargs: object) -> bool:
+        raise StoreUnansweredError("stamping the trash record: the store did not answer")
+
     if case == "refused-first":
         protected = catalog.client.post("/management/v1/table/lance_catalog$db$t/protection", json={"protected": True}, headers=alice)
         assert protected.status_code == 200, protected.text
@@ -277,6 +288,8 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
             during.setattr(native, "call", detach_faults)
         if case == "stamp-refused":
             during.setattr(trash, "stamp_detached", store_refuses)
+        if case == "stamp-unanswered":
+            during.setattr(trash, "stamp_detached", store_does_not_answer)
         try:
             first = _keyed(catalog, "alice", FIRST_KEY, door, query, body, table=table)
         except RuntimeError:
@@ -309,11 +322,12 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
     if case == "died-before-the-detach":
         assert (again.status_code, again.json().get("code")) == (404, 4), f"a drop that never detached must not be answered as done: {again.text}"
         assert catalog.client.post("/v1/table/lance_catalog$db$m/describe", json={}, headers=alice).status_code == 200, "the table must still be readable"
-    elif case == "stamp-refused":
+    elif case in _UNSTAMPED:
         dropped = {"transaction_id": f"lance_catalog$db$t${uuid}"}
         assert first is not None and _seen(first) == (200, dropped), first.text if first is not None else None
         assert trash.get(settings.registry_root, settings.storage_options(), uuid) is not None, "the drop must have filed its trash record"
         assert _seen(again) == (200, dropped), again.text
+        assert [record.__dict__["reason"] for record in caplog.records if record.getMessage() == "drop_unstamped"] == [_UNSTAMPED[case]]
     elif case == "answered" or (case == "lost" and door == "drop"):
         answered = {"transaction_id": f"lance_catalog$db$t${uuid}"} if first is None else first.json()
         assert _seen(again) == (200, answered), again.text

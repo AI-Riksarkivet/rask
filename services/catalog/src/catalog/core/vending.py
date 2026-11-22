@@ -36,7 +36,7 @@ from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, assert_never, runtime_checkable
 from urllib.parse import urlsplit
 
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError, ClientError  # noqa: TID251 — an exchange with STS, which is no store call
 from lance_namespace import InternalError, InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field
 

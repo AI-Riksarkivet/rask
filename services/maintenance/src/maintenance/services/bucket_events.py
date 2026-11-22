@@ -23,7 +23,7 @@ import logging
 from collections.abc import Mapping
 from typing import Any, Final
 
-from botocore.exceptions import BotoCoreError, ClientError
+from botocore.exceptions import BotoCoreError, ClientError  # noqa: TID251 — every failure of the client's is one answer here: the bucket is unknown
 from pydantic import BaseModel, Field
 
 from lakehouse.records import warehouse_records

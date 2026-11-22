@@ -34,18 +34,25 @@ no profile and no shared file, so no `AWS_PROFILE` or config file the environmen
 
 ## Listing and errors
 
-Every S3 call the library makes is wrapped in `lakehouse.storage.errors.store_call`, so its caller meets the `StorageError`
-family for whatever the store answered and for a call that got no answer: `ObjectNotFoundError` (also a
-`FileNotFoundError`), `BucketNotFoundError`, `PreconditionFailedError` (412: a conditional write whose condition did not
-hold), `WriteConflictError` (409: another write of the key was in flight, which the store has not settled),
-`StoreRefusedError` and `StoreUnansweredError`. The family is `OSError`, the type pyarrow and Lance raise for the same
-failures, and each error chains the client's own as its cause; `no_answer` is the one rule for which failure is an
-outage, which `lakehouse.problems.outage` reads. A lost race (`RecordExistsError`, `RecordChangedError`) and an absent
+Every S3 call the library makes is wrapped in `lakehouse.storage.errors.store_call`, and so is every one a service
+makes itself (the catalog's reservation marker, its warehouse buckets and its storage probe), so a caller meets the
+`StorageError` family for whatever the store answered and for a call that got no answer: `ObjectNotFoundError` (also a
+`FileNotFoundError`), `BucketNotFoundError`, `BucketExistsError` (a create of a bucket that is there),
+`PreconditionFailedError` (412: a conditional write whose condition did not hold), `WriteConflictError` (409: another
+write of the key was in flight, which the store has not settled), `StoreRefusedError` and `StoreUnansweredError`. The
+family is `OSError`, the type pyarrow and Lance raise for the same failures, and each error chains the client's own as
+its cause; `no_answer` is the one rule for which failure is an outage, which `lakehouse.problems.outage` reads: no
+response, a 5xx other than 501, a 429, or a code by which S3 says it did not get to what was asked
+(`unanswered_code`: `InternalError`, `SlowDown`, `ServiceUnavailable`, and `RequestTimeout`, which it answers as a 400).
+No module outside this seam names the S3 client's own exception types: ruff bans `botocore.exceptions` (TID251), and
+the two exchanges with STS and maintenance's bucket audit hold the reasoned exemptions. A lost race (`RecordExistsError`, `RecordChangedError`) and an absent
 record (`RecordMissingError`) are not in the family: as `OSError`s every `except OSError` would answer them as an outage.
 A defect is not in the family either: a missing key pair (`MissingStoreCredentialError`) is no `OSError`, and a failure
 of the client's that is no answer of the store's (a parameter it refuses) passes through `store_call` as itself. The
 backups' key listing and their retention walk (`prune_timestamped_prefixes`, which keeps the newest N timestamped
 prefixes under a base) are the backup scripts' own, in `scripts/_backup_store.py`.
 
-`split_s3_uri("s3://bucket/prefix/")` returns `("bucket", "prefix")`, and `s3_object("s3://bucket/prefix", "k")` returns
-`("bucket", "prefix/k")`.
+`split_s3_uri("s3://bucket/prefix/")` returns `("bucket", "prefix")`, `s3_object("s3://bucket/prefix", "k")` returns
+`("bucket", "prefix/k")`, and `s3_listing("s3://bucket/prefix")` returns `("bucket", "prefix/")`, the prefix that lists
+everything beneath the location. A location at a bucket's root joins a key with no leading slash and lists the whole
+bucket (`("bucket", "")`).

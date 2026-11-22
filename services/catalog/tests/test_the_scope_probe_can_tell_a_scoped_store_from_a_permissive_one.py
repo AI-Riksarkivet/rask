@@ -9,7 +9,9 @@ to measure at runtime and is not knowable offline, so it is modelled here in bot
 that honours the session policy and one that accepts it and ignores it. What is under test is the
 probe's ability to TELL THEM APART and to say so — because a probe that misreports an over-permissive
 store is worse than no probe, and its own module records why: such a store is "UNDETECTABLE AFTER THE
-FACT".
+FACT". The fake fails as the S3 client fails: a refusal is a ``ClientError`` carrying the store's status and
+code, and a request the store never answered is a transport error, so the probe is held to telling those
+two apart as well.
 """
 
 from __future__ import annotations
@@ -19,14 +21,16 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import pytest
+from botocore.exceptions import EndpointConnectionError
 from pydantic import SecretStr
 
 from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import warehouses as endpoint
 from catalog.core.vending import ReclaimScope, TableRecords, VendedSession
-from catalog.services.vend_probe import CAS_CHECK, SCOPE_CHECK, ProbeCheck
+from catalog.services.vend_probe import CAS_CHECK, SCOPE_CHECK, STORE_ANSWERED, ProbeCheck
 from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.credential import S3KeyPair
+from tests.store_answers import answered
 
 
 if TYPE_CHECKING:
@@ -79,11 +83,14 @@ class _Store:
     `conditional` selects the put-if-not-exists behaviour: ``honours`` refuses a conditional put on a key
     that exists; ``ignores`` overwrites it; ``rejects`` raises on the header itself, which is what a store
     with no support at all does.
+
+    `unanswered` names a key the store never answers a put of: the request leaves and nothing comes back.
     """
 
-    def __init__(self, *, scoped_to: str | None, conditional: str = "honours") -> None:
+    def __init__(self, *, scoped_to: str | None, conditional: str = "honours", unanswered: str | None = None) -> None:
         self._scoped_to = scoped_to
         self._conditional = conditional
+        self._unanswered = unanswered
         #: The tier of the credential the next request is signed with (:meth:`signed_as`).
         self._tier = "probe"
         self.keys: dict[str, bytes] = {}
@@ -99,26 +106,28 @@ class _Store:
 
     def _check(self, key: str) -> None:
         if self._scoped_to is not None and not key.startswith(self._scoped_to):
-            raise PermissionError(f"AccessDenied: {key} is outside {self._scoped_to}")
+            raise answered(403, "AccessDenied")
 
     def put_object(self, *, Bucket: str, Key: str, Body: bytes, IfNoneMatch: str | None = None) -> dict[str, Any]:  # noqa: N803 — boto3's own casing
         self.attempted.append(Key)
+        if self._unanswered is not None and Key.endswith(self._unanswered):
+            raise EndpointConnectionError(endpoint_url="http://store:9000")
         self._check(Key)
         # A store that honours the policy holds the write tier to it as well: no final manifest, nothing under `_refs/`.
         if self._scoped_to is not None and self._tier == "write" and (Key.endswith(".manifest") or "/_refs/" in Key):
-            raise PermissionError(f"AccessDenied: the write tier is refused {Key}")
+            raise answered(403, "AccessDenied")
         if IfNoneMatch is not None:
             if self._conditional == "rejects":
-                raise ValueError("NotImplemented: this store does not support IfNoneMatch")
+                raise answered(501, "NotImplemented")
             if self._conditional == "honours" and Key in self.keys:
-                raise FileExistsError("PreconditionFailed: the key already exists")
+                raise answered(412, "PreconditionFailed")
         self.keys[Key] = Body
         return {}
 
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
         self._check(Key)
         if Key not in self.keys:
-            raise KeyError(Key)
+            raise answered(404, "NoSuchKey")
         return {"Body": self.keys[Key]}
 
     def delete_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:  # noqa: N803
@@ -152,12 +161,12 @@ class _Installed:
 def store_factory(monkeypatch: pytest.MonkeyPatch) -> Callable[..., _Installed]:
     """Install a store in place of the real S3 client and hand back a handle to it."""
 
-    def _install(*, scoped: bool, conditional: str = "honours") -> _Installed:
+    def _install(*, scoped: bool, conditional: str = "honours", unanswered: str | None = None) -> _Installed:
         installed = _Installed()
 
         def _client(endpoint_url: str | None = None, *, key_pair: S3KeyPair, **_kwargs: object) -> _Store:
             if installed.store is None:
-                installed.store = _Store(scoped_to=installed.prefix if scoped else None, conditional=conditional)
+                installed.store = _Store(scoped_to=installed.prefix if scoped else None, conditional=conditional, unanswered=unanswered)
             return installed.store.signed_as(key_pair.access_key_id)
 
         monkeypatch.setattr(endpoint, "s3_client", _client)
@@ -251,6 +260,23 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
         assert outcomes["write_inside"] == "fail"
         assert [outcomes[n] for n in ("read_inside", SCOPE_CHECK, "cleanup")] == ["skip"] * 3
         assert endpoint.summarize_probe(checks).enforced is None
+
+    def test_a_write_outside_the_store_never_answered_learns_nothing_about_scope(self, store_factory: Callable[..., _Installed]) -> None:
+        """A request the store did not answer is no refusal: the store may honour the scope or ignore it, and the probe
+        has not learned which. Read as the refusal the check wanted, an outage at that moment would report a guarantee
+        nothing tested. So the check is unmeasured, the report fails on the store not answering, naming the step, and
+        the cleanup does not chase a key nothing says landed with a delete a scoped credential is refused."""
+        vendor = _Vendor(credentials=_creds())
+        installed = store_factory(scoped=True, unanswered="_validate_scope_probe_should_fail")
+        installed.prefix = "acme/warehouse/_validate/"
+
+        checks = _run(vendor)
+        outcomes = _named(checks)
+        report = endpoint.summarize_probe(checks)
+
+        assert (outcomes[SCOPE_CHECK], outcomes[STORE_ANSWERED], outcomes["cleanup"]) == ("skip", "fail", "pass")
+        assert next(c.detail for c in checks if c.name == STORE_ANSWERED).startswith(f"the probe's {SCOPE_CHECK}: the store did not answer")
+        assert (report.enforced, report.outcome) == (None, "fail")
 
 
 class TestConditionalPut:

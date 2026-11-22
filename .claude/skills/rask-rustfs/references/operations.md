@@ -106,4 +106,6 @@ Citations: `rustfs@1.0.3:<path>:<line>`, `docs:<path>`, rask paths bare.
   landed (inference): not a consistent Lance backup, and two writable sites would let two commits win.
 - **Delete bucket**: refused `BucketNotEmpty` (409) from a raw per-disk residue scan, logged and counted
   (`rustfs@1.0.3:crates/ecstore/src/store/bucket.rs:36-86,103`). Whether pending multipart uploads count as residue is
-  not confirmed; the purge aborts them before DeleteBucket and treats a 409 after a full drain as a store fault.
+  not confirmed. The catalog's purge (`catalog.services.warehouses.purge_bucket`) deletes every listed object by key and
+  then the bucket, and aborts no upload: a `BucketNotEmpty` after that is the store's refusal (`StoreRefusedError`), which
+  the warehouse delete answers as partly applied, to be issued again.

@@ -114,6 +114,7 @@ from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.lancekit.features import CREATE_FORMAT, table_file_format
 from lakehouse.naming import uuid_of
 from lakehouse.problems.ns_errors import PartiallyAppliedError
+from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.process.supervision import is_fault
 from lakehouse.records import base_registry, location_claims, object_records, protection, trash
 from lakehouse.records.protection import ProtectionRecord
@@ -902,8 +903,8 @@ async def _stamp_the_drop(
 
     ONLY ONCE THE DETACH RETURNED: a record a drop filed before dying ahead of the detach describes a table still live,
     and must not prove that drop. Held, a record withdrawn meanwhile is filed again, stamped (`trash.stamp_detached`). A
-    stamp the store refuses is logged and the drop answers: its fence is left to lapse, which is how the finish tells
-    this drop's detach (`Announcer.landed`).
+    stamp the store refuses, or does not answer, is logged as which and the drop answers: its fence is left to lapse,
+    which is how the finish tells this drop's detach (`Announcer.landed`).
 
     LOST, the detach having returned after the fence lapsed, the door answers the drop's success where its record stands
     stamped for it (the finish judged it), and where no record stands and the table resolves under no name: the finish
@@ -931,7 +932,8 @@ async def _stamp_the_drop(
     try:
         stamped = await run_in_threadpool(partial(trash.stamp_detached, root, so, record, refile=True))
     except OSError as exc:
-        log.warning("drop_unstamped", extra={"uuid": record.uuid, "drop": record.drop, "reason": "the store refused the stamp", "error": type(exc).__name__})
+        reason = "the store did not answer the stamp" if reads_as_store_outage(exc) else "the store refused the stamp"
+        log.warning("drop_unstamped", extra={"uuid": record.uuid, "drop": record.drop, "reason": reason, "error": type(exc).__name__})
         return False
     if not stamped:
         log.warning("drop_unstamped", extra={"uuid": record.uuid, "drop": record.drop, "reason": "another drop's record stands in its place"})

@@ -48,16 +48,25 @@ pyarrow 25.0.0 against a store answering each fault to a HEAD, a multipart PUT a
     connection dropped           "AWS Error NETWORK_CONNECTION during ...: curlCode: 28, Timeout was reached ..."
     403, 404 NoSuchBucket, 429   "AWS Error ACCESS_DENIED", "AWS Error NO_SUCH_BUCKET", "AWS Error UNKNOWN (HTTP status 429)"
 
+S3 answers a request it gave up receiving as a 400 ``RequestTimeout``. Measured 2026-11-22 on pylance 14.0.3 and pyarrow
+25.0.0, a proxy in front of moto answering every request with that status and code: pylance flattens it with the store's
+body, "... - Server returned non-2xx status code: 400 Bad Request: <?xml ...><Error><Code>RequestTimeout</Code>...", and
+pyarrow names the code, "AWS Error REQUEST_TIMEOUT during ListObjectsV2 operation: RequestTimeout". A ``HEAD`` has no
+body to carry the code, so no dialect can tell that one from another 400 (pyarrow: "AWS Error UNKNOWN (HTTP status 400)
+during HeadObject operation: No response body."; the native backend: ``inner: Status { status: 400, body: Some("") }``),
+and it stays the fault a 400 is.
+
 The catalog's control records go through the S3 client (botocore), the one dialect that TYPES its failures: no response
 is a ``ConnectionError`` or an ``HTTPClientError`` (no connection, a connect or read past its bound, a connection
 closed), and an answer is a ``ClientError`` carrying the status. The library maps them to its own ``StorageError`` family
 at one seam, which chains the client's own (``raise ... from exc``), and which of them is an outage is that seam's rule
 (``lakehouse.storage.errors.no_answer``), read here on the failure and on each cause beneath it.
 
-The transport failures, the 5xx and a 429 are outages. A 429 is the store's rate limit: it answered "not now", which a
-retry after a wait is for, in every dialect above. Any other 4xx is NOT: the store answered, and what it said (no such
-bucket, access denied, an expired token) will be said again on retry, so it stays the fault it is rather than becoming
-a 503 that invites a retry loop against a misconfiguration. The native 403 is excluded twice over: its source is
+The transport failures, the 5xx, a 429 and a ``RequestTimeout`` are outages. A 429 is the store's rate limit: it
+answered "not now", which a retry after a wait is for, in every dialect above; a ``RequestTimeout`` is the store giving up
+on a request it had not finished receiving, which the next try sends whole. Any other 4xx is NOT: the store answered,
+and what it said (no such bucket, access denied, an expired token) will be said again on retry, so it stays the fault it
+is rather than becoming a 503 that invites a retry loop against a misconfiguration. The native 403 is excluded twice over: its source is
 `PermissionDenied`, not `Generic`, and its status is neither a 5xx nor a 429.
 """
 
@@ -86,8 +95,11 @@ _SERVER_ERROR_MARKERS = (
 )
 #: The store answered with its rate limit, a 429, in each dialect's words.
 _THROTTLED_MARKERS = ("non-2xx status code: 429", "inner: Status { status: 429", "(HTTP status 429)")
-#: Every way the store did not answer the call itself: no response, a server error or its rate limit.
-_NO_ANSWER_MARKERS = _TRANSPORT_MARKERS + _SERVER_ERROR_MARKERS + _THROTTLED_MARKERS
+#: The store gave up on a request it had not finished receiving: S3's 400 ``RequestTimeout``, by the code in the body
+#: pylance and the native backend quote, and by pyarrow's name for it.
+_TIMED_OUT_MARKERS = ("<Code>RequestTimeout</Code>", "AWS Error REQUEST_TIMEOUT")
+#: Every way the store did not answer the call itself: no response, a server error, its rate limit or its own timeout.
+_NO_ANSWER_MARKERS = _TRANSPORT_MARKERS + _SERVER_ERROR_MARKERS + _THROTTLED_MARKERS + _TIMED_OUT_MARKERS
 
 
 def reads_as_store_outage(exc: BaseException) -> bool:

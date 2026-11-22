@@ -24,23 +24,21 @@ from pydantic import BaseModel, ConfigDict
 
 from lakehouse.storage.client import MAX_POOL_CONNECTIONS, S3Client
 from lakehouse.storage.conditional_records import store_clock
-from lakehouse.storage.errors import ObjectNotFoundError, StoreRefusedError, StoreUnansweredError, store_call
+from lakehouse.storage.errors import ObjectNotFoundError, StoreRefusedError, StoreUnansweredError, store_call, unanswered_code
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions, object_client, on_s3
-from lakehouse.storage.uri import s3_object, split_s3_uri
+from lakehouse.storage.uri import s3_listing, s3_object
 
 
-#: The most keys one S3 DeleteObjects request takes.
-_DELETE_BATCH: Final = 1000
+#: The most keys one S3 DeleteObjects request takes: what :func:`delete_objects` sends at a time, and what a caller
+#: deleting a listing it does not hold whole hands it at a time.
+DELETE_BATCH: Final = 1000
 
 #: How many objects :func:`identities` asks the store about at once: as many as one client's pool keeps.
 _IDENTITY_READS: Final = MAX_POOL_CONNECTIONS
 
 #: How much of a local object :func:`identities` hashes per read.
 _HASH_CHUNK: Final = 1 << 20
-
-#: The per-key codes of a DeleteObjects answer that say the store did not get to the key, which a retry may clear.
-_KEY_UNANSWERED: Final = frozenset({"InternalError", "SlowDown", "ServiceUnavailable"})
 
 #: The logger every object :func:`delete_objects` removes is recorded on, one line per object ([[LH-232]]). Lance writes
 #: its own deletes as ``lance::events::file_audit`` lines on stderr when ``LANCE_LOG`` asks for them; rask's deletes by
@@ -70,7 +68,8 @@ def list_under(uri: str, storage_options: StorageOptions) -> list[StoredObject]:
     """Every object beneath ``uri``, at any depth; ``[]`` when nothing is there.
 
     Any ``s3://`` root is listed through the object client, endpoint or none, so the listing asks the store for
-    ``<key>/`` alone, what a session scoped to the location may list.
+    ``<key>/`` alone, what a session scoped to the location may list, and for the whole bucket where the location is
+    its root.
 
     Raises:
         StorageError: The store refused the listing, or did not answer it.
@@ -126,10 +125,10 @@ def list_under_at(uri: str, storage_options: StorageOptions) -> StoreListing:
 def _s3_pages(uri: str, storage_options: StorageOptions) -> tuple[str, Iterator[Mapping[str, Any]]]:
     """The bucket ``uri`` names, and the pages of a listing of everything beneath its key, each request mapped by
     :func:`store_call`."""
-    bucket, key = split_s3_uri(uri)
+    bucket, under = s3_listing(uri)
     doing = f"listing {uri}"
     with store_call(doing):
-        pages = iter(object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key}/"))
+        pages = iter(object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=under))
     return bucket, _answered_pages(doing, pages)
 
 
@@ -190,8 +189,8 @@ def listed_identities(uri: str, storage_options: StorageOptions, keys: Sequence[
         return {}
     if not on_s3(uri):
         return identities(uri, storage_options, keys)
-    bucket, prefix = split_s3_uri(uri)
-    under, wanted = f"{prefix}/" if prefix else "", set(keys)
+    bucket, under = s3_listing(uri)
+    wanted = set(keys)
     found: dict[str, ObjectIdentity] = {}
     with store_call(f"listing {bucket}/{under}"):
         for page in object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=under):
@@ -322,8 +321,8 @@ def delete_objects(uri: str, storage_options: StorageOptions, paths: list[str]) 
         bucket, _, key = path.partition("/")
         by_bucket.setdefault(bucket, []).append(key)
     for bucket, keys in by_bucket.items():
-        for start in range(0, len(keys), _DELETE_BATCH):
-            _delete_batch(client, bucket, keys[start : start + _DELETE_BATCH])
+        for start in range(0, len(keys), DELETE_BATCH):
+            _delete_batch(client, bucket, keys[start : start + DELETE_BATCH])
 
 
 def _delete_local(uri: str, storage_options: StorageOptions, paths: list[str]) -> None:
@@ -338,8 +337,8 @@ def _delete_local(uri: str, storage_options: StorageOptions, paths: list[str]) -
 def _delete_batch(client: S3Client, bucket: str, keys: list[str]) -> None:
     """One DeleteObjects request for ``keys`` in ``bucket``, recording each key the store deleted.
 
-    A key the store answered ``InternalError``, ``SlowDown`` or ``ServiceUnavailable`` for is one it did not get to, an
-    outage a retry may clear; any other per-key error is its refusal. The keys it did delete are recorded first.
+    A key the store answered with a code saying it did not get to it (:func:`lakehouse.storage.errors.unanswered_code`)
+    is an outage a retry may clear; any other per-key error is its refusal. The keys it did delete are recorded first.
 
     Raises:
         StorageError: The store failed the request as a whole, or a key of it: ``StoreUnansweredError`` where it did
@@ -355,7 +354,7 @@ def _delete_batch(client: S3Client, bucket: str, keys: list[str]) -> None:
     if not failed:
         return
     message = f"deleting {len(keys)} key(s) in {bucket}: the store failed {len(failed)} of them: {failed[:3]}"
-    if any(str(error.get("Code")) in _KEY_UNANSWERED for error in failed):
+    if any(unanswered_code(str(error.get("Code"))) for error in failed):
         raise StoreUnansweredError(message, response=answered)
     raise StoreRefusedError(message, response=answered)
 
@@ -411,6 +410,7 @@ def _record_deleted(path: str) -> None:
 
 
 __all__ = [
+    "DELETE_BATCH",
     "FILE_AUDIT_LOGGER",
     "ObjectIdentity",
     "StoreListing",

@@ -42,8 +42,9 @@ from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.problems.ns_errors import PartiallyAppliedError
 from lakehouse.process.supervision import is_fault
 from lakehouse.records import base_registry, commit_records, file_identities, location_claims
+from lakehouse.storage.errors import store_call
 from lakehouse.storage.options import StorageOptions, object_client, on_s3
-from lakehouse.storage.uri import split_s3_uri
+from lakehouse.storage.uri import s3_object
 
 
 __all__ = [
@@ -329,10 +330,15 @@ def _namespace_holds(ns: LanceNamespace, segments: list[str]) -> bool:
 
 
 def _reserve(location: str, so: StorageOptions) -> None:
-    """Write the `.lance-reserved` marker at ``location``, as :func:`delete_table_object` deletes: no directory object beside it."""
+    """Write the `.lance-reserved` marker at ``location``, as :func:`delete_table_object` deletes: no directory object beside it.
+
+    Raises:
+        OSError: The store refused the write, or did not answer it.
+    """
     if on_s3(location):
-        bucket, prefix = split_s3_uri(location)
-        object_client(so).put_object(Bucket=bucket, Key=f"{prefix}/{RESERVED_MARKER}", Body=b"")
+        bucket, key = s3_object(location, RESERVED_MARKER)
+        with store_call(f"reserving {bucket}/{key}"):
+            object_client(so).put_object(Bucket=bucket, Key=key, Body=b"")
         return
     fs, path = dataset_fs(location, so)
     fs.create_dir(path, recursive=True)

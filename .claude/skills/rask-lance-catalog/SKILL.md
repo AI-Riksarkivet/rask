@@ -533,7 +533,9 @@ the rule:
   recorded author, ADR 0204) or unauthored,
   and only once each confirmed version's author record is deleted: a delete the store refuses holds the mark below it.
   A registered table's first mark is its register's ([[LH-550]]): the register door mints the table's uuid, marks each
-  ref at its head (`commit_reconcile.mark_registered_heads`, 503 code 17 when a head cannot be read; a dataset pylance
+  ref at its head (`commit_reconcile.mark_registered_heads`, answered by `store_refusal` as its two other guards are, the
+  read of a clone's source's claim and the filing of the clone's ending: 503 code 17 where the store did not answer, 500
+  code 18 for any other failure, a claim no reader can take for one among them; a dataset pylance
   refuses over its feature flags is left to the judge, which refuses it, 400 for flag 256 and 503 for any other) and
   only then takes the location's claim, which is what makes a table one the tick reads. The versions a register attaches
   were committed past every door, so none is announced or counted, whatever `rask.author` it carries; its

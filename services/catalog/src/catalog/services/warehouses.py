@@ -14,7 +14,8 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import suppress
-from typing import TYPE_CHECKING, Any
+from itertools import batched
+from typing import Any
 
 import pyarrow.fs as pafs
 from lance_namespace import (
@@ -43,13 +44,11 @@ from lakehouse.records.record_store import delete_record
 from lakehouse.records.trash import TrashRecord
 from lakehouse.records.warehouse_records import DeleteMode, UnreadableWarehouseRecordError, WarehouseRecord
 from lakehouse.records.warehouse_records import read as read_warehouse_record
+from lakehouse.storage import stored_objects
 from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
+from lakehouse.storage.errors import BucketExistsError, BucketNotFoundError, store_call
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import DEFAULT_REGION, StorageOptions, object_client
-
-
-if TYPE_CHECKING:
-    from mypy_boto3_s3.type_defs import ObjectIdentifierTypeDef
 
 
 log = logging.getLogger(__name__)
@@ -106,11 +105,11 @@ def provision_bucket(bucket: str, storage_options: StorageOptions) -> None:
 
     Uses boto3 against the same endpoint/credentials the catalog already holds. An already-owned/existing
     bucket is a no-op (a re-provision on a warehouse-create retry must not fail). Blocking IO; threadpool it.
-    """
-    from botocore.exceptions import ClientError
 
+    Raises:
+        OSError: The store refused the create, or did not answer it.
+    """
     region = storage_options.region or DEFAULT_REGION
-    client = object_client(storage_options)
     # Real AWS S3 REJECTS create_bucket without a LocationConstraint outside us-east-1; RustFS ignores
     # it. Sending it only when region != us-east-1 keeps RustFS working and a real-S3 backend correct.
     # dict[str, object] makes the **splat mismatch every typed create_bucket parameter
@@ -119,11 +118,9 @@ def provision_bucket(bucket: str, storage_options: StorageOptions) -> None:
     if region != "us-east-1":
         kwargs["CreateBucketConfiguration"] = {"LocationConstraint": region}
     try:
-        client.create_bucket(**kwargs)
-    except ClientError as exc:
-        code = str(exc.response.get("Error", {}).get("Code", ""))
-        if code not in ("BucketAlreadyOwnedByYou", "BucketAlreadyExists"):
-            raise
+        with store_call(f"creating bucket {bucket}"):
+            object_client(storage_options).create_bucket(**kwargs)
+    except BucketExistsError:
         log.info("warehouse_bucket_exists", extra={"bucket": bucket})
 
 
@@ -532,28 +529,23 @@ def purge_bucket(bucket: str, storage_options: StorageOptions) -> int:
     """Delete every object in ``bucket`` and then the bucket itself. Returns the object count removed.
 
     The IRREVERSIBLE half of a warehouse delete, reached only through an explicit ``?purge_bucket=true``.
-    S3 refuses to delete a non-empty bucket, so the contents go first (paginated — a warehouse holds far
-    more than one page of objects). An already-absent bucket is a no-op (0), so a retry after a partial
-    purge converges instead of erroring.
-    """
-    from botocore.exceptions import ClientError
+    S3 refuses to delete a non-empty bucket, so the contents go first, one delete request's worth of the listing at a
+    time (a warehouse holds far more than one page of objects), each object's delete recorded as every delete by key is
+    ([[LH-232]]). An already-absent bucket is a no-op (0), so a retry after a partial purge converges instead of erroring.
 
-    client = object_client(storage_options)
+    Raises:
+        OSError: The store refused the listing, a key's delete or the bucket's, or did not answer it. What was deleted
+            before it stays deleted, and the bucket stands.
+    """
+    root = f"s3://{bucket}"
     removed = 0
     try:
-        paginator = client.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=bucket):
-            keys: list[ObjectIdentifierTypeDef] = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
-            if not keys:
-                continue
-            # delete_objects caps at 1000 keys per call, which is exactly the paginator's page size.
-            client.delete_objects(Bucket=bucket, Delete={"Objects": keys})
-            removed += len(keys)
-        client.delete_bucket(Bucket=bucket)
-    except ClientError as exc:
-        code = str(exc.response.get("Error", {}).get("Code", ""))
-        if code not in ("NoSuchBucket", "404"):
-            raise
+        for listed in batched(stored_objects.iter_under(root, storage_options), stored_objects.DELETE_BATCH, strict=False):
+            stored_objects.delete_objects(root, storage_options, [stored.path for stored in listed])
+            removed += len(listed)
+        with store_call(f"deleting bucket {bucket}"):
+            object_client(storage_options).delete_bucket(Bucket=bucket)
+    except BucketNotFoundError:
         log.info("warehouse_bucket_already_absent", extra={"bucket": bucket})
     log.info("warehouse_bucket_purged", extra={"bucket": bucket, "objects": removed})
     return removed

@@ -76,6 +76,7 @@ from maintenance.services.expiry import DatasetResult
 from maintenance.services.naming import claim_store, policy_owners
 from maintenance.services.plan import PlanContext
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
+from tests.store_answers import answered
 
 
 if TYPE_CHECKING:
@@ -756,11 +757,6 @@ class _FailsAt:
         return getattr(self._inner, name)
 
 
-def _the_store_answers(status: int, code: str) -> ClientError:
-    answer: Any = {"Error": {"Code": code, "Message": code}, "ResponseMetadata": {"HTTPStatusCode": status}}
-    return ClientError(answer, "GetObject")
-
-
 def _the_endings(_source: str) -> str:
     return f"{clone_ending_records.PREFIX}/"
 
@@ -769,24 +765,45 @@ def _the_marks(_source: str) -> str:
     return f"{commit_records.MARKS_PREFIX}/"
 
 
+type _Fault = Callable[[_Estate, pytest.MonkeyPatch, str], None]
+
+
+def _the_store_fails(failing: Callable[[str], str], failure: ClientError) -> _Fault:
+    """The store answering ``failure`` to every read and write of the keys ``failing`` names for a registration's source."""
+
+    def _arrange(_estate: _Estate, monkeypatch: pytest.MonkeyPatch, source: str) -> None:
+        real_client = storage_client.s3_client
+        monkeypatch.setattr(
+            storage_client, "s3_client", lambda *args, **kwargs: _FailsAt(real_client(*args, **kwargs), marker=failing(source), failure=failure)
+        )
+
+    return _arrange
+
+
+def _the_sources_claim_is_no_claim(estate: _Estate, _monkeypatch: pytest.MonkeyPatch, source: str) -> None:
+    """The record at the source's claim key holding what no reader can take for a claim."""
+    estate.s3.put_object(Bucket=estate.bucket, Key=location_claims.claim_key(source), Body=b'{"held": "by nobody"}')
+
+
 @pytest.mark.parametrize(
-    ("failing", "failure", "answer"),
+    ("fault", "answer"),
     [
-        pytest.param(location_claims.claim_key, _the_store_answers(403, "AccessDenied"), (500, 18), id="the-sources-claim-refused"),
-        pytest.param(_the_endings, _the_store_answers(403, "AccessDenied"), (500, 18), id="the-clones-ending-refused"),
-        pytest.param(_the_marks, _the_store_answers(403, "AccessDenied"), (500, 18), id="the-heads-mark-refused"),
-        pytest.param(location_claims.claim_key, _the_store_answers(503, "SlowDown"), (503, 17), id="the-sources-claim-unanswered"),
+        pytest.param(_the_store_fails(location_claims.claim_key, answered(403, "AccessDenied")), (500, 18), id="the-sources-claim-refused"),
+        pytest.param(_the_store_fails(_the_endings, answered(403, "AccessDenied")), (500, 18), id="the-clones-ending-refused"),
+        pytest.param(_the_store_fails(_the_marks, answered(403, "AccessDenied")), (500, 18), id="the-heads-mark-refused"),
+        pytest.param(_the_store_fails(location_claims.claim_key, answered(503, "SlowDown")), (503, 17), id="the-sources-claim-unanswered"),
+        pytest.param(_the_sources_claim_is_no_claim, (500, 18), id="the-sources-claim-unreadable"),
     ],
 )
-def test_a_registration_whose_guard_the_store_fails_registers_nothing_and_answers_by_the_failure(
-    estate: _Estate, monkeypatch: pytest.MonkeyPatch, failing: Callable[[str], str], failure: ClientError, answer: tuple[int, int]
+def test_a_registration_whose_guard_fails_registers_nothing_and_answers_by_the_failure(
+    estate: _Estate, monkeypatch: pytest.MonkeyPatch, fault: _Fault, answer: tuple[int, int]
 ) -> None:
     """A registration marks its dataset's heads, reads the claim of its clone's source and files the clone's ending
-    before the table is one. A store that refuses one of them is a fault no retry clears (500, code 18), one that does
-    not answer is an outage (503, code 17), and either way the name holds no table."""
+    before the table is one. A store that refuses one of them, and a claim no reader can take for one, are faults no
+    retry clears (500, code 18); a store that does not answer is an outage (503, code 17); either way the name holds
+    no table."""
     bronze, _ = _unregistered_clone(estate)
-    real_client = storage_client.s3_client
-    monkeypatch.setattr(storage_client, "s3_client", lambda *args, **kwargs: _FailsAt(real_client(*args, **kwargs), marker=failing(bronze), failure=failure))
+    fault(estate, monkeypatch, bronze)
 
     refused = estate.client.post("/v1/table/lance_catalog$db$silver/register", json={"location": "silver"})
 
@@ -803,7 +820,7 @@ def test_a_claim_the_store_does_not_answer_leaves_its_table_unnamed_and_the_rest
     table = fga_ids.table_object(estate.table_uuid("lance_catalog$db$victim"))
     namespace = fga_ids.namespace_object(estate.namespace_uuid("lance_catalog$db"))
     real_client = storage_client.s3_client
-    unanswered = _the_store_answers(503, "SlowDown")
+    unanswered = answered(503, "SlowDown")
     monkeypatch.setattr(
         storage_client,
         "s3_client",
