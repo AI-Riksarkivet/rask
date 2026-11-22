@@ -37,7 +37,7 @@ whole run, outage and recovery included, on the e2e-stack kind lane (run 3904982
 | Lineage | scaled to zero | Commits go on landing; its durable consumer resumes where it stopped and records each announcement once. | 39 s |
 | The bus (`rask-nats`, three nodes) | scaled 3 → 0 for 150 s | Commits and grants land, their announcements staged in the outboxes, and the lineage relay records the staged writes without the bus. Each service's own connection is opened again by its own loop (`lakehouse.events.bus`), and its consumers are pulled or followed again on it (below). | 320 s, 150 s of it the outage² |
 | Dex | its Service cut from its pod | A door holding the issuer's key set (300 s) accepts an existing token. A door that must fetch the key set answers 503 code 17, never 401, and accepts the token again once Dex is back, with no restart. | 69 s |
-| The secret store (`rask-openbao`) | sealed in place | Within one re-read of its key (300 s) the catalog drops its signing key, then refuses every write it would announce with 503 code 17 before committing it. The store's contents survive the seal, so nothing is minted again. | 290 s, most of it the re-read |
+| The secret store (`rask-openbao`) | sealed in place | The catalog goes on signing with the key it holds for as long as the login the store last admitted it under stands (`openbao.identity.tokenTtl`, 15m by default; ADR 0203), so a write it can still announce lands. Once that login has run out it drops the key at its next re-read (300 s), then refuses every write it would announce with 503 code 17 before committing it. The store's contents survive the seal, so nothing is minted again. | 5 to 6 min on a 2-minute login (a kind lane of my own, 2026-11-22) |
 | The catalog | its uvicorn SIGKILLed, four writers committing through `version/create` | Every acknowledged commit lands once, a commit whose answer the kill lost lands at most once, and no run lands twice: Lance's put-if-not-exists of each `_versions/` manifest keeps one history. | 168 s |
 
 ¹ Measured on the RustFS fixture (ADR 0168): run 39129931426, main's e2e-stack lane, 2026-10-18; the drill passed
@@ -156,8 +156,9 @@ asked for again by the lane that met it, on the numbers that lane names (`lakeho
      relays deliver once the bus is back.
    - **The object store** (the RustFS fixture in development) — the S3 data plane. Down → no Lance read/write.
    - **The secret store / OpenFGA / Dex** — one pod each in development (the store and Dex are fixtures; production
-     names the platform's). The store sealed: a signer drops its key within one re-read (300 s) and the catalog refuses
-     every write it would announce, and the bus is dialled with the pod's own token, not a credential read from the store. OpenFGA down: every governed door answers 503 code 17. Dex down: a door that still holds
+     names the platform's). The store sealed or unreachable: a signer goes on signing with the key it holds until the
+     login the store last admitted it under has run out (`openbao.identity.tokenTtl`, 15m by default), drops the key at
+     its next re-read (300 s), and from then the catalog refuses every write it would announce; the bus is dialled with the pod's own token, not a credential read from the store. OpenFGA down: every governed door answers 503 code 17. Dex down: a door that still holds
      its key set accepts the tokens it verifies for up to 300 s, and one that must fetch the key set answers 503 code 17.
    *Fix (prod):* multi-replica + `streamReplicas=3` for NATS, a real Postgres HA (Patroni/CNPG), a replicated
    object store. Tracked as infra work; **the app tier is already `replicas`-ready** (stateless, PDBs shipped).

@@ -127,6 +127,11 @@ HELM_SET+=(
   --set observability.enabled=true
   --set-string observability.export.endpoint=http://otel-collector.observability:4318
 )
+# A STORE LOGIN OF TWO MINUTES IN THIS LANE, where the chart's default is fifteen. Criterion 5's sealed-store drill waits
+# for the catalog to stop signing, which it does only once the login the store last admitted it under has run out and
+# its key is read again (ADR 0203; `tests/e2e-py/chaos.py::signer_drop_seconds` reads the lease off the release). At
+# the default that wait is up to 21 minutes of every push; at two minutes it is up to 8, with the same code path.
+HELM_SET+=(--set-string openbao.identity.tokenTtl=2m)
 
 # EVERY SIDE-LOADED IMAGE THE CHART SCHEDULES, derived from the render rather than a list kept here.
 # `image.localImages=true` means a bare `<component>:dev` resolves on the NODE, so an image this

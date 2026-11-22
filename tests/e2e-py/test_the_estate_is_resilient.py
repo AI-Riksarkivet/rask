@@ -28,9 +28,11 @@ The drills, and what each outage must look like while it lasts:
    (`lakehouse.governed.oidc`): an existing token is accepted while the door holds the keys, answered
    ServiceUnavailable once a door must fetch them and cannot (never Unauthenticated, the caller is not at fault), and
    accepted again when the issuer is back, with no restart.
-6. The secret store, sealed in place. The catalog drops its signing key once it can no longer re-read it from the store,
-   and then refuses every write it would announce, ServiceUnavailable, before committing it: a write it cannot announce
-   never lands. The store's contents survive the seal, so nothing is minted again.
+6. The secret store, sealed in place. The catalog goes on signing with the key it holds for as long as the login the
+   store last admitted it under stands (ADR 0203), so a write it can still announce lands. Once that login has run out
+   it drops the key at its next re-read, and from then refuses every write it would announce, ServiceUnavailable,
+   before committing it: a write it cannot announce never lands. The store's contents survive the seal, so nothing is
+   minted again.
 7. The catalog itself, its process killed with SIGKILL while pipelines commit concurrently through `version/create`.
    Lance's put-if-not-exists of each `_versions/` manifest (`lance_docs/lance/format/table/transaction.md` § Commit Protocol) keeps one
    history: every acknowledged commit landed once, a commit whose answer the kill lost landed at most once, and no run
@@ -48,8 +50,8 @@ a drill that fails hands the release back with what it took down serving again.
 WHAT IS NOT CLAIMED, and why. A commit whose writer never got its answer may lack its announcement: a kill between the
 Lance commit and the outbox stage loses it (LH-497, #641, parked; ADR 0037), so such a version is held to at most one
 edge, never two. The service-account issuer is the cluster's API server, which no drill can take down without the
-cluster. A secret held by a running pod expires 300 to 600 s after the store stops confirming it (ADR 0166); the seal
-outlasts the signing key's re-read, not every secret's, and the expiry of the rest is pinned offline.
+cluster. The seal is held past the catalog's login and one re-read of its signing key (`chaos.signer_drop_seconds`) and
+no longer, so what every other reader of the store does across a longer seal is not driven here.
 
 A drill runs only when its run asks for it with `--chaos` (`conftest.py`): the e2e-stack lane does on every push, against
 its throwaway cluster, and the deployed release only when invoked explicitly, with `bash scripts/e2e_live.sh -m phase1
@@ -200,7 +202,7 @@ class Drills:
             return Refusal(status=None, code=None, text=f"no door reached: {str(error)[:200]}")
         if answer.status_code != 200:
             return Refusal(status=answer.status_code, code=_problem_code(answer), text=f"{answer.status_code}: {answer.text[:300]}")
-        return self._record(table, int(answer.json()["version"]), run)
+        return self._record(table, int(answer.json()["version"]), run, operation="insert")
 
     def describe(self, table: list[str]) -> int | Refusal:
         """The version the catalog's DescribeTable reports for ``table`` as the pipeline, or the refusal. The version is
@@ -246,8 +248,10 @@ class Drills:
             written = lance.write_dataset(scenario.rows_of(ids), namespace_client=client, table_id=table, mode="append", transaction_properties=stamped)
         return self._record(table, written.version, run)
 
-    def _record(self, table: list[str], version: int, run: NamedRun) -> Commit:
-        commit = Commit(table="$".join(table), version=version, run=run)
+    def _record(self, table: list[str], version: int, run: NamedRun, *, operation: str | None = None) -> Commit:
+        """Keep a commit the pipeline was told landed; ``operation`` is what the catalog door that made it stamps, and none
+        for a stock client's commit."""
+        commit = Commit(table="$".join(table), version=version, run=run, operation=operation)
         with self._lock:
             self.commits.append(commit)
         return commit
@@ -429,17 +433,19 @@ def test_an_issuer_outage_keeps_an_existing_token_while_a_door_holds_its_keys_an
     drills.assert_correct([table], since=started)
 
 
-def test_a_sealed_secret_store_refuses_every_write_the_catalog_cannot_announce_and_the_estate_recovers_correct(drills: Drills) -> None:
+def test_a_sealed_secret_store_is_ridden_through_until_the_catalogs_login_runs_out_and_the_estate_recovers_correct(drills: Drills) -> None:
     table = drills.make("secrets")
     started = drills.quiet()
 
     with chaos.sealed_store():
-        chaos.until(lambda: not chaos.catalog_signs(), "the catalog still held its signing key with its store sealed", within=chaos.SIGNER_DROP_SECONDS)
-        refused = drills.insert(table, range(4, 8), within=RECOVERY_SECONDS)
+        ridden = drills.insert(table, range(4, 8), within=RECOVERY_SECONDS)
+        chaos.until(lambda: not chaos.catalog_signs(), "the catalog still held its signing key with its store sealed", within=chaos.signer_drop_seconds())
+        refused = drills.insert(table, range(8, 12), within=RECOVERY_SECONDS)
     chaos.until(chaos.catalog_signs, "the catalog did not sign again once its store was unsealed", within=RECOVERY_SECONDS)
     drills.serving(table)
-    drills.append(table, range(8, 12))
+    drills.append(table, range(12, 16))
 
+    assert isinstance(ridden, Commit), f"a write the catalog could announce on the key it held answered {ridden}"
     assert _refused(refused), f"a write the catalog could not announce answered {refused}"
     drills.assert_correct([table], since=started)
 

@@ -35,6 +35,7 @@ import requests
 from pydantic import BaseModel
 
 from catalog.core.config import CatalogReadBounds
+from lakehouse.governed.signing_key import MAX_REFRESH_SECONDS
 
 
 RELEASE = os.environ.get("LANCE_E2E_RELEASE", "rask")
@@ -63,9 +64,10 @@ CATALOG_URL = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 STORE_URL = os.environ.get("LANCE_E2E_S3", "").rstrip("/")
 #: The catalog's container port (`services.catalog.port`), which its readiness is read on from inside the pod.
 CATALOG_PORT = int(os.environ.get("LANCE_E2E_CATALOG_PORT", "2333"))
-#: A signer re-reads its key from the store every 300 s while it holds one (`lakehouse.governed.signing_key`), so it
-#: drops the key within that of the store's loss; the rest is the slack of one failed re-read.
-SIGNER_DROP_SECONDS = 360.0
+#: The ConfigMap the chart renders each service's secret store role into (`chart/templates/secret-store-identities.yaml`).
+STORE_IDENTITIES = f"{RELEASE}-secret-store-identities"
+#: The units a store login's lease is written in (`openbao.identity.tokenTtl`: `<n>s`, `<n>m` or `<n>h`).
+_LEASE_UNIT_SECONDS = {"s": 1.0, "m": 60.0, "h": 3600.0}
 #: How long a service's own NATS client goes on reconnecting before it closes for good and the service opens another:
 #: `lakehouse.events.bus` sets 10 attempts at the server, 2 s apart, each connect bounded at 2 s.
 RECONNECT_WINDOW_SECONDS = 40.0
@@ -262,6 +264,20 @@ def _sealed(pod: str) -> bool:
     one, with the same JSON either way."""
     status: dict[str, object] = json.loads(kubectl("exec", pod, "-c", "seed", "--", "bao", "status", "-format=json", answers=frozenset({0, 2})))
     return status.get("sealed") is True
+
+
+def signer_drop_seconds() -> float:
+    """How long the catalog may go on signing once its secret store stops answering, on this release.
+
+    A signer keeps the key it holds while its store does not answer, for as long as the login the store last admitted
+    it under stands (`lakehouse.governed.signing_key`, ADR 0203), and hears that the login has run out at its next
+    re-read of the key, at most `MAX_REFRESH_SECONDS` later. So the bound is one whole lease, one re-read and the slack
+    of that read failing. The lease is the release's own (`openbao.identity.tokenTtl`), read off the role the chart
+    rendered for the catalog.
+    """
+    role: dict[str, object] = json.loads(kubectl("get", "configmap", STORE_IDENTITIES, "-o", f"jsonpath={{.data.role-{CATALOG}\\.json}}"))
+    lease = str(role["token_ttl"])
+    return float(lease[:-1]) * _LEASE_UNIT_SECONDS[lease[-1]] + MAX_REFRESH_SECONDS + 60.0
 
 
 def catalog_signs() -> bool:

@@ -194,17 +194,19 @@ def test_distributed_trace_spans_catalog_to_lineage(pipeline_run: dict[str, Any]
 
     Read off the trace the create's `traceparent` names, never the newest trace that spans both services: lineage
     writes its feed through the catalog's doors, so each relay tick spans catalog and lineage with no publish in it.
+
+    The wait is for the two spans themselves. A span is exported when it ends, and lineage's delivery span ends after
+    every call its handling makes, so one of those calls is in the trace a batch before the delivery that encloses it.
     """
     query = f"SELECT DISTINCT service_name, span_name FROM opentelemetry_traces WHERE trace_id = '{pipeline_run['trace_id']}' AND {_RECENT}"
+    joined = {("catalog", f"publish {LINEAGE_TOPIC}"), ("lineage", f"process {LINEAGE_TOPIC}")}
 
-    def joined_trace() -> list[list[Any]] | None:
-        spans = _gt_sql(query)
-        return spans if {"catalog", "lineage"} <= {service for service, _ in spans} else None
+    def joined_trace() -> set[tuple[str, str]]:
+        named = {(service, name) for service, name in _gt_sql(query)}
+        assert joined <= named, f"the trace lacks {sorted(joined - named)}; it holds {sorted(named)}"
+        return named
 
-    spans = _eventually(joined_trace)
-    named = {(service, name) for service, name in spans}
-    assert ("catalog", f"publish {LINEAGE_TOPIC}") in named, f"the catalog's publish on the lineage topic is not a span of the trace: {named}"
-    assert ("lineage", f"process {LINEAGE_TOPIC}") in named, f"lineage's delivery of the publish is not a span of the trace: {named}"
+    _eventually(joined_trace)
 
 
 @pytest.mark.usefixtures("pipeline_run")
