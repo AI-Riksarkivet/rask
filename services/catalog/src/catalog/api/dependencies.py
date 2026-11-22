@@ -36,6 +36,7 @@ from lakehouse.governed import fga_ids
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.problems.outage import store_refusal
+from lakehouse.process.supervision import is_fault
 from lakehouse.records import trash
 from lakehouse.records.trash import TrashKind, TrashRecord
 from lakehouse.storage.options import StorageOptions
@@ -607,7 +608,9 @@ class ObjectUuids:
     async def _connection(self, segments: list[str]) -> LanceNamespace | None:
         try:
             return await namespace_for_warehouse(self._request, self._settings, segments[0])
-        except Exception as exc:  # noqa: BLE001 — an unroutable namespace is a uuid the event goes without
+        except BaseException as exc:  # noqa: BLE001 — an unroutable namespace is a uuid the event goes without, a native panic too
+            if not is_fault(exc):
+                raise
             log.info("event_uuids_unrouted", extra={"segments": segments, "error": str(exc)[:300]})
             return None
 
@@ -626,7 +629,9 @@ class ObjectUuids:
             return None
         try:
             resolved = await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(self._settings), segments)
-        except Exception as exc:  # noqa: BLE001 — an unresolved input is an incarnation the event goes without
+        except BaseException as exc:  # noqa: BLE001 — an unresolved input is an incarnation the event goes without, a native panic too
+            if not is_fault(exc):
+                raise
             log.info("event_branch_identifier_unresolved", extra={"segments": segments, "error": str(exc)[:300]})
             return None
         if resolved.location is None:

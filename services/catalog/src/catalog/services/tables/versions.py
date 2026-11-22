@@ -19,6 +19,7 @@ from catalog.services import table_claims
 from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.lancekit.versions import committed_at
 from lakehouse.problems.outage import reads_as_store_outage
+from lakehouse.process.supervision import is_fault
 from lakehouse.records import commit_records
 from lakehouse.storage.options import StorageOptions
 
@@ -87,7 +88,9 @@ def read_version_and_schema(
         # `missing_on_storage`, and an event-driven consumer receives a table id it cannot resolve —
         # `services/maintenance` holds no catalog client by design.
         uri = str(getattr(dataset, "uri", "") or "") or None
-    except Exception as exc:
+    except BaseException as exc:  # noqa: BLE001 — a Rust panic is no Exception; is_fault passes the rest
+        if not is_fault(exc):
+            raise
         log.warning("lineage_readback_failed", extra={"table": table_id, "error": str(exc)}, exc_info=exc)
         return CommitReadback(version=pin_version, schema_fields=[], uri=None)
     if pin_version is None:
@@ -95,7 +98,9 @@ def read_version_and_schema(
     when = commit_time(dataset)
     try:
         return CommitReadback(version=pin_version, schema_fields=facet_fields(dataset.schema), uri=uri, committed_at=when)
-    except Exception as exc:
+    except BaseException as exc:  # noqa: BLE001 — a Rust panic is no Exception; is_fault passes the rest
+        if not is_fault(exc):
+            raise
         log.warning("schema_facet_read_failed", extra={"table": table_id, "error": str(exc)}, exc_info=exc)
         return CommitReadback(version=pin_version, schema_fields=[], uri=uri, committed_at=when)
 
@@ -104,7 +109,9 @@ def commit_time(dataset: lance.LanceDataset) -> str | None:
     """When the version ``dataset`` is opened at was committed, ISO 8601 in UTC, off its manifest; ``None`` when unread."""
     try:
         when = manifest_bytes.commit_time(dataset._ds.serialized_manifest())  # noqa: SLF001 — pylance exposes the manifest only here
-    except Exception as exc:
+    except BaseException as exc:  # noqa: BLE001 — a Rust panic is no Exception; is_fault passes the rest
+        if not is_fault(exc):
+            raise
         log.warning("commit_time_unread", extra={"uri": str(getattr(dataset, "uri", "")), "error": str(exc)}, exc_info=exc)
         return None
     return when.isoformat() if when is not None else None
@@ -158,14 +165,14 @@ def committed_version(table: table_claims.DoorTable, so: StorageOptions, transac
             transaction = read_transaction(dataset, version)
             if transaction is not None and transaction.uuid == transaction_id:
                 return version
-    except BaseException as exc:  # noqa: BLE001 — a Rust PANIC is not an Exception; see below
-        # `BaseException`, because a pyo3 panic derives from
-        # BaseException and cannot be caught by name (`pyo3_runtime` is synthesised lazily and is not
-        # importable). This runs after the write committed, so an escaped panic answers 500 for a commit
-        # that happened and skips the door's idempotency record, and a retry commits again.
-        if isinstance(exc, KeyboardInterrupt | SystemExit):
+    except BaseException as exc:  # noqa: BLE001 — a Rust panic is no Exception; is_fault passes the rest
+        # This runs after the write committed, so an escaped panic answers 500 for a commit that happened and skips the
+        # door's idempotency record, and a retry commits again.
+        if not is_fault(exc):
             raise
-        log.warning("committed_version_unreadable", extra={"table": table_id, "branch": branch, "error": str(exc), "error_type": type(exc).__name__})
+        log.warning(
+            "committed_version_unreadable", extra={"table": table_id, "branch": branch, "error": str(exc), "error_type": type(exc).__name__}, exc_info=exc
+        )
     return None
 
 
@@ -185,7 +192,9 @@ def branch_identifier(location: str, so: StorageOptions, table_id: list[str], *,
         return None
     try:
         entry = open_resolved_dataset_unchecked(location, so, table_id).branches.list().get(name)
-    except Exception as exc:
+    except BaseException as exc:  # noqa: BLE001 — a Rust panic is no Exception; is_fault passes the rest
+        if not is_fault(exc):
+            raise
         log.warning("branch_identifier_unreadable", extra={"table": table_id, "branch": name, "error": str(exc)}, exc_info=exc)
         return None
     return identifier_of(entry)
@@ -232,7 +241,9 @@ def payload_schema_fields(schema: pa.Schema, table_id: list[str]) -> SchemaField
     """
     try:
         return facet_fields(schema)
-    except Exception as exc:
+    except BaseException as exc:  # noqa: BLE001 — a Rust panic is no Exception; is_fault passes the rest
+        if not is_fault(exc):
+            raise
         log.warning("schema_facet_parse_failed", extra={"table": table_id, "error": str(exc)}, exc_info=exc)
         return []
 
@@ -341,14 +352,15 @@ def table_history(table: table_claims.DoorTable, so: StorageOptions, limit: int 
         }
         try:
             txn = read_transaction(dataset, version)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 — one version's failure is that version's row, never the door's
             # Versions written before transaction files, or a GC'd txn, still belong in the log. Reporting
             # the version with a null operation is honest; dropping it would make the history lie by omission.
             # ONE VERSION, NOT THE DOOR: whatever kept this version's transaction from being read or converted (an
             # ``OSError`` for a manifest gone, truncated or not one, measured on pylance 14.0.3; a namespace error for
             # a store an open connection lost; an operation this binding cannot convert), the version is listed with
-            # a null operation and the failure logged with its traceback.
-            log.info("txn_unreadable", extra={"table": table.segments, "version": version, "error": str(exc)}, exc_info=exc)
+            # a null operation and the failure logged by its type and text: one line per version per history request,
+            # so the version's row is the record, and a traceback would repeat the same frames for every one.
+            log.info("txn_unreadable", extra={"table": table.segments, "version": version, "error": str(exc), "error_type": type(exc).__name__})
             out.append(row)
             continue
         op = getattr(txn, "operation", None)

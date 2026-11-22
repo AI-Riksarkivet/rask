@@ -38,6 +38,7 @@ from lakehouse.lancekit.absence import reads_as_absent
 from lakehouse.lancekit.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.problems.outage import reads_as_store_outage
+from lakehouse.process.supervision import is_fault
 from lakehouse.records.clone_sources import CloneReference, clone_reference
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
@@ -457,7 +458,9 @@ def warn_if_mixed_file_versions(location: str, storage_options: StorageOptions, 
     """
     try:
         facts = registered_dataset_facts(location, storage_options)
-    except Exception as exc:  # noqa: BLE001 — a restore is never failed over a flag read
+    except BaseException as exc:  # noqa: BLE001 — a restore is never failed over a flag read, a native panic too
+        if not is_fault(exc):
+            raise
         log.warning("restored_table_flags_unreadable", extra={"table": table, "location": location, "error": str(exc)[:300]})
         return
     if facts is not None and facts.mixed:

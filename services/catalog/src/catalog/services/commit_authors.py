@@ -18,6 +18,8 @@ from collections.abc import Callable
 from lance import Transaction
 from opentelemetry import metrics
 
+from lakehouse.process.supervision import is_fault
+
 
 log = logging.getLogger(__name__)
 
@@ -43,7 +45,9 @@ def record_landed(record: Callable[[str, int], object], transaction: Transaction
         return
     try:
         record(transaction.uuid, version)
-    except Exception as exc:  # noqa: BLE001 — the version landed; a failed record must not fail the door that wrote it
+    except BaseException as exc:  # noqa: BLE001 — the version landed; a failed record must not fail the door that wrote it, a native panic too
+        if not is_fault(exc):
+            raise
         _count_unrecorded(table_location, version, f"{type(exc).__name__}: {exc}")
         return
     _unrecorded.add(0)

@@ -18,6 +18,7 @@ from catalog.core import native
 from lakehouse.events.control_events import ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.naming import uuid_of
+from lakehouse.process.supervision import is_fault
 from lakehouse.records import location_claims
 from lakehouse.records.location_claims import ClaimStore
 
@@ -50,7 +51,9 @@ def namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str | None:
         return None
     try:
         described = native.call(ns, "describe_namespace", DescribeNamespaceRequest(id=segments))
-    except Exception as exc:  # noqa: BLE001 — an event is announced without what it cannot read
+    except BaseException as exc:  # noqa: BLE001 — an event is announced without what it cannot read, a native panic too
+        if not is_fault(exc):
+            raise
         log.info("event_namespace_uuid_unread", extra={"namespace": segments, "error": str(exc)[:300]})
         return None
     return uuid_of(described.properties)
@@ -96,7 +99,9 @@ def table_uuid(ns: LanceNamespace, store: ClaimStore, segments: list[str], *, lo
         if location is None:
             location = native.call(ns, "describe_table", DescribeTableRequest(id=segments, check_declared=True)).location or None
         claim = location_claims.read(store, location) if location else None
-    except Exception as exc:  # noqa: BLE001 — an event is announced without what it cannot read
+    except BaseException as exc:  # noqa: BLE001 — an event is announced without what it cannot read, a native panic too
+        if not is_fault(exc):
+            raise
         log.info("event_table_uuid_unread", extra={"table": segments, "error": str(exc)[:300]})
         return None
     return claim.claim.uuid if claim is not None else None

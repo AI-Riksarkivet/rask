@@ -57,6 +57,11 @@ def is_panic(exc: BaseException) -> bool:
     return not isinstance(exc, _STOPS)
 
 
+def is_fault(exc: BaseException) -> bool:
+    """Whether ``exc`` is a fault a boundary may absorb: an Exception or a native library's panic, never a request to stop."""
+    return isinstance(exc, Exception) or is_panic(exc)
+
+
 def flush_telemetry(seconds: float) -> None:
     """Flush the process's stream log handlers, then give its OpenTelemetry logs, traces and metrics ``seconds`` at most.
 
@@ -166,4 +171,4 @@ class Supervisor:
         self._end("background_work_ended", loop=name, cause=cause)
 
 
-__all__ = ["EX_SOFTWARE", "FLUSH_SECONDS", "EndProcess", "Supervisor", "Work", "end_process", "flush_telemetry", "is_panic"]
+__all__ = ["EX_SOFTWARE", "FLUSH_SECONDS", "EndProcess", "Supervisor", "Work", "end_process", "flush_telemetry", "is_fault", "is_panic"]

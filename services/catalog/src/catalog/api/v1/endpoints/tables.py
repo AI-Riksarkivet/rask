@@ -114,6 +114,7 @@ from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.lancekit.features import CREATE_FORMAT, table_file_format
 from lakehouse.naming import uuid_of
 from lakehouse.problems.ns_errors import PartiallyApplied
+from lakehouse.process.supervision import is_fault
 from lakehouse.records import base_registry, location_claims, object_records, protection, trash
 from lakehouse.records.protection import ProtectionRecord
 from lakehouse.storage.options import StorageOptions
@@ -1312,7 +1313,9 @@ def _end_stale_trash_record(ns: LanceNamespace, settings: CatalogStore, fenced: 
         kept = trash.get(root, so, table.uuid)
         if kept is not None and not kept.is_residue and not _still_registered(ns, claims, kept, segments=segments) and table_claims.holds_fence(claims, fenced):
             trash.clear(root, so, table.uuid)
-    except Exception as exc:  # noqa: BLE001 — the door's answer stands; a record left is reported, not raised
+    except BaseException as exc:  # noqa: BLE001 — the door's answer stands; a record left is reported, not raised, a native panic too
+        if not is_fault(exc):
+            raise
         log.error("stale_trash_record_kept", extra={"uuid": table.uuid, "error": f"{type(exc).__name__}: {exc}"[:300]})
 
 
@@ -1376,7 +1379,9 @@ def absolute_table_location(ns: LanceNamespace, segments: list[str], registered:
     """
     try:
         described = native.call(ns, "describe_table", DescribeTableRequest(id=segments))
-    except Exception as exc:  # noqa: BLE001 — any failure degrades to the registered value, never to a 500
+    except BaseException as exc:  # noqa: BLE001 — any failure degrades to the registered value, never to a 500, a native panic too
+        if not is_fault(exc):
+            raise
         log.warning("register_location_unresolved", extra={"table": segments, "error": str(exc)})
         return registered
     return getattr(described, "location", None) or registered

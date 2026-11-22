@@ -25,7 +25,7 @@ from lance_namespace import ErrorCode
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from lakehouse.problems.envelope import send_problem
-from lakehouse.process.supervision import is_panic
+from lakehouse.process.supervision import is_fault
 
 
 class RequestDeadlineMiddleware:
@@ -83,7 +83,7 @@ class RequestDeadlineMiddleware:
         failure = door.exception()
         if failure is None:
             self._log.info("request_past_its_deadline_finished", extra=where)
-        elif isinstance(failure, Exception) or is_panic(failure):
+        elif is_fault(failure):
             self._log.error("request_past_its_deadline_failed", exc_info=failure, extra=where)
 
 

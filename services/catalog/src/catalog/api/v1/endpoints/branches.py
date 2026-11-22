@@ -29,6 +29,7 @@ from catalog.services.table_claims import DoorTable
 from catalog.services.tables import refs, versions
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga_ids
+from lakehouse.process.supervision import is_fault
 from lakehouse.storage.options import StorageOptions
 
 
@@ -108,8 +109,10 @@ def _recorded_parent(table: DoorTable, so: StorageOptions, body: CreateTableBran
     try:
         listed = refs.list_branches(table, so, ListTableBranchesRequest(id=body.id))
         entry = (listed.branches or {}).get(body.name)
-    except Exception:  # noqa: BLE001 — an announcement must survive an unreadable parent
-        log.warning("branch_parent_unreadable", extra={"branch": body.name})
+    except BaseException as exc:  # noqa: BLE001 — an announcement must survive an unreadable parent, a native panic too
+        if not is_fault(exc):
+            raise
+        log.warning("branch_parent_unreadable", extra={"branch": body.name, "error": str(exc)[:300], "error_type": type(exc).__name__})
         return {}
     if entry is None:
         return {}

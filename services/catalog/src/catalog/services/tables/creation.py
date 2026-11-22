@@ -40,6 +40,7 @@ from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.lancekit.features import CREATE_FILE_VERSION, CREATE_FORMAT, manifest_base_path_refs
 from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.problems.ns_errors import PartiallyApplied
+from lakehouse.process.supervision import is_fault
 from lakehouse.records import base_registry, commit_records, file_identities, location_claims
 from lakehouse.storage.options import StorageOptions, object_client, on_s3
 from lakehouse.storage.uri import split_s3_uri
@@ -353,7 +354,9 @@ def _described_location(ns: LanceNamespace, segments: list[str], *, fallback: st
     """The location the backend describes ``segments`` at, spelled as every other door answers it; ``fallback`` when it does not answer."""
     try:
         described = native.call(ns, "describe_table", DescribeTableRequest(id=segments, check_declared=True))
-    except Exception as exc:  # noqa: BLE001 — the declaration committed; the caller keeps the location it was made at
+    except BaseException as exc:  # noqa: BLE001 — the declaration committed; the caller keeps the location it was made at, a native panic too
+        if not is_fault(exc):
+            raise
         log.warning("declared_location_unresolved", extra={"table": segments, "error": str(exc)[:300]})
         return fallback
     return str(described.location or fallback)

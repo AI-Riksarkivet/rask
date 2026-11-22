@@ -9,8 +9,10 @@ are exercised.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -24,6 +26,7 @@ from lance_namespace import (
     CreateTableResponse,
     DescribeTableResponse,
     DescribeTableVersionResponse,
+    LanceNamespace,
     ListTableVersionsResponse,
     TableAlreadyExistsError,
     TableVersion,
@@ -34,6 +37,7 @@ from catalog.services import table_bases
 from catalog.services.tables.versions import CommitReadback
 from lakehouse.lancekit.features import DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY
 from lakehouse.naming import UUID_PROPERTY
+from lakehouse.records.location_claims import ClaimStore
 from tests import seeding
 
 
@@ -406,6 +410,211 @@ def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, f
     assert captured["operation"] == "add_columns"
     assert captured["version"] == 4
     assert captured["schema_fields"] == [{"name": "x", "type": "int64"}]  # post-evolution schema rides along
+
+
+class _NativePanic(BaseException):
+    """Where pylance's panic sits: ``pyo3_runtime.PanicException`` derives from BaseException alone and no module exports
+    it (measured on pylance 14.0.3: its MRO is PanicException, BaseException, object), so a stand-in of that shape is the
+    only way to raise one by choice."""
+
+
+@pytest.mark.parametrize(
+    ("where", "counted"),
+    [
+        pytest.param("catalog.services.tables.versions.open_resolved_dataset", None, id="the-pinned-open"),
+        pytest.param("catalog.services.tables.versions.manifest_bytes.commit_time", None, id="the-commit-time"),
+        pytest.param("catalog.services.tables.versions.facet_fields", None, id="the-schema-facet"),
+        pytest.param("catalog.services.object_uuids.DescribeNamespaceRequest", None, id="the-namespace-uuid"),
+        pytest.param("catalog.services.object_uuids.location_claims", None, id="the-table-uuid"),
+        pytest.param("catalog.api.dependencies.namespace_for_warehouse", None, id="the-uuid-connection"),
+        pytest.param("catalog.services.committed_files.read_transaction", "committed_files_unrecorded", id="the-landed-transaction"),
+        pytest.param("catalog.services.committed_files.added", "committed_files_unrecorded", id="the-landed-files"),
+    ],
+)
+def test_a_committed_write_whose_read_back_panics_answers_committed(
+    real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, where: str, counted: str | None
+) -> None:
+    """The read-back runs after the write committed, so a native panic in it degrades the announcement and the door still
+    answers the commit it made: a 500 for a write that landed sends the caller to retry it."""
+    _ensure_namespace(real_ns_client, "lance_catalog$db")
+    assert real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+
+    def _panics(*_args: object, **_kwargs: object) -> object:
+        raise _NativePanic("called `Result::unwrap()` on an `Err` value")
+
+    # A module the read-back reaches through is replaced where it is looked up, so the door's own uses of it are untouched.
+    monkeypatch.setattr(where, SimpleNamespace(read=_panics) if where.endswith("location_claims") else _panics)
+    as_a_caller_sees_it = TestClient(real_ns_client.app, raise_server_exceptions=False)
+    as_a_caller_sees_it.portal = real_ns_client.portal
+
+    inserted = as_a_caller_sees_it.post("/v1/table/lance_catalog$db$t/insert", content=_arrow_ipc(pa.table({"id": [2, 3]})), headers=ARROW_STREAM)
+
+    location = real_ns_client.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["location"]
+    assert (inserted.status_code, inserted.json().get("version"), lance.dataset(location).count_rows()) == (200, 2, 3), inserted.text
+    # What the read was for is counted as missed, never answered as the write's failure.
+    assert counted is None or any(record.getMessage() == counted for record in caplog.records), [record.getMessage() for record in caplog.records]
+
+
+def _panic_once_after(monkeypatch: pytest.MonkeyPatch, committed: str, read: str) -> None:
+    """The first backend ``read`` after the backend ``committed`` panics; every other call is the backend's own."""
+    from catalog.core import native
+
+    real, seen = native.call, {"committed": False, "panicked": False}
+
+    def call(ns: LanceNamespace, method_name: str, *args: object) -> object:
+        if method_name == committed:
+            seen["committed"] = True
+        elif method_name == read and seen["committed"] and not seen["panicked"]:
+            seen["panicked"] = True
+            raise _NativePanic("called `Result::unwrap()` on an `Err` value")
+        return real(ns, method_name, *args)
+
+    monkeypatch.setattr(native, "call", call)
+
+
+class _ListingPanics:
+    """``refs`` as the branch door reaches it, whose branch listing panics."""
+
+    def __getattr__(self, name: str) -> object:
+        from catalog.services.tables import refs
+
+        if name == "list_branches":
+            raise _NativePanic("called `Result::unwrap()` on an `Err` value")
+        return getattr(refs, name)
+
+
+def _registered(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[Any, str]:
+    lance.write_dataset(pa.table({"id": [1]}), str(root / "registered"), data_storage_version="2.2", enable_stable_row_ids=True)
+    _panic_once_after(monkeypatch, "register_table", "describe_table")
+    return client.post("/v1/table/lance_catalog$db$registered/register", json={"location": "registered"}), "lance_catalog$db$registered"
+
+
+def _declared(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[Any, str]:
+    _panic_once_after(monkeypatch, "register_table", "describe_table")
+    return client.post("/v1/table/lance_catalog$db$declared/declare", json={}), "lance_catalog$db$declared"
+
+
+def _branched(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[Any, str]:
+    assert client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+    monkeypatch.setattr("catalog.api.v1.endpoints.branches.refs", _ListingPanics())
+    return client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "b"}), "lance_catalog$db$t"
+
+
+def _undropped(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[Any, str]:
+    from catalog.core.config import get_settings
+
+    monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "1")
+    get_settings.cache_clear()
+    assert client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/drop", json={}).status_code == 200
+    monkeypatch.setattr("catalog.core.namespace.registered_dataset_facts", lambda *_a, **_k: _panics_now())
+    return client.post("/management/v1/table/lance_catalog$db$t/undrop", json={}), "lance_catalog$db$t"
+
+
+def _authored_on_a_branch(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[Any, str]:
+    from catalog.api.security import authenticate
+    from lakehouse.governed.idp_identity import PersonPrincipal
+    from lakehouse.governed.oidc import IDToken
+    from lakehouse.governed.principal import Principal
+
+    assert client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "b"}).status_code == 200
+    caller = PersonPrincipal(
+        principal=Principal(idp_id="dex", subject="alice"),
+        claims=IDToken(iss="https://idp.example", sub="alice", aud="lance", exp=2_000_000_000, iat=1_000_000_000),
+    )
+    monkeypatch.setitem(client.app.dependency_overrides, authenticate, lambda: caller)
+    # The author's record is keyed by the branch's incarnation, read off the branch listing after the append landed.
+    monkeypatch.setattr("catalog.services.tables.versions.open_resolved_dataset_unchecked", lambda *_a, **_k: _panics_now())
+    return client.post("/v1/table/lance_catalog$db$t/insert?branch=b", content=_arrow_ipc(pa.table({"id": [2]})), headers=ARROW_STREAM), "lance_catalog$db$t"
+
+
+class _InputResolvedOncePanics:
+    """``table_claims`` as the event's uuids reach it: the input ``src`` resolves once, for the judge before the commit,
+    and panics when the announcement resolves it again for its branch's incarnation."""
+
+    def __init__(self) -> None:
+        from catalog.services import table_claims
+
+        self._real, self._seen = table_claims, 0
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._real, name)
+
+    def resolve(self, ns: LanceNamespace, store: ClaimStore, segments: list[str]) -> object:
+        if segments == ["lance_catalog", "db", "src"]:
+            self._seen += 1
+            if self._seen > 1:
+                raise _NativePanic("called `Result::unwrap()` on an `Err` value")
+        return self._real.resolve(ns, store, segments)
+
+
+def _read_from_a_branch(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[Any, str]:
+    for table in ("src", "t"):
+        assert client.post(f"/v1/table/lance_catalog$db${table}/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$src/branches/create", json={"name": "feed"}).status_code == 200
+    run = {
+        "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
+        "x-rask-job-namespace": "pipelines",
+        "x-rask-job": "nightly",
+        "x-rask-inputs": json.dumps([{"table": ["lance_catalog", "db", "src"], "version": 1, "branch": "feed"}]),
+    }
+    monkeypatch.setattr("catalog.api.dependencies.table_claims", _InputResolvedOncePanics())
+    return client.post("/v1/table/lance_catalog$db$t/insert", content=_arrow_ipc(pa.table({"id": [2]})), headers={**ARROW_STREAM, **run}), "lance_catalog$db$t"
+
+
+def _created(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[Any, str]:
+    from catalog.services.tables import versions
+
+    real, calls = versions.facet_fields, []
+
+    def second_panics(schema: pa.Schema) -> object:
+        # The read-back's facet comes first; the payload's, which a create announces, second.
+        calls.append(schema)
+        if len(calls) == 2:
+            _panics_now()
+        return real(schema)
+
+    monkeypatch.setattr(versions, "facet_fields", second_panics)
+    return client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM), "lance_catalog$db$t"
+
+
+def _panics_now() -> None:
+    raise _NativePanic("called `Result::unwrap()` on an `Err` value")
+
+
+@pytest.mark.parametrize(
+    ("act", "counted"),
+    [
+        pytest.param(_created, None, id="create-the-payload-schema-facet"),
+        pytest.param(_registered, None, id="register-the-described-location"),
+        pytest.param(_declared, None, id="declare-the-described-location"),
+        pytest.param(_branched, None, id="branch-create-the-recorded-parent"),
+        pytest.param(_undropped, None, id="undrop-the-file-version-flags"),
+        pytest.param(_authored_on_a_branch, "commit_author_unrecorded", id="insert-the-author-record-ref"),
+        pytest.param(_read_from_a_branch, None, id="insert-the-input-branch-incarnation"),
+    ],
+)
+def test_a_door_whose_read_after_its_commit_panics_answers_committed(
+    real_ns_client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    tmp_path: Path,
+    act: Callable[[TestClient, pytest.MonkeyPatch, Path], tuple[Any, str]],
+    counted: str | None,
+) -> None:
+    """A door that reads the backend again after it committed degrades what that read adds when it panics, and answers
+    the commit it made: a 500 for a change that landed sends the caller to make it again."""
+    _ensure_namespace(real_ns_client, "lance_catalog$db")
+    as_a_caller_sees_it = TestClient(real_ns_client.app, raise_server_exceptions=False)
+    as_a_caller_sees_it.portal = real_ns_client.portal
+
+    answered, table = act(as_a_caller_sees_it, monkeypatch, tmp_path)
+
+    described = real_ns_client.post(f"/v1/table/{table}/describe", json={})
+    assert (answered.status_code, described.status_code) == (200, 200), answered.text
+    # What the read was for is counted as missed, never answered as the change's failure.
+    assert counted is None or any(record.getMessage() == counted for record in caplog.records), [record.getMessage() for record in caplog.records]
 
 
 def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_client: TestClient, monkeypatch) -> None:

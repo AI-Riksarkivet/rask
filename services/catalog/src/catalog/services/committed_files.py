@@ -30,6 +30,7 @@ from catalog.services import client_fragments
 from lakehouse.lancekit import base_refs
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
 from lakehouse.lancekit.transactions import read_transaction
+from lakehouse.process.supervision import is_fault
 from lakehouse.records import file_identities
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
@@ -121,13 +122,16 @@ def record_landed(
     Answers the version's transaction, which its author is recorded under (:mod:`catalog.services.commit_authors`), or
     ``None`` when none could be read.
 
-    After the version lands, since the write and its commit are one call: a store failure here is logged at ERROR and
-    counted, and the door still answers its version, because the write landed and an error would have its caller retry
-    it. So is a version that names no transaction, which no record can be keyed by.
+    After the version lands, since the write and its commit are one call: any failure here, an Exception or a native
+    library's panic, is logged at ERROR and counted by its type and text, and the door still answers its version, because
+    the write landed and an error would have its caller retry it. So is a version that names no transaction, which no
+    record can be keyed by. A request to stop passes through.
     """
     try:
         transaction = read_transaction(after, after.version)
-    except OSError as exc:
+    except BaseException as exc:  # noqa: BLE001 — the version landed; a failed read must not fail the door that wrote it
+        if not is_fault(exc):
+            raise
         _count_unrecorded(table_location, after.version, f"{type(exc).__name__}: {exc}")
         return None
     if transaction is None:
@@ -138,7 +142,9 @@ def record_landed(
         record(
             added(before, after, table_location=table_location, branch=branch, so=so, transaction_uuid=transaction.uuid, read_version=transaction.read_version)
         )
-    except OSError as exc:
+    except BaseException as exc:  # noqa: BLE001 — the version landed; a failed record must not fail the door that wrote it
+        if not is_fault(exc):
+            raise
         _count_unrecorded(table_location, after.version, f"{type(exc).__name__}: {exc}")
         return transaction
     _unrecorded.add(0)
