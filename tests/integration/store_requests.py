@@ -24,6 +24,7 @@ import threading
 import urllib.parse
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from typing import cast
 
@@ -69,6 +70,15 @@ class _Forwarding(http.server.ThreadingHTTPServer):
         #: The requests answered 503 rather than forwarded: none unless a test names them (:meth:`CountedStore.answering_unavailable`).
         self.answered_unavailable: Callable[[StoreRequest], bool] | None = None
 
+    def record(self, request: StoreRequest) -> None:
+        """Keep ``request`` among those seen. Called before its answer reaches the client, so a request is in the window
+        that was open when its client was answered: recorded after, the last request of a pass could land in the next
+        window, once the client was answered, its pass returned and the window was taken before this thread ran again
+        (measured 2026-11-22: with 0.3 s between the answer and the record, the pass's last two requests counted in the
+        audit's window)."""
+        with self.lock:
+            self.seen.append(request)
+
 
 class _Relaying(http.server.BaseHTTPRequestHandler):
     """A hop that reads a request whole and relays it to an upstream store, answering with what the store answered."""
@@ -91,8 +101,9 @@ class _Relaying(http.server.BaseHTTPRequestHandler):
             pass
         return bytes(body)
 
-    def _relay(self, upstream: tuple[str, int], path: str, *, body: bytes, headers: dict[str, str]) -> None:
-        """Send this request to ``upstream`` at ``path`` and answer with the store's answer."""
+    def _relay(self, upstream: tuple[str, int], path: str, *, body: bytes, headers: dict[str, str], answered: Callable[[], None] | None = None) -> None:
+        """Send this request to ``upstream`` at ``path`` and answer with the store's answer, calling ``answered`` once the store
+        has answered and before the client is: what the client does after its answer then happens after ``answered``."""
         connection = http.client.HTTPConnection(*upstream, timeout=60)
         try:
             connection.request(self.command, path, body=body if body or self.command in ("PUT", "POST") else None, headers=headers)
@@ -100,6 +111,8 @@ class _Relaying(http.server.BaseHTTPRequestHandler):
             data = answer.read()
         finally:
             connection.close()
+        if answered is not None:
+            answered()
         self.send_response_only(answer.status, answer.reason)
         for key, value in answer.getheaders():
             if key.lower() not in _HOP_HEADERS:
@@ -127,9 +140,7 @@ class _Handler(_Relaying):
             self._answer_unavailable()
             return
         headers = {key: value for key, value in self.headers.items() if key.lower() not in _HOP_HEADERS}
-        self._relay(forwarding.upstream, self.path, body=body, headers=headers)
-        with forwarding.lock:
-            forwarding.seen.append(request)
+        self._relay(forwarding.upstream, self.path, body=body, headers=headers, answered=partial(forwarding.record, request))
 
     def _answer_unavailable(self) -> None:
         self.send_response_only(503, "Service Unavailable")
