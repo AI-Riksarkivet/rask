@@ -35,18 +35,22 @@ from collections.abc import Callable
 from typing import Any
 
 import pyarrow.fs as pafs
+from pydantic import BaseModel, ValidationError
 
 from lakehouse.storage import stored_objects
+from lakehouse.storage.errors import store_call
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions, object_client, on_s3
-from lakehouse.storage.uri import split_s3_uri
+from lakehouse.storage.uri import s3_object
 
 
 __all__ = [
+    "UnreadableRecordError",
     "delete_record",
     "get_record",
     "list_every_record",
     "list_records",
+    "parse_record",
     "put_record",
     "read_record",
     "record_key",
@@ -55,6 +59,24 @@ __all__ = [
 
 
 log = logging.getLogger(__name__)
+
+
+class UnreadableRecordError(ValueError):
+    """Raised when a record is stored and cannot be read as one: what it decides is unknown, so it is never read as absent."""
+
+
+def parse_record[M: BaseModel](model: type[M], raw: object, *, at: str, error: type[UnreadableRecordError]) -> M:
+    """``raw`` as a ``model`` record; ``at`` names where it sits, and ``error`` is the registry's own refusal.
+
+    Raises:
+        UnreadableRecordError: ``raw`` is no ``model`` record, raised as ``error``, naming ``at`` and the fields that are
+            not a record's.
+    """
+    try:
+        return model.model_validate(raw)
+    except ValidationError as exc:
+        fields = ", ".join(sorted({".".join(str(part) for part in problem["loc"]) or "the record" for problem in exc.errors(include_url=False)}))
+        raise error(f"the record at {at} cannot be read as one: {fields} is not what a record holds") from exc
 
 
 def record_name(kind: str, canonical_id: str) -> str:
@@ -79,11 +101,15 @@ def put_record(control_root: str, storage_options: StorageOptions, key: str, *, 
     On S3 by its key alone, through the object client: pyarrow's ``create_dir`` puts every parent of the key as a
     directory marker (measured on pyarrow 25.0.0: ``_policies/``, ``_policies/state/`` and ``_policies/state/<uuid>/``
     before a stamp), a write outside what a writer granted its own records' keys may make ([[XC-084]]).
+
+    Raises:
+        OSError: The store refused the write or did not answer it (on S3 a :class:`~lakehouse.storage.errors.StorageError`).
     """
     body = json.dumps(record).encode()
     if on_s3(control_root):
-        bucket, prefix = split_s3_uri(control_root.rstrip("/"))
-        object_client(storage_options).put_object(Bucket=bucket, Key=f"{prefix}/{key}" if prefix else key, Body=body)
+        bucket, object_key = s3_object(control_root, key)
+        with store_call(f"writing {bucket}/{object_key}"):
+            object_client(storage_options).put_object(Bucket=bucket, Key=object_key, Body=body)
         return
     fs, base = fs_and_base(control_root, storage_options)
     path = f"{base}/{key}"

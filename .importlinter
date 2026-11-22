@@ -111,15 +111,20 @@ layers =
 # The auth plane judges a caller and presents the pod's own identity, and the bus and the store build on it to present
 # that identity (ADR 0224): `events.bus` reads the projected token, `storage.store_session` the machine identity and the
 # secret store. So the auth plane reaches neither of them, directly or through another module: a dependency the probe
-# reads of the bus or the store is built beside it, never in the process group the auth plane imports.
+# reads of the bus or the store is built beside it, never in the process group the auth plane imports. One edge is
+# named: the handlers every app installs read which store failure is an outage from the store's own vocabulary
+# (`storage.errors`), which imports nothing in the library and no store client (measured 2026-11-22: importing it loads
+# no boto3, botocore or pyarrow module).
 [importlinter:contract:the-auth-plane-reaches-neither-the-events-nor-the-store]
-name = ADR 0224: lakehouse.governed imports neither lakehouse.events nor lakehouse.storage, by any chain
+name = ADR 0224: lakehouse.governed imports neither lakehouse.events nor lakehouse.storage, by any chain but the outage rule
 type = forbidden
 source_modules =
     lakehouse.governed
 forbidden_modules =
     lakehouse.events
     lakehouse.storage
+ignore_imports =
+    lakehouse.problems.outage -> lakehouse.storage.errors
 
 # The store is reached from everything above it and builds on almost nothing (ADR 0224): the clients, the credential and
 # options a process signs with, its filesystem, its session, objects by key and the writes the store arbitrates. Seven
@@ -166,9 +171,10 @@ ignore_imports =
 # error mapping and the handlers every service app installs, the committed set of spec routes and the store-outage
 # reading. The service app installs them and the services answer through them, so they import nothing else in the
 # library, directly or through another module, beyond the request's trace id the body names as its `instance`
-# (`process.correlation`).
+# (`process.correlation`) and the store's rule for which of its client's failures is an outage (`storage.errors`, which
+# imports nothing in the library).
 [importlinter:contract:the-problems-import-nothing-else-in-the-library]
-name = ADR 0224: lakehouse.problems imports nothing else in the library beyond the request's trace id
+name = ADR 0224: lakehouse.problems imports nothing else in the library beyond the request's trace id and the store's outage rule
 type = forbidden
 source_modules =
     lakehouse.problems
@@ -176,6 +182,7 @@ forbidden_modules =
     lakehouse.*
 ignore_imports =
     lakehouse.problems.envelope -> lakehouse.process.correlation
+    lakehouse.problems.outage -> lakehouse.storage.errors
 
 # The Lance table plane is the floor of the library (ADR 0224): how every service reads and judges a Lance table, from a
 # version's commit time and a manifest's wire to its feature flags, its layout and a location's spellings. It is built
@@ -241,6 +248,7 @@ ignore_imports =
     lakehouse.records.maintenance_policies -> lakehouse.storage.uri
     lakehouse.records.object_records -> lakehouse.storage.options
     lakehouse.records.protection -> lakehouse.storage.options
+    lakehouse.records.record_store -> lakehouse.storage.errors
     lakehouse.records.record_store -> lakehouse.storage.objectfs
     lakehouse.records.record_store -> lakehouse.storage.options
     lakehouse.records.record_store -> lakehouse.storage.stored_objects

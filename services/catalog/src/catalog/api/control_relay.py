@@ -45,7 +45,6 @@ import logging
 from collections.abc import Callable, Mapping
 from typing import Any, Final
 
-from botocore.exceptions import BotoCoreError, ClientError
 from fastapi import FastAPI, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, SkipValidation, ValidationError
@@ -60,7 +59,6 @@ from lakehouse.events.control_events import CONTROL_TOPIC
 from lakehouse.events.published_keys import PublishedKeys
 from lakehouse.events.signing import KeySourceUnavailableError, SignatureError, SigningKey, VerifiedSignature, control_signature_of, verify_control_signature
 from lakehouse.governed.signing_key import SIGNING_STATE, SigningKeyHolder, published_key_fetch
-from lakehouse.storage.errors import StorageError
 from lakehouse.storage.options import StorageOptions
 
 
@@ -331,7 +329,7 @@ async def _delete_staged(key: str, *, lane: _Lane) -> bool:
     """
     try:
         await run_in_threadpool(outbox.drop_event, lane.settings.control_outbox_uri, lane.options, key)
-    except (ClientError, BotoCoreError, OSError, StorageError) as exc:
+    except OSError as exc:
         log.warning("control_outbox_left_staged", extra={"key": bounded(key), "error": bounded(str(exc))})
         return False
     return True

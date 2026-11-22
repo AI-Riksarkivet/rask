@@ -52,7 +52,6 @@ import logging
 from datetime import timedelta
 from typing import Final
 
-from botocore.exceptions import ClientError
 from lance_namespace import (
     ConcurrentModificationError,
     InvalidTableStateError,
@@ -87,7 +86,6 @@ _STILL_ENDING: Final = (
 #: What the store and the records raise when a read or a write could not be made.
 _UNREAD: Final = (
     OSError,
-    ClientError,
     ValueError,
     base_registry.UnreadableBaseRecordError,
     conditional_records.RecordChangedError,

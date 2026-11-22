@@ -27,6 +27,7 @@ from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_options
 from lakehouse.storage.options import StorageOptions, on_s3
 from lakehouse.storage.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
+from lakehouse.storage.uri import split_s3_uri
 
 
 if TYPE_CHECKING:
@@ -595,7 +596,7 @@ class Settings(
         contribute nothing, since there is no bucket to reserve."""
         named = {b.strip() for b in self.reserved_buckets.split(",") if b.strip()}
         for uri in (self.root, self.registry_root, *self.multibase_data_base_list):
-            if on_s3(uri) and (bucket := uri.removeprefix("s3://").split("/", 1)[0]):
+            if on_s3(uri) and (bucket := split_s3_uri(uri)[0]):
                 named.add(bucket)
         return frozenset(named)
 

@@ -181,7 +181,7 @@ def delete_table_object(location: str, so: StorageOptions, relative: str) -> Non
     """
     try:
         if on_s3(location):
-            bucket, prefix = split_s3_uri(location.rstrip("/"))
+            bucket, prefix = split_s3_uri(location)
             path = f"{bucket}/{prefix}/{relative}"
         else:
             _, base = dataset_fs(location, so)

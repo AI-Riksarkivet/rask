@@ -331,7 +331,7 @@ def _namespace_holds(ns: LanceNamespace, segments: list[str]) -> bool:
 def _reserve(location: str, so: StorageOptions) -> None:
     """Write the `.lance-reserved` marker at ``location``, as :func:`delete_table_object` deletes: no directory object beside it."""
     if on_s3(location):
-        bucket, prefix = split_s3_uri(location.rstrip("/"))
+        bucket, prefix = split_s3_uri(location)
         object_client(so).put_object(Bucket=bucket, Key=f"{prefix}/{RESERVED_MARKER}", Body=b"")
         return
     fs, path = dataset_fs(location, so)

@@ -34,7 +34,6 @@ from datetime import datetime, timedelta
 from typing import Any, Final
 
 import lance
-from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
@@ -53,8 +52,10 @@ from lakehouse.lancekit.filters import sql_literal
 from lakehouse.lancekit.lance_session import fresh_session, open_dataset
 from lakehouse.lancekit.manifest_names import committed_version
 from lakehouse.lancekit.transactions import read_transaction
+from lakehouse.problems.outage import store_refusal
 from lakehouse.records import commit_records
 from lakehouse.storage import stored_objects
+from lakehouse.storage.errors import StorageError
 from lakehouse.storage.options import StorageOptions, on_s3
 
 
@@ -200,12 +201,17 @@ def mark_registered_heads(settings: CatalogStore, so: StorageOptions, *, locatio
     committed version has no head to mark, and a pass finds nothing there until a commit lands.
 
     Raises:
-        ServiceUnavailableError: A ref's head could not be read or the mark could not be written; no mark was written.
+        ServiceUnavailableError: A ref's head could not be read, or the store did not answer the mark's write; no mark
+            was written.
+        InternalError: The store refused the mark's write; no mark was written.
     """
     try:
         heads = _registered_heads(location, so)
         if heads:
             commit_records.write_marks(settings.registry_root, settings.storage_options(), table_uuid, marks=commit_records.CommitMarks(refs=heads))
+    except StorageError as exc:
+        log.warning("registered_heads_unmarked", extra={"location": location, "error": str(exc)[:300]})
+        raise store_refusal(exc, reading=f"marking the heads of the dataset at {location!r}", so="it was not registered") from exc
     except (OSError, ValueError) as exc:
         log.warning("registered_heads_unmarked", extra={"location": location, "error": str(exc)[:300]})
         raise ServiceUnavailableError(f"the heads of the dataset at {location!r} could not be read and marked, so it was not registered") from exc
@@ -429,7 +435,7 @@ def _stamped_versions(ref_location: str, so: StorageOptions) -> tuple[dict[int, 
     versions = f"{key_uri(store_of(ref_location), decoded_path(ref_location))}/_versions" if on_s3(ref_location) else f"{ref_location.rstrip('/')}/_versions"
     try:
         listing = stored_objects.list_under_at(versions, so)
-    except (OSError, BotoCoreError, ClientError) as exc:
+    except OSError as exc:
         raise ReconcileReadError(f"the versions of {ref_location} could not be listed: {exc}") from exc
     stamped: dict[int, datetime] = {}
     for listed in listing.objects:

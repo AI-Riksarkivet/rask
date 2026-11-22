@@ -25,6 +25,7 @@ import socket
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from http import HTTPStatus
 from time import monotonic
 from typing import Final
 
@@ -34,6 +35,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 from lakehouse.process.own_threads import on_own_threads
 from lakehouse.records import control_prefixes
 from lakehouse.storage import conditional_records
+from lakehouse.storage.errors import StoreRefusedError
 from lakehouse.storage.options import StorageOptions
 
 
@@ -229,7 +231,7 @@ class Timer:
         try:
             read = conditional_records.read_json_at(self._root, options, key)
             denied = None
-        except Exception as exc:
+        except StoreRefusedError as exc:
             answered_at = _denied_at(exc)
             if answered_at is None:
                 raise
@@ -262,14 +264,10 @@ class Timer:
         return _Asked(mine=True, window=window, until_next=until_next)
 
 
-def _denied_at(exc: Exception) -> datetime | None:
-    """The store's clock when it refused a read as forbidden; none for any other failure."""
-    from botocore.exceptions import ClientError
-
-    if not isinstance(exc, ClientError):
-        return None
+def _denied_at(exc: StoreRefusedError) -> datetime | None:
+    """The store's clock when it refused a read as forbidden; none for any other refusal."""
     status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-    if status != 403 and str(exc.response.get("Error", {}).get("Code", "")) != "AccessDenied":
+    if status != HTTPStatus.FORBIDDEN and str(exc.response.get("Error", {}).get("Code", "")) != "AccessDenied":
         return None
     return conditional_records.store_clock(exc.response)
 

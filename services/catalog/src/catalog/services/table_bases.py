@@ -50,6 +50,7 @@ from lakehouse.problems.outage import store_refusal
 from lakehouse.records import base_registry, clone_sources, control_prefixes, location_claims
 from lakehouse.records.history_fences import HistoryFencedError
 from lakehouse.storage import conditional_records
+from lakehouse.storage.errors import StorageError
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 
@@ -364,11 +365,14 @@ def _governed_source(pin: _Pin, context: RegistrationContext) -> clone_sources.C
     holds it.
 
     Raises:
-        ServiceUnavailableError: The claim could not be read.
+        ServiceUnavailableError: The claim could not be read: the store did not answer, or what it holds is no claim.
+        InternalError: The store refused the read.
     """
     claims = location_claims.ClaimStore(control_root=context.registry.control_root, storage_options=context.registry.storage_options)
     try:
         held = location_claims.holder(claims, pin.ref.path)
+    except StorageError as exc:
+        raise store_refusal(exc, reading="reading the claim of a clone's source", so="the clone was not judged") from exc
     except (ValueError, OSError) as exc:
         raise ServiceUnavailableError("the claim of a clone's source could not be read, so the clone was not judged") from exc
     if held is None or held.uuid is None:
@@ -741,6 +745,7 @@ def _file_registration(verdict: RegistrationVerdict, *, clone_uuid: str, context
 
     Raises:
         ServiceUnavailableError: The ending could not be filed: the registration refuses before any tag is taken.
+        InternalError: The store refused the filing; the registration refuses before any tag is taken.
     """
     claims = _claim_store(context)
     intent = clone_ending_records.EndingIntent(
@@ -758,6 +763,8 @@ def _file_registration(verdict: RegistrationVerdict, *, clone_uuid: str, context
             "clone_ending_unfiled",
             extra={"table": context.holder, "location": verdict.location, "door": clone_ending_records.REGISTRATION, "error": str(exc)[:300]},
         )
+        if isinstance(exc, StorageError):
+            raise store_refusal(exc, reading=f"filing the record of what {context.holder} holds as a clone", so="it was not registered") from exc
         raise ServiceUnavailableError(f"cannot register {context.holder}: the record of what it holds as a clone could not be filed") from exc
 
 

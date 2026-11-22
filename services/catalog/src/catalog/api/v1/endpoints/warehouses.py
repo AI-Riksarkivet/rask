@@ -1566,7 +1566,7 @@ def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint:
     reported as failures — a probe that could not write has learned nothing about scope, and saying so
     is the difference between "the store is over-permissive" and "the store was unreachable".
     """
-    bucket, prefix = split_s3_uri(root_uri.rstrip("/"))
+    bucket, prefix = split_s3_uri(root_uri)
     probe_prefix = f"{prefix.rstrip('/') + '/' if prefix else ''}_validate/{uuid.uuid4().hex}"
     inside = f"{probe_prefix}/probe"
     # Its own key, inside the same vended prefix: the conditional put must land on a key nothing else

@@ -43,6 +43,7 @@ from lakehouse.lancekit.listing_floor import FLOOR_KEY
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import location_claims, maintenance_policies, record_store, trash
 from lakehouse.storage.credential import S3KeyPair, StoreCredentialUnavailableError
+from lakehouse.storage.errors import StorageError, store_call
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions
 from maintenance.core import metrics
@@ -394,9 +395,15 @@ def _outcomes(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [record.__dict__["outcome"] for record in caplog.records if record.getMessage() == "maintenance_orphan_check"]
 
 
-def _refused(status: int) -> ClientError:
+def _refused(status: int) -> StorageError:
+    """What the claim's read raises for the store's ``status``: its client's failure mapped by the store seam."""
     answer: Any = {"Error": {"Code": "ServiceUnavailable"}, "ResponseMetadata": {"HTTPStatusCode": status}}
-    return ClientError(answer, "GetObject")
+    try:
+        with store_call("reading the claim"):
+            raise ClientError(answer, "GetObject")
+    except StorageError as mapped:
+        return mapped
+    raise AssertionError("the store seam mapped nothing")
 
 
 @pytest.mark.parametrize(
@@ -416,7 +423,7 @@ def test_a_check_the_store_does_not_answer_is_an_incomplete_check(  # noqa: PLR0
     caplog: pytest.LogCaptureFixture,
     failure: Exception,
 ) -> None:
-    """The claim is read through the S3 client, which raises its own types, and the pod's store session can lapse
+    """The claim is read through the S3 client, whose failures the store seam maps, and the pod's store session can lapse
     before any read: neither is an answer about the table, so each is counted and said as an incomplete check."""
     task = _table(bucket=bucket, options=store)
 

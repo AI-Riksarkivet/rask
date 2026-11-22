@@ -100,7 +100,7 @@ async def require_reclaimable_history(request: Request, table: DoorTableDep, res
         raise InvalidTableStateError(
             "a maintenance policy that may govern the table cannot be read as one, and may keep its whole history, so no credential that could delete or rewrite it is vended"
         ) from exc
-    except maintenance_policies.UnreadablePolicyError as exc:
+    except OSError as exc:
         raise ServiceUnavailableError("the maintenance policies could not be read, so no maintain-tier credential was vended") from exc
     if held:
         raise InvalidTableStateError("the table's maintenance policy keeps its whole history, so no credential that could delete or rewrite it is vended")

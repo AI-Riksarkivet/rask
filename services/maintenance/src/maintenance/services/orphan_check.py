@@ -35,7 +35,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import Final
 
-from botocore.exceptions import BotoCoreError, ClientError
 from pydantic import BaseModel
 
 from lakehouse.records import location_claims, trash
@@ -109,9 +108,10 @@ def _check(task: Task, settings: MaintenanceSettings, *, now: datetime) -> tuple
             return OrphanCheck(outcome="gone", next_check=None), None
         if trash.keeps(settings.resolved_control_root, options, task.uuid):
             return OrphanCheck(outcome="trashed", next_check=None), None
-    except (OSError, ValueError, ClientError, BotoCoreError) as exc:
-        # How the two reads fail: the trash's on pyarrow (`OSError`), the claim's on the S3 client, which raises its
-        # own types, and a record that is there and is none (`ValueError`). Each decides nothing about the table.
+    except (OSError, ValueError) as exc:
+        # How the two reads fail: the store refusing or not answering (`OSError`, pyarrow's for the trash and the
+        # store's own family for the claim), and a record that is there and is none (`ValueError`). Each decides
+        # nothing about the table.
         raise OrphanCheckIncompleteError(f"the claim or the trash could not be read: {exc}") from exc
     governed = governs(task.location, warehouse=held.segments[0], settings=settings, options=options)
     if governed is None:

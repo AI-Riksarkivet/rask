@@ -17,11 +17,11 @@ import logging
 from enum import StrEnum
 from typing import Any, Self
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.records import control_prefixes
-from lakehouse.records.record_store import list_every_record, read_record
+from lakehouse.records.record_store import UnreadableRecordError, list_every_record, parse_record, read_record
 from lakehouse.storage.options import StorageOptions
 
 
@@ -68,9 +68,9 @@ class WarehouseStatus(StrEnum):
     DEACTIVATED = "deactivated"
 
 
-class UnreadableWarehouseRecordError(ValueError):
-    """A warehouse record is stored and cannot be read as one, so what it routes, quarantines or keeps is unknown. Names
-    where the record sits."""
+class UnreadableWarehouseRecordError(UnreadableRecordError):
+    """Raised when a warehouse record is stored and cannot be read as one, so what it routes, quarantines or keeps is
+    unknown. Names where the record sits."""
 
 
 class WarehouseRecord(BaseModel):
@@ -140,11 +140,7 @@ def read(raw: object, *, at: str) -> WarehouseRecord:
     Raises:
         UnreadableWarehouseRecordError: It is no warehouse record.
     """
-    try:
-        return WarehouseRecord.model_validate(raw)
-    except ValidationError as exc:
-        fields = ", ".join(sorted({".".join(str(part) for part in error["loc"]) or "the record" for error in exc.errors(include_url=False)}))
-        raise UnreadableWarehouseRecordError(f"the warehouse record at {at} cannot be read: {fields} is not what a record holds") from exc
+    return parse_record(WarehouseRecord, raw, at=at, error=UnreadableWarehouseRecordError)
 
 
 def _listed_at(raw: object) -> str:

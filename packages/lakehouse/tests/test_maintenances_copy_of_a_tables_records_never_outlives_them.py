@@ -16,11 +16,13 @@ from collections.abc import Iterator
 
 import boto3
 import pytest
+from botocore.exceptions import ClientError
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
 from lakehouse.records import file_identities
 from lakehouse.storage.credential import S3KeyPair
+from lakehouse.storage.errors import BucketNotFoundError
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.stored_objects import ObjectIdentity, list_under
@@ -67,3 +69,14 @@ def test_a_table_ended_inside_a_pass_keeps_no_copy_of_its_records(moto_url: str,
 
     left = [stored.path for prefix in (file_identities.PREFIX, file_identities.COPY_PREFIX) for stored in list_under(f"{control}/{prefix}", options)]
     assert left == [], left
+
+
+def test_a_listing_the_store_answers_reaches_the_caller_as_the_stores_own_error(moto_url: str) -> None:
+    """The records raise what the store seam raised, its client's failure as the cause, with no wrap of their own."""
+    options: StorageOptions = lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
+
+    with pytest.raises(OSError) as caught:
+        file_identities.listed_records(f"s3://absent-{uuid.uuid4().hex[:8]}", options, str(uuid.uuid4()))
+
+    assert type(caught.value) is BucketNotFoundError
+    assert isinstance(caught.value.__cause__, ClientError)

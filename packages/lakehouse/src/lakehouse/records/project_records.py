@@ -10,7 +10,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
+
+from lakehouse.records.record_store import UnreadableRecordError, parse_record
 
 
 __all__ = [
@@ -20,9 +22,9 @@ __all__ = [
 ]
 
 
-class UnreadableProjectRecordError(ValueError):
-    """A project record is stored and cannot be read as one, so whether the tenant stands, is being deleted, is
-    protected or is git's is unknown. Names where the record sits and the fields that are not a record's."""
+class UnreadableProjectRecordError(UnreadableRecordError):
+    """Raised when a project record is stored and cannot be read as one, so whether the tenant stands, is being deleted,
+    is protected or is git's is unknown. Names where the record sits and the fields that are not a record's."""
 
 
 class ProjectRecord(BaseModel):
@@ -67,8 +69,4 @@ def read(raw: object, *, at: str) -> ProjectRecord:
     Raises:
         UnreadableProjectRecordError: It is no project record.
     """
-    try:
-        return ProjectRecord.model_validate(raw)
-    except ValidationError as exc:
-        fields = ", ".join(sorted({".".join(str(part) for part in error["loc"]) or "the record" for error in exc.errors(include_url=False)}))
-        raise UnreadableProjectRecordError(f"the project record at {at} cannot be read: {fields} is not what a record holds") from exc
+    return parse_record(ProjectRecord, raw, at=at, error=UnreadableProjectRecordError)

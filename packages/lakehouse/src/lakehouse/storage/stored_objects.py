@@ -24,8 +24,10 @@ from pydantic import BaseModel, ConfigDict
 
 from lakehouse.storage.client import MAX_POOL_CONNECTIONS, S3Client
 from lakehouse.storage.conditional_records import store_clock
+from lakehouse.storage.errors import ObjectNotFoundError, StoreRefusedError, StoreUnansweredError, store_call
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions, object_client, on_s3
+from lakehouse.storage.uri import s3_object, split_s3_uri
 
 
 #: The most keys one S3 DeleteObjects request takes.
@@ -36,6 +38,9 @@ _IDENTITY_READS: Final = MAX_POOL_CONNECTIONS
 
 #: How much of a local object :func:`identities` hashes per read.
 _HASH_CHUNK: Final = 1 << 20
+
+#: The per-key codes of a DeleteObjects answer that say the store did not get to the key, which a retry may clear.
+_KEY_UNANSWERED: Final = frozenset({"InternalError", "SlowDown", "ServiceUnavailable"})
 
 #: The logger every object :func:`delete_objects` removes is recorded on, one line per object ([[LH-232]]). Lance writes
 #: its own deletes as ``lance::events::file_audit`` lines on stderr when ``LANCE_LOG`` asks for them; rask's deletes by
@@ -66,13 +71,20 @@ def list_under(uri: str, storage_options: StorageOptions) -> list[StoredObject]:
 
     Any ``s3://`` root is listed through the object client, endpoint or none, so the listing asks the store for
     ``<key>/`` alone, what a session scoped to the location may list.
+
+    Raises:
+        StorageError: The store refused the listing, or did not answer it.
     """
     return list(iter_under(uri, storage_options))
 
 
 def iter_under(uri: str, storage_options: StorageOptions) -> Iterator[StoredObject]:
     """:func:`list_under` a page at a time, a thousand objects a request on S3, so a caller that stops early has asked
-    the store for no more than it read."""
+    the store for no more than it read.
+
+    Raises:
+        StorageError: The store refused a page of the listing, or did not answer it.
+    """
     if on_s3(uri):
         bucket, pages = _s3_pages(uri, storage_options)
         for page in pages:
@@ -97,7 +109,11 @@ class StoreListing(BaseModel):
 
 def list_under_at(uri: str, storage_options: StorageOptions) -> StoreListing:
     """:func:`list_under`, with the store's clock at the listing, so an object's age is read off the one clock that
-    stamped it and never off a pod's (ADR 0179)."""
+    stamped it and never off a pod's (ADR 0179).
+
+    Raises:
+        StorageError: The store refused a page of the listing, or did not answer it.
+    """
     if not on_s3(uri):
         at = datetime.now(UTC)
         return StoreListing(objects=list_under(uri, storage_options), at=at)
@@ -108,9 +124,23 @@ def list_under_at(uri: str, storage_options: StorageOptions) -> StoreListing:
 
 
 def _s3_pages(uri: str, storage_options: StorageOptions) -> tuple[str, Iterator[Mapping[str, Any]]]:
-    """The bucket ``uri`` names, and the pages of a listing of everything beneath its key."""
-    bucket, _, key = uri.removeprefix("s3://").partition("/")
-    return bucket, iter(object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key.rstrip('/')}/"))
+    """The bucket ``uri`` names, and the pages of a listing of everything beneath its key, each request mapped by
+    :func:`store_call`."""
+    bucket, key = split_s3_uri(uri)
+    doing = f"listing {uri}"
+    with store_call(doing):
+        pages = iter(object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{key}/"))
+    return bucket, _answered_pages(doing, pages)
+
+
+def _answered_pages(doing: str, pages: Iterator[Mapping[str, Any]]) -> Iterator[Mapping[str, Any]]:
+    """Each of ``pages``, the request the paginator makes for each one under :func:`store_call`."""
+    while True:
+        with store_call(doing):
+            page = next(pages, None)
+        if page is None:
+            return
+        yield page
 
 
 def _on_page(bucket: str, page: Mapping[str, Any]) -> Iterator[StoredObject]:
@@ -136,7 +166,7 @@ def identities(uri: str, storage_options: StorageOptions, keys: Sequence[str]) -
     object is read with one HEAD, sixteen at a time; a local one is hashed.
 
     Raises:
-        OSError: The store refused, or could not be reached for, a read.
+        StorageError: The store refused a read, or did not answer it.
     """
     if not keys:
         return {}
@@ -154,24 +184,18 @@ def listed_identities(uri: str, storage_options: StorageOptions, keys: Sequence[
     root is hashed key by key, as :func:`identities` does.
 
     Raises:
-        OSError: The store refused, or could not be reached for, the listing.
+        StorageError: The store refused the listing, or did not answer it.
     """
     if not keys:
         return {}
     if not on_s3(uri):
         return identities(uri, storage_options, keys)
-    from botocore.exceptions import BotoCoreError, ClientError
-
-    bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
+    bucket, prefix = split_s3_uri(uri)
     under, wanted = f"{prefix}/" if prefix else "", set(keys)
     found: dict[str, ObjectIdentity] = {}
-    try:
+    with store_call(f"listing {bucket}/{under}"):
         for page in object_client(storage_options).get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=under):
             found.update(_listed_on_page(page, under=under, wanted=wanted))
-    except ClientError as exc:
-        raise OSError(f"the store refused listing {bucket}/{under}: {exc}") from exc
-    except BotoCoreError as exc:
-        raise OSError(f"the store could not be reached listing {bucket}/{under}: {exc}") from exc
     return found
 
 
@@ -185,21 +209,15 @@ def _listed_on_page(page: Mapping[str, Any], *, under: str, wanted: set[str]) ->
 
 
 def _s3_identity(uri: str, storage_options: StorageOptions) -> Callable[[str], ObjectIdentity | None]:
-    from botocore.exceptions import BotoCoreError, ClientError
-
-    bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
     client = object_client(storage_options)
 
     def read(key: str) -> ObjectIdentity | None:
-        full_key = f"{prefix}/{key}" if prefix else key
+        bucket, full_key = s3_object(uri, key)
         try:
-            head = client.head_object(Bucket=bucket, Key=full_key)
-        except ClientError as exc:
-            if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404:
-                return None
-            raise OSError(f"the store refused reading {bucket}/{full_key}: {exc}") from exc
-        except BotoCoreError as exc:
-            raise OSError(f"the store could not be reached reading {bucket}/{full_key}: {exc}") from exc
+            with store_call(f"reading {bucket}/{full_key}"):
+                head = client.head_object(Bucket=bucket, Key=full_key)
+        except ObjectNotFoundError:
+            return None
         return ObjectIdentity(etag=str(head["ETag"]).strip('"'), size=int(head["ContentLength"]))
 
     return read
@@ -229,7 +247,7 @@ def delete_object(uri: str, storage_options: StorageOptions, key: str) -> bool:
     policy refuses the marker, and a missing endpoint resolves as ``records``' conditional writes resolve it.
 
     Raises:
-        OSError: The store refused, or could not be reached for, the read or the delete.
+        StorageError: The store refused the read or the delete, or did not answer it.
     """
     if not on_s3(uri):
         fs, base = fs_and_base(uri, storage_options)
@@ -238,20 +256,14 @@ def delete_object(uri: str, storage_options: StorageOptions, key: str) -> bool:
         except FileNotFoundError:
             return False
         return True
-    from botocore.exceptions import BotoCoreError, ClientError
-
-    bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
-    full_key = f"{prefix}/{key}" if prefix else key
+    bucket, full_key = s3_object(uri, key)
     client = object_client(storage_options)
     try:
-        client.head_object(Bucket=bucket, Key=full_key)
-        client.delete_object(Bucket=bucket, Key=full_key)
-    except ClientError as exc:
-        if exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode") == 404:
-            return False
-        raise OSError(f"the store refused deleting {bucket}/{full_key}: {exc}") from exc
-    except BotoCoreError as exc:
-        raise OSError(f"the store could not be reached deleting {bucket}/{full_key}: {exc}") from exc
+        with store_call(f"deleting {bucket}/{full_key}"):
+            client.head_object(Bucket=bucket, Key=full_key)
+            client.delete_object(Bucket=bucket, Key=full_key)
+    except ObjectNotFoundError:
+        return False
     return True
 
 
@@ -261,7 +273,7 @@ def remove_object(uri: str, storage_options: StorageOptions, key: str) -> None:
     spends a HEAD).
 
     Raises:
-        OSError: The store refused the delete, or could not be reached.
+        StorageError: The store refused the delete, or did not answer it.
     """
     if not on_s3(uri):
         fs, base = fs_and_base(uri, storage_options)
@@ -270,16 +282,9 @@ def remove_object(uri: str, storage_options: StorageOptions, key: str) -> None:
         except FileNotFoundError:
             return
         return
-    from botocore.exceptions import BotoCoreError, ClientError
-
-    bucket, _, prefix = uri.removeprefix("s3://").rstrip("/").partition("/")
-    full_key = f"{prefix}/{key}" if prefix else key
-    try:
+    bucket, full_key = s3_object(uri, key)
+    with store_call(f"deleting {bucket}/{full_key}"):
         object_client(storage_options).delete_object(Bucket=bucket, Key=full_key)
-    except ClientError as exc:
-        raise OSError(f"the store refused deleting {bucket}/{full_key}: {exc}") from exc
-    except BotoCoreError as exc:
-        raise OSError(f"the store could not be reached deleting {bucket}/{full_key}: {exc}") from exc
 
 
 def _file_kind(path: str) -> str:
@@ -304,7 +309,7 @@ def delete_objects(uri: str, storage_options: StorageOptions, paths: list[str]) 
     found. The paths may lie in several buckets; each bucket's are sent in requests of their own.
 
     Raises:
-        OSError: The store refused a delete.
+        StorageError: The store refused a delete, or did not answer it.
     """
     if not paths:
         return
@@ -333,17 +338,26 @@ def _delete_local(uri: str, storage_options: StorageOptions, paths: list[str]) -
 def _delete_batch(client: S3Client, bucket: str, keys: list[str]) -> None:
     """One DeleteObjects request for ``keys`` in ``bucket``, recording each key the store deleted.
 
+    A key the store answered ``InternalError``, ``SlowDown`` or ``ServiceUnavailable`` for is one it did not get to, an
+    outage a retry may clear; any other per-key error is its refusal. The keys it did delete are recorded first.
+
     Raises:
-        OSError: The store refused a key; the keys it did delete are recorded first.
+        StorageError: The store failed the request as a whole, or a key of it: ``StoreUnansweredError`` where it did
+            not get to one, ``StoreRefusedError`` where it refused one and got to the rest.
     """
-    answered = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in keys], "Quiet": True})
-    refused = answered.get("Errors") or []
-    refused_keys = {str(error.get("Key")) for error in refused}
+    with store_call(f"deleting {len(keys)} key(s) in {bucket}"):
+        answered = client.delete_objects(Bucket=bucket, Delete={"Objects": [{"Key": key} for key in keys], "Quiet": True})
+    failed = answered.get("Errors") or []
+    failed_keys = {str(error.get("Key")) for error in failed}
     for key in keys:
-        if key not in refused_keys:
+        if key not in failed_keys:
             _record_deleted(f"{bucket}/{key}")
-    if refused:
-        raise OSError(f"the store refused {len(refused)} delete(s) in {bucket}: {refused[:3]}")
+    if not failed:
+        return
+    message = f"deleting {len(keys)} key(s) in {bucket}: the store failed {len(failed)} of them: {failed[:3]}"
+    if any(str(error.get("Code")) in _KEY_UNANSWERED for error in failed):
+        raise StoreUnansweredError(message, response=answered)
+    raise StoreRefusedError(message, response=answered)
 
 
 @contextmanager
@@ -357,7 +371,7 @@ def recording_removed_transactions(ref_root: str, storage_options: StorageOption
     are. A file gone that the cleanup did not remove (another reclaim of the same ref meanwhile) is a removed file too.
 
     Raises:
-        OSError: The store refused, or could not be reached for, the listing before the cleanup.
+        StorageError: The store refused the listing before the cleanup, or did not answer it.
     """
     directory = f"{ref_root.rstrip('/')}/_transactions"
     before = _paths_under(directory, storage_options)
@@ -382,16 +396,9 @@ def _paths_under(uri: str, storage_options: StorageOptions) -> set[str]:
     """The store path of every object beneath ``uri``.
 
     Raises:
-        OSError: The store refused the listing, or could not be reached.
+        StorageError: The store refused the listing, or did not answer it.
     """
-    from botocore.exceptions import BotoCoreError, ClientError
-
-    try:
-        return {stored.path for stored in iter_under(uri, storage_options)}
-    except ClientError as exc:
-        raise OSError(f"the store refused listing {uri}: {exc}") from exc
-    except BotoCoreError as exc:
-        raise OSError(f"the store could not be reached listing {uri}: {exc}") from exc
+    return {stored.path for stored in iter_under(uri, storage_options)}
 
 
 def _record_deleted(path: str) -> None:

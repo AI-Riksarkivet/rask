@@ -36,9 +36,10 @@ from lakehouse.events import outbox_metrics
 from lakehouse.events.bus import Bus, publish_event  # noqa: TID251 — the outbox is a registered publish site
 from lakehouse.events.cloud_events import CloudEvent
 from lakehouse.events.outbox_metrics import OutboxLane
+from lakehouse.storage.errors import store_call
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions, object_client, on_s3
-from lakehouse.storage.uri import split_s3_uri
+from lakehouse.storage.uri import s3_object
 
 
 log = logging.getLogger(__name__)
@@ -102,13 +103,9 @@ def stage_event(outbox_uri: str, storage_options: StorageOptions, key: str, *, e
     keeps the filesystem path: a local outbox is a real directory and genuinely needs its parent made.
     """
     if on_s3(outbox_uri):
-        bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
-        name = f"{key}.json"
-        object_client(storage_options).put_object(
-            Bucket=bucket,
-            Key=f"{prefix.rstrip('/')}/{name}" if prefix else name,
-            Body=event_json.encode("utf-8"),
-        )
+        bucket, object_key = s3_object(outbox_uri, f"{key}.json")
+        with store_call(f"staging {bucket}/{object_key}"):
+            object_client(storage_options).put_object(Bucket=bucket, Key=object_key, Body=event_json.encode("utf-8"))
         return
     fs, base = fs_and_base(outbox_uri, storage_options)
     fs.create_dir(base, recursive=True)
@@ -153,18 +150,16 @@ def drop_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> No
     and `delete_file` there needs no object-store permissions at all.
     """
     if on_s3(outbox_uri):
-        bucket, prefix = split_s3_uri(outbox_uri.rstrip("/"))
+        bucket, object_key = s3_object(outbox_uri, f"{key}.json")
         # The stage's own client (:func:`~lakehouse.storage.options.object_client`): it signs with the whole key pair of these options or builds
         # no client (`StorageOptions.signing_pair`), so a delete is never signed by whatever the pod's environment holds;
         # pinned in `test_the_outbox_drain_needs_no_write_permission.py`.
         client = object_client(storage_options)
         # An absent object already satisfies the post-condition, and S3's DeleteObject is idempotent for
-        # a missing key (204, no error) — so this suppression is for a NON-S3 double or backend that
-        # raises instead, the same tolerance the filesystem path below spells the same way. Catching
-        # boto3's `client.exceptions.NoSuchKey` would couple this seam to one client's exception shape
-        # for a case that client does not raise.
-        with suppress(FileNotFoundError):
-            client.delete_object(Bucket=bucket, Key=f"{prefix.rstrip('/')}/{key}.json" if prefix else f"{key}.json")
+        # a missing key (204, no error); a store answering 404 instead raises `ObjectNotFoundError`, a
+        # `FileNotFoundError`, which the filesystem path below suppresses the same way.
+        with suppress(FileNotFoundError), store_call(f"dropping {bucket}/{object_key}"):
+            client.delete_object(Bucket=bucket, Key=object_key)
         return
     fs, base = fs_and_base(outbox_uri, storage_options)
     with suppress(FileNotFoundError):

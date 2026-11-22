@@ -26,6 +26,7 @@ from lakehouse.process.health import Dependency
 from lakehouse.process.own_threads import on_own_threads
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import REGION, VIRTUAL_HOSTED, StorageOptions, on_s3, s3_filesystem
+from lakehouse.storage.uri import split_s3_uri
 
 
 if TYPE_CHECKING:
@@ -179,7 +180,7 @@ def fs_and_base(root_uri: str, storage_options: StorageOptions) -> tuple[pafs.Fi
     """
     if on_s3(root_uri):
         fs = s3_filesystem(storage_options)
-        return fs, root_uri[len("s3://") :].rstrip("/")
+        return fs, "/".join(part for part in split_s3_uri(root_uri) if part)
     resolved, path = pafs.FileSystem.from_uri(root_uri)
     return resolved, path.rstrip("/")
 

@@ -42,7 +42,7 @@ from typing import Any, Final, Literal, Self
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from lakehouse.records import control_prefixes, warehouse_records
-from lakehouse.records.record_store import delete_record, list_records, put_record, read_record, record_key
+from lakehouse.records.record_store import UnreadableRecordError, delete_record, list_records, parse_record, put_record, read_record, record_key
 from lakehouse.storage import conditional_records, stored_objects
 from lakehouse.storage.options import StorageOptions, on_s3
 from lakehouse.storage.uri import split_s3_uri
@@ -56,7 +56,6 @@ __all__ = [
     "PolicyKind",
     "PolicyRecord",
     "PolicySettings",
-    "UnreadablePolicyError",
     "cadence_key",
     "delete_policy",
     "end_table_state",
@@ -87,16 +86,11 @@ type PolicyKind = Literal["table", "namespace", "project"]
 _UUID_KEYED_KINDS: Final = frozenset({"table", "namespace"})
 
 
-class UnreadablePolicyError(RuntimeError):
-    """A policy record that may govern a table could not be read, so whether it keeps the table's history is unknown and
-    nothing that would reclaim it may be decided. Raised as itself when the store did not answer the read, which a later
-    read may get past; :class:`MalformedPolicyError` when the record is there and cannot be read as a policy."""
-
-
-class MalformedPolicyError(UnreadablePolicyError):
-    """A policy record that may govern a table is there and cannot be read as a policy: not JSON, not a record of its kind
-    and key, or a setting no value of its type reads (``retention_days: "30d"``). It may be a legal hold, and no later
-    read changes it until someone writes the record again."""
+class MalformedPolicyError(UnreadableRecordError):
+    """Raised when a policy record that may govern a table is there and cannot be read as a policy: not JSON, not a record
+    of its kind and key, or a setting no value of its type reads (``retention_days: "30d"``). It may be a legal hold, so
+    nothing that would reclaim the table's history may be decided, and no later read changes it until someone writes the
+    record again."""
 
 
 class PolicySettings(BaseModel):
@@ -199,10 +193,7 @@ def read(raw: object, *, at: str) -> PolicyRecord:
     Raises:
         MalformedPolicyError: It is no policy record.
     """
-    try:
-        return PolicyRecord.model_validate(raw)
-    except ValidationError as exc:
-        raise MalformedPolicyError(f"the policy record at {at} cannot be read as one: {exc.error_count()} field(s) are not what a record holds") from exc
+    return parse_record(PolicyRecord, raw, at=at, error=MalformedPolicyError)
 
 
 #: How many read, merge and conditional-write rounds a set runs before refusing: contention is admins setting one
@@ -323,7 +314,7 @@ def governing_policy(
 
     Raises:
         MalformedPolicyError: A record, or the claim naming the bucket's project, is there and cannot be read as one.
-        UnreadablePolicyError: The store failed a read.
+        OSError: The store failed a read.
     """
     try:
         if (own := _governing(control_root, storage_options, "table", key=table_uuid)) is not None:
@@ -334,9 +325,7 @@ def governing_policy(
         bucket = split_s3_uri(location)[0] if on_s3(location) else ""
         project = warehouse_records.bucket_project(claims_root, storage_options, bucket) if bucket else None
         tenant = _governing(control_root, storage_options, "project", key=project) if project is not None else None
-    except OSError as exc:
-        raise UnreadablePolicyError(f"a maintenance policy that may govern the table {table_uuid} could not be read: {exc}") from exc
-    except (MalformedPolicyError, ValueError) as exc:
+    except ValueError as exc:
         raise MalformedPolicyError(f"a maintenance policy that may govern the table {table_uuid} cannot be read as one: {exc}") from exc
     return tenant if tenant is not None and bucket in tenant.buckets else None
 
@@ -380,7 +369,7 @@ def _by_uuid(policies: list[PolicyRecord], kind: PolicyKind) -> dict[str, Policy
 
 def _project_policy(policies: list[PolicyRecord], uri: str) -> PolicyRecord | None:
     """The one project record whose ``buckets`` contain the dataset's bucket, ``None`` when none or several do."""
-    bucket = uri.removeprefix("s3://").split("/", 1)[0]
+    bucket = split_s3_uri(uri)[0]
     hits = [record for record in policies if record.kind == "project" and bucket in record.buckets]
     if len(hits) > 1:
         log.warning("maintenance_policy_project_overlap", extra={"bucket": bucket, "projects": sorted(record.id for record in hits)})

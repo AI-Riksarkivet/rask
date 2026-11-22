@@ -53,15 +53,16 @@ from pydantic import SecretStr
 import lakehouse.storage.client as storage_client
 from catalog.core import native
 from catalog.core.config import get_settings
-from catalog.services import clone_ending_records, table_bases
+from catalog.services import clone_ending_records, object_names, table_bases
 from catalog.services import clone_endings as clone_endings_door
 from catalog.services.tables import destroy
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.lancekit.base_refs import normalise
 from lakehouse.lancekit.features import manifest_base_path_refs
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.records import base_registry, clone_sources, location_claims, trash
+from lakehouse.records import base_registry, clone_sources, commit_records, location_claims, trash
 from lakehouse.storage import conditional_records
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.credential import S3KeyPair
@@ -78,7 +79,7 @@ from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 
 
 if TYPE_CHECKING:
-    from mypy_boto3_s3.type_defs import GetObjectRequestTypeDef
+    from mypy_boto3_s3.type_defs import GetObjectRequestTypeDef, PutObjectRequestTypeDef
 
 
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -393,17 +394,23 @@ def _reads_cold(uri: str, key: dict[str, str]) -> list[int]:
 _CLONED_IDS = sorted([1, 2, 3] * 3)
 
 
-def _registered_clone(estate: _Estate, table: str = "lance_catalog$db$silver", source: str = "lance_catalog$db$bronze tier") -> tuple[str, str]:
-    """A ``source`` made through the catalog and a shallow clone of its latest version registered as ``table``: the
-    source's location and the clone's.
+def _unregistered_clone(estate: _Estate, source: str = "lance_catalog$db$bronze tier") -> tuple[str, str]:
+    """A ``source`` made through the catalog and a shallow clone of its latest version at ``silver``, under no name yet:
+    the source's location and the clone's.
 
     The source's name is one the catalog percent-encodes into its location (``bronze tier``), as the claim, the tag and
     the clone's base all spell it while the store keeps the decoded directory (lh279 r6 spellings).
     """
     bronze = estate.create(source, fragments=3)
     clone = f"{estate.root}/silver"
-    source = estate.open(bronze)
-    source.shallow_clone(clone, source.version, storage_options=estate.key.in_clear())
+    made = estate.open(bronze)
+    made.shallow_clone(clone, made.version, storage_options=estate.key.in_clear())
+    return bronze, clone
+
+
+def _registered_clone(estate: _Estate, table: str = "lance_catalog$db$silver", source: str = "lance_catalog$db$bronze tier") -> tuple[str, str]:
+    """:func:`_unregistered_clone`, registered as ``table``."""
+    bronze, clone = _unregistered_clone(estate, source)
     registered = estate.client.post(f"/v1/table/{table}/register", json={"location": "silver"})
     assert registered.status_code == 200, registered.text
     return bronze, clone
@@ -724,6 +731,90 @@ def test_a_drop_whose_clone_ending_cannot_be_filed_changes_nothing(estate: _Esta
     residue = trash.named(estate.root, estate.key, "lance_catalog$db$silver", kind="table")
     assert (dropped.status_code, dropped.json().get("code"), described, residue, clone_ending_records.standing(_claims(estate))) == (503, 17, 200, [], [])
     assert _clone_tags(estate, bronze) == [clone_sources.tag_of(clone)]
+
+
+class _FailsAt:
+    """An S3 client answering ``failure`` to every read and write of a key holding ``marker``, and as the store does to
+    every other call."""
+
+    def __init__(self, inner: S3Client, *, marker: str, failure: ClientError) -> None:
+        self._inner = inner
+        self._marker = marker
+        self._failure = failure
+
+    def get_object(self, **request: Unpack[GetObjectRequestTypeDef]) -> object:
+        if self._marker in request["Key"]:
+            raise self._failure
+        return self._inner.get_object(**request)
+
+    def put_object(self, **request: Unpack[PutObjectRequestTypeDef]) -> object:
+        if self._marker in request["Key"]:
+            raise self._failure
+        return self._inner.put_object(**request)
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+
+def _the_store_answers(status: int, code: str) -> ClientError:
+    answer: Any = {"Error": {"Code": code, "Message": code}, "ResponseMetadata": {"HTTPStatusCode": status}}
+    return ClientError(answer, "GetObject")
+
+
+def _the_endings(_source: str) -> str:
+    return f"{clone_ending_records.PREFIX}/"
+
+
+def _the_marks(_source: str) -> str:
+    return f"{commit_records.MARKS_PREFIX}/"
+
+
+@pytest.mark.parametrize(
+    ("failing", "failure", "answer"),
+    [
+        pytest.param(location_claims.claim_key, _the_store_answers(403, "AccessDenied"), (500, 18), id="the-sources-claim-refused"),
+        pytest.param(_the_endings, _the_store_answers(403, "AccessDenied"), (500, 18), id="the-clones-ending-refused"),
+        pytest.param(_the_marks, _the_store_answers(403, "AccessDenied"), (500, 18), id="the-heads-mark-refused"),
+        pytest.param(location_claims.claim_key, _the_store_answers(503, "SlowDown"), (503, 17), id="the-sources-claim-unanswered"),
+    ],
+)
+def test_a_registration_whose_guard_the_store_fails_registers_nothing_and_answers_by_the_failure(
+    estate: _Estate, monkeypatch: pytest.MonkeyPatch, failing: Callable[[str], str], failure: ClientError, answer: tuple[int, int]
+) -> None:
+    """A registration marks its dataset's heads, reads the claim of its clone's source and files the clone's ending
+    before the table is one. A store that refuses one of them is a fault no retry clears (500, code 18), one that does
+    not answer is an outage (503, code 17), and either way the name holds no table."""
+    bronze, _ = _unregistered_clone(estate)
+    real_client = storage_client.s3_client
+    monkeypatch.setattr(storage_client, "s3_client", lambda *args, **kwargs: _FailsAt(real_client(*args, **kwargs), marker=failing(bronze), failure=failure))
+
+    refused = estate.client.post("/v1/table/lance_catalog$db$silver/register", json={"location": "silver"})
+
+    monkeypatch.undo()
+    described = estate.client.post("/v1/table/lance_catalog$db$silver/describe", json={}).status_code
+    assert (refused.status_code, refused.json()["code"], described) == (*answer, 404), refused.text
+
+
+def test_a_claim_the_store_does_not_answer_leaves_its_table_unnamed_and_the_rest_of_the_answer_named(
+    estate: _Estate, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A name is a label beside the uuid a grant holds, never what a decision reads: a claim the store fails to read
+    leaves its table out of the answer, said at WARNING, and the answer still names what it could read."""
+    table = fga_ids.table_object(estate.table_uuid("lance_catalog$db$victim"))
+    namespace = fga_ids.namespace_object(estate.namespace_uuid("lance_catalog$db"))
+    real_client = storage_client.s3_client
+    unanswered = _the_store_answers(503, "SlowDown")
+    monkeypatch.setattr(
+        storage_client,
+        "s3_client",
+        lambda *args, **kwargs: _FailsAt(real_client(*args, **kwargs), marker=location_claims.claim_key(estate.victim), failure=unanswered),
+    )
+
+    with caplog.at_level(logging.WARNING, logger=object_names.__name__):
+        named = object_names.current_names(get_settings(), [table, namespace])
+
+    assert named == {namespace: "lance_catalog$db"}
+    assert "object_name_claim_unread" in caplog.messages
 
 
 def test_a_registration_refused_by_another_requests_fence_releases_nothing(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:

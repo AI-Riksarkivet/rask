@@ -137,7 +137,14 @@ def test_mutate_gives_up_after_bounded_attempts(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_s3_replace_sends_if_match_and_maps_412_to_a_lost_race(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("code", "status"),
+    [
+        pytest.param("PreconditionFailed", 412, id="the-condition-did-not-hold"),
+        pytest.param("ConditionalRequestConflict", 409, id="another-write-in-flight"),
+    ],
+)
+def test_s3_replace_sends_if_match_and_maps_a_refused_condition_to_a_lost_race(monkeypatch: pytest.MonkeyPatch, code: str, status: int) -> None:
     """`IfMatch` is what makes this safe on the multi-replica path; a refactor that drops the kwarg
     would leave every call site reading as conditional while writing unconditionally — the F4 bug
     restored, invisibly. So the parameter is asserted by name, not just the behaviour."""
@@ -147,7 +154,7 @@ def test_s3_replace_sends_if_match_and_maps_412_to_a_lost_race(monkeypatch: pyte
         "ETag": '"abc123"',
         "LastModified": datetime(2026, 11, 12, tzinfo=UTC),
     }
-    client.put_object.side_effect = _client_error("PreconditionFailed", 412)
+    client.put_object.side_effect = _client_error(code, status)
     monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
 
     with pytest.raises(conditional_records.RecordChangedError):

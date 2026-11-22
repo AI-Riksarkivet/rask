@@ -35,6 +35,7 @@ from tests.secret_store_double import SecretStoreDouble
 from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.records import location_claims
+from lakehouse.storage.errors import store_call
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.arrival import Arrivals, LaneTask, lane_task
 from maintenance.services.queue import QueueUnavailableError, Task, TaskQueue
@@ -207,13 +208,15 @@ async def test_a_claim_the_store_does_not_answer_for_is_a_failure_a_redelivery_c
     the error its worker hands a delivery back on; the store client's own error is none the worker settles, so it would
     end the worker's process on every delivery of the announcement."""
 
-    def refused(_claims: object, _location: str) -> None:
-        raise ClientError({"Error": {"Code": "SlowDown", "Message": "reduce your request rate"}}, "GetObject")
+    def refused(_claims: object, location: str) -> None:
+        answer: Any = {"Error": {"Code": "SlowDown", "Message": "reduce your request rate"}, "ResponseMetadata": {"HTTPStatusCode": 503}}
+        with store_call(f"reading the claim on {location}"):
+            raise ClientError(answer, "GetObject")
 
     monkeypatch.setattr(location_claims, "holder", refused)
     arrivals = Arrivals(MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(_RecordingQueue()))
 
-    with pytest.raises(OSError, match="could not be read"):
+    with pytest.raises(OSError, match="the store answered 503 SlowDown"):
         await arrivals.hold_task(_body(_event("insert", uuid=None)))
 
 

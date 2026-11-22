@@ -573,6 +573,50 @@ def test_a_drop_whose_delete_fails_keeps_the_bytes_held_for_the_purge(moto_clien
     assert "left by a destructive drop that failed" in undropped.json()["detail"], undropped.text
 
 
+class _BaseReadsFail:
+    """The object client, failing every read of a base record with ``failure``, the store's own answer to it."""
+
+    def __init__(self, client: Any, failure: Exception) -> None:
+        self._client = client
+        self._failure = failure
+
+    def get_object(self, **request: Any) -> Any:
+        if "_bases/" in str(request["Key"]):
+            raise self._failure
+        return self._client.get_object(**request)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
+@pytest.mark.parametrize(
+    ("status", "code"), [pytest.param(403, "AccessDenied", id="the-store-refused"), pytest.param(503, "SlowDown", id="the-store-did-not-answer")]
+)
+def test_a_drop_whose_base_record_the_store_fails_to_read_drops_nothing_and_answers_503(
+    moto_client: TestClient, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, status: int, code: str
+) -> None:
+    """A drop reads the table's base record before anything changes; a read the store refuses or does not answer drops
+    nothing and is the spec's 503 either way, the store's own failure reaching the drop as the family's error."""
+    from botocore.exceptions import ClientError
+
+    from lakehouse.storage import conditional_records
+
+    rows = pa.table({"id": pa.array([1], pa.int64())})
+    table = f"lance_catalog$baseread{uuid.uuid4().hex[:8]}$t"
+    assert _create(moto_client, table, rows).status_code == 200
+    answer: Any = {"Error": {"Code": code, "Message": code}, "ResponseMetadata": {"HTTPStatusCode": status}}
+    failure = ClientError(answer, "GetObject")
+    real_client = conditional_records.object_client
+    monkeypatch.setattr(conditional_records, "object_client", lambda options: _BaseReadsFail(real_client(options), failure))
+
+    dropped = moto_client.post(f"/v1/table/{table}/drop?purge=true", json={})
+
+    monkeypatch.undo()
+    assert (dropped.status_code, dropped.json()["code"]) == (503, 17), dropped.text
+    assert "drop_data_directories_unread" in caplog.messages
+    assert moto_client.post(f"/v1/table/{table}/describe", json={}).status_code == 200, "a drop that could not read its base record dropped the table"
+
+
 # --------------------------------------------------------------------------- #
 # ADR 0146 — the deadline ends the recovery
 #

@@ -154,7 +154,7 @@ class TableHistory(BaseModel):
 
         Raises:
             HistoryFencedError: Work that excludes ``work`` holds it, or the take lost every round to writers it shares with.
-            botocore.exceptions.ClientError: The store refused a read or a write.
+            StorageError: The store refused a read or a write, or did not answer it.
         """
         for _ in range(_ATTEMPTS):
             read = conditional_records.read_json_at(self.control_root, self.storage_options, self.key)
@@ -211,7 +211,7 @@ class TableHistory(BaseModel):
         that stood then, and only a fresh take may hold the table again.
 
         Raises:
-            botocore.exceptions.ClientError: The store refused a read or a write.
+            StorageError: The store refused a read or a write, or did not answer it.
             conditional_records.RecordChangedError: Every attempt lost to another writer of the fence.
         """
         for _ in range(_ATTEMPTS):
@@ -260,7 +260,7 @@ class TableHistory(BaseModel):
 
         Raises:
             HistoryFencedError: Work that excludes ``work`` holds it; the block did not run.
-            botocore.exceptions.ClientError: The store refused the take.
+            StorageError: The store refused the take, or did not answer it.
         """
         token = self.take(work)
         stopped = threading.Event()

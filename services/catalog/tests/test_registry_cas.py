@@ -25,6 +25,7 @@ from botocore.exceptions import ClientError
 
 import lakehouse.storage.client as storage_client
 from lakehouse.storage import conditional_records
+from lakehouse.storage.errors import PreconditionFailedError, StorageError, StoreRefusedError, WriteConflictError
 from lakehouse.storage.options import StorageOptions
 
 
@@ -71,18 +72,32 @@ def _client_error(code: str, status: int) -> ClientError:
 
 
 def test_create_json_s3_412_maps_to_record_exists(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lost race is no ``OSError``: every ``except OSError`` around a store call would answer it as an outage (503)
+    where its caller answers 409."""
     client = MagicMock()
     client.put_object.side_effect = _client_error("PreconditionFailed", 412)
     monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
-    with pytest.raises(conditional_records.RecordExistsError):
+    with pytest.raises(conditional_records.RecordExistsError) as caught:
         conditional_records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", record={"id": "wh-a"})
+    assert not isinstance(caught.value, OSError)
+    assert isinstance(caught.value.__cause__, PreconditionFailedError)
 
 
-def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.MonkeyPatch) -> None:
-    # A refused conditional PUT is the one expected signal; anything else (auth, throttling, outage)
-    # must surface as itself — laundering it into "already exists" would hide a real failure.
+@pytest.mark.parametrize(
+    ("code", "status", "raised"),
+    [
+        pytest.param("AccessDenied", 403, StoreRefusedError, id="a-refusal"),
+        pytest.param("ConditionalRequestConflict", 409, WriteConflictError, id="another-write-in-flight"),
+    ],
+)
+def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.MonkeyPatch, code: str, status: int, raised: type[StorageError]) -> None:
+    # A refused conditional PUT is the one expected signal; anything else (auth, throttling, outage, a write of the
+    # key still in flight, which may yet fail) must surface as itself: laundering it into "already exists" would hide
+    # a real failure.
     client = MagicMock()
-    client.put_object.side_effect = _client_error("AccessDenied", 403)
+    client.put_object.side_effect = _client_error(code, status)
     monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
-    with pytest.raises(ClientError):
+    with pytest.raises(StorageError) as caught:
         conditional_records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", record={"id": "wh-a"})
+    assert type(caught.value) is raised
+    assert isinstance(caught.value.__cause__, ClientError)

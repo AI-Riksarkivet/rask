@@ -36,7 +36,7 @@ def held_table_claims(settings: CatalogStore) -> dict[str, location_claims.Locat
 
     Raises:
         ValueError: A claim record cannot be read, which may be a live table's.
-        botocore.exceptions.ClientError: The store refused the listing.
+        StorageError: The store refused the listing, or did not answer it.
     """
     claims = location_claims.every_claim(table_claims.claim_store(settings))
     return {fga_ids.table_object(claim.uuid): claim for claim in claims if claim.released_at is None and claim.uuid}

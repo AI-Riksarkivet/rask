@@ -331,7 +331,7 @@ class TableTurns(BaseModel):
         (:data:`_SHARED_READS`).
 
         Raises:
-            botocore.exceptions.ClientError: The store refused a read.
+            StorageError: The store refused a read, or did not answer it.
         """
         return _held(_SHARED_READS.get(self._shared, self._live_turns), ref, mine)
 
@@ -341,7 +341,7 @@ class TableTurns(BaseModel):
         turn held to its lapse, with the catalog's own writers of the ref waiting on it.
 
         Raises:
-            botocore.exceptions.ClientError: The store refused the read.
+            StorageError: The store refused the read, or did not answer it.
         """
         return any(turn.token == token for turn in self._live_turns())
 
@@ -353,7 +353,7 @@ class TableTurns(BaseModel):
 
         Raises:
             CommitTurnBusyError: The wait would sleep while every seat is taken.
-            botocore.exceptions.ClientError: The store refused a read.
+            StorageError: The store refused a read, or did not answer it.
         """
         deadline = time.monotonic() + HOLD.total_seconds() if until is None else until
         attempt, seated = 0, False
@@ -384,7 +384,7 @@ class TableTurns(BaseModel):
         this way, against 60-62 with each poll sent to a thread.
 
         Raises:
-            botocore.exceptions.ClientError: The store refused a read.
+            StorageError: The store refused a read, or did not answer it.
         """
         return await self._wait_out_in_loop(ref, mine=mine, held=_held)
 
@@ -393,7 +393,7 @@ class TableTurns(BaseModel):
         writer's peers race.
 
         Raises:
-            botocore.exceptions.ClientError: The store refused a read.
+            StorageError: The store refused a read, or did not answer it.
         """
         return await self._wait_out_in_loop(ref, mine=mine, held=_held_by_a_door)
 
@@ -451,7 +451,7 @@ class TableTurns(BaseModel):
         Raises:
             CommitTurnBusyError: Another commit still held the turn after the wait, the wait found every seat taken, or
                 every round lost to another writer of the record.
-            botocore.exceptions.ClientError: The store refused a read or a write.
+            StorageError: The store refused a read or a write, or did not answer it.
         """
         return self._take(ref, token=uuid.uuid4().hex, hold=HOLD, deadline=time.monotonic() + HOLD.total_seconds(), handed_to=None)
 
@@ -461,7 +461,7 @@ class TableTurns(BaseModel):
 
         Raises:
             CommitTurnBusyError: Another commit holds the turn, or every round lost to another writer of the record.
-            botocore.exceptions.ClientError: The store refused a read or a write.
+            StorageError: The store refused a read or a write, or did not answer it.
         """
         self._take(ref, token=writer.token, hold=HOLD, deadline=time.monotonic(), handed_to=writer.caller)
 
@@ -492,7 +492,7 @@ class TableTurns(BaseModel):
         Raises:
             CommitTurnBusyError: Another commit still held the turn after the wait, or every round of the take lost to
                 another writer of the record; the block did not run.
-            botocore.exceptions.ClientError: The store refused the take.
+            StorageError: The store refused the take, or did not answer it.
         """
         token = self.take(ref)
         try:

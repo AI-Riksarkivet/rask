@@ -1,6 +1,6 @@
 """lakehouse.storage — how a lakehouse process reaches its object store and holds its session there.
 
-The S3 and STS clients (`client`, `sts`), key listing and URI parsing (`s3`, `uri`), the store's error taxonomy
+The S3 and STS clients (`client`, `sts`), the `s3://` split and join (`uri`), the store's failures
 (`errors`), the credential a service signs with (`credential`), its options and the pyarrow filesystem they build
 (`options`, `endpoint_scheme`, `objectfs`), the store session its ServiceAccount token is exchanged for
 (`store_session`), objects listed and deleted by key (`stored_objects`), and the writes the store arbitrates

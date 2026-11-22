@@ -1,123 +1,156 @@
-"""The backend-agnostic S3 error taxonomy — so no caller ever imports botocore.
+"""The store's failures in the library's own words, so no caller reads a botocore exception.
 
-``lakehouse.storage`` is the ONE S3 wrapper in this estate (never raw boto3), and until
-this module the wrapper leaked its own boundary: a caller that wanted to tell "that
-bucket does not exist" from "that key does not exist" from "the store is down" had to
-reach into ``botocore.exceptions.ClientError`` and read ``response["Error"]["Code"]``.
-Nobody did, so every caller either caught nothing (→ an unhandled botocore exception
-became an HTTP 500 with a traceback: the lakehouse storage browser's "Storage service
-unreachable (HTTP 500)" on a missing bucket, live-proof 2026-07-28) or caught
-``Exception`` and flattened three very different situations into one message.
+:func:`store_call` is the one place the library reads what the S3 client raised: it maps what the store answered (a
+``ClientError``) and a call that got no answer (a transport failure) to the :class:`StorageError` family, always chained
+(``raise ... from exc``), so the client's own failure stays the cause a reader of an outage can still consult. The family
+derives from ``OSError``, the standard type of an operational I/O failure, which pyarrow and Lance raise for the same
+failures, so an ``except OSError`` already written around a store call catches it unchanged. Any other failure of the
+client's (a parameter it refuses, a credential it cannot find) is a defect of the call, not an answer of the store's,
+and passes through as itself: mapped, an ``except OSError`` would answer it as a refusal to retry around.
 
-The codes matched below are **standard S3 REST error codes**, not a vendor dialect —
-AWS and RustFS both return `NoSuchBucket` / `NoSuchKey`, and a `HEAD` (which has
-no body to carry a code) surfaces as the bare HTTP status `404`/`NotFound` on every one
-of them. That keeps the storage-agnostic contract intact: swapping backends stays an
-env change.
+The codes read below are standard S3 REST error codes, which AWS and RustFS both answer: ``NoSuchBucket``, ``NoSuchKey``,
+and on a ``HEAD``, which has no body to carry a code, the bare status ``404``/``NotFound``. ``PreconditionFailed`` (412) is
+a conditional write whose condition did not hold: the store's verdict on the key. ``ConditionalRequestConflict`` (409) is
+a conditional write that met another write of the same key in flight, which the store has not settled: no verdict yet,
+so it is a class of its own, and any other 409 is read as it (the status says the conflict, and a store may name it by a
+code of its own, as AWS also answers ``OperationAborted``).
 
-Usage — wrap the call, not the whole handler, so only storage failures are translated::
+Which failure is an outage lives here once, in :func:`no_answer`, and :mod:`lakehouse.problems.outage` reads it: no
+response, a 5xx other than 501, or the store's rate limit (429). A 501 is the store saying it lacks what was asked,
+which no retry clears.
 
-    with s3_errors(bucket=bucket, key=key):
+Usage: wrap the call, not the handler, so only the store's failures are mapped::
+
+    with store_call(f"reading {bucket}/{key}"):
         resp = client.head_object(Bucket=bucket, Key=key)
-
-Anything that is not a recognised S3 error passes through untouched: a genuinely
-unreachable endpoint or a credential failure is NOT a "not found", and pretending
-otherwise would hide an outage behind a 404.
 """
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
+from http import HTTPStatus
+from typing import Any
 
 
 __all__ = [
     "BucketNotFoundError",
     "MissingStoreCredentialError",
     "ObjectNotFoundError",
+    "PreconditionFailedError",
     "StorageError",
-    "s3_errors",
+    "StoreRefusedError",
+    "StoreUnansweredError",
+    "WriteConflictError",
+    "no_answer",
+    "store_call",
 ]
 
-#: Error codes an S3 backend uses for "no such bucket". `404`/`NotFound` never appear
-#: here: a bucket-scoped HEAD is not something this estate issues, and a bare 404 from a
-#: key operation must not be mistaken for a missing bucket.
 _BUCKET_MISSING = frozenset({"NoSuchBucket"})
-
-#: Error codes for "no such key". `NoSuchKey` is the GET/LIST form; `404` and `NotFound`
-#: are what a HEAD returns, where there is no response body to carry a code.
 _KEY_MISSING = frozenset({"NoSuchKey", "404", "NotFound"})
+_CONDITION_FAILED = frozenset({"PreconditionFailed"})
+_WRITE_IN_FLIGHT = frozenset({"ConditionalRequestConflict"})
 
 
-class StorageError(Exception):
-    """Base for the storage boundary's own, backend-neutral failures."""
+class StorageError(OSError):
+    """Raised when the object store failed a call; ``response`` is what it answered, empty when it answered nothing."""
+
+    def __init__(self, message: str, *, response: Mapping[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.response: Mapping[str, Any] = response or {}
+
+
+class ObjectNotFoundError(StorageError, FileNotFoundError):
+    """Raised when the store holds no object at the key a call named (404, ``NoSuchKey``, ``NotFound``)."""
 
 
 class BucketNotFoundError(StorageError):
-    """The bucket itself does not exist on the configured S3 endpoint.
-
-    Distinct from :class:`ObjectNotFoundError` on purpose: an empty bucket and an
-    ABSENT bucket look identical in a listing, and conflating them is how a
-    never-provisioned bucket stayed invisible for a whole debugging session.
-    """
-
-    def __init__(self, bucket: str) -> None:
-        self.bucket = bucket
-        super().__init__(f"bucket does not exist: {bucket}")
+    """Raised when the bucket a call named does not exist (``NoSuchBucket``): an empty bucket lists, an absent one does not."""
 
 
-class ObjectNotFoundError(StorageError):
-    """The bucket exists but holds no such key."""
-
-    def __init__(self, bucket: str, key: str) -> None:
-        self.bucket = bucket
-        self.key = key
-        super().__init__(f"object does not exist: {bucket}/{key}")
+class PreconditionFailedError(StorageError):
+    """Raised when the store refused a conditional write because its condition did not hold (412)."""
 
 
-class MissingStoreCredentialError(StorageError):
-    """A store client was asked for without a whole key pair to sign with, so none is built.
+class WriteConflictError(StorageError):
+    """Raised when a write met another write of the same key in flight (409): the store has settled neither, so this is
+    no verdict on the key, and a read after it sees what the store settled."""
+
+
+class StoreRefusedError(StorageError):
+    """Raised when the store answered a call with a refusal a retry meets again."""
+
+
+class StoreUnansweredError(StorageError):
+    """Raised when the store did not answer a call: no response, a server error other than 501, or its rate limit."""
+
+
+class MissingStoreCredentialError(Exception):
+    """Raised when a store client is asked for without a whole key pair to sign with, so none is built.
 
     botocore and pyarrow fill a missing credential from their default chain (environment variables, shared files,
     profiles, a credential process, container and instance metadata), and in a pod that chain signs as a credential
-    nobody scoped. The message names the missing parts, never a value.
+    nobody scoped. A deployment defect, not a store failure, so it is no ``OSError`` an ``except OSError`` would read as
+    a refusal. The message names the missing parts, never a value.
     """
 
 
-def _error_code(exc: BaseException) -> str | None:
-    """The S3 error code carried by a botocore ``ClientError``, if this is one.
+def no_answer(exc: BaseException) -> bool:
+    """Whether ``exc`` reports the store not answering: no response, a 5xx other than 501, or a 429."""
+    from botocore.exceptions import ClientError, HTTPClientError
+    from botocore.exceptions import ConnectionError as NoConnectionError
 
-    Duck-typed rather than ``isinstance(exc, ClientError)`` so this module imports no
-    botocore at all (boto3 is an optional-at-import dependency of several callers, and
-    the taxonomy must be usable by a stubbed client in tests).
-    """
-    response = getattr(exc, "response", None)
-    if not isinstance(response, dict):
-        return None
-    error = response.get("Error")
-    if not isinstance(error, dict):
-        return None
-    code = error.get("Code")
-    return code if isinstance(code, str) else None
+    if isinstance(exc, StoreUnansweredError | NoConnectionError | HTTPClientError):
+        return True
+    if not isinstance(exc, ClientError):
+        return False
+    return _status_unanswered(_status(exc.response))
+
+
+def _status(response: Mapping[str, Any]) -> int:
+    return int(response.get("ResponseMetadata", {}).get("HTTPStatusCode") or 0)
+
+
+def _status_unanswered(status: int) -> bool:
+    return status == HTTPStatus.TOO_MANY_REQUESTS or (status >= HTTPStatus.INTERNAL_SERVER_ERROR and status != HTTPStatus.NOT_IMPLEMENTED)
+
+
+def _answered(response: Mapping[str, Any], doing: str) -> StorageError:
+    """The family's error for the store's ``response`` to the call ``doing``."""
+    code = str(response.get("Error", {}).get("Code", ""))
+    status = _status(response)
+    if code in _BUCKET_MISSING:
+        return BucketNotFoundError(f"{doing}: the bucket does not exist", response=response)
+    if code in _KEY_MISSING or status == HTTPStatus.NOT_FOUND:
+        return ObjectNotFoundError(f"{doing}: no such object", response=response)
+    if code in _CONDITION_FAILED or status == HTTPStatus.PRECONDITION_FAILED:
+        return PreconditionFailedError(f"{doing}: the store's condition did not hold", response=response)
+    if code in _WRITE_IN_FLIGHT or status == HTTPStatus.CONFLICT:
+        return WriteConflictError(f"{doing}: another write of the key was in flight", response=response)
+    if _status_unanswered(status):
+        return StoreUnansweredError(f"{doing}: the store answered {status} {code}", response=response)
+    return StoreRefusedError(f"{doing}: the store refused it, {status} {code}", response=response)
 
 
 @contextmanager
-def s3_errors(*, bucket: str, key: str | None = None) -> Generator[None]:
-    """Translate S3 not-found errors raised inside the block into :class:`StorageError`.
+def store_call(doing: str) -> Generator[None]:
+    """Map the store's answer to a call inside the block, and a call that got none, to the :class:`StorageError` family,
+    chained.
 
-    `key` is optional: a listing has no key, so a `404` inside a listing block is
-    reported against the bucket. Every other exception — connection errors, auth
-    failures, throttling — propagates unchanged, because those are outages and deserve
-    a 5xx, not a polite 404.
+    ``doing`` says what the call was for (``"reading <bucket>/<key>"``), for the message. Anything else passes through
+    untouched: a failure that is not the S3 client's, and one of the client's that is neither (a defect of the call).
+
+    Raises:
+        StorageError: The store answered the call with a failure, or did not answer it; the client's own exception is
+            the ``__cause__``.
     """
+    from botocore.exceptions import BotoCoreError, ClientError
+
     try:
         yield
-    except Exception as exc:
-        code = _error_code(exc)
-        if code in _BUCKET_MISSING:
-            raise BucketNotFoundError(bucket) from exc
-        if code in _KEY_MISSING:
-            if key is None:
-                raise BucketNotFoundError(bucket) from exc
-            raise ObjectNotFoundError(bucket, key) from exc
-        raise
+    except ClientError as exc:
+        raise _answered(exc.response, doing) from exc
+    except BotoCoreError as exc:
+        if not no_answer(exc):
+            raise
+        raise StoreUnansweredError(f"{doing}: the store did not answer: {exc}") from exc

@@ -30,7 +30,7 @@ from typing import Final
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 from lakehouse.records import control_prefixes
-from lakehouse.records.record_store import delete_record, get_record, put_record, read_record, record_key
+from lakehouse.records.record_store import UnreadableRecordError, delete_record, get_record, put_record, read_record, record_key
 from lakehouse.storage import conditional_records, stored_objects
 from lakehouse.storage.options import StorageOptions
 
@@ -98,8 +98,8 @@ def _author_key(table_uuid: str, transaction_uuid: str, version: int) -> str:
     return f"{AUTHORS_PREFIX}/{table_uuid}/{transaction_uuid}/{version}.json"
 
 
-class UnreadableAuthorRecordError(ValueError):
-    """An author record is filed for the commit and does not read as one, so whether a door authorized the commit is
+class UnreadableAuthorRecordError(UnreadableRecordError):
+    """Raised when an author record is filed for the commit and does not read as one, so whether a door authorized it is
     unknown: it signs nothing, and the version is not passed as one no door made. Names the key it is filed under."""
 
 
@@ -132,19 +132,7 @@ def record_author(
         if recorded is None or (recorded.author, recorded.ref) != (author, ref):
             raise AuthorRecordedError(f"transaction {transaction_uuid} of table {table_uuid} is recorded at version {version} for another commit") from None
         return False
-    except Exception as exc:
-        if _from_the_store(exc):
-            raise OSError(f"the store refused recording the author of transaction {transaction_uuid}: {exc}") from exc
-        raise
     return True
-
-
-def _from_the_store(exc: Exception) -> bool:
-    """Whether ``exc`` is the S3 client's answer for a store that refused or did not answer, which every caller here reads
-    as an ``OSError`` like pyarrow's."""
-    from botocore.exceptions import BotoCoreError, ClientError
-
-    return isinstance(exc, ClientError | BotoCoreError)
 
 
 def _read(control_root: str, storage_options: StorageOptions, key: str) -> CommitAuthor | None:

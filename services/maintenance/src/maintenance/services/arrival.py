@@ -41,7 +41,6 @@ import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
@@ -205,7 +204,7 @@ class Arrivals:
         except ValueError as exc:
             log.warning("maintenance_arrival_claim_unreadable", extra={"location": _bounded(location), "error": str(exc)[:_MAX_LOGGED_CHARS]})
             return None
-        except (ClientError, BotoCoreError, StoreCredentialUnavailableError) as exc:
+        except StoreCredentialUnavailableError as exc:
             raise OSError(f"the claim at {_bounded(location)} could not be read: {exc}") from exc
         return held.uuid if held is not None else None
 

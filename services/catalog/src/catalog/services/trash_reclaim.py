@@ -80,7 +80,7 @@ def location_claim(settings: CatalogStore, record: TrashRecord) -> LocationClaim
 
     Raises:
         ValueError: The stored claim is not a claim.
-        botocore.exceptions.ClientError: The store refused the read.
+        StorageError: The store refused the read, or did not answer it.
     """
     location = record.location
     if not location:
@@ -156,7 +156,7 @@ def scope_of(settings: CatalogStore, record: TrashRecord, *, uuid: str) -> Recla
 
     Raises:
         UnreadableBaseRecordError: The table's base record exists and cannot be read.
-        botocore.exceptions.ClientError: The store refused a read of the record or a claim.
+        StorageError: The store refused a read of the record or a claim, or did not answer it.
     """
     location = record.location
     directories = directories_to_end(_registry(settings), location, uuid=uuid)

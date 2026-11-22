@@ -9,7 +9,6 @@ from contextlib import suppress
 from typing import Final
 
 import pyarrow.fs as pafs
-from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import (
     DeregisterTableRequest,
     DeregisterTableResponse,
@@ -177,7 +176,7 @@ def _data_directories_of(control: location_claims.ClaimStore, location: str, tab
     registry = base_registry.BaseRegistry(control_root=control.control_root, storage_options=control.storage_options)
     try:
         return data_directories.directories_to_end(registry, location, uuid=uuid)
-    except (base_registry.UnreadableBaseRecordError, ClientError, BotoCoreError, ValueError) as exc:
+    except (base_registry.UnreadableBaseRecordError, OSError, ValueError) as exc:
         log.error("drop_data_directories_unread", extra={"table": table, "location": location, "error": str(exc)[:300]})
         raise ServiceUnavailableError(f"the data directories of {table} could not be read, so nothing was dropped") from exc
 

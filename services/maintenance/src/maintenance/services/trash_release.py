@@ -42,6 +42,7 @@ from lakehouse.lancekit.base_refs import location_within
 from lakehouse.records import trash, warehouse_records
 from lakehouse.records.trash import TrashRecord
 from lakehouse.storage.options import StorageOptions, on_s3
+from lakehouse.storage.uri import split_s3_uri
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, release_trash
 from maintenance.services.purge import Liveness, liveness_across, still_registered
@@ -197,7 +198,7 @@ def root_of(record: TrashRecord) -> str | None:
     location = record.location
     if record.kind != "table" or not on_s3(location):
         return None
-    bucket = location.removeprefix("s3://").split("/", 1)[0]
+    bucket = split_s3_uri(location)[0]
     return f"s3://{bucket}" if bucket else None
 
 

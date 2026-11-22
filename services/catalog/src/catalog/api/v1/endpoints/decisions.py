@@ -33,7 +33,6 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Final
 
-from botocore.exceptions import ClientError
 from fastapi import APIRouter, Depends
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import InvalidInputError, PermissionDeniedError, ServiceUnavailableError, UnauthenticatedError
@@ -312,7 +311,7 @@ async def decide_locate(token: CurrentToken, settings: SettingsDep, body: Decisi
     store = table_claims.claim_store(settings)
     try:
         located = {location: await run_in_threadpool(_table_at, store, location) for location in body.locations}
-    except (ClientError, OSError, ValueError, NotImplementedError) as exc:
+    except (OSError, ValueError, NotImplementedError) as exc:
         audit(AuditAction.AUTHZ_DECISION, AuditOutcome.FAILURE, subject=caller, route="locate", reason="claims_unreadable", **asked)
         log.error("decision_locate_unreadable", exc_info=True)
         raise ServiceUnavailableError("the location claims cannot be read") from exc

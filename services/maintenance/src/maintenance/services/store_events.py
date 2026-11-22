@@ -32,7 +32,6 @@ from time import monotonic
 from typing import Final
 from urllib.parse import unquote_plus
 
-from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -178,7 +177,7 @@ class StoreEvents:
         except ValueError as exc:
             log.warning("maintenance_store_event_claim_unreadable", extra={"root": root, "error": str(exc)[:300]})
             return None
-        except (ClientError, BotoCoreError, StoreCredentialUnavailableError) as exc:
+        except StoreCredentialUnavailableError as exc:
             raise OSError(f"the claim on {root} could not be read: {exc}") from exc
         if claim is None or claim.uuid is None:
             return None

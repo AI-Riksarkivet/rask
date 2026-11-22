@@ -69,7 +69,7 @@ def claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase, uuid
 
     Raises:
         ValueError: The stored claim is not a claim.
-        botocore.exceptions.ClientError: The store refused the read.
+        StorageError: The store refused the read, or did not answer it.
     """
     held = location_claims.holder(claims, directory.path)
     return held is not None and held.uuid == uuid
@@ -83,7 +83,7 @@ def last_claimed_by(claims: location_claims.ClaimStore, directory: RecordedBase,
 
     Raises:
         ValueError: The stored claim is not a claim.
-        botocore.exceptions.ClientError: The store refused the read.
+        StorageError: The store refused the read, or did not answer it.
     """
     found = location_claims.read(claims, directory.path)
     return found is not None and found.claim.uuid == uuid
@@ -95,7 +95,7 @@ def directories_to_end(registry: BaseRegistry, location: str, *, uuid: str) -> l
     Raises:
         UnreadableBaseRecordError: The record exists and cannot be read.
         ValueError: A stored claim is not a claim.
-        botocore.exceptions.ClientError: The store refused a read.
+        StorageError: The store refused a read, or did not answer it.
     """
     claims = location_claims.ClaimStore(control_root=registry.control_root, storage_options=registry.storage_options)
     directories = recorded_directories(read_base_record(registry, location))
@@ -129,6 +129,6 @@ def delete_table_directories(registry: BaseRegistry, location: str, *, uuid: str
     Raises:
         UnreadableBaseRecordError: The record exists and cannot be read.
         OSError: The store refused a delete.
-        botocore.exceptions.ClientError: The store refused a read.
+        StorageError: The store refused a read, or did not answer it.
     """
     return delete_directories(directories_to_end(registry, location, uuid=uuid), storage_options)

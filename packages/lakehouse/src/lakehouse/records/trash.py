@@ -39,7 +39,16 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from lakehouse.records import control_prefixes, location_claims, object_records
 from lakehouse.records.base_registry import BaseRegistry, forget_base_record
-from lakehouse.records.record_store import delete_record, list_every_record, list_records, put_record, read_record, record_key
+from lakehouse.records.record_store import (
+    UnreadableRecordError,
+    delete_record,
+    list_every_record,
+    list_records,
+    parse_record,
+    put_record,
+    read_record,
+    record_key,
+)
 from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, mutate_json, read_json, replace_json
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
@@ -86,8 +95,8 @@ def key(uuid: str, *, kind: TrashKind = "table") -> str:
     return record_key(_TRASH_PREFIX, kind, uuid)
 
 
-class UnreadableTrashRecordError(ValueError):
-    """A trash record is there and cannot be read as one: it still keeps its object, and names the key it sits under."""
+class UnreadableTrashRecordError(UnreadableRecordError):
+    """Raised when a trash record is there and cannot be read as one: it still keeps its object, and names its key."""
 
 
 class Refusal(BaseModel):
@@ -255,10 +264,7 @@ def read(raw: Mapping[str, Any], *, at: str) -> TrashRecord:
     Raises:
         UnreadableTrashRecordError: It is no trash record.
     """
-    try:
-        record = TrashRecord.model_validate(raw)
-    except ValidationError as exc:
-        raise UnreadableTrashRecordError(f"the trash record at {at} cannot be read: {exc.error_count()} field(s) are not what a record holds") from exc
+    record = parse_record(TrashRecord, raw, at=at, error=UnreadableTrashRecordError)
     if record.deadline is None:
         log.warning(
             "trash_record_undated" if record.expires_at is None else "trash_record_bad_deadline", extra={"id": record.id, "expires_at": record.expires_at}
@@ -484,7 +490,7 @@ def end(control_root: str, storage_options: StorageOptions, record: TrashRecord,
 
     Raises:
         UnreadableBaseRecordError: The table's base record exists and cannot be read.
-        botocore.exceptions.ClientError: The store refused a read or a write.
+        StorageError: The store refused a read or a write, or did not answer it.
     """
     object_records.end_object_records(control_root, storage_options, kind, uuid=uuid)
     if record.location:

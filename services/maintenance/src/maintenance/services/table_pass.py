@@ -31,7 +31,6 @@ from time import perf_counter
 from typing import Final, Literal
 
 import lance
-from botocore.exceptions import BotoCoreError, ClientError
 from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, ConfigDict, Field
@@ -48,6 +47,7 @@ from lakehouse.records.history_fences import TableHistory
 from lakehouse.records.maintenance_due import delete_due
 from lakehouse.storage import objectfs
 from lakehouse.storage.options import StorageOptions, on_s3
+from lakehouse.storage.uri import split_s3_uri
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore, get_settings, shared_lance_session
 from maintenance.core.lineage_emit import MaintenanceEmitter
 from maintenance.core.metrics import (
@@ -331,7 +331,7 @@ def _data_directories(
     try:
         recorded = data_directories.recorded_directories(base_record_reader(settings, options)(uri))
         held = [directory for directory in recorded if data_directories.claimed_by(claim_store(settings), directory, uuid)]
-    except (base_registry.UnreadableBaseRecordError, ClientError, BotoCoreError, OSError, ValueError) as exc:
+    except (base_registry.UnreadableBaseRecordError, OSError, ValueError) as exc:
         log.warning("maintenance_base_record_unreadable", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return []
     if unheld := [directory.path for directory in recorded if directory not in held]:
@@ -512,7 +512,7 @@ def _report_unrecorded_bases(uri: str, *, settings: MaintenanceStore, opened: Da
         judged = base_registry.judge_bases(
             uri, declared, configured=settings.external_blob_base_list, load_record=lambda: base_record_reader(settings, options)(uri)
         )
-    except (base_registry.UnreadableBaseRecordError, ClientError, BotoCoreError, OSError, ValueError) as exc:
+    except (base_registry.UnreadableBaseRecordError, OSError, ValueError) as exc:
         log.warning("maintenance_bases_unjudged", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
         return
     unrecorded = [decoded_path(judgement.ref.path) for judgement in judged if judgement.standing is base_registry.BaseStanding.UNRECORDED]
@@ -743,7 +743,7 @@ def governs(location: str, *, warehouse: str, settings: MaintenanceStore, option
     if not on_s3(location):
         return True
     if warehouse == settings.estate_warehouse:
-        return location.removeprefix("s3://").split("/", 1)[0] in settings.sweep_buckets
+        return split_s3_uri(location)[0] in settings.sweep_buckets
     try:
         record = warehouse_records.warehouse_record(settings.resolved_control_root, options, warehouse)
     except (OSError, ValueError) as exc:
@@ -769,7 +769,7 @@ def read_for(location: str, held: location_claims.LocationClaim, settings: Maint
     of its datasets is refused (:func:`name_dataset`).
     """
     options = settings.storage_options()
-    root = f"s3://{location.removeprefix('s3://').split('/', 1)[0]}" if on_s3(location) else settings.resolved_control_root
+    root = f"s3://{split_s3_uri(location)[0]}" if on_s3(location) else settings.resolved_control_root
     ids = table_ids_of(root, options, segments=held.segments)
     if ids is None:
         return None
@@ -789,7 +789,7 @@ def read_for(location: str, held: location_claims.LocationClaim, settings: Maint
             log.error("maintenance_policy_malformed", extra={"uuid": held.uuid, "table": held.table, "error": str(exc)[:300]})
             context = PlanContext(policies=[], now=now, older_than=timedelta(days=settings.older_than_days))
             return PassReadings(table_ids=ids, context=context, table=held.table, policy_unreadable=str(exc)[:300])
-        except maintenance_policies.UnreadablePolicyError as exc:
+        except OSError as exc:
             log.error("maintenance_policy_unreadable", extra={"uuid": held.uuid, "table": held.table, "error": str(exc)[:300]})
             return None
         policies = [policy] if policy is not None else []

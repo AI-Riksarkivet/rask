@@ -12,11 +12,18 @@ A finding against `lakehouse` about a seam written more than once:
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 
+from lakehouse.records import maintenance_policies, project_records, trash, warehouse_records
+from lakehouse.records.base_registry import BaseRegistry, UnreadableBaseRecordError, read_base_record, record_key_for
 from lakehouse.records.maintenance_policies import MalformedPolicyError, get_policy
+from lakehouse.records.project_records import UnreadableProjectRecordError
+from lakehouse.records.record_store import UnreadableRecordError
+from lakehouse.records.trash import UnreadableTrashRecordError
+from lakehouse.records.warehouse_records import UnreadableWarehouseRecordError
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
 
@@ -52,3 +59,48 @@ def test_the_record_key_shape_is_unchanged_by_the_de_duplication() -> None:
     assert record_key("_protection", "table", _TABLE_UUID) == "_protection/table-9f9a37202eeb7dc7cabba84b.json"
     assert record_key("_policies", "namespace", _NAMESPACE_UUID) == "_policies/namespace-3c0b296fe7c2d32e9edd2812.json"
     assert record_key("_trash", "table", "db$t") == "_trash/table-f74c29b36c7f71a511912ddc.json"
+
+
+def _a_base_record(root: Path) -> object:
+    location = "s3://bucket/t"
+    stored = root / record_key_for(location)
+    stored.parent.mkdir(parents=True)
+    stored.write_text(json.dumps({"entries": "not a list"}))
+    return read_base_record(BaseRegistry(control_root=str(root), storage_options=StorageOptions()), location)
+
+
+def _a_policy_record(_root: Path) -> object:
+    return maintenance_policies.read({"kind": "table"}, at="_policies/table-x.json")
+
+
+def _a_project_record(_root: Path) -> object:
+    return project_records.read({"status": 7}, at="_projects/p.json")
+
+
+def _a_warehouse_record(_root: Path) -> object:
+    return warehouse_records.read({"id": "w"}, at="_warehouses/w.json")
+
+
+def _a_trash_record(_root: Path) -> object:
+    return trash.read({"id": 7}, at="_trash/table-x.json")
+
+
+@pytest.mark.parametrize(
+    ("reader", "refusal"),
+    [
+        pytest.param(_a_base_record, UnreadableBaseRecordError, id="base"),
+        pytest.param(_a_policy_record, MalformedPolicyError, id="policy"),
+        pytest.param(_a_project_record, UnreadableProjectRecordError, id="project"),
+        pytest.param(_a_warehouse_record, UnreadableWarehouseRecordError, id="warehouse"),
+        pytest.param(_a_trash_record, UnreadableTrashRecordError, id="trash"),
+    ],
+)
+def test_every_registry_refuses_a_record_it_cannot_read_as_its_own_unreadable_record_error(
+    tmp_path: Path, reader: Callable[[Path], object], refusal: type[UnreadableRecordError]
+) -> None:
+    """One family for a stored record no reader can parse, a ``ValueError`` by its kind: invalid input to the reader."""
+    with pytest.raises(UnreadableRecordError) as caught:
+        reader(tmp_path)
+
+    assert type(caught.value) is refusal
+    assert isinstance(caught.value, ValueError)

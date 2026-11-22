@@ -31,7 +31,7 @@ from typing import Any, Final, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from lakehouse.records import control_prefixes
-from lakehouse.records.record_store import delete_record, put_record, read_record, record_key
+from lakehouse.records.record_store import UnreadableRecordError, delete_record, put_record, read_record, record_key
 from lakehouse.storage.options import StorageOptions
 
 
@@ -54,9 +54,9 @@ PREFIX: Final = control_prefixes.PROTECTION
 type ProtectedKind = Literal["table", "namespace"]
 
 
-class UnreadableProtectionRecordError(ValueError):
-    """A protection record is filed for the object and cannot be read as one, so whether its owner armed it is unknown
-    and nothing the flag guards may go ahead. Names the key the record is filed under."""
+class UnreadableProtectionRecordError(UnreadableRecordError):
+    """Raised when a protection record is filed for the object and cannot be read as one, so whether its owner armed it
+    is unknown and nothing the flag guards may go ahead. Names the key the record is filed under."""
 
 
 class ProtectionRecord(BaseModel):

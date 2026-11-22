@@ -25,7 +25,6 @@ from collections.abc import Callable, Sequence
 from functools import partial
 from typing import TYPE_CHECKING, Protocol
 
-from botocore.exceptions import BotoCoreError, ClientError
 from lance_namespace import InvalidTableStateError, ServiceUnavailableError
 from pydantic import BaseModel
 
@@ -110,7 +109,7 @@ class BaseJudge(BaseModel):
         except base_registry.UnreadableBaseRecordError as exc:
             log.error("table_base_record_unreadable", extra={"location": location, "error": str(exc)[:300]})
             raise ServiceUnavailableError("a table's base record could not be read, so its declared bases were not judged") from exc
-        except (ClientError, BotoCoreError, OSError) as exc:
+        except OSError as exc:
             log.error("table_base_record_store_unavailable", extra={"location": location, "error": f"{type(exc).__name__}: {exc}"[:300]})
             raise ServiceUnavailableError("the store holding a table's base record did not answer, so its declared bases were not judged") from exc
 

@@ -172,10 +172,8 @@ def _write_copy(control_root: str, storage_options: StorageOptions, table_uuid: 
     condition writes nothing. A copy created where none stood is deleted again once the table's records are gone.
 
     Raises:
-        OSError: The store refused, or could not be reached for, the write or the listing after it.
+        OSError: The store refused, or did not answer, the write or the listing after it.
     """
-    from botocore.exceptions import BotoCoreError, ClientError
-
     key = _copy_key(table_uuid)
     try:
         if over is not None:
@@ -185,8 +183,6 @@ def _write_copy(control_root: str, storage_options: StorageOptions, table_uuid: 
     except (RecordChangedError, RecordExistsError):
         log.info("file_identities_copy_moved", extra={"table_uuid": table_uuid})
         return
-    except (BotoCoreError, ClientError) as exc:
-        raise OSError(f"the store refused, or could not be reached for, writing {key}: {exc}") from exc
     if copy.records and not listed_records(control_root, storage_options, table_uuid):
         delete_record(control_root, storage_options, key)
 
@@ -195,14 +191,9 @@ def listed_records(control_root: str, storage_options: StorageOptions, table_uui
     """Each record of the table ``table_uuid`` the store lists, by transaction uuid: its size. Reads only.
 
     Raises:
-        OSError: The store refused, or could not be reached for, the listing.
+        OSError: The store refused, or did not answer, the listing.
     """
-    from botocore.exceptions import BotoCoreError, ClientError
-
-    try:
-        listed = stored_objects.list_under(f"{control_root.rstrip('/')}/{records_of(table_uuid)}", storage_options)
-    except (BotoCoreError, ClientError) as exc:
-        raise OSError(f"the store refused, or could not be reached for, listing {records_of(table_uuid)}: {exc}") from exc
+    listed = stored_objects.list_under(f"{control_root.rstrip('/')}/{records_of(table_uuid)}", storage_options)
     return {name.removesuffix(".json"): stored.size for stored in listed if (name := stored.path.rsplit("/", 1)[-1]).endswith(".json")}
 
 
@@ -211,10 +202,8 @@ def _read_copy(control_root: str, storage_options: StorageOptions, table_uuid: s
     stands. A copy that does not parse is deleted, so it is rebuilt as one written where none stood.
 
     Raises:
-        OSError: The store refused, or could not be reached for, the read.
+        OSError: The store refused, or did not answer, the read.
     """
-    from botocore.exceptions import BotoCoreError, ClientError
-
     key = _copy_key(table_uuid)
     try:
         held = read_json(control_root, storage_options, key)
@@ -222,8 +211,6 @@ def _read_copy(control_root: str, storage_options: StorageOptions, table_uuid: s
         held = None
         log.warning("file_identities_copy_rebuilt", extra={"table_uuid": table_uuid})
         delete_record(control_root, storage_options, key)
-    except (BotoCoreError, ClientError) as exc:
-        raise OSError(f"the store refused, or could not be reached for, reading {key}: {exc}") from exc
     if held is None:
         return _RecordCopy(), None
     body, etag = held

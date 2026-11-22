@@ -22,6 +22,7 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoi
 
 from lakehouse import timers
 from lakehouse.storage import conditional_records
+from lakehouse.storage.errors import store_call
 from lakehouse.storage.options import StorageOptions
 from lakehouse.timers import Outcome, Timer, Turn, claim_key
 
@@ -92,9 +93,10 @@ async def test_a_replica_that_finds_the_window_claimed_drops_what_only_the_claim
 
 
 def _forbidden(*_: object) -> NoReturn:
-    """What S3 answers a read of a key to an identity that may not list its bucket, whether or not the key exists."""
+    """What the read raises when S3 answers a key to an identity that may not list its bucket, whether or not it exists."""
     answer: Any = {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403, "HTTPHeaders": {}}}
-    raise ClientError(answer, "GetObject")
+    with store_call("reading the claim"):
+        raise ClientError(answer, "GetObject")
 
 
 @pytest.mark.asyncio

@@ -48,39 +48,41 @@ from typing import Any
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict
 
+from lakehouse.storage.errors import ObjectNotFoundError, PreconditionFailedError, WriteConflictError, store_call
 from lakehouse.storage.options import StorageOptions, object_client, on_s3
+from lakehouse.storage.uri import s3_object
 
 
 log = logging.getLogger(__name__)
 
 
 class RecordExistsError(Exception):
-    """Create refused: the key already exists — the STORE said so, not a possibly-stale read."""
+    """Raised when a create is refused because the key already exists: the STORE said so, not a possibly-stale read.
+
+    No ``OSError``, so no ``except OSError`` written around a store call reads a lost race as an outage.
+    """
 
 
 def create_json(root_uri: str, storage_options: StorageOptions, key: str, *, record: dict[str, Any]) -> None:
     """Write ``record`` as JSON at ``<root_uri>/<key>`` iff the key does not exist.
 
-    Raises :class:`RecordExistsError` when the key is already present (the lost-race signal), and
-    lets every OTHER failure (auth, throttling, outage) surface as itself — laundering an outage
-    into "already exists" would turn a 503 into a silent 409.
+    Every OTHER failure (auth, throttling, outage) surfaces as itself: laundering an outage into "already exists"
+    would turn a 503 into a silent 409. So does a write the store answers 409 for (``WriteConflictError``): another
+    write of the key was in flight, which may yet fail, so the key is not known to exist.
+
+    Raises:
+        RecordExistsError: The key is already present (the lost-race signal).
+        StorageError: The store refused the write, or did not answer it.
     """
     body = json.dumps(record).encode("utf-8")
 
     if on_s3(root_uri):
-        from botocore.exceptions import ClientError
-
-        base = root_uri[len("s3://") :].rstrip("/")
-        bucket, _, prefix = base.partition("/")
-        full_key = f"{prefix}/{key}" if prefix else key
+        bucket, full_key = s3_object(root_uri, key)
         try:
-            object_client(storage_options).put_object(Bucket=bucket, Key=full_key, Body=body, IfNoneMatch="*")
-        except ClientError as exc:
-            status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-            code = str(exc.response.get("Error", {}).get("Code", ""))
-            if status == 412 or code == "PreconditionFailed":
-                raise RecordExistsError(f"record {key!r} already exists under {root_uri!r}") from exc
-            raise
+            with store_call(f"creating {bucket}/{full_key}"):
+                object_client(storage_options).put_object(Bucket=bucket, Key=full_key, Body=body, IfNoneMatch="*")
+        except PreconditionFailedError as exc:
+            raise RecordExistsError(f"record {key!r} already exists under {root_uri!r}") from exc
         return
 
     fs, path = pafs.FileSystem.from_uri(root_uri)
@@ -106,12 +108,14 @@ def create_json(root_uri: str, storage_options: StorageOptions, key: str, *, rec
 
 
 class RecordChangedError(Exception):
-    """Conditional replace refused: the record moved under us between the read and the write."""
+    """Raised when a conditional replace is refused because the record moved between the read and the write."""
 
 
 class RecordMissingError(Exception):
-    """Mutation asked for a record that does not exist. Distinct from a lost race on purpose — one
-    means "somebody else wrote", the other means "there is nothing here to mutate"."""
+    """Raised when a mutation asks for a record that does not exist.
+
+    Distinct from a lost race on purpose: one means "somebody else wrote", the other "there is nothing here to mutate".
+    """
 
 
 # How many read→apply→write rounds `mutate_json` will run before giving up. Contention here is two
@@ -119,12 +123,6 @@ class RecordMissingError(Exception):
 # collisions are rare; the bound exists to turn a pathological livelock into an honest error rather
 # than to absorb sustained load.
 _MUTATE_ATTEMPTS = 5
-
-
-def _s3_parts(root_uri: str, key: str) -> tuple[str, str]:
-    base = root_uri[len("s3://") :].rstrip("/")
-    bucket, _, prefix = base.partition("/")
-    return bucket, (f"{prefix}/{key}" if prefix else key)
 
 
 class Stored(BaseModel):
@@ -166,18 +164,20 @@ def read_json_at(root_uri: str, storage_options: StorageOptions, key: str) -> St
     The ETag is the concurrency token :func:`mutate_json` writes back under. On S3 it is the store's
     own; on a local root it is a content hash, which has the same meaning ("the bytes I read") and
     the same failure behaviour, without needing the filesystem to invent one.
+
+    Raises:
+        StorageError: The store refused the read, or did not answer it.
+        ValueError: The stored body is not JSON.
     """
     if on_s3(root_uri):
-        from botocore.exceptions import ClientError
-
-        bucket, full_key = _s3_parts(root_uri, key)
+        bucket, full_key = s3_object(root_uri, key)
         try:
-            got = object_client(storage_options).get_object(Bucket=bucket, Key=full_key)
-        except ClientError as exc:
-            if str(exc.response.get("Error", {}).get("Code", "")) in {"NoSuchKey", "404"}:
-                return StoreRead(stored=None, at=store_clock(exc.response))
-            raise
-        body = json.loads(got["Body"].read().decode("utf-8"))
+            with store_call(f"reading {bucket}/{full_key}"):
+                got = object_client(storage_options).get_object(Bucket=bucket, Key=full_key)
+                raw = got["Body"].read()
+        except ObjectNotFoundError as exc:
+            return StoreRead(stored=None, at=store_clock(exc.response))
+        body = json.loads(raw.decode("utf-8"))
         return StoreRead(stored=Stored(record=body, etag=str(got["ETag"]).strip('"'), modified=got["LastModified"]), at=store_clock(got))
 
     fs, path = pafs.FileSystem.from_uri(root_uri)
@@ -261,6 +261,7 @@ def exchange_json(
     Raises:
         RecordMissingError: The key is absent.
         RecordChangedError: Every attempt lost the race.
+        StorageError: The store refused a read or the write, or did not answer it.
     """
     for _ in range(attempts):
         current = read_json(root_uri, storage_options, key)
@@ -286,6 +287,7 @@ def replace_json(root_uri: str, storage_options: StorageOptions, key: str, *, re
 
     Raises:
         RecordChangedError: The record changed since that read.
+        StorageError: The store refused the write, or did not answer it.
     """
     _replace_json(root_uri, storage_options, key, record=record, etag=etag)
 
@@ -308,19 +310,15 @@ def _replace_json(root_uri: str, storage_options: StorageOptions, key: str, *, r
 
 def _replace_s3_json(root_uri: str, storage_options: StorageOptions, key: str, *, body: bytes, etag: str) -> None:
     """Put ``body`` at ``key`` under the S3 root iff its ETag is ``etag``; ``RecordChangedError`` where it changed."""
-    from botocore.exceptions import ClientError
-
-    bucket, full_key = _s3_parts(root_uri, key)
+    bucket, full_key = s3_object(root_uri, key)
     try:
-        object_client(storage_options).put_object(Bucket=bucket, Key=full_key, Body=body, IfMatch=etag)
-    except ClientError as exc:
-        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-        code = str(exc.response.get("Error", {}).get("Code", ""))
+        with store_call(f"replacing {bucket}/{full_key}"):
+            object_client(storage_options).put_object(Bucket=bucket, Key=full_key, Body=body, IfMatch=etag)
+    except (PreconditionFailedError, WriteConflictError, ObjectNotFoundError) as exc:
         # A record deleted since the read answers 404 NoSuchKey, not 412 (measured on moto 5: a PutObject naming
-        # If-Match on a deleted key): it changed under the writer as surely as one written over.
-        if status in {404, 409, 412} or code in {"PreconditionFailed", "ConditionalRequestConflict", "NoSuchKey"}:
-            raise RecordChangedError(f"record {key!r} changed under {root_uri!r}") from exc
-        raise
+        # If-Match on a deleted key): it changed under the writer as surely as one written over. So did one another
+        # write was in flight for (409): whichever of the two the store settles, the ETag this write named is not it.
+        raise RecordChangedError(f"record {key!r} changed under {root_uri!r}") from exc
 
 
 def _replace_local_json(root_uri: str, key: str, *, body: bytes, etag: str) -> None:

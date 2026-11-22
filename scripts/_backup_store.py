@@ -4,7 +4,7 @@
 resolves from the script's own directory: the image copies it beside them (`.docker/rest-catalog.dockerfile`). No
 service reaches the store this way, so it lives with the scripts rather than in the library.
 
-Every S3 call is wrapped in :func:`lakehouse.storage.errors.s3_errors`, so a missing bucket reaches a caller as storage's
+Every S3 call is wrapped in :func:`lakehouse.storage.errors.store_call`, so a missing bucket reaches a caller as storage's
 own :class:`~lakehouse.storage.errors.BucketNotFoundError` rather than a raw botocore ``ClientError`` it cannot name.
 """
 
@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.storage.client import configured_endpoint
-from lakehouse.storage.errors import s3_errors
+from lakehouse.storage.errors import store_call
 from lakehouse.storage.options import DEFAULT_REGION, ENDPOINT, REGION, StorageOptions, object_client
 from lakehouse.storage.store_session import EXCHANGE_FAILURES, SessionSeconds, WebIdentity, exchange
 
@@ -69,10 +69,11 @@ def job_client(identity: JobStoreIdentity, *, session_name: str) -> S3Client:
 def iter_keys(client: S3Client, bucket: str, prefix: str = "") -> Iterator[str]:
     """Every key under ``bucket``/``prefix``, page by page, in listing order.
 
-    Bucket-scoped (no ``key``), so a not-found inside the listing is reported against the bucket, which is the only thing
-    it can be about: an empty bucket lists successfully.
+    Raises:
+        BucketNotFoundError: The bucket does not exist; an empty bucket lists successfully.
+        StorageError: The store refused the listing or did not answer it.
     """
-    with s3_errors(bucket=bucket):
+    with store_call(f"listing {bucket}/{prefix}"):
         paginator = client.get_paginator("list_objects_v2")
         for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
             for obj in page.get("Contents", []):
@@ -102,7 +103,7 @@ def prune_timestamped_prefixes(client: S3Client, *, bucket: str, base: str, keep
     kept, pruned = stamps[:keep], stamps[keep:]
     for stamp in pruned:
         for key in list(iter_keys(client, bucket, f"{marker}{stamp}/")):
-            with s3_errors(bucket=bucket, key=key):
+            with store_call(f"deleting {bucket}/{key}"):
                 client.delete_object(Bucket=bucket, Key=key)
     return kept, pruned
 

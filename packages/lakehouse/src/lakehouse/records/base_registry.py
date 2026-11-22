@@ -38,7 +38,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from lakehouse.lancekit.base_refs import decoded_path, key_uri, location_in_store, names_a_location, normalise, store_of
 from lakehouse.lancekit.features import BasePathRef
 from lakehouse.records import clone_sources, control_prefixes, location_claims
-from lakehouse.records.record_store import delete_record, record_key
+from lakehouse.records.record_store import UnreadableRecordError, delete_record, record_key
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 
@@ -198,8 +198,8 @@ class BaseClaim(BaseModel):
     added: list[RecordedBase] = Field(default_factory=list)
 
 
-class UnreadableBaseRecordError(RuntimeError):
-    """A record exists and cannot be read as one.
+class UnreadableBaseRecordError(UnreadableRecordError):
+    """Raised when a base record exists and cannot be read as one.
 
     Distinct from "absent" on purpose: a caller treating an unreadable record as no record would
     demote a recorded clone source to a finding and hand its bytes to compaction.

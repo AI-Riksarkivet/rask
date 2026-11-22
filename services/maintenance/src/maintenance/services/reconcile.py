@@ -56,6 +56,7 @@ from lakehouse.records.trash import TrashKind, TrashRecord, UnreadableTrashRecor
 from lakehouse.records.warehouse_records import UnreadableWarehouseRecordError, WarehouseRecord
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions, object_client, on_s3
+from lakehouse.storage.uri import split_s3_uri
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings, MaintenanceStore, shared_lance_session
 from maintenance.services.discovery import discover_datasets
@@ -665,7 +666,7 @@ def _orphaned_trash(records: list[TrashRecord], *, claimed: set[str]) -> list[Or
         location = record.location
         if not on_s3(location):
             continue
-        bucket = location[len("s3://") :].split("/", 1)[0]
+        bucket = split_s3_uri(location)[0]
         if bucket and bucket not in claimed and (uuid := record.uuid) is not None:
             out.append(OrphanedTrash(id=record.id, uuid=uuid, kind=record.kind, location=location))
     return sorted(out, key=lambda o: (o.location, o.id))
@@ -748,7 +749,7 @@ def _bucket_of(root_uri: str) -> str | None:
     """The bucket a root URI addresses, or ``None`` for a local/file root (which owns no bucket)."""
     if not on_s3(root_uri):
         return None
-    return root_uri[len("s3://") :].strip("/").split("/")[0] or None
+    return split_s3_uri(root_uri)[0] or None
 
 
 async def _fga_source(sources: Sources, grants: GrantCensusReader | None) -> tuple[TupleScan | None, str | None]:

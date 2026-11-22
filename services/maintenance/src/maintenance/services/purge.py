@@ -69,7 +69,6 @@ from functools import partial
 from typing import Any
 
 import pyarrow.fs as pafs
-from botocore.exceptions import BotoCoreError, ClientError
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -546,7 +545,7 @@ def held_by(finding: OrphanedTrash, *, storage_options: StorageOptions, registry
     Raises:
         OSError: The store refused, or could not be reached for, a listing.
         UnreadableBaseRecordError: The table's base record exists and cannot be read.
-        botocore.exceptions.ClientError: The store refused a read of the base record or a claim.
+        StorageError: The store refused a read of the base record or a claim, or did not answer it.
     """
     directories = directories_to_end(registry, finding.location, uuid=finding.uuid)
     held = objects_held(finding.location, storage_options)
@@ -707,7 +706,7 @@ async def _delete_bytes_or_refuse(
     except NotADatasetRootError as exc:
         await _refuse(out, record, reason=str(exc), settings=settings)
         log.warning("trash_purge_refused_not_a_dataset", extra={"kind": record.kind, "id": obj_id, "location": location})
-    except (OSError, UnreadableBaseRecordError, ClientError, BotoCoreError) as exc:
+    except (OSError, UnreadableBaseRecordError) as exc:
         reason = f"deleting {location!r} failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
         await _refuse(out, record, reason=reason, settings=settings)
         log.error("trash_purge_delete_failed", extra={"kind": record.kind, "id": obj_id, "location": location, "error": str(exc)})
@@ -1002,7 +1001,7 @@ def _judged_data_directories(location: str, *, registry: BaseRegistry, uuid: str
 
     Raises:
         UnreadableBaseRecordError: The record exists and cannot be read.
-        botocore.exceptions.ClientError: The store refused a read of the record or a claim.
+        StorageError: The store refused a read of the record or a claim, or did not answer it.
     """
     return directories_to_end(registry, location, uuid=uuid)
 
