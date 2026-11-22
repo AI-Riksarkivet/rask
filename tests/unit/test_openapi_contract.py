@@ -33,17 +33,19 @@ _TS_CLIENT = Path(__file__).resolve().parents[2] / "frontend" / "packages" / "ap
 
 
 def _string_enums(spec: dict) -> dict[str, list[str]]:
-    """Every string enum in a spec's component schemas, keyed by ``Schema.property``.
+    """Every string enum in a spec's component schemas: a named one keyed by its component's name, one a property
+    declares inline by ``Schema.property``.
 
-    Walks properties rather than whole schemas because that is where the drift lands: a new
-    ``ControlAction`` member widens ``CatalogControlEvent.action`` and nothing else.
+    Those are the two places the drift lands: a new ``ControlAction`` member widens the ``ControlAction`` component and
+    nothing else, and a new member of an enum declared inline widens the property that declares it.
     """
     found: dict[str, list[str]] = {}
     for name, schema in spec.get("components", {}).get("schemas", {}).items():
-        for prop, definition in (schema.get("properties") or {}).items():
+        declared = {name: schema} | {f"{name}.{prop}": definition for prop, definition in (schema.get("properties") or {}).items()}
+        for key, definition in declared.items():
             members = definition.get("enum")
             if members and all(isinstance(m, str) for m in members):
-                found[f"{name}.{prop}"] = members
+                found[key] = members
     return found
 
 
@@ -58,7 +60,7 @@ _SPECS = [("catalog.main", "catalog-openapi.json", "catalog.ts"), ("lineage.main
 
 
 def test_committed_openapi_contract_covers_every_live_ENUM_MEMBER() -> None:
-    """A schema keeps its name while its enum gains a member, and the name check above cannot see it.
+    """A schema keeps its name while its enum gains a member, which no comparison of schema names can see.
 
     That is not hypothetical: the five ref-plane ``ControlAction`` members landed on the bus while
     ``docs/catalog-openapi.json`` still lacked them, and the only thing that

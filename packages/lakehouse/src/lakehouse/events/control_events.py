@@ -34,7 +34,7 @@ CONTROL_TOPIC = "catalog.control.v1"
 #: wire values. Grouped by object: projects, grants, warehouses, policies, namespaces, tables.
 #: `table_renamed` matters most to the UI — it invalidates every open view of that table; `project_deleted`
 #: matters most to the shell, which must drop a tenant that no longer exists from every picker.
-ControlAction = Literal[
+type ControlAction = Literal[
     "grant_added",
     "grant_revoked",
     "project_created",
@@ -118,10 +118,10 @@ ControlAction = Literal[
 ]
 
 #: The kind of governed object the action targets — drives which console view invalidates. `project` is the
-#: top of rask's hierarchy (project > warehouse > namespace > table) and became a first-class control object
-#: when tenants got their own registry record (`open_hierarchy_lifecycle.md` Decision 1). Every member is a lakehouse
-#: object: a tool that works on the lakehouse keeps its own objects and its own channel for them (ADR 0171).
-ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "principal", "role", "label"]
+#: top of rask's hierarchy (project > warehouse > namespace > table), a control object because its registry record is
+#: where a tenant exists. Every member is a lakehouse object: a tool that works on the lakehouse keeps its own objects
+#: and its own channel for them (ADR 0171).
+type ControlObjectType = Literal["project", "grant", "warehouse", "policy", "namespace", "table", "principal", "role", "label"]
 
 
 class CatalogControlEvent(BaseModel):

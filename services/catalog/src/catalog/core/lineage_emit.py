@@ -54,13 +54,13 @@ from lakehouse.events.openlineage import (
     RunRef,
     author_facet,
     catalog_facet,
-    dataset_type_facet,
     lance_facet,
     lifecycle_facet,
     lifecycle_state,
     processing_engine_facet,
     schema_facet,
     symlinks_facet,
+    table_type_facet,
 )
 from lakehouse.events.signing import CanonError, SigningKey, attach_signature, author_of
 from lakehouse.governed import fga_ids
@@ -515,7 +515,7 @@ def _output_dataset_of(write: _Write) -> dict[str, Any]:
     # WHAT KIND of thing this is. Unconditionally TABLE: this builder serves CATALOG writes, and the
     # catalog writes governed Lance tables and nothing else — an external source reaches the feed as
     # an INPUT ref, never as something this event wrote.
-    facets["datasetType"] = dataset_type_facet(_PRODUCER, external=False)
+    facets["datasetType"] = table_type_facet(_PRODUCER)
     if facets:
         output["facets"] = facets
     output = with_dataset_uuids(output, uuids or DatasetUuids(), producer=_PRODUCER)

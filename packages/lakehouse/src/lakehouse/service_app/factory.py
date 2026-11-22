@@ -43,9 +43,9 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import AsyncGenerator, Callable, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
-from typing import Any, Final, override
+from typing import Final, override
 
 from fastapi import APIRouter, FastAPI
 from fastapi.openapi.docs import get_redoc_html, get_swagger_ui_html
@@ -54,6 +54,8 @@ from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.middleware import Middleware
+from starlette.requests import Request
+from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
 from lakehouse.governed.audit import configure_audit
@@ -67,6 +69,9 @@ from lakehouse.service_app.deadline import RequestDeadlineMiddleware
 from lakehouse.service_app.no_store import NoStoreMiddleware
 from lakehouse.service_app.panic_catcher import PanicCatcherMiddleware
 
+
+#: A Starlette ``http`` middleware function: the request, and the rest of the app to call with it.
+type HttpMiddleware = Callable[[Request, Callable[[Request], Awaitable[Response]]], Awaitable[Response]]
 
 #: Lance's switch for the migration a read commits. A dataset whose fragment metadata is out of date, or whose index
 #: segments overlap, is migrated by a commit from whichever read noticed, ``index_stats`` among them, unless it is
@@ -112,13 +117,17 @@ def _trace_every_request(app: FastAPI) -> None:
     """Run every request of ``app`` in a trace, so each has the one correlation id (ADR 0209).
 
     A process `opentelemetry-instrument` launched already holds an SDK provider and instruments every FastAPI app it
-    builds (the flag the instrumentation sets on the app, read here, so a second call does not log its warning). A process launched without it (the
-    chart's with `observability.enabled` off, a test) holds the API's no-op provider, under which a request with no
-    ``traceparent`` of its own has no trace id at all; it gets an SDK provider with no exporter, which mints ids and
-    sends nothing anywhere. The provider is the process's, set once whichever app is built first.
+    builds (the mark the instrumentation sets on the app, read here, so a second call does not log its warning). A
+    process launched without it (the chart's with `observability.enabled` off, a test) holds the API's no-op provider,
+    under which a request with no ``traceparent`` of its own has no trace id at all; it gets an SDK provider with no
+    exporter, which mints ids and sends nothing anywhere. The provider is the process's, set once whichever app is built
+    first.
     """
     if not isinstance(trace.get_tracer_provider(), TracerProvider):
         trace.set_tracer_provider(TracerProvider())
+    # The instrumentation's own mark on the app, which its `instrument_app` reads the same way (measured on 0.66b2). It
+    # offers no public answer for one app: the instrumentor's `is_instrumented_by_opentelemetry` is the process's, and
+    # says nothing of an app whose class was imported before `instrument()` ran.
     if not getattr(app, "_is_instrumented_by_opentelemetry", False):
         FastAPIInstrumentor.instrument_app(app)
 
@@ -174,7 +183,7 @@ def build_service_app(
     request_deadline_seconds: float,
     live_check: LiveCheck | None = None,
     routers: Sequence[APIRouter] = (),
-    inner_middleware: Sequence[Callable[[Any, Any], Any]] = (),
+    inner_middleware: Sequence[HttpMiddleware] = (),
     outer_middleware: Sequence[Middleware] = (),
 ) -> FastAPI:
     """Assemble one lance-plane service's FastAPI app. See the module docstring for what and why.

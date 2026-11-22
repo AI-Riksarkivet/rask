@@ -253,7 +253,7 @@ def test_list_users_returns_the_userset_arm_it_used_to_discard() -> None:
                 ListUsersResponse,
             )
 
-    result = asyncio.run(fga_reads.list_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t", qualified=True))
+    result = asyncio.run(fga_reads.list_fga_users(cast(OpenFgaClient, _Client()), relation="reader", obj="table:t"))
     assert result == ["role:stewards#assignee", "user:*", "user:alice"]
 
 
@@ -334,12 +334,11 @@ def test_check_passes_contextual_tuples_through_without_writing() -> None:
 
     hypothetical = [fga_writes.ClientTuple(user="user:bob", relation="reader", object="warehouse:acme")]
     allowed = asyncio.run(
-        fga_reads.check(
+        fga_reads.check_fga_user(
             cast(OpenFgaClient, _Client()),
-            user="user:bob",
+            fga_user="user:bob",
             relation="can_read_data",
             obj="table:acme_gold_catalog",
-            qualify=False,
             contextual_tuples=hypothetical,
         )
     )

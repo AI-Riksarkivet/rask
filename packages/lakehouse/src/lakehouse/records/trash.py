@@ -1,4 +1,4 @@
-"""Trash records for the drop→undrop path (#75, open_lakehouse_diff §1.2).
+"""Trash records for the drop→undrop path (#75).
 
 Lance version time-travel and `restore_table` do not stand in for an undrop: **time-travel does not survive
 `drop_table`** — `restore_table` rewinds a LIVE table; a drop deletes the bytes and leaves no version
@@ -39,7 +39,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
 from lakehouse.records import control_prefixes, location_claims, object_records
 from lakehouse.records.base_registry import BaseRegistry, forget_base_record
-from lakehouse.records.record_store import delete_record, list_records, put_record, read_record, record_key
+from lakehouse.records.record_store import delete_record, list_every_record, list_records, put_record, read_record, record_key
 from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, mutate_json, read_json, replace_json
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
@@ -567,7 +567,7 @@ def every_record(control_root: str, storage_options: StorageOptions) -> list[Tra
         OSError: The store could not be listed, or a record read.
         ValueError: A record is not a JSON object, or not a record (:class:`UnreadableTrashRecordError`).
     """
-    return [read(raw, at=_key_of(raw)) for raw in list_records(control_root, storage_options, _TRASH_PREFIX, event=_EVENT, strict=True)]
+    return [read(raw, at=_key_of(raw)) for raw in list_every_record(control_root, storage_options, _TRASH_PREFIX, event=_EVENT)]
 
 
 def expired(records: list[TrashRecord], *, now: datetime | None = None) -> list[TrashRecord]:

@@ -317,7 +317,7 @@ def test_list_objects_qualifies_a_bare_subject_and_says_when_openfga_cut_the_ans
         seen.update(kwargs)
         return ep.fga_reads.ObjectListing(objects=[TABLE, OTHER_TABLE], truncated=True)
 
-    monkeypatch.setattr(ep.fga_reads, "list_objects", _fake)
+    monkeypatch.setattr(ep.fga_reads, "list_fga_user_objects", _fake)
     response = asyncio.run(
         ep.list_access_objects(
             settings=_settings(),
@@ -328,8 +328,8 @@ def test_list_objects_qualifies_a_bare_subject_and_says_when_openfga_cut_the_ans
     )
     # The estate gate is a router dependency, which a direct handler call does not run: this test holds what it is
     # named for, and the gate is held where the route runs it.
-    # qualify=False with a pre-resolved subject — the same double-prefix guard `check` carries.
-    assert seen == {"user": "user:dex~alice", "relation": "can_read_data", "object_type": "table", "qualify": False}
+    # A pre-resolved subject, sent verbatim — the same double-prefix guard `check_fga_user` carries.
+    assert seen == {"fga_user": "user:dex~alice", "relation": "can_read_data", "object_type": "table"}
     assert response.objects == [TABLE, OTHER_TABLE]
     # OpenFGA's ListObjects stops at its ceiling: a reach review that reads a cut answer as whole is wrong ([[LH-576]]).
     assert response.truncated is True
@@ -363,7 +363,7 @@ def test_list_objects_outage_audits_failure_and_raises(rec: _AuditRecorder, monk
     async def _down(_client: Any, **_kwargs: Any) -> list[str]:
         raise ServiceUnavailableError("openfga down")
 
-    monkeypatch.setattr(ep.fga_reads, "list_objects", _down)
+    monkeypatch.setattr(ep.fga_reads, "list_fga_user_objects", _down)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
             ep.list_access_objects(
@@ -383,7 +383,7 @@ def test_list_users_returns_qualified_subjects_and_flags_truncation(rec: _AuditR
         seen.update(kwargs)
         return [f"user:u{i}" for i in range(fga_reads.LIST_USERS_SERVER_CAP)]
 
-    monkeypatch.setattr(ep.fga_reads, "list_users", _fake)
+    monkeypatch.setattr(ep.fga_reads, "list_fga_users", _fake)
     response = asyncio.run(
         ep.list_access_users(
             resolver=_RESOLVER,
@@ -393,7 +393,7 @@ def test_list_users_returns_qualified_subjects_and_flags_truncation(rec: _AuditR
             body=AccessListUsersRequest(object=TABLE, relation="can_read_data"),
         )
     )
-    assert seen["qualified"] is True and seen["user_type"] == "user"
+    assert seen["user_type"] == "user"
     # ListUsers has no pagination; a result at the server ceiling is likely truncated, and an
     # under-reported access review must never render as a complete one.
     assert response.truncated is True
@@ -407,7 +407,7 @@ def test_list_users_passes_a_userset_filter_through(rec: _AuditRecorder, monkeyp
         seen.update(kwargs)
         return ["role:stewards#assignee"]
 
-    monkeypatch.setattr(ep.fga_reads, "list_users", _fake)
+    monkeypatch.setattr(ep.fga_reads, "list_fga_users", _fake)
     response = asyncio.run(
         ep.list_access_users(
             resolver=_RESOLVER,
@@ -583,7 +583,7 @@ def test_simulate_outage_audits_failure_and_raises(rec: _AuditRecorder, monkeypa
     async def _down(_client: Any, **_kwargs: Any) -> bool:
         raise ServiceUnavailableError("openfga down")
 
-    monkeypatch.setattr(ep.fga_reads, "check", _down)
+    monkeypatch.setattr(ep.fga_reads, "check_fga_user", _down)
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
             ep.simulate_access(
@@ -729,7 +729,7 @@ def test_a_simulated_hypothesis_cannot_carry_a_clock_either(rec: _AuditRecorder,
         checks.append(kwargs)
         return True
 
-    monkeypatch.setattr(ep.fga_reads, "check", _fake_check)
+    monkeypatch.setattr(ep.fga_reads, "check_fga_user", _fake_check)
     body = AccessSimulateRequest(user="dex~alice", relation="writer", object=NAMESPACE, hypothetical=[_clock_pinned_grant()])
     with pytest.raises(InvalidInputError, match="cannot carry current_time on the tuple"):
         asyncio.run(ep.simulate_access(resolver=_RESOLVER, settings=_settings(), client=_fga_client(), token=None, body=body))

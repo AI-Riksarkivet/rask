@@ -1,4 +1,4 @@
-"""Deletion-protection records for tables and namespaces (#73, open_lakehouse_diff §1.1).
+"""Deletion-protection records for tables and namespaces (#73).
 
 The ``protected`` flag warehouses and projects carry on their REGISTRY records, extended to the two
 rungs that had none — where the gap was sharpest, because a table drop deletes bytes and (until the

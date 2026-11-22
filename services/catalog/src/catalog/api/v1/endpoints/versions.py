@@ -377,7 +377,7 @@ async def _finalize_the_judged_version(
         writer = managed_versions.writer_turn(commit.caller, commit.staged.transaction_uuid, commit.staged.operation)
         # Waited out here, in the event loop, so a stock writer waiting holds no request thread; a turn handed to another stock
         # writer is not waited out, since this writer races it as Lance's own backoff spreads them ([[LH-259]]).
-        kept = await commit.table.wait_for_turn_in_loop(commit.ref.branch, mine=writer.token if writer is not None else None, handed=False)
+        kept = await commit.table.wait_for_doors_turn_in_loop(commit.ref.branch, mine=writer.token if writer is not None else None)
         response = await run_in_threadpool(partial(managed_versions.finalize, writer=writer, kept=kept), commit.table, commit.staged, body, so=commit.so)
     except Exception:
         # Only the request that created the record deletes it: a retry sharing the transaction relies on its twin's. A

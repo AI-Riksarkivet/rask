@@ -5626,11 +5626,7 @@ export interface components {
          *     envelope parse alike.
          */
         CatalogControlEvent: {
-            /**
-             * Action
-             * @enum {string}
-             */
-            action: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "project_protected" | "project_unprotected" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_deleted" | "warehouse_protected" | "warehouse_unprotected" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted" | "role_created" | "role_deleted" | "label_defined" | "label_deleted" | "table_labelled" | "table_unlabelled" | "namespace_labelled" | "namespace_unlabelled" | "table_contract_set" | "table_contract_deleted";
+            action: components["schemas"]["ControlAction"];
             /** Actor */
             actor?: string | null;
             /** Event Id */
@@ -5645,11 +5641,7 @@ export interface components {
             object_id: string;
             /** Object Name */
             object_name?: string | null;
-            /**
-             * Object Type
-             * @enum {string}
-             */
-            object_type: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "principal" | "role" | "label";
+            object_type: components["schemas"]["ControlObjectType"];
             /** Object Uuid */
             object_uuid?: string | null;
             /**
@@ -5764,6 +5756,10 @@ export interface components {
             /** Uuid */
             uuid: string;
         };
+        /** @enum {string} */
+        ControlAction: "grant_added" | "grant_revoked" | "project_created" | "project_deleted" | "project_protected" | "project_unprotected" | "warehouse_created" | "warehouse_activated" | "warehouse_deactivated" | "warehouse_deleted" | "warehouse_protected" | "warehouse_unprotected" | "policy_set" | "policy_deleted" | "namespace_created" | "namespace_dropped" | "table_created" | "table_dropped" | "table_renamed" | "table_registered" | "table_deregistered" | "table_declared" | "table_protected" | "table_unprotected" | "namespace_protected" | "namespace_unprotected" | "table_undropped" | "namespace_undropped" | "table_purged" | "namespace_purged" | "table_branch_created" | "table_branch_deleted" | "table_tag_created" | "table_tag_updated" | "table_tag_deleted" | "erasure_release_scheduled" | "principal_deleted" | "role_created" | "role_deleted" | "label_defined" | "label_deleted" | "table_labelled" | "table_unlabelled" | "namespace_labelled" | "namespace_unlabelled" | "table_contract_set" | "table_contract_deleted";
+        /** @enum {string} */
+        ControlObjectType: "project" | "grant" | "warehouse" | "policy" | "namespace" | "table" | "principal" | "role" | "label";
         /**
          * CountTableRowsRequest
          * @description CountTableRowsRequest
@@ -8186,13 +8182,17 @@ export interface components {
              */
             tables: string[];
         };
-        /** Liveness */
+        /**
+         * Liveness
+         * @description The body of ``/livez``.
+         */
         Liveness: {
             /** @default ok */
             status?: components["schemas"]["LivenessStatus"];
         };
         /**
          * LivenessStatus
+         * @description What ``/livez`` answers: ``ok`` while the process lives, ``stalled`` once its own check fails.
          * @enum {string}
          */
         LivenessStatus: "ok" | "stalled";
@@ -9004,7 +9004,10 @@ export interface components {
              */
             single_vector?: (number)[] | null;
         };
-        /** Readiness */
+        /**
+         * Readiness
+         * @description The body of ``/readyz``: the service's status and each component's verdict.
+         */
         Readiness: {
             /** Components */
             components?: {
@@ -9014,6 +9017,7 @@ export interface components {
         };
         /**
          * ReadinessStatus
+         * @description Where a service stands in its lifecycle, as ``/readyz`` answers it.
          * @enum {string}
          */
         ReadinessStatus: "starting" | "ready" | "degraded" | "unhealthy" | "shutting_down";

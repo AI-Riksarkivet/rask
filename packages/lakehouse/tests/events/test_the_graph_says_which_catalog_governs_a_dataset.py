@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from lakehouse.events.openlineage import CATALOG_FRAMEWORK, catalog_facet, dataset_type_facet
+from lakehouse.events.openlineage import CATALOG_FRAMEWORK, catalog_facet, table_type_facet
 
 
 _PRODUCER = "https://example.invalid/catalog"
@@ -47,8 +47,7 @@ def test_the_warehouse_uri_is_optional() -> None:
     assert "warehouseUri" not in _facet(warehouse_uri="")
 
 
-def test_a_governed_dataset_is_a_TABLE_and_a_source_is_a_FILE() -> None:
-    """The two values this estate can claim truthfully. The enum also admits VIEW, TOPIC, STREAM, MODEL
+def test_a_governed_dataset_is_a_TABLE() -> None:
+    """The value a governed dataset claims truthfully. The enum also admits FILE, VIEW, TOPIC, STREAM, MODEL
     and JOB_OUTPUT — none of which the catalog serves, so none is emitted."""
-    assert dataset_type_facet(_PRODUCER, external=False)["datasetType"] == "TABLE"
-    assert dataset_type_facet(_PRODUCER, external=True)["datasetType"] == "FILE"
+    assert table_type_facet(_PRODUCER)["datasetType"] == "TABLE"

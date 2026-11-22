@@ -23,6 +23,7 @@ __all__ = [
     "ANNOUNCEMENT_INTENTS",
     "BACKUPS",
     "BASES",
+    "BUCKET_CLAIMS",
     "CLONE_ENDINGS",
     "COMMIT_AUTHORS",
     "COMMIT_MARKS",
@@ -63,6 +64,8 @@ __all__ = [
 TRASH: Final = "_trash"
 PROJECTS: Final = "_projects"
 WAREHOUSES: Final = "_warehouses"
+#: Which project owns each bucket, one write-once claim a bucket, under the warehouse registry's own prefix.
+BUCKET_CLAIMS: Final = f"{WAREHOUSES}/bucket-claims"
 POLICIES: Final = "_policies"
 PROTECTION: Final = "_protection"
 BASES: Final = "_bases"

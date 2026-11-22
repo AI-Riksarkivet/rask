@@ -52,8 +52,8 @@ log = logging.getLogger(__name__)
 #: The tenant-lifecycle origins (`project_create`, `warehouse_create`, `lifecycle_delete`) name the
 #: control-plane doors that mint and retire a tenant's authz: an audit row can then say a grant was born
 #: WITH its project rather than added to it later, and a revoke was a deletion rather than an admin's
-#: choice. `warehouse_bootstrap` is gone with the exception it named — a project's first warehouse no
-#: longer mints its admin (that moved to `POST /management/v1/projects`, `open_hierarchy_lifecycle.md` Decision 1).
+#: choice. A project's admin is minted with the project (`POST /management/v1/projects`), so no warehouse origin
+#: mints one.
 TupleOrigin = Literal[
     "admin_api",
     "grant_api",
@@ -168,33 +168,32 @@ async def write_tuples(
 async def grant_on_create(
     client: OpenFgaClient,
     *,
-    user_sub: str,
+    owner: str | None,
     obj: str,
     actor: str,
     origin: TupleOrigin,
-    grant_owner: bool = True,
     parent_object: str | None = None,
     retry: RetryPolicy = DEFAULT_RETRY,
 ) -> None:
-    """Grant the creator ownership of a just-created object, in a single write.
+    """Grant ``owner`` ownership of a just-created object, in a single write.
 
-    Always writes ``user:<principal> owner <obj>`` (:func:`user_object` of the creator) so the creator can manage what
-    they made. When ``parent_object`` is given it *also* writes ``<obj> parent <parent_object>`` and its inverse, so the
-    object inherits reader/writer/owner down the hierarchy (per the model). ``obj`` and ``parent_object`` are the
-    objects the grants are held by: a table's or namespace's names its uuid (:func:`table_object`,
+    Writes ``user:<principal> owner <obj>`` (:func:`user_object` of ``owner``, the creator) so the creator can manage
+    what they made, and nothing for an ``owner`` of ``None``. When ``parent_object`` is given it *also* writes
+    ``<obj> parent <parent_object>`` and its inverse, so the object inherits reader/writer/owner down the hierarchy (per
+    the model). ``obj`` and ``parent_object`` are the objects the grants are held by: a table's or namespace's names its uuid (:func:`table_object`,
     :func:`namespace_object`), a top-level namespace's parent is its warehouse.
 
     Idempotent (safe to call again on retry of a create): writing existing tuples
     is swallowed. On OpenFGA outage it fails closed with ``ServiceUnavailableError``.
     """
-    # `grant_owner=False` writes the hierarchy edge ALONE — for a creator who should not own what it
+    # An `owner` of None writes the hierarchy edge ALONE — for a creator who should not own what it
     # made. The estate's case is a machine: a service principal registering its own output would
     # become that table's owner, keeping drop/deregister/restore/manage_grants on every namespace of every
     # tenant it wrote to (owner ruling 2026-09-10). The object is not left unowned — ownership still descends the
     # parent chain from the project's admin — which is exactly why the edge must still be written, and
-    # why this is a flag on the SAME batch rather than a second call: dropping the owner tuple and
+    # why the owner rides the SAME batch rather than a second call: dropping the owner tuple and
     # dropping the edge look identical at the call site and are opposite in effect.
-    tuples = [ClientTuple(user=user_object(user_sub), relation="owner", object=obj)] if grant_owner else []
+    tuples = [ClientTuple(user=user_object(owner), relation="owner", object=obj)] if owner is not None else []
     if parent_object:
         # The `parent` edge and the INVERSE edge with it, in the SAME batch, so the two directions cannot
         # drift. `hierarchy_edge_tuples` owns that pairing for every writer — see its docstring for what
@@ -213,11 +212,9 @@ async def grant_on_create(
     )
 
 
-async def grant_before_arrival(
-    client: OpenFgaClient, *, user_sub: str, obj: str, actor: str, origin: TupleOrigin, grant_owner: bool, parent_object: str
-) -> None:
-    """What a namespace holds before the backend records it ([[LH-585]]): the creator's ``owner`` on ``obj`` (unless
-    ``grant_owner`` is false, :func:`grant_on_create`) and the ``parent`` edge it inherits through, in one write.
+async def grant_before_arrival(client: OpenFgaClient, *, owner: str | None, obj: str, actor: str, origin: TupleOrigin, parent_object: str) -> None:
+    """What a namespace holds before the backend records it ([[LH-585]]): ``owner``'s ``owner`` on ``obj`` (none for an
+    ``owner`` of ``None``, :func:`grant_on_create`) and the ``parent`` edge it inherits through, in one write.
 
     The inverse ``child`` edge is not written here. It is the one tuple of a link that confers something on ANOTHER
     object: ``visible_below from child`` shows the parent to whoever holds a rung on the child, so one naming an
@@ -228,8 +225,8 @@ async def grant_before_arrival(
         ServiceUnavailableError: OpenFGA gave no answer.
     """
     forward, _ = _link_by_direction(obj, parent_object)
-    owner = [ClientTuple(user=user_object(user_sub), relation="owner", object=obj)] if grant_owner else []
-    await write_tuples(client, [*owner, forward], actor=actor, origin=origin)
+    owned = [ClientTuple(user=user_object(owner), relation="owner", object=obj)] if owner is not None else []
+    await write_tuples(client, [*owned, forward], actor=actor, origin=origin)
 
 
 def _delete_reported_absent(exc: ApiException) -> bool:

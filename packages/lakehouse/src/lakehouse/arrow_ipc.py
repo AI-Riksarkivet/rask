@@ -1,7 +1,7 @@
 """The ONE Arrow-IPC **stream** encoder, the ONE validating decoder of a caller's Arrow body, and the media type.
 
 The encoder writes the wire the Lance catalog's write doors (``/v1/table/{id}/create``, ``/insert``,
-``/merge_insert``) parse and a browser canvas consumes zero-copy. It is a **stream**, never an
+``/merge_insert``) parse and any Arrow reader consumes zero-copy. It is a **stream**, never an
 IPC *file*: a file body fails the catalog's Rust reader with "failed to fill whole buffer". The read
 side returns IPC files — that asymmetry is the catalog's contract, not this encoder's choice.
 
@@ -42,8 +42,8 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
 
-#: The Arrow-IPC **stream** media type — the ``Content-Type`` every catalog write body carries and the
-#: type the ``/points`` / annotations read responses are served as. One spelling, one import.
+#: The Arrow-IPC **stream** media type — the ``Content-Type`` every catalog write body carries. One spelling, one
+#: import.
 ARROW_STREAM_MEDIA_TYPE = "application/vnd.apache.arrow.stream"
 
 #: The two Arrow IPC framings a caller's body can arrive in.

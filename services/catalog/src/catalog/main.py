@@ -48,7 +48,7 @@ from lakehouse.events.bus import Bus, bus_dependency, bus_session
 from lakehouse.events.control_emit import make_control_emitter
 from lakehouse.events.signing import SigningKey, parse_published_keys
 from lakehouse.governed.admission import judge_before_the_body
-from lakehouse.governed.auth_lifespan import attach_auth
+from lakehouse.governed.auth_lifespan import BootFailure, ModelRole, attach_auth
 from lakehouse.governed.fga_provision import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
@@ -315,7 +315,7 @@ async def _open_the_store(app: FastAPI, settings: Settings, *, stack: AsyncExitS
 
 async def _attach_authorization_and_vending(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> None:
     """Attach the authorization plane, the credential vendor and the base judge, each release pushed onto ``stack``."""
-    # `fatal=True` KEEPS THIS SERVICE'S POSTURE: neither construction was wrapped in a `try`, so a
+    # `BootFailure.CRASH` KEEPS THIS SERVICE'S POSTURE: neither construction was wrapped in a `try`, so a
     # failed build has always crashed the pod. The catalog is the estate's authorization SOURCE — it
     # writes the grants every other service reads — so a boot that cannot reach OpenFGA must be
     # visible as a CrashLoopBackOff, not as a fleet of ready pods answering 503 to everyone.
@@ -325,13 +325,13 @@ async def _attach_authorization_and_vending(app: FastAPI, settings: Settings, *,
         settings,
         service="catalog",
         loops=loops,
-        fatal=True,
+        on_failure=BootFailure.CRASH,
         # THE ESTATE'S ONE PUBLISHER OF THE AUTHORIZATION MODEL. Every other service resolves what
         # this one wrote; `build_fga_client` defaults to the read-only half for that reason.
         # The catalog is the publisher because it owns the governed plane the model describes, it
-        # is `fatal=True` so a failure to build is a refusal to serve rather than an open door,
+        # is `BootFailure.CRASH` so a failure to build is a refusal to serve rather than an open door,
         # and its declaration converge writes the estate's first tuples against its objects.
-        provision=True,
+        model_role=ModelRole.PUBLISHER,
     )
     # Credential vending (data plane): turn an authorized (table location, tier) into the scoped
     # storage_options a client uses to reach object storage DIRECTLY. mode_b (default) vends nothing —

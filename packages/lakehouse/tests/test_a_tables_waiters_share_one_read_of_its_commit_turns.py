@@ -145,7 +145,7 @@ def test_a_writer_handed_its_turn_by_another_replica_finds_it_kept(tmp_path: Pat
     assert here.poll(None) is False
     elsewhere.hand(None, WRITER)
 
-    assert asyncio.run(here.wait_in_loop(None, mine=WRITER.token, handed=False)) is True
+    assert asyncio.run(here.wait_doors_in_loop(None, mine=WRITER.token)) is True
 
 
 @pytest.mark.parametrize("beaten_to", [pytest.param("create_json", id="the-tables-first-turn"), pytest.param("replace_json", id="a-later-turn")])

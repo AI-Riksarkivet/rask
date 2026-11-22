@@ -457,13 +457,17 @@ export interface components {
             /** Oldest Seq */
             oldest_seq?: number | null;
         };
-        /** Liveness */
+        /**
+         * Liveness
+         * @description The body of ``/livez``.
+         */
         Liveness: {
             /** @default ok */
             status?: components["schemas"]["LivenessStatus"];
         };
         /**
          * LivenessStatus
+         * @description What ``/livez`` answers: ``ok`` while the process lives, ``stalled`` once its own check fails.
          * @enum {string}
          */
         LivenessStatus: "ok" | "stalled";
@@ -506,7 +510,10 @@ export interface components {
             /** Seq */
             seq: number;
         };
-        /** Readiness */
+        /**
+         * Readiness
+         * @description The body of ``/readyz``: the service's status and each component's verdict.
+         */
         Readiness: {
             /** Components */
             components?: {
@@ -516,6 +523,7 @@ export interface components {
         };
         /**
          * ReadinessStatus
+         * @description Where a service stands in its lifecycle, as ``/readyz`` answers it.
          * @enum {string}
          */
         ReadinessStatus: "starting" | "ready" | "degraded" | "unhealthy" | "shutting_down";

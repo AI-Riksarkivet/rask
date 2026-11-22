@@ -1,8 +1,7 @@
 """An IdP the estate cannot reach is OUR fault, and must be answered and audited as ours.
 
-Found by an external comparison (`antoniocali/polaris-k8s`, 2026-09-20), which proves its auth plane
-at startup and surfaces the verdict on a condition rather than discovering it on the first request.
-That half is a separate question; this one is the defect underneath it.
+Proving the auth plane at startup, and surfacing the verdict on a condition rather than discovering it on the first
+request, is a separate question; this one is the defect underneath it.
 
 THREE CONFIGURATION FAULTS WERE CHARGED TO THE CALLER. `OIDCVerifier.verify` maps only
 ``(jwt.PyJWTError, jwt.PyJWKClientError, ValidationError)`` to `UnauthenticatedError`, and the

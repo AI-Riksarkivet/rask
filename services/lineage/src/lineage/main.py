@@ -17,7 +17,7 @@ from fastapi import FastAPI, Request
 
 from lakehouse.events.bus import Bus, bus_dependency, bus_session
 from lakehouse.governed.admission import judge_before_the_body
-from lakehouse.governed.auth_lifespan import attach_auth
+from lakehouse.governed.auth_lifespan import BootFailure, attach_auth
 from lakehouse.governed.fga_provision import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
@@ -121,10 +121,10 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     # pinned ahead of boot. (The catalog writes the grants on create; lineage reads them — one shared
     # Zanzibar store.)
     #
-    # `fatal=True` KEEPS THIS SERVICE'S POSTURE: a replica that came up unable to authorize would serve
+    # `BootFailure.CRASH` KEEPS THIS SERVICE'S POSTURE: a replica that came up unable to authorize would serve
     # 503s that read as a slow feed, not as a broken authorization plane.
     stack.push_async_callback(fga_dispose, app)
-    await attach_auth(app, settings, service="lineage", loops=loops, fatal=True)
+    await attach_auth(app, settings, service="lineage", loops=loops, on_failure=BootFailure.CRASH)
     # THIS PROCESS'S OWN CONNECTION TO THE BUS ([[XC-199]]), as lineage's bus user (`lakehouse.events.bus`): lineage takes its
     # deliveries on it, and the relay re-publishes a recovered event on it, so a consumer that never saw it still acts on
     # it. A loop of `loops` connects it behind the start and keeps it, so lineage serves while the bus is away, and the

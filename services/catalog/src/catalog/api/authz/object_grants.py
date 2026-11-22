@@ -147,8 +147,7 @@ async def seed_ownership(
     # drifts the moment a service is renamed.
     await fga_writes.grant_on_create(  # noqa: TID251
         client,
-        grant_owner=not isinstance(context.token, ServicePrincipal),
-        user_sub=context.token.subject,
+        owner=None if isinstance(context.token, ServicePrincipal) else context.token.subject,
         obj=owned_object(resource, uuid),
         actor=context.token.subject,
         origin="create",
@@ -187,11 +186,10 @@ async def seed_namespace_before_write(context: AuthzContext, *, resolver: Resolv
     try:
         await fga_writes.grant_before_arrival(  # noqa: TID251
             client,
-            user_sub=context.token.subject,
+            owner=None if isinstance(context.token, ServicePrincipal) else context.token.subject,
             obj=fga_ids.namespace_object(uuid),
             actor=context.token.subject,
             origin="create",
-            grant_owner=not isinstance(context.token, ServicePrincipal),
             parent_object=await namespace_parent(resolver, context.settings, segments),
         )
     except Exception:

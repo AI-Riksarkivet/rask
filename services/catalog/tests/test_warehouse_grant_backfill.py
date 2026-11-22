@@ -111,8 +111,8 @@ def _stub_client(monkeypatch) -> None:
         async def close(self) -> None: ...
 
     monkeypatch.setattr(fga_provision, "make_client", lambda *a, **k: _Client())
-    # BOTH HALVES, because which one the bootstrap takes is a POSTURE and postures change: since
-    # 2026-09-09 `build_fga_client` defaults `provision=False`, so an unpinned build resolves rather
+    # BOTH HALVES, because which one the bootstrap takes is a POSTURE and postures change:
+    # `build_fga_client` defaults to `ModelRole.READER`, so an unpinned build resolves rather
     # than publishes (only the catalog's own lifespan opts in; the default is pinned by
     # `test_attach_auth_postures.py::test_the_default_posture_RESOLVES_when_unpinned`). Stubbing only the
     # write half left the read half dialling a real `openfga:8080`, which fails as a DNS error rather

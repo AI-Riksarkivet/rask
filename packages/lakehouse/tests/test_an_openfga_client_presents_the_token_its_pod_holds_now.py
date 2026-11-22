@@ -7,7 +7,7 @@ governed door it serves fails closed. RUN through the hop every service builds i
 (`RASK_FGA_TOKEN_FILE`), against `openfga_stub`, which admits only the bearer the token file holds at that
 moment: the boot lookup (`provision` for the model owner, `resolve` for everyone else), then two checks on the
 client, the file rotated between them. A refused credential is not an outage, so the build raises whatever the
-service's `fatal` posture: a pod that kept serving with no client would stay Ready with every door failing closed.
+service's `on_failure` posture: a pod that kept serving with no client would stay Ready with every door failing closed.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from openfga_sdk.client.models import ClientCheckRequest
 from openfga_sdk.exceptions import UnauthorizedException
 from pydantic_settings import BaseSettings
 
-from lakehouse.governed.auth_lifespan import build_fga_client
+from lakehouse.governed.auth_lifespan import BootFailure, ModelRole, build_fga_client
 from lakehouse.governed.fga_provision import OpenFgaCredentialRefusedError
 from lakehouse.governed.settings import FgaSettings
 from tests.unit.openfga_stub import BY_NAME, Recorded, openfga
@@ -38,15 +38,17 @@ def _environment(monkeypatch: pytest.MonkeyPatch, url: str, token: Path) -> _Ser
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provision", [pytest.param(False, id="resolve"), pytest.param(True, id="provision")])
-async def test_the_service_client_presents_the_token_the_file_holds_at_each_request(provision: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("model_role", [pytest.param(ModelRole.READER, id="resolve"), pytest.param(ModelRole.PUBLISHER, id="provision")])
+async def test_the_service_client_presents_the_token_the_file_holds_at_each_request(
+    model_role: ModelRole, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     token = tmp_path / "token"
     token.write_text("projected-before-rotation\n")
     recorded = Recorded(written={("user:alice", "owner", "warehouse:lance_catalog")})
     request = ClientCheckRequest(user="user:alice", relation="owner", object="warehouse:lance_catalog")
 
     with openfga(BY_NAME, recorded, token_file=token) as url:
-        client = await build_fga_client(_environment(monkeypatch, url, token), service="probe", provision=provision)
+        client = await build_fga_client(_environment(monkeypatch, url, token), service="probe", model_role=model_role)
         assert client is not None, f"the boot lookup built no client; OpenFGA refused {recorded.refused} requests 401"
 
         async def answer() -> bool | str:
@@ -74,4 +76,4 @@ async def test_a_refused_credential_fails_the_boot_of_a_non_fatal_service(tmp_pa
     with openfga(BY_NAME, Recorded(), token_file=admitted) as url:
         settings = _environment(monkeypatch, url, presented)
         with pytest.raises(OpenFgaCredentialRefusedError, match="refused this pod's credential"):
-            await build_fga_client(settings, service="probe", provision=False, fatal=False)
+            await build_fga_client(settings, service="probe", model_role=ModelRole.READER, on_failure=BootFailure.SERVE_UNAVAILABLE)

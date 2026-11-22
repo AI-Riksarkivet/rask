@@ -86,19 +86,18 @@ class _CapturingCheck:
         return answer({"allowed": True}, CheckResponse)
 
 
-def test_check_qualify_false_sends_subject_verbatim() -> None:
-    """The access simulator (#68) passes a FULL subject: ``qualify=False`` must send it verbatim — never
+def test_check_fga_user_sends_subject_verbatim() -> None:
+    """The access simulator (#68) passes a FULL subject: ``check_fga_user`` must send it verbatim — never
     double-prefix a user (``user:user:alice`` → always denies) and let a userset be Checked at all
     (audit 2026-07-20 caught the double-prefix bug that made every simulated Check falsely deny)."""
     c = _CapturingCheck()
-    asyncio.run(fga_reads.check(cast(OpenFgaClient, c), user="user:alice", relation="can_drop", obj="table:t", qualify=False))
+    asyncio.run(fga_reads.check_fga_user(cast(OpenFgaClient, c), fga_user="user:alice", relation="can_drop", obj="table:t"))
     asyncio.run(
-        fga_reads.check(
+        fga_reads.check_fga_user(
             cast(OpenFgaClient, c),
-            user="role:project_admin#member",
+            fga_user="role:project_admin#member",
             relation="can_drop",
             obj="table:t",
-            qualify=False,
         )
     )
     assert c.seen == ["user:alice", "role:project_admin#member"]
@@ -229,20 +228,19 @@ class _CapturingList:
         return answer({"objects": ["table:acme_gold_catalog"]}, ListObjectsResponse)
 
 
-def test_list_objects_qualify_false_sends_a_userset_verbatim() -> None:
-    """`qualify=False` is what lets an estate admin ask a USERSET question.
+def test_list_fga_user_objects_sends_a_userset_verbatim() -> None:
+    """`list_fga_user_objects` is what lets an estate admin ask a USERSET question.
 
     A grant to a role is the userset question that explains a real grant, so prefixing it would make that
     question unaskable.
     """
     client = _CapturingList()
     asyncio.run(
-        fga_reads.list_objects(
+        fga_reads.list_fga_user_objects(
             cast(OpenFgaClient, client),
-            user="role:project_admin#member",
+            fga_user="role:project_admin#member",
             relation="can_get_metadata",
             object_type="table",
-            qualify=False,
         )
     )
     assert [r.user for r in client.requests] == ["role:project_admin#member"]

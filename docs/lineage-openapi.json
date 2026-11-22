@@ -364,6 +364,7 @@
         "type": "object"
       },
       "Liveness": {
+        "description": "The body of ``/livez``.",
         "properties": {
           "status": {
             "$ref": "#/components/schemas/LivenessStatus",
@@ -374,6 +375,7 @@
         "type": "object"
       },
       "LivenessStatus": {
+        "description": "What ``/livez`` answers: ``ok`` while the process lives, ``stalled`` once its own check fails.",
         "enum": [
           "ok",
           "stalled"
@@ -475,6 +477,7 @@
         "type": "object"
       },
       "Readiness": {
+        "description": "The body of ``/readyz``: the service's status and each component's verdict.",
         "properties": {
           "components": {
             "additionalProperties": {
@@ -494,6 +497,7 @@
         "type": "object"
       },
       "ReadinessStatus": {
+        "description": "Where a service stands in its lifecycle, as ``/readyz`` answers it.",
         "enum": [
           "starting",
           "ready",

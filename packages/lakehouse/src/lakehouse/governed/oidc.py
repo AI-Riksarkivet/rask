@@ -6,9 +6,9 @@ signing keys it returns, never the client: see the rules below) and
 plumbing PyJWT does not: discover the provider's ``.well-known/openid-configuration`` for the issuer +
 JWKS URI, and enforce a *local* signing-algorithm allowlist before handing the token to ``jwt.decode``
 (below). Provider-agnostic — works with Keycloak, Dex, Okta, Auth0, Entra, or Google by setting the
-issuer + audience. (We do NOT hand-roll JWT crypto — see the don't-reinvent audit.)
+issuer + audience. No JWT cryptography is written here.
 
-Security posture (see CHANGELOG in the task notes):
+Security posture:
 
 * **Local algorithm allowlist.** We never trust the provider's advertised
   ``id_token_signing_alg_values_supported`` blindly. We intersect it with a
@@ -77,7 +77,7 @@ import threading
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Annotated, Any, Final
+from typing import Annotated, Any, Final, override
 from urllib.parse import urlsplit
 
 import httpx
@@ -230,6 +230,7 @@ class _CredentialedJWKClient(jwt.PyJWKClient):
         super().__init__(uri, cache_jwk_set=False, max_cached_keys=max_cached_keys, timeout=timeout, ssl_context=credential.ssl_context)
         self._credential = credential
 
+    @override
     def fetch_data(self) -> Any:
         self.headers = self._credential.headers()
         return super().fetch_data()
@@ -476,8 +477,8 @@ class OIDCVerifier:
         # OURS, NOT THE CALLER'S. Everything from here to the mismatch check below is a statement
         # about this deployment's configuration and the issuer it points at — the presented token is
         # not read and plays no part. These errors are raised from `_provider_for`, before `verify`
-        # reaches its try block, so they are mapped here, to `ProviderUnavailableError`: a 503, as
-        # `deps.py` answers for a verifier it does not have, because it is the same fact arriving later.
+        # reaches its try block, so they are mapped here, to `ProviderUnavailableError`: a 503, as a door
+        # answers when no verifier was built, because it is the same fact arriving later.
         try:
             with httpx.Client(timeout=HTTP_FETCH_TIMEOUT_SECONDS, verify=self._credential.verify()) as client:
                 response = client.get(f"{discovery_base}{_DISCOVERY_SUFFIX}", headers=self._credential.headers())

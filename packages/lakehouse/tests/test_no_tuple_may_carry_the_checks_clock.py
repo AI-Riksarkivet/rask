@@ -82,8 +82,8 @@ async def test_a_check_refuses_a_contextual_tuple_carrying_the_clock() -> None:
     grant that `write_tuples` refuses to create."""
     store = _Store()
     with pytest.raises(InvalidInputError, match=REFUSAL):
-        await fga_reads.check(
-            cast(OpenFgaClient, store), user="user:alice", relation="writer", obj="namespace:bronze", qualify=False, contextual_tuples=[_pinned()]
+        await fga_reads.check_fga_user(
+            cast(OpenFgaClient, store), fga_user="user:alice", relation="writer", obj="namespace:bronze", contextual_tuples=[_pinned()]
         )
     assert store.checks == [], "a check ran with a clock-pinned contextual tuple"
 
@@ -92,12 +92,11 @@ async def test_a_check_refuses_a_contextual_tuple_carrying_the_clock() -> None:
 async def test_a_check_may_still_name_its_own_clock_in_the_request_context() -> None:
     """The clock belongs to the CHECK, so the request context is exactly where it may be named."""
     store = _Store()
-    await fga_reads.check(
+    await fga_reads.check_fga_user(
         cast(OpenFgaClient, store),
-        user="user:alice",
+        fga_user="user:alice",
         relation="writer",
         obj="namespace:bronze",
-        qualify=False,
         contextual_tuples=[_grant()],
         context={fga_reads.CLOCK_PARAMETER: "2026-07-29T10:00:00Z"},
     )
@@ -109,7 +108,7 @@ async def test_a_check_that_names_no_clock_is_evaluated_at_the_servers_now() -> 
     """What the estate-admin `/management/v1/access/check` docstring promises: an omitted clock is not a DENY."""
     store = _Store()
     before = datetime.now(UTC)
-    await fga_reads.check(cast(OpenFgaClient, store), user="user:alice", relation="writer", obj="namespace:bronze", qualify=False)
+    await fga_reads.check_fga_user(cast(OpenFgaClient, store), fga_user="user:alice", relation="writer", obj="namespace:bronze")
     context = store.checks[0].context
     assert context is not None, "the check was sent with no context, so a time-boxed grant reads as expired"
     sent = context[fga_reads.CLOCK_PARAMETER]

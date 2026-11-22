@@ -81,7 +81,7 @@ class _ReadDeleteClient:
 def test_grant_on_create_writes_no_edges_for_a_root_object() -> None:
     """No parent → no edges either way; the creator's own grant is the whole write."""
     fake = _WriteClient()
-    asyncio.run(fga_writes.grant_on_create(_client(fake), user_sub="dex~alice", obj=_TABLE, actor="dex~alice", origin="create"))
+    asyncio.run(fga_writes.grant_on_create(_client(fake), owner="dex~alice", obj=_TABLE, actor="dex~alice", origin="create"))
     assert _keys(fake.written) == {("user:dex~alice", "owner", _TABLE)}
 
 
@@ -93,7 +93,7 @@ def test_grant_on_create_skips_the_inverse_when_the_parent_type_declares_no_chil
     asyncio.run(
         fga_writes.grant_on_create(
             _client(fake),
-            user_sub="dex~alice",
+            owner="dex~alice",
             obj="classification:pii",
             actor="dex~alice",
             origin="create",

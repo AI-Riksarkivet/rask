@@ -1415,11 +1415,11 @@ def test_a_retry_of_an_in_flight_commit_leaves_the_record_its_twin_made(served: 
     the record names its author."""
     from catalog.core.config import get_settings
 
-    waited = table_claims.DoorTable.wait_for_turn_in_loop
+    waited = table_claims.DoorTable.wait_for_doors_turn_in_loop
     posted: list[str] = []
     twins: list[int] = []
 
-    async def _a_twin_while_waiting(table: table_claims.DoorTable, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
+    async def _a_twin_while_waiting(table: table_claims.DoorTable, ref: str | None, *, mine: str | None = None) -> bool:
         if posted:
             raise table_claims.TurnWaitRefusedError("every seat a commit waits in is taken")
         described = await asyncio.to_thread(httpx.post, f"{served.url}/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}, headers=_TOKEN)
@@ -1430,10 +1430,10 @@ def test_a_retry_of_an_in_flight_commit_leaves_the_record_its_twin_made(served: 
         twins.append(
             (await asyncio.to_thread(httpx.post, f"{served.url}/v1/table/lance_catalog$db$t/version/create", json=request, headers=_TOKEN)).status_code
         )
-        return await waited(table, ref, mine=mine, handed=handed)
+        return await waited(table, ref, mine=mine)
 
     stock = _created(served)
-    monkeypatch.setattr(table_claims.DoorTable, "wait_for_turn_in_loop", _a_twin_while_waiting)
+    monkeypatch.setattr(table_claims.DoorTable, "wait_for_doors_turn_in_loop", _a_twin_while_waiting)
 
     written = lance.write_dataset(_keyed([4], ["d"]), namespace_client=stock, table_id=_TABLE, mode="append")
 
@@ -1618,17 +1618,17 @@ def test_a_stock_writer_whose_finalize_loses_is_handed_the_refs_next_turn(served
     while this one waits out a door's turn, right before its finalize. The finalize then loses, and the writer is handed
     the ref's next turn there, so its retry, staged again under its transaction, finalizes before the catalog's own
     writers: when the retry reaches ``version/create``, the record keeps a turn under the writer's own token, read from
-    the store, and holds no door's."""
+    the store, and no other commit holds the ref's."""
     stock = served.stock()
     stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=["lance_catalog", "db"]))
     lance.write_dataset(_row(0), namespace_client=stock, table_id=_APPENDED_TO, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
     competitor = served.stock()
-    waited = table_claims.DoorTable.wait_for_turn_in_loop
+    waited = table_claims.DoorTable.wait_for_doors_turn_in_loop
     beaten: list[str] = []
     at_the_retry: list[tuple[bool, bool]] = []
 
-    async def _waited_then_beaten(table: table_claims.DoorTable, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
-        kept = await waited(table, ref, mine=mine, handed=handed)
+    async def _waited_then_beaten(table: table_claims.DoorTable, ref: str | None, *, mine: str | None = None) -> bool:
+        kept = await waited(table, ref, mine=mine)
         if mine is not None and not beaten:
             beaten.append(mine)
             await asyncio.to_thread(competitor.insert_into_table, lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(1)))
@@ -1637,9 +1637,9 @@ def test_a_stock_writer_whose_finalize_loses_is_handed_the_refs_next_turn(served
     def _note_the_turn(_request: lance_namespace.CreateTableVersionRequest) -> None:
         if beaten:
             turns = _turns(stock, tmp_path)
-            at_the_retry.append((turns.keeps(beaten[0]), turns.poll(None, handed=False)))
+            at_the_retry.append((turns.keeps(beaten[0]), turns.poll(None, mine=beaten[0])))
 
-    monkeypatch.setattr(table_claims.DoorTable, "wait_for_turn_in_loop", _waited_then_beaten)
+    monkeypatch.setattr(table_claims.DoorTable, "wait_for_doors_turn_in_loop", _waited_then_beaten)
 
     lance.write_dataset(_row(2), namespace_client=_HookedCommits(served.stock(), before=_note_the_turn), table_id=_APPENDED_TO, mode="append")
 

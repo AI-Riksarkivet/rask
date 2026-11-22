@@ -7,7 +7,7 @@ exceptions, so it is written once here and each door only translates the verdict
 
 The door hands `judge` the check as a callable already bound to its event, its signer policy and its key source, for example
 `lambda: verify_control_signature(envelope, source=..., signers=..., delegators=...)`. Which signers an action allows is the
-caller's policy and not the kit's.
+caller's policy and not this module's.
 
 THE THREE MODES are the chart's `signing.doors`:
 
@@ -36,7 +36,7 @@ from lakehouse.events.signing import KeySourceUnavailableError, SignatureError, 
 
 
 #: What OBSERVE reports when it could not read the keys a signature is checked against: the one outcome that is not a refusal
-#: reason. A counter keyed on `observed` stays a handful of series, since the rest come from the kit's closed `RefusalReason`.
+#: reason. A counter keyed on `observed` stays a handful of series, since the rest come from the closed `signing.RefusalReason`.
 KEYS_UNAVAILABLE: Final = "keys_unavailable"
 
 

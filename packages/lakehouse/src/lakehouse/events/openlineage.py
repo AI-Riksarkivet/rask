@@ -207,7 +207,7 @@ def processing_engine_facet(producer: str, *, name: str, version: str) -> dict[s
 #: Standard ``CatalogDatasetFacet`` schema URL — WHICH CATALOG governs this dataset.
 #:
 #: A lakehouse that publishes lineage to a shared consumer has to say whose catalog a dataset belongs
-#: to; without it, two estates writing `bronze$events` are indistinguishable in one graph backend.
+#: to; without it, two estates writing `db$events` are indistinguishable in one graph backend.
 CATALOG_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-1-0/CatalogDatasetFacet.json#/$defs/CatalogDatasetFacet"
 
 #: The storage framework, and it is a CONSTANT rather than a parameter because the estate's format is
@@ -220,13 +220,13 @@ CATALOG_FRAMEWORK: Final = "lance"
 def catalog_facet(producer: str, *, impl: str, name: str, warehouse_uri: str = "") -> dict[str, object]:
     """The standard ``catalog`` payload, or ``{}`` when the catalog cannot identify itself.
 
-    ``impl`` is the Lance Namespace implementation (``dir``, ``rest``, …) — the spec's ``type``, whose
-    own examples are ``jdbc``/``glue``/``polaris``, i.e. HOW the catalog is reached. ``name`` is the
+    ``impl`` is the Lance Namespace implementation (``dir``, ``rest``, …) — the spec's ``type``, i.e. HOW the
+    catalog is reached. ``name`` is the
     catalog's identity in a graph backend, which this estate already fixes as the lineage job namespace, so
     the facet and the events it rides on cannot disagree about who is speaking.
 
     **``metadataUri`` IS DELIBERATELY ABSENT, and the omission carries the architecture.** The spec's
-    example is a JDBC string because Iceberg-style catalogs hold the commit pointer in a database;
+    example is a JDBC string, the address of a catalog that holds the commit pointer in a database;
     Lance puts the CAS in the object store, which is why this estate needs no relational DB at all.
     There is no metadata endpoint to name, and inventing one — the REST door, say — would describe a
     component that is not where the commits live.
@@ -257,28 +257,22 @@ BRANCH_IDENTIFIER: Final = "branchIdentifier"
 #: Standard ``DatasetTypeDatasetFacet`` schema URL — WHAT KIND of thing this dataset is.
 DATASET_TYPE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/DatasetTypeDatasetFacet.json#/$defs/DatasetTypeDatasetFacet"
 
-#: The two values this estate can claim truthfully. A governed dataset is a Lance TABLE; a source
-#: outside the estate is bytes at a location, which the spec spells FILE. The enum also admits VIEW,
-#: TOPIC, STREAM, MODEL and JOB_OUTPUT — none of which the catalog serves, so none is emitted.
+#: The value a governed dataset claims: a Lance TABLE. The enum also admits FILE, VIEW, TOPIC, STREAM, MODEL and
+#: JOB_OUTPUT — none of which the catalog serves, so none is emitted.
 _DATASET_TYPE_TABLE: Final = "TABLE"
-_DATASET_TYPE_FILE: Final = "FILE"
 
 
-def dataset_type_facet(producer: str, *, external: bool) -> dict[str, object]:
-    """The standard ``datasetType`` payload: ``TABLE`` for a governed dataset, ``FILE`` for a source.
-
-    The discriminator is the caller's, and must be `naming.is_external_source_namespace` — the same
-    one the lineage door's input check uses. Deciding "is this ours" twice, two ways, is how a source
-    ends up governed by one rule and described by another.
+def table_type_facet(producer: str) -> dict[str, object]:
+    """The standard ``datasetType`` payload a governed dataset carries: ``TABLE``.
 
     ``subType`` is not emitted. The spec's examples (MATERIALIZED, EXTERNAL, TEMPORARY) describe
     properties of a TABLE this estate does not have: nothing here is materialised from a query,
-    nothing is temporary, and EXTERNAL is already said by `datasetType` being FILE.
+    nothing is temporary, and nothing the catalog governs is external.
     """
     return {
         "_producer": producer,
         "_schemaURL": DATASET_TYPE_FACET_SCHEMA_URL,
-        "datasetType": _DATASET_TYPE_FILE if external else _DATASET_TYPE_TABLE,
+        "datasetType": _DATASET_TYPE_TABLE,
     }
 
 
@@ -401,7 +395,6 @@ __all__ = [
     "RunRef",
     "author_facet",
     "catalog_facet",
-    "dataset_type_facet",
     "lance_facet",
     "lifecycle_facet",
     "lifecycle_state",
@@ -410,4 +403,5 @@ __all__ = [
     "run_id_for",
     "schema_facet",
     "symlinks_facet",
+    "table_type_facet",
 ]

@@ -72,7 +72,7 @@ class PublishedKeys:
     A failure is kept no longer than that: a verification that begins after it ended reads afresh, and a half-seeded
     store cannot pin a missing list for a TTL.
 
-    The locks, the cache and the failures are keyed only by identities the caller configured: the kit reads an identity
+    The locks, the cache and the failures are keyed only by identities the caller configured: the verifier reads an identity
     only after checking it against the signer set, so they are bounded by that set. The one thing keyed by the event's
     own text, the key ids it names, is a bounded memory under each identity (`MAX_UNKNOWN_KEY_IDS`).
 

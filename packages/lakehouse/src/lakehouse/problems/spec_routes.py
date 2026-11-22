@@ -23,69 +23,6 @@ from typing import Final
 
 __all__ = ["SPEC_ERROR_STATUSES", "SPEC_ROUTES", "UNSUPPORTED_STATUS", "is_spec_route", "structural"]
 
-#: (METHOD, structural path) for every operation in the vendored spec. Re-derived and compared by
-#: `test_spec_conformance.py`, so re-vendoring `lance_docs/ns_catalog/spec.yaml` reds the suite unless
-#: this moves with it.
-SPEC_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
-    {
-        ("GET", "/v1/namespace/{}/list"),
-        ("GET", "/v1/namespace/{}/table/list"),
-        ("GET", "/v1/table"),
-        ("POST", "/v1/materialized_view/{}/create"),
-        ("POST", "/v1/materialized_view/{}/refresh"),
-        ("POST", "/v1/namespace/{}/create"),
-        ("POST", "/v1/namespace/{}/describe"),
-        ("POST", "/v1/namespace/{}/drop"),
-        ("POST", "/v1/namespace/{}/exists"),
-        ("POST", "/v1/table/batch-commit"),
-        ("POST", "/v1/table/version/batch-create"),
-        ("POST", "/v1/table/{}/add_columns"),
-        ("POST", "/v1/table/{}/alter_columns"),
-        ("POST", "/v1/table/{}/analyze_plan"),
-        ("POST", "/v1/table/{}/backfill_column"),
-        ("POST", "/v1/table/{}/branches/create"),
-        ("POST", "/v1/table/{}/branches/delete"),
-        ("POST", "/v1/table/{}/branches/list"),
-        ("POST", "/v1/table/{}/count_rows"),
-        ("POST", "/v1/table/{}/create"),
-        ("POST", "/v1/table/{}/create_index"),
-        ("POST", "/v1/table/{}/create_scalar_index"),
-        ("POST", "/v1/table/{}/declare"),
-        ("POST", "/v1/table/{}/delete"),
-        ("POST", "/v1/table/{}/deregister"),
-        ("POST", "/v1/table/{}/describe"),
-        ("POST", "/v1/table/{}/drop"),
-        ("POST", "/v1/table/{}/drop_columns"),
-        ("POST", "/v1/table/{}/exists"),
-        ("POST", "/v1/table/{}/explain_plan"),
-        ("POST", "/v1/table/{}/index/list"),
-        ("POST", "/v1/table/{}/index/{}/drop"),
-        ("POST", "/v1/table/{}/index/{}/stats"),
-        ("POST", "/v1/table/{}/insert"),
-        ("POST", "/v1/table/{}/merge_insert"),
-        ("POST", "/v1/table/{}/query"),
-        ("POST", "/v1/table/{}/register"),
-        ("POST", "/v1/table/{}/rename"),
-        ("POST", "/v1/table/{}/restore"),
-        ("POST", "/v1/table/{}/schema_metadata/update"),
-        ("POST", "/v1/table/{}/stats"),
-        ("POST", "/v1/table/{}/tags/create"),
-        ("POST", "/v1/table/{}/tags/delete"),
-        ("POST", "/v1/table/{}/tags/list"),
-        ("POST", "/v1/table/{}/tags/update"),
-        ("POST", "/v1/table/{}/tags/version"),
-        ("POST", "/v1/table/{}/update"),
-        ("POST", "/v1/table/{}/update_field_metadata"),
-        ("POST", "/v1/table/{}/version/create"),
-        ("POST", "/v1/table/{}/version/delete"),
-        ("POST", "/v1/table/{}/version/describe"),
-        ("POST", "/v1/table/{}/version/list"),
-        ("POST", "/v1/transaction/{}/alter"),
-        ("POST", "/v1/transaction/{}/describe"),
-    }
-)
-
-
 #: The status every spec operation may answer besides the ones ``spec.yaml`` lists for it: 406, the spec's status for
 #: code 0, Unsupported (`lance_docs/ns_catalog/namespace/operations/errors.md`). The catalog answers it wherever a request
 #: names a field or feature the catalog does not serve (a `timeout`, `properties`, a `branch` a door cannot honour, a
@@ -93,9 +30,9 @@ SPEC_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(
 #: few operations; the published OpenAPI declares it on each (ADR 0020 row 11).
 UNSUPPORTED_STATUS: Final = "406"
 
-#: The error statuses the vendored spec lists for each of its operations, keyed as :data:`SPEC_ROUTES` is, which the
+#: The error statuses the vendored spec lists for each of its operations, keyed by (METHOD, structural path), which the
 #: published OpenAPI declares on each (``lakehouse.problems.ns_errors``) with the problem body every refusal carries, beside
-#: :data:`UNSUPPORTED_STATUS`. Re-derived and compared by ``test_spec_conformance.py``, as :data:`SPEC_ROUTES` is.
+#: :data:`UNSUPPORTED_STATUS`. Re-derived and compared by ``test_spec_conformance.py``.
 SPEC_ERROR_STATUSES: Final[dict[tuple[str, str], frozenset[str]]] = {
     ("POST", "/v1/materialized_view/{}/create"): frozenset({"400", "401", "403", "404", "409", "503", "5XX"}),
     ("POST", "/v1/materialized_view/{}/refresh"): frozenset({"400", "401", "403", "404", "503", "5XX"}),
@@ -152,6 +89,11 @@ SPEC_ERROR_STATUSES: Final[dict[tuple[str, str], frozenset[str]]] = {
     ("POST", "/v1/transaction/{}/alter"): frozenset({"400", "401", "403", "404", "409", "503", "5XX"}),
     ("POST", "/v1/transaction/{}/describe"): frozenset({"400", "401", "403", "404", "503", "5XX"}),
 }
+
+#: (METHOD, structural path) for every operation in the vendored spec: the keys of :data:`SPEC_ERROR_STATUSES`, so the
+#: spec's operations are listed once. Re-derived and compared by `test_spec_conformance.py`, so re-vendoring
+#: `lance_docs/ns_catalog/spec.yaml` reds the suite unless this moves with it.
+SPEC_ROUTES: Final[frozenset[tuple[str, str]]] = frozenset(SPEC_ERROR_STATUSES)
 
 
 def structural(path_format: str) -> str:

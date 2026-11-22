@@ -2850,57 +2850,7 @@
         "description": "One control-plane mutation notice, published AFTER the mutation it announces succeeds.\n\n`actor` is the person the emitting service authenticated (`user:<principal>`), or a service principal or None when a\nservice acts for itself. Several services publish on this topic (`control_signer_role` names the one that signs\neach action), so to a consumer the actor is a claim until the envelope's `rask_signature` proves who stamped it\n(`lakehouse.events.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned\nenvelope parse alike.",
         "properties": {
           "action": {
-            "enum": [
-              "grant_added",
-              "grant_revoked",
-              "project_created",
-              "project_deleted",
-              "project_protected",
-              "project_unprotected",
-              "warehouse_created",
-              "warehouse_activated",
-              "warehouse_deactivated",
-              "warehouse_deleted",
-              "warehouse_protected",
-              "warehouse_unprotected",
-              "policy_set",
-              "policy_deleted",
-              "namespace_created",
-              "namespace_dropped",
-              "table_created",
-              "table_dropped",
-              "table_renamed",
-              "table_registered",
-              "table_deregistered",
-              "table_declared",
-              "table_protected",
-              "table_unprotected",
-              "namespace_protected",
-              "namespace_unprotected",
-              "table_undropped",
-              "namespace_undropped",
-              "table_purged",
-              "namespace_purged",
-              "table_branch_created",
-              "table_branch_deleted",
-              "table_tag_created",
-              "table_tag_updated",
-              "table_tag_deleted",
-              "erasure_release_scheduled",
-              "principal_deleted",
-              "role_created",
-              "role_deleted",
-              "label_defined",
-              "label_deleted",
-              "table_labelled",
-              "table_unlabelled",
-              "namespace_labelled",
-              "namespace_unlabelled",
-              "table_contract_set",
-              "table_contract_deleted"
-            ],
-            "title": "Action",
-            "type": "string"
+            "$ref": "#/components/schemas/ControlAction"
           },
           "actor": {
             "anyOf": [
@@ -2949,19 +2899,7 @@
             "title": "Object Name"
           },
           "object_type": {
-            "enum": [
-              "project",
-              "grant",
-              "warehouse",
-              "policy",
-              "namespace",
-              "table",
-              "principal",
-              "role",
-              "label"
-            ],
-            "title": "Object Type",
-            "type": "string"
+            "$ref": "#/components/schemas/ControlObjectType"
           },
           "object_uuid": {
             "anyOf": [
@@ -3268,6 +3206,72 @@
         ],
         "title": "ContractResponse",
         "type": "object"
+      },
+      "ControlAction": {
+        "enum": [
+          "grant_added",
+          "grant_revoked",
+          "project_created",
+          "project_deleted",
+          "project_protected",
+          "project_unprotected",
+          "warehouse_created",
+          "warehouse_activated",
+          "warehouse_deactivated",
+          "warehouse_deleted",
+          "warehouse_protected",
+          "warehouse_unprotected",
+          "policy_set",
+          "policy_deleted",
+          "namespace_created",
+          "namespace_dropped",
+          "table_created",
+          "table_dropped",
+          "table_renamed",
+          "table_registered",
+          "table_deregistered",
+          "table_declared",
+          "table_protected",
+          "table_unprotected",
+          "namespace_protected",
+          "namespace_unprotected",
+          "table_undropped",
+          "namespace_undropped",
+          "table_purged",
+          "namespace_purged",
+          "table_branch_created",
+          "table_branch_deleted",
+          "table_tag_created",
+          "table_tag_updated",
+          "table_tag_deleted",
+          "erasure_release_scheduled",
+          "principal_deleted",
+          "role_created",
+          "role_deleted",
+          "label_defined",
+          "label_deleted",
+          "table_labelled",
+          "table_unlabelled",
+          "namespace_labelled",
+          "namespace_unlabelled",
+          "table_contract_set",
+          "table_contract_deleted"
+        ],
+        "type": "string"
+      },
+      "ControlObjectType": {
+        "enum": [
+          "project",
+          "grant",
+          "warehouse",
+          "policy",
+          "namespace",
+          "table",
+          "principal",
+          "role",
+          "label"
+        ],
+        "type": "string"
       },
       "CountTableRowsRequest": {
         "description": "CountTableRowsRequest",
@@ -8757,6 +8761,7 @@
         "type": "object"
       },
       "Liveness": {
+        "description": "The body of ``/livez``.",
         "properties": {
           "status": {
             "$ref": "#/components/schemas/LivenessStatus",
@@ -8767,6 +8772,7 @@
         "type": "object"
       },
       "LivenessStatus": {
+        "description": "What ``/livez`` answers: ``ok`` while the process lives, ``stalled`` once its own check fails.",
         "enum": [
           "ok",
           "stalled"
@@ -10728,6 +10734,7 @@
         "type": "object"
       },
       "Readiness": {
+        "description": "The body of ``/readyz``: the service's status and each component's verdict.",
         "properties": {
           "components": {
             "additionalProperties": {
@@ -10747,6 +10754,7 @@
         "type": "object"
       },
       "ReadinessStatus": {
+        "description": "Where a service stands in its lifecycle, as ``/readyz`` answers it.",
         "enum": [
           "starting",
           "ready",

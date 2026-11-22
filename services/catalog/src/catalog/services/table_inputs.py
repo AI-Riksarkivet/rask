@@ -36,7 +36,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 from catalog.core.run_context import RunInput
 from lakehouse import derived_tables
 from lakehouse.records import control_prefixes
-from lakehouse.records.record_store import list_records, record_key
+from lakehouse.records.record_store import list_every_record, record_key
 from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, create_json, read_json_at, replace_json
 from lakehouse.storage.options import StorageOptions
 
@@ -129,7 +129,7 @@ def every_record(control_root: str, storage_options: StorageOptions) -> list[Tab
         ValueError: A record is not a JSON object.
         OSError: The store could not be listed, or a record read.
     """
-    return [_parsed(raw, key=PREFIX) for raw in list_records(control_root, storage_options, PREFIX, event="table_inputs", strict=True)]
+    return [_parsed(raw, key=PREFIX) for raw in list_every_record(control_root, storage_options, PREFIX, event="table_inputs")]
 
 
 def as_edges(records: Sequence[TableInputs]) -> derived_tables.EdgeRows:

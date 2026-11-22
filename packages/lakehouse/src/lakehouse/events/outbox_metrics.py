@@ -1,4 +1,4 @@
-"""OpenTelemetry domain metrics for the #4 transactional lineage outbox (OTLP-direct to GreptimeDB).
+"""OpenTelemetry domain metrics for the #4 transactional outboxes, the lineage lane's and the control lane's (OTLP-direct to GreptimeDB).
 
 WHY (docs/adr/0003-p1-1-outbox-observability-the-four-signals.md P1.1, the four signals): the outbox is an external boundary (S3 + pub/sub) that
 carried ZERO of the four golden signals — a direct violation of
@@ -40,12 +40,12 @@ _meter = metrics.get_meter("lance.outbox")
 _staged = _meter.create_counter(
     "outbox.events.staged",
     unit="{event}",
-    description="Lineage events written to the object-store outbox BEFORE the publish (the durable copy).",
+    description="Events written to the object-store outbox BEFORE the publish (the durable copy).",
 )
 _published = _meter.create_counter(
     "outbox.events.published",
     unit="{event}",
-    description="Lineage events whose publish was acked (the staged copy is then dropped).",
+    description="Events whose publish was acked (the staged copy is then dropped).",
 )
 _publish_failed = _meter.create_counter(
     "outbox.publish.failed",
@@ -63,7 +63,7 @@ _stage_failed = _meter.create_counter(
         "Stages that failed, after which the event was published ANYWAY without a durable copy. This is "
         "the only path that delivers with the crash window open: `staged` never counts it, `publish_failed` "
         "is gated on having staged, and depth/oldest-age describe objects that exist. Non-zero means the "
-        "object store refused a write the lineage lane did not need in order to deliver."
+        "object store refused a write the lane did not need in order to deliver."
     ),
 )
 _drop_failed = _meter.create_counter(
@@ -79,7 +79,7 @@ _drop_failed = _meter.create_counter(
 _drained = _meter.create_counter(
     "outbox.events.drained",
     unit="{event}",
-    description="Staged survivors the relay tick re-ingested into the lineage feed.",
+    description="Staged survivors the relay tick delivered again.",
 )
 _stranded = _meter.create_counter(
     "outbox.events.stranded",
@@ -169,22 +169,27 @@ def create_series(lane: OutboxLane) -> None:
 
 
 def record_staged(lane: OutboxLane) -> None:
+    """Count one event staged in ``lane``'s outbox before its publish."""
     _staged.add(1, {_LANE: lane})
 
 
 def record_published(lane: OutboxLane) -> None:
+    """Count one staged event of ``lane`` whose publish was acked."""
     _published.add(1, {_LANE: lane})
 
 
 def record_publish_failed(lane: OutboxLane) -> None:
+    """Count one staged event of ``lane`` whose publish failed, left staged for the relay."""
     _publish_failed.add(1, {_LANE: lane})
 
 
 def record_stage_failed(lane: OutboxLane) -> None:
+    """Count one event of ``lane`` the store refused to stage, published without a durable copy."""
     _stage_failed.add(1, {_LANE: lane})
 
 
 def record_drop_failed(lane: OutboxLane) -> None:
+    """Count one published event of ``lane`` whose staged copy could not be deleted."""
     _drop_failed.add(1, {_LANE: lane})
 
 
@@ -208,6 +213,7 @@ def record_refused(lane: OutboxLane, count: int) -> None:
 
 
 def record_poison_dropped(lane: OutboxLane) -> None:
+    """Count one staged object of ``lane`` discarded so it cannot wedge the drain."""
     _poison_dropped.add(1, {_LANE: lane})
 
 

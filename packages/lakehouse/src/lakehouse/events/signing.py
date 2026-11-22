@@ -30,8 +30,8 @@ other member is a claim a hop could rewrite if it sat outside the bytes: `kid` a
 canonicalization, so an editable one is a downgrade surface, and `onBehalfOf` is the delegation that separates an
 honest service acting for a person from one stamping the wrong author.
 
-THE SIGNER MUST BE THE AUTHOR, or declare a delegation. A signature made with the bronze-to-silver key over a
-body stamped `rask_author.sub = "service-trainer"` is valid, and the event still records provenance as somebody
+THE SIGNER MUST BE THE AUTHOR, or declare a delegation. A signature made with one producer's key over a body
+stamped with another producer's `rask_author.sub` is valid, and the event still records provenance as somebody
 else; covering the author in the bytes does not stop that. So the identity that signed has to equal the author
 it stamped, or it has to declare `onBehalfOf` equal to that author and be one of the delegators the verifier is
 configured with. An event with no author binds to nothing and does not verify.
@@ -58,6 +58,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, ValidationError
 
+from lakehouse.events.lineage_events import AUTHOR_FACET, RASK_FACET_SCHEMAS
 from lakehouse.events.openlineage import PRODUCER
 
 
@@ -68,13 +69,10 @@ if TYPE_CHECKING:
 #: The facet's key. IN the event rather than beside it, so a transport change never moves the signature.
 SIGNATURE_FACET = "rask_signature"
 
-#: The facet naming the subject a producer stamped on its own event, read by :func:`author_of`. The same name as
-#: ``lakehouse.events.lineage_events.AUTHOR_FACET``, which every emitter writes: the two modules never import each other.
-AUTHOR_FACET = "rask_author"
-
-#: The schema the facet's `_schemaURL` names. The URL is inside the signed bytes, so it cannot be corrected
-#: after an event carries it: the git tag `facets-1.0.0` must exist before the first signed event is emitted.
-SIGNATURE_FACET_SCHEMA_URL = "https://raw.githubusercontent.com/AI-Riksarkivet/rask/facets-1.0.0/spec/facets/rask/RaskSignatureRunFacet.json"
+#: The schema the facet's `_schemaURL` names, under the tag every rask facet's schema is published at. The URL is inside
+#: the signed bytes, so it cannot be corrected after an event carries it: the tag must exist before the first signed
+#: event is emitted.
+SIGNATURE_FACET_SCHEMA_URL = f"{RASK_FACET_SCHEMAS}/RaskSignatureRunFacet.json"
 
 _SIGNATURE_ALG = "Ed25519"
 
@@ -710,7 +708,6 @@ def verify_control_signature(envelope: Mapping[str, Any], *, source: PublicKeySo
 
 
 __all__ = [
-    "AUTHOR_FACET",
     "MAX_NESTING",
     "SIGNATURE_FACET",
     "SIGNATURE_FACET_SCHEMA_URL",

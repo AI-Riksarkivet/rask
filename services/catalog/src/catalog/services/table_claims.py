@@ -304,17 +304,25 @@ class DoorTable:
         except commit_turns.CommitTurnBusyError as exc:
             raise TurnWaitRefusedError(f"commit refused: {exc}; retry it") from exc
 
-    async def wait_for_turn_in_loop(self, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
+    async def wait_for_turn_in_loop(self, ref: str | None, *, mine: str | None = None) -> bool:
         """:meth:`wait_for_turn` from the event loop, holding no request thread while it waits, so a door awaits it before
         it enters the thread pool ([[LH-259]]; measured 2026-10-31: 50 writers waiting in threads made a describe of another
         table wait 26.8 s); then whether the record keeps a turn under ``mine``, read from the store
-        (:meth:`commit_turns.TableTurns.keeps`). ``handed=False`` waits out only a catalog door's turn, never one handed to a
-        stock writer, which a stock writer's peers race.
+        (:meth:`commit_turns.TableTurns.keeps`).
 
         Raises:
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
         """
-        return await self._turns().wait_in_loop(ref, mine=mine, handed=handed)
+        return await self._turns().wait_in_loop(ref, mine=mine)
+
+    async def wait_for_doors_turn_in_loop(self, ref: str | None, *, mine: str | None = None) -> bool:
+        """:meth:`wait_for_turn_in_loop`, waiting out only a catalog door's turn, never one handed to a stock writer, which a
+        stock writer's peers race.
+
+        Raises:
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+        """
+        return await self._turns().wait_doors_in_loop(ref, mine=mine)
 
     @contextmanager
     def commit_turn(self, ref: str | None) -> Generator[str]:

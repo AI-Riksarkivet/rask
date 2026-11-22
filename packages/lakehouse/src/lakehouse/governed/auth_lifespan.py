@@ -11,8 +11,8 @@ THE POSTURES ARE PARAMETERS, and that is what makes the collapse honest rather t
 were not stylistic variants; they encoded three decisions, and a single-posture helper is why ten of
 them survived the first extraction:
 
-  * **`provision`** — whether this service may CREATE the store and PUBLISH the authorization model.
-    **False by default, and the default is the control.** `fga_provision.provision` writes a model the store
+  * **`model_role`** (`ModelRole`) — whether this service may CREATE the store and PUBLISH the authorization model.
+    **`READER` by default, and the default is the control.** `fga_provision.provision` writes a model the store
     does not hold and OpenFGA mints a new immutable id per write, so every publisher grows the history
     and an older image that publishes adds its older body; one publisher keeps that to the catalog.
     Every service checks against the model its own image carries (`fga_provision.resolve`, [[LH-201]]).
@@ -21,11 +21,11 @@ them survived the first extraction:
     no `maintainer` rung at all.
     Pinned by `packages/lakehouse/tests/test_attach_auth_postures.py::test_the_default_posture_RESOLVES_when_unpinned`,
     and the TID251 banned-api entry on `lakehouse.governed.fga_provision.provision` keeps the call at one site.
-    `maintenance` passes `False` explicitly: a data writer that mints a store and writes an
-    authorization model becomes the source of truth for everyone else's permissions. They resolve read-only and fail closed against an estate
-    that has not been bootstrapped. Reading which store exists is not authoring one, which is the
-    distinction `fga_provision.resolve` exists for.
-  * **`fatal`** — whether a failed build takes the pod down. `catalog` and `lineage`
+    A data writer that minted a store and wrote an authorization model would become the source of truth for everyone
+    else's permissions, so every service but the catalog resolves read-only and fails closed against an estate that
+    has not been bootstrapped. Reading which store exists is not authoring one, which is the distinction
+    `fga_provision.resolve` exists for.
+  * **`on_failure`** (`BootFailure`) — whether a failed build takes the pod down. `catalog` and `lineage`
     wrap neither construction in a `try` and therefore crash on boot; that is deliberate and it is
     the only signal an operator watches. Defaulting them into the swallowing posture would convert a
     CrashLoopBackOff into a fleet of pods serving 503, which looks healthy from every angle.
@@ -38,14 +38,15 @@ WHAT IT GUARANTEES otherwise, and both halves are load-bearing:
   * **Nothing is built at import.** `OIDCVerifier` fetches discovery, so constructing one at module
     scope would put a network round-trip on the import path of every service and every test.
 
-Both flags default OFF, so a service that calls this with an unconfigured settings object behaves
-exactly as it did before it had a door.
+Both postures default to the cautious value (`ModelRole.READER`, `BootFailure.SERVE_UNAVAILABLE`): a caller that names
+neither publishes no model, and a build of its that fails leaves the governed doors answering 503 rather than open.
 """
 
 from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 from starlette.concurrency import run_in_threadpool
@@ -63,22 +64,40 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
+class ModelRole(StrEnum):
+    """What a service does with the authorization model: publish the one its image carries, or resolve it."""
+
+    #: Create the store when none exists and write the model this image carries: the catalog, and nothing else.
+    PUBLISHER = "publisher"
+    #: Find the store the estate uses and the model this image carries, creating neither.
+    READER = "reader"
+
+
+class BootFailure(StrEnum):
+    """What a failure to build a verifier or the authorization client does to the service's boot."""
+
+    #: The error ends the boot, so the pod crash-loops where an operator watches.
+    CRASH = "crash"
+    #: The failure is logged, the attribute is left unset, and the governed doors answer 503.
+    SERVE_UNAVAILABLE = "serve_unavailable"
+
+
 async def build_fga_client(
     settings: FgaSettings,
     *,
     service: str,
-    provision: bool = False,
-    fatal: bool = False,
+    model_role: ModelRole = ModelRole.READER,
+    on_failure: BootFailure = BootFailure.SERVE_UNAVAILABLE,
 ) -> OpenFgaClient | None:
     """The FGA client for this service, or `None` when it is off or could not be built.
 
     It returns the client rather than assigning it, because one caller builds its client outside a FastAPI
     lifespan: the catalog's warehouse-grant backfill holds the client for its own run and closes it.
 
-    `provision=False` takes the read-only half: `fga_provision.resolve` finds the store the estate already uses and the model
+    `ModelRole.READER` takes the read-only half: `fga_provision.resolve` finds the store the estate already uses and the model
     this image carries, and can never create either. When either is still absent at its deadline it raises
-    `fga_provision.OpenFgaModelAbsentError`: a non-fatal caller logs `openfga_unpinned` with the cause, builds no client and its
-    gate answers 503; a fatal one lets the error end its boot, because a fatal caller reads a missing client as
+    `fga_provision.OpenFgaModelAbsentError`: a `SERVE_UNAVAILABLE` caller logs `openfga_unpinned` with the cause, builds no
+    client and its gate answers 503; a `CRASH` caller lets the error end its boot, because it reads a missing client as
     "authorization off".
 
     Disposal belongs to the caller's lifespan: `lakehouse.governed.fga_provision.dispose`.
@@ -91,8 +110,8 @@ async def build_fga_client(
         # THE MODEL IS NEVER A SETTING: every service checks against the model its own image carries, found in the store
         # by its body ([[LH-201]]), so a `model.fga` edit takes effect with the image that ships it. A store id may be
         # named (a per-cluster id, never a committed default); the model's id is read from that store.
-        if provision:
-            store_id, model_id = await fga_provision.provision(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)  # noqa: TID251
+        if model_role is ModelRole.PUBLISHER:
+            store_id, model_id = await fga_provision.provision(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)  # noqa: TID251 — the estate's one publisher of the model
             # Structured, not a printf: `openfga_provisioned` is a documented INFO audit-tier event
             # (`lakehouse.process.log_handler`), and its fields are what the audit reads.
             log.info("openfga_provisioned", extra={"service": service, "store_id": store_id, "model_id": model_id})
@@ -105,18 +124,18 @@ async def build_fga_client(
         log.info("%s: FGA client ready (%s)", service, settings.fga_api_url)
     except fga_provision.OpenFgaModelAbsentError as exc:
         # Fails CLOSED, and never by provisioning: the service that noticed must not be the one that decides
-        # what everyone is allowed to do. A fatal caller lets it end the boot rather than serve with no checker
+        # what everyone is allowed to do. A `CRASH` caller lets it end the boot rather than serve with no checker
         # behind its doors.
-        if fatal:
+        if on_failure is BootFailure.CRASH:
             raise
         log.warning("openfga_unpinned", extra={"service": service, "reason": f"{exc}; governed routes report unavailable"})
         return None
     except Exception as exc:
-        # A refused credential is raised whatever `fatal` says: the pod must not report Ready with every
+        # A refused credential is raised whatever `on_failure` says: the pod must not report Ready with every
         # governed door failing closed ([[XC-077]], `fga_provision.OpenFgaCredentialRefusedError`).
         if fga_provision.credential_refused(exc) and not isinstance(exc, fga_provision.OpenFgaCredentialRefusedError):
             raise fga_provision.OpenFgaCredentialRefusedError(f"{service}: OpenFGA refused this pod's credential") from exc
-        if fatal or fga_provision.credential_refused(exc):
+        if on_failure is BootFailure.CRASH or fga_provision.credential_refused(exc):
             raise
         log.exception("openfga_client_failed", extra={"service": service})
         return None
@@ -129,8 +148,8 @@ async def attach_auth(
     *,
     service: str,
     loops: Supervisor,
-    provision: bool = False,
-    fatal: bool = False,
+    model_role: ModelRole = ModelRole.READER,
+    on_failure: BootFailure = BootFailure.SERVE_UNAVAILABLE,
 ) -> None:
     """Put `app.state.oidc`, `app.state.sa_oidc`, `app.state.fga` and `app.state.decider` in place when configured, and None otherwise.
 
@@ -142,7 +161,7 @@ async def attach_auth(
 
     Call from a lifespan, before yielding. `service` names the caller in the log lines, which is the
     only thing that differed between the copies this replaces. See the module docstring for what
-    `provision` and `fatal` select and which services need which.
+    `model_role` and `on_failure` select and which services need which.
 
     All three start at None, so the doors read this lifespan's settings and nothing an earlier lifespan of the same
     app object built: a producer door reads a lingering `sa_oidc` as "a verifier is configured" and refuses the
@@ -158,21 +177,21 @@ async def attach_auth(
         try:
             await _attach_person_verifier(app, settings, providers=providers, service=service, loops=loops)
         except Exception:
-            if fatal:
+            if on_failure is BootFailure.CRASH:
                 raise
             log.exception("%s: OIDC verifier failed to build — governed routes will 503", service)
 
     try:
         await _attach_service_account_verifier(app, settings, service=service, loops=loops)
     except Exception:
-        if fatal:
+        if on_failure is BootFailure.CRASH:
             raise
         log.exception("%s: service-account verifier failed to build — service callers will 503", service)
 
     app.state.decider = build_catalog_decider(settings, service=service)
     if app.state.decider is not None:
         return
-    client = await build_fga_client(settings, service=service, provision=provision, fatal=fatal)
+    client = await build_fga_client(settings, service=service, model_role=model_role, on_failure=on_failure)
     if client is not None:
         from lakehouse.governed.decider import OpenFgaDecider
 
@@ -273,6 +292,8 @@ def build_catalog_decider(settings: FgaSettings, *, service: str) -> AccessDecid
 
 
 __all__ = [
+    "BootFailure",
+    "ModelRole",
     "attach_auth",
     "build_catalog_decider",
     "build_fga_client",

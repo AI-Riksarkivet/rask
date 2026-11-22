@@ -28,7 +28,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed import fga_provision
 from lakehouse.governed import oidc as oidc_mod
-from lakehouse.governed.auth_lifespan import attach_auth, build_fga_client
+from lakehouse.governed.auth_lifespan import BootFailure, ModelRole, attach_auth, build_fga_client
 from lakehouse.governed.settings import GovernedAuthSettings
 from lakehouse.process.supervision import Supervisor
 
@@ -123,9 +123,7 @@ async def test_the_default_posture_RESOLVES_when_unpinned(fga_calls: _Recorder) 
 
 
 @pytest.mark.asyncio
-async def test_provision_False_with_no_store_leaves_the_door_SHUT(
-    monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder, caplog: pytest.LogCaptureFixture
-) -> None:
+async def test_a_reader_with_no_store_leaves_the_door_SHUT(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder, caplog: pytest.LogCaptureFixture) -> None:
     """An unbootstrapped estate must not be bootstrapped BY the reader. No client, so the gate 503s, and
     the warning names what `fga_provision.resolve` found missing."""
 
@@ -137,7 +135,7 @@ async def test_provision_False_with_no_store_leaves_the_door_SHUT(
     app = FastAPI()
     with caplog.at_level(logging.WARNING):
         async with Supervisor() as loops:
-            await attach_auth(app, _settings(), service="t", loops=loops, provision=False)
+            await attach_auth(app, _settings(), service="t", loops=loops, model_role=ModelRole.READER)
 
     assert getattr(app.state, "fga", None) is None
     assert not any(c.startswith("make_client") for c in fga_calls.calls)
@@ -147,17 +145,17 @@ async def test_provision_False_with_no_store_leaves_the_door_SHUT(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("provision", [False, True], ids=["resolve", "provision"])
-async def test_a_pinned_store_reaches_the_lookup(fga_calls: _Recorder, provision: bool) -> None:
+@pytest.mark.parametrize(("model_role", "lookup"), [(ModelRole.READER, "resolve"), (ModelRole.PUBLISHER, "provision")], ids=["resolve", "provision"])
+async def test_a_pinned_store_reaches_the_lookup(fga_calls: _Recorder, model_role: ModelRole, lookup: str) -> None:
     """The model hook writes into a pinned store; a service that looked its store up by
     name instead would check against a different one ([[LH-201]])."""
-    await build_fga_client(_settings(fga_store_id="01PINNED"), service="t", provision=provision)
+    await build_fga_client(_settings(fga_store_id="01PINNED"), service="t", model_role=model_role)
 
-    assert fga_calls.kwargs["provision" if provision else "resolve"].get("store_id") == "01PINNED"
+    assert fga_calls.kwargs[lookup].get("store_id") == "01PINNED"
 
 
 @pytest.mark.asyncio
-async def test_fatal_True_refuses_to_run_without_the_model_its_image_carries(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
+async def test_a_crashing_boot_refuses_to_run_without_the_model_its_image_carries(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
     """A caller that reads a missing client as "authorization off" comes up open, so a fatal one (the
     catalog's cascade backfill) whose resolve finds no store, or no model its image carries, must crash
     instead ([[LH-201]])."""
@@ -169,12 +167,12 @@ async def test_fatal_True_refuses_to_run_without_the_model_its_image_carries(mon
     monkeypatch.setattr(fga_provision, "resolve", resolve)
 
     with pytest.raises(fga_provision.OpenFgaModelAbsentError, match=r"holds no model carrying this image's model\.json"):
-        await build_fga_client(_settings(), service="warehouse-grant-backfill", provision=False, fatal=True)
+        await build_fga_client(_settings(), service="warehouse-grant-backfill", on_failure=BootFailure.CRASH)
     assert not any(c.startswith("make_client") for c in fga_calls.calls)
 
 
 @pytest.mark.asyncio
-async def test_fatal_True_reraises_a_failed_fga_build(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
+async def test_a_crashing_boot_reraises_a_failed_fga_build(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
     """`catalog` and `lineage` crash on boot. A refactor that turns that
     into a logged line converts a CrashLoopBackOff an operator watches into a 503 nobody does."""
 
@@ -182,16 +180,16 @@ async def test_fatal_True_reraises_a_failed_fga_build(monkeypatch: pytest.Monkey
         raise RuntimeError("openfga unreachable")
 
     # `resolve`, not `provision`: the default posture is read-only, so that is the call this failure
-    # has to arrive on for the assertion to be about `fatal` rather than about which half was patched.
+    # has to arrive on for the assertion to be about `on_failure` rather than about which half was patched.
     monkeypatch.setattr(fga_provision, "resolve", boom)
     app = FastAPI()
     with pytest.raises(RuntimeError, match="openfga unreachable"):
         async with Supervisor() as loops:
-            await attach_auth(app, _settings(), service="t", loops=loops, fatal=True)
+            await attach_auth(app, _settings(), service="t", loops=loops, on_failure=BootFailure.CRASH)
 
 
 @pytest.mark.asyncio
-async def test_fatal_True_reraises_a_failed_verifier_build(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
+async def test_a_crashing_boot_reraises_a_failed_verifier_build(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
     """The OIDC half of the same posture — those services wrap neither construction in a `try`."""
 
     def boom(*_a: object, **_k: object) -> object:
@@ -201,7 +199,7 @@ async def test_fatal_True_reraises_a_failed_verifier_build(monkeypatch: pytest.M
     app = FastAPI()
     with pytest.raises(RuntimeError, match="discovery refused"):
         async with Supervisor() as loops:
-            await attach_auth(app, _settings(fga_enabled=False), service="t", loops=loops, fatal=True)
+            await attach_auth(app, _settings(fga_enabled=False), service="t", loops=loops, on_failure=BootFailure.CRASH)
 
 
 @pytest.mark.asyncio
@@ -239,7 +237,7 @@ async def test_provisioning_emits_the_structured_audit_event(caplog: pytest.LogC
     import logging
 
     with caplog.at_level(logging.INFO):
-        await build_fga_client(_settings(), service="catalog", provision=True)
+        await build_fga_client(_settings(), service="catalog", model_role=ModelRole.PUBLISHER)
     rec = next((r for r in caplog.records if r.getMessage() == "openfga_provisioned"), None)
     assert rec is not None, "openfga_provisioned is no longer emitted — obs.py raises it to OTLP as a severity-9 audit event"
     assert getattr(rec, "store_id", None) and getattr(rec, "model_id", None), "the event lost its store_id/model_id extra — a printf string would"
@@ -249,7 +247,7 @@ async def test_provisioning_emits_the_structured_audit_event(caplog: pytest.LogC
 @pytest.mark.asyncio
 async def test_resolve_by_name_emits_the_structured_diagnostic(caplog: pytest.LogCaptureFixture, fga_calls: _Recorder) -> None:
     with caplog.at_level(logging.INFO):
-        await build_fga_client(_settings(), service="maintenance", provision=False)
+        await build_fga_client(_settings(), service="maintenance", model_role=ModelRole.READER)
     rec = next((r for r in caplog.records if r.getMessage() == "openfga_resolved_by_name"), None)
     assert rec is not None, "the unpinned resolve-by-name diagnostic (was maintenance's reconcile_fga_resolved_by_name) is gone"
     assert getattr(rec, "store_id", None) and getattr(rec, "model_id", None), "the diagnostic lost its store_id/model_id extra"

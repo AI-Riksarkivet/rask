@@ -18,7 +18,7 @@ Every non-2xx object-store failure arrives as one flattened string carrying the 
 So `"not found"` matches the STATUS LINE of a 404 raised for any reason at all, and `"does not exist"`
 matches `NoSuchBucket`'s body verbatim. Neither says anything about whether the table was written —
 they say the bucket is not there, which is a WAREHOUSE fault and is exactly the estate's live
-condition: § Q8-15 measured 79 datasets registered into `lakehouse`/`landing`, buckets that do not
+condition: 79 datasets were measured registered into two buckets that do not
 exist. Under the wide vocabulary every one of them reads as a table nobody ever wrote.
 
 TEXT, NOT TYPES, and that is forced the same way `commit_verdict` is forced: the object-store layer

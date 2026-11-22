@@ -47,13 +47,13 @@ def _run(
     the endpoint asked about, so a test can assert on the QUESTIONS as well as the answers."""
     asked: list[tuple[str, str, str]] = []
 
-    async def fake_check(_client: object, *, user: str, relation: str, obj: str, **_kw: Any) -> bool:
+    async def fake_check(_client: object, *, fga_user: str, relation: str, obj: str, **_kw: Any) -> bool:
         if outage:
             raise ServiceUnavailableError("fga down")
-        asked.append((user, relation, obj))
+        asked.append((fga_user, relation, obj))
         return relation in (allow or set())
 
-    monkeypatch.setattr(access.fga_reads, "check", fake_check)
+    monkeypatch.setattr(access.fga_reads, "check_fga_user", fake_check)
     client = cast("OpenFgaClient", object())  # injected now (catalog-api-09); the fga.* module functions are faked below
     settings = governed_settings() if fga_enabled else catalog_settings()
     token = (

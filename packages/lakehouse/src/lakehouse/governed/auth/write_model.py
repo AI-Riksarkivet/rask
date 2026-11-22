@@ -20,6 +20,7 @@ import logging
 import time
 import urllib.error
 import urllib.parse
+import urllib.request
 from importlib.resources import files
 from typing import Any, Final
 
@@ -59,18 +60,15 @@ def fga_headers(token_file: str | None) -> dict[str, str]:
 
 
 def _call(api: str, path: str, body: dict[str, Any] | None = None, *, token_file: str | None, timeout: float = 30.0) -> dict[str, Any]:
-    import json as _json
-    import urllib.request
-
-    data = _json.dumps(body).encode() if body is not None else None
+    data = json.dumps(body).encode() if body is not None else None
     headers = {"content-type": "application/json"} if data else {}
     headers |= fga_headers(token_file)
     request = urllib.request.Request(f"{api.rstrip('/')}{path}", data=data, headers=headers)  # noqa: S310 — in-cluster URL from env
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 — the in-cluster URL above
         return json.loads(response.read() or b"{}")
 
 
-def history(api: str, store: str, desired: dict[str, Any], *, token_file: str | None) -> ModelHistory:
+def history(api: str, store: str, desired: dict[str, Any], *, token_file: str | None) -> ModelHistory[dict[str, Any]]:
     """The store's models read against ``desired``, newest first and stopped at the first that carries it.
 
     The same rule the catalog's boot and every service's resolve apply (``fga_provision.ModelHistory``), over
@@ -78,7 +76,7 @@ def history(api: str, store: str, desired: dict[str, Any], *, token_file: str | 
     because absent is what makes this hook write.
     """
     wanted = canonical_model(desired)
-    read, token = ModelHistory(), ""
+    read, token = ModelHistory[dict[str, Any]](), ""
     for _ in range(MODEL_MAX_PAGES):
         query = f"page_size={MODEL_PAGE_SIZE}" + (f"&continuation_token={urllib.parse.quote(token)}" if token else "")
         page = _call(api, f"/stores/{store}/authorization-models?{query}", token_file=token_file)

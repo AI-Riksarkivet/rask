@@ -20,7 +20,9 @@ from openfga_sdk import ClientConfiguration, OpenFgaClient
 from openfga_sdk.configuration import RetryParams
 from openfga_sdk.credentials import CredentialConfiguration, Credentials
 from openfga_sdk.exceptions import ForbiddenException, UnauthorizedException
+from openfga_sdk.models.authorization_model import AuthorizationModel
 from openfga_sdk.models.create_store_request import CreateStoreRequest
+from openfga_sdk.models.store import Store
 from openfga_sdk.models.write_authorization_model_request import WriteAuthorizationModelRequest
 from pydantic import BaseModel, ConfigDict
 
@@ -195,7 +197,7 @@ class OpenFgaCredentialRefusedError(ServiceUnavailableError):
     """OpenFGA answered 401 or 403 to this pod's credential ([[XC-077]]).
 
     Not an outage: no retry or wait mends a missing, wrong or unlisted token, so a booting service raises it
-    whatever its `fatal` posture (`auth_lifespan.build_fga_client`). A pod that kept serving with no client
+    whatever its `on_failure` posture (`auth_lifespan.build_fga_client`). A pod that kept serving with no client
     would stay Ready while every governed door failed closed, and a rollout would report green.
     """
 
@@ -205,8 +207,8 @@ class OpenFgaModelAbsentError(ServiceUnavailableError):
 
     Its message names what the last look found: no store by the name, a store holding no model whose canonical body is
     this image's ``model.json``, or OpenFGA not answering (chained to the transport's error). A booting service fails
-    closed on it (`auth_lifespan.build_fga_client`): a non-fatal one serves with every governed door unavailable, and a
-    fatal one does not start.
+    closed on it (`auth_lifespan.build_fga_client`): a `SERVE_UNAVAILABLE` one serves with every governed door
+    unavailable, and a `CRASH` one does not start.
     """
 
 
@@ -270,7 +272,7 @@ def client_configuration(
     )
 
 
-def newest_store(stores: Iterable[Any], name: str) -> Any | None:
+def newest_store[S: (Store, dict[str, Any])](stores: Iterable[S], name: str) -> S | None:
     """The newest store named ``name``: the rule every reader and writer of the estate's model shares.
 
     Its callers ask OpenFGA for the stores of that name (`ListStores`'s ``name``, an exact match): a listing of every
@@ -281,7 +283,7 @@ def newest_store(stores: Iterable[Any], name: str) -> Any | None:
     return max(named, key=lambda store: _field(store, "created_at")) if named else None
 
 
-class ModelHistory(BaseModel):
+class ModelHistory[M: (AuthorizationModel, dict[str, Any])](BaseModel):
     """A store's models read against one body: its newest model, and the newest one carrying that body.
 
     Nothing treats the store's newest model as authoritative ([[LH-201]]): every service and the hook
@@ -290,16 +292,16 @@ class ModelHistory(BaseModel):
     body again would only grow the history. ``carrying`` absent is a model the store has never held.
     """
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
-    newest: Any = None
-    carrying: Any = None
+    newest: M | None = None
+    carrying: M | None = None
 
     @property
     def held_below_newest(self) -> bool:
         return self.carrying is not None and str(_field(self.carrying, "id")) != str(_field(self.newest, "id"))
 
-    def read(self, models: Iterable[Any], wanted: str) -> Self:
+    def read(self, models: Iterable[M], wanted: str) -> Self:
         """This history extended by the next page, newest first; ``wanted`` is the body's canonical form."""
         newest, carrying = self.newest, self.carrying
         for model in models:
@@ -315,7 +317,7 @@ async def _model_history(
     *,
     known_newest: str | None = None,
     retry: RetryPolicy = DEFAULT_RETRY,
-) -> ModelHistory:
+) -> ModelHistory[AuthorizationModel]:
     """The store's models read against ``desired``, paged newest first and stopped at the first match.
 
     ``known_newest`` is the newest id an earlier read already scanned past: models are listed newest first
@@ -325,8 +327,8 @@ async def _model_history(
     """
     wanted = canonical_model(desired)
 
-    async def _do_read() -> ModelHistory:
-        history, token = ModelHistory(), ""
+    async def _do_read() -> ModelHistory[AuthorizationModel]:
+        history, token = ModelHistory[AuthorizationModel](), ""
         for _ in range(MODEL_MAX_PAGES):
             options: dict[str, int | str | dict[str, int | str]] = {"page_size": MODEL_PAGE_SIZE}
             if token:
@@ -381,7 +383,7 @@ async def provision(
     async with OpenFgaClient(client_configuration(api_url, token_file=token_file, store_id=store_id)) as client:
         # A store minted moments ago holds no model, so it never pays the read, which is also what keeps
         # a first boot from depending on a model that cannot exist yet.
-        history = ModelHistory() if store_is_new else await _model_history(client, model, retry=retry)
+        history = ModelHistory[AuthorizationModel]() if store_is_new else await _model_history(client, model, retry=retry)
         if history.carrying is not None:
             # THE STORE ALREADY HOLDS THIS IMAGE'S MODEL, so nothing is written ([[LH-201]]). Every
             # `write_authorization_model` mints an immutable version, so rewriting a held body grows the
@@ -389,7 +391,7 @@ async def provision(
             # it is still this image's model: every consumer checks against its own, so the newest is no
             # one's rules and re-promoting a body would only grow the history.
             carrying_id = str(history.carrying.id)
-            if history.held_below_newest:
+            if history.held_below_newest and history.newest is not None:
                 log.info("openfga_model_held_below_newest", extra={"store_id": store_id, "model_id": carrying_id, "newest_model_id": str(history.newest.id)})
             else:
                 log.info("openfga_model_unchanged", extra={"store_id": store_id, "model_id": carrying_id})

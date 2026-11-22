@@ -20,7 +20,7 @@ no version at its target failed its commit as of unknown outcome.
 
 A HANDED TURN HOLDS THE CATALOG'S OWN WRITERS, NOT A STOCK WRITER'S PEERS. The catalog's doors and its ``/insert`` commit
 in-process, far faster than a stock writer's round trip, so they wait out a turn handed to one; other stock writers race it
-as Lance's own backoff spreads them (``handed`` on :meth:`TableTurns.wait`). Measured 2026-10-31 with 16 stock writers on
+as Lance's own backoff spreads them (:meth:`TableTurns.wait_doors_in_loop`). Measured 2026-10-31 with 16 stock writers on
 one table at the estate's round trip: waiting on each other's handed turns they landed 4 of 32 appends, racing them 10 of
 32, as many as with no turn. A handed turn that lapses unused simply lapses, as a Kubernetes Lease or an etcd lease does,
 and nothing is held against the identity of its writer, which a pipeline's workers share.
@@ -172,10 +172,15 @@ def _kept(record: dict[str, object] | None, now: datetime) -> list[Turn]:
     return [turn for turn in CommitTurns.model_validate(record).turns if turn.expires_at > now]
 
 
-def _holds(turns: list[Turn], ref: str | None, *, mine: str | None, handed: bool) -> bool:
-    """Whether a commit but the one holding ``mine`` holds ``ref``'s turn among ``turns``, counting a turn handed to a stock
-    writer only with ``handed`` (a stock writer's peers race it)."""
-    return any(turn.ref == ref and turn.token != mine and (handed or turn.handed_to is None) for turn in turns)
+def _held(turns: list[Turn], ref: str | None, mine: str | None, /) -> bool:
+    """Whether a commit but the one holding ``mine`` holds ``ref``'s turn among ``turns``."""
+    return any(turn.ref == ref and turn.token != mine for turn in turns)
+
+
+def _held_by_a_door(turns: list[Turn], ref: str | None, mine: str | None, /) -> bool:
+    """Whether a catalog door's commit but the one holding ``mine`` holds ``ref``'s turn among ``turns``: a turn handed to a
+    stock writer does not count, since a stock writer's peers race it."""
+    return _held([turn for turn in turns if turn.handed_to is None], ref, mine)
 
 
 class _SharedRead(BaseModel):
@@ -321,15 +326,14 @@ class TableTurns(BaseModel):
     def _live_turns(self) -> list[Turn]:
         return self._read()[1]
 
-    def poll(self, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
+    def poll(self, ref: str | None, *, mine: str | None = None) -> bool:
         """Whether a commit but the one holding ``mine`` holds ``ref``'s turn now, as the table's shared read finds it
-        (:data:`_SHARED_READS`), counting a turn handed to a stock writer only with ``handed`` (a stock writer's peers race
-        it).
+        (:data:`_SHARED_READS`).
 
         Raises:
             botocore.exceptions.ClientError: The store refused a read.
         """
-        return _holds(_SHARED_READS.get(self._shared, self._live_turns), ref, mine=mine, handed=handed)
+        return _held(_SHARED_READS.get(self._shared, self._live_turns), ref, mine)
 
     def keeps(self, token: str) -> bool:
         """Whether the record keeps a live turn under ``token`` now, read from the store and never from the shared read: a
@@ -341,7 +345,7 @@ class TableTurns(BaseModel):
         """
         return any(turn.token == token for turn in self._live_turns())
 
-    def wait(self, ref: str | None, *, mine: str | None = None, until: float | None = None, handed: bool = True) -> None:
+    def wait(self, ref: str | None, *, mine: str | None = None, until: float | None = None) -> None:
         """Return once no commit but the one holding ``mine`` holds ``ref``'s turn (:meth:`poll`), or at ``until`` (a
         ``time.monotonic`` deadline, :data:`HOLD` from now when ``None``), whichever comes first: a waiter outlasts no
         single hold, however many commits take the turn one after another. The calling thread sleeps between reads in one
@@ -354,7 +358,7 @@ class TableTurns(BaseModel):
         deadline = time.monotonic() + HOLD.total_seconds() if until is None else until
         attempt, seated = 0, False
         try:
-            while self.poll(ref, mine=mine, handed=handed):
+            while self.poll(ref, mine=mine):
                 left = deadline - time.monotonic()
                 if left <= 0:
                     log.warning("commit_turn_wait_outlasted", extra={"table_uuid": self.table_uuid, "ref": ref})
@@ -368,7 +372,7 @@ class TableTurns(BaseModel):
             if seated:
                 _THREAD_WAITER_SEATS.release()
 
-    async def wait_in_loop(self, ref: str | None, *, mine: str | None = None, handed: bool = True) -> bool:
+    async def wait_in_loop(self, ref: str | None, *, mine: str | None = None) -> bool:
         """:meth:`wait` from the event loop, holding no request thread: a fresh shared answer is taken in the loop itself
         (:meth:`_SharedReads.peek`, no I/O and no lock); without one the waiter takes a thread of the turn reads' own set
         (:data:`_TURN_READS`) until the record is read, by its own read or by the one in flight it queues behind; and the
@@ -382,6 +386,18 @@ class TableTurns(BaseModel):
         Raises:
             botocore.exceptions.ClientError: The store refused a read.
         """
+        return await self._wait_out_in_loop(ref, mine=mine, held=_held)
+
+    async def wait_doors_in_loop(self, ref: str | None, *, mine: str | None = None) -> bool:
+        """:meth:`wait_in_loop`, waiting out only a catalog door's turn, never one handed to a stock writer, which a stock
+        writer's peers race.
+
+        Raises:
+            botocore.exceptions.ClientError: The store refused a read.
+        """
+        return await self._wait_out_in_loop(ref, mine=mine, held=_held_by_a_door)
+
+    async def _wait_out_in_loop(self, ref: str | None, *, mine: str | None, held: Callable[[list[Turn], str | None, str | None], bool]) -> bool:
         read = self._shared
         deadline = time.monotonic() + HOLD.total_seconds()
         attempt = 0
@@ -389,7 +405,7 @@ class TableTurns(BaseModel):
             turns = _SHARED_READS.peek(read)
             if turns is None:
                 turns = await _TURN_READS.run(_SHARED_READS.get, read, self._live_turns)
-            if not _holds(turns, ref, mine=mine, handed=handed):
+            if not held(turns, ref, mine):
                 break
             left = deadline - time.monotonic()
             if left <= 0:

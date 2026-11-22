@@ -64,7 +64,7 @@ def _get(path: str) -> dict[str, Any]:
 
 
 @pytest.fixture(scope="module")
-def held() -> tuple[str, ModelHistory]:
+def held() -> tuple[str, ModelHistory[dict[str, Any]]]:
     """The store the estate uses, and its history read against this checkout's model."""
     if not FGA:
         pytest.skip("set LANCE_E2E_FGA (a deployed OpenFGA) — scripts/e2e_live.sh discovers it")
@@ -77,7 +77,7 @@ def held() -> tuple[str, ModelHistory]:
     return store, history(FGA, store, model_document(), token_file=FGA_TOKEN_FILE)
 
 
-def _absent(store: str, read: ModelHistory) -> str:
+def _absent(store: str, read: ModelHistory[dict[str, Any]]) -> str:
     """What a red run tells an operator: the store's newest model against this checkout's, by name."""
     if read.newest is None:
         return f"store {store} holds no authorization model at all: neither the `openfga-model` hook nor the catalog has written one"
@@ -96,7 +96,7 @@ def _absent(store: str, read: ModelHistory) -> str:
     )
 
 
-def test_the_store_holds_this_checkouts_model(held: tuple[str, ModelHistory]) -> None:
+def test_the_store_holds_this_checkouts_model(held: tuple[str, ModelHistory[dict[str, Any]]]) -> None:
     store, read = held
 
     assert read.carrying is not None, _absent(store, read)

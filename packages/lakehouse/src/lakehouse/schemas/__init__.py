@@ -1,1 +1,1 @@
-"""Pydantic response/request models shared across feature packages."""
+"""Pydantic response models every lakehouse service answers with: the probe answers (``health``)."""

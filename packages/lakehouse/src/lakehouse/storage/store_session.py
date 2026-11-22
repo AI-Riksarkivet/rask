@@ -165,6 +165,7 @@ class SessionCache:
         return held is None or self._clock() >= (held.issued_at + held.expires_at) / 2
 
     def forget(self, identity: WebIdentity) -> None:
+        """Drop the session ``identity`` holds; a signer that asks for it next finds none (:meth:`peek`)."""
         with self._lock:
             self._held = {held: session for held, session in self._held.items() if held != identity}
 

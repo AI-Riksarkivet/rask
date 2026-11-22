@@ -214,7 +214,7 @@ async def refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: ob
         # userset path — the common case costs nothing.
         userset_object, _, userset_relation = resolved.partition("#")
         try:
-            inside = await fga_reads.check(client, user=subject, relation=userset_relation, obj=userset_object, qualify=False)
+            inside = await fga_reads.check_fga_user(client, fga_user=subject, relation=userset_relation, obj=userset_object)
         except ServiceUnavailableError:  # authz layer down mid-decision — fail closed, like every other door
             audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, relation="can_grant_self", subject=user, resource=obj, reason="authz_unavailable")
             raise
@@ -222,7 +222,7 @@ async def refuse_self_elevation(client: OpenFgaClient, *, user: str, grantee: ob
             return
     # The caller is the grantee. Allowed only when it changes nothing they do not already have.
     try:
-        already = await fga_reads.check(client, user=subject, relation=_holding_relation(obj.partition(":")[0], relation), obj=obj, qualify=False)
+        already = await fga_reads.check_fga_user(client, fga_user=subject, relation=_holding_relation(obj.partition(":")[0], relation), obj=obj)
     except ServiceUnavailableError:
         audit(AuditAction.AUTHZ, AuditOutcome.FAILURE, relation="can_grant_self", subject=user, resource=obj, reason="authz_unavailable")
         raise

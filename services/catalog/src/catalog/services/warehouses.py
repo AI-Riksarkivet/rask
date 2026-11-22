@@ -55,8 +55,6 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 _REGISTRY_PREFIX = control_prefixes.WAREHOUSES
-#: Where a bucket's owning project is recorded, write-once: an immutable claim the store arbitrates
-_BUCKET_CLAIMS_PREFIX = f"{_REGISTRY_PREFIX}/bucket-claims"
 
 
 #: The record fields holding a warehouse's delete profile, as strings like every record field.
@@ -381,7 +379,7 @@ def bucket_claim(control_root: str, storage_options: StorageOptions, *, bucket: 
     ``None`` rather than an exception so a caller can distinguish "unclaimed" from "claimed by someone"
     without control flow, the same shape :func:`get_warehouse` answers with.
     """
-    key = f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json"
+    key = f"{control_prefixes.BUCKET_CLAIMS}/{bucket}.json"
     record = read_json(control_root, storage_options, key)
     if record is None:
         return None
@@ -407,7 +405,7 @@ def claim_bucket(control_root: str, storage_options: StorageOptions, *, bucket: 
     pass rather than a collision, and why keying this by warehouse id would refuse the second half of a
     legitimate pair. It is also what keeps `create_warehouse`'s partial-failure retry idempotent.
     """
-    key = f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json"
+    key = f"{control_prefixes.BUCKET_CLAIMS}/{bucket}.json"
     payload = {"bucket": bucket, "project": project, "warehouse_id": warehouse_id}
     try:
         create_json(control_root, storage_options, key, record=payload)
@@ -438,7 +436,7 @@ def release_bucket_claim(control_root: str, storage_options: StorageOptions, *, 
     """
     if any(r.bucket == bucket and r.id != warehouse_id for r in every_warehouse(control_root, storage_options)):
         return False
-    return delete_record(control_root, storage_options, f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json")
+    return delete_record(control_root, storage_options, f"{control_prefixes.BUCKET_CLAIMS}/{bucket}.json")
 
 
 def project_of(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> str | None:

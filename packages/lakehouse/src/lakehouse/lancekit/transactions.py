@@ -43,11 +43,11 @@ _REWRITTEN_INDEX = make_dataclass(
     ],
     bases=(LanceOperation.RewrittenIndex,),
 )
+# pylance's binding resolves the class by name on each read, so it is named once, when this module is imported, and every
+# read in the process takes it.
+setattr(LanceOperation, "RewrittenIndex", _REWRITTEN_INDEX)  # noqa: B010 - the attribute's declared type is the class it replaces
 
 
 def read_transaction(dataset: _ReadsTransactions, version: int) -> Any:  # noqa: ANN401 - pylance's own return
     """The transaction that committed ``version`` of ``dataset``, or None where the version keeps none."""
-    # pylance resolves the class by name on each read, so it is named here, where a transaction is read, and nowhere a
-    # caller could forget it.
-    setattr(LanceOperation, "RewrittenIndex", _REWRITTEN_INDEX)  # noqa: B010 - the attribute's declared type is the class it replaces
     return dataset.read_transaction(version)

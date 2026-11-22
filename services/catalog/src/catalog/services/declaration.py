@@ -28,7 +28,7 @@ from lakehouse.governed.principal import PrincipalKey
 from lakehouse.governed.subjects import is_person_subject
 from lakehouse.naming import CONTROL_ID_PATTERN, CONTROL_ID_RE
 from lakehouse.records import control_prefixes
-from lakehouse.records.record_store import delete_record, list_records
+from lakehouse.records.record_store import delete_record, list_every_record
 from lakehouse.storage.conditional_records import RecordExistsError, create_json
 from lakehouse.storage.options import StorageOptions
 
@@ -202,7 +202,7 @@ def recorded_grants(control_root: str, storage_options: StorageOptions) -> set[G
         OSError: The store failed a read.
         ValueError: A record is there and cannot be read as one.
     """
-    records = list_records(control_root, storage_options, control_prefixes.DECLARED_GRANTS, event="declared_grant", strict=True)
+    records = list_every_record(control_root, storage_options, control_prefixes.DECLARED_GRANTS, event="declared_grant")
     return {GrantTuple.model_validate(record) for record in records}
 
 

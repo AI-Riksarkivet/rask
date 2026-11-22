@@ -262,7 +262,7 @@ def every_claim(store: ClaimStore) -> list[LocationClaim]:
         OSError: A record could not be read.
         ValueError: A record is not a JSON object, or not a claim.
     """
-    records = record_store.list_records(store.control_root, store.storage_options, _PREFIX, event="location_claim", strict=True)
+    records = record_store.list_every_record(store.control_root, store.storage_options, _PREFIX, event="location_claim")
     return [LocationClaim.model_validate(record) for record in records]
 
 

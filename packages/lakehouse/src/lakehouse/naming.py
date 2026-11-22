@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Final
 
 
-#: The delimiter that joins a table's or namespace's names into its string identifier (``gold$catalog``). The Lance
+#: The delimiter that joins a table's or namespace's names into its string identifier (``db$t``). The Lance
 #: Namespace spec fixes it: a request naming no delimiter uses ``$`` (``lance_docs/ns_catalog/spec.yaml:2314-2318``), so
 #: no setting moves it ([[LH-526]]). Every parse site splits on it and every producer, pipeline and reader joins with it,
 #: so the ids the catalog answers and the ids every client sends cannot drift apart, and the catalog refuses a request
@@ -82,7 +82,7 @@ def is_safe_project(value: object) -> bool:
 #:
 #: `s3-prefix` mints `s3://<bucket>`, which a URI-scheme test catches. `local-dir` mints `file` and
 #: `lance-append` mints `lance` — bare identifiers, indistinguishable by shape from a catalog namespace
-#: like `lane-bronze`, and both were authorized as governed until this was declared (measured on the
+#: like `analytics`, and both were authorized as governed until this was declared (measured on the
 #: deployed estate 2026-09-10: `ingest_input_denied ... inputs=['/tmp/ingest-fixtures']`).
 #:
 #: Naming them EXPLICITLY rather than widening the shape test is the point. "Anything without a
@@ -94,7 +94,7 @@ _EXTERNAL_SOURCE_NAMESPACES = frozenset({"file", "lance"})
 #: The scheme of the namespace a catalog names its tables' OpenLineage datasets under ([[LH-553]]): the catalog's endpoint,
 #: ``lance-namespace://<host><prefix>``, as OpenLineage names a catalog's tables by the catalog that serves them
 #: (``unitycatalog://{host}``, ``hive://{host}:{port}``; https://openlineage.io/docs/spec/naming). Two estates holding
-#: ``acme$bronze$t`` are then two datasets in one graph backend. The table's storage location rides the dataset's
+#: ``acme$db$t`` are then two datasets in one graph backend. The table's storage location rides the dataset's
 #: ``symlinks`` facet, so an engine naming the table by its location (``s3://<bucket>`` and the key) names the same dataset.
 CATALOG_DATASET_SCHEME: Final = "lance-namespace"
 

@@ -80,7 +80,7 @@ def get_table_owners(client: FgaClientDep, settings: SettingsDep) -> TableOwners
     async def _owners(object_id: str) -> list[str]:
         if (wired := decisions.wired(settings, client)) is None:
             return []
-        return await fga_reads.list_users(wired, relation="owner_effective", obj=object_id, qualified=True)
+        return await fga_reads.list_fga_users(wired, relation="owner_effective", obj=object_id)
 
     return _owners
 

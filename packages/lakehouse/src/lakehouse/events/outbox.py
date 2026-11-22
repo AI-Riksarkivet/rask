@@ -1,4 +1,4 @@
-"""Durable object-store outbox for lineage events (#4) — narrows the loss window to commit→stage.
+"""Durable object-store outbox for the lineage and control lanes' events (#4) — narrows the loss window to commit→stage.
 
 A producer commits its Lance write and then publishes its event on the bus. A crash between the commit and the
 stream's acknowledgement loses the lineage event: the data landed but the feed never learns of it. A consumer's park
@@ -198,7 +198,7 @@ def resolve_event(outbox_uri: str, storage_options: StorageOptions, run_id: str)
 
 
 def read_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> str | None:
-    """The staged event JSON for one ``run_id``, or ``None`` if it isn't staged (already drained / never
+    """The staged event JSON under ``key``, or ``None`` if it isn't staged (already drained / never
     staged). The targeted read behind an admin DLQ replay (#83) — cheaper + race-safer than scanning the
     whole prefix. Blocking IO; callers threadpool it."""
     fs, base = fs_and_base(outbox_uri, storage_options)

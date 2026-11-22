@@ -513,7 +513,7 @@ async def check_access(
     user = _qualified_subject(body.user)
     subject = token.subject if token else "anonymous"
     try:
-        allowed = await fga_reads.check(client, user=user, relation=body.relation, obj=obj, qualify=False, context=body.context or None)
+        allowed = await fga_reads.check_fga_user(client, fga_user=user, relation=body.relation, obj=obj, context=body.context or None)
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_SIMULATE, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
@@ -552,7 +552,7 @@ async def list_access_objects(
     user = _qualified_subject(body.user)
     subject = token.subject if token else "anonymous"
     try:
-        listing = await fga_reads.list_objects(client, user=user, relation=relation, object_type=body.type, qualify=False)
+        listing = await fga_reads.list_fga_user_objects(client, fga_user=user, relation=relation, object_type=body.type)
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_LIST_OBJECTS, AuditOutcome.FAILURE, subject=subject, resource=f"{body.type}:", reason="authz_unavailable")
         raise
@@ -590,13 +590,12 @@ async def list_access_users(
         raise InvalidInputError(f"{body.user_relation!r} is not a relation the model defines on {body.user_type}")
     subject = token.subject if token else "anonymous"
     try:
-        users = await fga_reads.list_users(
+        users = await fga_reads.list_fga_users(
             client,
             relation=relation,
             obj=obj,
             user_type=body.user_type,
             user_relation=body.user_relation,
-            qualified=True,
         )
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_LIST_USERS, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
@@ -686,11 +685,9 @@ async def simulate_access(
         # Two checks, one round trip each. The baseline cannot be skipped when `hypothetical` is empty
         # either: the caller still asked for a delta, and answering with allowed == baseline is the
         # honest shape rather than a special case that returns a different meaning.
-        baseline = await fga_reads.check(client, user=user, relation=relation, obj=obj, qualify=False)
+        baseline = await fga_reads.check_fga_user(client, fga_user=user, relation=relation, obj=obj)
         allowed = (
-            baseline
-            if not hypothetical
-            else await fga_reads.check(client, user=user, relation=relation, obj=obj, qualify=False, contextual_tuples=hypothetical)
+            baseline if not hypothetical else await fga_reads.check_fga_user(client, fga_user=user, relation=relation, obj=obj, contextual_tuples=hypothetical)
         )
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_SIMULATE_HYPOTHETICAL, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")

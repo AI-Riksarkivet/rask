@@ -16,7 +16,7 @@ a read refuses a dataset over a bit only a writer must understand.
   8-fragment clone with **no ``data/`` directory at all** came back with its own full copy of every
   row. That is silent storage amplification which defeats the entire point of the feature, and
   ``cleanup_old_versions`` then ran on the result. **The flag alone does not say which kind of base a
-  dataset has**, and refusing on the flag alone cost the estate its bronze compaction for 785 sweep
+  dataset has**, and refusing on the flag alone cost the estate a table's compaction for 785 sweep
   ticks — so compaction gates on OBSERVED evidence about the bases instead
   (:func:`describe_compaction_unsupported_flags`), while every other consumer keeps the flags-only
   refusal.
@@ -315,7 +315,7 @@ class BasePathRef(BaseModel):
     """One ``BasePath`` entry out of a manifest: WHERE the base is, and WHAT the manifest SAYS it is.
 
     Flag 16 says only that a dataset spans bases; it cannot tell a shallow CLONE (whose base is
-    another dataset's root and holds the only copy of the clone's rows) from an ingest bronze table
+    another dataset's root and holds the only copy of the clone's rows) from a table written over external blobs
     (whose base is a plain object-store prefix where external blobs already live, its own data files
     under its own root). Those two need opposite answers from the compaction gate, so this model
     carries ``is_dataset_root`` alongside the path.

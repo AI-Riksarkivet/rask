@@ -23,7 +23,7 @@ from _files_under import files_under
 ROOT = Path(__file__).resolve().parent.parent
 
 #: The products the design research reads and the code never names, matched in any case.
-REFERENCE_PRODUCTS = frozenset({"lakekeeper"})
+REFERENCE_PRODUCTS = frozenset({"gravitino", "lakekeeper", "polaris"})
 #: The code trees, and the root files that are code.
 CODE_TREES = ("packages", "services", "tests", "chart", "deploy", "scripts", "frontend", ".dagger", ".docker", ".github")
 CODE_FILES = ("conftest.py", "Makefile", "pyproject.toml", "prek.toml", ".importlinter", ".vulture-whitelist.py")

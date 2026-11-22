@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import logging
 from enum import StrEnum
-from typing import Any, Final, Self
+from typing import Any, Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.records import control_prefixes
-from lakehouse.records.record_store import list_records, read_record
+from lakehouse.records.record_store import list_every_record, read_record
 from lakehouse.storage.options import StorageOptions
 
 
@@ -41,10 +41,8 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
-#: Where the catalog writes warehouse records and which project owns a bucket. Kept in sync with
-#: `catalog/services/warehouses.py`.
+#: Where the catalog writes warehouse records.
 REGISTRY_PREFIX = control_prefixes.WAREHOUSES
-_BUCKET_CLAIMS_PREFIX: Final = f"{REGISTRY_PREFIX}/bucket-claims"
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "warehouse_record"
@@ -166,7 +164,7 @@ def read_warehouse_records(control_root: str, storage_options: StorageOptions) -
         ValueError: A record is not JSON, not a JSON object, or not a warehouse record
             (:class:`UnreadableWarehouseRecordError`).
     """
-    return [read(raw, at=_listed_at(raw)) for raw in list_records(control_root, storage_options, REGISTRY_PREFIX, event=_EVENT, strict=True)]
+    return [read(raw, at=_listed_at(raw)) for raw in list_every_record(control_root, storage_options, REGISTRY_PREFIX, event=_EVENT)]
 
 
 def maintainable_buckets(records: list[WarehouseRecord]) -> list[str]:
@@ -207,7 +205,7 @@ def bucket_project(control_root: str, storage_options: StorageOptions, bucket: s
         ValueError: The claim cannot be read as one.
         OSError: The store failed the read.
     """
-    claim = read_record(control_root, storage_options, f"{_BUCKET_CLAIMS_PREFIX}/{bucket}.json")
+    claim = read_record(control_root, storage_options, f"{control_prefixes.BUCKET_CLAIMS}/{bucket}.json")
     if claim is None:
         return None
     project = claim.get("project")

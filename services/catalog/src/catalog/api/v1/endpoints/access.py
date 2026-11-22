@@ -305,12 +305,12 @@ async def _access_check(
     obj, name = await _target(resolver, fga_type, segments)
     subject = context.token.subject if context.token else "anonymous"
     # Resolve to a FULL subject (`fga_ids.grantee_object`): a subject is the user it is; a qualified userset
-    # (``role:…#assignee``) is passed through as-is. Then check with qualify=False so
-    # fga_reads.check sends it verbatim — otherwise its default ``user:`` prefix would double to ``user:user:…``
+    # (``role:…#assignee``) is passed through as-is. Then `fga_reads.check_fga_user` sends it verbatim —
+    # `fga_reads.check` would qualify it again, to ``user:user:…``
     # and every simulated Check would falsely deny (audit 2026-07-20 caught exactly this).
     user = fga_ids.grantee_object(body.user)
     try:
-        allowed = await fga_reads.check(client, user=user, relation=body.relation, obj=obj, qualify=False)
+        allowed = await fga_reads.check_fga_user(client, fga_user=user, relation=body.relation, obj=obj)
     except ServiceUnavailableError:
         audit(AuditAction.ACCESS_SIMULATE, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise
@@ -367,7 +367,7 @@ async def _my_permissions(context: AuthzContext, *, resolver: Resolver, fga_type
     # than leaving orphaned retry loops hammering a degraded OpenFGA after the request has 503'd.
     try:
         async with asyncio.TaskGroup() as group:
-            tasks = [group.create_task(fga_reads.check(client, user=subject, relation=r, obj=obj, qualify=False)) for r in relations]
+            tasks = [group.create_task(fga_reads.check_fga_user(client, fga_user=subject, relation=r, obj=obj)) for r in relations]
     except* ServiceUnavailableError as outage:
         # A TaskGroup raises an ExceptionGroup, which no handler in the problem-body map recognises —
         # it would surface as a 500 and the caller would read "the catalog is broken" instead of
@@ -525,7 +525,7 @@ async def _change_access(
     segments = parse_identifier(target.id)
     obj, name = await _target(resolver, fga_type, segments)
     actor = context.token.subject if context.token else "anonymous"
-    # Resolve the grantee to a FULL subject (qualify=False semantics, mirroring access/check): a subject is the
+    # Resolve the grantee to a FULL subject (as access/check does for `check_fga_user`): a subject is the
     # user it is; a qualified userset (``role:…#assignee``) is passed through verbatim.
     grantee = fga_ids.grantee_object(body.user)
     # The store refuses a tuple its model cannot hold, and that refusal reaches here as an outage, so the model is asked

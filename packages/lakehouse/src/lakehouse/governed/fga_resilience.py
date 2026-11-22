@@ -1,12 +1,12 @@
 """How every OpenFGA call retries a transient failure and fails closed, and the process's one circuit over OpenFGA.
 
-``check`` / ``batch_check`` / ``list_objects`` / ``list_users`` / ``expand`` and the
+Every read of ``lakehouse.governed.fga_reads`` (the checks, the listings, ``expand``) and the
 post-create grant writes go through a bounded retry with exponential backoff + jitter (tenacity). Only
 *transient* failures are retried — OpenFGA 429/5xx AND the dominant outage modes raised
 by the aiohttp transport (connection refused / DNS / read timeout, i.e.
 ``aiohttp.ClientError`` / ``TimeoutError`` / ``OSError``). A definitive ``allowed=false``
 is never retried. The per-request timeout is carried by the client itself
-(``ClientConfiguration.timeout_millisec``, set in ``make_client``) and the SDK's own
+(``ClientConfiguration.timeout_millisec``, set in ``fga_provision.make_client``) and the SDK's own
 retry layer is disabled there so tenacity is the single authoritative one. When retries
 are exhausted (OpenFGA outage) we **fail closed** and raise ``ServiceUnavailableError``
 so the request surfaces as a 503 rather than a 500 — and never as a silent allow/deny.
@@ -87,9 +87,9 @@ class UnansweredBatchItemsError(Exception):
 
     The SDK reports such an item as ``allowed=False``, so reading the verdict alone turns an OpenFGA
     fault into a denial. It is transient only when no item names an ``input_error``: an input fault is
-    the per-item form of the 400 :func:`check` does not retry, and it recurs on every attempt. The split
+    the per-item form of the 400 :func:`lakehouse.governed.fga_reads.check` does not retry, and it recurs on every attempt. The split
     is not exact on the deployed engine: with ``weighted_graph_check``, OpenFGA v1.18.3 reports an object
-    carrying a control character as ``internal_error`` (measured), which :func:`is_object_id` keeps from
+    carrying a control character as ``internal_error`` (measured), which :func:`lakehouse.governed.fga_ids.is_object_id` keeps from
     ever being sent.
     """
 
@@ -187,7 +187,7 @@ def retrying[T](policy: RetryPolicy) -> Callable[[Callable[..., Awaitable[T]]], 
     Retries both OpenFGA ``ApiException`` 429/5xx and raw transport errors (a down
     server), and is bounded by BOTH an attempt count and an overall wall-clock budget
     so a flapping OpenFGA cannot pin a worker. tenacity is the single retry layer — the
-    SDK's own retries are disabled in :func:`make_client`.
+    SDK's own retries are disabled in :func:`lakehouse.governed.fga_provision.make_client`.
     """
     decorator = retry(
         retry=retry_if_exception(_is_transient),

@@ -56,7 +56,7 @@ def plan(listing: StoreListing) -> int:
 
 def read_history(pages: Iterable[str], desired: dict[str, Any]) -> ModelHistory:
     """The streamed pages read against ``desired``, stopped at the first model that carries it."""
-    wanted, history = canonical_model(desired), ModelHistory()
+    wanted, history = canonical_model(desired), ModelHistory[dict[str, Any]]()
     for line in pages:
         if not line.strip():
             continue
@@ -72,7 +72,7 @@ def compare(store: str, history: ModelHistory, desired: dict[str, Any]) -> int:
     if history.carrying is not None and not history.held_below_newest:
         print(f">> store {store}'s newest model {history.carrying['id']} carries this checkout's model ({len(shipped)} relations)")
         return 0
-    if history.carrying is not None:
+    if history.carrying is not None and history.newest is not None:
         print(f">> store {store} holds this checkout's model as {history.carrying['id']} ({len(shipped)} relations), below its newest {history.newest['id']}.")
         print("   A newer image, a revert or another writer wrote since; each service checks against the model its own")
         print("   image carries, so a pod built from this checkout resolves this one.")

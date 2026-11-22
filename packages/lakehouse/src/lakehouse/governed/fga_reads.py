@@ -9,7 +9,7 @@ too.
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection, Iterable
+from collections.abc import Callable, Collection, Iterable
 from datetime import UTC, datetime
 from typing import Any, Final, NoReturn
 
@@ -29,6 +29,7 @@ from openfga_sdk.constants import CLIENT_MAX_BATCH_SIZE
 from openfga_sdk.models.consistency_preference import ConsistencyPreference
 from openfga_sdk.models.fga_object import FgaObject
 from openfga_sdk.models.read_request_tuple_key import ReadRequestTupleKey
+from openfga_sdk.models.user import User
 from openfga_sdk.models.user_type_filter import UserTypeFilter
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -130,12 +131,35 @@ async def check(
     user: str,
     relation: str,
     obj: str,
-    qualify: bool = True,
     contextual_tuples: list[ClientTuple] | None = None,
     context: dict[str, Any] | None = None,
     retry: RetryPolicy = DEFAULT_RETRY,
 ) -> bool:
-    """Return whether ``user:<user>`` has ``relation`` on ``obj`` (e.g. ``table:db1$t``).
+    """Return whether the principal ``user`` (a caller's ``subject``) has ``relation`` on ``obj`` (e.g. ``table:db1$t``).
+
+    It sends the store's user the principal is (:func:`user_object`); :func:`check_fga_user` asks for a subject that is
+    already the store's own. ``contextual_tuples``, ``context`` and the retry are :func:`check_fga_user`'s.
+    """
+    return await check_fga_user(
+        client, fga_user=user_object(user), relation=relation, obj=obj, contextual_tuples=contextual_tuples, context=context, retry=retry
+    )
+
+
+async def check_fga_user(
+    client: OpenFgaClient,
+    *,
+    fga_user: str,
+    relation: str,
+    obj: str,
+    contextual_tuples: list[ClientTuple] | None = None,
+    context: dict[str, Any] | None = None,
+    retry: RetryPolicy = DEFAULT_RETRY,
+) -> bool:
+    """Return whether ``fga_user``, sent verbatim, has ``relation`` on ``obj``.
+
+    ``fga_user`` is a FULL subject as the store names it — a ``type:id`` user or a ``type:id#rel`` userset — so the
+    access simulator can probe arbitrary subjects, usersets included; qualifying it again would send ``user:user:…``
+    and every Check would falsely deny (review 2026-07-20).
 
     ``context`` supplies the runtime values a CONDITION evaluates against — for the model's
     ``non_expired_grant`` that is ``current_time``. The split is deliberate: the tuple carries the
@@ -151,23 +175,17 @@ async def check(
     wrong. Contextual tuples are per-request and never persisted, but they are evaluated like stored
     ones, so one carrying the clock is refused (:func:`reject_stored_clock`) before anything is sent.
 
-    Callers pass a principal key (the caller's ``subject``) and this sends the user it is (:func:`user_object`). Pass
-    ``qualify=False`` when ``user`` is ALREADY a full subject — a ``type:id`` user or a ``type:id#rel``
-    userset — so it is sent verbatim (the access-simulator probes arbitrary subjects, incl. usersets;
-    double-prefixing them to ``user:user:…`` would make every Check falsely deny — review 2026-07-20).
-
     Transient OpenFGA failures (network/timeout, 429, 5xx) are retried with
     backoff; a definitive ``allowed=false`` is a normal result and is NOT retried.
     On exhausted retries / outage we fail closed with ``ServiceUnavailableError``.
-    The per-request timeout is carried by ``client`` (see ``make_client``).
+    The per-request timeout is carried by ``client`` (see ``fga_provision.make_client``).
     """
     reject_stored_clock(contextual_tuples or ())
-    subject = user_object(user) if qualify else user
 
     async def _do_check() -> bool:
         response = await client.check(
             ClientCheckRequest(
-                user=subject,
+                user=fga_user,
                 relation=relation,
                 object=obj,
                 contextual_tuples=contextual_tuples,
@@ -265,30 +283,44 @@ async def list_objects(
     user: str,
     relation: str,
     object_type: str,
-    qualify: bool = True,
     context: dict[str, Any] | None = None,
     retry: RetryPolicy = DEFAULT_RETRY,
 ) -> ObjectListing:
-    """Return the objects of ``object_type`` the user has ``relation`` on (e.g. ``table:…``).
+    """Return the objects of ``object_type`` the principal ``user`` (a caller's ``subject``) has ``relation`` on.
 
-    Callers pass a principal key (the caller's ``subject``) and this sends the user it is (:func:`user_object`). Pass
-    ``qualify=False`` when ``user`` is ALREADY a full subject — a ``type:id`` user or a ``type:id#rel``
-    userset — exactly as :func:`check` does. Without that hatch an estate admin's access review could only ask
-    "what can this *user* reach", never "what can ``role:<id>#assignee`` reach", and a grant to a role is
-    the userset question that explains a real grant.
+    It sends the store's user the principal is (:func:`user_object`); :func:`list_fga_user_objects` asks for a subject
+    that is already the store's own. ``context`` and the retry are :func:`list_fga_user_objects`'.
+    """
+    return await list_fga_user_objects(client, fga_user=user_object(user), relation=relation, object_type=object_type, context=context, retry=retry)
+
+
+async def list_fga_user_objects(
+    client: OpenFgaClient,
+    *,
+    fga_user: str,
+    relation: str,
+    object_type: str,
+    context: dict[str, Any] | None = None,
+    retry: RetryPolicy = DEFAULT_RETRY,
+) -> ObjectListing:
+    """Return the objects of ``object_type`` ``fga_user``, sent verbatim, has ``relation`` on (e.g. ``table:…``).
+
+    ``fga_user`` is a FULL subject as the store names it — a ``type:id`` user or a ``type:id#rel`` userset — exactly as
+    :func:`check_fga_user` takes it. Without it an estate admin's access review could only ask "what can this *user*
+    reach", never "what can ``role:<id>#assignee`` reach", and a grant to a role is the userset question that explains a
+    real grant.
 
     ``context`` is defaulted through :func:`condition_context`. It matters MORE here than on a single
     check: a listing that omits the clock silently drops every object reachable only through a
     time-boxed grant, and a short list reads as a correct answer rather than an error.
 
     Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as
-    :func:`check`.
+    :func:`check_fga_user`.
     """
-    subject = user_object(user) if qualify else user
 
     async def _do_list_objects() -> ObjectListing:
         response = await client.list_objects(
-            ClientListObjectsRequest(user=subject, relation=relation, type=object_type, context=condition_context(context)), options=_fresh_read_options()
+            ClientListObjectsRequest(user=fga_user, relation=relation, type=object_type, context=condition_context(context)), options=_fresh_read_options()
         )
         objects = list(response.objects)
         # THE SAME GUARD `list_users` HAS CARRIED SINCE IT WAS WRITTEN, and the asymmetry is how this
@@ -336,6 +368,25 @@ LIST_USERS_SERVER_CAP: Final = 1000
 LIST_OBJECTS_SERVER_CAP: Final = 1000
 
 
+def _bare_subject(user: User) -> str | None:
+    """One ListUsers answer as an access review reads it: a principal key, a userset's object id, or ``"*"``."""
+    if (obj_arm := user.object) is not None:
+        # A bare id is a SUBJECT, so a `user` id is decoded (:func:`subject_of`).
+        return subject_of(obj_arm.id) if obj_arm.type == "user" else obj_arm.id
+    if (userset_arm := user.userset) is not None:
+        return userset_arm.id
+    return "*" if user.wildcard is not None else None
+
+
+def _fga_user(user: User) -> str | None:
+    """One ListUsers answer as the store names it, which a caller passes back verbatim (:func:`check_fga_user`)."""
+    if (obj_arm := user.object) is not None:
+        return f"{obj_arm.type}:{obj_arm.id}"
+    if (userset_arm := user.userset) is not None:
+        return f"{userset_arm.type}:{userset_arm.id}#{userset_arm.relation}"
+    return f"{user.wildcard.type}:*" if user.wildcard is not None else None
+
+
 async def list_users(
     client: OpenFgaClient,
     *,
@@ -343,26 +394,22 @@ async def list_users(
     obj: str,
     user_type: str = "user",
     user_relation: str | None = None,
-    qualified: bool = False,
     context: dict[str, Any] | None = None,
     retry: RetryPolicy = DEFAULT_RETRY,
 ) -> list[str]:
-    """The ``user:`` subjects holding ``relation`` on ``obj`` (e.g. every reader of ``table:db1$t``),
-    sorted — the access-review primitive (#51), the inverse of :func:`list_objects`.
+    """The subjects holding ``relation`` on ``obj`` (e.g. every reader of ``table:db1$t``) as bare ids, sorted — the
+    access-review primitive (#51), the inverse of :func:`list_objects`.
+
+    A ``user`` is its principal key, a userset its object's id, and a public ``user:*`` wildcard ``"*"`` (the model
+    doesn't write one today, but a review must never hide it). :func:`list_fga_users` answers the same question with
+    each subject as the store names it.
 
     ``user_type`` (+ optional ``user_relation``) selects WHICH subject kind to enumerate — OpenFGA takes
     exactly ONE filter per call, so ``user_type="role", user_relation="assignee"`` answers "which roles
-    hold this", a different question from "which users". The default keeps the review contract every
-    existing caller relies on: bare ``user:`` ids.
-
-    ``qualified=True`` returns FULL subjects (``user:alice``, ``role:<id>#assignee``, ``user:*``) instead of
-    bare ids. Off by default because the access-review callers built their output around bare ids; an
-    estate-wide access view needs the qualified form, since a bare ``eng`` is ambiguous once the filter is not
-    ``user``.
+    hold this", a different question from "which users". The default asks for ``user:`` subjects.
 
     ListUsers *expands* the model (role assignees, nested roles, the parent cascade), so the answer is
-    effective access, not just direct tuples — exactly what a reviewer needs. A public ``user:*``
-    wildcard surfaces as ``"*"`` (the model doesn't write one today, but a review must never hide it).
+    effective access, not just direct tuples — exactly what a reviewer needs.
     Read-only/idempotent, so it gets the same bounded retry + fail-closed treatment as :func:`check`
     (outage → ``ServiceUnavailableError`` → 503 — never an empty list that reads as "nobody").
 
@@ -375,42 +422,68 @@ async def list_users(
     so a result at or past the cap is logged as possibly truncated; an under-reported review must
     never pass unnoticed.
     """
-    obj_type, _, obj_id = obj.partition(":")
+    request = _ListUsers(relation=relation, obj=obj, user_type=user_type, user_relation=user_relation, context=context)
+    return await _list_users(client, request, render=_bare_subject, retry=retry)
+
+
+async def list_fga_users(
+    client: OpenFgaClient,
+    *,
+    relation: str,
+    obj: str,
+    user_type: str = "user",
+    user_relation: str | None = None,
+    context: dict[str, Any] | None = None,
+    retry: RetryPolicy = DEFAULT_RETRY,
+) -> list[str]:
+    """:func:`list_users` with each subject as the store names it (``user:alice``, ``role:<id>#assignee``, ``user:*``).
+
+    An estate-wide access view needs this form, since a bare ``eng`` is ambiguous once the filter is not ``user``.
+    """
+    request = _ListUsers(relation=relation, obj=obj, user_type=user_type, user_relation=user_relation, context=context)
+    return await _list_users(client, request, render=_fga_user, retry=retry)
+
+
+class _ListUsers(BaseModel):
+    """One ListUsers question: who holds ``relation`` on ``obj``, filtered to one subject kind."""
+
+    model_config = ConfigDict(frozen=True)
+
+    relation: str
+    obj: str
+    user_type: str
+    user_relation: str | None
+    context: dict[str, Any] | None
+
+
+async def _list_users(client: OpenFgaClient, request: _ListUsers, *, render: Callable[[User], str | None], retry: RetryPolicy) -> list[str]:
+    """Ask ``request`` with the bounded retry, each answer spelled by ``render``, sorted; logs a possibly truncated one."""
+    obj_type, _, obj_id = request.obj.partition(":")
 
     async def _do_list_users() -> list[str]:
         response = await client.list_users(
             ClientListUsersRequest(
                 object=FgaObject(type=obj_type, id=obj_id),
-                relation=relation,
-                user_filters=[UserTypeFilter(type=user_type, relation=user_relation)],
-                context=condition_context(context),
+                relation=request.relation,
+                user_filters=[UserTypeFilter(type=request.user_type, relation=request.user_relation)],
+                context=condition_context(request.context),
             ),
             options=_fresh_read_options(),
         )
-        subjects: list[str] = []
-        for user in response.users or []:
-            # The three arms of ListUsers' User union. A userset arm only ever arrives when the filter
-            # ASKS for one (user_relation set); dropping it silently — as this did before — hid exactly
-            # the subjects this model routes access through.
-            if (obj_arm := getattr(user, "object", None)) is not None:
-                # A bare id is a SUBJECT, so a `user` id is decoded (:func:`subject_of`); a qualified one is the
-                # store's own object id, which a caller passes back verbatim (`qualify=False`).
-                subjects.append(f"{obj_arm.type}:{obj_arm.id}" if qualified else subject_of(obj_arm.id) if obj_arm.type == "user" else obj_arm.id)
-            elif (userset_arm := getattr(user, "userset", None)) is not None:
-                subjects.append(f"{userset_arm.type}:{userset_arm.id}#{userset_arm.relation}" if qualified else userset_arm.id)
-            elif (wildcard_arm := getattr(user, "wildcard", None)) is not None:
-                subjects.append(f"{wildcard_arm.type}:*" if qualified else "*")
+        # The three arms of ListUsers' User union. A userset arm only ever arrives when the filter ASKS for one
+        # (user_relation set); every arm is kept, since the usersets are the subjects this model routes access through.
+        subjects = [subject for user in response.users or [] if (subject := render(user)) is not None]
         if len(subjects) >= LIST_USERS_SERVER_CAP:
             log.warning(
                 "openfga_list_users_possibly_truncated",
-                extra={"relation": relation, "object": obj, "subjects": len(subjects)},
+                extra={"relation": request.relation, "object": request.obj, "subjects": len(subjects)},
             )
         return sorted(subjects)
 
     return await guarded(
         _do_list_users,
         event="openfga_list_users_unavailable",
-        extra={"relation": relation, "object": obj},
+        extra={"relation": request.relation, "object": request.obj},
         retry=retry,
     )
 
@@ -583,7 +656,7 @@ class _ExpandWalk:
             # malformed and OpenFGA answers 500 — which this module dutifully fails closed into a 503,
             # so the symptom was "the derivation is unavailable" on every relation that resolves
             # through a rung, i.e. all of the interesting ones. Verified against the live store:
-            # expand(can_read_data, table:bronze$pages) → {"computed":{"userset":"table:bronze$pages#reader"}}.
+            # expand(can_read_data, table:db1$t) → {"computed":{"userset":"table:db1$t#reader"}}.
             leaf["expanded"] = [await self.walk(_relation_of(computed), _object_of(computed, target), depth=depth + 1, path=path)]
             return
         if (ttu := leaf.get("tuple_to_userset")) is not None:
@@ -894,9 +967,12 @@ __all__ = [
     "batch_check",
     "census",
     "check",
+    "check_fga_user",
     "condition_context",
     "expand",
     "expand_tree",
+    "list_fga_user_objects",
+    "list_fga_users",
     "list_objects",
     "list_users",
     "read_all_tuples",

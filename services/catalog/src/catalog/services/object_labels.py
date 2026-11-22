@@ -32,7 +32,7 @@ import uuid
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from hashlib import blake2s
-from typing import Any, Final
+from typing import Any, Final, Protocol
 
 from lance_namespace import InternalError, InvalidInputError
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -41,7 +41,7 @@ from catalog.schemas import LabelDefinition, LabelKind, LabelScope
 from lakehouse.naming import PLATFORM_PREFIX
 from lakehouse.problems.outage import store_refusal
 from lakehouse.records import control_prefixes
-from lakehouse.records.record_store import delete_record, get_record, list_records, record_key
+from lakehouse.records.record_store import delete_record, get_record, list_every_record, list_records, record_key
 from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.stored_objects import list_under
@@ -216,29 +216,22 @@ def definitions(control_root: str, storage_options: StorageOptions, project: str
     return sorted(found, key=lambda defined: defined.name)
 
 
-def attachments(control_root: str, storage_options: StorageOptions, *, project: str, strict: bool = False) -> list[Attachment]:
+def attachments(control_root: str, storage_options: StorageOptions, *, project: str) -> list[Attachment]:
     """Every attachment record of ``project``'s objects, unordered.
 
-    A record that cannot be read is skipped and logged, which a listing of what is labelled may do. A caller deciding on a
-    label's ABSENCE passes ``strict``: an unreadable record names no project it can be left out of, and may carry the
-    label, so it is refused instead.
+    A record that cannot be read is skipped and logged, which a listing of what is labelled may do; a caller deciding on
+    a label's ABSENCE reads :func:`carriers`, which refuses one instead.
 
     Raises:
-        ServiceUnavailableError: ``strict``, and the store did not answer the listing.
-        InternalError: ``strict``, and a record is there and cannot be read as one.
+        ServiceUnavailableError: The store did not answer the listing.
+        InternalError: The store answered and the listing failed.
     """
-    try:
-        records = list_records(control_root, storage_options, control_prefixes.LABELS, event="labels", strict=strict)
-    except (OSError, ValueError) as exc:
-        raise store_refusal(exc, reading="the labels records", so="which objects carry a label is not known") from exc
     found: list[Attachment] = []
-    for record in records:
+    for record in _labels_records(list_records, control_root, storage_options):
         try:
             attachment = Attachment.model_validate(record)
-        except ValidationError as exc:
+        except ValidationError:
             log.warning("labels_record_unreadable", extra={"uuid": record.get("uuid")})
-            if strict:
-                raise InternalError(f"the labels record of {record.get('uuid')!r} cannot be read as one; write the labels again") from exc
             continue
         if attachment.project == project:
             found.append(attachment)
@@ -248,9 +241,42 @@ def attachments(control_root: str, storage_options: StorageOptions, *, project: 
 def carriers(control_root: str, storage_options: StorageOptions, defined: LabelDefinition) -> list[Attachment]:
     """Every attachment record of the project that carries the label ``defined``, judged against that definition.
 
-    Read strictly (:func:`attachments`): its caller deletes the definition when this answers none.
+    Read strictly, since its caller deletes the definition when this answers none: an unreadable record names no project
+    it can be left out of, and may carry the label, so it is refused.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer the listing.
+        InternalError: A record is there and cannot be read as one.
     """
-    return [attachment for attachment in attachments(control_root, storage_options, project=defined.project, strict=True) if carries(attachment, defined)]
+    found: list[Attachment] = []
+    for record in _labels_records(list_every_record, control_root, storage_options):
+        try:
+            attachment = Attachment.model_validate(record)
+        except ValidationError as exc:
+            log.warning("labels_record_unreadable", extra={"uuid": record.get("uuid")})
+            raise InternalError(f"the labels record of {record.get('uuid')!r} cannot be read as one; write the labels again") from exc
+        if attachment.project == defined.project and carries(attachment, defined):
+            found.append(attachment)
+    return found
+
+
+class _RecordListing(Protocol):
+    """A reader of a control-root prefix's records: :func:`list_records` or :func:`list_every_record`."""
+
+    def __call__(self, control_root: str, storage_options: StorageOptions, prefix: str, /, *, event: str) -> list[dict[str, Any]]: ...
+
+
+def _labels_records(read: _RecordListing, control_root: str, storage_options: StorageOptions) -> list[dict[str, Any]]:
+    """The labels records ``read`` finds on the control root.
+
+    Raises:
+        ServiceUnavailableError: The store did not answer the listing.
+        InternalError: The store answered and the listing failed, a record that is not a JSON object among them.
+    """
+    try:
+        return read(control_root, storage_options, control_prefixes.LABELS, event="labels")
+    except (OSError, ValueError) as exc:
+        raise store_refusal(exc, reading="the labels records", so="which objects carry a label is not known") from exc
 
 
 def carries(attachment: Attachment, defined: LabelDefinition) -> bool:
