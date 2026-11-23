@@ -145,6 +145,9 @@ _VOUCH_MARGIN: Final = 1.0
 _EXIT_RESERVE: Final = 0.5
 #: How soon a heartbeat or a settle the bus did not answer is asked again.
 _VOUCH_RETRY: Final = 1.0
+#: How long a readiness read waits for a connection that is reconnecting. A session asked for again is back in a round
+#: trip (measured 2026-11-15 on nats-server 2.15.2: 3.2 ms), so a connection still away after this is reported away.
+_RECONNECTED_WITHIN_SECONDS: Final = 2.0
 #: How often the client asks the server it is connected to whether it is still there, and how many unanswered asks
 #: drop the connection: a node that dies without closing it is left within 30 s, inside the 60 s ack wait, so the client
 #: reconnects to a live node and its heartbeats are answered again (nats-py's default, 120 s x 2, outlasts the lease).
@@ -732,11 +735,17 @@ class TaskQueue:
         return read
 
     async def answering(self) -> None:
-        """Raise unless the connection to the bus is up: the verdict a readiness report shows for the bus.
+        """Raise unless the connection to the bus is up: the verdict a readiness report shows for the bus. A connection
+        that is reconnecting is waited for, up to ``_RECONNECTED_WITHIN_SECONDS``: the round trip in which a session is
+        asked for again is no outage to report.
 
         Raises:
-            QueueUnavailableError: The connection is reconnecting, or gone.
+            QueueUnavailableError: The connection is still reconnecting after the wait, or gone.
         """
+        clock = asyncio.get_running_loop()
+        until = clock.time() + _RECONNECTED_WITHIN_SECONDS
+        while self._client.is_reconnecting and clock.time() < until:
+            await asyncio.sleep(0.02)
         if not self._client.is_connected:
             raise QueueUnavailableError("the connection to the bus is not up")
 

@@ -4,8 +4,7 @@ A *project* is the FGA model's tenant type (``lakehouse/governed/auth/model.fga`
 via their ``project`` field, and every grant cascades down from it. A project EXISTS when its registry
 record does (``catalog/services/projects.py`` — ``_projects/<id>.json`` on the control root, no DB), and
 ``POST /management/v1/projects`` writes that record AND the creator's ``admin`` tuple in one operation, so existence
-and permission cannot drift (`open_hierarchy_lifecycle.md`, Decision 1 — the live estate once held three
-tenants in authz the catalog had never heard of, seeded FGA-only).
+and permission cannot drift: a tenant seeded in authz alone is one the catalog has never heard of.
 
 Creation used to be IMPLICIT via warehouse-create, with an estate-admin bootstrap exception for the first
 warehouse of a not-yet-existing project. That door is gone: the estate admin creates the PROJECT here,
@@ -32,7 +31,7 @@ audited (allow/deny/outage, #41), and an OpenFGA outage fails the list closed wi
 **DELETE is gated differently, on purpose: ``project:<id>#can_administer``.** Retiring a tenant is an act
 INSIDE it, so the tenant's own admins must be able to do it without holding estate-wide privilege — and an
 estate OBSERVER, whose bar is "may watch the whole estate", must not be able to delete a tenant they do not
-administer. The delete itself is bottom-up (`open_hierarchy_lifecycle.md` Decision 3): it refuses 409 while
+administer. The delete itself is bottom-up: it refuses 409 while
 the project still holds warehouses, naming them, and carries no ``cascade`` at all (see ``delete_project``).
 Its deletion protection is set and cleared on the same authority, ``POST /management/v1/projects/{id}/protection``
 ([[LH-549]]), decided through :func:`administered_project`, which answers a caller who may not administer the tenant
@@ -588,7 +587,7 @@ async def delete_project(
     empty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so
     no role of a retired tenant keeps a grant.
 
-    **Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses
+    **Emptiness is bottom-up**: a project holding warehouses
     refuses 409 and NAMES them — a refusal that does not say what blocks it just moves the search to the
     user. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would
     reach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to

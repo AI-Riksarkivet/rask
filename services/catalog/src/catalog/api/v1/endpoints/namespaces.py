@@ -1514,7 +1514,7 @@ async def list_tables(
     was ``false`` (403); after it, ``true`` (200, full listing). A table list is not a harmless header:
     it names data someone may not know exists.
 
-    So the split ``open_notifications.md`` §3.1 already settled applies verbatim: the ROUTE may open on
+    So the route and the item are checked apart: the ROUTE may open on
     ``can_get_metadata``, each ITEM is checked on the object itself. ``list_all_tables`` (``tables.py``)
     has always done this; that this route did not was the inconsistency, not the policy.
 

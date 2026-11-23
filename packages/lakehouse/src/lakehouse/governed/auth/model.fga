@@ -388,7 +388,7 @@ type warehouse
     # namespaces down passes it here. Correct for browsing; as a delivery gate it would push a
     # container-scoped governance event to everyone holding a grant on anything underneath — an
     # audience nobody chose, arriving as a notification. That is the exact failure a targeted notifier
-    # exists to end (open_notifications.md §3.1), reintroduced through a relation whose own
+    # exists to end, reintroduced through a relation whose own
     # purpose is unrelated.
     #
     # A notification asserts a stake in the OBJECT ITSELF, so this is `reader_effective` alone. It lives in the

@@ -1,4 +1,4 @@
-"""Deletion protection on the TABLE and NAMESPACE rungs (#73, open_lakehouse_diff §1.1).
+"""Deletion protection on the TABLE and NAMESPACE rungs.
 
 The warehouse door's Decision-5 contract extended to where the gap was sharpest: a table drop
 deletes BYTES, and until the trash-namespace undrop lands nothing stands behind it. The invariants

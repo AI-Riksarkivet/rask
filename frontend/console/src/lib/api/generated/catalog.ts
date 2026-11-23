@@ -1441,7 +1441,7 @@ export interface paths {
          *     empty first. Each is ended as its own delete door ends it (every tuple naming it and on it, then its record), so
          *     no role of a retired tenant keeps a grant.
          *
-         *     **Emptiness is bottom-up** (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses
+         *     **Emptiness is bottom-up**: a project holding warehouses
          *     refuses 409 and NAMES them — a refusal that does not say what blocks it just moves the search to the
          *     user. **There is deliberately no ``cascade`` parameter on this route at all.** A project cascade would
          *     reach warehouses, and a warehouse's own delete can purge a bucket; one request must never be able to
@@ -2674,7 +2674,7 @@ export interface paths {
          * @description Delete a warehouse: its namespaces (on ``?cascade=true``), its trash, its tuples and its registry record — and
          *     its BUCKET only if asked.
          *
-         *     Gated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the
+         *     Gated on ``project#can_administer``, NOT on a relation of the
          *     warehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own
          *     admin bar rather than a rung someone could hold on this one warehouse.
          *
@@ -3088,7 +3088,7 @@ export interface paths {
          *     was ``false`` (403); after it, ``true`` (200, full listing). A table list is not a harmless header:
          *     it names data someone may not know exists.
          *
-         *     So the split ``open_notifications.md`` §3.1 already settled applies verbatim: the ROUTE may open on
+         *     So the route and the item are checked apart: the ROUTE may open on
          *     ``can_get_metadata``, each ITEM is checked on the object itself. ``list_all_tables`` (``tables.py``)
          *     has always done this; that this route did not was the inconsistency, not the policy.
          *

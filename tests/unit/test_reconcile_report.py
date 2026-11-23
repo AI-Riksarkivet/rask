@@ -1,4 +1,4 @@
-"""The cross-store reconciler (`open_hierarchy_lifecycle.md` Decision 4) — REPORT ONLY (unit).
+"""The cross-store reconciler — REPORT ONLY (unit).
 
 The estate is built with the CATALOG's own registry writers against a local filesystem control root
 (``file://{tmp_path}``, exactly as ``services/catalog/tests/test_warehouses.py`` does), so these tests prove the

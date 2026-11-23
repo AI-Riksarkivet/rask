@@ -499,9 +499,12 @@ async def test_a_bus_dialled_over_tls_is_sent_nothing_until_it_has_proved_itself
 
 
 @pytest.mark.asyncio
-async def test_a_publish_that_meets_a_session_being_asked_for_again_waits_for_it(monkeypatch: pytest.MonkeyPatch, broker: _Broker, as_catalog: Path) -> None:
+async def test_a_publish_and_a_readiness_read_wait_for_a_session_being_asked_for_again(
+    monkeypatch: pytest.MonkeyPatch, broker: _Broker, as_catalog: Path
+) -> None:
     """A session is asked for again before its time is up, on the client that holds it, and that client is back in a
-    round trip: a publish that meets it is sent once it is up and not left to its relay."""
+    round trip: a publish that meets it is sent once it is up and not left to its relay, and a readiness read that
+    meets it answers for the connection that came back, not for the moment between the two."""
     del as_catalog
     monkeypatch.setenv("RASK_BUS_SESSION_SECONDS", "20")
     monkeypatch.setattr(bus, "_RENEW_MARGIN_SECONDS", (19.9, 19.9))
@@ -524,7 +527,7 @@ async def test_a_publish_that_meets_a_session_being_asked_for_again_waits_for_it
     async with Supervisor() as loops, bus.bus_session(loops) as session:
         assert session is not None
         await asking.wait()
-        await bus.publish_event(session, _envelope(run="r1"), topic=TOPIC, timeout_seconds=5)
+        await asyncio.gather(session.answering(), bus.publish_event(session, _envelope(run="r1"), topic=TOPIC, timeout_seconds=5))
 
     assert ([sent["subject"] for sent in _sent(client)], len(broker.opened)) == ([TOPIC], 1)
 

@@ -1,4 +1,4 @@
-"""The cross-store drift reconciler — a REPORT, beside the passes (`open_hierarchy_lifecycle.md` Decision 4).
+"""The cross-store drift reconciler — a REPORT, beside the passes.
 
 **NOTHING DELETES. NOTHING MUTATES.** Every path in this module is read-only, and that is the point:
 a reclaimer that deletes on its first run against an unvalidated rule eats live data. The output is a

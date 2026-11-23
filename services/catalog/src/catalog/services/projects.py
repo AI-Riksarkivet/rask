@@ -5,7 +5,7 @@ record claimed it, and the FGA store carried tenant tuples independently. The tw
 time anything wrote one without the other — the live estate held three projects in authz that the
 catalog had never heard of, and the projects surface read empty while `/management/v1/me` listed memberships.
 
-This registry is the fix (`open_hierarchy_lifecycle.md`, Decision 1): existence lives HERE, one JSON
+This registry is the fix: existence lives HERE, one JSON
 record per tenant, and `POST /management/v1/projects` writes this record and the FGA tuples in one operation so
 the two cannot disagree again. Same stateless-over-object-store shape as the warehouse registry —
 `_projects/<id>.json` on the control root, no DB — and the same per-record corruption tolerance:

@@ -478,7 +478,7 @@ def set_warehouse_status(control_root: str, storage_options: StorageOptions, war
 
 
 # --------------------------------------------------------------------------- #
-# Deletion primitives (`open_hierarchy_lifecycle.md` Decision 3). Deletes are bottom-up:
+# Deletion primitives. Deletes are bottom-up:
 # a container refuses while full, so these only ever run on an emptied object.
 # --------------------------------------------------------------------------- #
 

@@ -11,7 +11,7 @@ Authorization is DELIBERATELY stronger than the data plane: warehouse-create gat
 `can_create_warehouse` (= admin) — the model action that until now was defined but never enforced — not the
 writer-tier create-on-parent that guards tables/namespaces. There is exactly ONE door and no exception:
 the project must already EXIST (`require_project_exists`, a 404 naming `POST /management/v1/projects`), and that
-route is where a tenant and its first admin are minted together (`open_hierarchy_lifecycle.md` Decision 1), so
+route is where a tenant and its first admin are minted together, so
 creating a warehouse never grants its creator tenant admin.
 
 DELETE is the mirror image (Decision 3): bottom-up, gated on the PROJECT's `can_administer` because
@@ -754,7 +754,7 @@ async def _announce_protection(control: ControlEmitter, warehouse_id: str, actor
 
 
 # --------------------------------------------------------------------------- #
-# Deletion (`open_hierarchy_lifecycle.md` Decision 3): bottom-up, and a container refuses while full.
+# Deletion: bottom-up, and a container refuses while full.
 # --------------------------------------------------------------------------- #
 
 
@@ -1040,7 +1040,7 @@ async def delete_warehouse(
     """Delete a warehouse: its namespaces (on ``?cascade=true``), its trash, its tuples and its registry record — and
     its BUCKET only if asked.
 
-    Gated on ``project#can_administer`` (`open_hierarchy_lifecycle.md` Decision 3), NOT on a relation of the
+    Gated on ``project#can_administer``, NOT on a relation of the
     warehouse itself: destroying a tenant's storage is a tenant-level act, so it clears the tenant's own
     admin bar rather than a rung someone could hold on this one warehouse.
 

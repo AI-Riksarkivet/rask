@@ -102,7 +102,7 @@ def test_create_list_get_warehouse(client: TestClient, tmp_path: Any, store: str
 def test_a_project_holding_warehouses_refuses_its_delete_naming_each_one(
     client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Deletes are bottom-up (`open_hierarchy_lifecycle.md` Decision 3): a project holding warehouses refuses 409 and names
+    """Deletes are bottom-up: a project holding warehouses refuses 409 and names
     each one with the door that empties it, never another tenant's, and the refusal removes nothing."""
     client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme", "globex")

@@ -469,7 +469,8 @@ class Bus:
 
         A read taken before this process has held any connection waits for the first one, within
         :data:`_FIRST_CONNECTION_SECONDS`: a service's watch starts beside its session, and the first connect returning
-        a few milliseconds later is the bus coming up, not the bus being away.
+        a few milliseconds later is the bus coming up, not the bus being away. A read that meets a session being asked
+        for again waits for it as a publish does (:meth:`_renewed`): the round trip of a renewal is no outage to report.
 
         Raises:
             ConnectionError: No connection is held, or the one held is reconnecting or closed.
@@ -478,6 +479,7 @@ class Bus:
             with contextlib.suppress(TimeoutError):
                 async with asyncio.timeout(_FIRST_CONNECTION_SECONDS):
                     await self._held.wait()
+        await self._renewed()
         if not self.connected:
             raise ConnectionError("this process is not connected to the bus")
 
@@ -485,13 +487,17 @@ class Bus:
         client = self._client
         return client if client is not None and client.is_connected else None
 
-    async def _up(self) -> Client | None:
-        """The connection when it is up. One that is asking for its session again is waited for, up to
-        ``_RENEWED_WITHIN_SECONDS`` from the asking: it is back in a round trip, and a publish that met it need not be
-        left to its relay. A connection that is away for any other reason is not waited for."""
+    async def _renewed(self) -> None:
+        """Wait for a connection that is asking for its session again, up to ``_RENEWED_WITHIN_SECONDS`` from the
+        asking: it is back in a round trip. A connection that is away for any other reason is not waited for."""
         clock = asyncio.get_running_loop()
         while (client := self._client) is not None and client.is_reconnecting and clock.time() < self._renewed_by:
             await asyncio.sleep(0.02)
+
+    async def _up(self) -> Client | None:
+        """The connection when it is up, once a session being asked for again is back: a publish that met the asking
+        need not be left to its relay."""
+        await self._renewed()
         return self._connected()
 
     async def send(self, topic: str, body: bytes, *, message_id: str, timeout: float) -> None:

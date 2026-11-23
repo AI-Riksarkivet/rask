@@ -168,7 +168,7 @@ def require_namespace_depth(segments: list[str]) -> None:
 def require_not_protected(protected: bool, *, kind: str, obj_id: str, force: bool) -> None:
     """Refuse to delete an object marked ``protected`` unless the caller passed ``force=true``.
 
-    Deletion protection (`open_hierarchy_lifecycle.md` Decision 5): an opt-in flag on the registry
+    Deletion protection: an opt-in flag on the registry
     record that makes an object refuse deletion. It is what makes ``cascade`` survivable — a
     fat-fingered cascade cannot take a protected object with it — and it is the ONE thing standing
     between a mistyped id and an irreversible purge.
@@ -263,7 +263,7 @@ async def require_namespace_unprotected(settings: CatalogStore, namespace: Gover
 async def require_project_exists(settings: CatalogStore, project: str) -> None:
     """Refuse an operation naming a project the registry does not know.
 
-    Existence is a LAYER-3 invariant (`open_hierarchy_lifecycle.md`): it comes from the project
+    Existence is a LAYER-3 invariant: it comes from the project
     registry, not from FGA tuples and not from warehouse records implying a tenant. Checked before
     authz on purpose — the answer is the same for every caller, discloses nothing, and a 404 here
     tells an authorized admin the actual fix (create the project) instead of a misleading 403.

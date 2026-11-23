@@ -8,8 +8,7 @@ shipped client — pylance's Rust `RestNamespace`, lancedb `namespace_client_imp
 namespace mode, and the generated urllib3 client — sends those fields in the body.
 
 rask declared none of them, so FastAPI bound rask's own aliases as QUERY parameters and dropped the
-body on the floor. `DescribeTable` was fixed in `4c64046c`; these eight were not, which is blocker A1
-in `open_lakehouse_diff_left.md`.
+body on the floor. `DescribeTable` was fixed in `4c64046c`; these eight were not.
 
 TWO CONSEQUENCES, and the second is why this test exists now. A spec client's `version`, `branch`,
 `page_token` and `limit` were silently ignored — an unpaged listing, main's stats, the latest version.
