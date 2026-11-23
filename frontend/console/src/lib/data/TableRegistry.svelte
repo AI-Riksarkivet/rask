@@ -3,14 +3,7 @@
 	// sortable columns, a text search, a project filter and a LABEL filter (the labels each table
 	// carries, ADR 0211, shown as chips per row). Same stack-mode states as before: governed without a
 	// session ⇒ sign-in, unreachable ⇒ retrying, open ⇒ data or the honest empty state.
-	//
-	// THE #85 "Declare table" FORM NOW HAS ITS SECOND HALF. Declaring reserves an id and writes no
-	// bytes, and nothing in the app could put the first rows in: the append door (`insertRows`)
-	// opens the table's dataset to coerce the batch, so it 404s for a table that has none yet. The
-	// row field below sends the same submit through the catalog's create door instead, which lands
-	// the first data version into a declared-only table's already-reserved location — so declare and
-	// fill are two visits to one form rather than a dead end. This is the ONLY surface where that can
-	// live: a declared-only table has no dataset to describe, so its detail page is not reachable.
+	// The #85 declare form, and its create-with-rows second half, is `TableDeclareForm`.
 	import {
 		createSvelteTable,
 		DataTable,
@@ -29,11 +22,9 @@
 	import { Plus, RefreshCw, ShieldAlert } from '@lucide/svelte';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { createTableWithRows } from './catalog';
-	import { WriteKey } from './write-key.svelte';
-	import { parseJsonRows, rowsToArrow } from './json-rows';
-	import { missingFieldsHint } from '#lib/form-hint.ts';
-	import { declareTable, fetchTables } from './remote/catalog.api';
+	import { Button } from '@riksarkivet/ui/button';
+	import { fetchTables } from './remote/catalog.api';
+	import TableDeclareForm from './TableDeclareForm.svelte';
 	import ProjectFilter from './ProjectFilter.svelte';
 	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
 	import { filterVerdict, projectOf } from './project-filter.ts';
@@ -82,28 +73,8 @@
 	const unauthorized = $derived(tables === null && lastStatus === 401);
 	const offline = $derived(tables === null && settled && lastStatus !== 401);
 
-	// What a BARE declare leaves behind, said where the user decides to make one — the dead end was
-	// not only missing a door, it was silent about being a dead end.
-	const DECLARE_ONLY_NOTE =
-		'Left empty, this reserves the name and writes no data: the table has no version and no schema until its first write, and appending rows to it is refused. Its page, or this form with the same namespace and name, lands that first version.';
-
-	// #85 declare-table form state — hidden behind a toggle so the registry stays a list by default.
+	// The declare form, hidden behind a toggle so the registry stays a list by default.
 	let declaring = $state(false);
-	let declNs = $state('');
-	let declName = $state('');
-	let declLocation = $state(''); // optional — empty means the catalog picks the location
-	let declRows = $state(''); // optional — a JSON array of row objects turns this into a create
-	// Kept while an unanswered create of the same table and rows is retried, so the catalog creates it once (LH-577).
-	const createKey = new WriteKey();
-	let declBusy = $state(false);
-	let declMsg = $state<{ ok: boolean; text: string } | null>(null);
-	const hasRows = $derived(declRows.trim().length > 0);
-	const declareHint = $derived(
-		missingFieldsHint(hasRows ? 'Creating' : 'Declaring', [
-			['a namespace', declNs],
-			['a table name', declName],
-		]),
-	);
 
 	/** The labels each listed table carries, read per project the caller can see (ADR 0211). */
 	const labels = new LabelIndexRead();
@@ -128,131 +99,11 @@
 	// still honest.
 	liveRead(lineageTick, () => load());
 
-	/** The refusal wording both submit paths share — one denial, worded once. */
-	function declFail(verb: string, ns: string, status: number, detail: string): void {
-		if (status === 401) declMsg = { ok: false, text: `Sign in to ${verb} a table.` };
-		else if (status === 403)
-			declMsg = {
-				ok: false,
-				text: `Denied: ${verb === 'create' ? 'creating' : 'declaring'} in ${ns} needs create access (can_create_table).`,
-			};
-		else if (status === 0 && verb === 'create')
-			declMsg = {
-				ok: false,
-				text: `Not confirmed: the catalog did not answer, so the table may have been created. Creating again sends the same request, which the catalog applies once. (${detail})`,
-			};
-		else if (status === 0)
-			declMsg = { ok: false, text: `Catalog unreachable — the ${verb} was not applied.` };
-		else declMsg = { ok: false, text: detail };
-	}
-
-	function clearDeclareForm(): void {
-		declNs = '';
-		declName = '';
-		declLocation = '';
-		declRows = '';
-	}
-
-	async function runDeclare(): Promise<void> {
-		const ns = declNs.trim();
-		const name = declName.trim();
-		if (declBusy || !ns || !name) return;
-		declBusy = true;
-		declMsg = null;
-		try {
-			const res = await declareTable({
-				namespace: ns,
-				name,
-				location: declLocation.trim() || undefined,
-			});
-			if (res.ok) {
-				declMsg = {
-					ok: true,
-					// The reservation is real but EMPTY, and saying only "declared" is what sent people to a
-					// 404 detail page next. State what exists and what does not.
-					text: `declared ${ns}$${name}${res.data.location ? ` @ ${res.data.location}` : ''} — no data yet. ${DECLARE_ONLY_NOTE}`,
-				};
-				clearDeclareForm();
-				await load(); // pull the declared table into the registry
-			} else declFail('declare', ns, res.status, res.detail);
-		} catch (err) {
-			// the parse boundary throws on a wire-contract drift — surface it, never render from a lie
-			declMsg = { ok: false, text: `declare response drifted from the contract: ${String(err)}` };
-		} finally {
-			declBusy = false;
-		}
-	}
-
-	/** The first write: create the table FROM the typed rows. Serves a brand-new id and a previously
-	 *  declared one identically — the catalog lands the first data version into whichever location the
-	 *  id already holds, which is why `location` is not sent here and is ignored when rows are given. */
-	async function runCreateWithRows(): Promise<void> {
-		const ns = declNs.trim();
-		const name = declName.trim();
-		if (declBusy || !ns || !name) return;
-		const parsed = parseJsonRows(declRows);
-		if (!parsed.ok) {
-			declMsg = { ok: false, text: `Invalid rows: ${parsed.reason}` };
-			return;
-		}
-		const rows = parsed.rows;
-		declBusy = true;
-		declMsg = null;
-		try {
-			// Browser-side Arrow-IPC encode: the inferred schema BECOMES the table's schema on a create,
-			// so whole numbers are written as integers (`rowsToArrow`).
-			const arrow = rowsToArrow(rows);
-			const res = await createTableWithRows({
-				table: `${ns}$${name}`,
-				arrow,
-				key: createKey.take(JSON.stringify([ns, name, declRows])),
-			});
-			createKey.settle(res);
-			if (res.ok) {
-				declMsg = {
-					ok: true,
-					text: `Created ${ns}$${name} with ${rows.length} row${rows.length === 1 ? '' : 's'}.`,
-				};
-				clearDeclareForm();
-				// EXPLICIT refresh, unlike the declare path. `declareTable` is a remote command and
-				// single-flights `fetchTables().refresh()` in the browser; this write is a keep-bytes
-				// catalog door route, so nothing invalidates the query cache for it — `load()` alone would re-read
-				// the CACHED list and the new table would not appear until something else advanced the
-				// live cursor. (Caught by the e2e, which was flaky exactly as often as the cursor ticked.)
-				await fetchTables().refresh();
-				await load();
-			} else declFail('create', ns, res.status, res.detail);
-		} catch (e) {
-			declMsg = { ok: false, text: `Encode failed: ${e instanceof Error ? e.message : String(e)}` };
-		} finally {
-			declBusy = false;
-		}
-	}
-
-	/** The form's toggle, held to hand the focus back to. */
-	let declareToggle: HTMLButtonElement | null = null;
-	function holdToggle(button: HTMLButtonElement): () => void {
-		declareToggle = button;
-		return () => (declareToggle = null);
-	}
-
-	/** The form opens on a click that asked for it, so its first field takes the focus. */
-	function focusOnOpen(input: HTMLInputElement): void {
-		input.focus();
-	}
-
-	/** Escape in any of the form's controls closes it, as it closes every other panel, and hands focus
-	 *  back to its toggle. */
-	function closeDeclareOnEscape(e: KeyboardEvent): void {
-		if (e.key !== 'Escape') return;
-		e.preventDefault();
+	/** The form's toggle, held to hand the focus back to when Escape closes the form. */
+	let declareToggle = $state<HTMLElement | null>(null);
+	function closeDeclare(): void {
 		declaring = false;
 		declareToggle?.focus();
-	}
-
-	function submitDeclareForm(): void {
-		if (hasRows) void runCreateWithRows();
-		else void runDeclare();
 	}
 
 	// ── the DataTable (goal cond 4) ──
@@ -404,80 +255,19 @@
 				: 'the catalog registry, estate-wide — every table your grants allow'}</span
 		>
 		{#if !unauthorized}
-			<button class="new" {@attach holdToggle} onclick={() => (declaring = !declaring)}>
+			<Button
+				variant="outline"
+				size="sm"
+				class="ml-auto"
+				bind:ref={declareToggle}
+				onclick={() => (declaring = !declaring)}
+			>
 				<Plus size={12} /> Declare table
-			</button>
+			</Button>
 		{/if}
 	</header>
 
-	{#if declaring && !unauthorized}
-		<!-- #85 the browser-shaped create. Empty rows → declare (JSON, no Arrow): the id is reserved and
-		     nothing is written. Rows → create: the browser encodes them to Arrow IPC and the catalog
-		     lands the table's first data version, whether or not the id was declared earlier. -->
-		<form
-			class="declare"
-			aria-label="Declare table"
-			onsubmit={(e) => {
-				e.preventDefault();
-				submitDeclareForm();
-			}}
-		>
-			<div class="row">
-				<input
-					class="mono"
-					bind:value={declNs}
-					placeholder="namespace — warehouse$name"
-					aria-label="Namespace"
-					onkeydown={closeDeclareOnEscape}
-					{@attach focusOnOpen}
-				/>
-				<input
-					class="mono"
-					bind:value={declName}
-					placeholder="table name"
-					aria-label="Table name"
-					onkeydown={closeDeclareOnEscape}
-				/>
-				<input
-					class="mono loc"
-					bind:value={declLocation}
-					placeholder="location (optional — catalog picks)"
-					aria-label="Location"
-					onkeydown={closeDeclareOnEscape}
-					disabled={hasRows}
-					title={hasRows
-						? 'Ignored when rows are given: the create lands into the location the id already holds.'
-						: undefined}
-				/>
-			</div>
-			<textarea
-				class="mono rows"
-				bind:value={declRows}
-				placeholder={'rows (optional) — [{ "id": 1, "name": "a" }]'}
-				aria-label="Initial rows"
-				onkeydown={closeDeclareOnEscape}></textarea>
-			<p class="hint">
-				{hasRows
-					? 'The rows are encoded to Arrow and become the schema and first version of this table.'
-					: DECLARE_ONLY_NOTE}
-			</p>
-			<div class="row">
-				<button
-					class="btn"
-					type="submit"
-					disabled={declBusy || declareHint !== null}
-					aria-describedby={declareHint ? 'declare-hint' : undefined}
-					onkeydown={closeDeclareOnEscape}
-				>
-					{declBusy ? '…' : hasRows ? 'Create with rows' : 'Declare'}
-				</button>
-				{#if declareHint}<span class="hint" id="declare-hint">{declareHint}</span>{/if}
-			</div>
-		</form>
-	{/if}
-	{#if declMsg}
-		<div class={['banner', { ok: declMsg.ok, fail: !declMsg.ok }]}>{declMsg.text}</div>
-	{/if}
+	<TableDeclareForm open={declaring && !unauthorized} onclose={closeDeclare} onchanged={load} />
 
 	{#if unauthorized}
 		<div class="empty">
@@ -552,24 +342,27 @@
 			<dd><LabelChips labels={drawerRow.labels} /></dd>
 		</dl>
 		<div class="jumps">
-			<a
-				class="btn"
+			<Button
+				variant="outline"
+				size="sm"
 				href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(drawerRow.id) })}
-				>Open detail</a
+				>Open detail</Button
 			>
 			<!-- R18 table previewer: deep-link onto the detail pane's preview tab, which reads the
 			     first N rows through the catalog's query door onto the shared data-table. -->
-			<a
-				class="btn"
+			<Button
+				variant="outline"
+				size="sm"
 				href={resolve('/catalog/tables/[table]?tab=preview', {
 					table: encodeURIComponent(drawerRow.id),
-				})}>Preview</a
+				})}>Preview</Button
 			>
-			<a
-				class="btn"
+			<Button
+				variant="outline"
+				size="sm"
 				href={resolve('/catalog/tables/[table]?tab=access', {
 					table: encodeURIComponent(drawerRow.id),
-				})}>Access tab</a
+				})}>Access tab</Button
 			>
 		</div>
 	{/if}
@@ -604,86 +397,6 @@
 	.sub {
 		color: var(--muted-foreground);
 		font-size: 12px;
-	}
-	.new {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		margin-left: auto;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 12px;
-		cursor: pointer;
-	}
-	.new:hover {
-		border-color: var(--muted-foreground);
-	}
-	.declare {
-		display: flex;
-		flex-direction: column;
-		gap: 8px;
-		margin-bottom: 12px;
-	}
-	.declare .row {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 8px;
-	}
-	.declare input,
-	.declare textarea {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 8px;
-	}
-	.declare input:disabled {
-		opacity: 0.5;
-	}
-	.declare .loc {
-		flex: 1;
-		min-width: 220px;
-	}
-	.declare .rows {
-		min-height: 56px;
-		resize: vertical;
-	}
-	.hint {
-		margin: 0;
-		color: var(--muted-foreground);
-		font-size: 12px;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 10px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.banner {
-		padding: 8px 12px;
-		border-radius: var(--radius-sm);
-		border: 1px solid var(--border);
-		margin-bottom: 12px;
-		font-size: 13px;
-	}
-	.banner.ok {
-		border-color: color-mix(in srgb, var(--success) 45%, var(--border));
-		color: var(--success);
-	}
-	.banner.fail {
-		border-color: color-mix(in srgb, var(--destructive) 45%, var(--border));
-		color: var(--destructive);
 	}
 	.toolbar {
 		display: flex;
@@ -737,17 +450,5 @@
 	.jumps {
 		display: flex;
 		gap: 8px;
-	}
-	.jumps .btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 12px;
-		text-decoration: none;
-	}
-	.jumps .btn:hover {
-		border-color: var(--muted-foreground);
 	}
 </style>

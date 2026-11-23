@@ -5,7 +5,6 @@
 	// namespace carries (ADR 0211) and a filter by one, the #85 drop action (AlertDialog confirm;
 	// Restrict by default, Cascade opt-in) and the create: the spec's CreateNamespace on
 	// `<warehouse>$<name>`.
-	import { AlertDialog } from '@riksarkivet/ui/alert-dialog';
 	import {
 		createSvelteTable,
 		DataTable,
@@ -25,10 +24,8 @@
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { fetchTables } from './remote/catalog.api';
-	import { dropNamespace } from './remote/namespace.api';
-	import { dropRecoveryText } from './drop-recovery';
-	import { DropRecoveryRead } from './drop-recovery-read.svelte.ts';
-	import { createWarehouseNamespace } from './remote/warehouses.api';
+	import NamespaceCreateForm, { type Banner } from './NamespaceCreateForm.svelte';
+	import NamespaceDropDialog from './NamespaceDropDialog.svelte';
 	import { listEstateNamespaces, type EstateNamespaces } from './estate-namespaces.ts';
 	import ProjectFilter from './ProjectFilter.svelte';
 	import ProjectFilterNotice from './ProjectFilterNotice.svelte';
@@ -41,9 +38,8 @@
 	import LabelIndexNotice from './LabelIndexNotice.svelte';
 	import { labelChips, type Labels } from './labels.ts';
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
-	import { DELIMITER, parentNamespace, warehouseOf } from '#lib/api/identifiers.ts';
-	import { missingFieldsHint } from '#lib/form-hint.ts';
-	import { Select } from '@riksarkivet/ui/select';
+	import { parentNamespace, warehouseOf } from '#lib/api/identifiers.ts';
+	import { Button } from '@riksarkivet/ui/button';
 	import { catalogPath } from '#lib/catalog-trail.ts';
 	import { CopyButton } from '@riksarkivet/ui/copy-button';
 
@@ -57,10 +53,7 @@
 	let lastStatus = $state(0);
 	let settled = $state(false);
 	let busy = $state(false);
-	let banner = $state<{ tone: 'ok' | 'fail'; text: string } | null>(null);
-	let dropOpen = $state(false);
-	let dropTarget = $state<string | null>(null);
-	let cascade = $state(false);
+	let banner = $state<Banner | null>(null);
 
 	/** The project the rows are filtered to (`''`: every project); the namespaces page keeps it in
 	 *  its URL. */
@@ -168,103 +161,26 @@
 		),
 	);
 
+	// The drop's confirm, mounted once per opening (`dropOpening` counts them), so its cascade choice
+	// and its recovery read belong to that opening alone.
+	let dropOpen = $state(false);
+	let dropTarget = $state<string | null>(null);
+	let dropOpening = $state(0);
 	// Tables inside the namespace queued for drop — sizes the Cascade choice honestly.
 	const targetCount = $derived(
 		dropTarget === null ? 0 : (rows.find((r) => r.ns === dropTarget)?.count ?? 0),
 	);
 
-	// What a cascade would leave recoverable, read from the namespace's warehouse when the dialog opens.
-	const recovery = new DropRecoveryRead();
-
 	function openDrop(ns: string): void {
 		dropTarget = ns;
-		cascade = false;
+		dropOpening += 1;
 		banner = null;
 		dropOpen = true;
-		void recovery.load(ns);
 	}
 
-	function fail(ns: string, status: number, detail: string): void {
-		if (status === 401)
-			banner = { tone: 'fail', text: 'Sign in — dropping a namespace is a per-user action.' };
-		else if (status === 403)
-			banner = {
-				tone: 'fail',
-				text: `Denied: dropping ${ns} needs the modifier rung (can_delete).`,
-			};
-		else if (status === 0)
-			banner = { tone: 'fail', text: 'Catalog unreachable — the drop was not applied.' };
-		else banner = { tone: 'fail', text: detail };
-	}
-
-	async function confirmDrop(): Promise<void> {
-		const ns = dropTarget;
-		if (ns === null || busy) return;
-		busy = true;
-		banner = null;
-		try {
-			const res = await dropNamespace({ namespace: ns, cascade });
-			if (res.ok) {
-				banner = { tone: 'ok', text: `namespace ${ns} dropped${cascade ? ' (cascade)' : ''}` };
-				await load();
-			} else {
-				fail(ns, res.status, res.detail);
-			}
-		} catch (err) {
-			// the parse boundary throws on a wire-contract drift — surface it, never render from a lie
-			banner = { tone: 'fail', text: `drop response drifted from the contract: ${String(err)}` };
-		} finally {
-			// ALWAYS close + disarm: bits-ui's AlertDialog.Action does not auto-close, so leaving the dialog
-			// open would keep the destructive action armed for a second, confirm-free fire (audit: major).
-			// The banner carries success/failure either way.
-			busy = false;
-			dropOpen = false;
-			dropTarget = null;
-		}
-	}
-
-	// The create: a namespace directly under a warehouse, named `<warehouse>$<name>`. Hidden behind
-	// the header's toggle so the page stays a list by default, as the tables page's declare is.
+	// The create, hidden behind the header's toggle so the page stays a list by default, as the
+	// tables page's declare is.
 	let creating = $state(false);
-	let createDraft = $state({ warehouse: '', name: '' });
-	const createHint = $derived(
-		createDraft.name.includes(DELIMITER)
-			? `A name holds no ${DELIMITER}: this creates a namespace directly under the warehouse.`
-			: missingFieldsHint('Creating', [
-					['a warehouse', createDraft.warehouse],
-					['a name', createDraft.name.trim()],
-				]),
-	);
-
-	async function create(): Promise<void> {
-		const warehouse = createDraft.warehouse;
-		const name = createDraft.name.trim();
-		if (busy || createHint !== null) return;
-		busy = true;
-		banner = null;
-		try {
-			const res = await createWarehouseNamespace({ warehouse, name });
-			if (res.ok) {
-				banner = { tone: 'ok', text: `namespace ${warehouse}${DELIMITER}${name} created` };
-				createDraft = { warehouse, name: '' };
-				await load();
-			} else if (res.status === 401)
-				banner = { tone: 'fail', text: 'Sign in — creating a namespace is a per-user action.' };
-			else if (res.status === 403)
-				banner = {
-					tone: 'fail',
-					text: `Denied: creating a namespace in ${warehouse} needs write access there (can_create_namespace). ${res.detail}`,
-				};
-			else if (res.status === 0)
-				banner = {
-					tone: 'fail',
-					text: 'Not confirmed: the catalog did not answer, so the namespace may have been created.',
-				};
-			else banner = { tone: 'fail', text: res.detail };
-		} finally {
-			busy = false;
-		}
-	}
 
 	let sorting = $state<SortingState>([]);
 	let globalFilter = $state('');
@@ -397,14 +313,16 @@
 	</a>
 {/snippet}
 {#snippet actionsCell(row: Row)}
-	<button
-		class="drop"
+	<Button
+		variant="ghost"
+		size="xs"
+		class="text-muted-foreground hover:text-destructive"
 		aria-label={`Drop namespace ${row.ns}`}
 		disabled={busy}
 		onclick={() => openDrop(row.ns)}
 	>
 		<Trash2 size={12} /> drop
-	</button>
+	</Button>
 {/snippet}
 
 <div class="page">
@@ -416,50 +334,25 @@
 				: 'every warehouse, estate-wide — every namespace your grants allow'} ·
 			&lt;warehouse&gt;$&lt;namespace&gt;</span
 		>
-		<button
-			class="new"
+		<Button
+			variant="outline"
+			size="sm"
+			class="ml-auto"
 			aria-expanded={creating}
 			aria-controls="create-namespace"
 			onclick={() => (creating = !creating)}
 		>
 			<Plus size={12} /> New namespace
-		</button>
+		</Button>
 	</header>
 
-	{#if creating && !unauthorized}
-		<form
-			id="create-namespace"
-			class="create"
-			aria-label="Create namespace"
-			onsubmit={(e) => {
-				e.preventDefault();
-				void create();
-			}}
-		>
-			<label class="field">
-				Warehouse
-				<Select
-					bind:value={createDraft.warehouse}
-					ariaLabel="Warehouse"
-					placeholder="warehouse…"
-					options={(listing?.warehouses ?? []).map((w) => ({ value: w, label: w }))}
-				/>
-			</label>
-			<label class="field">
-				Name
-				<input class="mono" bind:value={createDraft.name} placeholder="bronze" />
-			</label>
-			<button
-				class="jbtn"
-				type="submit"
-				disabled={busy || createHint !== null}
-				aria-describedby={createHint ? 'create-hint' : undefined}
-			>
-				Create
-			</button>
-			{#if createHint}<p class="mut hint" id="create-hint">{createHint}</p>{/if}
-		</form>
-	{/if}
+	<NamespaceCreateForm
+		open={creating && !unauthorized}
+		warehouses={listing?.warehouses ?? []}
+		bind:busy
+		onresult={(next) => (banner = next)}
+		onchanged={load}
+	/>
 
 	<!-- #86: a listing that failed is its own state. Collapsing it into "no namespaces" is the #66
 	     defect — an empty namespace invisible with nothing said. -->
@@ -554,45 +447,29 @@
 			<dd class="mono">{drawerRow.count}</dd>
 		</dl>
 		<div class="jumps">
-			<a
-				class="jbtn"
+			<Button
+				variant="outline"
+				size="sm"
 				href={resolve('/catalog/namespaces/[id]', { id: encodeURIComponent(drawerRow.ns) })}
-				>Open detail</a
+				>Open detail</Button
 			>
 		</div>
 	{/if}
 </RowDrawer>
 
-<AlertDialog.Root bind:open={dropOpen}>
-	<AlertDialog.Content>
-		<AlertDialog.Title>Drop namespace {dropTarget}</AlertDialog.Title>
-		<AlertDialog.Description>
-			This drops <span class="mono">{dropTarget}</span> from the catalog (owner-gated: can_delete).
-			The default Restrict behavior refuses a non-empty namespace, and removes an empty one
-			permanently: there is nothing in it to recover. Tick Cascade to also drop everything inside
-			it.
-			{#if cascade}
-				A cascade drops it and its tables
-				{#if recovery.current}{dropRecoveryText(recovery.current)}.{:else}(reading how long they
-					stay recoverable…).{/if}
-			{/if}
-		</AlertDialog.Description>
-		<label class="cascade">
-			<input type="checkbox" bind:checked={cascade} disabled={busy} />
-			Cascade — also drop the {targetCount} table{targetCount === 1 ? '' : 's'} inside
-		</label>
-		<div class="dialog-actions">
-			<AlertDialog.Cancel disabled={busy}>Cancel</AlertDialog.Cancel>
-			<AlertDialog.Action
-				class="border-destructive/40 bg-destructive/15 text-destructive hover:bg-destructive/25"
-				disabled={busy}
-				onclick={confirmDrop}
-			>
-				Drop
-			</AlertDialog.Action>
-		</div>
-	</AlertDialog.Content>
-</AlertDialog.Root>
+{#if dropTarget !== null}
+	{#key dropOpening}
+		<NamespaceDropDialog
+			bind:open={dropOpen}
+			ns={dropTarget}
+			count={targetCount}
+			bind:busy
+			onresult={(next) => (banner = next)}
+			onchanged={load}
+			ondone={() => (dropTarget = null)}
+		/>
+	{/key}
+{/if}
 
 <style>
 	.page {
@@ -616,23 +493,6 @@
 		color: var(--muted-foreground);
 		font-size: 12px;
 	}
-	.new {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		margin-left: auto;
-		cursor: pointer;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 12px;
-		text-decoration: none;
-	}
-	.new:hover {
-		border-color: var(--muted-foreground);
-	}
 	.banner {
 		padding: 8px 12px;
 		border-radius: var(--radius-sm);
@@ -654,33 +514,6 @@
 	.banner.fail {
 		border-color: color-mix(in srgb, var(--destructive) 45%, var(--border));
 		color: var(--destructive);
-	}
-	.create {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: flex-end;
-		gap: 8px;
-		margin-bottom: 12px;
-	}
-	.field {
-		display: flex;
-		flex-direction: column;
-		gap: 4px;
-		color: var(--muted-foreground);
-		font-size: 12px;
-	}
-	.create input {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		padding: 5px 9px;
-		font-size: 12px;
-	}
-	.hint {
-		flex-basis: 100%;
-		margin: 0;
-		font-size: 12px;
 	}
 	.toolbar {
 		display: flex;
@@ -712,33 +545,6 @@
 		color: var(--muted-foreground);
 		padding: 32px 0;
 	}
-	.drop {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		background: none;
-		border: none;
-		border-radius: var(--radius-sm);
-		color: var(--muted-foreground);
-		font-size: 11px;
-		padding: 2px 6px;
-		cursor: pointer;
-	}
-	.drop:hover {
-		color: var(--destructive);
-		background: var(--muted);
-	}
-	.drop:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.cascade {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		color: var(--muted-foreground);
-		font-size: 13px;
-	}
 	/* drawer record + jump links */
 	.rec {
 		display: grid;
@@ -757,23 +563,6 @@
 	}
 	.jumps {
 		display: flex;
-		gap: 8px;
-	}
-	.jbtn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 12px;
-		text-decoration: none;
-	}
-	.jbtn:hover {
-		border-color: var(--muted-foreground);
-	}
-	.dialog-actions {
-		display: flex;
-		justify-content: flex-end;
 		gap: 8px;
 	}
 </style>

@@ -17,6 +17,7 @@
 	import { ExternalLink, TriangleAlert } from '@lucide/svelte';
 	import { AlertDialog } from '@riksarkivet/ui/alert-dialog';
 	import { Button } from '@riksarkivet/ui/button';
+	import { Checkbox } from '@riksarkivet/ui/checkbox';
 	import { toast } from 'svelte-sonner';
 	import { deleteProject } from '#lib/remote/warehouses.api.ts';
 
@@ -157,8 +158,8 @@
 		     destructive flag has to keep the control that disarms it. -->
 		{#if protectedRefusal || force}
 			<label class="force">
-				<input
-					type="checkbox"
+				<Checkbox
+					class="mt-px"
 					bind:checked={force}
 					disabled={busy}
 					aria-label="Override deletion protection"

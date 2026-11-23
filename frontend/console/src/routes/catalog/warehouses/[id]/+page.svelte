@@ -39,54 +39,51 @@
 		fetchMyPermissions: (kind, id) => fetchMyPermissions({ kind, id }),
 	};
 
-	let wh = $state<Warehouse | null>(null);
-	let tables = $state<string[] | null>(null);
+	// The record, the warehouse's own listing, the table registry and the root listing, read together;
+	// the page settles once all four have answered. Each is one instance per argument, so a navigation
+	// reads the new warehouse's with no latest-wins guard to hand-write.
+	const reads = $derived({
+		wh: fetchWarehouse(id),
+		ns: fetchWarehouseNamespaces(id),
+		tables: fetchTables(),
+		served: fetchServedWarehouses(),
+	});
+	const whRes = $derived(reads.wh.current);
+	const nsRes = $derived(reads.ns.current);
+	const tRes = $derived(reads.tables.current);
+	const served = $derived(reads.served.current);
+	const settled = $derived(
+		whRes !== undefined && nsRes !== undefined && tRes !== undefined && served !== undefined,
+	);
+
+	const wh = $derived(settled && whRes?.ok ? whRes.data : null);
+	const lastStatus = $derived(!settled || whRes === undefined ? 0 : whRes.ok ? 200 : whRes.status);
 	// The warehouse's listing. `null` = the read itself failed (rendered as its own honest state, never
 	// silently collapsed into "no namespaces" — that collapse was the #66 bug's shape).
-	let bound = $state<string[] | null>(null);
+	const bound = $derived(settled && nsRes?.ok ? [...nsRes.data.namespaces].sort() : null);
+	const tables = $derived(settled && tRes?.ok ? tRes.data.tables : null);
 	/** The root listing names this id and the registry holds no record of it: the estate's own. */
-	let estate = $state(false);
-	let lastStatus = $state(0);
-	let settled = $state(false);
+	const estate = $derived(
+		settled &&
+			whRes?.ok === false &&
+			whRes.status === 404 &&
+			served?.ok === true &&
+			served.data.namespaces.includes(id),
+	);
 
 	const unauthorized = $derived(wh === null && settled && lastStatus === 401);
 	const denied = $derived(wh === null && settled && lastStatus === 403);
 	const missing = $derived(wh === null && settled && lastStatus === 404 && !estate);
 	const offline = $derived(wh === null && settled && ![200, 401, 403, 404].includes(lastStatus));
 
-	async function load(): Promise<void> {
-		const current = id;
-		const [whRes, nsRes, tRes, served] = await Promise.all([
-			fetchWarehouse(current),
-			fetchWarehouseNamespaces(current),
-			fetchTables(),
-			fetchServedWarehouses(),
-		]);
-		if (id !== current) return; // latest-wins across navigation
-		settled = true;
-		if (whRes.ok) {
-			wh = whRes.data;
-			lastStatus = 200;
-		} else {
-			wh = null;
-			lastStatus = whRes.status;
-		}
-		estate =
-			!whRes.ok && whRes.status === 404 && served.ok && served.data.namespaces.includes(current);
-		bound = nsRes.ok ? [...nsRes.data.namespaces].sort() : null;
-		tables = tRes.ok ? [...tRes.data.tables].sort() : null;
+	/** Read all four again (an undrop changed what the warehouse lists): each call re-reads unless a
+	 *  read of it is already out, as the undrop's own refresh is. */
+	function load(): void {
+		fetchWarehouse(id);
+		fetchWarehouseNamespaces(id);
+		fetchTables();
+		fetchServedWarehouses();
 	}
-
-	$effect(() => {
-		void id;
-		wh = null;
-		tables = null;
-		bound = null;
-		estate = false;
-		lastStatus = 0;
-		settled = false;
-		load();
-	});
 
 	// The warehouse's namespaces: the LIST is the warehouse's own listing, verbatim — including a
 	// namespace with zero tables, which is exactly what the delete door will refuse on. The table
@@ -203,7 +200,7 @@
 		{@render namespaceList()}
 
 		<!-- An undrop changes what the warehouse lists, so the page reads its own listing again. -->
-		<WarehouseTrash warehouse={id} onrestored={() => void load()} />
+		<WarehouseTrash warehouse={id} onrestored={load} />
 
 		<section>
 			<h2>Access</h2>

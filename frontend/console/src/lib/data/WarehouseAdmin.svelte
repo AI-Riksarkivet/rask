@@ -24,7 +24,6 @@
 	import { page } from '$app/state';
 	import type { Warehouse } from './catalog';
 	import {
-		createWarehouse,
 		fetchServedWarehouses,
 		fetchWarehouses,
 		setWarehouseActive,
@@ -36,8 +35,9 @@
 	import { filterVerdict } from './project-filter.ts';
 	import RowDrawer from './RowDrawer.svelte';
 	import WarehouseDeleteDialog from './WarehouseDeleteDialog.svelte';
+	import WarehouseProvision from './WarehouseProvision.svelte';
+	import { Button } from '@riksarkivet/ui/button';
 	import { controlTick, liveRead } from '#lib/live/tick.svelte.ts';
-	import { missingFieldsHint } from '#lib/form-hint.ts';
 
 	/** A registered warehouse, or the estate's own (`estate`): one the root listing answers and the
 	 *  registry does not, which holds the lakehouse's own namespaces and belongs to no project. */
@@ -49,14 +49,6 @@
 	let settled = $state(false);
 	let busy = $state(false);
 	let banner = $state<{ tone: 'ok' | 'fail'; text: string } | null>(null);
-	let draft = $state({ id: '', project: '', bucket: '' });
-
-	const provisionHint = $derived(
-		missingFieldsHint('Provisioning', [
-			['a warehouse id', draft.id],
-			['a project', draft.project],
-		]),
-	);
 
 	const unauthorized = $derived(warehouses === null && lastStatus === 401);
 	const offline = $derived(warehouses === null && settled && lastStatus !== 401);
@@ -111,29 +103,9 @@
 		else banner = { tone: 'fail', text: detail };
 	}
 
-	async function provision(): Promise<void> {
-		if (busy || !draft.id.trim() || !draft.project.trim()) return;
-		busy = true;
-		banner = null;
-		try {
-			const res = await createWarehouse({
-				id: draft.id.trim(),
-				project: draft.project.trim(),
-				bucket: draft.bucket.trim() || null,
-			});
-			if (res.ok) {
-				banner = {
-					tone: 'ok',
-					text: `warehouse ${res.data.id} provisioned (${res.data.root_uri})`,
-				};
-				draft = { id: '', project: '', bucket: '' };
-				await load();
-			} else {
-				fail(res.status, res.detail);
-			}
-		} finally {
-			busy = false;
-		}
+	async function provisioned(w: Warehouse): Promise<void> {
+		banner = { tone: 'ok', text: `warehouse ${w.id} provisioned (${w.root_uri})` };
+		await load();
 	}
 
 	async function toggleActive(w: Warehouse): Promise<void> {
@@ -298,17 +270,20 @@
 	     its doors answer 403, and offering what will be refused is the defect. -->
 	{#if !w.estate}
 		{@const git = declaredInGit(w)}
-		<button
-			class="btn ghost"
+		<Button
+			variant="ghost"
+			size="xs"
 			disabled={busy || git}
 			title={git ? DECLARED_IN_GIT_REASON : undefined}
 			aria-describedby={git ? `git-${w.id}` : undefined}
 			onclick={() => toggleActive(w)}
 		>
 			{statusOf(w) === 'active' ? 'deactivate' : 'activate'}
-		</button>
-		<button
-			class="btn ghost destroy"
+		</Button>
+		<Button
+			variant="ghost"
+			size="xs"
+			class="text-destructive"
 			disabled={busy || git}
 			title={git ? DECLARED_IN_GIT_REASON : undefined}
 			aria-describedby={git ? `git-${w.id}` : undefined}
@@ -316,7 +291,7 @@
 			onclick={() => openDelete(w)}
 		>
 			delete
-		</button>
+		</Button>
 	{/if}
 {/snippet}
 
@@ -379,39 +354,12 @@
 			/>
 		{/if}
 
-		<section>
-			<h2>Provision</h2>
-			<form
-				class="row"
-				onsubmit={(e) => {
-					e.preventDefault();
-					provision();
-				}}
-			>
-				<!-- Each field named on screen, not by a placeholder that goes when the reader types. -->
-				<label class="text-muted-foreground flex flex-col gap-1 text-xs">
-					Warehouse id
-					<input class="mono" bind:value={draft.id} placeholder="acme-wh" />
-				</label>
-				<label class="text-muted-foreground flex flex-col gap-1 text-xs">
-					Project
-					<input class="mono" bind:value={draft.project} placeholder="acme" />
-				</label>
-				<label class="text-muted-foreground flex flex-col gap-1 text-xs">
-					Bucket
-					<input class="mono" bind:value={draft.bucket} placeholder="defaults to the id" />
-				</label>
-				<button
-					class="btn"
-					type="submit"
-					disabled={busy || provisionHint !== null}
-					aria-describedby={provisionHint ? 'provision-hint' : undefined}
-				>
-					Provision
-				</button>
-			</form>
-			{#if provisionHint}<p class="mut" id="provision-hint">{provisionHint}</p>{/if}
-		</section>
+		<WarehouseProvision
+			bind:busy
+			onstart={() => (banner = null)}
+			onprovisioned={provisioned}
+			onfailed={fail}
+		/>
 	{/if}
 </div>
 
@@ -429,10 +377,11 @@
 			here, and it cannot be deactivated or deleted.
 		</p>
 		<div class="jumps">
-			<a
-				class="jbtn"
+			<Button
+				variant="outline"
+				size="sm"
 				href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(drawerRow.id) })}
-				>Open detail</a
+				>Open detail</Button
 			>
 		</div>
 	{:else if drawerRow}
@@ -469,16 +418,18 @@
 			{/if}
 		</dl>
 		<div class="jumps">
-			<a
-				class="jbtn"
+			<Button
+				variant="outline"
+				size="sm"
 				href={resolve('/catalog/warehouses/[id]', { id: encodeURIComponent(drawerRow.id) })}
-				>Open detail</a
+				>Open detail</Button
 			>
 			<!-- full-page, same reason as the project cell above -->
-			<a
-				class="jbtn"
+			<Button
+				variant="outline"
+				size="sm"
 				href={resolve('/projects/[project]', { project: encodeURIComponent(drawerRow.project) })}
-				>Open project</a
+				>Open project</Button
 			>
 		</div>
 	{/if}
@@ -503,13 +454,6 @@
 		line-height: var(--text-xl--line-height);
 		letter-spacing: var(--text-xl--letter-spacing);
 		margin: 0;
-	}
-	h2 {
-		font-size: 13px;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		color: var(--muted-foreground);
-		margin: 18px 0 8px;
 	}
 	.sub {
 		color: var(--muted-foreground);
@@ -538,36 +482,6 @@
 	}
 	.chip.off {
 		border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
-	}
-	.row {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: flex-end;
-		gap: 8px;
-	}
-	input {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		padding: 5px 9px;
-		font-size: 12px;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 12px;
-		cursor: pointer;
-	}
-	.btn.ghost {
-		background: none;
-		color: var(--muted-foreground);
-	}
-	.btn.destroy {
-		color: var(--destructive);
 	}
 	.mut {
 		color: var(--muted-foreground);
@@ -620,17 +534,5 @@
 	.jumps {
 		display: flex;
 		gap: 8px;
-	}
-	.jbtn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 12px;
-		text-decoration: none;
-	}
-	.jbtn:hover {
-		border-color: var(--muted-foreground);
 	}
 </style>

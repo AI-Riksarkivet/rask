@@ -129,15 +129,16 @@
 						<li>
 							<Badge variant="outline" class="gap-1 pr-1 font-mono font-normal">
 								{labelChip(name, carried.data.labels[name] ?? null)}
-								<button
-									type="button"
-									class="text-muted-foreground hover:text-foreground rounded-sm disabled:opacity-50"
+								<Button
+									variant="ghost"
+									size="icon-xs"
+									class="text-muted-foreground hover:text-foreground size-4"
 									aria-label="Remove label {name}"
 									disabled={busy}
 									onclick={() => void remove(name)}
 								>
 									<X size={12} />
-								</button>
+								</Button>
 							</Badge>
 						</li>
 					{/each}

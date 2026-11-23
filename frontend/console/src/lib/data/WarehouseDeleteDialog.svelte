@@ -17,7 +17,9 @@
 	// Nothing is remembered between opens. Consent given for one warehouse (or one attempt) is not
 	// consent for the next.
 	import { Dialog } from '@riksarkivet/ui/dialog';
+	import { Button } from '@riksarkivet/ui/button';
 	import { Checkbox } from '@riksarkivet/ui/checkbox';
+	import { Input } from '@riksarkivet/ui/input';
 	import { toast } from 'svelte-sonner';
 	import type { Warehouse } from './catalog';
 	import { deleteWarehouse } from './remote/warehouses.api';
@@ -63,20 +65,18 @@
 		bucketTyped = '';
 	}
 
-	// Clear on the closed→open transition AND whenever the dialog is re-pointed at a different
-	// warehouse. `armedFor` is deliberately NOT `$state`: it is bookkeeping for this effect, and making
-	// it reactive would have the effect depend on its own write.
-	//
-	// This is a TRANSITION, not a projection, so `$derived` cannot express it: every field reset here is
-	// then edited by the user, and a derived value would snap each keystroke back to the reset. The
-	// effect reads only `open` and `warehouse.id` and writes none of them, so it cannot re-enter.
-	let armedFor: string | null = null;
-	$effect(() => {
-		const key = open ? (warehouse?.id ?? '') : null;
-		if (key === armedFor) return;
-		armedFor = key;
-		if (key !== null) reset();
-	});
+	// Cleared on every close, so the next opening starts clean whichever warehouse it is pointed at. The
+	// page opens the dialog by assignment, for which Bits reports no `onOpenChange`, so the closes are
+	// where a reset is observable: the ones Bits performs (Escape, the overlay, its close button) report
+	// through `onOpenChange`, and Cancel and a confirmed delete reset as they close.
+	function close(): void {
+		open = false;
+		reset();
+	}
+
+	function onOpenChange(next: boolean): void {
+		if (!next) reset();
+	}
 
 	// The catalog's emptiness refusal names what blocks the delete in its `holds` member. The warehouse
 	// page lists the same namespaces, but the refusal is what the cascade would take AT THE MOMENT it was
@@ -111,7 +111,7 @@
 						: `bucket ${r.bucket} kept`,
 				];
 				toast.success(`Deleted warehouse ${r.id}: ${parts.join('; ')}.`);
-				open = false;
+				close();
 				ondeleted?.();
 				return;
 			}
@@ -130,7 +130,7 @@
 	}
 </script>
 
-<Dialog.Root bind:open>
+<Dialog.Root bind:open {onOpenChange}>
 	<Dialog.Content>
 		{#if warehouse}
 			<Dialog.Title>Delete warehouse {warehouse.id}</Dialog.Title>
@@ -194,8 +194,8 @@
 						Deletes every object in <code>{warehouse.bucket}</code> and the bucket itself. This cannot
 						be undone and no other step here touches bytes. Type the bucket name to enable it.
 					</p>
-					<input
-						class="mono"
+					<Input
+						class="w-64 font-mono text-xs"
 						bind:value={bucketTyped}
 						placeholder={warehouse.bucket}
 						aria-label="Type the bucket name to confirm the purge"
@@ -213,12 +213,10 @@
 			</div>
 
 			<div class="actions">
-				<button type="button" class="btn ghost" disabled={busy} onclick={() => (open = false)}>
-					Cancel
-				</button>
-				<button type="button" class="btn destroy" disabled={busy} onclick={submit}>
+				<Button variant="ghost" disabled={busy} onclick={close}>Cancel</Button>
+				<Button variant="destructive" disabled={busy} onclick={submit}>
 					{busy ? '…' : purgeArmed ? 'Delete and purge bucket' : 'Delete warehouse'}
-				</button>
+				</Button>
 			</div>
 		{/if}
 	</Dialog.Content>
@@ -273,38 +271,9 @@
 		margin: 0;
 		color: var(--muted-foreground);
 	}
-	input {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		padding: 5px 9px;
-		font-size: 12px;
-	}
 	.actions {
 		display: flex;
 		justify-content: flex-end;
 		gap: 8px;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 12px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.btn.ghost {
-		background: none;
-		color: var(--muted-foreground);
-	}
-	.btn.destroy {
-		border-color: color-mix(in srgb, var(--destructive) 55%, var(--border));
-		color: var(--destructive);
 	}
 </style>

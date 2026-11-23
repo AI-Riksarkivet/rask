@@ -122,21 +122,22 @@
 							class="border-border flex items-center gap-0.5 rounded-md border p-0.5"
 						>
 							{#each [{ id: 'gallery', label: 'Gallery', icon: LayoutGrid }, { id: 'table', label: 'Table', icon: List }] as const as option (option.id)}
-								<button
-									type="button"
+								<Button
+									variant="ghost"
+									size="icon-sm"
 									role="radio"
 									aria-checked={view === option.id}
 									aria-label={option.label}
 									title={option.label}
 									data-slot="projects-view-{option.id}"
 									class={[
-										'text-muted-foreground hover:text-foreground focus-visible:ring-ring rounded-sm p-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2',
+										'text-muted-foreground hover:text-foreground',
 										view === option.id && 'bg-accent text-foreground',
 									]}
 									onclick={() => choose(option.id)}
 								>
 									<option.icon class="size-4" aria-hidden="true" />
-								</button>
+								</Button>
 							{/each}
 						</div>
 					{/if}

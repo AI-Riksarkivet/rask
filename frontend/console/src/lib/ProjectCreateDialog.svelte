@@ -17,7 +17,9 @@
 	// Moved here from the console unchanged in behaviour (2026-08-03 ruling): a project is the
 	// TOP of the hierarchy, so the surface that MINTS one belongs beside the estate's project list in
 	// the main menu, not inside one project's catalog.
+	import { Button } from '@riksarkivet/ui/button';
 	import { Dialog } from '@riksarkivet/ui/dialog';
+	import { Input } from '@riksarkivet/ui/input';
 	import { toast } from 'svelte-sonner';
 	import { createWarehouse } from '#lib/data/remote/warehouses.api.ts';
 	import { createProject } from '#lib/remote/warehouses.api.ts';
@@ -40,9 +42,16 @@
 	let name = $state('');
 	let whId = $state('');
 	let whBucket = $state('');
-	let admin = $state('');
+	// The initial admin is the signed-in caller's subject for each opening, until it is edited (kept
+	// editable: the estate admin may be provisioning for someone else, and clearing the field must stick,
+	// or an empty admin, i.e. "no initial grant", could not be expressed). An edit holds until the dialog
+	// closes. The gallery opens the dialog by assignment, for which Bits reports no `onOpenChange`, so the
+	// closes are where the edit is dropped.
+	let adminEdit = $state<string | null>(null);
+	const admin = $derived(adminEdit ?? defaultAdmin);
 	let busy = $state(false);
 	let error = $state<string | null>(null);
+	const FIELD = 'font-mono text-xs';
 	const createHint = $derived(
 		missingFieldsHint('Creating a project', [
 			['a project name', name],
@@ -50,21 +59,21 @@
 		]),
 	);
 
-	// Prefill the admin subject on the closed→open TRANSITION only (kept editable — the estate admin
-	// may be provisioning for someone else, and clearing the field must stick: an unconditional
-	// refill would make an empty admin, i.e. "no initial grant", impossible to express).
-	let wasOpen = false;
-	$effect(() => {
-		if (open && !wasOpen) admin = defaultAdmin;
-		wasOpen = open;
-	});
-
 	function reset(): void {
 		name = '';
 		whId = '';
 		whBucket = '';
-		admin = '';
+		adminEdit = null;
 		error = null;
+	}
+
+	function close(): void {
+		open = false;
+		adminEdit = null;
+	}
+
+	function onOpenChange(next: boolean): void {
+		if (!next) adminEdit = null;
 	}
 
 	function failText(what: string, { status, detail, timedOut }: ApiFailure): string {
@@ -133,7 +142,7 @@
 					`Project ${project} created — warehouse ${wh}${adminUser ? `, admin ${adminUser}` : ''}.`,
 				);
 			}
-			open = false;
+			close();
 			reset();
 			oncreated?.();
 		} finally {
@@ -142,7 +151,7 @@
 	}
 </script>
 
-<Dialog.Root bind:open>
+<Dialog.Root bind:open {onOpenChange}>
 	<Dialog.Content>
 		<Dialog.Title>New project</Dialog.Title>
 		<Dialog.Description>
@@ -157,40 +166,42 @@
 		>
 			<label
 				>project name
-				<input class="mono" bind:value={name} placeholder="acme" aria-label="Project name" />
+				<Input class={FIELD} bind:value={name} placeholder="acme" aria-label="Project name" />
 			</label>
 			<div class="pair">
 				<label
 					>first warehouse id
-					<input class="mono" bind:value={whId} placeholder="acme-wh" aria-label="Warehouse id" />
+					<Input class={FIELD} bind:value={whId} placeholder="acme-wh" aria-label="Warehouse id" />
 				</label>
 				<label
 					>bucket (defaults to id)
-					<input class="mono" bind:value={whBucket} placeholder="—" aria-label="Warehouse bucket" />
+					<Input
+						class={FIELD}
+						bind:value={whBucket}
+						placeholder="—"
+						aria-label="Warehouse bucket"
+					/>
 				</label>
 			</div>
 			<label
 				>initial admin (FGA subject)
-				<input
-					class="mono"
-					bind:value={admin}
+				<Input
+					class={FIELD}
+					bind:value={() => admin, (next) => (adminEdit = next ?? '')}
 					placeholder="user:alice"
 					aria-label="Initial admin"
 				/>
 			</label>
 			{#if error}<p class="error">{error}</p>{/if}
 			<div class="actions">
-				<button type="button" class="btn ghost" disabled={busy} onclick={() => (open = false)}>
-					Cancel
-				</button>
-				<button
-					class="btn"
+				<Button variant="ghost" disabled={busy} onclick={close}>Cancel</Button>
+				<Button
 					type="submit"
 					disabled={busy || createHint !== null}
 					aria-describedby={createHint ? 'project-create-hint' : undefined}
 				>
 					{busy ? '…' : 'Create project'}
-				</button>
+				</Button>
 			</div>
 			{#if createHint}<p class="hint" id="project-create-hint">{createHint}</p>{/if}
 		</form>
@@ -215,14 +226,6 @@
 		display: flex;
 		gap: 10px;
 	}
-	input {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		padding: 5px 9px;
-		font-size: 12px;
-	}
 	.error {
 		color: var(--destructive);
 		margin: 0;
@@ -237,22 +240,5 @@
 		justify-content: flex-end;
 		gap: 8px;
 		margin-top: 4px;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 12px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.btn.ghost {
-		background: none;
-		color: var(--muted-foreground);
 	}
 </style>

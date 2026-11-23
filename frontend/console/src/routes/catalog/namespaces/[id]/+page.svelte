@@ -1,23 +1,26 @@
 <script lang="ts">
 	// `/namespaces/<id>` — the namespace detail page (sweep group 3): the catalog's namespace-scoped
-	// governance surfaces (access list/check/grant/revoke + maintenance policy set/describe/delete)
-	// have been live since #50/#51/#72 with no UI — this page closes that asymmetry. Header (id +
-	// table count from the registry the /namespaces page already derives from), the kind-generalized
-	// GrantsPanel, and a maintenance-policy card mirroring the table policy form. Same stack-mode
-	// states as the registry — governed without a session ⇒ sign-in, unreachable ⇒ retrying.
-	import { GatedAction } from '#lib/access/gated-action/index.ts';
+	// governance surfaces (access list/check/grant/revoke + maintenance policy set/describe/delete).
+	// Header (id + table count from the registry the /namespaces page already derives from), the
+	// kind-generalized GrantsPanel, and the maintenance-policy section (`NamespacePolicy`). Same
+	// stack-mode states as the registry — governed without a session ⇒ sign-in, unreachable ⇒ retrying.
+	//
+	// Every read is held through the read layer, one instance per namespace, so a navigation reads the
+	// new namespace's instances with no latest-wins guard to hand-write; what the reader opened or typed
+	// (the tab, the graph card, the policy editor) is keyed by the namespace, so none of it survives
+	// into the next one.
 	import { GrantsPanel, type GrantsClient } from '#lib/access/grants-panel/index.ts';
 	import { Subject } from '#lib/access/identity/index.ts';
-	import { Boxes, Network, RefreshCw, ShieldAlert, Trash2 } from '@lucide/svelte';
+	import { Boxes, RefreshCw, ShieldAlert } from '@lucide/svelte';
+	import { Button } from '@riksarkivet/ui/button';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
 	import { fetchTables } from '#lib/data/remote/catalog.api.ts';
 	import DetailTabs from '#lib/data/DetailTabs.svelte';
+	import NamespaceGraphCard from '#lib/data/NamespaceGraphCard.svelte';
+	import NamespacePolicy from '#lib/data/NamespacePolicy.svelte';
 	import ObjectLabels from '#lib/data/ObjectLabels.svelte';
 	import { leafSegment, parentNamespace } from '#lib/api/identifiers.ts';
-	import { policyRequestFrom } from '#lib/data/namespace.ts';
-	import type { AccessGraph } from '#lib/data/namespace.ts';
-	import type { Policy } from '#lib/policies.ts';
 	import {
 		checkAccess,
 		fetchAccess,
@@ -28,11 +31,9 @@
 		revokeAccess,
 	} from '#lib/data/remote/access-objects.api.ts';
 	import {
-		deleteNamespacePolicy,
 		describeNamespace,
 		fetchNamespacePolicy,
 		fetchNamespaceTasks,
-		setNamespacePolicy,
 	} from '#lib/data/remote/namespace.api.ts';
 	import type { TrashEntry } from '#lib/data/remote/catalog.api.ts';
 	import { formatZoned } from '@riksarkivet/ui/utils';
@@ -44,8 +45,9 @@
 	const ns = $derived(page.params.id ?? '');
 
 	// The FGA view lives on an Access TAB (overview stays the default), and the overview carries the
-	// namespace's labels.
-	let tab = $state('overview');
+	// namespace's labels. The choice holds for the namespace it was made on.
+	let tabChoice = $state<{ for: string; value: string } | null>(null);
+	const tab = $derived(tabChoice?.for === ns ? tabChoice.value : 'overview');
 
 	// The catalog calls the grants panel makes, bound to this page's reads and writes: the panel's
 	// positional signature onto the data functions' single argument.
@@ -60,65 +62,19 @@
 		fetchMyPermissions: (kind, id) => fetchMyPermissions({ kind, id }),
 	};
 
-	let tables = $state<string[] | null>(null);
-	let lastStatus = $state(0);
-	let settled = $state(false);
-
-	// #50 policy card state — 'none' (the catalog answers `set: false`: honest "global defaults
-	// apply"), 'set', 'denied' (401/403), 'unavailable' (a 404, a 5xx, offline or contract drift:
-	// never an affirmative empty state that would invite an overwriting write — the same stance as
-	// TableDetail's policyUnavailable).
-	let policy = $state<Policy | null>(null);
-	let policyPart = $state<'loading' | 'none' | 'set' | 'denied' | 'unavailable'>('loading');
-	let policyDenied = $state<string | null>(null);
-	let policyError = $state<string | null>(null);
-	let editingPolicy = $state(false);
-	let busy = $state(false);
-	// number | null, matching what bind:value on a type="number" input delivers (Svelte 5 coerces to
-	// a number, or null for an empty field) — same shape TableDetail's audit-hardened draft uses.
-	let draft = $state<{
-		retention_days: number | null;
-		retain_versions: number | null;
-		interval: number | null;
-		target: number | null;
-		enabled: boolean;
-	}>({ retention_days: null, retain_versions: null, interval: null, target: null, enabled: true });
-
-	// #81 one hop of the authorization graph around the namespace, as a compact LIST card (TableDetail's
-	// lazy-toggle pattern without the SvelteFlow canvas — the namespace page has no inline grant form to
-	// prefill, so a list states the same edges more cheaply). Owner-gated by the catalog (can_delete).
-	let showGraph = $state(false);
-	let graph = $state<AccessGraph | null>(null);
-	let graphStatus = $state<'loading' | 'ok' | 'denied' | 'offline'>('loading');
-
-	// What the SIGNED-IN caller may do here, from the catalog's self-view. This page used to render
-	// every action unconditionally and report the denial only after the click, which was survivable
-	// while a reader could not reach the page at all — the namespace 403'd first. Upward visibility
-	// ended that: a single-table grantee now navigates here legitimately, so an ungated `Set policy`
-	// would be a button that exists solely to fail. `null` means "not answered yet", which is NOT the
-	// same as "denied": treating it as denied would hide an owner's own controls on every first paint.
-	let perms = $state<Record<string, boolean> | null>(null);
-	// Whether granting here is CENTRALIZED. Distinct from `perms`: that says what the caller may do,
-	// this says WHY — an owner whose grant controls vanished is otherwise looking at a bug. `null`
-	// means unanswered, which is not the same as "not managed": claiming a policy before the read
-	// lands would be as wrong as hiding one.
-	let managed = $state<boolean | null>(null);
-	// Namespace policy set/delete is gated by the catalog on `can_delete` (the owner suffix map in its `authz/rungs.py`), so
-	// that is the rung the button must agree with — not a rung this page invents.
-	const mayEditPolicy = $derived(perms?.can_delete === true);
-	// ONE string, shared by the three gated policy controls and the sentence below them — three copies
-	// of a denial reason is how the grant message came to be wrong in two places at once.
-	const REASON_EDIT = $derived(
-		`Changing this policy needs the modifier rung (can_delete) on ${ns}.`,
+	// Read on each namespace the page shows, as a visit to it would: the registry is one shared
+	// instance, so the call re-reads it unless a read is out or just settled.
+	const tablesRead = $derived.by(() => {
+		void ns;
+		return fetchTables();
+	});
+	const tablesAnswer = $derived(tablesRead.current);
+	const tables = $derived(tablesAnswer?.ok ? tablesAnswer.data.tables : null);
+	const lastStatus = $derived(
+		tablesAnswer === undefined ? 0 : tablesAnswer.ok ? 200 : tablesAnswer.status,
 	);
-	const permsSettled = $derived(perms !== null);
-	// The one case worth naming separately: the caller owns this namespace, and granting is still
-	// denied. That is managed access doing its job, and it is the only reading under which an owner
-	// should NOT read a missing grant control as broken.
-	const grantsCentralized = $derived(managed === true && perms?.can_delete === true);
-
 	const unauthorized = $derived(tables === null && lastStatus === 401);
-	const offline = $derived(tables === null && settled && lastStatus !== 401);
+	const offline = $derived(tables === null && tablesAnswer !== undefined && lastStatus !== 401);
 
 	// The namespace's member tables, grouped the way the registry groups them — through the SAME helper
 	// (`parentNamespace`, every segment but the last), not a local re-implementation of it: a copy that
@@ -128,142 +84,12 @@
 	/** The namespaces directly under this one (the spec's ListNamespaces on its id), so a table in a nested
 	 *  namespace is reached from its warehouse through every namespace above it. `null`: the listing failed,
 	 *  said so on the page, never read as "none". */
-	let children = $state<string[] | null>([]);
-
-	async function loadChildren(): Promise<void> {
-		const current = ns;
-		const res = await fetchWarehouseNamespaces(current);
-		if (ns !== current) return;
-		children = res.ok ? [...res.data.namespaces].sort() : null;
-	}
-
-	async function loadTables(): Promise<void> {
-		const current = ns;
-		const res = await fetchTables();
-		if (ns !== current) return; // latest-wins across a namespace navigation
-		settled = true;
-		if (res.ok) {
-			tables = [...res.data.tables];
-			lastStatus = 200;
-		} else {
-			lastStatus = res.status;
-		}
-	}
-
-	async function loadPerms(): Promise<void> {
-		const current = ns;
-		const res = await fetchMyPermissions({ kind: 'namespace', id: current });
-		if (ns !== current) return; // latest-wins across a namespace navigation
-		// A failure leaves `perms` null — "unanswered", so actions stay hidden rather than being shown
-		// on a guess. The catalog is the authority either way; this only decides what to RENDER.
-		if (res.ok) perms = res.data.permissions;
-	}
-
-	async function loadManaged(): Promise<void> {
-		const current = ns;
-		const res = await fetchManagedAccess({ kind: 'namespace', id: current });
-		if (ns !== current) return; // latest-wins across a namespace navigation
-		if (res.ok) managed = res.data.managed_access;
-	}
-
-	async function loadGraph(): Promise<void> {
-		const current = ns;
-		graphStatus = 'loading';
-		const res = await fetchAccessGraph({ kind: 'namespace', id: current });
-		if (ns !== current) return; // latest-wins across a namespace navigation
-		if (res.ok) {
-			graph = res.data;
-			graphStatus = 'ok';
-		} else if (res.status === 401 || res.status === 403) {
-			graphStatus = 'denied';
-		} else {
-			graphStatus = 'offline';
-		}
-	}
-
-	function toggleGraph(): void {
-		showGraph = !showGraph;
-		if (showGraph) loadGraph();
-	}
-
-	// Split the one-hop edges for the card: inbound = grants (subject holds a rung ON the namespace),
-	// outbound = the container edge (namespace → parent/project). Labels come from the graph's nodes.
-	const graphNode = (id: string): string => graph?.nodes.find((n) => n.id === id)?.label ?? id;
-	const grantEdges = $derived.by(() => {
-		const g = graph;
-		return g === null ? [] : g.edges.filter((e) => e.target === g.object);
+	const childrenRead = $derived(fetchWarehouseNamespaces(ns));
+	const children = $derived.by((): string[] | null => {
+		const res = childrenRead.current;
+		if (res === undefined) return [];
+		return res.ok ? [...res.data.namespaces].sort() : null;
 	});
-	const containerEdges = $derived.by(() => {
-		const g = graph;
-		return g === null ? [] : g.edges.filter((e) => e.source === g.object);
-	});
-
-	async function loadPolicy(): Promise<void> {
-		const current = ns;
-		try {
-			const res = await fetchNamespacePolicy({ namespace: current });
-			if (ns !== current) return;
-			if (res.ok) {
-				policy = res.data;
-				policyPart = res.data === null ? 'none' : 'set';
-			} else if (res.status === 401) {
-				policyDenied = 'Sign in to view the maintenance policy.';
-				policyPart = 'denied';
-			} else if (res.status === 403) {
-				policyDenied = 'Denied: viewing this policy needs a reader rung on the namespace.';
-				policyPart = 'denied';
-			} else {
-				policyPart = 'unavailable';
-			}
-		} catch (err) {
-			// the parse boundary throws on a wire-contract drift — surface it, never render from a lie
-			if (ns !== current) return;
-			policyError = `policy response drifted from the contract: ${String(err)}`;
-			policyPart = 'unavailable';
-		}
-	}
-
-	$effect(() => {
-		// Reset every piece of state on a namespace change — including the edit form, or an editor
-		// opened on A would survive into B and Save would write A's draft to B (the TableDetail audit).
-		void ns;
-		tab = 'overview';
-		tables = null;
-		lastStatus = 0;
-		settled = false;
-		policy = null;
-		policyPart = 'loading';
-		policyDenied = null;
-		policyError = null;
-		editingPolicy = false;
-		busy = false;
-		// #81 graph card — reset too, or namespace A's grantees would flash on B until its fetch lands.
-		showGraph = false;
-		graph = null;
-		graphStatus = 'loading';
-		// Reset to "unanswered" too — carrying A's verdicts into B would render B's controls from
-		// A's grants, which is the same class of bug as the edit form surviving a namespace change.
-		perms = null;
-		managed = null;
-		presence = { kind: 'checking' };
-		children = [];
-		loadTables();
-		void loadChildren();
-		void loadPresence();
-	});
-
-	// Whether the namespace is there before its governance is read. A describe the catalog refuses (403)
-	// or does not find (404) is a namespace this caller cannot see: dropped, never there, or theirs to see
-	// no more. Its trash record, when the caller may read one, says it was dropped; without one the page
-	// says it cannot show the namespace, and asks for none of its governance, every read of which would
-	// be refused. A describe that failed any other way (a 5xx, an unreachable catalog) claims nothing.
-	let presence = $state<
-		| { kind: 'checking' }
-		| { kind: 'live' }
-		| { kind: 'dropped'; entry: TrashEntry }
-		| { kind: 'not-visible' }
-		| { kind: 'unavailable'; status: number; detail: string }
-	>({ kind: 'checking' });
 
 	/** The newest of a name's trash records: a name dropped twice keeps a record per drop. */
 	const newestDrop = (entries: readonly TrashEntry[]): TrashEntry | undefined =>
@@ -275,89 +101,69 @@
 			undefined,
 		);
 
-	async function loadPresence(): Promise<void> {
-		const current = ns;
-		const described = await describeNamespace(current);
-		if (ns !== current) return;
-		if (!described.ok && described.status !== 403 && described.status !== 404) {
-			presence = { kind: 'unavailable', status: described.status, detail: described.detail };
-			return;
-		}
-		if (!described.ok) {
-			const tasks = await fetchNamespaceTasks(current);
-			if (ns !== current) return;
-			const entry = tasks.ok ? newestDrop(tasks.data) : undefined;
-			presence = entry ? { kind: 'dropped', entry } : { kind: 'not-visible' };
-			return;
-		}
-		presence = { kind: 'live' };
-		loadPolicy();
-		loadPerms();
-		loadManaged();
-	}
+	// Whether the namespace is there before its governance is read. A describe the catalog refuses (403)
+	// or does not find (404) is a namespace this caller cannot see: dropped, never there, or theirs to see
+	// no more. Its trash record, when the caller may read one, says it was dropped; without one the page
+	// says it cannot show the namespace, and asks for none of its governance, every read of which would
+	// be refused. A describe that failed any other way (a 5xx, an unreachable catalog) claims nothing.
+	// The read is held in its own derivation and read in another: a read created inside the derivation
+	// that reads it would not be tracked by it.
+	const describeRead = $derived(describeNamespace(ns));
+	const described = $derived(describeRead.current);
+	const refused = $derived(
+		described !== undefined && !described.ok && [403, 404].includes(described.status),
+	);
+	const tasksRead = $derived(refused ? fetchNamespaceTasks(ns) : null);
+	type Presence =
+		| { kind: 'checking' }
+		| { kind: 'live' }
+		| { kind: 'dropped'; entry: TrashEntry }
+		| { kind: 'not-visible' }
+		| { kind: 'unavailable'; status: number; detail: string };
+	const presence = $derived.by((): Presence => {
+		if (described === undefined) return { kind: 'checking' };
+		if (described.ok) return { kind: 'live' };
+		if (!refused)
+			return { kind: 'unavailable', status: described.status, detail: described.detail };
+		const tasks = tasksRead?.current;
+		if (tasks === undefined) return { kind: 'checking' };
+		const entry = tasks.ok ? newestDrop(tasks.data) : undefined;
+		return entry ? { kind: 'dropped', entry } : { kind: 'not-visible' };
+	});
+	const live = $derived(presence.kind === 'live');
 
-	function startPolicyEdit(): void {
-		draft = {
-			retention_days: policy?.retention_days ?? null,
-			retain_versions: policy?.retain_versions ?? null,
-			interval: policy?.compact_interval_hours ?? null,
-			target: policy?.target_rows_per_fragment ?? null,
-			enabled: policy?.compact_enabled ?? true,
-		};
-		policyError = null;
-		editingPolicy = true;
-	}
+	// The governance reads, issued together, in this order, and only for a namespace the caller can
+	// see: the policy; what the SIGNED-IN caller may do here (the catalog's self-view: a single-table
+	// grantee reaches this page through upward visibility, so an ungated `Set policy` would be a button
+	// that exists solely to fail); and whether granting here is CENTRALIZED (`perms` says what the caller
+	// may do, this says WHY, since an owner whose grant controls vanished is otherwise looking at a bug).
+	const governance = $derived(
+		live
+			? {
+					policy: fetchNamespacePolicy({ namespace: ns }),
+					perms: fetchMyPermissions({ kind: 'namespace', id: ns }),
+					managed: fetchManagedAccess({ kind: 'namespace', id: ns }),
+				}
+			: null,
+	);
+	// `null` means "not answered yet", which is NOT "denied": treating it as denied would hide an
+	// owner's own controls on every first paint. A failed read stays unanswered.
+	const perms = $derived.by(() => {
+		const res = governance?.perms.current;
+		return res?.ok ? res.data.permissions : null;
+	});
+	const managed = $derived.by(() => {
+		const res = governance?.managed.current;
+		return res?.ok ? res.data.managed_access : null;
+	});
+	// The one case worth naming separately: the caller owns this namespace, and granting is still
+	// denied. That is managed access doing its job.
+	const grantsCentralized = $derived(managed === true && perms?.can_delete === true);
 
-	function policyFail(status: number, detailText: string): void {
-		if (status === 401) policyError = 'Sign in to edit the maintenance policy.';
-		else if (status === 403)
-			policyError = 'Denied: policy changes need the modifier rung (can_delete).';
-		else policyError = detailText;
-	}
-
-	async function savePolicy(): Promise<void> {
-		if (busy) return;
-		busy = true;
-		policyError = null;
-		const current = ns;
-		try {
-			const body = policyRequestFrom(draft);
-			const res = await setNamespacePolicy({ namespace: current, policy: body });
-			if (ns !== current) return; // navigated away — drop the stale result
-			if (res.ok) {
-				policy = res.data;
-				policyPart = 'set';
-				editingPolicy = false;
-			} else {
-				policyFail(res.status, res.detail);
-			}
-		} catch (err) {
-			if (ns === current) policyError = `policy response drifted from the contract: ${String(err)}`;
-		} finally {
-			busy = false;
-		}
-	}
-
-	async function removePolicy(): Promise<void> {
-		if (busy) return;
-		busy = true;
-		policyError = null;
-		const current = ns;
-		try {
-			const res = await deleteNamespacePolicy({ namespace: current });
-			if (ns !== current) return;
-			if (res.ok) {
-				policy = null;
-				policyPart = 'none';
-			} else {
-				policyFail(res.status, res.detail);
-			}
-		} catch (err) {
-			if (ns === current) policyError = `policy response drifted from the contract: ${String(err)}`;
-		} finally {
-			busy = false;
-		}
-	}
+	// #81 the graph card, open only for the namespace it was opened on; each opening reads the graph.
+	let graphFor = $state<string | null>(null);
+	const showGraph = $derived(graphFor === ns);
+	const graphRead = $derived(showGraph ? fetchAccessGraph({ kind: 'namespace', id: ns }) : null);
 </script>
 
 <svelte:head><title>{catalogPath(ns)} · namespaces · rask</title></svelte:head>
@@ -410,9 +216,15 @@
 	{:else if tables === null || presence.kind === 'checking'}
 		<div class="empty"><p>Loading…</p></div>
 	{:else}
-		<!-- Goal cond 3: overview (default) | access — the FGA view moved onto its own tab. -->
-		<DetailTabs tabs={['overview', 'connect', 'access']} bind:active={tab} />
-		{#if tab === 'overview'}
+		<!-- Goal cond 3: overview (default) | connect | access. -->
+		<DetailTabs
+			tabs={['overview', 'connect', 'access']}
+			active={tab}
+			onselect={(next) => (tabChoice = { for: ns, value: next })}
+		/>
+		<!-- The overview is HIDDEN on the other tabs, not unmounted, so a policy draft being typed
+		     survives a trip to another tab; `{#key ns}` still resets it on a namespace navigation. -->
+		<div hidden={tab !== 'overview'}>
 			{#key ns}
 				<ObjectLabels kind="namespace" id={ns} />
 			{/key}
@@ -456,134 +268,15 @@
 				{/if}
 			</section>
 
-			<section>
-				<h2>Maintenance policy</h2>
-				<p class="mut">
-					A namespace policy governs every dataset under <span class="mono">{ns}</span> unless a table
-					policy overrides it; tag-pinned versions (e.g. blessed) are never cleaned up.
-				</p>
-				{#if editingPolicy}
-					<div class="policy-edit">
-						<label
-							>retention days <input
-								class="mono"
-								type="number"
-								min="1"
-								bind:value={draft.retention_days}
-								placeholder="global default"
-							/></label
-						>
-						<label
-							>retain versions <input
-								class="mono"
-								type="number"
-								min="1"
-								bind:value={draft.retain_versions}
-								placeholder="—"
-							/></label
-						>
-						<label
-							>compact every (h) <input
-								class="mono"
-								type="number"
-								min="1"
-								bind:value={draft.interval}
-								placeholder="every sweep"
-							/></label
-						>
-						<label
-							>target rows/fragment <input
-								class="mono"
-								type="number"
-								min="1024"
-								bind:value={draft.target}
-								placeholder="Lance default"
-							/></label
-						>
-						<label class="check"
-							><input type="checkbox" bind:checked={draft.enabled} /> maintenance enabled</label
-						>
-						<div class="btnrow">
-							<button class="btn" disabled={busy} onclick={savePolicy}>Save policy</button>
-							<button class="btn ghost" onclick={() => (editingPolicy = false)}>Cancel</button>
-						</div>
-					</div>
-				{:else if policyPart === 'loading'}
-					<p class="mut">Loading policy…</p>
-				{:else if policyPart === 'denied'}
-					<p class="mut">{policyDenied}</p>
-				{:else if policyPart === 'unavailable'}
-					<p class="mut">
-						Policy unavailable right now — not shown to avoid an overwriting edit against a stale
-						read.
-					</p>
-				{:else if policy}
-					<div class="refs">
-						{#if policy.retention_days}<span class="chip mono"
-								>retention {policy.retention_days}d</span
-							>{/if}
-						{#if policy.retain_versions}<span class="chip mono"
-								>keep last {policy.retain_versions}</span
-							>{/if}
-						{#if policy.compact_interval_hours}<span class="chip mono"
-								>every {policy.compact_interval_hours}h</span
-							>{/if}
-						{#if policy.target_rows_per_fragment}<span class="chip mono">target {policy.target_rows_per_fragment}
-						rows/frag</span>{/if}
-						{#if !policy.compact_enabled}<span class="chip off mono">maintenance off</span>{/if}
-						<!-- #143 (owner ruling, 2026-08-16): a gated action stays VISIBLE and disabled with its
-						     reason. These were `{#if mayEditPolicy}` — absent, with the reason in a separate
-						     sentence below. The sentence STAYS: it is visible without hovering, which the
-						     tooltip is not, and it names the rung to ask for. What changes is that the
-						     operations themselves are now discoverable rather than invisible.
-						     `disabled` is conditional on the verdict because GatedAction deliberately avoids
-						     the native attribute — it would kill the tooltip and drop the control from the
-						     tab order. Until the self-view answers (`permsSettled` false) they render live,
-						     since "not answered yet" is not "denied". -->
-						<GatedAction
-							allowed={!permsSettled || mayEditPolicy}
-							action="Edit policy"
-							reason={REASON_EDIT}
-						>
-							<button class="btn ghost" onclick={startPolicyEdit}>Edit</button>
-						</GatedAction>
-						<GatedAction
-							allowed={!permsSettled || mayEditPolicy}
-							action="Remove policy"
-							reason={REASON_EDIT}
-						>
-							<button
-								class="btn ghost danger"
-								disabled={(!permsSettled || mayEditPolicy) && busy}
-								onclick={removePolicy}
-							>
-								<Trash2 size={12} /> Remove
-							</button>
-						</GatedAction>
-					</div>
-				{:else}
-					<p class="mut">
-						No policy — the sweep applies the global defaults.
-						<GatedAction
-							allowed={!permsSettled || mayEditPolicy}
-							action="Set policy"
-							reason={REASON_EDIT}
-						>
-							<button class="btn ghost" onclick={startPolicyEdit}>Set policy</button>
-						</GatedAction>
-					</p>
-				{/if}
-				<!-- Say WHY the controls are absent, once the self-view has actually answered. Silence
-				     would read as a broken page to someone who expected to be able to edit, and the
-				     rung is the useful part of the answer — it names what to ask for. -->
-				{#if permsSettled && !mayEditPolicy}
-					<p class="mut">{REASON_EDIT}</p>
-				{/if}
-				{#if policyError}<p class="error">{policyError}</p>{/if}
-			</section>
-		{:else if tab === 'connect'}
+			{#if governance}
+				{#key ns}
+					<NamespacePolicy {ns} read={governance.policy} {perms} />
+				{/key}
+			{/if}
+		</div>
+		{#if tab === 'connect'}
 			<ConnectSnippets id={ns} kind="namespace" />
-		{:else}
+		{:else if tab === 'access'}
 			<section>
 				<h2>Access</h2>
 				<!-- Managed access is a POLICY, and an unexplained absence is indistinguishable from a
@@ -599,52 +292,16 @@
 					</p>
 				{/if}
 				<GrantsPanel dataset={ns} kind="namespace" client={grantsClient} />
-				<!-- #81 one hop of the authorization graph, lazy-loaded as a compact list card. -->
-				<button class="btn ghost graphtoggle" onclick={toggleGraph}>
+				<!-- #81 one hop of the authorization graph, read each time it is opened. -->
+				<Button
+					variant="ghost"
+					size="sm"
+					class="mt-2.5 mb-2"
+					onclick={() => (graphFor = showGraph ? null : ns)}
+				>
 					{showGraph ? 'Hide' : 'Show'} authorization graph
-				</button>
-				{#if showGraph}
-					<div class="graphcard">
-						<header class="graphhead">
-							<Network size={14} />
-							<h3>Authorization graph</h3>
-							<span class="mut mono">who holds which rung · one hop around {ns}</span>
-						</header>
-						{#if graphStatus === 'denied'}
-							<p class="mut">
-								<ShieldAlert size={13} /> Owner access is required to view the graph.
-							</p>
-						{:else if graphStatus === 'offline'}
-							<p class="mut">Graph unavailable right now — reopen to retry.</p>
-						{:else if graphStatus === 'loading'}
-							<p class="mut">Loading the authorization graph…</p>
-						{:else if graph}
-							{#if grantEdges.length === 0}
-								<p class="mut">No direct grants on this namespace.</p>
-							{:else}
-								<ul class="edges">
-									{#each grantEdges as e (`${e.source}:${e.relation}`)}
-										<li class="mono">
-											<Subject value={graphNode(e.source)} class="text-foreground" />
-											<span class="chip rel">{e.relation}</span>
-											<span class="mut">on {graphNode(e.target)}</span>
-										</li>
-									{/each}
-								</ul>
-							{/if}
-							{#if containerEdges.length > 0}
-								<ul class="edges">
-									{#each containerEdges as e (`${e.relation}:${e.target}`)}
-										<li class="mono">
-											<span class="mut">{e.relation} →</span>
-											<span class="subject">{graphNode(e.target)}</span>
-										</li>
-									{/each}
-								</ul>
-							{/if}
-						{/if}
-					</div>
-				{/if}
+				</Button>
+				{#if graphRead}<NamespaceGraphCard {ns} read={graphRead} />{/if}
 			</section>
 		{/if}
 	{/if}
@@ -685,11 +342,6 @@
 		padding-left: 8px;
 		color: var(--muted-foreground);
 	}
-	.error {
-		color: var(--destructive);
-		font-size: 12px;
-		margin: 6px 0 0;
-	}
 	.list {
 		list-style: none;
 		margin: 0;
@@ -722,119 +374,5 @@
 		gap: 8px;
 		color: var(--muted-foreground);
 		padding: 32px 0;
-	}
-	.refs {
-		display: flex;
-		flex-wrap: wrap;
-		align-items: center;
-		gap: 6px;
-	}
-	.chip {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--muted-foreground);
-		font-size: 12px;
-		padding: 1px 8px;
-	}
-	.chip.off {
-		border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
-	}
-	.policy-edit {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 10px;
-		align-items: end;
-	}
-	.policy-edit label {
-		display: flex;
-		flex-direction: column;
-		gap: 3px;
-		color: var(--muted-foreground);
-		font-size: 11px;
-	}
-	.policy-edit label.check {
-		flex-direction: row;
-		align-items: center;
-		gap: 6px;
-		font-size: 12px;
-		color: var(--muted-foreground);
-	}
-	.policy-edit input[type='number'] {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 7px;
-		width: 130px;
-	}
-	.btnrow {
-		display: flex;
-		gap: 6px;
-	}
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 12px;
-		cursor: pointer;
-	}
-	.btn.ghost {
-		background: none;
-		color: var(--muted-foreground);
-	}
-	.btn.danger {
-		color: var(--destructive);
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.graphtoggle {
-		margin: 10px 0 8px;
-	}
-	.graphcard {
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		background: var(--muted);
-		padding: 10px 12px;
-	}
-	.graphhead {
-		display: flex;
-		align-items: baseline;
-		gap: 8px;
-		margin-bottom: 6px;
-	}
-	.graphhead h3 {
-		font-size: 13px;
-		margin: 0;
-	}
-	.edges {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		font-size: 12px;
-	}
-	.edges li {
-		display: flex;
-		align-items: center;
-		gap: 8px;
-		padding: 3px 0;
-		border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-	}
-	.edges li:last-child {
-		border-bottom: none;
-	}
-	.subject {
-		color: var(--foreground);
-	}
-	.chip.rel {
-		border-color: color-mix(in srgb, var(--success) 45%, var(--border));
 	}
 </style>
