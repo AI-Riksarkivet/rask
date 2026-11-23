@@ -1,6 +1,6 @@
 import { test, expect, type Page } from '@playwright/test';
 import { ME_ADMIN, signIn, TOKEN } from '../session';
-import { seed as seedFor } from '../mock-client';
+import { postsTo, seed as seedFor } from '../mock-client';
 import { MOCK_CATALOG } from '../ports';
 
 // `/projects/<p>` — ONE project's metadata and overview, a top-level page because a project is the
@@ -174,4 +174,50 @@ test('a define the catalog refuses for want of project-admin access says so', as
 	await expect(page.getByTestId('project-labels').getByRole('status')).toHaveText(
 		'Denied: defining a label needs project-admin access (can_administer).',
 	);
+});
+
+test('a project admin reviews, grants and revokes access on the project', async ({ page }) => {
+	const grant = { object: 'project:acme', user: 'dex~bob', relation: 'describer' };
+	await seed(page, {
+		'GET /management/v1/projects/acme': DETAIL,
+		'POST /management/v1/projects/acme/access/list': {
+			object: 'project:acme',
+			grants: [
+				{ relation: 'can_read_assignments', users: ['user:e2e'] },
+				{ relation: 'can_decide_access', users: [] },
+			],
+		},
+		'POST /management/v1/projects/acme/access/my-permissions': {
+			object: 'project:acme',
+			subject: 'user:e2e',
+			permissions: { can_grant_describer: true, can_revoke_grant: true },
+		},
+		'POST /management/v1/projects/acme/access/grant': { ...grant, granted: true },
+		'POST /management/v1/projects/acme/access/revoke': { ...grant, granted: false },
+	});
+	await page.goto('/projects/acme');
+	const access = page.locator('section', { has: page.getByRole('heading', { name: 'Access' }) });
+	await access.getByRole('button', { name: 'Access review' }).click();
+	await expect(access.getByRole('row').filter({ hasText: 'can_read_assignments' })).toContainText(
+		'user:e2e',
+	);
+	// A project has no check door, so no simulator is offered.
+	await expect(access.getByText('Check a specific access')).toHaveCount(0);
+
+	await access.getByLabel('Subject to grant to').fill('dex~bob');
+	await access.getByLabel('Grant rung').click();
+	// Exactly the rungs the project's grant door takes.
+	await expect(page.getByRole('option')).toHaveText([/^describer/, /^modifier/, /^decider/]);
+	await page.getByRole('option', { name: /^describer/ }).click();
+	await access.getByRole('button', { name: 'Grant', exact: true }).click();
+	await expect(access.locator('.verdict.ok')).toHaveText('describer granted to dex~bob.');
+	expect(await postsTo(page, token, '/management/v1/projects/acme/access/grant')).toEqual([
+		{ user: 'dex~bob', relation: 'describer' },
+	]);
+
+	await access.getByRole('button', { name: 'Revoke', exact: true }).click();
+	await expect(access.locator('.verdict.ok')).toHaveText('describer revoked from dex~bob.');
+	expect(await postsTo(page, token, '/management/v1/projects/acme/access/revoke')).toEqual([
+		{ user: 'dex~bob', relation: 'describer' },
+	]);
 });

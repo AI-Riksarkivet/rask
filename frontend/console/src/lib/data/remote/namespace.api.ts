@@ -123,3 +123,23 @@ export const fetchNamespaceTasks = query(
 			v.array(TrashEntrySchema),
 		),
 );
+
+/** Recover a dropped namespace and what its cascade filed under it (`POST
+ *  /management/v1/namespace/{id}/undrop`). `uuid` names one trashed namespace where several held the
+ *  name; without it the door restores the one dropped under it, or answers 409 listing each. On success
+ *  the listings that name what it restored refresh in the same flight. */
+export const undropNamespace = command(
+	({ namespace }) => `Undrop namespace ${namespace}`,
+	v.object({ namespace: v.string(), uuid: v.optional(v.string()) }),
+	async ({ namespace, uuid }): Promise<ApiResult<unknown>> => {
+		const query = uuid === undefined ? '' : `?uuid=${enc(uuid)}`;
+		const result = await catalogJSON(`/management/v1/namespace/${enc(namespace)}/undrop${query}`, {
+			method: 'POST',
+		});
+		if (result.ok) {
+			void fetchTables().refresh();
+			void fetchWarehouseNamespaces(warehouseOf(namespace)).refresh();
+		}
+		return result;
+	},
+);

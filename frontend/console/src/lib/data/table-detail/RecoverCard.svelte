@@ -59,7 +59,7 @@
 		recovering = true;
 		recoverError = null;
 		try {
-			const res = await undropTable(table);
+			const res = await undropTable({ table });
 			if (res.ok) {
 				recoverable = null;
 				await onrecovered();

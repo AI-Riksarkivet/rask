@@ -112,6 +112,7 @@ test('the account menu opens on its first item, and Sign out is a menu item bene
 test('signing out is an act, not a page: a link to /auth/logout ends nobody’s session', async ({
 	context,
 	page,
+	baseURL,
 }) => {
 	await signIn(context);
 	await mockMe(page);
@@ -123,7 +124,8 @@ test('signing out is an act, not a page: a link to /auth/logout ends nobody’s 
 	// Where a link in a mail, or an image on another site, would send a signed-in person.
 	await page.goto('/auth/logout');
 
-	await expect(page.getByRole('heading', { name: 'Page not found', exact: true })).toBeVisible();
+	// It is no page, so the visit signs in like any other and, naming no route, lands on the estate home.
+	await expect(page).toHaveURL(`${baseURL}/`);
 	expect(ended).toEqual([]);
 	// The issuer's session stands: the next page signs in from it without a login form.
 	await page.goto('/admin/dlq');

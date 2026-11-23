@@ -85,11 +85,15 @@ export const fetchTables = query(async (): Promise<ApiResult<TablesList>> =>
 	typedAs<TablesList>(await catalogListing('/v1/table', 'tables')),
 );
 
-/** `TrashEntry[]` — what is SCHEDULED against one table (#75/§2.4). Today that is exactly one thing:
- *  a pending undrop deadline. Reader-gated at the catalog, so an owner can see the clock they are
- *  racing — a deadline nobody can read is not a safety feature. */
+/** `TrashEntry` — one recoverable drop, as the table's and namespace's `tasks` doors and the warehouse's
+ *  trash listing answer it. Reader-gated at the catalog, so an owner can see the clock they are
+ *  racing — a deadline nobody can read is not a safety feature. `expired` is the catalog's own reading
+ *  of the deadline, the rule its undrop refuses by. */
 export const TrashEntrySchema = v.object({
+	kind: v.picklist(['table', 'namespace']),
 	id: v.string(),
+	uuid: v.string(),
+	expired: v.optional(v.boolean(), false),
 	location: v.string(),
 	dropped_by: v.string(),
 	dropped_at: v.string(),
@@ -116,10 +120,15 @@ export const fetchTableContract = query(
  *  period expired or the drop purged its bytes — genuinely unrecoverable, and the UI says so rather
  *  than pretending. Single-flights the table list so the recovered table reappears. */
 export const undropTable = command(
-	(table) => `Undrop table ${table}`,
-	v.string(),
-	async (table): Promise<ApiResult<unknown>> => {
-		const res = await catalogJSON(`/management/v1/table/${enc(table)}/undrop`, { method: 'POST' });
+	({ table }) => `Undrop table ${table}`,
+	// `uuid` names one trashed table where several held the name; without it the door restores the
+	// one dropped under it, or answers 409 listing each.
+	v.object({ table: v.string(), uuid: v.optional(v.string()) }),
+	async ({ table, uuid }): Promise<ApiResult<unknown>> => {
+		const query = uuid === undefined ? '' : `?uuid=${enc(uuid)}`;
+		const res = await catalogJSON(`/management/v1/table/${enc(table)}/undrop${query}`, {
+			method: 'POST',
+		});
 		if (res.ok) {
 			// BOTH reads, and the detail one is load-bearing: the page offering Undrop is showing a CACHED
 			// 404 for this very table, so refreshing only the list left the recovered table still rendering

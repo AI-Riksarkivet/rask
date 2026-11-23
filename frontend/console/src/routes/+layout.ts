@@ -14,7 +14,8 @@ export const prerender = false;
  * the active project, and the RESOLVED `/management/v1/me` — so the navbar renders its final entry set.
  *
  * SIGN-IN FIRST. On a stack that signs people in, a signed-out visit to any page goes to the issuer,
- * and comes back to the page it asked for. The `/auth/*` pages are the round trip itself.
+ * and comes back to the page it asked for. `/auth/login` and `/auth/callback` are the round trip itself;
+ * any other address under `/auth/` is a page like every other, so it signs in before it says it is none.
  *
  * `me` is null for BOTH "signed out" and "signed in but /management/v1/me was unreachable / 401 /
  * drifted", and those are opposite situations to a user, so `hasSession` rides beside it. On a stack
@@ -25,11 +26,14 @@ export const prerender = false;
  * browser-only app it is the browser's fetch, and it records `/config.json` and `/management/v1/me` as
  * this load's dependencies, so `invalidate()` on either re-runs it.
  */
+/** The two pages of the sign-in round trip, with or without a query. */
+const ROUND_TRIP = /^\/auth\/(login|callback)(\?|$)/;
+
 export const load: LayoutLoad = async ({ fetch, url, untrack }) => {
 	await initAuth(fetch);
 	if (auth.configError) error(503, `Sign-in is not configured: ${auth.configError}`);
 	const path = untrack(() => url.pathname + url.search);
-	if (auth.enabled && !auth.session && !path.startsWith('/auth/')) {
+	if (auth.enabled && !auth.session && !ROUND_TRIP.test(path)) {
 		await login(path);
 		// The browser is leaving for the issuer; render nothing meanwhile.
 		await new Promise<never>(() => {});

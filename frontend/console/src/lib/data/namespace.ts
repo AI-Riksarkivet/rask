@@ -19,24 +19,24 @@ export type MyPermissions = components['schemas']['MyPermissionsResponse'];
 export type ManagedAccess = components['schemas']['ManagedAccessResponse'];
 export type PolicyRequest = components['schemas']['PolicyRequest'];
 
-/** The FGA object kinds the catalog's FULL access surface is mounted on — the owner-rung gate is
- * `can_drop` for a table, `can_delete` for a namespace (same bar, per-type relation).
- *
- * Deliberately NOT widened to warehouse/project: `access/list`, `check`, `grant`, `revoke` and
- * `graph` exist only for these two, so a wider type here would advertise routes that 404. */
+/** The FGA object kinds that also have `access/check` and `access/graph`: a project and a warehouse
+ * have neither (`docs/catalog-openapi.json`), so a wider type here would advertise routes that 404. */
 export type AccessKind = 'table' | 'namespace';
 
-/** The kinds the PERMISSION SELF-VIEW (`access/my-permissions`) is mounted on — a superset, because
- * warehouse and project gained one so the UI could render a disabled action with its reason instead
- * of a button that 403s on click (ruling #143). */
-export type PermissionKind = AccessKind | 'warehouse' | 'project';
+/** The kinds whose access is listed, granted and revoked: each has `access/list`, `access/grant`,
+ * `access/revoke` and `access/my-permissions`. */
+export type GrantKind = AccessKind | 'warehouse' | 'project';
+
+/** Whether `kind` has the check and graph doors as well. */
+export const hasAccessCheck = (kind: GrantKind): kind is AccessKind =>
+	kind === 'table' || kind === 'namespace';
 
 /** kind -> URL segment. NOT the identity function, and that is the whole reason this exists: the
  * catalog mounts the warehouse access router at `/management/v1/warehouse` (SINGULAR) and the project one at
  * `/management/v1/projects` (PLURAL, matching the projects module's own prefix). Deriving the path from the
  * kind directly yields `/management/v1/project/...`, which 404s — a failure that would read as "you have no
  * permissions here" rather than as a wrong URL, i.e. it would render every action disabled. */
-export const PERMISSION_SEGMENT: Record<PermissionKind, string> = {
+export const ACCESS_SEGMENT: Record<GrantKind, string> = {
 	table: 'table',
 	namespace: 'namespace',
 	warehouse: 'warehouse',

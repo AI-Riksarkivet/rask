@@ -1004,7 +1004,9 @@ test('a declared table says so, reads no data door, and offers only its first wr
 
 const GONE = 'db1%24dropped';
 const TRASH_ENTRY = {
+	kind: 'table',
 	id: 'db1$dropped',
+	uuid: '7c1d2e3f-0000-4000-8000-000000000075',
 	location: 's3://lance-catalog/db1$dropped',
 	dropped_by: 'CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0MzESBWxvY2Fs',
 	dropped_at: '2026-08-01T09:15:00Z',

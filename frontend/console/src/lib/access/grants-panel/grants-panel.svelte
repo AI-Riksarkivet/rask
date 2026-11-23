@@ -1,12 +1,12 @@
 <script lang="ts">
 	// The access-review panel: who holds which can_* action on a catalog object, expanded through the
-	// FGA model (roles, nested roles, the parent cascade). `kind` picks the object, a table (the
-	// default) or a namespace, and the owner gate is that type's bar (can_drop / can_delete). Owner-only
-	// by design: the catalog gates the enumeration, so a non-owner sees the denial, never the ACL.
+	// FGA model (roles, nested roles, the parent cascade). `kind` picks the object: a table (the
+	// default), a namespace, a warehouse or a project. The catalog gates the enumeration, so a caller
+	// who may not review sees the denial, never the ACL.
 	// The page hands in its `client`, the catalog calls bound to its own reads and writes, so the panel
 	// owns the flow and the page the transport.
-	// Collapsed by default: one owner-rung round-trip per object, with definitive outcomes (the ACL,
-	// 401/403/501) cached and transient failures (offline, 5xx) retried on the next open.
+	// Collapsed by default: one review round-trip per object, with definitive outcomes (the ACL,
+	// 401/403/406) cached and transient failures (offline, 5xx) retried on the next open.
 	import { ChevronRight, ShieldCheck } from '@lucide/svelte';
 	import { Select } from '@riksarkivet/ui/select';
 	import type { ApiResult } from '#lib/api/client.ts';
@@ -15,29 +15,32 @@
 		AccessGrant,
 		AccessKind,
 		AccessList,
+		GrantKind,
 		MyPermissions,
 	} from '#lib/data/namespace.ts';
+	import { hasAccessCheck } from '#lib/data/namespace.ts';
 	import { GrantForm } from '../grant-form/index.ts';
 	import Subject from '../identity/subject.svelte';
 
-	/** The catalog calls the panel makes: the review, a check, and grant/revoke, all owner-gated by the
+	/** The catalog calls the panel makes: the review, a check, and grant/revoke, each gated by the
 	 *  catalog. */
 	export type GrantsClient = {
-		fetchAccess: (kind: AccessKind, id: string) => Promise<ApiResult<AccessList>>;
-		checkAccess: (
+		fetchAccess: (kind: GrantKind, id: string) => Promise<ApiResult<AccessList>>;
+		/** Only a table and a namespace have the check door, so the simulator renders only for them. */
+		checkAccess?: (
 			kind: AccessKind,
 			id: string,
 			user: string,
 			relation: string,
 		) => Promise<ApiResult<AccessCheck>>;
 		grantAccess: (
-			kind: AccessKind,
+			kind: GrantKind,
 			id: string,
 			user: string,
 			relation: string,
 		) => Promise<ApiResult<AccessGrant>>;
 		revokeAccess: (
-			kind: AccessKind,
+			kind: GrantKind,
 			id: string,
 			user: string,
 			relation: string,
@@ -45,14 +48,28 @@
 		/** The caller's own verdicts on this object (`{ can_grant_reader: true, … }`), so a refused
 		 *  Grant or Revoke renders disabled with its reason. Optional: absent means unknown, which
 		 *  renders the controls live, so a verdict is never invented from a read that was not made. */
-		fetchMyPermissions?: (kind: AccessKind, id: string) => Promise<ApiResult<MyPermissions>>;
+		fetchMyPermissions?: (kind: GrantKind, id: string) => Promise<ApiResult<MyPermissions>>;
 	};
 
 	let {
 		dataset,
 		kind = 'table',
 		client,
-	}: { dataset: string; kind?: AccessKind; client: GrantsClient } = $props();
+	}: { dataset: string; kind?: GrantKind; client: GrantsClient } = $props();
+
+	// The catalog's review gate per kind: `can_review_access` on a table or a namespace,
+	// `can_read_assignments` on a warehouse (its grant managers, owners included unless access is
+	// centrally managed) and on a project (its security admins, every admin among them).
+	const REVIEW_DENIED: Record<GrantKind, string> = {
+		table: 'Owner access required to review who can reach this table.',
+		namespace: 'Owner access required to review who can reach this namespace.',
+		warehouse:
+			'Only those who manage this warehouse’s grants, and its project’s admins, may see who has access here.',
+		project:
+			'Only this project’s admins and security admins may see or change who has access here.',
+	};
+
+	const checkClient = $derived(hasAccessCheck(kind) ? (client.checkAccess ?? null) : null);
 
 	// #143: the caller's own verdicts, KEYED BY DATASET like `review.for` / `simFor` / `mgFor` above.
 	// An unkeyed field would let one object's permissions gate another's buttons on navigation — the
@@ -73,6 +90,7 @@
 	} | null>(null);
 	let loadingFor = $state<string | null>(null);
 	let failedFor = $state<string | null>(null); // transient failure — never cached, reopen retries
+	let failedDetail = $state('');
 
 	// #68 access-check simulator — probe an arbitrary (user, relation) against THIS dataset. Gated at the
 	// catalog on `can_review_access`, as the review is. Keyed by dataset so a verdict never bleeds across nav.
@@ -127,11 +145,12 @@
 					res.status === 401
 						? 'Sign in to review access.'
 						: res.status === 403
-							? `Owner access required to review who can reach this ${kind}.`
+							? REVIEW_DENIED[kind]
 							: 'This stack runs auth-off — there are no grants to review.';
 				review = { for: current, access: null, denied };
 			} else {
 				failedFor = current; // offline / 5xx: shown but not cached, so the next open retries
+				failedDetail = res.detail;
 			}
 		} finally {
 			if (loadingFor === current) loadingFor = null;
@@ -147,12 +166,13 @@
 
 	async function runCheck(): Promise<void> {
 		const user = simUser.trim();
-		if (simBusy || !user || !simRelation) return;
+		const check = checkClient;
+		if (simBusy || !user || !simRelation || !check || !hasAccessCheck(kind)) return;
 		simBusy = true;
 		simError = null;
 		const current = dataset;
 		try {
-			const res = await client.checkAccess(kind, current, user, simRelation);
+			const res = await check(kind, current, user, simRelation);
 			if (dataset !== current) return; // navigated away — drop the stale verdict
 			if (res.ok) {
 				simVerdict = {
@@ -177,8 +197,12 @@
 	// multi-statement arrow inside a markup attribute to column 0 — which is what made this file the
 	// estate's only `fmt:check` failure.
 	async function refreshAfterMutation() {
-		const refreshed = await client.fetchAccess(kind, dataset);
-		if (refreshed.ok) review = { for: dataset, access: refreshed.data, denied: null };
+		// The object the write was on: the page may show another by the time the read is answered.
+		const written = dataset;
+		const refreshed = await client.fetchAccess(kind, written);
+		if (refreshed.ok && dataset === written) {
+			review = { for: written, access: refreshed.data, denied: null };
+		}
 	}
 </script>
 
@@ -192,7 +216,10 @@
 		{#if loading}
 			<p class="mut">Reviewing access…</p>
 		{:else if failed}
-			<p class="mut">Access review unavailable right now — close and reopen to retry.</p>
+			<p class="mut">
+				Access review unavailable right now{failedDetail ? `: ${failedDetail}` : ''} — close and reopen
+				to retry.
+			</p>
 		{:else if shown?.denied}
 			<p class="mut">{shown.denied}</p>
 		{:else if shown?.access}
@@ -226,55 +253,63 @@
 				</table>
 			{/if}
 
-			<div class="sim">
-				<div class="sim-head">Check a specific access</div>
-				<div class="sim-form">
-					<input
-						class="mono"
-						placeholder="principal (idp~user id), or role:…#assignee"
-						bind:value={simUser}
-						onkeydown={(e) => e.key === 'Enter' && runCheck()}
-					/>
-					<Select
-						bind:value={simRelation}
-						ariaLabel="Simulate action"
-						placeholder="action…"
-						options={relations.map((r) => ({ value: r, label: r }))}
-					/>
-					<button
-						class="btn"
-						disabled={simBusy || !simUser.trim() || !simRelation}
-						onclick={runCheck}
-					>
-						{simBusy ? '…' : 'Check'}
-					</button>
+			{#if checkClient}
+				<div class="sim">
+					<div class="sim-head">Check a specific access</div>
+					<div class="sim-form">
+						<input
+							class="mono"
+							placeholder="principal (idp~user id), or role:…#assignee"
+							bind:value={simUser}
+							onkeydown={(e) => e.key === 'Enter' && runCheck()}
+						/>
+						<Select
+							bind:value={simRelation}
+							ariaLabel="Simulate action"
+							placeholder="action…"
+							options={relations.map((r) => ({ value: r, label: r }))}
+						/>
+						<button
+							class="btn"
+							disabled={simBusy || !simUser.trim() || !simRelation}
+							onclick={runCheck}
+						>
+							{simBusy ? '…' : 'Check'}
+						</button>
+					</div>
+					{#if simError}
+						<p class="mut">{simError}</p>
+					{:else if simVerdictShown}
+						<p
+							class={[
+								'verdict',
+								{ allow: simVerdictShown.allowed, deny: !simVerdictShown.allowed },
+							]}
+						>
+							<Subject value={simVerdictShown.user} />
+							{simVerdictShown.allowed ? 'can' : 'cannot'}
+							<span class="mono">{simVerdictShown.relation}</span> on this {kind}.
+						</p>
+					{/if}
 				</div>
-				{#if simError}
-					<p class="mut">{simError}</p>
-				{:else if simVerdictShown}
-					<p
-						class={['verdict', { allow: simVerdictShown.allowed, deny: !simVerdictShown.allowed }]}
-					>
-						<Subject value={simVerdictShown.user} />
-						{simVerdictShown.allowed ? 'can' : 'cannot'}
-						<span class="mono">{simVerdictShown.relation}</span> on this {kind}.
-					</p>
-				{/if}
-			</div>
+			{/if}
 
 			<div class="sim">
 				<div class="sim-head">Manage access (grant / revoke)</div>
 				<!-- The grant form the access graph renders too. `knownSubjects` comes from the review this
 				     panel already renders, the only subject directory there is. -->
-				<GrantForm
-					{kind}
-					bind:subject={mgUser}
-					permissions={permMap}
-					knownSubjects={(shown?.access?.grants ?? []).flatMap((g) => g.users)}
-					grant={(user, relation) => client.grantAccess(kind, dataset, user, relation)}
-					revoke={(user, relation) => client.revokeAccess(kind, dataset, user, relation)}
-					onmutated={refreshAfterMutation}
-				/>
+				<!-- Keyed by the object: a rung picked for one is no draft for the next. -->
+				{#key dataset}
+					<GrantForm
+						{kind}
+						bind:subject={mgUser}
+						permissions={permMap}
+						knownSubjects={(shown?.access?.grants ?? []).flatMap((g) => g.users)}
+						grant={(user, relation) => client.grantAccess(kind, dataset, user, relation)}
+						revoke={(user, relation) => client.revokeAccess(kind, dataset, user, relation)}
+						onmutated={refreshAfterMutation}
+					/>
+				{/key}
 			</div>
 		{/if}
 	{/if}

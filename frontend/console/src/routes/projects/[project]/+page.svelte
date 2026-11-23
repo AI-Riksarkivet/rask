@@ -26,12 +26,28 @@
 	import { fetchProject, namespaceTables, projectEvents } from '#lib/remote/warehouses.api.ts';
 	import { fetchWarehouseNamespaces } from '#lib/data/remote/warehouses.api.ts';
 	import ProjectLabels from '#lib/data/ProjectLabels.svelte';
+	import { GrantsPanel, type GrantsClient } from '#lib/access/grants-panel/index.ts';
+	import {
+		fetchAccess,
+		fetchMyPermissions,
+		grantAccess,
+		revokeAccess,
+	} from '#lib/data/remote/access-objects.api.ts';
 	import DeclaredInGit, {
 		declaredInGit,
 		DECLARED_IN_GIT_REASON,
 	} from '#lib/data/DeclaredInGit.svelte';
 
 	const project = $derived(page.params.project ?? '');
+
+	// A project has the list, grant, revoke and self-view doors, and no check door, so the panel
+	// offers no simulator here.
+	const grantsClient: GrantsClient = {
+		fetchAccess: (kind, id) => fetchAccess({ kind, id }),
+		grantAccess: (kind, id, user, relation) => grantAccess({ kind, id, user, relation }),
+		revokeAccess: (kind, id, user, relation) => revokeAccess({ kind, id, user, relation }),
+		fetchMyPermissions: (kind, id) => fetchMyPermissions({ kind, id }),
+	};
 
 	// The graph is a map: every rung below the project links to the catalog page that owns it.
 	// `project` returns null: from `/projects/<id>`, the project rung IS this page.
@@ -329,6 +345,14 @@
 						/>{/each}
 				</div>
 			{/if}
+		</section>
+
+		<!-- Who holds the project's own rungs: `describer` and `modifier` reach every warehouse of the
+		     project, `decider` lets a service ask the decision door about its objects. Membership is the
+		     members door's, not this one's. -->
+		<section>
+			<h2>Access</h2>
+			<GrantsPanel dataset={project} kind="project" client={grantsClient} />
 		</section>
 
 		<!-- The labels this project defines, which its objects' owners attach (ADR 0211). Keyed by the

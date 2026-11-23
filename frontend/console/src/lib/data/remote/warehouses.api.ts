@@ -5,6 +5,7 @@ import type { CreateWarehouse, Warehouse } from '../catalog';
 
 import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
 import { childId, DELIMITER } from '#lib/api/identifiers.ts';
+import { TrashEntrySchema, type TrashEntry } from './catalog.api';
 // Transport: the console's catalog door, `#lib/doors`.
 // The warehouse + project registry, declared with `query`/`command` and answering the shared
 // `ApiResult` union. The catalog's project-admin gate is enforced against a REAL user: these run in the
@@ -94,6 +95,17 @@ export const fetchWarehouseNamespaces = query(
 			? { ok: true, data: { namespaces: result.data.namespaces.map((name) => childId(id, name)) } }
 			: result;
 	},
+);
+
+/** The warehouse's trash (`TrashListing`), every page: each recoverable drop under it that the caller
+ *  holds a grant on, tables and namespaces alike, sorted by name then uuid. */
+export const fetchWarehouseTrash = query(
+	v.string(),
+	async (id): Promise<ApiResult<{ objects: TrashEntry[] }>> =>
+		parsed(
+			await catalogListing(`/management/v1/warehouses/${enc(id)}/trash`, 'objects'),
+			v.object({ objects: v.array(TrashEntrySchema) }),
+		),
 );
 
 // This module reads no project: `/projects` is the estate's project list and `/projects/<p>` one

@@ -18,9 +18,26 @@
 		fetchWarehouseNamespaces,
 	} from '#lib/data/remote/warehouses.api.ts';
 	import DeclaredInGit, { declaredInGit } from '#lib/data/DeclaredInGit.svelte';
+	import WarehouseTrash from '#lib/data/WarehouseTrash.svelte';
 	import { leafSegment, parentNamespace } from '#lib/api/identifiers.ts';
+	import { GrantsPanel, type GrantsClient } from '#lib/access/grants-panel/index.ts';
+	import {
+		fetchAccess,
+		fetchMyPermissions,
+		grantAccess,
+		revokeAccess,
+	} from '#lib/data/remote/access-objects.api.ts';
 
 	const id = $derived(page.params.id ?? '');
+
+	// A warehouse has the list, grant, revoke and self-view doors, and no check door, so the panel
+	// offers no simulator here.
+	const grantsClient: GrantsClient = {
+		fetchAccess: (kind, id) => fetchAccess({ kind, id }),
+		grantAccess: (kind, id, user, relation) => grantAccess({ kind, id, user, relation }),
+		revokeAccess: (kind, id, user, relation) => revokeAccess({ kind, id, user, relation }),
+		fetchMyPermissions: (kind, id) => fetchMyPermissions({ kind, id }),
+	};
 
 	let wh = $state<Warehouse | null>(null);
 	let tables = $state<string[] | null>(null);
@@ -184,6 +201,14 @@
 		</section>
 
 		{@render namespaceList()}
+
+		<!-- An undrop changes what the warehouse lists, so the page reads its own listing again. -->
+		<WarehouseTrash warehouse={id} onrestored={() => void load()} />
+
+		<section>
+			<h2>Access</h2>
+			<GrantsPanel dataset={id} kind="warehouse" client={grantsClient} />
+		</section>
 	{/if}
 </div>
 

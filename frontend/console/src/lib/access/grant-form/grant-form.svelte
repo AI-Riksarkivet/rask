@@ -1,14 +1,14 @@
 <script lang="ts" module>
 	import type { ApiResult } from '#lib/api/client.ts';
-	import type { AccessGrant } from '#lib/data/namespace.ts';
+	import type { AccessGrant, GrantKind } from '#lib/data/namespace.ts';
 
 	/** A grant or a revoke of `relation` to `user`, bound by the page to its object. */
 	export type GrantFormMutate = (user: string, relation: string) => Promise<ApiResult<AccessGrant>>;
 
 	export type GrantFormProps = {
-		/** The object's type. Names it in every message ("…on this table"), and decides whether the
-		 *  steward's entry is offered: the catalog has no `classifier` on a project. */
-		kind: string;
+		/** The object's type. Names it in every message ("…on this table"), and decides which rungs are
+		 *  offered: those the catalog's grant door takes on that type. */
+		kind: GrantKind;
 		/** The subject being granted to. `$bindable` because AccessGraph prefills it when a subject node
 		 *  is clicked on the canvas, which is that component's whole reason for existing. */
 		subject?: string;
@@ -61,6 +61,7 @@
 		rung('modifier', 'modifier — may change and retire it, grants nothing'),
 		rung('owner'),
 	];
+	const MAINTAINER = rung('maintainer', 'maintainer — may run its maintenance');
 	// `classifier` labels columns and does NOT see the object, so the picker offers it only together
 	// with `describer`: a steward is granted both. `describer` is listed first because it is granted
 	// first and revoked last, so no failure half-way leaves `classifier` held alone.
@@ -70,15 +71,27 @@
 		label: 'classifier + describer — may label it and see it, reads no data',
 		rungs: ['describer', 'classifier'],
 	};
-	// The catalog's model defines `classifier` on these object types and not on a project.
-	const CLASSIFIER_KINDS: ReadonlySet<string> = new Set(['warehouse', 'namespace', 'table']);
+	// The model's `decider` is `[user]`: one account, never a role's assignees.
+	const DECIDER = rung('decider', 'decider — a service account may ask what others may do here');
 	const GRANT_AXIS: readonly Entry[] = [
 		rung('pass_grants', 'pass_grants — may re-grant what they hold'),
 		rung('manage_grants', 'manage_grants — may grant anything, reads nothing'),
 	];
-	const entries = $derived(
-		CLASSIFIER_KINDS.has(kind) ? [...LADDER, STEWARD, ...GRANT_AXIS] : [...LADDER, ...GRANT_AXIS],
-	);
+	// Per kind, the rungs the catalog's grant door takes: `_GRANTABLE_BASE` in the catalog's
+	// `access.py` intersected with the relations `model.fga` defines on the type (read 2026-11-23).
+	// A project defines only `describer`, `modifier` and `decider` of them, and its two data rungs
+	// reach every warehouse of the project.
+	const ENTRIES: Record<GrantKind, readonly Entry[]> = {
+		table: [...LADDER, MAINTAINER, STEWARD, ...GRANT_AXIS],
+		namespace: [...LADDER, MAINTAINER, STEWARD, ...GRANT_AXIS],
+		warehouse: [...LADDER, MAINTAINER, STEWARD, DECIDER, ...GRANT_AXIS],
+		project: [
+			rung('describer', 'describer — may see every warehouse of the project, reads no data'),
+			rung('modifier', 'modifier — may change and retire every warehouse of the project'),
+			DECIDER,
+		],
+	};
+	const entries = $derived(ENTRIES[kind]);
 
 	let relation = $state('');
 	let busy = $state(false);
@@ -97,8 +110,18 @@
 	const mayGrant = $derived(missing.length === 0);
 	const mayRevoke = $derived(permissions == null ? true : permissions.can_revoke_grant === true);
 
+	// A project has no owner and no grant option: its admins grant its data rungs, its security admins
+	// `decider`, and its security admins revoke (`model.fga`, type project).
+	const projectGranter = (r: string): string =>
+		r === 'decider' ? 'its security admins' : 'its admins';
+	// The rungs no holder may pass on: the model gives their grant to `manage_grants` alone.
+	const MANAGER_ONLY: ReadonlySet<string> = new Set(['decider', 'manage_grants', 'pass_grants']);
 	const grantNeeds = (r: string): string =>
-		`Granting ${r || 'a rung'} here needs can_grant_${r || '<rung>'} on this ${kind} — held by a grant-manager, or by someone holding ${r || 'that rung'} plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`;
+		kind === 'project'
+			? `Granting ${r || 'a rung'} here needs can_grant_${r || '<rung>'} on this project — held by ${projectGranter(r)}.`
+			: MANAGER_ONLY.has(r)
+				? `Granting ${r} here needs can_grant_${r} on this ${kind} — held by a grant-manager only.`
+				: `Granting ${r || 'a rung'} here needs can_grant_${r || '<rung>'} on this ${kind} — held by a grant-manager, or by someone holding ${r || 'that rung'} plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`;
 	const gates = (rungs: readonly string[]): string =>
 		rungs.map((r) => `can_grant_${r}`).join(' and ');
 	const grantReason = $derived.by(() => {
@@ -109,7 +132,9 @@
 		return `Granting ${selected.name} here makes ${selected.rungs.length} grants and needs ${gates(selected.rungs)} on this ${kind}${lacking} — each held by a grant-manager, or by someone holding that rung plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`;
 	});
 	const revokeReason = $derived(
-		`Revoking here needs can_revoke_grant on this ${kind} — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.`,
+		kind === 'project'
+			? 'Revoking here needs can_revoke_grant on this project — held by its security admins.'
+			: `Revoking here needs can_revoke_grant on this ${kind} — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.`,
 	);
 
 	// A grant names a principal, `<idp-id>~<user id>` (LH-063), or a typed object or userset; the catalog refuses

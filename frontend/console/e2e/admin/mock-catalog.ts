@@ -179,6 +179,10 @@ Bun.serve({
 				404,
 			);
 		}
+		// A warehouse's trash holds nothing until a spec seeds a drop, as a warehouse nobody dropped from.
+		if (/^\/management\/v1\/warehouses\/[^/]+\/trash$/.test(url.pathname) && req.method === 'GET') {
+			return json({ objects: [] });
+		}
 		// A namespace page asks whether its namespace is there before reading its governance; one a spec
 		// names is, unless the spec seeds otherwise.
 		if (/^\/v1\/namespace\/[^/]+\/describe$/.test(url.pathname) && req.method === 'POST') {

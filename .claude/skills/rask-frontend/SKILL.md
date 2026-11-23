@@ -94,7 +94,8 @@ panel's width.
 
 **A table's and a namespace's tabs.** A table has Overview, Preview, Versions (the commit log, its tags and branches as
 Lance has them: each tag with the version, and the branch, it names, and no tag name treated specially), Connect and
-Access; a namespace has Overview, Connect and Access. A table's Overview shows its data contract
+Access; a namespace has Overview, Connect and Access; a project's page and a warehouse's page each carry an Access
+section (list, grant and revoke at their own `access/*` doors, which have no check or graph door). A warehouse's page lists its trash (`WarehouseTrash.svelte`, `GET /management/v1/warehouses/{id}/trash`, every page): each dropped table and namespace by its path, when it was dropped and its deadline, and an Undrop for each entry the catalog does not mark `expired`, sent to that kind's undrop door with the entry's `?uuid=`; nothing there ends a record or releases bytes. A table's Overview shows its data contract
 (`#lib/data/TableContract.svelte`, ADR 0212), read from `POST /management/v1/table/{id}/contract/describe`
 (`fetchTableContract`, `#lib/data/contract.ts`): the ODCS document's id, version and status, who set it and when, and its
 columns (a nested one by its dotted path, its physical type, required, primary key), or one line saying the table holds
