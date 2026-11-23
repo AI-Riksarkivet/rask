@@ -109,7 +109,8 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   secret), redirecting to `/auth/callback` on `:8080` and the Vite dev server's `:5173`, a trusted peer of the audience
   client, its `allowedOrigins` answered for CORS. It is a key of its own so that a client's `clients` or
   `allowedOrigins` values cannot drop it by replacing a list; `clients` stays the empty seam a client's own repository
-  fills with `-f`.
+  fills with `-f`: a map keyed by client id, each entry `{public, secret, redirectURIs, allowedOrigins}`, so several
+  repositories' files merge ([[XC-221]]); a list is refused at the render.
   **The console is the product's, not a client** (ADR 0193): the product chart renders it (`templates/console.yaml`,
   `console.enabled`: Deployment, Service and HTTPRoute `rask-console`, ServiceAccount `rask-sa-console` with no token
   mounted, ConfigMap `rask-console-config`), and `make k3s-up` installs it with the lakehouse. **No client is a
@@ -190,7 +191,8 @@ provisioned by its operator and attested by `signing.provisioned`).
   unless the tag is pinned on the command: `--set image.tags.lance-rest-catalog=<tag>`.
 - Every helm call goes through `scripts/helm.sh`.
 - **The estate's tenants are chart values too** ([[XC-213]], ADR 0206). `catalog.declared` (`projects`, `warehouses`,
-  `grants` to principals that are not people; the default declares the project `default`, administered by
+  `grants` to principals that are not people, a map keyed by a name its values file chooses so several files merge
+  ([[XC-221]]); the default declares the project `default`, administered by
   `auth.bootstrapAdmin` when it names no admin), with the estate's own grants (`estate.admins`: `auth.bootstrapAdmin`;
   `estate.roles`: `lance.fgaEstateRoles`, [[XC-011]]; no hook writes OpenFGA), renders to the ConfigMap
   `<release>-catalog-declaration`

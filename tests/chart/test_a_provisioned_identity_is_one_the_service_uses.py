@@ -98,7 +98,7 @@ def test_each_workload_presents_the_store_identity_the_chart_provisions_for_its_
 _LAKEHOUSE_DOORS = ("rask-catalog", "rask-lineage")
 
 
-def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it_trusts() -> None:
+def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it_trusts(tmp_path: Path) -> None:
     """[[LH-515]] The lakehouse checks an audience of its own, which the IdP issues only to the clients it trusts.
 
     Measured on Dex v2.42.0: a client that asks for `audience:server:client_id:<audience>` gets an id token and an access
@@ -115,7 +115,14 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it
     chart = render("--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"))
     client = {"id": "a-client", "secret": "a-client-secret", "redirectURIs": ["http://localhost:9999/auth/callback"]}
     browser = {"id": "a-browser-app", "public": True, "redirectURIs": ["http://localhost:9999/auth/callback"]}
-    fixture = render_fixture("dex", "--set-json", f"clients=[{json.dumps(client)},{json.dumps(browser)}]")
+    # Each client comes from a values file of its own, as two repositories would supply them: a client is an entry keyed
+    # by its id, so the two files merge, and each client's own origins join the ones Dex answers CORS for ([[XC-221]]).
+    one, other = tmp_path / "one.yaml", tmp_path / "other.yaml"
+    one.write_text(yaml.safe_dump({"clients": {"a-client": {"secret": client["secret"], "redirectURIs": client["redirectURIs"]}}}))
+    other.write_text(
+        yaml.safe_dump({"clients": {"a-browser-app": {"public": True, "redirectURIs": browser["redirectURIs"], "allowedOrigins": ["http://localhost:9999"]}}})
+    )
+    fixture = render_fixture("dex", "-f", str(one), "-f", str(other))
     [config] = [yaml.safe_load(doc["data"]["config.yaml"]) for doc in fixture if doc.get("kind") == "ConfigMap"]
     clients = {client["id"]: client for client in config["staticClients"]}
     doors = {
@@ -131,6 +138,7 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it
     assert (clients[audience].get("public", False), sorted(clients[audience].get("trustedPeers", []))) == (False, others)
     assert clients["a-client"] == {"name": "a-client", **client}
     assert clients["a-browser-app"] == {"name": "a-browser-app", **browser}
+    assert config["web"]["allowedOrigins"] == ["http://localhost:5173", "http://localhost:9999"]
     assert (sorted(clients["rask-web"]), config["oauth2"]["pkce"]) == (["id", "name", "secret"], {"enforce": True, "codeChallengeMethodsSupported": ["S256"]})
 
 
@@ -138,21 +146,26 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it
     ("browser", "refusal"),
     [
         pytest.param(
-            {"id": "a-browser-app", "public": True, "secret": "leaked", "redirectURIs": ["http://localhost:9999/auth/callback"]},
+            {"a-browser-app": {"public": True, "secret": "leaked", "redirectURIs": ["http://localhost:9999/auth/callback"]}},
             'clients "a-browser-app" is public and names a secret: a public client holds none',
             id="a-secret",
         ),
         pytest.param(
-            {"id": "a-browser-app", "public": True},
+            {"a-browser-app": {"public": True}},
             'clients "a-browser-app" is public and names no redirectURIs: Dex then accepts any loopback, out-of-band or device redirect',
             id="no-redirect",
         ),
+        pytest.param(
+            [{"id": "a-browser-app", "public": True, "redirectURIs": ["http://localhost:9999/auth/callback"]}],
+            "clients is a map of entries keyed by client id",
+            id="a-list-which-would-replace-every-other-files-clients",
+        ),
     ],
 )
-def test_a_public_dex_client_is_refused_unless_it_holds_no_secret_and_names_its_redirects(browser: dict[str, object], refusal: str) -> None:
+def test_a_dex_client_declared_wrongly_is_refused_at_the_render(browser: object, refusal: str) -> None:
     """A public client holds no secret, and names each redirect it may receive a code at: one that names a secret is a
     confidential client mis-declared, and one with no redirect is a client Dex hands a code to at any loopback,
     out-of-band or device callback (v2.46.1 `server/authflow/request.go:96-113`), so either is refused at the render."""
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        render_fixture("dex", "--set-json", f"clients=[{json.dumps(browser)}]")
+        render_fixture("dex", "--set-json", f"clients={json.dumps(browser)}")
     assert refusal in refused.value.stderr

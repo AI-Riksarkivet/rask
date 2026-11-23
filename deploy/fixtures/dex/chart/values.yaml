@@ -29,23 +29,26 @@ machineClients:
 # The lakehouse console's sign-in client (the product chart's `console.oidc.clientId`): public, holding no secret and
 # signing in with PKCE (S256, which this Dex enforces), redirected to the console's callback on the origin the dev
 # Gateway is forwarded to (:8080) and on the Vite dev server's (:5173, `make dev` and `make dev-k3s`). The audience client
-# trusts it, so the person's token is issued for the lakehouse. Its own key, so a client's `clients` or `allowedOrigins`
-# values cannot drop it by replacing a list. The Vite dev server is an origin of its own, so its discovery read, key read
+# trusts it, so the person's token is issued for the lakehouse. Its own key, so no values file's `clients` or
+# `allowedOrigins` can drop it. The Vite dev server is an origin of its own, so its discovery read, key read
 # and code exchange are cross-origin and Dex answers CORS for `allowedOrigins`; the console served through the Gateway is
 # same-origin with Dex and needs none. A platform's IdP registers the same client by the platform's means.
 console:
   clientId: rask-console
   redirectURIs: [http://localhost:8080/auth/callback, http://localhost:5173/auth/callback]
   allowedOrigins: [http://localhost:5173]
-# A client release's own sign-in clients, each `{id, secret, redirectURIs}`, or `{id, public: true, redirectURIs}` for a
-# browser app that holds no secret and signs in with PKCE (S256, which this Dex enforces): a person signs in to that
+# A client release's own sign-in clients, each an entry keyed by its client id ([[XC-221]]): `<id>: {secret,
+# redirectURIs}`, or `<id>: {public: true, redirectURIs}` for a browser app that holds no secret and signs in with PKCE
+# (S256, which this Dex enforces). A map, so the values files of several repositories merge: a list would replace every
+# other file's clients. An entry's own `allowedOrigins` join the origins Dex answers CORS for, so a browser app served
+# from an origin of its own names it beside its client. A person signs in to that
 # client through it, and the audience client trusts it, so the person's token is issued for the lakehouse. A public
 # client's residual is this fixture's: Dex serves the password grant to every client (`oauth2.grantTypes` is global, and
 # a client has no grant list of its own), so anyone holding a public client's id may trade a password at /token for a
 # lakehouse token without a browser; the console's client carries the same residual. A platform's IdP that limits grants
 # per client closes it. Empty here: a client supplies its own entry from its own repository with `-f`, and the pinned
 # lakehouse a client's e2e stands up (`Lakehouse` in .dagger/release.go) registers the client it is given ([[XC-189]]).
-clients: []
+clients: {}
 # Demo identities with one password. The hash is bcrypt of "password". alice and bob make the governed demo's allow and
 # deny: alice creates a table and is granted it, bob is refused reading it. carol, dave and erin are the writer, the
 # reader and the outsider of criterion 2's principal matrix (tests/e2e-py/test_the_catalog_is_correct.py), so each rung

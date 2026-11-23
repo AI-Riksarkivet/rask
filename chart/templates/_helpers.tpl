@@ -950,7 +950,13 @@ buckets as the estate's reads already are. */ -}}
 {{- range $relations -}}{{- $roles = append $roles (dict "relation" . "principal" $principal) -}}{{- end -}}
 {{- end -}}
 {{- $estate := dict "admins" (ternary (list $admin) list (ne $admin "")) "roles" $roles -}}
-{{- dict "projects" $projects "warehouses" (.Values.catalog.declared.warehouses | default list) "grants" (.Values.catalog.declared.grants | default list) "estate" $estate | toJson -}}
+{{- $declared := .Values.catalog.declared.grants | default dict -}}
+{{- $grants := list -}}
+{{- range $name := keys $declared | sortAlpha -}}
+{{- if not (regexMatch "^[a-z0-9][a-z0-9-]*$" $name) }}{{- fail (printf "catalog.declared.grants.%s: an entry's name must match ^[a-z0-9][a-z0-9-]*$" $name) }}{{- end -}}
+{{- $grants = append $grants (get $declared $name) -}}
+{{- end -}}
+{{- dict "projects" $projects "warehouses" (.Values.catalog.declared.warehouses | default list) "grants" $grants "estate" $estate | toJson -}}
 {{- end -}}
 
 {{- define "lance.oidcAudience" -}}

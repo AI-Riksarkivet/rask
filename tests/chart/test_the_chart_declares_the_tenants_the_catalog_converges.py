@@ -7,7 +7,12 @@ model refuses would converge nothing on a deployed estate and report it only in 
 
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
 from typing import Any
+
+import pytest
+import yaml
 
 from catalog.services.declaration import Declaration, DeclaredEstate, DeclaredEstateRole, DeclaredGrant, DeclaredProject, DeclaredWarehouse
 from tests.chart.chart_render import DEFAULT_ARGS, render
@@ -55,14 +60,26 @@ def test_a_fresh_install_declares_the_bootstrap_admin_over_the_estate_and_its_de
     )
 
 
-def test_declared_projects_warehouses_and_grants_reach_the_catalog_as_declared() -> None:
+def test_declared_projects_warehouses_and_grants_reach_the_catalog_as_declared(tmp_path: Path) -> None:
+    """Projects and warehouses are the estate's own lists. A grant is an entry keyed by a name its file chooses, so the
+    grants of two values files, written in two repositories, both reach the catalog ([[XC-221]]): Helm merges maps
+    and replaces lists, and a replaced list would revoke the other file's grant."""
+    ours, theirs = tmp_path / "ours.yaml", tmp_path / "theirs.yaml"
+    ours.write_text(
+        yaml.safe_dump({"catalog": {"declared": {"grants": {"pipeline": {"object": "warehouse:acme", "relation": "writer", "principal": PIPELINE}}}}})
+    )
+    theirs.write_text(
+        yaml.safe_dump({"catalog": {"declared": {"grants": {"a-reader": {"object": "warehouse:acme", "relation": "reader", "principal": PIPELINE}}}}})
+    )
     declared = _declaration(
         "--set-json",
         'catalog.declared.projects=[{"id":"acme","admins":["dex~bob"],"protected":true}]',
         "--set-json",
         'catalog.declared.warehouses=[{"id":"acme","project":"acme","bucket":"acme-bucket","delete_profile":{"mode":"soft","grace_days":7},"active":false}]',
-        "--set-json",
-        f'catalog.declared.grants=[{{"object":"warehouse:acme","relation":"writer","principal":"{PIPELINE}"}}]',
+        "-f",
+        str(ours),
+        "-f",
+        str(theirs),
     )
 
     assert declared.model_copy(update={"estate": DeclaredEstate()}) == Declaration(
@@ -72,5 +89,17 @@ def test_declared_projects_warehouses_and_grants_reach_the_catalog_as_declared()
                 {"id": "acme", "project": "acme", "bucket": "acme-bucket", "delete_profile": {"mode": "soft", "grace_days": 7}, "active": False}
             )
         ],
-        grants=[DeclaredGrant(object="warehouse:acme", relation="writer", principal=PIPELINE)],
+        grants=[
+            DeclaredGrant(object="warehouse:acme", relation="reader", principal=PIPELINE),
+            DeclaredGrant(object="warehouse:acme", relation="writer", principal=PIPELINE),
+        ],
     )
+
+
+def test_a_list_of_grants_is_refused_at_the_render() -> None:
+    """A list would replace every other values file's grants, and the catalog revokes a grant the declaration stops
+    naming, so the render refuses the shape and names the key."""
+    with pytest.raises(subprocess.CalledProcessError) as refused:
+        _declaration("--set-json", f'catalog.declared.grants=[{{"object":"warehouse:acme","relation":"writer","principal":"{PIPELINE}"}}]')
+
+    assert "grants" in refused.value.stderr

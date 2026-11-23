@@ -310,8 +310,9 @@
                     "type": "object",
                     "properties": {
                         "grants": {
-                            "description": "Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:\u003cid\u003e` or `warehouse:\u003cid\u003e`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:\u003cnamespace\u003e:\u003cname\u003e`). The catalog revokes a grant removed from here, and only one it wrote from here.",
-                            "type": "array"
+                            "description": "Grants git declares to principals that are not people, each an entry keyed by a name its values file chooses, `\u003cname\u003e: {object, relation, principal}` (a map, so several values files merge where a list would replace each other's): `object` is `project:\u003cid\u003e` or `warehouse:\u003cid\u003e`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:\u003cnamespace\u003e:\u003cname\u003e`). The catalog revokes a grant removed from here, and only one it wrote from here.",
+                            "type": "object",
+                            "additionalProperties": true
                         },
                         "projects": {
                             "description": "Projects git declares, each `{id, admins, protected}`: `admins` lists people's principals (`\u003cidp-id\u003e~\u003cuser id\u003e`), and a project naming none is administered by `auth.bootstrapAdmin` when that is set; `protected` arms its deletion protection. The default declares one project, so a one-team install never creates one.",

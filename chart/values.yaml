@@ -708,8 +708,8 @@ catalog:
       - id: default
     # -- Warehouses git declares, each `{id, project, bucket, delete_profile, protected, active}`: `bucket` defaults to the id, `delete_profile` is `{mode: hard}` or `{mode: soft, grace_days: n}` (unset takes the estate's grace period), `active: false` deactivates it. The id is the first segment of every name in the warehouse.
     warehouses: []
-    # -- Grants git declares to principals that are not people, each `{object, relation, principal}`: `object` is `project:<id>` or `warehouse:<id>`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:<namespace>:<name>`). The catalog revokes a grant removed from here, and only one it wrote from here.
-    grants: []
+    # -- Grants git declares to principals that are not people, each an entry keyed by a name its values file chooses, `<name>: {object, relation, principal}` (a map, so several values files merge where a list would replace each other's): `object` is `project:<id>` or `warehouse:<id>`, `relation` a rung of that type, `principal` a service account's principal (`kubernetes~system:serviceaccount:<namespace>:<name>`). The catalog revokes a grant removed from here, and only one it wrote from here.
+    grants: {} # @schema additionalProperties: true
   declarationConverge:
     # A tick that finds the estate as declared costs one registry read per declared object and one tuple read per
     # object granted on, so it runs often enough that a change to the declaration lands within a minute or two.

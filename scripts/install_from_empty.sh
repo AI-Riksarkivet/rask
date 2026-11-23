@@ -33,7 +33,7 @@ DEX_VALUES=()
 if [ -n "${DEX_CLIENT:-}" ]; then
   # JSON is YAML, and json.dumps quotes whatever the secret holds; the file is the install's alone.
   dex_values="$(mktemp)"
-  python3 -c 'import json, os; print(json.dumps({"clients": [{"id": os.environ["DEX_CLIENT"], "secret": os.environ["DEX_CLIENT_SECRET"], "redirectURIs": json.loads(os.environ.get("DEX_REDIRECT_URIS") or "[]")}]}))' >"$dex_values"
+  python3 -c 'import json, os; print(json.dumps({"clients": {os.environ["DEX_CLIENT"]: {"secret": os.environ["DEX_CLIENT_SECRET"], "redirectURIs": json.loads(os.environ.get("DEX_REDIRECT_URIS") or "[]")}}}))' >"$dex_values"
   DEX_VALUES=(-- -f "$dex_values")
 fi
 TIMEOUT="${TIMEOUT:-900s}"

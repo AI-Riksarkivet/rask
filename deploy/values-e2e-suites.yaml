@@ -66,6 +66,7 @@ catalog:
           mode: soft
           grace_days: 1
     grants:
-      - object: warehouse:declared-one
+      suites-read-declared-one:
+        object: warehouse:declared-one
         relation: reader
         principal: kubernetes~system:serviceaccount:default:rask-e2e-suites

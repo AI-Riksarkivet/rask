@@ -117,7 +117,8 @@ catalog converges it within a tick.
            project: acme
            delete_profile: {mode: soft, grace_days: 7}
        grants:
-         - object: warehouse:acme-bronze
+         ingest-writes-bronze:
+           object: warehouse:acme-bronze
            relation: writer
            principal: "kubernetes~system:serviceaccount:pipelines:ingest"
    ```
