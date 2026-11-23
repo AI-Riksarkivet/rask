@@ -43,7 +43,9 @@ function toReport(
 		message: err?.message ?? String(error),
 		eventId,
 		routeId: event.route.id,
-		url: event.url.pathname + event.url.search,
+		// The path alone on the sign-in round trip: the callback's query is the authorization code and its
+		// state, which are no part of an error report.
+		url: event.url.pathname + (event.url.pathname.startsWith('/auth/') ? '' : event.url.search),
 		status,
 		stack: err?.stack,
 	};

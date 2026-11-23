@@ -73,9 +73,7 @@
 		<Tooltip.Root>
 			<!-- The `child` snippet, NOT the default trigger. `Tooltip.Trigger` renders a <button> of its
 			     own, and the thing being gated is almost always a <button> too — nesting them is invalid
-			     HTML, so the browser repairs it by hoisting the inner one out, content shifts, and SSR
-			     warns `node_invalid_placement_ssr` followed by a hydration mismatch. (Observed, not
-			     theorised: the home settings suite printed exactly that before this snippet existed.)
+			     HTML, so the browser repairs it by hoisting the inner one out and content shifts.
 			     Delegating lets the trigger BE this span, so there is one element and it is not a button. -->
 			<Tooltip.Trigger>
 				{#snippet child({ props })}

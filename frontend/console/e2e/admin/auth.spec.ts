@@ -94,7 +94,7 @@ test('sign-out without an issuer end-session endpoint makes the next sign-in re-
 	expect(authorize.searchParams.get('prompt')).toBe('login');
 });
 
-test('the account menu opens on its first item, and Sign out is the menu item itself', async ({
+test('the account menu opens on its first item, and Sign out is a menu item beneath it', async ({
 	context,
 	page,
 }) => {
@@ -107,7 +107,27 @@ test('the account menu opens on its first item, and Sign out is the menu item it
 	await expect(signOut).toBeVisible();
 	await expect(page.getByRole('menuitem').first()).toBeFocused();
 	await expect(signOut).not.toBeFocused();
-	await expect(signOut).toHaveAttribute('href', '/auth/logout');
+});
+
+test('signing out is an act, not a page: a link to /auth/logout ends nobody’s session', async ({
+	context,
+	page,
+}) => {
+	await signIn(context);
+	await mockMe(page);
+	const ended: string[] = [];
+	page.on('request', (request) => {
+		if (new URL(request.url()).pathname === '/oidc/logout') ended.push(request.url());
+	});
+
+	// Where a link in a mail, or an image on another site, would send a signed-in person.
+	await page.goto('/auth/logout');
+
+	await expect(page.getByRole('heading', { name: 'Page not found', exact: true })).toBeVisible();
+	expect(ended).toEqual([]);
+	// The issuer's session stands: the next page signs in from it without a login form.
+	await page.goto('/admin/dlq');
+	await expect(page.getByRole('heading', { name: 'DLQ', exact: true })).toBeVisible();
 });
 
 /** A refresh-token exchange at the mock issuer. */

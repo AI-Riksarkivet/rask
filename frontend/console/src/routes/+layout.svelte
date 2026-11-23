@@ -8,7 +8,7 @@
 	import { AppShell } from '#lib/shell/index.ts';
 	import { Button } from '@riksarkivet/ui/button';
 	import type { Snippet } from 'svelte';
-	import { auth, expired, login, renew } from '#lib/auth.svelte.ts';
+	import { auth, expired, login, logout, renew } from '#lib/auth.svelte.ts';
 	import { activity } from '#lib/activity.svelte.ts';
 	import { areaOf, consoleSidebar, GROUP_NAMES, PAGE_NAMES } from '#lib/nav.ts';
 	import { catalogTrail } from '#lib/catalog-trail.ts';
@@ -44,6 +44,12 @@
 
 	const signInAgain = () => void login(page.url.pathname + page.url.search);
 
+	// Signing out: forget the reader's activity log, drop the in-memory session, end the issuer's.
+	const signOut = () => {
+		activity.forget();
+		void logout();
+	};
+
 	// The navbar's bell (the shell's ActivityCenter, mounted by AppShell): the outcome of every write
 	// this console sent for the reader, kept in their browser (`#lib/activity.svelte.ts`). The shell
 	// renders it and calls back when the panel opens and when the reader clears the log.
@@ -78,6 +84,7 @@
 	groups={GROUP_NAMES}
 	trail={catalogTrail(page.route.id, page.params)}
 	activity={activityFeed}
+	onsignout={signOut}
 >
 	{#if auth.ended}
 		<div

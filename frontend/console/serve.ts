@@ -52,10 +52,17 @@ function policy(): string {
 	return [...directives, "frame-ancestors 'none'"].join('; ');
 }
 
+// HSTS is read only over https, where it tells the browser never to ask for this host in the clear
+// again; over http a browser ignores it. It names this host alone: whether its subdomains serve https
+// is the platform's to say, at the Gateway that terminates TLS. The opener policy puts the console in a browsing context group
+// of its own, so a page that opened it, or that it opened on another origin, holds no handle on its
+// window; the workbench's popouts are same-origin and keep theirs.
 const SECURITY_HEADERS = {
 	'content-security-policy': policy(),
 	'x-content-type-options': 'nosniff',
 	'referrer-policy': 'no-referrer',
+	'strict-transport-security': 'max-age=31536000',
+	'cross-origin-opener-policy': 'same-origin',
 };
 
 function page(body: string, contentType: string, cache: string): Response {

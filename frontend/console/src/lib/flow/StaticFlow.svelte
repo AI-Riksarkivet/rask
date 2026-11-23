@@ -1,7 +1,7 @@
 <script lang="ts">
-	// SSR-able Svelte Flow diagram: explicit node dims + handle positions + a fixed
-	// width/height so it renders WITHOUT a browser layout engine (the server-render
-	// contract from the Svelte Flow SSR docs) — for a diagram drawn without a live canvas.
+	// A static Svelte Flow diagram: explicit node dims + handle positions + a fixed
+	// width/height, so it is drawn whole at its first paint with nothing measured first —
+	// for a diagram drawn without a live canvas.
 	import { SvelteFlow, Background } from '@xyflow/svelte';
 	import type { Node, Edge, NodeTypes } from '@xyflow/svelte';
 

@@ -57,7 +57,7 @@ modules are fine, and the data layer is `reads.svelte.ts`. `tsconfig.json` exten
 | `/catalog/{warehouses,namespaces,tables}` (`warehouses/[id]`, `namespaces/[id]`, `tables/[table]`) | the catalog; the three lists take `?project=<id>` (below) |
 | `/admin`, `/admin/{events,dlq}` | operations, estate-admin only (`admin/+layout.ts`) |
 | `/workbench` | the dock (events, tables) |
-| `/auth/{login,callback,logout}` | the sign-in round trip, client pages |
+| `/auth/{login,callback}` | the sign-in round trip, client pages |
 
 There is no base path (the `sveltekit()` options set no `paths.base`), and SvelteKit soft-navigates every in-app link. Every `href` and
 `goto` still goes through `resolve()` from `$app/paths`, which fills a route id's parameters: oxlint's
@@ -185,7 +185,11 @@ the one way a request leaves the browser, asks for one renewal and sends the req
 session that cannot be renewed (no refresh token, or the issuer refuses it) has ENDED once a door refused its token or
 it expired: `auth.ended`, and the root layout shows a notice with "Sign in again". Nothing redirects on a timer, so
 what a person typed is never thrown away. The mock issuer takes its behaviour per spec by cookie (`issuerBehaviour`
-in `e2e/admin/session.ts`: the token's lifetime, an authorize error, the renewed token, a refused refresh). Sign-out (`logout()`) calls
+in `e2e/admin/session.ts`: the token's lifetime, an authorize error, the renewed token, a refused refresh).
+
+**Signing out is an act, not a page.** The account menu's Sign out calls the `onsignout` the root layout hands the
+shell (forget the activity log, then `logout()`). There is no `/auth/logout` route, so no link a person is sent to
+signs them out. `logout()` calls
 `signoutRedirect()` while the user is still held, so the end-session request carries `id_token_hint`; `signoutRedirect`
 removes the user itself before it navigates. Without an `end_session_endpoint` it removes the user and goes to
 `/auth/login?prompt=login`, so an issuer that keeps a session authenticates whoever signs in next instead of reusing it.
@@ -210,7 +214,8 @@ or built from `auth.oidc.audience`), and `federated:id` only under that connecto
 `script-src 'self'` plus the bootstrap hash, `connect-src 'self'`, `style-src 'self' 'unsafe-inline'` for Svelte's and
 Bits UI's inline styles). `serve.ts` lifts that policy out of the built `index.html`, removes the meta tag, and sends it
 as a HEADER, adding the configured issuer's origin to `connect-src` and `frame-ancestors 'none'`, plus
-`X-Content-Type-Options: nosniff` and `Referrer-Policy: no-referrer`. The meta tag must go: a meta policy and a header
+`X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Strict-Transport-Security` for its own host (read only over https)
+and `Cross-Origin-Opener-Policy: same-origin` (the workbench's popouts are same-origin and keep their opener). The meta tag must go: a meta policy and a header
 policy both apply, so a meta `connect-src 'self'` would block a cross-origin issuer whatever the header said. A library
 that compiles code at runtime is blocked by `script-src`: `patches/apache-arrow@21.2.0.patch` replaces apache-arrow's
 `new Function` null check with a closure that keeps upstream's semantics (held to upstream's compiled function by
@@ -244,6 +249,11 @@ NOT CONFIRMED, never that it was not applied. Each row-writing form holds a `Wri
 one key per batch, kept while an unanswered (0), conflicting (409) or failed (5xx) write of the same rows is retried,
 so the catalog applies it once, and a new one once the write is settled or the rows change; the form's button reads
 Retry while one is held.
+
+**One declaration per door.** A door is read by one `query` in one module, and every page that needs it imports that
+one (the estate's tables are `fetchTables` in `#lib/data/remote/catalog.api.ts`, the access page included): a second
+declaration is a second cache, which a write's refresh does not reach. The e2e mock's tuples door answers three to a
+page, so a reader that stopped at a first page fails the access specs.
 
 **`#lib/reads.svelte.ts` is the data layer**: `query` (a cached, refreshable read), `query.live` (a cursor that
 advances), and `command` (a write), in the browser. Every `*.api.ts` module (`#lib/remote/`, `#lib/data/remote/`,

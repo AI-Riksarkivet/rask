@@ -74,8 +74,8 @@
 	let loadingFor = $state<string | null>(null);
 	let failedFor = $state<string | null>(null); // transient failure — never cached, reopen retries
 
-	// #68 access-check simulator — probe an arbitrary (user, relation) against THIS dataset. Owner-gated
-	// server-side (the same can_drop bar as the review). Keyed by dataset so a verdict never bleeds across nav.
+	// #68 access-check simulator — probe an arbitrary (user, relation) against THIS dataset. Gated at the
+	// catalog on `can_review_access`, as the review is. Keyed by dataset so a verdict never bleeds across nav.
 	let simUser = $state('');
 	let simRelation = $state('');
 	let simFor = $state<string | null>(null);

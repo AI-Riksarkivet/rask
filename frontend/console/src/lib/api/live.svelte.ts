@@ -29,13 +29,11 @@ import { onMount, untrack } from 'svelte';
  *    eagerly and once when the stream lands, for no new information. Only a cursor that moves after
  *    that means the estate did something. (Caught by `lakehouse/e2e/lineage/live-refresh.spec.ts`,
  *    which counts reads: it expected 1 and got 2.)
- *  - The stream is OPENED ON MOUNT, never at component init, so it does not exist during SSR. A live
- *    query touched while rendering makes the server hold the render until the generator's first value
- *    — which for these cursors is a round trip to the lineage plane on the critical path of every
- *    page. A page whose HTML waits on a *liveness probe* is strictly worse than the timers this
- *    replaced, and it is measurable: opening at init took the lakehouse e2e suite from 2 failures to
- *    9–18, nearly all of them shell elements simply absent, and moving it here put the count back. A
- *    live feed is a client concern; the server's job is to render the page.
+ *  - The stream is OPENED ON MOUNT, never at component init. A live query touched while a component
+ *    renders holds that render until the generator's first value, which for these cursors is a round
+ *    trip to the lineage plane on the critical path of every page: a page whose first paint waits on a
+ *    *liveness probe*. Measured: opening at init took the e2e suite from 2 failures to 9–18, nearly all
+ *    of them shell elements simply absent, and opening on mount put the count back.
  *
  * The read is `untrack`ed: a loader assigns the `$state` it also reads,
  * so tracking it would re-enter.

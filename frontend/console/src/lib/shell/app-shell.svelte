@@ -50,6 +50,7 @@
 		pages = null,
 		groups = null,
 		trail = null,
+		onsignout,
 		children,
 	}: {
 		pathname?: string;
@@ -59,6 +60,8 @@
 		/** `null` = no resolved identity: signed out on an auth-on stack, or auth off entirely. */
 		user?: NavUser | null;
 		authEnabled?: boolean;
+		/** What the account menu's Sign out does. The app owns the session, so the act is the app's. */
+		onsignout?: (() => void) | undefined;
 		/** The sidebar's routes; null renders an empty rail. */
 		pageNav?: PageNav | null;
 		/** The reader's activity for the bell (see `ActivityFeed`). The shell never stores it; `null`
@@ -218,7 +221,7 @@
 						onclear={activity.onclear}
 					/>
 				{/if}
-				<NavbarUser {user} {authEnabled} {pathname} />
+				<NavbarUser {user} {authEnabled} {pathname} {onsignout} />
 			</div>
 		</header>
 		<div

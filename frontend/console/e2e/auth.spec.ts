@@ -25,12 +25,6 @@ test('/auth/login is a fail-safe no-op back to the landing when sign-in is not c
 	).toBeVisible();
 });
 
-test('/auth/logout drops the session and goes back to the landing', async ({ page, baseURL }) => {
-	const res = await page.goto('/auth/logout');
-	expect(res?.status()).toBe(200);
-	await expect(page).toHaveURL(`${baseURL}/`);
-});
-
 test("the sidebar is every page's one navigation; an anonymous visitor sees the estate-admin rows disabled, with no way in", async ({
 	page,
 }) => {

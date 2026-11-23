@@ -27,10 +27,10 @@
 		expand,
 		fetchAccessModel,
 		fetchStore,
-		fetchTables,
 		listObjects,
 		listUsers,
 	} from '../remote/access.api';
+	import { fetchTables } from '#lib/data/remote/catalog.api.ts';
 	import { controlTick, liveRead } from '#lib/live/tick.svelte.ts';
 	import FacetRail from './FacetRail.svelte';
 	import Inspector from './Inspector.svelte';
@@ -158,7 +158,13 @@
 	/** `{condition: {parameter: type}}` served by GET /management/v1/access/model — the grant dialog renders TYPED
 	 *  inputs from this rather than from a copy that would drift the moment the model gains a parameter. */
 	let modelConditions = $state<Record<string, Record<string, string>>>({});
-	let registry = $state<string[]>([]);
+	/** The estate's tables, from the one read every page shares: a table dropped or declared anywhere
+	 *  refreshes it, so the seed list here is never a copy of its own. */
+	const tablesRead = fetchTables();
+	const registry = $derived.by(() => {
+		const read = tablesRead.current;
+		return read?.ok && Array.isArray(read.data.tables) ? [...read.data.tables].sort() : [];
+	});
 	/** Every tuple in the store — the canvas's base graph, and what the facet counts are computed on. */
 	let storeTuples = $state<Tuple[]>([]);
 	/** The names the last query's answer gave its table and namespace objects (`table:<uuid>` → `db$t`). */
@@ -225,8 +231,7 @@
 	}
 
 	async function loadRegistry(): Promise<void> {
-		const res = await fetchTables();
-		if (res.ok) registry = [...res.data.tables].sort();
+		await tablesRead.refresh();
 	}
 
 	/** Relations the model defines on the type currently in play — the query bar's suggestions, so a

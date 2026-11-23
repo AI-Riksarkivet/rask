@@ -8,7 +8,7 @@ import { warehouseOf } from '#lib/api/identifiers.ts';
 import { PolicyDescribeSchema, PolicyResponseSchema, type Policy } from '#lib/policies.ts';
 import { PolicyDeleteResponseSchema, type NamespacePolicyDelete } from '../namespace';
 
-import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
+import { catalogJSON, parsed } from '#lib/doors.ts';
 // Transport: the console's catalog door, `#lib/doors`.
 // The NAMESPACE-scoped lifecycle + maintenance-policy surfaces, declared with `query`/`command` and
 // answering the shared `ApiResult` union. Owner-gated by the CATALOG (can_delete on namespace:<id>)
@@ -21,25 +21,6 @@ import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
 // The wire contracts live in `../catalog` and `../namespace`, beside the types the components import.
 
 const enc = encodeURIComponent;
-
-/** The tables under ONE namespace — the namespace→table rung of the app Overview's hierarchy view
- *  (#109). The spec's list_tables through the catalog's GET route, reader-gated like every other read
- *  here.
- *
- *  Deliberately NOT `catalog.api.ts`'s `fetchTables`: that one reads the whole estate's registry in
- *  `<ns>$<table>` canonical form for the tables PAGE, so drawing a per-namespace rung from it would
- *  mean pulling every table in the estate to render one branch — and it would answer for namespaces
- *  this caller cannot read, which the hierarchy must show as "unreadable" rather than as empty.
- *  Every page of the listing is read (`catalogListing`). */
-const NamespaceTablesSchema = v.object({ tables: v.array(v.string()) });
-export const fetchNamespaceTables = query(
-	v.string(),
-	async (namespace): Promise<ApiResult<{ tables: string[] }>> =>
-		parsed(
-			await catalogListing(`/v1/namespace/${enc(namespace)}/table/list`, 'tables'),
-			NamespaceTablesSchema,
-		),
-);
 
 /** What a CALLER supplies to set a policy — the PolicyRequest wire body, every bound optional
  *  (absent = "the global default applies"), which is why the form omits an empty field rather than

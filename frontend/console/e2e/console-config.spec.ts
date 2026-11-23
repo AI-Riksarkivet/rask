@@ -41,7 +41,14 @@ for (const { name, answer, why } of [
 test('a malformed percent-escape in the path is a 400, not a server error', async ({ request }) => {
 	const res = await request.get('/catalog/%E0%A4%A');
 	expect(res.status()).toBe(400);
-	expect(res.headers()['content-security-policy']).toContain("frame-ancestors 'none'");
+	const sent = res.headers();
+	expect(sent['content-security-policy']).toContain("frame-ancestors 'none'");
+	// Every answer carries the policies, an error's too: no http after one https visit, and no handle on
+	// the console's window for a page on another origin.
+	expect([sent['strict-transport-security'], sent['cross-origin-opener-policy']]).toEqual([
+		'max-age=31536000',
+		'same-origin',
+	]);
 });
 
 test('the server answers /readyz as ready, and told to stop it exits cleanly', async () => {

@@ -14,13 +14,20 @@
 	//
 	// `authEnabled` drives the auth affordance: off → the local identity,
 	// no auth UI; on + signed in → identity + Sign out; on + signed out (user null) → a "Sign in" prompt.
-	// Login/logout are the app's own `/auth/*` pages: the session lives in the page's memory, so they are
-	// soft navigations — a document load would drop it.
+	// Signing in is the app's own `/auth/login` page. Signing out is an ACT, handed in as `onsignout`: it is
+	// no page and no link, so nothing a person is sent to (a link in a mail, an image on another site) can
+	// sign them out.
 	let {
 		user = null,
 		authEnabled = false,
 		pathname = '',
-	}: { user?: NavUser | null; authEnabled?: boolean; pathname?: string } = $props();
+		onsignout,
+	}: {
+		user?: NavUser | null;
+		authEnabled?: boolean;
+		pathname?: string;
+		onsignout?: (() => void) | undefined;
+	} = $props();
 
 	const signedIn = $derived(!!user);
 	// The identity shown on the trigger. NEVER invented: in a governance UI the point is knowing who
@@ -67,15 +74,9 @@
 		{#if authEnabled}
 			<DropdownMenu.Separator />
 			{#if signedIn}
-				<!-- The anchor IS the menu item. An anchor nested inside an item would be the menu's first
-				     tabbable element, so the menu would open with focus on it and two Enters would sign out. -->
-				<DropdownMenu.Item>
-					{#snippet child({ props })}
-						<a {...props} href="/auth/logout">
-							<LogOut class="size-4" />
-							Sign out
-						</a>
-					{/snippet}
+				<DropdownMenu.Item onSelect={() => onsignout?.()}>
+					<LogOut class="size-4" />
+					Sign out
 				</DropdownMenu.Item>
 			{:else}
 				<!-- Returns here after the round-trip. -->

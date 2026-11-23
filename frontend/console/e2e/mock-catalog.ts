@@ -118,6 +118,9 @@ const callsOf = (bearer: string): Body[] => {
 const json = (data: unknown, status = 200): Response =>
 	new Response(JSON.stringify(data), { status, headers: { 'content-type': 'application/json' } });
 
+/** How many tuples the mock's tuples door answers at a time. */
+const TUPLES_PER_PAGE = 3;
+
 Bun.serve({
 	port: MOCK_CATALOG_PORT,
 	async fetch(req: Request): Promise<Response> {
@@ -206,7 +209,15 @@ Bun.serve({
 						.map(answered)
 						.filter((t) => !state.deleted.some((d) => sameTuple(d, t)));
 					if (object) tuples = tuples.filter((t) => t.object === object);
-					return json({ tuples, continuation: null });
+					// PAGED, as the catalog's door is (it answers at most `page_size` tuples and a continuation):
+					// three to a page here, so every read of more than three spans pages, and a reader that
+					// stopped at the first would show part of the store as all of it.
+					const from = Number(url.searchParams.get('continuation') ?? 0);
+					const to = from + TUPLES_PER_PAGE;
+					return json({
+						tuples: tuples.slice(from, to),
+						continuation: to < tuples.length ? String(to) : null,
+					});
 				}
 				if (state.failWrites) return json({ detail: 'forbidden' }, 403);
 				const body = (await req.json()) as FixtureTuple;
