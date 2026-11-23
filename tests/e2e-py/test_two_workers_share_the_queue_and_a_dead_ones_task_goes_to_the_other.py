@@ -209,6 +209,10 @@ collector = f"http://127.0.0.1:{{silent.getsockname()[1]}}/v1/logs"
 provider.add_log_record_processor(BatchLogRecordProcessor(OTLPLogExporter(endpoint=collector, timeout=60)))
 set_logger_provider(provider)
 logging.getLogger().addHandler(LoggingHandler(logger_provider=provider))
+# Its warnings also reach stderr, so a worker that ends itself says why where the test's failure shows it.
+said = logging.StreamHandler(sys.stderr)
+said.setLevel(logging.WARNING)
+logging.getLogger().addHandler(said)
 
 async def main(url: str, max_pass: float) -> None:
     queue = await TaskQueue.connect(url, BusSettings(), name="maintenance-worker")
@@ -379,9 +383,16 @@ async def _holding(url: str, pod: Pod, log: Path, session_seconds: int) -> async
 
 
 async def _said(process: asyncio.subprocess.Process) -> list[str]:
-    """The next line a worker in a process of its own printed, as words."""
+    """The next line a worker in a process of its own printed, as words.
+
+    A worker that ended without a word fails here with how it ended: its exit code, beside the warnings it wrote to
+    stderr, which pytest shows with the failure.
+    """
     assert process.stdout is not None
-    return (await asyncio.wait_for(process.stdout.readline(), 60)).decode().split()
+    line = await asyncio.wait_for(process.stdout.readline(), 60)
+    if not line:
+        raise AssertionError(f"the worker said nothing and ended with exit code {await asyncio.wait_for(process.wait(), 30)}")
+    return line.decode().split()
 
 
 async def _until(done: Callable[[], bool | Awaitable[bool]], seconds: float) -> bool:
