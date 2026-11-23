@@ -138,7 +138,7 @@ spec:
             - "python"
             - "-m"
             - "maintenance.worker"
-          ports: [{ name: http, containerPort: {{ $probes }} }]
+          ports: [{ name: probes, containerPort: {{ $probes }} }]
           env:
             {{- include "lance.maintenanceEnv" (list $root $drain) | nindent 12 }}
           {{- include "lance.appProbes" . | nindent 10 }}

@@ -21,7 +21,7 @@ the threadpool so the heartbeats stay on the event loop.
 The process serves no API. It answers ``/livez`` and ``/readyz`` on ``MAINTENANCE_WORKER_PORT``, for the kubelet. They
 are served from a thread of their own: uvicorn takes SIGTERM for itself on the main thread and would stop answering at
 the moment the drain begins. Served from another loop, ``/livez`` would say nothing of the worker's, so the worker's
-loop marks a beat each second and ``/livez`` fails once the last one is :data:`STALE_SECONDS` old.
+loop marks a beat each second and ``/livez`` fails once the last one is stale (`lakehouse.process.probe_server.LoopBeat`).
 
 Run: ``python -m maintenance.worker``.
 """
@@ -32,15 +32,13 @@ import asyncio
 import logging
 import os
 import signal
-import threading
 from collections.abc import AsyncGenerator, Generator
 from contextlib import asynccontextmanager, contextmanager, suppress
-from time import monotonic
 
-import uvicorn
 from fastapi import FastAPI
 
 from lakehouse.governed.signing_key import attach_signing, signing_ready_check
+from lakehouse.process import probe_server
 from lakehouse.process.lifecycle import mark_draining, mark_started
 from lakehouse.process.supervision import FLUSH_SECONDS, Supervisor, flush_telemetry
 from lakehouse.service_app.factory import build_service_app
@@ -51,12 +49,8 @@ from maintenance.services.tasks import running_worker
 
 log = logging.getLogger(__name__)
 
-#: How long the probes' server is given to start, and then to stop.
-_PROBES_SECONDS = 10.0
 #: How often the worker's loop marks that it turns, and how old its last mark may be before ``/livez`` fails. A pass
 #: runs in the threadpool, so a loop that has not turned for this long is wedged and its heartbeats have stopped.
-_BEAT_SECONDS = 1.0
-STALE_SECONDS = 30.0
 #: How long the worker may take to start before its process ends, to be started again: a start that waits on the bus or
 #: the store for ever is a pod that is alive and never ready. Inside the kubelet's startup allowance (300 s).
 START_SECONDS = 240.0
@@ -70,9 +64,8 @@ async def _serves_no_lifespan(_app: FastAPI) -> AsyncGenerator[None]:
     yield
 
 
-def _alive() -> bool:
-    """Whether the worker's loop has marked a beat within :data:`STALE_SECONDS`."""
-    return monotonic() - app.state.beat < STALE_SECONDS
+#: The worker's loop's beat, which ``/livez`` follows.
+_beat = probe_server.LoopBeat()
 
 
 #: The probes, and nothing else: liveness follows the worker's loop, and readiness the lifecycle flags this process sets,
@@ -87,11 +80,10 @@ app = build_service_app(
     lifespan=_serves_no_lifespan,
     log=log,
     ready_check=signing_ready_check(reported_readiness),
-    live_check=_alive,
+    live_check=_beat.alive,
     max_body_bytes=_PROBE_MAX_BODY_BYTES,
     request_deadline_seconds=_PROBE_DEADLINE_SECONDS,
 )
-app.state.beat = monotonic()
 
 
 @contextmanager
@@ -101,28 +93,9 @@ def serving_probes(port: int) -> Generator[None]:
     Raises:
         RuntimeError: The server did not start, as when the port is taken.
     """
-    app.state.beat = monotonic()
-    server = uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=port, log_config=None, lifespan="off"))  # noqa: S104 — the kubelet probes the pod's address
-    thread = threading.Thread(target=server.run, name="maintenance-worker-probes", daemon=True)
-    thread.start()
-    waited = 0.0
-    while not server.started:
-        if not thread.is_alive() or waited >= _PROBES_SECONDS:
-            raise RuntimeError(f"the worker's probes did not start on port {port}")
-        thread.join(timeout=0.05)
-        waited += 0.05
-    try:
+    _beat.mark()
+    with probe_server.serving(app, port, name="maintenance-worker-probes"):
         yield
-    finally:
-        server.should_exit = True
-        thread.join(timeout=_PROBES_SECONDS)
-
-
-async def _beating() -> None:
-    """Mark, each :data:`_BEAT_SECONDS`, that this loop turns."""
-    while True:
-        app.state.beat = monotonic()
-        await asyncio.sleep(_BEAT_SECONDS)
 
 
 async def _work(settings: MaintenanceSettings, stop: asyncio.Event, started: asyncio.Event) -> None:
@@ -186,7 +159,7 @@ async def run(settings: MaintenanceSettings, stop: asyncio.Event) -> bool:
         TimeoutError: The worker did not start within :data:`START_SECONDS`.
     """
     started = asyncio.Event()
-    beat = asyncio.create_task(_beating(), name="maintenance-worker-beat")
+    beat = asyncio.create_task(_beat.run(), name="maintenance-worker-beat")
     work = asyncio.create_task(_work(settings, stop, started), name="maintenance-worker")
     asked = asyncio.create_task(stop.wait(), name="maintenance-worker-stop")
     begun = asyncio.create_task(started.wait(), name="maintenance-worker-started")

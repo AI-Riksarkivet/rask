@@ -72,6 +72,8 @@ services:
     module: catalog.main:app
     # -- Container and Service port of the Lance catalog.
     port: 2333
+    # -- Container port the catalog answers the kubelet's `/livez` and `/readyz` on, from a thread of its own, so a probe does not wait behind requests (LANCE_PROBES_PORT). On no Service.
+    probesPort: 2334 # @schema type: integer; minimum: 1; maximum: 65535
     # -- The catalog's app id: its secret-store role (`<release>-<id>`), its bus user and its OTel service.
     appId: catalog
     # -- Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count.
@@ -81,6 +83,8 @@ services:
     module: lineage.main:app
     # -- Container and Service port of the lineage service.
     port: 8000
+    # -- Container port lineage answers the kubelet's `/livez` and `/readyz` on, from a thread of its own, so a probe does not wait behind requests (LINEAGE_PROBES_PORT). On no Service.
+    probesPort: 8002 # @schema type: integer; minimum: 1; maximum: 65535
     # -- Lineage's app id: its secret-store role (`<release>-<id>`), its bus user and its OTel service.
     appId: lineage
     # Safe to scale: every replica pulls the one durable consumer `lineage-ingest`, so each event is delivered to one

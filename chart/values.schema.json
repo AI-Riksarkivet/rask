@@ -1441,6 +1441,12 @@
                             "description": "Container and Service port of the Lance catalog.",
                             "type": "integer"
                         },
+                        "probesPort": {
+                            "description": "Container port the catalog answers the kubelet's `/livez` and `/readyz` on, from a thread of its own, so a probe does not wait behind requests (LANCE_PROBES_PORT). On no Service.",
+                            "type": "integer",
+                            "maximum": 65535,
+                            "minimum": 1
+                        },
                         "replicas": {
                             "description": "Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count.",
                             "type": "integer"
@@ -1539,6 +1545,12 @@
                         "port": {
                             "description": "Container and Service port of the lineage service.",
                             "type": "integer"
+                        },
+                        "probesPort": {
+                            "description": "Container port lineage answers the kubelet's `/livez` and `/readyz` on, from a thread of its own, so a probe does not wait behind requests (LINEAGE_PROBES_PORT). On no Service.",
+                            "type": "integer",
+                            "maximum": 65535,
+                            "minimum": 1
                         },
                         "provenanceNamespace": {
                             "description": "Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`): `lance_catalog$\u003cnamespace\u003e`, a namespace of the estate's own warehouse; the render refuses any other.",

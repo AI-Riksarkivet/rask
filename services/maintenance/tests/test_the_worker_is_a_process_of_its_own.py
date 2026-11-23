@@ -78,16 +78,6 @@ def test_the_workers_probes_follow_its_life_and_liveness_holds_through_the_drain
         httpx.get(f"http://127.0.0.1:{port}/livez", timeout=2)
 
 
-def test_a_worker_whose_loop_stopped_turning_is_not_live() -> None:
-    port = _free_port()
-
-    with worker.serving_probes(port):
-        worker.app.state.beat = time.monotonic() - worker.STALE_SECONDS - 1
-        wedged = httpx.get(f"http://127.0.0.1:{port}/livez", timeout=5).status_code
-
-    assert wedged == 503
-
-
 @pytest.mark.usefixtures("store_pair")
 def test_a_worker_with_no_bus_to_take_tasks_from_does_not_start() -> None:
     settings = MaintenanceSettings.model_validate({})

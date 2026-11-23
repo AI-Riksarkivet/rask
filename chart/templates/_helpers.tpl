@@ -531,18 +531,23 @@ topologySpreadConstraints:
 - "--forwarded-allow-ips={{ $cidr }}"
 {{- end -}}
 
+{{/*
+The kubelet's probes of a lakehouse app, on the container port named `probes`: a server of the probes' own on a thread of
+its own (`lakehouse.process.probe_server`), so a probe does not wait behind a burst of requests on the serving loop
+(XC-204: 300 requests at once held a probe on the serving port for over two seconds, past these timeouts).
+*/}}
 {{- define "lance.appProbes" -}}
 {{/**/}}
 startupProbe:
-  httpGet: { path: /livez, port: http }
+  httpGet: { path: /livez, port: probes }
   periodSeconds: 10
   failureThreshold: 30
 readinessProbe:
-  httpGet: { path: /readyz, port: http }
+  httpGet: { path: /readyz, port: probes }
   initialDelaySeconds: 5
   periodSeconds: 10
 livenessProbe:
-  httpGet: { path: /livez, port: http }
+  httpGet: { path: /livez, port: probes }
   initialDelaySeconds: 10
   periodSeconds: 20
   timeoutSeconds: 3

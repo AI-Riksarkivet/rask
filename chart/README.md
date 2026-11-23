@@ -247,6 +247,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.catalog.appId | string | `"catalog"` | The catalog's app id: its secret-store role (`<release>-<id>`), its bus user and its OTel service. |
 | services.catalog.module | string | `"catalog.main:app"` | uvicorn import path the catalog Deployment runs (templates/services.yaml). |
 | services.catalog.port | int | `2333` | Container and Service port of the Lance catalog. |
+| services.catalog.probesPort | int | `2334` | Container port the catalog answers the kubelet's `/livez` and `/readyz` on, from a thread of its own, so a probe does not wait behind requests (LANCE_PROBES_PORT). On no Service. |
 | services.catalog.replicas | int | `1` | Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count. |
 | services.lineage.appId | string | `"lineage"` | Lineage's app id: its secret-store role (`<release>-<id>`), its bus user and its OTel service. |
 | services.lineage.deliveriesInFlight | int | `64` | How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `max_ack_pending`, and each replica's bound). |
@@ -263,6 +264,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.module | string | `"lineage.main:app"` | uvicorn import path the lineage Deployment runs (templates/services.yaml). |
 | services.lineage.outbox.enabled | bool | `true` | Stages each lineage event to `s3://<objectStore.bucket>/_lineage_outbox` before publishing, drained by the relay. Requires relay.enabled. |
 | services.lineage.port | int | `8000` | Container and Service port of the lineage service. |
+| services.lineage.probesPort | int | `8002` | Container port lineage answers the kubelet's `/livez` and `/readyz` on, from a thread of its own, so a probe does not wait behind requests (LINEAGE_PROBES_PORT). On no Service. |
 | services.lineage.provenanceNamespace | string | `"lance_catalog$provenance"` | Namespace the catalog keeps for lineage's feed and edge list (`LANCE_PROVENANCE_NAMESPACE`, `LINEAGE_PROVENANCE_NAMESPACE`): `lance_catalog$<namespace>`, a namespace of the estate's own warehouse; the render refuses any other. |
 | services.lineage.provenanceRetainVersions | int | `20` | Versions maintenance keeps of each provenance table: the namespace's keep-last-N policy, written by the catalog at boot (`LANCE_PROVENANCE_RETAIN_VERSIONS`). Null declares none. |
 | services.lineage.relay.enabled | bool | `true` | Runs the relay's timer in each lineage replica: it drains the lineage outbox, forwards the feed and prunes it. |

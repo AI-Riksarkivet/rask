@@ -10,8 +10,9 @@ three ways: the gate order (shutdown-first vs startup-first), the body shape (a 
 handler, which puts liveness on the blocking threadpool where it queues behind heavy Arrow/Lance
 work and fails exactly when the pod is busiest. One home, one shape, ``async def``.
 
-:func:`make_probes_router` takes the service's ``ready_check``: its hard dependency (lineage's feed, read through the
-catalog) or a fact worth reporting (the catalog's resolved namespace id), asked once the lifecycle gates pass.
+:func:`make_probes_router` takes the service's ``ready_check``: the verdicts the process keeps of its hard dependencies
+(lineage's feed, as its health watch last found it) or a fact worth reporting (the catalog's resolved namespace id),
+asked once the lifecycle gates pass.
 """
 
 from __future__ import annotations
@@ -28,6 +29,9 @@ from lakehouse.schemas.health import Liveness, LivenessStatus, Readiness, Readin
 
 #: A service-specific readiness check, run only AFTER the lifecycle gates pass. Returns the
 #: ``Readiness`` body to serve: ``ready`` and ``degraded`` → 200, which keep the pod in rotation; ``unhealthy`` → 503.
+#: IT ANSWERS FROM WHAT THE PROCESS HOLDS AND AWAITS NOTHING: the probes are also served from a thread and a loop of
+#: their own (`lakehouse.process.probe_server`), where a lock, an event or a client made on the serving loop cannot be
+#: awaited, so a check reads attributes a watch on the serving loop keeps.
 type ReadyCheck = Callable[[Request], Awaitable[Readiness]]
 #: The answers that keep a pod in its Service.
 _IN_ROTATION = frozenset({ReadinessStatus.ready, ReadinessStatus.degraded})

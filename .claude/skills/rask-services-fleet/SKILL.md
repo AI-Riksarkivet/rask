@@ -64,6 +64,13 @@ chart names no client.
 | **maintenance** | 8001 (probes only) | none | the work-queue worker (each table's pass, the hourly audit, the daily scan, ADR 0198) and the write-event lane, one process (`python -m maintenance.worker`); it pulls its tasks, its fired schedules, the store's events and the commit announcements from NATS, and is reached by nothing but its probes |
 | **console** | 3000 | `/` | the console's static-file server (`serve.ts`), the lakehouse's own UI; calls no door itself (`rask-frontend`) |
 
+**The kubelet probes a port of the probes' own**, named `probes` on each container: 2334 on the catalog
+(`services.catalog.probesPort`, `LANCE_PROBES_PORT`), 8002 on lineage (`services.lineage.probesPort`,
+`LINEAGE_PROBES_PORT`) and the worker's 8001. `/livez` and `/readyz` are answered there from a thread of their own
+(`lakehouse.process.probe_server`), so a probe does not wait behind a burst of requests on the serving loop (measured
+2026-11-23, XC-204: 2.2 to 2.5 s on the serving port against under 0.3 s there), and `/livez` there fails once the
+serving loop has marked no beat for 30 s. The serving port answers the same two paths; no Service names the probes port.
+
 The lakehouse rows are `/api/catalog` and `/api/lineage`. There is no ingest row and no medallion row: the lakehouse
 runs no ingest service, no stage and no training (ADR 0154, ADR 0155), and data enters through the catalog's
 namespace doors on `/api/catalog`. A user's pipeline that moves data between tables writes through those doors on its

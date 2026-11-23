@@ -62,6 +62,7 @@ from lakehouse.governed.audit import configure_audit
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.process.draining import arm_drain_on_sigterm
 from lakehouse.process.log_handler import setup_logging
+from lakehouse.process.probe_server import serving_beside
 from lakehouse.process.probes import LiveCheck, ReadyCheck, make_probes_router
 from lakehouse.service_app import thread_pool
 from lakehouse.service_app.body_limit import BodySizeLimitMiddleware
@@ -132,9 +133,12 @@ def _trace_every_request(app: FastAPI) -> None:
         FastAPIInstrumentor.instrument_app(app)
 
 
-def _served(lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]]) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+def _served(
+    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]], ready_check: ReadyCheck, probes_port: int | None
+) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
     """``lifespan``, entered once the serving loop's thread pool is reported (`lakehouse.service_app.thread_pool`), with the drain
-    armed while it serves.
+    armed while it serves, and the probes served beside it on ``probes_port`` when one is given
+    (`lakehouse.process.probe_server`).
 
     ARMED AT SIGTERM, for every service the factory builds (`lakehouse.process.draining.arm_drain_on_sigterm`). A lifespan's own
     ``finally`` runs only after uvicorn has stopped accepting connections and drained, so a probe reading a flag set
@@ -147,7 +151,7 @@ def _served(lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]]) ->
     @asynccontextmanager
     async def serving(app: FastAPI) -> AsyncGenerator[None]:
         thread_pool.watch()
-        async with lifespan(app):
+        async with lifespan(app), _probes_beside(app, ready_check, probes_port):
             disarm = arm_drain_on_sigterm(app)
             try:
                 yield
@@ -155,6 +159,16 @@ def _served(lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]]) ->
                 disarm()
 
     return serving
+
+
+@asynccontextmanager
+async def _probes_beside(app: FastAPI, ready_check: ReadyCheck, port: int | None) -> AsyncGenerator[None]:
+    """The probes on ``port`` for as long as the service serves; nothing for a service given no port."""
+    if port is None:
+        yield
+        return
+    async with serving_beside(app, ready_check, port):
+        yield
 
 
 def _mount_docs(app: FastAPI) -> None:
@@ -182,6 +196,7 @@ def build_service_app(
     max_body_bytes: int,
     request_deadline_seconds: float,
     live_check: LiveCheck | None = None,
+    probes_port: int | None = None,
     routers: Sequence[APIRouter] = (),
     inner_middleware: Sequence[HttpMiddleware] = (),
     outer_middleware: Sequence[Middleware] = (),
@@ -191,12 +206,18 @@ def build_service_app(
     ``log`` is the SERVICE's logger, not this module's: the problem handlers log an unhandled error
     with a traceback, and that record must carry the name of the service it happened in.
 
-    ``ready_check`` is the service's own readiness answer, run once the lifecycle flags say started and not draining.
+    ``ready_check`` is the service's own readiness answer, run once the lifecycle flags say started and not draining; it
+    answers from what the process holds and awaits nothing, since it also runs on the probes' own loop.
     REQUIRED, as ``docs_enabled`` is: every lakehouse service has a dependency or a fact `/readyz` reports (the
     catalog's namespace and signing key, lineage's feed, maintenance's signing key), so a new one answers it too.
 
     ``live_check`` is for a process whose probes are not served by the loop its work runs on (a worker serving them
     from a thread): what `/livez` then answers, where otherwise it proves only that the serving loop turns.
+
+    ``probes_port`` is the port the kubelet probes, served from a thread of its own while the service serves, so a
+    probe does not wait behind a burst of requests on the serving loop (`lakehouse.process.probe_server`); ``/livez`` there
+    follows a beat the serving loop marks. The serving port answers the same two paths. None serves them there alone, as
+    an app under test is built.
 
     ``max_body_bytes`` and ``request_deadline_seconds`` are REQUIRED for the reason ``docs_enabled`` is: every
     lakehouse service sets its own body cap and deadline, so a new one answers both rather than inheriting none.
@@ -219,7 +240,7 @@ def build_service_app(
     app = _UncachedApp(
         title=title,
         version=version,
-        lifespan=_served(lifespan),
+        lifespan=_served(lifespan, ready_check, probes_port),
         docs_url=None,
         redoc_url=None,
         openapi_url="/openapi.json" if docs_enabled else None,

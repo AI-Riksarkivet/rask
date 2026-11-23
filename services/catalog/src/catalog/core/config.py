@@ -627,6 +627,9 @@ class Settings(
     # (2026-10-29..11-12: a warehouse cascade delete, 50.9 s; an insert waiting its commit turn, 46 s), so it answers a
     # hang, never a door that is working.
     request_deadline_seconds: float = Field(default=300.0, gt=0, alias="LANCE_REQUEST_DEADLINE_SECONDS")
+    #: The port the catalog answers `/livez` and `/readyz` on from a thread of their own (`lakehouse.process.probe_server`),
+    #: so a probe does not wait behind a burst of requests; unset, they are answered on the serving port alone.
+    probes_port: int | None = Field(default=None, ge=1, le=65535, alias="LANCE_PROBES_PORT")
 
     #: How long an `Idempotency-Key`'s record outlives its last write before maintenance's daily scan asks for it to go
     #: (`catalog.services.idempotency_records.reclaim`, [[LH-576]]): a retry inside it is answered from the record, one after it runs as

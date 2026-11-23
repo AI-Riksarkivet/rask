@@ -222,6 +222,9 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, LineageForwar
     #: five times the longest lineage request measured over two weeks of the estate's traces (2026-10-29..11-12: the
     #: relay's tick, 58.1 s).
     request_deadline_seconds: float = Field(default=300.0, gt=0, alias="LINEAGE_REQUEST_DEADLINE_SECONDS")
+    #: The port lineage answers `/livez` and `/readyz` on from a thread of their own (`lakehouse.process.probe_server`),
+    #: so a probe does not wait behind a burst of requests; unset, they are answered on the serving port alone.
+    probes_port: int | None = Field(default=None, ge=1, le=65535, alias="LINEAGE_PROBES_PORT")
 
     @model_validator(mode="after")
     def _one_store_identity(self) -> Self:

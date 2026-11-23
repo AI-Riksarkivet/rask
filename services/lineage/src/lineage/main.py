@@ -196,6 +196,7 @@ app = build_service_app(
     log=log,
     routers=[api_router],
     ready_check=_lineage_ready,
+    probes_port=get_settings().probes_port,
     max_body_bytes=get_settings().max_body_bytes,
     request_deadline_seconds=get_settings().request_deadline_seconds,
 )
