@@ -15,8 +15,10 @@ install or upgrade; a cluster-less render states the target with `--api-versions
 
 AN ESTATE THAT ALREADY HOLDS DATA KEEPS ITS CREDENTIALS. The development Postgres and the object store keep the
 password and root they were initialised with, so generating fresh ones beside them hands every consumer a
-credential its server refuses. Each credential is guarded on its own (`$unlocks`): `postgres-password` while the development
-Postgres's StatefulSet (`lance.postgresFixtureHost`) exists, `object-store-secret-key` while the object store does, which counts only when its StatefulSet and its
+credential its server refuses. Each credential is guarded on its own (`$unlocks`), and a store counts only once it
+was given a credential, because each fixture is installed before rask and its StatefulSet exists on a fresh install:
+`postgres-password` while the development Postgres's StatefulSet (`lance.postgresFixtureHost`) and its password's
+Secret, `<host>-auth`, both exist (`$postgres`); `object-store-secret-key` while the object store's StatefulSet and its
 root's Secret, `<release>-object-store-root`, both exist (`$objectStore`). On an upgrade of an estate whose store exists,
 that credential's Secret must already exist: carried forward from the current credential before the first upgrade, and
 rotated in place afterwards (docs/OPERATORS.md 8). A credential no store holds (one added later) is
