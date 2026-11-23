@@ -173,14 +173,25 @@ for every authorization code (`oauth2.pkce.enforce: true`, `codeChallengeMethods
 `deploy/fixtures/dex/chart/templates/dex.yaml`), and its own `rask-web` client is confidential with no redirect, signed in
 as by the live lanes' password grant, so no browser signs in through it. Tokens live **in memory only** (`InMemoryWebStorage` user store); only the
 transient PKCE state rides `sessionStorage` for one redirect. A reload therefore starts signed out and goes back to the
-issuer: one that keeps a session answers at once, and the dev Dex, which keeps none, shows its login form. The root `+layout.ts` sends a signed-out visit to the
-issuer and returns to the requested path; the `/auth/*` pages are the round trip. Sign-out (`logout()`) calls
+issuer, and one that keeps a session (the dev Dex does) answers at once. The root `+layout.ts` sends a signed-out visit to the
+issuer and returns to the requested path; the `/auth/*` pages are the round trip.
+
+**The session is renewed without leaving the page** ([[FE-021]]). The console's scopes carry `offline_access`
+(`console.oidc.scopes`), so the issuer grants a refresh token, kept in memory like the others. `renew()`
+(`auth.svelte.ts`) exchanges it (`signinSilent`, the refresh-token grant, never an iframe: the console forbids
+framing itself) a minute before the access token expires and when a door answers 401: `#lib/api/client.ts`'s `send`,
+the one way a request leaves the browser, asks for one renewal and sends the request again, a write included, since a
+401 means the door did nothing. Callers during an exchange share it, so a burst of 401s spends one refresh token. A
+session that cannot be renewed (no refresh token, or the issuer refuses it) has ENDED once a door refused its token or
+it expired: `auth.ended`, and the root layout shows a notice with "Sign in again". Nothing redirects on a timer, so
+what a person typed is never thrown away. The mock issuer takes its behaviour per spec by cookie (`issuerBehaviour`
+in `e2e/admin/session.ts`: the token's lifetime, an authorize error, the renewed token, a refused refresh). Sign-out (`logout()`) calls
 `signoutRedirect()` while the user is still held, so the end-session request carries `id_token_hint`; `signoutRedirect`
 removes the user itself before it navigates. Without an `end_session_endpoint` it removes the user and goes to
 `/auth/login?prompt=login`, so an issuer that keeps a session authenticates whoever signs in next instead of reusing it.
-The dev Dex keeps no session: Dex v2.46.1 keeps sessions, reads `prompt` (`server/authflow/login.go`) and advertises its
-end-session endpoint (`server/discovery/discovery.go`) only with its sessions flag on, `DEX_SESSIONS_ENABLED`, which is
-off by default and unset in the fixture, so it shows its login form on every sign-in and takes the `prompt=login` path.
+Dex v2.46.1 keeps sessions, reads `prompt` (`server/authflow/login.go`) and advertises its end-session endpoint
+(`server/discovery/discovery.go`) only with its sessions flag on, `DEX_SESSIONS_ENABLED`, which the dev fixture sets
+([[XC-223]]), so the dev Dex ends its session at sign-out.
 
 **The issuer, client and scopes come from `/config.json`** (`{issuer, clientId, scopes}`, validated with valibot),
 which the product chart renders from its values (`rask-console-config`: `auth.oidc.issuer`, `console.oidc.clientId`,

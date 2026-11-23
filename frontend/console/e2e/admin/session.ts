@@ -70,7 +70,28 @@ export async function signIn(
 	]);
 }
 
-/** Make the mock issuer advertise no `end_session_endpoint` to this context, as the dev Dex does not (its sessions are off). */
+/** What the mock issuer does for this context beyond signing it in (`e2e/mock-oidc.ts`): the access
+ *  token's lifetime in seconds, an authorize error it answers in place of a code, the access token a
+ *  refresh answers with, and whether it refuses the refresh. */
+export async function issuerBehaviour(
+	context: BrowserContext,
+	behaviour: { expiresIn?: number; error?: string; renewedToken?: string; refuseRefresh?: boolean },
+	{ origin = AUTH_ON }: { origin?: string } = {},
+) {
+	const cookies: Record<string, string | undefined> = {
+		mock_oidc_expires_in: behaviour.expiresIn?.toString(),
+		mock_oidc_error: behaviour.error,
+		mock_oidc_renewed_token: behaviour.renewedToken,
+		mock_oidc_refuse_refresh: behaviour.refuseRefresh ? '1' : undefined,
+	};
+	await context.addCookies(
+		Object.entries(cookies).flatMap(([name, value]) =>
+			value === undefined ? [] : [{ name, value: encodeURIComponent(value), url: origin }],
+		),
+	);
+}
+
+/** Make the mock issuer advertise no `end_session_endpoint` to this context, as a Dex with its sessions off does not. */
 export async function withoutEndSession(
 	context: BrowserContext,
 	{ origin = AUTH_ON }: { origin?: string } = {},

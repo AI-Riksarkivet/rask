@@ -5,8 +5,10 @@
 // relation degrading to [] on an FGA outage). Anon is a 401, and with FGA off the backend answers
 // `estate_admin: true, projects: []` (dev parity). Both sides code against THIS shape — no drift.
 //
-// Framework-free (valibot + fetch only), so the `Me` type and schema flow into loads and components.
+// Framework-free (valibot and the package's one transport), so the `Me` type and schema flow into loads
+// and components.
 import * as v from 'valibot';
+import { upstreamJSON } from './client.ts';
 
 /** One project membership row from `/management/v1/me` — the tenant and the caller's role in it. */
 export const MeProjectSchema = v.object({
@@ -44,16 +46,17 @@ export async function fetchMe(opts: {
 	fetchFn?: typeof fetch;
 	timeoutMs?: number;
 }): Promise<Me | null> {
-	const { catalogUrl, accessToken, fetchFn = fetch, timeoutMs = ME_TIMEOUT_MS } = opts;
+	const { catalogUrl, accessToken, fetchFn, timeoutMs = ME_TIMEOUT_MS } = opts;
 	if (!accessToken) return null;
-	try {
-		const res = await fetchFn(`${catalogUrl.replace(/\/$/, '')}/management/v1/me`, {
-			headers: { authorization: `Bearer ${accessToken}` },
-			signal: AbortSignal.timeout(timeoutMs),
-		});
-		if (!res.ok) return null;
-		return v.parse(MeSchema, await res.json());
-	} catch {
-		return null;
-	}
+	const res = await upstreamJSON({
+		fetch: fetchFn,
+		base: catalogUrl.replace(/\/$/, ''),
+		path: '/management/v1/me',
+		bearer: accessToken,
+		timeoutMs,
+		upstream: 'catalog',
+	});
+	if (!res.ok) return null;
+	const me = v.safeParse(MeSchema, res.data);
+	return me.success ? me.output : null;
 }

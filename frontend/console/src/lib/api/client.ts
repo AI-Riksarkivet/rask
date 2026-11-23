@@ -9,6 +9,14 @@
 // The bearer comes from a PROVIDER the app installs once (`setBearerProvider`), so this package
 // stays framework-free and holds no token: the provider reads the in-memory session the app's OIDC
 // client keeps.
+//
+// EVERY REQUEST LEAVES THROUGH `send`. It attaches the bearer, and when a door answers 401 to a request
+// that carried one it asks the app to renew the session once (`setBearerRenewal`) and sends the request
+// again with the new bearer. A 401 means the door did nothing, so a write is as safe to send again as a
+// read. A request that carried no bearer, or one the caller authorized itself, is answered as it came.
+// One renewal answers every request refused with the old bearer: a 401 that lands after the session was
+// renewed is sent again with the bearer now held, and a bearer a door refused straight after a renewal is
+// not renewed for again, so a door that refuses every token costs the issuer one exchange, not one a poll.
 import * as v from 'valibot';
 
 /** Per-request timeout — a hung backend must not stack poll ticks. */
@@ -51,6 +59,14 @@ export function currentBearer(): string | undefined {
 	return bearerProvider();
 }
 
+let renewBearer: () => Promise<boolean> = () => Promise.resolve(false);
+
+/** Install what renews the signed-in person's session without leaving the page; it answers whether a
+ *  new access token is now held. With none installed nothing is renewed and a 401 is answered as it came. */
+export function setBearerRenewal(renew: () => Promise<boolean>): void {
+	renewBearer = renew;
+}
+
 /** Whether `url` resolves to this page's own origin. Off a page (a unit test) only a relative URL does. */
 function sameOrigin(url: string): boolean {
 	if (typeof location === 'undefined') return url.startsWith('/') && !url.startsWith('//');
@@ -61,15 +77,50 @@ function sameOrigin(url: string): boolean {
 	}
 }
 
-/** `fetch` with the person's bearer attached — unless the caller set `authorization` itself, and only to
- *  this origin: the token is the lakehouse's, and no other origin is ever handed it, whatever the CSP. */
+/** What one request is sent with, beyond its `RequestInit`. */
+interface Sending {
+	/** The fetch to use; the browser's by default. A load function passes its own. */
+	fetch?: typeof globalThis.fetch | undefined;
+	/** The bearer of the first attempt; omitted, the installed provider's. A retry after a renewal always
+	 *  carries the provider's, which is the renewed one. */
+	bearer?: string | undefined;
+	/** How long each attempt may take. A retry after a renewal gets the whole of it again, so a slow
+	 *  exchange at the issuer does not spend the request's own time. Omitted, `init.signal` alone bounds it. */
+	timeoutMs?: number | undefined;
+}
+
+/** The bearer a door refused although it had just been renewed: renewing again would change nothing. */
+let refusedAfterRenewal: string | undefined;
+
+/** The one way a request leaves the browser. The person's bearer is attached unless the caller set
+ *  `authorization` itself, and only to this origin: the token is the lakehouse's, and no other origin is
+ *  ever handed it, whatever the CSP. A 401 to a request that carried the bearer renews the session once and
+ *  sends the request again. */
+async function send(input: string, init: RequestInit, sending: Sending = {}): Promise<Response> {
+	const doFetch = sending.fetch ?? globalThis.fetch;
+	const attempt = (bearer: string | undefined): Promise<Response> => {
+		const headers = new Headers(init.headers);
+		if (bearer) headers.set('authorization', `Bearer ${bearer}`);
+		const signal = sending.timeoutMs ? timeoutSignal(sending.timeoutMs) : init.signal;
+		return doFetch(input, { ...init, headers, ...(signal ? { signal } : {}) });
+	};
+	const mayCarry = sameOrigin(input) && !new Headers(init.headers).has('authorization');
+	const bearer = mayCarry ? (sending.bearer ?? currentBearer()) : undefined;
+	const answer = await attempt(bearer);
+	if (answer.status !== 401 || !bearer) return answer;
+	// Renewed meanwhile by another request's 401: the bearer now held has not been tried.
+	const held = currentBearer();
+	if (held && held !== bearer) return attempt(held);
+	if (bearer === refusedAfterRenewal || !(await renewBearer())) return answer;
+	const renewed = currentBearer();
+	const again = await attempt(renewed);
+	if (again.status === 401) refusedAfterRenewal = renewed;
+	return again;
+}
+
+/** `fetch` with the person's bearer attached, through {@link send}. */
 export function authorizedFetch(input: string, init: RequestInit = {}): Promise<Response> {
-	const headers = new Headers(init.headers);
-	const bearer = currentBearer();
-	if (bearer && sameOrigin(input) && !headers.has('authorization')) {
-		headers.set('authorization', `Bearer ${bearer}`);
-	}
-	return fetch(input, { ...init, headers });
+	return send(input, init);
 }
 
 /** Lift `detail` out of an error body, tolerating a non-JSON error page. */
@@ -91,6 +142,8 @@ export interface UpstreamRequest {
 	init?: RequestInit | undefined;
 	/** An explicit bearer; omitted, the installed provider's is used. */
 	bearer?: string | undefined;
+	/** A timeout of the caller's own for each attempt, in place of a read's {@link FETCH_TIMEOUT_MS}. */
+	timeoutMs?: number | undefined;
 	/** Names the upstream in failure details ("catalog answered 503") — a detail that cannot say
 	 *  WHICH upstream failed sends the reader to the wrong service. */
 	upstream: string;
@@ -105,21 +158,25 @@ function isRead(init: RequestInit | undefined): boolean {
 /** One upstream call → the `ApiResult` union. Never throws. */
 export async function upstreamJSON(req: UpstreamRequest): Promise<ApiResult<unknown>> {
 	const { base, path, init, upstream } = req;
-	const doFetch = req.fetch ?? globalThis.fetch;
-	const bearer = sameOrigin(`${base}${path}`) ? (req.bearer ?? currentBearer()) : undefined;
 	let res: Response;
 	try {
-		res = await doFetch(`${base}${path}`, {
-			// A read gives up at a poll's timeout; a write is never cut off by one, since a write given up on may land
-			// anyway, and the page would tell the person it was not applied.
-			...(isRead(init) ? { signal: timeoutSignal(FETCH_TIMEOUT_MS) } : {}),
-			...init,
-			headers: {
-				...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
-				...(init?.body ? { 'content-type': 'application/json' } : {}),
-				...init?.headers,
+		res = await send(
+			`${base}${path}`,
+			{
+				...init,
+				headers: {
+					...(init?.body ? { 'content-type': 'application/json' } : {}),
+					...init?.headers,
+				},
 			},
-		});
+			{
+				fetch: req.fetch,
+				bearer: req.bearer,
+				// A read gives up at a poll's timeout; a write is never cut off by one, since a write given up on may
+				// land anyway, and the page would tell the person it was not applied.
+				timeoutMs: req.timeoutMs ?? (isRead(init) && !init?.signal ? FETCH_TIMEOUT_MS : undefined),
+			},
+		);
 	} catch (err) {
 		return { ok: false, status: 0, detail: String(err) };
 	}
@@ -170,10 +227,7 @@ export async function requestJSON<T = unknown>(
 	init?: RequestInit,
 ): Promise<ApiResult<T>> {
 	try {
-		const res = await authorizedFetch(`${apiBase}/${path}`, {
-			...init,
-			signal: timeoutSignal(FETCH_TIMEOUT_MS),
-		});
+		const res = await send(`${apiBase}/${path}`, init ?? {}, { timeoutMs: FETCH_TIMEOUT_MS });
 		const body: unknown = await res.json().catch(() => ({}));
 		if (!res.ok)
 			return { ok: false, status: res.status, detail: detailFrom(body, `HTTP ${res.status}`) };
@@ -191,10 +245,7 @@ export async function requestBinary(
 	init?: RequestInit,
 ): Promise<ApiResult<ArrayBuffer>> {
 	try {
-		const res = await authorizedFetch(`${apiBase}/${path}`, {
-			...init,
-			signal: timeoutSignal(FETCH_TIMEOUT_MS),
-		});
+		const res = await send(`${apiBase}/${path}`, init ?? {}, { timeoutMs: FETCH_TIMEOUT_MS });
 		if (!res.ok) {
 			const body: unknown = await res.json().catch(() => ({}));
 			return { ok: false, status: res.status, detail: detailFrom(body, `HTTP ${res.status}`) };
@@ -218,15 +269,18 @@ export async function requestBytes(
 ): Promise<ApiResult<unknown>> {
 	const { contentType = 'application/vnd.apache.arrow.stream', idempotencyKey } = options;
 	try {
-		const res = await authorizedFetch(`${apiBase}/${path}`, {
-			method: 'POST',
-			headers: {
-				'content-type': contentType,
-				...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
+		const res = await send(
+			`${apiBase}/${path}`,
+			{
+				method: 'POST',
+				headers: {
+					'content-type': contentType,
+					...(idempotencyKey ? { 'idempotency-key': idempotencyKey } : {}),
+				},
+				body,
 			},
-			body,
-			signal: timeoutSignal(WRITE_TIMEOUT_MS),
-		});
+			{ timeoutMs: WRITE_TIMEOUT_MS },
+		);
 		const payload: unknown = await res.json().catch(() => ({}));
 		if (!res.ok)
 			return { ok: false, status: res.status, detail: detailFrom(payload, `HTTP ${res.status}`) };

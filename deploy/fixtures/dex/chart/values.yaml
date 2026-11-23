@@ -48,6 +48,16 @@ console:
 sessions:
   absoluteLifetime: 24h
   validIfNotUsedFor: 1h
+# How long what Dex issues lasts. The console asks for a refresh token (`offline_access`) and renews its session with
+# it, so the refresh token is bounded as the login session is: Dex's own default bounds it by neither idleness nor age,
+# and an open tab would then renew for ever. Each refresh rotates the token (Dex's default). An id token, which is
+# what a door is shown, lasts two hours: the live lanes sign in once per session and their longest runs most of an
+# hour (measured on CI 2026-11-23: e2e-stack, three sessions in 56 minutes).
+expiry:
+  idTokens: 2h
+  refreshTokens:
+    validIfNotUsedFor: 1h
+    absoluteLifetime: 24h
 # A client release's own sign-in clients, each an entry keyed by its client id ([[XC-221]]): `<id>: {secret,
 # redirectURIs}`, or `<id>: {public: true, redirectURIs}` for a browser app that holds no secret and signs in with PKCE
 # (S256, which this Dex enforces). A map, so the values files of several repositories merge: a list would replace every

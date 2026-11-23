@@ -6,8 +6,9 @@
 	import { APPEARANCE } from '#lib/appearance-options.ts';
 	import { Toaster } from 'svelte-sonner';
 	import { AppShell } from '#lib/shell/index.ts';
+	import { Button } from '@riksarkivet/ui/button';
 	import type { Snippet } from 'svelte';
-	import { auth, expired, login } from '#lib/auth.svelte.ts';
+	import { auth, expired, login, renew } from '#lib/auth.svelte.ts';
 	import { activity } from '#lib/activity.svelte.ts';
 	import { areaOf, consoleSidebar, GROUP_NAMES, PAGE_NAMES } from '#lib/nav.ts';
 	import { catalogTrail } from '#lib/catalog-trail.ts';
@@ -28,18 +29,20 @@
 	// nothing and hand its scrolling to the page. Panels own their own overflow.
 	const canvasArea = $derived(areaOf(page.url.pathname) === 'workbench');
 
-	// The session ends when its token does: there is no refresh token in memory, so the browser goes
-	// back to the issuer and returns here: an issuer that keeps a session answers at once, and the dev
-	// Dex, which keeps none, shows its login form.
+	// A token that reaches its expiry unrenewed (the renewal a minute earlier did not land) is renewed
+	// here once more; where it cannot be, `renew` marks the session ended and the notice below offers to
+	// sign in again. Nothing redirects on a timer: a page the person is typing into stays theirs.
 	$effect(() => {
 		const session = auth.session;
 		if (!session || session.expiresAt === 0) return;
 		const wait = Math.max(session.expiresAt * 1000 - Date.now(), 0);
 		const timer = setTimeout(() => {
-			if (expired(session)) void login(page.url.pathname + page.url.search);
+			if (auth.session && expired(auth.session)) void renew();
 		}, wait);
 		return () => clearTimeout(timer);
 	});
+
+	const signInAgain = () => void login(page.url.pathname + page.url.search);
 
 	// The navbar's bell (the shell's ActivityCenter, mounted by AppShell): the outcome of every write
 	// this console sent for the reader, kept in their browser (`#lib/activity.svelte.ts`). The shell
@@ -76,6 +79,18 @@
 	trail={catalogTrail(page.route.id, page.params)}
 	activity={activityFeed}
 >
+	{#if auth.ended}
+		<div
+			role="alert"
+			class="flex flex-wrap items-center gap-3 border-b border-border bg-muted px-4 py-2 text-sm"
+		>
+			<p class="min-w-0 flex-1">
+				Your sign-in has ended, so nothing more can be read or saved from this page. What you typed
+				is still here: copy anything you want to keep, then sign in again.
+			</p>
+			<Button size="sm" onclick={signInAgain}>Sign in again</Button>
+		</div>
+	{/if}
 	{#if canvasArea}
 		<div class="canvas-scroll">
 			{@render children()}

@@ -1,7 +1,7 @@
-import { command, getRequestEvent, query } from '#lib/reads.svelte.ts';
+import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
 import { fetchMe, type Me } from '#lib/api/index.ts';
-import type { ApiResult } from '#lib/api/client.ts';
+import { currentBearer, type ApiResult } from '#lib/api/client.ts';
 import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 import {
@@ -172,12 +172,7 @@ export const fetchTables = query(async (): Promise<ApiResult<{ tables: string[] 
 /** The signed-in identity — what the tuple store actually keys on. Fail-soft to `null` (no session,
  *  catalog down): the "me" chip simply does not render, exactly like the shell's own use of fetchMe. */
 export const accessMe = query(async (): Promise<Me | null> => {
-	const { locals, fetch } = getRequestEvent();
-	return fetchMe({
-		catalogUrl: CATALOG_API,
-		accessToken: locals.session?.accessToken,
-		fetchFn: fetch,
-	});
+	return fetchMe({ catalogUrl: CATALOG_API, accessToken: currentBearer() });
 });
 
 /** "What can this subject reach?" — every `type` object the subject holds `relation` on. */

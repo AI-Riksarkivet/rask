@@ -21,7 +21,6 @@ import { error, isHttpError } from '@sveltejs/kit';
 import type { ApiResult } from '#lib/api/client.ts';
 import { untrack } from 'svelte';
 import { activity, type ActivityOutcome } from './activity.svelte.ts';
-import { auth, type Session } from './auth.svelte';
 
 /** A read settled this recently is reused by the next call instead of read again. */
 const FRESH_MS = 1000;
@@ -47,19 +46,6 @@ async function validated<Out>(
 	const result = await schema['~standard'].validate(input);
 	if (result.issues) error(400, result.issues.map((issue) => issue.message).join('; '));
 	return result.value;
-}
-
-/** What a data function reaches for: the browser's fetch and the signed-in person. */
-export interface RequestEvent {
-	fetch: typeof globalThis.fetch;
-	locals: { session: Session | null; authEnabled: boolean };
-}
-
-export function getRequestEvent(): RequestEvent {
-	return {
-		fetch: globalThis.fetch.bind(globalThis),
-		locals: { session: auth.session, authEnabled: auth.enabled },
-	};
 }
 
 /** One read, held. It is a Promise of its latest read; what is reactive is `.current`, `.error` and

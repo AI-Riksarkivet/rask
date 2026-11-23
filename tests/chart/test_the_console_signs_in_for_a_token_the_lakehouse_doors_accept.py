@@ -92,3 +92,9 @@ def test_the_console_config_names_the_issuer_a_public_client_and_the_scopes_the_
     [dex_env] = [env_of(container) for workload, name, container in containers(dex) if name == "dex"]
     assert (dex_env.get("DEX_SESSIONS_ENABLED"), dex_config["sessions"]) == ("true", {"absoluteLifetime": "24h", "validIfNotUsedFor": "1h"})
     assert declared[config["clientId"]]["postLogoutRedirectURIs"] == ["http://localhost:8080/", "http://localhost:5173/"]
+    # The console renews its session with a refresh token ([[FE-021]]), which the fixture serves and bounds as it bounds
+    # the login session: unbounded, an open tab would renew for ever.
+    assert ("refresh_token" in dex_config["oauth2"]["grantTypes"], dex_config["expiry"]) == (
+        True,
+        {"idTokens": "2h", "refreshTokens": {"validIfNotUsedFor": "1h", "absoluteLifetime": "24h"}},
+    )

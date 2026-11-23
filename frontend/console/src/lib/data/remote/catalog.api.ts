@@ -1,7 +1,7 @@
-import { command, getRequestEvent, query } from '#lib/reads.svelte.ts';
+import { command, query } from '#lib/reads.svelte.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 import * as v from 'valibot';
-import type { ApiResult } from '#lib/api/client.ts';
+import { authorizedFetch, type ApiResult } from '#lib/api/client.ts';
 import { parse } from '#lib/api/index.ts';
 import {
 	DeclareTableResponseSchema,
@@ -142,16 +142,13 @@ export const undropTable = command(
 export const fetchTableDetail = query(
 	TableArg,
 	async ({ table }): Promise<ApiResult<TableDetail>> => {
-		const { fetch, locals } = getRequestEvent();
 		const base = `${CATALOG_API}/v1/table/${enc(table)}`;
 		// The policy is rask's, so it is served under the management mount, not the spec's `/v1`.
 		const management = `${CATALOG_API}/management/v1/table/${enc(table)}`;
-		// Raw fetch on purpose: the per-part 404→null / 5xx→{error} mapping below cannot ride the
-		// JSON door, so this fan-out carries its own bearer.
-		const bearer = locals.session?.accessToken;
-		const headers: Record<string, string> = bearer ? { authorization: `Bearer ${bearer}` } : {};
+		// The response itself, not the JSON door's result: the per-part 404→null / 5xx→{error} mapping
+		// below reads each part's status.
 		const read = (path: string, at: string = base) =>
-			fetch(`${at}/${path}`, { method: 'POST', headers });
+			authorizedFetch(`${at}/${path}`, { method: 'POST' });
 		const part = async (res: Response): Promise<unknown> => {
 			if (res.ok) return res.json();
 			return res.status === 404 ? null : { error: res.status };

@@ -6,6 +6,7 @@
 		"profile",
 		"email",
 		"groups",
+		"offline_access",
 		"federated:id",
 		"audience:server:client_id:rask-lakehouse"
 	]

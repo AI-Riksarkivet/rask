@@ -28,6 +28,11 @@ data:
     sessions:
       absoluteLifetime: {{ required "sessions.absoluteLifetime is how long a login session lasts at most" .Values.sessions.absoluteLifetime | quote }}
       validIfNotUsedFor: {{ required "sessions.validIfNotUsedFor is how long an unused login session stays valid" .Values.sessions.validIfNotUsedFor | quote }}
+    expiry:
+      idTokens: {{ required "expiry.idTokens is how long an id token lasts" .Values.expiry.idTokens | quote }}
+      refreshTokens:
+        validIfNotUsedFor: {{ required "expiry.refreshTokens.validIfNotUsedFor is how long an unused refresh token stays valid" .Values.expiry.refreshTokens.validIfNotUsedFor | quote }}
+        absoluteLifetime: {{ required "expiry.refreshTokens.absoluteLifetime is how long a refresh token lasts at most" .Values.expiry.refreshTokens.absoluteLifetime | quote }}
     oauth2:
       skipApprovalScreen: true
       passwordConnector: local

@@ -355,7 +355,7 @@
                             "type": "string"
                         },
                         "scopes": {
-                            "description": "Scopes the console asks for; the lakehouse's audience scope is always added, and `federated:id` whenever `auth.oidc.connectors` names a Dex's connectors.",
+                            "description": "Scopes the console asks for; the lakehouse's audience scope is always added, and `federated:id` whenever `auth.oidc.connectors` names a Dex's connectors. `offline_access` asks the issuer for a refresh token, which the console keeps in memory and renews its session with; the issuer must bound it by idleness and by age and rotate it at each use, and one that grants none ends the session at the access token's expiry.",
                             "type": "array",
                             "items": {
                                 "type": "string"

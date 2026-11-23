@@ -86,7 +86,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.trashGraceDays | float | `7` | Days, a fraction allowed, a dropped table or namespace stays undroppable, where its warehouse names no delete profile (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
 | console.enabled | bool | `true` | Render the console: its Deployment, Service, `/config.json` ConfigMap, ServiceAccount and, with `route.enabled`, its `/` HTTPRoute. |
 | console.oidc.clientId | string | `"rask-console"` | The IdP's public client the console signs in with (PKCE, no secret); the development Dex declares `rask-console` (deploy/fixtures/dex `console`). |
-| console.oidc.scopes | list | `["openid","profile","email","groups"]` | Scopes the console asks for; the lakehouse's audience scope is always added, and `federated:id` whenever `auth.oidc.connectors` names a Dex's connectors. |
+| console.oidc.scopes | list | `["openid","profile","email","groups","offline_access"]` | Scopes the console asks for; the lakehouse's audience scope is always added, and `federated:id` whenever `auth.oidc.connectors` names a Dex's connectors. `offline_access` asks the issuer for a refresh token, which the console keeps in memory and renews its session with; the issuer must bound it by idleness and by age and rotate it at each use, and one that grants none ends the session at the access token's expiry. |
 | console.port | int | `3000` | Port of the console's static server and its Service. |
 | console.replicas | int | `1` | Replicas of the console's static server. |
 | console.resources | object | `{"limits":{"cpu":"500m","memory":"128Mi"},"requests":{"cpu":"10m","memory":"32Mi"}}` | CPU/memory requests and limits for the console's static server. |

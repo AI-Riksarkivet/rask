@@ -1,5 +1,5 @@
 {
 	"issuer": "/oidc",
 	"clientId": "rask-console",
-	"scopes": ["openid", "profile", "email", "federated:id"]
+	"scopes": ["openid", "profile", "email", "offline_access", "federated:id"]
 }
