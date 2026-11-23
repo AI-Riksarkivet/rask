@@ -267,7 +267,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.provenanceRetainVersions | int | `20` | Versions maintenance keeps of each provenance table: the namespace's keep-last-N policy, written by the catalog at boot (`LANCE_PROVENANCE_RETAIN_VERSIONS`). Null declares none. |
 | services.lineage.relay.enabled | bool | `true` | Runs the relay's timer in each lineage replica: it drains the lineage outbox, forwards the feed and prunes it. |
 | services.lineage.relay.periodSeconds | int | `30` | Seconds between two relay ticks (`LINEAGE_RELAY_PERIOD_SECONDS`); one replica runs each tick. |
-| services.lineage.replicas | int | `1` | Replica count of lineage; its replicas share one durable consumer, so it scales freely. |
+| services.lineage.replicas | int | `1` | Replica count of lineage; its replicas share one durable consumer. More replicas add availability, not intake: the catalog bounds it. |
 | services.lineage.requestDeadlineSeconds | int | `300` | Seconds a lineage request may run before its caller is answered 503 (code 17) while it runs on to its end (LINEAGE_REQUEST_DEADLINE_SECONDS, ADR 0203). |
 | signing.doors | string | `"enforce"` | Mode of the bus doors' signature check: "off", "observe" (count would-refuse) or "enforce" (ack and refuse). Always quoted. |
 | signing.provisioned | bool | `false` | Attest that signing keys exist for every identity in the platform's store; the render fails until it is true there. |

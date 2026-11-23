@@ -1564,7 +1564,7 @@
                             "additionalProperties": false
                         },
                         "replicas": {
-                            "description": "Replica count of lineage; its replicas share one durable consumer, so it scales freely.",
+                            "description": "Replica count of lineage; its replicas share one durable consumer. More replicas add availability, not intake: the catalog bounds it.",
                             "type": "integer"
                         },
                         "requestDeadlineSeconds": {

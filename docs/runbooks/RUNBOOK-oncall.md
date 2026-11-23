@@ -562,6 +562,7 @@ is `kubectl logs deploy/rask-maintenance-worker -c worker`).
 - `MaintenanceLineageEmitFailing` (warning): a maintenance pass's lineage event did not reach the bus (`reason`:
   `unsigned` or `publish`). First check: the worker's `maintenance_event_withheld_unsigned` or
   `maintenance_publish_failed` log, then the bus.
+- `LakehouseTimerSlow` (warning): one run of a timer's work has averaged more than half the timer's period over an hour, for 30 minutes. First check: `timer_work_duration_seconds` by timer against `timer_period_seconds`, and the service's CPU; [A timer has stopped](#a-timer-has-stopped) names the series.
 - `LakehouseTimerFailing` (warning): a timer's work has raised on every window a replica claimed, none returning, for 20 minutes. First check: the
   service's `timer_work_failed` log.
 - `LineageForwardStalled`, `LineageForwardRefused` (warnings): the forwarder cannot reach the graph backend, or the

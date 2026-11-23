@@ -26,7 +26,7 @@ lands once on the feed; a mark one writes lower than another's costs a re-read, 
 from __future__ import annotations
 
 import logging
-from datetime import UTC, datetime, timedelta
+from datetime import UTC
 from functools import partial
 
 from fastapi import Request
@@ -96,11 +96,6 @@ def create_series() -> None:
     by operation, an open set, so its alert reads a new series as its first find."""
     for counter in (_unreadable, _late_derived, _late_derived_unwatched, _unauthored):
         counter.add(0)
-
-
-#: How much earlier than the oldest commit looked for the feed is read: a row is received after its commit, never
-#: before, but the store's clock and the catalog's may disagree.
-_FEED_SLACK = timedelta(minutes=10)
 
 
 class CommitReconcileTick(BaseModel):
@@ -242,7 +237,7 @@ async def tick(ctx: Tick) -> CommitReconcileTick:
     live = await _live_tables(request, settings)
     tables = live.tables
     now = clock().astimezone(UTC)
-    tick_pass = _Pass(emitter=emitter, request=request, settings=settings, so=so, feed=feed, now=now)
+    tick_pass = _Pass(emitter=emitter, request=request, settings=settings, so=so, on_feed=commit_reconcile.feed_reading(settings, so, feed=feed, now=now))
     total = _Reconciled(unreadable=live.unreadable)
     for table in tables:
         total = total.plus(await _reconcile_table(table, tick_pass=tick_pass))
@@ -255,7 +250,7 @@ async def tick(ctx: Tick) -> CommitReconcileTick:
 
 
 class _Pass(BaseModel):
-    """What every table of one tick is reconciled against: the emitter, the request, the store and the feed, at one time."""
+    """What every table of one tick is reconciled against: the emitter, the request, the store, and the feed as the tick read it."""
 
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -264,8 +259,7 @@ class _Pass(BaseModel):
     request: SkipValidation[Request]
     settings: Settings
     so: StorageOptions
-    feed: str
-    now: datetime
+    on_feed: SkipValidation[commit_reconcile.FeedReading]
 
 
 class _Reconciled(BaseModel):
@@ -299,8 +293,7 @@ async def _reconcile_table(table: _LiveTable, *, tick_pass: _Pass) -> _Reconcile
                 segments=table.segments,
                 location=table.location,
                 table_uuid=str(table.uuids.table_uuid),
-                feed=tick_pass.feed,
-                now=tick_pass.now,
+                on_feed=tick_pass.on_feed,
             )
         )
     except Exception as exc:  # noqa: BLE001 — one table this tick cannot read must not stop the others

@@ -2,6 +2,16 @@
 
 **Reopened 2026-11-09** by [ADR 0199](0199-nats-is-the-one-bus-and-the-design-review-reopens-eight-decisions.md): the reclaim runs in the serving process on every replica; a catalog worker role is to own it, decided after one tick is timed.
 
+**Settled 2026-11-23** (owner, XC-204 #802: "Cut the tick's cost, no worker role"): the reconcilers stay in the catalog's
+serving process and no worker role is built. Each timer's window is claimed by one replica (`lakehouse.timers`, XC-199), so a
+tick runs once a window whatever the replica count, and every run is timed (`timer.work.duration`). Measured that day,
+off the estate with the real catalog over a counting store: one idle commit-reconcile tick cost 22 store requests a
+table (22,246 at 1,000 tables) and one read of every feed fragment per table; it now costs 16 a table and reads the
+feed once a tick, and only when some table holds a version to look for. The reclaim cost 2,139 requests at 1,000 tables,
+about two per retained index version. On the development estate a table costs about 0.2 s of a tick, so the commit
+reconcile reaches half its 600 s period near 1,500 tables: `LakehouseTimerSlow` pages when any timer's runs average more
+than half its period over an hour, and that page is when a worker role, a longer period or more CPU is decided again.
+
 **Status:** accepted. Source: LH-251 (#165): nothing reclaimed `__manifest`, every namespace operation kept a version,
 and a dropped id stayed readable in its history.
 
@@ -50,8 +60,8 @@ A `dir` root keeps its namespaces and tables as rows of one Lance table, `<root>
 
 - A dropped namespace or table stays readable in the index's history for up to the retention plus one schedule (3,600 s
   and 600 s by default, `catalog.manifestReclaim`), and the history holds the operations of that window.
-- Every catalog replica opens each root's index again every 15 minutes per plane; every replica ticks, and two
-  reclaims of one root remove the same versions.
+- One catalog replica, whichever claims the window, opens each root's index again every tick; a tick that fails is
+  repaired by the next, and two reclaims of one root remove the same versions.
 - A root the reclaim fails on is counted on `catalog.manifest_reclaim.failed` by root, and the same root failing on two
   ticks within half an hour pages (`CatalogManifestReclaimFailing`); one tick's failure is repaired by the next.
 - The safety argument assumes no two clocks disagree by more than three quarters of the retention and that no

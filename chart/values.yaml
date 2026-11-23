@@ -85,8 +85,11 @@ services:
     appId: lineage
     # Safe to scale: every replica pulls the one durable consumer `lineage-ingest`, so each event is delivered to one
     # of them, and every record is idempotent anyway: an insert-only merge on the event's key in the feed table lands a
-    # redelivery as nothing.
-    # -- Replica count of lineage; its replicas share one durable consumer, so it scales freely.
+    # redelivery as nothing. MORE REPLICAS ADD AVAILABILITY, NOT THROUGHPUT: lineage records each event through the
+    # catalog's doors, so the catalog bounds its intake. Measured 2026-11-23 on the development estate (XC-204, one
+    # catalog pod at its 1-CPU limit, 16 writers): 1.23, 1.12 and 0.89 events a second at 1, 2 and 4 lineage replicas,
+    # each lineage pod at 0.01 CPU.
+    # -- Replica count of lineage; its replicas share one durable consumer. More replicas add availability, not intake: the catalog bounds it.
     replicas: 1
     # -- Maximum request-body bytes on any lineage route (LINEAGE_MAX_BODY_BYTES), one OpenLineage event; larger bodies get 413 before a byte is read.
     maxBodyBytes: 8388608 # @schema type: integer; minimum: 1

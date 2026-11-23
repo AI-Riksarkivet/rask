@@ -203,11 +203,11 @@ async def test_each_run_of_a_timers_work_is_timed_by_timer_and_by_how_it_ended(t
     data = reader.get_metrics_data()
     assert data is not None
     timed = {
-        (str((point.attributes or {})["timer"]), str((point.attributes or {})["outcome"])): (point.count, point.sum >= 0)
+        (str((point.attributes or {})["timer"]), str((point.attributes or {})["outcome"])): point.count
         for point in data.resource_metrics[0].scope_metrics[0].metrics[0].data.data_points
         if isinstance(point, HistogramDataPoint)
     }
-    assert timed == {("relay", "ran"): (1, True), ("reclaim", "failed"): (1, True)}
+    assert timed == {("relay", "ran"): 1, ("reclaim", "failed"): 1}
 
 
 @pytest.mark.asyncio

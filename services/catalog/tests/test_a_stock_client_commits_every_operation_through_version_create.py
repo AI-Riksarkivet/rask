@@ -32,7 +32,7 @@ from collections.abc import Callable, Iterable, Iterator
 from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import boto3
@@ -1340,10 +1340,11 @@ def test_a_commit_whose_author_record_cannot_be_read_is_neither_announced_nor_co
         commit_reconcile.scan_ref(
             table.uri,
             StorageOptions(),
+            root=table,
             branch=None,
             branch_identifier=None,
             mark=1,
-            announced=set(),
+            announced=lambda _ref, _version: False,
             horizon=timedelta(hours=1),
             grace=timedelta(0),
             record_of=lambda transaction_uuid, version, ref: commit_records.recorded(
@@ -1352,6 +1353,36 @@ def test_a_commit_whose_author_record_cannot_be_read_is_neither_announced_nor_co
             authenticates=True,
             unannounced=lambda _operation: False,
         )
+
+
+def test_a_main_ref_with_nothing_after_its_mark_is_answered_from_one_listing_of_its_versions(served: Served, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The reconciler's idle cost a table ([[XC-204]]): main's own ``_versions/`` listing says nothing landed after the
+    mark, so the pass reads neither the ref's version log nor the feed."""
+    from catalog.services import commit_reconcile
+
+    def unread(*_: object, **__: object) -> NoReturn:
+        raise AssertionError("an idle ref's version log or the feed was read")
+
+    table = _opened(_created(served))
+    head = table.version
+    monkeypatch.setattr(lance.LanceDataset, "versions", unread)
+
+    scan = commit_reconcile.scan_ref(
+        table.uri,
+        StorageOptions(),
+        root=table,
+        branch=None,
+        branch_identifier=None,
+        mark=head,
+        announced=unread,
+        horizon=timedelta(hours=1),
+        grace=timedelta(0),
+        record_of=unread,
+        authenticates=True,
+        unannounced=unread,
+    )
+
+    assert scan == commit_reconcile.RefScan(branch=None, branch_identifier=None, mark=head)
 
 
 def test_a_version_landed_past_every_door_under_an_in_flight_commits_transaction_is_signed_for_no_one(served: Served, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1392,10 +1423,11 @@ def test_a_version_landed_past_every_door_under_an_in_flight_commits_transaction
     scan = commit_reconcile.scan_ref(
         landed.uri,
         StorageOptions(),
+        root=landed,
         branch=None,
         branch_identifier=None,
         mark=taken - 1,
-        announced=set(),
+        announced=lambda _ref, _version: False,
         horizon=timedelta(hours=1),
         grace=timedelta(0),
         record_of=lambda transaction_uuid, version, ref: commit_records.recorded(

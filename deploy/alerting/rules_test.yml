@@ -1653,6 +1653,37 @@ tests:
         alertname: CatalogManifestReclaimFailing
         exp_alerts: []
 
+  # [[XC-204]] A timer whose runs take more than half its period pages; one inside half does not. The reconcile runs
+  # once every ten minutes for 400 s of its 600 s period, the relay once a minute for 5 s of its 60 s.
+  - interval: 1m
+    input_series:
+      - series: 'timer_work_duration_seconds_sum{timer="catalog-commit-reconcile",outcome="ran"}'
+        values: "0+40x120"
+      - series: 'timer_work_duration_seconds_count{timer="catalog-commit-reconcile",outcome="ran"}'
+        values: "0+0.1x120"
+      - series: 'timer_period_seconds{timer="catalog-commit-reconcile"}'
+        values: "600x120"
+      - series: 'timer_work_duration_seconds_sum{timer="catalog-control-relay",outcome="ran"}'
+        values: "0+5x120"
+      - series: 'timer_work_duration_seconds_count{timer="catalog-control-relay",outcome="ran"}'
+        values: "0+1x120"
+      - series: 'timer_period_seconds{timer="catalog-control-relay"}'
+        values: "60x120"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LakehouseTimerSlow
+        exp_alerts: []
+      - eval_time: 100m
+        alertname: LakehouseTimerSlow
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+              timer: "catalog-commit-reconcile"
+            exp_annotations:
+              summary: "The timer catalog-commit-reconcile takes more than half its period to run"
+              description: "One run of the timer catalog-commit-reconcile has taken 6m 40s on average over the last hour, more than half the period git gives it, so a larger estate will make it overrun its window. Read `timer_work_duration_seconds` by timer against `timer_period_seconds`, and the service's CPU: the work is sequential store reads in a replica that also serves requests. Lengthen the timer's period in git, or give the service more CPU. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
+
   # ==================================================================================================
   # [[XC-208]] Every failure counter pages on its first count, and each outbox pages under its own lane.
 

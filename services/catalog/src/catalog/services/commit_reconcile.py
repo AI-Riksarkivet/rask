@@ -29,13 +29,15 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable, Iterator, Set
+from collections import defaultdict
+from collections.abc import Callable, Iterator
 from datetime import datetime, timedelta
+from functools import partial
 from typing import Any, Final
 
 import lance
 from lance_namespace import InvalidInputError
-from pydantic import BaseModel, ConfigDict, SkipValidation
+from pydantic import BaseModel, ConfigDict
 
 from catalog.core import lineage_emit, run_context, table_objects
 from catalog.core.config import CatalogStore, Settings
@@ -110,40 +112,76 @@ class RefScan(BaseModel):
     mark: int | None = None
 
 
-class Announced(BaseModel):
-    """What the feed holds of one table."""
+class FeedReading:
+    """What the feed holds of every table inside one tick's window: read on the first ask and kept for the tick.
 
-    model_config = ConfigDict(frozen=True)
+    A tick reconciles its tables one after another, so one read serves them all, and a tick in which no table holds a
+    version to look for never opens the feed. Measured 2026-11-23 ([[XC-204]]): read once per table, the feed cost one
+    request per fragment per table on every tick.
 
-    #: The ``(ref key, version)`` of every commit announced; the ref key is :func:`commit_records.ref_key`'s.
-    commits: frozenset[tuple[str, int]] = frozenset()
-
-
-def announced(feed_location: str, so: StorageOptions, table_uuid: str, *, since: datetime, signer: str | None) -> Announced:
-    """Every commit of ``table_uuid`` the feed holds a row for, received at ``since`` or after.
-
-    A row naming the table among its outputs (a run) or as its dataset (a static change) at a version counts, whatever
+    A row naming a table among its outputs (a run) or as its dataset (a static change) at a version counts, whatever
     the name it used, once ``signer`` signed it: lineage records a signature only from its bus and outbox doors, after
     verifying it, and drops it from every event its HTTP door records ([[LH-576]]). A writer of the table may post an
     event naming any of its versions over HTTP, which would otherwise read as the catalog's announcement and keep a lost
     one from ever being announced. ``signer`` is ``None`` for a catalog that signs nothing, whose announcements carry no
     signature to tell from a posted one's.
+
+    Args:
+        location: Where ``provenance$events`` lives.
+        so: The store options the feed is opened with.
+        since: The oldest ``received_at`` read.
+        signer: The identity whose signature makes a row the catalog's announcement; none for a catalog that signs nothing.
     """
-    feed = open_dataset(feed_location, storage_options=so.in_clear() or None, session=fresh_session())
-    rows = feed.to_table(
-        columns=["event"],
-        filter=f"array_has(table_uuids, {sql_literal(table_uuid)}) AND received_at >= TIMESTAMP {sql_literal(since.strftime('%Y-%m-%d %H:%M:%S'))}",
-    )
-    commits: set[tuple[str, int]] = set()
-    for text in rows.column("event").to_pylist():
-        try:
-            event = json.loads(text)
-        except (TypeError, ValueError):
-            continue
-        if signer is not None and _signed_by(event) != signer:
-            continue
-        commits |= set(_commits_named(event, table_uuid))
-    return Announced(commits=frozenset(commits))
+
+    def __init__(self, location: str, so: StorageOptions, *, since: datetime, signer: str | None) -> None:
+        self._location = location
+        self._so = so
+        self._since = since
+        self._signer = signer
+        self._every_table: dict[str, frozenset[tuple[str, int]]] | None = None
+        self._read_again: dict[str, frozenset[tuple[str, int]]] = {}
+
+    def holds(self, table_uuid: str, ref: str, version: int) -> bool:
+        """Whether the feed holds the catalog's announcement of ``version`` on ``ref`` (:func:`commit_records.ref_key`'s
+        key) of ``table_uuid``.
+
+        The tick's one reading answers a commit it holds. A commit it lacks is looked for again in the table's own rows
+        before it is called missing, once a table: a tick reads its tables one after another, so a row that reached the
+        feed after the tick's reading, inside the grace its table is judged by, is still found, and only a commit the
+        feed lacks at that moment is announced again.
+        """
+        if self._every_table is None:
+            self._every_table = self._read(None)
+        if (ref, version) in self._every_table.get(table_uuid, frozenset()):
+            return True
+        if table_uuid not in self._read_again:
+            self._read_again[table_uuid] = self._read(table_uuid).get(table_uuid, frozenset())
+        return (ref, version) in self._read_again[table_uuid]
+
+    def _read(self, table_uuid: str | None) -> dict[str, frozenset[tuple[str, int]]]:
+        """The commits the feed's rows inside the window announce, by table: of every table, or of ``table_uuid`` alone."""
+        feed = open_dataset(self._location, storage_options=self._so.in_clear() or None, session=fresh_session())
+        received = f"received_at >= TIMESTAMP {sql_literal(self._since.strftime('%Y-%m-%d %H:%M:%S'))}"
+        rows = received if table_uuid is None else f"array_has(table_uuids, {sql_literal(table_uuid)}) AND {received}"
+        commits: defaultdict[str, set[tuple[str, int]]] = defaultdict(set)
+        for batch in feed.to_batches(columns=["event", "table_uuids"], filter=rows):
+            for text, named_tables in zip(batch.column("event").to_pylist(), batch.column("table_uuids").to_pylist(), strict=True):
+                try:
+                    event = json.loads(text)
+                except (TypeError, ValueError):
+                    continue
+                if self._signer is not None and _signed_by(event) != self._signer:
+                    continue
+                for named in named_tables or []:
+                    commits[named].update(_commits_named(event, named))
+        return {named: frozenset(found) for named, found in commits.items()}
+
+
+def feed_reading(settings: Settings, so: StorageOptions, *, feed: str, now: datetime) -> FeedReading:
+    """The reading of the feed at ``feed`` one tick at ``now`` reconciles every table against: back to the horizon
+    (``LANCE_COMMIT_RECONCILE_HORIZON_SECONDS``) and a slack before it."""
+    since = now - timedelta(seconds=settings.commit_reconcile_horizon_seconds) - _FEED_SLACK
+    return FeedReading(feed, so, since=since, signer=settings.signing_identity or None)
 
 
 def _mapping(value: object) -> dict[str, Any]:
@@ -178,11 +216,6 @@ def _commits_named(event: dict[str, Any], table_uuid: str) -> Iterator[tuple[str
         ref = named.get("ref") if isinstance(named.get("ref"), str) else None
         identifier = named.get(BRANCH_IDENTIFIER) if isinstance(named.get(BRANCH_IDENTIFIER), str) else None
         yield commit_records.ref_key(ref, identifier), version
-
-
-def refs_of(location: str, so: StorageOptions) -> list[tuple[str | None, str | None]]:
-    """Main and every branch of the table, each with its incarnation (pylance's ``branch_identifier``)."""
-    return _listed_refs(open_dataset(location, storage_options=so.in_clear() or None, session=fresh_session()))
 
 
 def _listed_refs(dataset: lance.LanceDataset) -> list[tuple[str | None, str | None]]:
@@ -242,10 +275,11 @@ def scan_ref(
     location: str,
     so: StorageOptions,
     *,
+    root: lance.LanceDataset,
     branch: str | None,
     branch_identifier: str | None,
     mark: int | None,
-    announced: set[tuple[str, int]],
+    announced: Callable[[str, int], bool],
     horizon: timedelta,
     grace: timedelta,
     record_of: Callable[[str, int, str], commit_records.CommitAuthor | None],
@@ -253,7 +287,8 @@ def scan_ref(
     unannounced: Callable[[str], bool],
 ) -> RefScan:
     """Every version of ``branch`` after ``mark``, older than ``grace`` and younger than ``horizon``, that the feed
-    (``announced``) lacks.
+    (``announced``, asked a ref's key and a version) lacks. ``root`` is the table at ``location``, opened; ``announced``
+    is asked only once a version has to be looked for, so a ref with nothing after its mark costs no read of the feed.
 
     A VERSION'S AGE IS THE STORE'S (ADR 0179): the time the store stamped on its ``_versions/`` manifest
     (``LastModified``) against the store's own clock at one listing of the ref's ``_versions/``, the listing
@@ -284,6 +319,9 @@ def scan_ref(
     key = commit_records.ref_key(branch, branch_identifier)
     ref_location = managed_versions.CommitRef(table_location=location, branch=branch).location
     stamped, at = _stamped_versions(ref_location, so)
+    if branch is None and mark is not None and stamped and max(stamped) <= mark:
+        # Main's own listing holds no manifest after the mark, so the ref's version log is not read for one.
+        return RefScan(branch=branch, branch_identifier=branch_identifier, mark=mark)
     after, before = at - horizon, at - grace
     missing: list[Commit] = []
     unauthored: list[int] = []
@@ -303,7 +341,7 @@ def scan_ref(
         authenticates=authenticates,
         unannounced=unannounced,
     )
-    for version, handle in _versions_after(location, so, branch, mark=mark):
+    for version, handle in _versions_after(root, location, branch, mark=mark):
         when = stamped.get(version)
         if when is None:
             raise ReconcileReadError(f"version {version} of {location} on {branch or 'main'} has no manifest the store lists")
@@ -341,9 +379,9 @@ class _RefReading(BaseModel):
     key: str
     ref_location: str
     after: datetime
-    # The feed's announced commits as the caller read them once for the table, held as that same set and only read: a
-    # copy validated for every ref would walk the whole feed again each time.
-    announced: SkipValidation[Set[tuple[str, int]]]
+    # Whether the feed holds the ref's commit at a version: asked only for a version being judged, so a ref with
+    # nothing to look for reads no feed.
+    announced: Callable[[str, int], bool]
     record_of: Callable[[str, int, str], commit_records.CommitAuthor | None]
     authenticates: bool
     unannounced: Callable[[str], bool]
@@ -361,7 +399,7 @@ class _VersionFinding(BaseModel):
 
 def _judge_version(reading: _RefReading, handle: lance.LanceDataset, version: int, *, when: datetime) -> _VersionFinding:
     """What :func:`scan_ref` makes of ``version``, read through ``handle`` and stamped ``when``, by the rules it states."""
-    on_feed = when < reading.after or (reading.key, version) in reading.announced
+    on_feed = when < reading.after or reading.announced(reading.key, version)
     try:
         commit = _commit_at(handle, version, branch=reading.branch, branch_identifier=reading.branch_identifier)
     except UnidentifiedCommitError as exc:
@@ -400,8 +438,8 @@ def _signed_for(record: commit_records.CommitAuthor | None, ref_location: str, s
     return record.author
 
 
-def _versions_after(location: str, so: StorageOptions, branch: str | None, *, mark: int | None) -> Iterator[tuple[int, lance.LanceDataset]]:
-    """Each retained version of ``branch`` after ``mark``, oldest first, opened.
+def _versions_after(root: lance.LanceDataset, location: str, branch: str | None, *, mark: int | None) -> Iterator[tuple[int, lance.LanceDataset]]:
+    """Each retained version of ``branch`` of the table ``root`` (at ``location``) after ``mark``, oldest first, opened.
 
     The retained versions are the ref's own listing: a version cleanup reclaimed is not in it, so it is skipped, and a
     retained version that fails to open stops the pass rather than being taken for reclaimed.
@@ -409,7 +447,6 @@ def _versions_after(location: str, so: StorageOptions, branch: str | None, *, ma
     Raises:
         ReconcileReadError: A retained version could not be opened.
     """
-    root = open_dataset(location, storage_options=so.in_clear() or None, session=fresh_session())
     latest = root.checkout_version((branch, None)) if branch is not None else root
     retained = sorted(int(entry["version"]) for entry in latest.versions())
     for version in (v for v in retained if mark is None or v > mark):
@@ -529,10 +566,9 @@ def reconcile_table(
     segments: list[str],
     location: str,
     table_uuid: str,
-    feed: str,
-    now: datetime,
+    on_feed: FeedReading,
 ) -> TableReconcile:
-    """Scan every ref of the table at ``location`` against the feed at ``feed``, forget the recorded author of every commit
+    """Scan every ref of the table at ``location`` against the tick's reading of the feed, forget the recorded author of every commit
     the scan confirmed, and keep each mark it confirmed.
 
     The window is the grace (``LANCE_COMMIT_RECONCILE_GRACE_SECONDS``) at the young end and the horizon
@@ -544,21 +580,21 @@ def reconcile_table(
         return TableReconcile()
     control, control_so = settings.registry_root, settings.storage_options()
     marks = commit_records.read_marks(control, control_so, table_uuid)
-    after = now - timedelta(seconds=settings.commit_reconcile_horizon_seconds)
-    on_feed = announced(feed, so, table_uuid, since=after - _FEED_SLACK, signer=settings.signing_identity or None)
+    root = open_dataset(location, storage_options=so.in_clear() or None, session=fresh_session())
     parent = fga_ids.parent_namespace_id(segments) or ""
     scans: list[RefScan] = []
     unreadable: list[str] = []
-    for branch, identifier in refs_of(location, so):
+    for branch, identifier in _listed_refs(root):
         try:
             scans.append(
                 scan_ref(
                     location,
                     so,
+                    root=root,
                     branch=branch,
                     branch_identifier=identifier,
                     mark=marks.refs.get(commit_records.ref_key(branch, identifier)),
-                    announced=set(on_feed.commits),
+                    announced=partial(on_feed.holds, table_uuid),
                     horizon=timedelta(seconds=settings.commit_reconcile_horizon_seconds),
                     grace=timedelta(seconds=settings.commit_reconcile_grace_seconds),
                     record_of=lambda transaction_uuid, version, ref: commit_records.recorded(

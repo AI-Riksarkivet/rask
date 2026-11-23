@@ -426,6 +426,26 @@ groups:
             returned, for 20 minutes and the half hour before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped
 
+      # A tick's work is sequential and grows with the estate (the commit reconcile reads every claimed table, about 16
+      # store requests each, measured 2026-11-23, XC-204), and it runs in a replica that also serves requests. One whose
+      # mean run over an hour takes more than half its period is on its way to overrunning the window: the next window
+      # then starts late and the tick's bound (a lost announcement found within one period) no longer holds. The mean is
+      # over the runs that returned or raised; a timer that ran nothing in the hour has no mean and pages nothing here.
+      - alert: LakehouseTimerSlow
+        expr: >-
+          (
+            sum by (timer) (increase(timer_work_duration_seconds_sum[1h]))
+            / sum by (timer) (increase(timer_work_duration_seconds_count[1h]))
+          ) > 0.5 * max by (timer) (timer_period_seconds)
+        for: 30m
+        labels:
+          severity: warning
+          service: lakehouse
+        annotations:
+          summary: "The timer {{ $labels.timer }} takes more than half its period to run"
+          description: >-
+            One run of the timer {{ $labels.timer }} has taken {{ $value | humanizeDuration }} on average over the last hour, more than half the period git gives it, so a larger estate will make it overrun its window. Read `timer_work_duration_seconds` by timer against `timer_period_seconds`, and the service's CPU: the work is sequential store reads in a replica that also serves requests. Lengthen the timer's period in git, or give the service more CPU. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped
+
       # A released erasure obligation is final, so a table found derived from its table after the release, written before
       # it, may still hold the subject (ADR 0183 §5). One is enough to page.
       - alert: ErasureDerivedAfterRelease
