@@ -108,7 +108,9 @@
 	const mayEditPolicy = $derived(perms?.can_delete === true);
 	// ONE string, shared by the three gated policy controls and the sentence below them — three copies
 	// of a denial reason is how the grant message came to be wrong in two places at once.
-	const REASON_EDIT = $derived(`Changing this policy needs the owner rung (can_delete) on ${ns}.`);
+	const REASON_EDIT = $derived(
+		`Changing this policy needs the modifier rung (can_delete) on ${ns}.`,
+	);
 	const permsSettled = $derived(perms !== null);
 	// The one case worth naming separately: the caller owns this namespace, and granting is still
 	// denied. That is managed access doing its job, and it is the only reading under which an owner
@@ -309,7 +311,7 @@
 	function policyFail(status: number, detailText: string): void {
 		if (status === 401) policyError = 'Sign in to edit the maintenance policy.';
 		else if (status === 403)
-			policyError = 'Denied: policy changes need the owner rung (can_delete).';
+			policyError = 'Denied: policy changes need the modifier rung (can_delete).';
 		else policyError = detailText;
 	}
 

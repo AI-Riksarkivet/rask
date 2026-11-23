@@ -130,7 +130,7 @@ HTTP request
   │      derive (object, can_* relation) from the route, e.g.
   │        describe table  -> check can_get_metadata on table:<uuid>
   │        insert  table   -> check can_write_data   on table:<uuid>
-  │        drop    table   -> check can_drop         on table:<uuid>   (owner tier)
+  │        drop    table   -> check can_drop         on table:<uuid>   (modifier tier)
   │        create  table   -> check can_create_table on the PARENT    (create-on-parent)
   │      OpenFGA says yes/no. No → 403. OpenFGA down → 503 (never silent allow).
   │
@@ -177,17 +177,18 @@ project                      (the tenant: admins, members, roles, label definiti
 
 types:   user, role, revision, estate, project, warehouse, namespace, table, classification, materialized_view
 subjects: user:<sub>  AND  role:<name>#assignee   (grant a team/role, not just a person)
-rungs:   owner ⊇ writer ⊇ reader   (concentric; cascade DOWN via `parent`)
+rungs:   owner ⊇ modifier ⊇ writer ⊇ reader ⊇ describer   (concentric; cascade DOWN via `parent`)
 actions: can_get_metadata, can_read_data, can_write_data, can_drop, can_deregister,
          can_delete, can_create_table, can_create_namespace, …   (the app checks THESE)
 ```
 
-- **Concentric**: an `owner` is automatically a `writer` is automatically a `reader`.
+- **Concentric**: an `owner` is automatically a `modifier`, a `writer`, a `reader` and a `describer`. `describer`
+  sees an object and reads no row; `modifier` runs its lifecycle and hands out no access (ADR 0227).
 - **Cascade**: a grant on a namespace flows to its nested namespaces and tables via the
   `parent` edge (which `seed_ownership` writes on create).
 - **Roles as subjects**: `role:data_eng#assignee` can be granted a rung on any object;
   add people to the role and they all inherit it. (This is how "teams" work.)
-- **`can_*` actions**: the app never checks raw `owner/writer/reader`; it checks an action
+- **`can_*` actions**: the app never checks a raw rung (`owner`, `writer`, `reader`, …); it checks an action
   like `can_write_data`, and the *model* decides that reduces to the writer rung. Move the
   policy in the model, not the code.
 
@@ -348,7 +349,7 @@ Config is env-driven and estate-wide — ONE name per setting, declared once in
   a registered one where its registrar put it (ADR 0173 §5).
 - **Tuple** — an OpenFGA fact, e.g. `user:dex~alice owner table:<uuid>`: a table's or namespace's grants are held by the uuid the catalog minted for it, never by its name (ADR 0173 §8).
 - **`can_*` relation** — an action permission the app checks (model maps it to a rung).
-- **Concentric** — owner ⊇ writer ⊇ reader.
+- **Concentric** — owner ⊇ modifier ⊇ writer ⊇ reader ⊇ describer.
 - **Cascade** — a grant flows down the hierarchy (project → warehouse → namespace → table), through each object's
   `project` or `parent` edge.
 - **Create-on-parent** — creating a child is authorized against its parent.

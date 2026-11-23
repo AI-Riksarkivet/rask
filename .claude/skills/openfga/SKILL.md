@@ -128,7 +128,10 @@ spell it through `user_object`.
 `namespace`, `table` and `materialized_view` the bare name (`reader`) holds only what was granted on the object: grant
 doors write it and list it. `reader_effective` adds the rungs that imply it and what flows from the parent, and no
 `can_*` reads a bare data rung. A check that means "holds it here" asks a `can_*` or a twin, never the bare rung; a new rung ships
-as both relations. `visible_below` (upward visibility) reads the bare `owner`/`writer`/`reader` and recurses downward
+as both relations. The ladder is owner > modifier > writer > reader > describer (ADR 0227): `describer` is the rung for
+seeing (`can_get_metadata`, listings), `modifier` the rung for the lifecycle, and neither grants; a new `can_*` that
+means "sees" reads `describer_effective` and one that means "lifecycle" reads `modifier_effective`. `visible_below`
+(upward visibility) reads the five bare rungs and recurses downward
 through `child` only: never define it over a twin, which sends every descendant back up to the project on each refusal
 (measured 2026-11-13 on a local OpenFGA, 234 descendants: 167 ms refused before the split, 17 ms after). A project
 `member` holds no data rung. A change to `model.fga` adds an entry to `auth/CHANGELOG.md` saying whether a store's

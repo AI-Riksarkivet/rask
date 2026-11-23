@@ -7,9 +7,9 @@ answer is effective access, not just direct tuples. The relation set comes from 
 actually loads (never a hand-kept list), so a model edit is reflected here automatically and
 ``test_fga_model_contract`` proves every queried pair exists.
 
-Owner-tier gated by the router-level ``authorize`` (``access/list`` maps to ``can_drop`` /
-``can_delete`` — an enumeration reveals principals, so it clears the same bar as destroying the
-object); the gate audits the authz decision, and the endpoint additionally emits a dedicated
+Gated by the router-level ``authorize`` on ``can_review_access``, the owner's and the grant manager's (an enumeration
+reveals principals, so a modifier, who holds the drop's rung and grants nothing, does not pass it, [[LH-570]]); the
+gate audits the authz decision, and the endpoint additionally emits a dedicated
 ``access_review`` audit event (the disclosure itself, distinguishable from an actual drop — the same
 two-layer pattern as credential vending). Fail-closed: an OpenFGA outage is a 503, never an empty
 grant list that reads as "nobody has access".
@@ -103,8 +103,10 @@ classification_router = APIRouter(prefix="/management/v1/classification", tags=[
 #: `services/catalog/tests/test_a_grantable_rung_has_a_door.py` compares them now.
 _GRANTABLE_BASE: tuple[str, ...] = (
     "owner",
+    "modifier",
     "writer",
     "reader",
+    "describer",
     "maintainer",
     "manage_grants",
     "pass_grants",
@@ -170,7 +172,7 @@ async def _access_list(context: AuthzContext, *, resolver: Resolver, fga_type: s
         # the only trace, indistinguishable from a completed disclosure.
         audit(AuditAction.ACCESS_REVIEW, AuditOutcome.FAILURE, subject=subject, resource=obj, reason="authz_unavailable")
         raise outage.exceptions[0] from None
-    # #41 audit the actual ACL disclosure (who reviewed what) — the gate's can_drop/can_delete allow
+    # #41 audit the actual ACL disclosure (who reviewed what) — the gate's can_review_access allow
     # alone would be byte-identical to a pending destructive op.
     audit(AuditAction.ACCESS_REVIEW, AuditOutcome.SUCCESS, subject=subject, resource=obj)
     # TRUNCATION IS REPORTED, not just logged (diff2 F10 item 8). `list_users` stops at OpenFGA's
@@ -195,7 +197,7 @@ async def list_table_access(
     context: AuthzContextDep,
     resolver: ResolverDep,
 ) -> AccessListResponse:
-    """Effective access on the table, per ``can_*`` action — owner-gated by the router (``can_drop``)."""
+    """Effective access on the table, per ``can_*`` action — the router asks ``can_review_access``, the owner's and the grant manager's."""
     return await _access_list(context, resolver=resolver, fga_type="table", id=id)
 
 
@@ -206,8 +208,7 @@ async def list_namespace_access(
     context: AuthzContextDep,
     resolver: ResolverDep,
 ) -> AccessListResponse:
-    """Effective access on the namespace, per ``can_*`` action — owner-gated by the router
-    (``can_delete``)."""
+    """Effective access on the namespace, per ``can_*`` action — the router asks ``can_review_access``."""
     return await _access_list(context, resolver=resolver, fga_type="namespace", id=id)
 
 
@@ -292,7 +293,7 @@ async def _access_check(
     body: AccessCheckRequest,
 ) -> AccessCheckResponse:
     """The #68 playground's check primitive — a single ``(user, relation, object)`` OpenFGA Check,
-    owner-gated identically to ``access/list`` (probing the graph is the same disclosure as enumerating
+    gated identically to ``access/list`` (probing the graph is the same disclosure as enumerating
     it). Only relations the compiled model defines on ``fga_type`` may be probed, so an unknown relation
     is a clean 400 here — the caller's error, the same code the estate-admin door gives the identical
     mistake — rather than an OpenFGA 400 that fails closed to a 503 for the caller."""
@@ -322,13 +323,13 @@ async def _access_check(
 
 @table_router.post("/{id}/access/check")
 async def check_table_access(*, id: str, context: AuthzContextDep, resolver: ResolverDep, body: AccessCheckRequest) -> AccessCheckResponse:
-    """Simulate 'does <user> hold <relation> on this table?' — owner-gated by the router (``can_drop``)."""
+    """Simulate 'does <user> hold <relation> on this table?' — the router asks ``can_review_access``."""
     return await _access_check(context, resolver=resolver, fga_type="table", id=id, body=body)
 
 
 @namespace_router.post("/{id}/access/check")
 async def check_namespace_access(*, id: str, context: AuthzContextDep, resolver: ResolverDep, body: AccessCheckRequest) -> AccessCheckResponse:
-    """Simulate 'does <user> hold <relation> on this namespace?' — owner-gated (``can_delete``)."""
+    """Simulate 'does <user> hold <relation> on this namespace?' — the router asks ``can_review_access``."""
     return await _access_check(context, resolver=resolver, fga_type="namespace", id=id, body=body)
 
 
@@ -617,8 +618,9 @@ async def grant_project_access(
 ) -> AccessGrantResponse:
     """Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]).
 
-    The rung is ``decider``: a service's own identity may then ask the decision door about the project's objects, and
-    nothing beyond them. Who belongs to the project is the members door's.
+    The rung is ``decider`` (a service's own identity may then ask the decision door about the project's objects, and
+    nothing beyond them), or one of the project's two data rungs, ``modifier`` and ``describer``, which reach every
+    warehouse of the project ([[LH-570]]). Who belongs to the project is the members door's.
     \f
 
     Args:
@@ -756,7 +758,7 @@ async def graph_table_access(
     context: AuthzContextDep,
     resolver: ResolverDep,
 ) -> AccessGraphResponse:
-    """One hop of the authorization graph around the table — owner-gated by the router (``can_drop``)."""
+    """One hop of the authorization graph around the table — the router asks ``can_review_access``."""
     return await _access_graph(context, resolver=resolver, fga_type="table", id=id)
 
 
@@ -767,7 +769,7 @@ async def graph_namespace_access(
     context: AuthzContextDep,
     resolver: ResolverDep,
 ) -> AccessGraphResponse:
-    """One hop of the authorization graph around the namespace — owner-gated (``can_delete``)."""
+    """One hop of the authorization graph around the namespace — the router asks ``can_review_access``."""
     return await _access_graph(context, resolver=resolver, fga_type="namespace", id=id)
 
 

@@ -2398,3 +2398,227 @@ tests:
       - user: user:sole_admin
         object: project:solo
         assertions: { admin_revision: false, can_administer: true, can_grant_admin: true }
+
+  - name: a describer sees a table it cannot read, and a modifier runs its lifecycle and hands out nothing
+    # [[LH-570]] The ladder is owner > modifier > writer > reader > describer, each rung holding the ones below it.
+    # `describer` is the rung for seeing (metadata, listings), `modifier` the rung for the lifecycle; neither grants,
+    # and neither is implied by `classifier` or `tagger`. Each subject holds exactly one stored rung, asserted live,
+    # so a negative here can never go vacuous.
+    tuples:
+      - { user: project:ladder, relation: project, object: warehouse:ladder_wh }
+      - { user: project:ladder, relation: project, object: warehouse:ladder_later }
+      - { user: warehouse:ladder_wh, relation: parent, object: namespace:ladder_ns }
+      - { user: namespace:ladder_ns, relation: child, object: warehouse:ladder_wh }
+      - { user: namespace:ladder_ns, relation: parent, object: table:ladder_t }
+      - { user: table:ladder_t, relation: child, object: namespace:ladder_ns }
+      - { user: namespace:ladder_ns, relation: parent, object: table:ladder_other }
+      - { user: table:ladder_other, relation: child, object: namespace:ladder_ns }
+      - { user: warehouse:ladder_later, relation: parent, object: namespace:ladder_later_ns }
+      - { user: namespace:ladder_later_ns, relation: child, object: warehouse:ladder_later }
+      - { user: namespace:ladder_later_ns, relation: parent, object: table:ladder_later_t }
+      - { user: user:dora, relation: describer, object: table:ladder_t }
+      - { user: user:mona, relation: modifier, object: table:ladder_t }
+      - { user: user:rhea, relation: reader, object: table:ladder_t }
+      - { user: user:wade, relation: writer, object: table:ladder_t }
+      - { user: user:nsdora, relation: describer, object: namespace:ladder_ns }
+      - { user: user:nsmona, relation: modifier, object: namespace:ladder_ns }
+      - { user: user:pdora, relation: describer, object: project:ladder }
+      - { user: user:pmona, relation: modifier, object: project:ladder }
+      - { user: user:pmember, relation: member, object: project:ladder }
+      - { user: user:tess, relation: tagger, object: table:ladder_t }
+      - { user: user:cleo, relation: classifier, object: table:ladder_t }
+      - { user: user:passer, relation: modifier, object: table:ladder_t }
+      - { user: user:passer, relation: pass_grants, object: table:ladder_t }
+      # a rung stored on the warehouse itself, and a view in the namespace
+      - { user: user:whdora, relation: describer, object: warehouse:ladder_wh }
+      - { user: user:whmona, relation: modifier, object: warehouse:ladder_wh }
+      - { user: namespace:ladder_ns, relation: parent, object: materialized_view:ladder_mv }
+      # a namespace under managed access: its table's owner, and a modifier there holding the grant option
+      - { user: warehouse:ladder_wh, relation: parent, object: namespace:ladder_managed }
+      - { user: namespace:ladder_managed, relation: child, object: warehouse:ladder_wh }
+      - { user: "user:*", relation: managed_access, object: namespace:ladder_managed }
+      - { user: namespace:ladder_managed, relation: parent, object: table:ladder_managed_t }
+      - { user: user:owen, relation: owner, object: table:ladder_managed_t }
+      - { user: user:mpasser, relation: modifier, object: table:ladder_managed_t }
+      - { user: user:mpasser, relation: pass_grants, object: table:ladder_managed_t }
+      - { user: user:nspasser, relation: describer, object: namespace:ladder_ns }
+      - { user: user:nspasser, relation: pass_grants, object: namespace:ladder_ns }
+    check:
+      # The describer: sees the table and nothing of its rows, and changes nothing.
+      - user: user:dora
+        object: table:ladder_t
+        assertions:
+          describer: true
+          can_get_metadata: true
+          can_read_data: false
+          can_write_data: false
+          can_be_notified: false
+          can_drop: false
+          can_grant_describer: false
+          can_read_assignments: false
+      # A grant on one table lends its containers visibility, and no sibling.
+      - user: user:dora
+        object: namespace:ladder_ns
+        assertions: { can_get_metadata: true, describer_effective: false }
+      - user: user:dora
+        object: warehouse:ladder_wh
+        assertions: { can_get_metadata: true }
+      - user: user:dora
+        object: table:ladder_other
+        assertions: { can_get_metadata: false }
+      # A reader and a writer each see what a describer sees.
+      - user: user:rhea
+        object: table:ladder_t
+        assertions: { reader: true, describer_effective: true, can_get_metadata: true, can_read_data: true, can_write_data: false }
+      # The writer: writes, and runs none of the lifecycle.
+      - user: user:wade
+        object: table:ladder_t
+        assertions:
+          writer: true
+          can_write_data: true
+          modifier_effective: false
+          can_drop: false
+          can_restore: false
+          can_set_protection: false
+          can_get_protection: false
+          can_label: false
+          can_set_contract: false
+          can_deregister: false
+          can_create_branch: false
+          can_create_tag: false
+          can_maintain: false
+      # The modifier: everything an owner does to the table but hand out or see access.
+      - user: user:mona
+        object: table:ladder_t
+        assertions:
+          modifier: true
+          owner_effective: false
+          can_get_metadata: true
+          can_read_data: true
+          can_write_data: true
+          can_drop: true
+          can_restore: true
+          can_set_protection: true
+          can_get_protection: true
+          can_label: true
+          can_set_contract: true
+          can_deregister: true
+          can_create_branch: true
+          can_create_tag: true
+          can_update_tag: true
+          can_maintain: true
+          can_classify: false
+          can_vend_maintain: false
+          can_move: false
+          manage_grants: false
+          can_grant_modifier: false
+          can_grant_describer: false
+          can_grant_reader: false
+          can_revoke_grant: false
+          can_read_assignments: false
+      # With the grant option a modifier hands on what it holds, and never ownership or the option itself.
+      - user: user:passer
+        object: table:ladder_t
+        assertions:
+          can_grant_modifier: true
+          can_grant_writer: true
+          can_grant_reader: true
+          can_grant_describer: true
+          can_grant_owner: false
+          can_grant_pass_grants: false
+          can_revoke_grant: false
+      # A rung on a namespace reaches the tables beneath it, and the namespace's own lifecycle.
+      - user: user:nsdora
+        object: table:ladder_other
+        assertions: { can_get_metadata: true, can_read_data: false }
+      - user: user:nsmona
+        object: namespace:ladder_ns
+        assertions: { can_delete: true, can_set_protection: true, can_get_protection: true, can_label: true, can_create_table: true, manage_grants: false, can_grant_modifier: false }
+      - user: user:nsmona
+        object: table:ladder_other
+        assertions: { can_drop: true, can_write_data: true, can_read_assignments: false }
+      - user: user:nsdora
+        object: namespace:ladder_ns
+        assertions: { can_get_metadata: true, can_create_table: false, can_delete: false }
+      # A rung on the project covers every warehouse of it; membership alone gives nothing.
+      - user: user:pdora
+        object: table:ladder_later_t
+        assertions: { can_get_metadata: true, can_read_data: false }
+      - user: user:pdora
+        object: warehouse:ladder_later
+        assertions: { can_get_metadata: true, can_create_namespace: false }
+      - user: user:pmona
+        object: table:ladder_later_t
+        assertions: { can_drop: true, can_write_data: true, manage_grants: false }
+      - user: user:pmona
+        object: project:ladder
+        assertions: { can_administer: false, can_create_warehouse: false, member: false }
+      - user: user:pmember
+        object: table:ladder_t
+        assertions: { can_get_metadata: false }
+      # A project-wide rung is handed out by the project's admins, who own every warehouse of it. A security admin,
+      # who holds no data, hands out none, and neither does the rung's holder.
+      - user: user:alice
+        object: project:acme
+        assertions: { can_grant_modifier: true, can_grant_describer: true }
+      - user: user:grace
+        object: project:acme
+        assertions: { security_admin: true, can_grant_modifier: false, can_grant_describer: false }
+      - user: user:pmona
+        object: project:ladder
+        assertions: { modifier: true, can_grant_modifier: false, can_grant_describer: false, can_read_assignments: false }
+      # A rung stored on the warehouse reaches everything beneath it, and is handed on only with the grant option.
+      - user: user:whdora
+        object: warehouse:ladder_wh
+        assertions: { describer: true, can_get_metadata: true, can_create_namespace: false, can_grant_describer: false }
+      - user: user:whdora
+        object: table:ladder_other
+        assertions: { can_get_metadata: true, can_read_data: false }
+      - user: user:whmona
+        object: warehouse:ladder_wh
+        assertions: { modifier: true, can_create_namespace: true, can_grant_modifier: false, manage_grants: false, can_set_managed_access: false, can_read_assignments: false }
+      - user: user:whmona
+        object: table:ladder_other
+        assertions: { can_drop: true, can_review_access: false }
+      - user: user:nspasser
+        object: namespace:ladder_ns
+        assertions: { can_grant_describer: true, can_grant_reader: false }
+      # A describer of the namespace sees a view in it as it sees a table, and reads neither.
+      - user: user:nsdora
+        object: materialized_view:ladder_mv
+        assertions: { can_get_metadata: true, can_read: false }
+      # A modifier's grant on one table lends its containers visibility, as any stored rung does.
+      - user: user:mona
+        object: namespace:ladder_ns
+        assertions: { can_get_metadata: true, modifier_effective: false }
+      - user: user:mona
+        object: table:ladder_other
+        assertions: { can_get_metadata: false }
+      # The rest of what a writer and a describer do not hold, and what a namespace's modifier accepts.
+      - user: user:wade
+        object: table:ladder_t
+        assertions: { can_update_tag: false, can_create_version: true, can_review_access: false }
+      - user: user:dora
+        object: table:ladder_t
+        assertions: { can_create_version: false, can_review_access: false }
+      - user: user:nsmona
+        object: namespace:ladder_ns
+        assertions: { can_accept_moved_table: true, can_review_access: false }
+      # Who sees who holds access: the owner, inside a managed scope too, and never a modifier. Under managed access
+      # the grant option is withdrawn, so a modifier holding it hands on nothing.
+      - user: user:owen
+        object: table:ladder_managed_t
+        assertions: { owner: true, manage_grants: false, can_review_access: true, can_read_assignments: false }
+      - user: user:mpasser
+        object: table:ladder_managed_t
+        assertions: { modifier: true, can_drop: true, can_grant_modifier: false, can_grant_describer: false, can_review_access: false }
+      - user: user:mona
+        object: table:ladder_t
+        assertions: { can_review_access: false }
+      # Tagging or classifying a table is not seeing it.
+      - user: user:tess
+        object: table:ladder_t
+        assertions: { tagger: true, can_create_tag: true, can_get_metadata: false }
+      - user: user:cleo
+        object: table:ladder_t
+        assertions: { classifier: true, can_classify: true, can_get_metadata: false }

@@ -159,12 +159,14 @@ def app_with(openfga_store: Any) -> AppWith:  # noqa: ANN401 — the root confte
 @pytest.mark.anyio
 async def test_a_GOVERNED_input_the_caller_cannot_see_is_STILL_refused(settings: LineageSettings, app_with: AppWith) -> None:
     """The half the fix must not cost. This is the forgery the guard exists to stop: an authenticated
-    reader recording `I read gold$catalog` into the feed."""
+    caller recording `I read gold$catalog` into the feed. Seeing the table is not reading it ([[LH-570]]): a describer
+    of it is refused as a caller holding nothing is, and a reader is admitted."""
     event = _event(inputs=[_table("gold", "gold$catalog")])
 
-    async with app_with({}) as app:
-        with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: gold\$catalog"):
-            await enforce_output_authz(event, app, settings, token=_PIPELINE)
+    for held in ({}, {"gold$catalog": "describer"}):
+        async with app_with(held) as app:
+            with pytest.raises(PermissionDeniedError, match=r"can_read_data required on inputs: gold\$catalog"):
+                await enforce_output_authz(event, app, settings, token=_PIPELINE)
     async with app_with({"gold$catalog": "reader"}) as app:
         await enforce_output_authz(event, app, settings, token=_PIPELINE)
 
@@ -211,7 +213,7 @@ async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_externa
     event = _event(inputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME), _table("bind86-bronze", GOVERNED)])
 
     async with app_with({}) as app:
-        with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: bind86-bronze\$pages$"):
+        with pytest.raises(PermissionDeniedError, match=r"can_read_data required on inputs: bind86-bronze\$pages$"):
             await enforce_output_authz(event, app, settings, token=_PIPELINE)
     async with app_with({GOVERNED: "reader"}) as app:
         await enforce_output_authz(event, app, settings, token=_PIPELINE)
@@ -363,7 +365,7 @@ async def test_a_GOVERNED_column_upstream_is_AUTHORIZED_not_written_blind(settin
     event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "gold", GOVERNED)
 
     async with app_with({"mine$table": "writer"}) as app:  # write on the sandbox only
-        with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: bind86-bronze\$pages"):
+        with pytest.raises(PermissionDeniedError, match=r"can_read_data required on inputs: bind86-bronze\$pages"):
             await enforce_output_authz(event, app, settings, token=_PIPELINE)
 
 

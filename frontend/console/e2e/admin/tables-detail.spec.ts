@@ -810,7 +810,7 @@ test('a 403 drop surfaces the owner-denied state and stays on the page (#85)', a
 	const danger = page.locator('section.dangerzone');
 	await danger.getByRole('button', { name: 'Drop table' }).click();
 	await page.getByRole('alertdialog').getByRole('button', { name: 'Drop', exact: true }).click();
-	await expect(danger).toContainText('Denied: drop needs the owner rung (can_drop).');
+	await expect(danger).toContainText('Denied: drop needs the modifier rung (can_drop).');
 	await expect(page.getByRole('alertdialog')).toHaveCount(0); // closed even on failure (finally)
 	await expect(page).toHaveURL(/\/catalog\/tables\/db1%24t$/);
 });

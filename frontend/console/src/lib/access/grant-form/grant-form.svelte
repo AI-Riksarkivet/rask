@@ -6,7 +6,8 @@
 	export type GrantFormMutate = (user: string, relation: string) => Promise<ApiResult<AccessGrant>>;
 
 	export type GrantFormProps = {
-		/** Names the object in every message — "…on this table" / "…on this namespace". */
+		/** The object's type. Names it in every message ("…on this table"), and decides whether the
+		 *  steward's entry is offered: the catalog has no `classifier` on a project. */
 		kind: string;
 		/** The subject being granted to. `$bindable` because AccessGraph prefills it when a subject node
 		 *  is clicked on the canvas, which is that component's whole reason for existing. */
@@ -43,28 +44,70 @@
 		onmutated,
 	}: GrantFormProps = $props();
 
-	// The rung ladder, in ONE place, so every surface that grants offers the same rungs.
-	const GRANTABLE = ['reader', 'writer', 'owner', 'pass_grants', 'manage_grants'];
-	const RUNG_LABEL: Record<string, string> = {
-		pass_grants: 'pass_grants — may re-grant what they hold',
-		manage_grants: 'manage_grants — may grant anything, reads nothing',
+	// What the picker offers, in ONE place, so every surface that grants offers the same entries. An
+	// entry names the rungs it grants: one for a rung, two for the steward's pair.
+	type Entry = { value: string; name: string; label: string; rungs: readonly string[] };
+	const rung = (value: string, label: string = value): Entry => ({
+		value,
+		name: value,
+		label,
+		rungs: [value],
+	});
+	// The access ladder, lowest first: each level holds what the ones before it hold.
+	const LADDER: readonly Entry[] = [
+		rung('describer', 'describer — may see it, reads no data'),
+		rung('reader'),
+		rung('writer'),
+		rung('modifier', 'modifier — may change and retire it, grants nothing'),
+		rung('owner'),
+	];
+	// `classifier` labels columns and does NOT see the object, so the picker offers it only together
+	// with `describer`: a steward is granted both. `describer` is listed first because it is granted
+	// first and revoked last, so no failure half-way leaves `classifier` held alone.
+	const STEWARD: Entry = {
+		value: 'classifier+describer',
+		name: 'classifier + describer',
+		label: 'classifier + describer — may label it and see it, reads no data',
+		rungs: ['describer', 'classifier'],
 	};
+	// The catalog's model defines `classifier` on these object types and not on a project.
+	const CLASSIFIER_KINDS: ReadonlySet<string> = new Set(['warehouse', 'namespace', 'table']);
+	const GRANT_AXIS: readonly Entry[] = [
+		rung('pass_grants', 'pass_grants — may re-grant what they hold'),
+		rung('manage_grants', 'manage_grants — may grant anything, reads nothing'),
+	];
+	const entries = $derived(
+		CLASSIFIER_KINDS.has(kind) ? [...LADDER, STEWARD, ...GRANT_AXIS] : [...LADDER, ...GRANT_AXIS],
+	);
 
 	let relation = $state('');
 	let busy = $state(false);
 	let result = $state<{ tone: 'ok' | 'fail'; text: string } | null>(null);
+	const selected = $derived(entries.find((e) => e.value === relation));
 
-	// #143 verdicts, per BUTTON, because the gates genuinely differ: grant is `can_grant_<rung>`,
-	// revoke is `can_revoke_grant` (= `manage_grants` alone, deliberately stricter so a delegate cannot
-	// strip the owner who delegated to them). Conflating the two is the bug the denial message carried.
-	const mayGrant = $derived(
-		permissions == null || !relation ? true : permissions[`can_grant_${relation}`] === true,
+	// #143 verdicts, per BUTTON, because the gates genuinely differ: grant is `can_grant_<rung>` for
+	// EVERY rung the entry grants, revoke is `can_revoke_grant` (= `manage_grants` alone, deliberately
+	// stricter so a delegate cannot strip the owner who delegated to them). Conflating the two is the
+	// bug the denial message carried.
+	const missing = $derived(
+		permissions == null || !selected
+			? []
+			: selected.rungs.filter((r) => permissions[`can_grant_${r}`] !== true),
 	);
+	const mayGrant = $derived(missing.length === 0);
 	const mayRevoke = $derived(permissions == null ? true : permissions.can_revoke_grant === true);
 
-	const grantReason = $derived(
-		`Granting ${relation || 'a rung'} here needs can_grant_${relation || '<rung>'} on this ${kind} — held by a grant-manager, or by someone holding ${relation || 'that rung'} plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`,
-	);
+	const grantNeeds = (r: string): string =>
+		`Granting ${r || 'a rung'} here needs can_grant_${r || '<rung>'} on this ${kind} — held by a grant-manager, or by someone holding ${r || 'that rung'} plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`;
+	const gates = (rungs: readonly string[]): string =>
+		rungs.map((r) => `can_grant_${r}`).join(' and ');
+	const grantReason = $derived.by(() => {
+		if (!selected || selected.rungs.length === 1) return grantNeeds(selected?.rungs[0] ?? '');
+		const lacking = missing.length
+			? `; ${gates(missing)} ${missing.length === 1 ? 'is' : 'are'} missing`
+			: '';
+		return `Granting ${selected.name} here makes ${selected.rungs.length} grants and needs ${gates(selected.rungs)} on this ${kind}${lacking} — each held by a grant-manager, or by someone holding that rung plus the grant option. Owning the ${kind} is not sufficient if access is centrally managed.`;
+	});
 	const revokeReason = $derived(
 		`Revoking here needs can_revoke_grant on this ${kind} — grant-manager only, deliberately stricter than granting so a delegate cannot strip the owner who delegated to them.`,
 	);
@@ -79,35 +122,52 @@
 		return !(known.has(u) || known.has(`user:${u}`));
 	});
 
+	/** Why the catalog refused one rung's grant or revoke. */
+	function refusal(granting: boolean, r: string, res: { status: number; detail: string }): string {
+		// NAMES THE REAL GATE. Listing and probing access (`access/list`, `access/check`) ask
+		// `can_review_access`, the owner's and the grant manager's; grant and revoke ask the grant
+		// axis, which is separate from ownership. Under `managed_access` a refused caller may already
+		// HOLD the owner rung, because
+		// that flag withdraws precisely `manage_grants` and the grant option beneath it.
+		if (res.status === 401 || res.status === 403) return granting ? grantNeeds(r) : revokeReason;
+		// The catalog says which half it refused, the subject or the rung.
+		if (res.status === 400 || res.status === 422) return res.detail;
+		return `Failed (HTTP ${res.status}).`;
+	}
+
 	async function run(granting: boolean): Promise<void> {
 		const user = subject.trim();
-		if (busy || !user || !relation) return;
+		const entry = selected;
+		if (busy || !user || !entry) return;
 		busy = true;
 		result = null;
+		const did = granting ? 'granted to' : 'revoked from';
+		// One request per rung, in sequence, stopping at the first refusal. A revoke runs the entry's
+		// rungs backwards, so the steward's `classifier` goes before the `describer` it relies on.
+		const rungs = granting ? entry.rungs : [...entry.rungs].reverse();
+		const done: string[] = [];
+		let named = user;
 		try {
-			const res = granting ? await grant(user, relation) : await revoke(user, relation);
-			if (res.ok) {
-				result = {
-					tone: 'ok',
-					text: `${relation} ${granting ? 'granted to' : 'revoked from'} ${res.data.user}.`,
-				};
-				await onmutated?.();
-			} else if (res.status === 401 || res.status === 403) {
-				// NAMES THE REAL GATE. "Managing access needs the owner rung" is true of
-				// `access/list` and `access/check` (both still `can_drop`) and has NOT been true of
-				// grant/revoke since the grant axis was separated from ownership. Under `managed_access` a
-				// refused caller may already HOLD the owner rung, because that flag withdraws precisely
-				// `manage_grants` and the grant option beneath it.
-				result = {
-					tone: 'fail',
-					text: granting ? grantReason : revokeReason,
-				};
-			} else if (res.status === 400 || res.status === 422) {
-				// The catalog says which half it refused, the subject or the rung.
-				result = { tone: 'fail', text: res.detail };
-			} else {
-				result = { tone: 'fail', text: `Failed (HTTP ${res.status}).` };
+			for (const r of rungs) {
+				const res = granting ? await grant(user, r) : await revoke(user, r);
+				if (!res.ok) {
+					const why = refusal(granting, r, res);
+					// An entry of several rungs names the rung that failed, and any that went through.
+					const before = done.length ? `${done.join(', ')} ${did} ${named}; ` : '';
+					const text =
+						rungs.length === 1
+							? why
+							: `${before}${r} was not ${granting ? 'granted' : 'revoked'}: ${why}`;
+					result = { tone: 'fail', text };
+					break;
+				}
+				done.push(r);
+				named = res.data.user;
 			}
+			if (done.length === rungs.length) {
+				result = { tone: 'ok', text: `${entry.name} ${did} ${named}.` };
+			}
+			if (done.length) await onmutated?.();
 		} finally {
 			busy = false;
 		}
@@ -125,17 +185,21 @@
 		bind:value={relation}
 		ariaLabel="Grant rung"
 		placeholder="rung…"
-		options={GRANTABLE.map((r) => ({ value: r, label: RUNG_LABEL[r] ?? r }))}
+		options={entries.map((e) => ({ value: e.value, label: e.label }))}
 	/>
 	<!-- #143: a refused action stays VISIBLE and says why. `disabled` is conditional on the verdict
 	     because GatedAction deliberately avoids the native attribute — it would kill the tooltip and
 	     drop the control from the tab order — so a natively-disabled child defeats the mechanism.
 	     Form-validity disabling still applies in the ALLOWED case, where it is the only thing between
 	     the user and a pointless request. -->
-	<GatedAction allowed={mayGrant} action={`Grant ${relation || 'a rung'}`} reason={grantReason}>
+	<GatedAction
+		allowed={mayGrant}
+		action={`Grant ${selected?.name ?? 'a rung'}`}
+		reason={grantReason}
+	>
 		<button
 			class="btn"
-			disabled={mayGrant && (busy || !subject.trim() || !relation)}
+			disabled={mayGrant && (busy || !subject.trim() || !selected)}
 			onclick={() => run(true)}
 		>
 			{busy ? '…' : 'Grant'}
@@ -144,7 +208,7 @@
 	<GatedAction allowed={mayRevoke} action="Revoke" reason={revokeReason}>
 		<button
 			class="btn ghost"
-			disabled={mayRevoke && (busy || !subject.trim() || !relation)}
+			disabled={mayRevoke && (busy || !subject.trim() || !selected)}
 			onclick={() => run(false)}
 		>
 			Revoke

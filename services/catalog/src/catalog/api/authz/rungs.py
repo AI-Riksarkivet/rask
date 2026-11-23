@@ -5,9 +5,9 @@ The op -> ``can_*`` mapping here is the ONLY policy logic in the app; the privil
 (which rung each ``can_*`` reduces to, and how owner/writer/reader cascade through
 ``parent``) lives in the model (``lakehouse/governed/auth/model.fga``) — so it is testable in ``model.fga.yaml``. Mapping:
 
-  read ops   -> can_get_metadata / can_read_data        (reader rung)
+  read ops   -> can_get_metadata (describer rung) / can_read_data (reader rung)
   mutations  -> can_write_data / can_update_properties   (writer rung)
-  lifecycle  -> can_drop / can_deregister / can_delete   (owner rung)
+  lifecycle  -> can_drop / can_deregister / can_delete   (modifier rung, which an owner holds)
   create     -> can_create_table / can_create_namespace on the PARENT (create-on-parent)
   move       -> can_move on the table / can_accept_moved_table on the namespace it enters (grant authority)
   undeclared -> refused for every caller                 (no rung is a default)
@@ -84,7 +84,7 @@ FGA_TYPE: dict[str, str] = {
 
 #: The rungs that mean "this door only READS". Keyed on the relation `action_relation` resolved, so a
 #: door is classified by what it DOES rather than by how its path happens to be spelled — `access/list`
-#: is owner-tier and its trailing segment is the word "list".
+#: asks the access review's rung and its trailing segment is the word "list".
 READ_RELATIONS: Final = frozenset({"can_get_metadata", "can_read_data", "can_read", "can_get_protection"})
 
 
@@ -102,13 +102,14 @@ CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
 }
 
 
-# Full route suffixes that are lifecycle/destructive/ref-plane on the object itself (owner rung).
-# Matched on the FULL suffix so ``index/{index_name}/drop`` does not inherit ``drop``'s owner rung.
-# ``rename`` is owner-tier: it RETIRES the name every reader and pipeline addresses the table by, so it is the owner's
-# act on the source. Its grants stay on its uuid (ADR 0173 §8), which is why a rename into ANOTHER namespace asks
+# Full route suffixes that are lifecycle/destructive/ref-plane on the object itself: the modifier's rung, which an
+# owner holds through the ladder ([[LH-570]]); "owner bar" below names that rung.
+# Matched on the FULL suffix so ``index/{index_name}/drop`` does not inherit ``drop``'s rung.
+# ``rename`` is a lifecycle act: it RETIRES the name every reader and pipeline addresses the table by, so it asks the
+# drop's rung on the source. Its grants stay on its uuid (ADR 0173 §8), which is why a rename into ANOTHER namespace asks
 # :data:`_MOVE_RELATION` in this rung's place (:func:`rename_relation`).
 # ``restore`` REWINDS the table to an older version (destructive) and ``branches/create`` FORKS history;
-# both are privileged and stay at the owner rung. A table writer writes every branch of the table (ADR 0159 D3): a
+# both are privileged and stay at the lifecycle rung. A table writer writes every branch of the table (ADR 0159 D3): a
 # branch is a parameter of a table operation, so ``insert``, ``merge_insert`` and a write vend naming one ask
 # ``can_write_data`` on the table as on main. ``tags/create`` / ``tags/update`` re-point the
 # ref-plane and are privileged too — above the writer rung, since moving a named pointer is no data
@@ -159,13 +160,13 @@ OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # the reader tier via its trailing segment.
         "policy/set": "can_drop",
         "policy/delete": "can_drop",
-        # #51 access review: enumerating who holds access reveals principals, so it clears the
-        # owner bar — a reader must not be able to map the ACL they are inside of.
-        "access/list": "can_drop",
+        # #51 access review: enumerating who holds access reveals principals, so it asks `can_review_access`, the
+        # owner's and the grant manager's ([[LH-570]]): a reader must not map the ACL they are inside of, and a
+        # modifier, who runs the table's lifecycle and grants nothing, must not either.
+        "access/list": "can_review_access",
         # #68 access simulation (the "who can do what" playground check): probing an arbitrary
-        # (user, relation) is the same authz-graph disclosure as enumerating it, so it clears the
-        # same owner bar.
-        "access/check": "can_drop",
+        # (user, relation) is the same authz-graph disclosure as enumerating it, so it asks the same rung.
+        "access/check": "can_review_access",
         # The SELF-view is the one access route that must NOT clear the owner bar. `access/list` and
         # `access/check` disclose principals; "what may I do here" discloses only the caller to
         # themselves. Owner-gating it would mean only the people who already know the answer could
@@ -179,8 +180,8 @@ OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # before `action_relation` is consulted — a mapping here would be dead code that
         # reads like the live rule.
         # #81 authorization graph: one hop of the relationship graph discloses principals + the cascade,
-        # the same disclosure as access/list — owner bar.
-        "access/graph": "can_drop",
+        # the same disclosure as access/list, and the same rung.
+        "access/graph": "can_review_access",
         # #75 on-demand maintenance: previewing and reclaiming version history are the drop rung, like the
         # retention policy that schedules them.
         "maintenance/preview": "can_drop",
@@ -234,8 +235,8 @@ OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         "labels/remove": "can_label",
         "policy/set": "can_delete",
         "policy/delete": "can_delete",
-        "access/list": "can_delete",
-        "access/check": "can_delete",
+        "access/list": "can_review_access",
+        "access/check": "can_review_access",
         # Same as the table block: grant/revoke are authorized on the rung their body names.
         # #C4 managed access. SUFFIX PER OPERATION (`policy/describe` vs `policy/set`, the convention
         # already here) — and not stylistic: this map is keyed on the PATH ALONE, so one `managed-access`
@@ -253,7 +254,7 @@ OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # The self-view sits at the READER bar here too — see the table block for why. Spelled out per type:
         # each type's map is its own, and a suffix it does not declare is refused.
         "access/my-permissions": "can_get_metadata",
-        "access/graph": "can_delete",
+        "access/graph": "can_review_access",
     },
 }
 

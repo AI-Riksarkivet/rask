@@ -6,6 +6,37 @@ One entry per change to `model.fga` that a store holding tuples has to know abou
 whether the change writes new tuples into a store. When both are `FALSE`, deploying the model is the whole migration:
 `write_model.py` writes it, and every tuple in the store keeps its name and is read by the new model as it stands.
 
+## 2026-11-23: a describer sees without reading, and a modifier runs the lifecycle without granting
+
+```text
+MODIFIES_TUPLES: FALSE
+ADDS_TUPLES:     FALSE
+```
+
+Row LH-570 (#790).
+
+- **Added:** two assignable rungs, each a stored relation and its `_effective` twin, on `warehouse`, `namespace` and
+  `table`: `modifier` and `describer`. The ladder is owner > modifier > writer > reader > describer. Both are also
+  assignable on `project`, where one grant covers every warehouse of the project. Their grant actions,
+  `can_grant_modifier` and `can_grant_describer`, follow the other rungs' on a warehouse, a namespace and a table
+  (`manage_grants`, or the rung held together with `pass_grants`); on a project they are the project `admin`'s.
+- **Added:** `table#can_review_access` and `namespace#can_review_access`, each `owner_effective or manage_grants`: the
+  verb the doors that list, probe and graph access ask. They asked `can_drop` and `can_delete`, which a modifier now
+  holds. Every owner still passes, inside a managed scope too; a modifier does not.
+- **Changed, seeing:** `can_get_metadata` reads `describer_effective` (it read `reader_effective`), and
+  `visible_below` counts a stored `modifier` or `describer`. Every reader, writer and owner still holds it, since each
+  rung holds the ones below. `can_be_notified` stays the reader's. A materialized view is seen by a describer of its
+  namespace.
+- **Changed, lifecycle:** on a table `can_drop`, `can_set_protection`, `can_get_protection`, `can_label`,
+  `can_set_contract`, `can_deregister`, `can_create_branch`, `can_restore`, and beside a tagger `can_create_tag` and
+  `can_update_tag`, read `modifier_effective` (they read `owner_effective`); on a namespace `can_delete`,
+  `can_set_protection`, `can_get_protection` and `can_label` do. `maintainer_effective` holds a modifier where it held
+  an owner, and `writer_effective` holds a modifier. Every owner still holds each, through the ladder.
+- **Unchanged:** `manage_grants`, `pass_grants`, `can_revoke_grant`, `can_read_assignments`, `can_move` (grant
+  authority and the drop's rung together) and `can_classify`. A modifier hands out nothing and does not see who holds
+  what; `classifier` and `tagger` do not include seeing the object.
+- **A store's tuples:** none is rewritten or added. An existing grant keeps its meaning and gains nothing.
+
 ## 2026-11-16: reading an object's deletion protection has its own verb
 
 ```text

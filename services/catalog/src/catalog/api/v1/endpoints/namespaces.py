@@ -372,8 +372,7 @@ async def list_namespaces(
 
     So: the ROUTE still opens (narrowing it to 403 would restore the broken breadcrumb C1 fixed) and
     each ITEM is checked on the object itself, on ``can_get_metadata`` — the relation that governs
-    seeing a namespace, where the table listing filters on ``can_read_data`` because reading a table's
-    NAME and reading its ROWS are the same disclosure there.
+    seeing a namespace, as it governs seeing a table in the table listing ([[LH-570]]).
 
     Pagination is applied AFTER the filter for the reason ``list_tables`` records: a backend ``limit``
     truncates first, so a page could answer short and hand out a cursor that skips everything the
@@ -1040,8 +1039,8 @@ async def list_tables(
     page_token: str | None = None,
     include_declared: bool = True,
 ) -> ListTablesResponse:
-    """List the tables under namespace ``id``; when FGA is on, filtered to what the caller can
-    ``can_read_data``. ``include_declared=false`` lists only the tables that hold a committed version, each judged by
+    """List the tables under namespace ``id``; when FGA is on, filtered to what the caller may see
+    (``can_get_metadata``). ``include_declared=false`` lists only the tables that hold a committed version, each judged by
     its own storage (:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).
 
     **WHY THIS FILTERS AT ALL — the route's gate stopped implying its contents.** The router mounts
@@ -1070,13 +1069,13 @@ async def list_tables(
     candidates = [(name, [*segments, name]) for name in names]
     if not include_declared:
         candidates = await listings.holding_a_version(resolver, so, candidates)
-    # With FGA on, keep only the tables the caller may actually read, each judged on the object its name resolves to
-    # ([[LH-223]], [[LH-524]]).
+    # With FGA on, keep only the tables the caller may see (`can_get_metadata`, the describer's rung, [[LH-570]]), each
+    # judged on the object its name resolves to ([[LH-223]], [[LH-524]]).
     if (authz := decisions.authorization(context)) is not None:
         response.tables, response.page_token = await visible_pages.authorized_page(
             authz,
             resolver,
-            relation="can_read_data",
+            relation="can_get_metadata",
             kind="table",
             candidates=candidates,
             page_token=page_token,

@@ -492,6 +492,16 @@ _CONDITIONAL_GRANT_RUNGS: frozenset[tuple[str, str]] = frozenset(
         ("namespace", "writer"),
         ("table", "reader"),
         ("table", "writer"),
+        # [[LH-570]] The lifecycle rung and the seeing rung are data rungs: neither is grant authority, so a lapsed
+        # one leaves no permanent grant behind it.
+        ("project", "modifier"),
+        ("project", "describer"),
+        ("warehouse", "modifier"),
+        ("warehouse", "describer"),
+        ("namespace", "modifier"),
+        ("namespace", "describer"),
+        ("table", "modifier"),
+        ("table", "describer"),
         ("materialized_view", "reader"),
         ("materialized_view", "refresher"),
         ("warehouse", "maintainer"),

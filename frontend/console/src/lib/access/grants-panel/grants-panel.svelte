@@ -162,7 +162,7 @@
 				};
 				simFor = current;
 			} else if (res.status === 401 || res.status === 403) {
-				simError = `Simulating access needs the owner rung on this ${kind}.`;
+				simError = `Simulating access needs the modifier rung on this ${kind}.`;
 			} else {
 				simError = `Check failed (HTTP ${res.status}).`;
 			}

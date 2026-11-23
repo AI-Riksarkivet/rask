@@ -186,7 +186,7 @@ async def list_all_tables(
     page_token: str | None = None,
     include_declared: bool = True,
 ) -> ListTablesResponse:
-    """List every table of every warehouse; when FGA is on, only those the caller can ``can_read_data``.
+    """List every table of every warehouse; when FGA is on, only those the caller may see (``can_get_metadata``).
 
     ``include_declared=false`` lists only the tables that hold a committed version, each judged by its own storage
     (:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).
@@ -200,13 +200,13 @@ async def list_all_tables(
     candidates = [(name, parse_identifier(name)) for name in sorted(await _tables_of_every_warehouse(request, context.settings))]
     if not include_declared:
         candidates = await listings.holding_a_version(resolver, so, candidates)
-    # With FGA on, return only the tables the caller can read, each judged on the object its name resolves to; pages
-    # count only tables the caller can see.
+    # With FGA on, return only the tables the caller may see (`can_get_metadata`, the describer's rung, [[LH-570]]),
+    # each judged on the object its name resolves to; pages count only those.
     if (authz := decisions.authorization(context)) is not None:
         response.tables, response.page_token = await visible_pages.authorized_page(
             authz,
             resolver,
-            relation="can_read_data",
+            relation="can_get_metadata",
             kind="table",
             candidates=candidates,
             page_token=page_token,
@@ -1510,7 +1510,7 @@ async def rename_table(
     ``tables.rename.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one
     shape (a V1 root-namespace table) it refuses.
 
-    Within its namespace the caller must hold ``can_drop`` on the source (owner tier, gated by the router
+    Within its namespace the caller must hold ``can_drop`` on the source (the modifier's rung, gated by the router
     ``authorize``) AND ``can_create_table`` on that namespace. The table keeps its uuid, so every record and every grant
     kept for it stays where it is ([[LH-523]], [[LH-524]]), and a rename into ANOTHER namespace therefore takes its grants
     along: it asks ``can_move`` on the source and ``can_accept_moved_table`` on the destination's namespace instead,

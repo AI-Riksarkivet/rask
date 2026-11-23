@@ -208,7 +208,7 @@ test('a 403 policy write surfaces the owner-rung denial on the card', async ({ p
 	await page.getByRole('button', { name: 'Edit', exact: true }).click();
 	await page.getByRole('button', { name: 'Save policy' }).click();
 	await expect(
-		page.getByText('Denied: policy changes need the owner rung (can_delete).'),
+		page.getByText('Denied: policy changes need the modifier rung (can_delete).'),
 	).toBeVisible();
 });
 
@@ -246,7 +246,7 @@ test('a caller who may only SEE the namespace gets no policy actions, and is tol
 	// The page still RENDERS — visibility is the point of the child edge.
 	await expect(page.getByRole('heading', { name: 'gold', exact: true })).toBeVisible();
 	// …and it names the missing rung rather than going silent, which would read as a broken page.
-	await expect(page.getByText('Changing this policy needs the owner rung')).toBeVisible({
+	await expect(page.getByText('Changing this policy needs the modifier rung')).toBeVisible({
 		timeout: 15_000,
 	});
 	// The policy's actions are VISIBLE and REFUSED, not absent (#143): a namespace that holds a policy
@@ -283,6 +283,49 @@ test('the grant picker offers the grant-axis rungs, labelled for what they do', 
 	await expect(
 		page.getByRole('option', { name: /pass_grants — may re-grant what they hold/ }),
 	).toBeVisible();
+	// The two levels either side of the data rungs say what they allow, as the grant axis does.
+	await expect(
+		page.getByRole('option', { name: 'describer — may see it, reads no data', exact: true }),
+	).toBeVisible();
+	await expect(
+		page.getByRole('option', {
+			name: 'modifier — may change and retire it, grants nothing',
+			exact: true,
+		}),
+	).toBeVisible();
+
+	// A steward: `classifier` alone does not see the object, so the picker offers it with `describer`
+	// as ONE entry, and granting it sends both rungs, `describer` first.
+	await seed(page, {
+		'POST /management/v1/namespace/gold/access/my-permissions': {
+			...MY_PERMISSIONS,
+			permissions: {
+				...MY_PERMISSIONS.permissions,
+				can_grant_classifier: true,
+				can_grant_describer: true,
+			},
+		},
+	});
+	await page.reload();
+	await page.getByRole('tab', { name: 'access' }).click();
+	await page.getByRole('button', { name: 'Access review' }).click();
+	await page.getByPlaceholder('principal (idp~user id), or role:…#assignee').last().fill('bob');
+	await page.getByLabel('Grant rung').click();
+	await page
+		.getByRole('option', {
+			name: 'classifier + describer — may label it and see it, reads no data',
+			exact: true,
+		})
+		.click();
+	await page.getByRole('button', { name: 'Grant', exact: true }).click();
+	await expect(page.locator('.verdict.ok')).toContainText('classifier + describer granted to');
+	const grants = (await calls(page)).filter(
+		(c) => c.path === '/management/v1/namespace/gold/access/grant',
+	);
+	expect(grants.map((c) => c.body)).toEqual([
+		{ user: 'bob', relation: 'describer' },
+		{ user: 'bob', relation: 'classifier' },
+	]);
 });
 
 // MANAGED ACCESS (C4). The flag is the REASON an owner's grant controls are absent, so the page has

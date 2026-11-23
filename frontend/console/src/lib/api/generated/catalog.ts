@@ -707,7 +707,7 @@ export interface paths {
         put?: never;
         /**
          * Check Namespace Access
-         * @description Simulate 'does <user> hold <relation> on this namespace?' — owner-gated (``can_delete``).
+         * @description Simulate 'does <user> hold <relation> on this namespace?' — the router asks ``can_review_access``.
          */
         post: operations["check_namespace_access_management_v1_namespace__id__access_check_post"];
         delete?: never;
@@ -747,7 +747,7 @@ export interface paths {
         put?: never;
         /**
          * Graph Namespace Access
-         * @description One hop of the authorization graph around the namespace — owner-gated (``can_delete``).
+         * @description One hop of the authorization graph around the namespace — the router asks ``can_review_access``.
          */
         post: operations["graph_namespace_access_management_v1_namespace__id__access_graph_post"];
         delete?: never;
@@ -767,8 +767,7 @@ export interface paths {
         put?: never;
         /**
          * List Namespace Access
-         * @description Effective access on the namespace, per ``can_*`` action — owner-gated by the router
-         *     (``can_delete``).
+         * @description Effective access on the namespace, per ``can_*`` action — the router asks ``can_review_access``.
          */
         post: operations["list_namespace_access_management_v1_namespace__id__access_list_post"];
         delete?: never;
@@ -1193,8 +1192,9 @@ export interface paths {
          * Grant Project Access
          * @description Grant a rung on the project to a subject, gated by :func:`require_project_grant` ([[LH-563]]).
          *
-         *     The rung is ``decider``: a service's own identity may then ask the decision door about the project's objects, and
-         *     nothing beyond them. Who belongs to the project is the members door's.
+         *     The rung is ``decider`` (a service's own identity may then ask the decision door about the project's objects, and
+         *     nothing beyond them), or one of the project's two data rungs, ``modifier`` and ``describer``, which reach every
+         *     warehouse of the project ([[LH-570]]). Who belongs to the project is the members door's.
          */
         post: operations["grant_project_access_management_v1_projects__id__access_grant_post"];
         delete?: never;
@@ -1631,7 +1631,7 @@ export interface paths {
         put?: never;
         /**
          * Check Table Access
-         * @description Simulate 'does <user> hold <relation> on this table?' — owner-gated by the router (``can_drop``).
+         * @description Simulate 'does <user> hold <relation> on this table?' — the router asks ``can_review_access``.
          */
         post: operations["check_table_access_management_v1_table__id__access_check_post"];
         delete?: never;
@@ -1674,7 +1674,7 @@ export interface paths {
         put?: never;
         /**
          * Graph Table Access
-         * @description One hop of the authorization graph around the table — owner-gated by the router (``can_drop``).
+         * @description One hop of the authorization graph around the table — the router asks ``can_review_access``.
          */
         post: operations["graph_table_access_management_v1_table__id__access_graph_post"];
         delete?: never;
@@ -1694,7 +1694,7 @@ export interface paths {
         put?: never;
         /**
          * List Table Access
-         * @description Effective access on the table, per ``can_*`` action — owner-gated by the router (``can_drop``).
+         * @description Effective access on the table, per ``can_*`` action — the router asks ``can_review_access``, the owner's and the grant manager's.
          */
         post: operations["list_table_access_management_v1_table__id__access_list_post"];
         delete?: never;
@@ -2028,9 +2028,10 @@ export interface paths {
          *     number. Two sources, each authoritative for its own half — a third that merged them would just be a copy
          *     of one of them, free to drift.
          *
-         *     Reader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is
-         *     metadata about the data, and it leaks real information (predicates name values, field names name
-         *     columns), so it is gated exactly like the schema is rather than being treated as public.
+         *     The describer's: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is
+         *     metadata about the data, so it is gated exactly like the schema is rather than being treated as public. One field
+         *     of it is data: a delete's or an update's ``predicate`` names row values, so a row carries it only for a caller who
+         *     may read the table's rows (``can_read_data``, [[LH-570]]).
          *
          *     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``read_actions.META_READ_ACTIONS`` to get it:
          *     ``authorize`` is a router-wide dependency, so an unnamed suffix is refused for every caller and no reader
@@ -3049,8 +3050,7 @@ export interface paths {
          *
          *     So: the ROUTE still opens (narrowing it to 403 would restore the broken breadcrumb C1 fixed) and
          *     each ITEM is checked on the object itself, on ``can_get_metadata`` — the relation that governs
-         *     seeing a namespace, where the table listing filters on ``can_read_data`` because reading a table's
-         *     NAME and reading its ROWS are the same disclosure there.
+         *     seeing a namespace, as it governs seeing a table in the table listing ([[LH-570]]).
          *
          *     Pagination is applied AFTER the filter for the reason ``list_tables`` records: a backend ``limit``
          *     truncates first, so a page could answer short and hand out a cursor that skips everything the
@@ -3074,8 +3074,8 @@ export interface paths {
         };
         /**
          * List Tables
-         * @description List the tables under namespace ``id``; when FGA is on, filtered to what the caller can
-         *     ``can_read_data``. ``include_declared=false`` lists only the tables that hold a committed version, each judged by
+         * @description List the tables under namespace ``id``; when FGA is on, filtered to what the caller may see
+         *     (``can_get_metadata``). ``include_declared=false`` lists only the tables that hold a committed version, each judged by
          *     its own storage (:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).
          *
          *     **WHY THIS FILTERS AT ALL — the route's gate stopped implying its contents.** The router mounts
@@ -3117,7 +3117,7 @@ export interface paths {
         };
         /**
          * List All Tables
-         * @description List every table of every warehouse; when FGA is on, only those the caller can ``can_read_data``.
+         * @description List every table of every warehouse; when FGA is on, only those the caller may see (``can_get_metadata``).
          *
          *     ``include_declared=false`` lists only the tables that hold a committed version, each judged by its own storage
          *     (:func:`catalog.api.listings.holding_a_version`, [[LH-528]]).
@@ -3895,7 +3895,7 @@ export interface paths {
          *     ``tables.rename.rename_table`` for the lance-ns V2 naming rule that makes this correct and for the one
          *     shape (a V1 root-namespace table) it refuses.
          *
-         *     Within its namespace the caller must hold ``can_drop`` on the source (owner tier, gated by the router
+         *     Within its namespace the caller must hold ``can_drop`` on the source (the modifier's rung, gated by the router
          *     ``authorize``) AND ``can_create_table`` on that namespace. The table keeps its uuid, so every record and every grant
          *     kept for it stays where it is ([[LH-523]], [[LH-524]]), and a rename into ANOTHER namespace therefore takes its grants
          *     along: it asks ``can_move`` on the source and ``can_accept_moved_table`` on the destination's namespace instead,

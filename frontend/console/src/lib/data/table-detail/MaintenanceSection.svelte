@@ -58,7 +58,8 @@
 
 	function policyFail(status: number, detailText: string): void {
 		if (status === 401) policyError = 'Sign in to edit the maintenance policy.';
-		else if (status === 403) policyError = 'Denied: policy changes need the owner rung (can_drop).';
+		else if (status === 403)
+			policyError = 'Denied: policy changes need the modifier rung (can_drop).';
 		else policyError = detailText;
 	}
 
@@ -105,7 +106,7 @@
 
 	function gcFail(status: number, detail: string): void {
 		if (status === 401) gcError = 'Sign in to run garbage collection.';
-		else if (status === 403) gcError = 'Denied: GC needs the owner rung (can_drop).';
+		else if (status === 403) gcError = 'Denied: GC needs the modifier rung (can_drop).';
 		else if (status === 422) gcError = 'Set a retention-days and/or keep-last bound first.';
 		else gcError = detail;
 	}

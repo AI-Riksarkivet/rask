@@ -274,7 +274,7 @@
 			} else if (res.status === 401) {
 				restoreError = 'Sign in to restore a version.';
 			} else if (res.status === 403) {
-				restoreError = 'Denied: restoring a version needs the owner rung (can_restore).';
+				restoreError = 'Denied: restoring a version needs the modifier rung (can_restore).';
 			} else {
 				restoreError = res.detail;
 			}

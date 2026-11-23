@@ -188,7 +188,10 @@
 		if (status === 401)
 			banner = { tone: 'fail', text: 'Sign in — dropping a namespace is a per-user action.' };
 		else if (status === 403)
-			banner = { tone: 'fail', text: `Denied: dropping ${ns} needs the owner rung (can_delete).` };
+			banner = {
+				tone: 'fail',
+				text: `Denied: dropping ${ns} needs the modifier rung (can_delete).`,
+			};
 		else if (status === 0)
 			banner = { tone: 'fail', text: 'Catalog unreachable — the drop was not applied.' };
 		else banner = { tone: 'fail', text: detail };

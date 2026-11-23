@@ -194,7 +194,7 @@ def test_a_write_naming_a_table_by_a_name_another_rename_took_is_authorized_on_t
     Measured on LH-522's read-back (rev 1), the door refused such an event `can_get_metadata required on inputs: <ns>$t`."""
     event = _event(inputs=[_dataset("bronze$renamed_since", _SOURCE)], rask_author={"name": "pipeline", "sub": "dex~pipeline"})
     store.write((user_object("dex~pipeline"), "writer", f"table:{_PAGES}"))
-    with pytest.raises(PermissionDeniedError, match=r"can_get_metadata required on inputs: bronze\$renamed_since"):
+    with pytest.raises(PermissionDeniedError, match=r"can_read_data required on inputs: bronze\$renamed_since"):
         _gate(store, event, None, event.model_dump(by_alias=True))
 
     store.write((user_object("dex~pipeline"), "reader", f"table:{_SOURCE}"))

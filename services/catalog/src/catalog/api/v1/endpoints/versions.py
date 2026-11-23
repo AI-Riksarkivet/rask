@@ -32,7 +32,7 @@ from lance_namespace import (
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.api import lineage_deps
-from catalog.api.authz import door_gates, write_doors
+from catalog.api.authz import decisions, door_gates, write_doors
 from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.dependencies import (
     DoorTableDep,
@@ -108,9 +108,10 @@ async def table_history(
     number. Two sources, each authoritative for its own half — a third that merged them would just be a copy
     of one of them, free to drift.
 
-    Reader-tier: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is
-    metadata about the data, and it leaks real information (predicates name values, field names name
-    columns), so it is gated exactly like the schema is rather than being treated as public.
+    The describer's: ``can_get_metadata`` on the table, the same rung as describe/list-versions. A commit log is
+    metadata about the data, so it is gated exactly like the schema is rather than being treated as public. One field
+    of it is data: a delete's or an update's ``predicate`` names row values, so a row carries it only for a caller who
+    may read the table's rows (``can_read_data``, [[LH-570]]).
 
     THE RUNG IS THE ROUTER'S, and this route has to be NAMED in ``read_actions.META_READ_ACTIONS`` to get it:
     ``authorize`` is a router-wide dependency, so an unnamed suffix is refused for every caller and no reader
@@ -121,6 +122,11 @@ async def table_history(
     into 10k object-store round trips.
     """
     rows = await run_in_threadpool(versions.table_history, table, so, limit)
+    if client is not None and token is not None and (uuid := table.resolved.uuid) is not None:
+        reads = await decisions.check_recording_outage(client, user=token.subject, relation="can_read_data", obj=fga_ids.table_object(uuid))
+        if not reads:
+            for row in rows:
+                row.pop("predicate", None)
     return {"table": id, "versions": rows}
 
 

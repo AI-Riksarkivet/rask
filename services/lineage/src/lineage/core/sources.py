@@ -14,7 +14,7 @@ def is_external_source(namespace: str, name: str) -> bool:
     therefore no tuple that could ever be written for it. Authorizing those inputs the same way as
     governed ones is not strict — it is unsatisfiable, and it refused every such producer permanently:
 
-        403 "can_get_metadata required on inputs: bind86-src/run1"
+        403 "can_read_data required on inputs: bind86-src/run1"
 
     on the ingest plane's START event, whose input is the S3 prefix the run reads. The run landed its
     data, the terminal event was authorized fine, and the run was never recorded as opened. Ten

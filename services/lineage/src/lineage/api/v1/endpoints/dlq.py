@@ -10,7 +10,7 @@ them replay one on demand instead of waiting for the next reconcile tick.
 
 Authz mirrors ingest exactly, because a replay IS a re-ingest: the view is filtered per-dataset (you see only
 events whose datasets you may read — :func:`governed`), and a replay requires ``can_write_data`` on the
-event's outputs + ``can_get_metadata`` on its inputs (:func:`enforce_output_authz`). Both are no-ops when FGA
+event's outputs + ``can_read_data`` on its inputs (:func:`enforce_output_authz`). Both are no-ops when FGA
 is off (dev/tests). Every replay is audited on the ``lance.audit`` trail (#41).
 
 A STAGED EVENT IS SCOPED AS THE CALLER, NOW ([[LH-598]]). No door has admitted it yet, so nothing recorded which
@@ -152,7 +152,7 @@ async def replay_dlq(
 
     A replay IS a re-ingest, so it carries the SAME authz as a fresh ingest, twice over: the relay's gate on
     the staged bytes (:func:`enforce_bus_authz` — signature and stamped author) and the ingest door's on the
-    operator (:func:`enforce_output_authz` — ``can_write_data`` on the outputs, ``can_get_metadata`` on the
+    operator (:func:`enforce_output_authz` — ``can_write_data`` on the outputs, ``can_read_data`` on the
     inputs, fail-closed). The record is idempotent: every feed row and edge is written under its key. The
     staged bytes are re-published
     to the lineage topic exactly as the relay re-publishes them, so subscribers hear of the event as well as

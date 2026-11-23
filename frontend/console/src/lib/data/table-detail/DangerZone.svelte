@@ -42,8 +42,8 @@
 		else if (status === 403)
 			dangerError =
 				action === 'deregister'
-					? 'Denied: deregistering needs the owner rung (can_deregister).'
-					: `Denied: ${action} needs the owner rung (can_drop).`;
+					? 'Denied: deregistering needs the modifier rung (can_deregister).'
+					: `Denied: ${action} needs the modifier rung (can_drop).`;
 		else if (status === 0) dangerError = `Catalog unreachable — the ${action} was not applied.`;
 		else dangerError = detail;
 	}

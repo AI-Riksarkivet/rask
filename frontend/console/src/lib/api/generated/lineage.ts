@@ -100,7 +100,7 @@ export interface paths {
          *
          *     A replay IS a re-ingest, so it carries the SAME authz as a fresh ingest, twice over: the relay's gate on
          *     the staged bytes (:func:`enforce_bus_authz` — signature and stamped author) and the ingest door's on the
-         *     operator (:func:`enforce_output_authz` — ``can_write_data`` on the outputs, ``can_get_metadata`` on the
+         *     operator (:func:`enforce_output_authz` — ``can_write_data`` on the outputs, ``can_read_data`` on the
          *     inputs, fail-closed). The record is idempotent: every feed row and edge is written under its key. The
          *     staged bytes are re-published
          *     to the lineage topic exactly as the relay re-publishes them, so subscribers hear of the event as well as

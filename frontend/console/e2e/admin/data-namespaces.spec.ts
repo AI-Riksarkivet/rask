@@ -210,7 +210,7 @@ test('cancelling the confirm never posts the drop', async ({ page }) => {
 });
 
 test('a 403 drop surfaces the forbidden state and keeps the namespace listed', async ({ page }) => {
-	// Deny the drop like the catalog's FGA gate (the owner rung's can_delete) does for a non-owner.
+	// Deny the drop like the catalog's FGA gate (the modifier rung's can_delete) does for a non-owner.
 	await seed(page, {
 		'POST /v1/namespace/acme-wh%24gold/drop': { status: 403, body: { detail: 'forbidden' } },
 	});
@@ -218,7 +218,7 @@ test('a 403 drop surfaces the forbidden state and keeps the namespace listed', a
 	await page.getByRole('button', { name: 'Drop namespace acme-wh$gold', exact: true }).click();
 	await page.getByRole('alertdialog').getByRole('button', { name: 'Drop', exact: true }).click();
 	await expect(page.locator('.banner.fail')).toContainText(
-		'Denied: dropping acme-wh$gold needs the owner rung (can_delete).',
+		'Denied: dropping acme-wh$gold needs the modifier rung (can_delete).',
 	);
 	await expect(nsLink(page, 'acme-wh$gold')).toBeVisible();
 });

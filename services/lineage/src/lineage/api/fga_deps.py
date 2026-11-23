@@ -622,8 +622,9 @@ async def enforce_output_authz(
     a producer cannot record provenance for a table it has no ``can_write_data`` on (the same write
     permission the catalog requires to mutate that table). No-op when FGA is off. Fail-closed BEFORE any
     empty-set short-circuit: unwired client → 503, unauthenticated → 401, any non-writable output → 403.
-    GOVERNED inputs are also authorized (``can_get_metadata``): you may only record READING a dataset you
-    can see, so an authenticated reader can't forge READ-edge provenance for datasets outside its reach.
+    GOVERNED inputs are also authorized (``can_read_data``, the rung the catalog asks of a commit's inputs): you may
+    only record READING a dataset you may read, so a caller who merely sees a table ([[LH-570]]) cannot forge
+    READ-edge provenance from it.
     External sources are exempt and :func:`is_external_source` says why — they are unauthorizable by
     construction, and requiring a tuple for one refused every honest producer of a raw ingest.
 
@@ -674,8 +675,8 @@ async def enforce_output_authz(
     if read.objects and not attested:
         hidden |= await _unseen_inputs(decider, subject=token.subject, read=read, sources=sources, read_as=read_as)
     if hidden:
-        _denied("ingest_input_denied", subject=token.subject, relation="can_get_metadata", resources=sorted(hidden))
-        raise PermissionDeniedError(f"can_get_metadata required on inputs: {', '.join(sorted(hidden))}")
+        _denied("ingest_input_denied", subject=token.subject, relation="can_read_data", resources=sorted(hidden))
+        raise PermissionDeniedError(f"can_read_data required on inputs: {', '.join(sorted(hidden))}")
     return written.tables | read_as.tables
 
 
@@ -743,7 +744,7 @@ def _governed_inputs(event: RunEvent | DatasetEvent, read_as: Aliases) -> Govern
     #
     # The column upstreams join the INPUT set rather than getting a check of their own: recording
     # "my column came from yours" is a claim to have READ your column, which is exactly what
-    # `can_get_metadata` on the input side already governs. Same exemption too — an external upstream
+    # `can_read_data` on the input side already governs. Same exemption too — an external upstream
     # has no `table:` object, and (since `lineage_name`) cannot be recorded as a governed table either. A column
     # upstream is the table a dataset of the event by that name is.
     read = governed_refs(event.inputs, column_upstreams=upstreams_named_as_tables([*event.inputs, *event.outputs]))
@@ -751,8 +752,8 @@ def _governed_inputs(event: RunEvent | DatasetEvent, read_as: Aliases) -> Govern
 
 
 async def _unseen_inputs(decider: AccessDecider, *, subject: str, read: Governed, sources: list[Dataset], read_as: Aliases) -> set[str]:
-    """The names of the tables in ``read`` that ``subject`` may not see, as ``sources`` name them."""
-    seen = await decider.batch_check(user=subject, relation="can_get_metadata", objects=sorted(read.objects))
+    """The names of the tables in ``read`` that ``subject`` may not read, as ``sources`` name them."""
+    seen = await decider.batch_check(user=subject, relation="can_read_data", objects=sorted(read.objects))
     return set(_names_of(sources, [obj for obj in read.objects if not seen.get(obj)], read_as))
 
 

@@ -110,12 +110,27 @@ def test_grantable_relations_are_the_base_rungs_only() -> None:
     ``ReserveFragments`` and a ``Rewrite`` only from a maintainer, and a job's own identity is never an owner
     (LH-433), so without this entry no job could ever compact.
 
+    ``modifier`` and ``describer`` are the ladder's lifecycle and seeing rungs ([[LH-570]]), grantable wherever a data
+    rung is.
+
     ``apply`` is absent from the answer below and present in the tuple, which is the mechanism
     working: ``_grantable_relations`` intersects with what the TYPE defines, and neither table nor
     namespace defines it. It is a rung of ``classification`` alone.
     """
     for t in ("table", "namespace"):
-        assert access._grantable_relations(t) == ("owner", "writer", "reader", "maintainer", "manage_grants", "pass_grants", "classifier")
+        assert access._grantable_relations(t) == (
+            "owner",
+            "modifier",
+            "writer",
+            "reader",
+            "describer",
+            "maintainer",
+            "manage_grants",
+            "pass_grants",
+            "classifier",
+        )
+    # A project gives the two rungs that cover every warehouse of it ([[LH-570]]), beside the asking.
+    assert access._grantable_relations("project") == ("modifier", "describer", "decider")
     assert access._grantable_relations("classification") == ("pass_grants", "apply")
 
 

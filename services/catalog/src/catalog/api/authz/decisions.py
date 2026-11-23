@@ -290,10 +290,11 @@ async def refused_read_as_absent(
     * THE CALLER MUST SEE ABOVE THE NAME: ``can_get_metadata`` on a namespace standing above it, at any depth, or on an
       object a recoverable drop trashed at the name or an ancestor's (below). Without that the answer is today's 403, so
       this cannot be used to walk the id space from outside the hierarchy.
-    * WHETHER THE NAME HOLDS AN OBJECT IS NEVER ASKED ([[LH-236]]). On a table and a namespace every read rung is the
-      caller's sight of the object (a table's ``can_read_data`` is ``reader``, as its ``can_get_metadata`` is, and a
-      namespace's read doors all ask ``can_get_metadata``), so a refused read names an object the caller cannot see,
-      and what it is told must not depend on whether that object exists. Seeing a namespace is not seeing its children:
+    * WHETHER THE NAME HOLDS AN OBJECT IS NEVER ASKED OF A CALLER WHO CANNOT SEE IT ([[LH-236]]). A refused
+      ``can_get_metadata`` names an object the caller cannot see, and what it is told must not depend on whether that
+      object exists. A table's data doors ask more than its sight (``can_read_data`` is the reader's, ``can_get_metadata``
+      the describer's, [[LH-570]]): a caller refused the data of a table it sees is told the refusal, since the absence
+      would deny what its own listing shows it. Seeing a namespace is not seeing its children:
       the model grants ``can_get_metadata`` on a namespace upward from any one child, and a listing shows each child
       only to a caller who holds it. An absence converted alone would answer 404 for a ghost and 403 for a hidden
       sibling, and so name every object the listing hides.
@@ -317,6 +318,12 @@ async def refused_read_as_absent(
     if denied not in READ_RELATIONS or fga_type not in UUID_KEYED:
         return
     try:
+        if (
+            denied != "can_get_metadata"
+            and (seen := await resolver.object(fga_type, segments)) is not None
+            and await _reads_any(client, user=token.subject, objects=[seen])
+        ):
+            return
         # The trash is listed only when no standing ancestor admits the caller: it is one read of every record.
         if not await _reads_any(client, user=token.subject, objects=await standing_ancestors(resolver, segments)) and not await _reads_any(
             client, user=token.subject, objects=await trashed_at_or_above(resolver, fga_type, segments)
