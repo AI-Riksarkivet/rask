@@ -37,6 +37,7 @@ from lance_namespace import (
 from unfiled_announcer import unfiled
 
 from catalog.api.authz.context import AuthzContext
+from catalog.api.authz.hierarchy import ContainerHoldsError
 from catalog.api.idempotency import KeyedDoor
 from catalog.core.config import Settings
 from catalog.services import warehouses
@@ -198,6 +199,9 @@ def test_a_warehouse_that_still_holds_namespaces_refuses_and_names_every_one_of_
     message = str(exc.value)
     assert "acme-wh$bronze" in message and "acme-wh$silver" in message
     assert "cascade=true" in message
+    # The names ride the problem as a member a client parses, so no client reads them out of the sentence.
+    assert isinstance(exc.value, ContainerHoldsError)
+    assert exc.value.extensions == {"holds": ["acme-wh$bronze", "acme-wh$silver"]}
     assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-wh") is not None
     assert ns.dropped == []
 

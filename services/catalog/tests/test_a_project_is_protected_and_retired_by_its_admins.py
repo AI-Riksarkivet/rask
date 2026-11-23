@@ -47,6 +47,9 @@ ESTATE_ASKED = {
 #: What a refused request is answered: its status, media type, spec code (`lance_docs/ns_catalog/namespace/operations/errors.md`)
 #: and detail. A caller who may not administer acme is answered exactly what a missing project is.
 NOT_FOUND = (404, "application/problem+json", 4, f"project not found: {PROJECT}")
+#: The problem type of a refused delete of a protected container: what a client dispatches on, since the same door
+#: answers the same code (3) for a project that still holds warehouses.
+PROTECTED = "https://lance.org/problems/protectedcontainererror"
 #: What a protected project's delete is answered without `force=true`: the remedy, named.
 REFUSED_UNLESS_FORCED = (
     f"project '{PROJECT}' is protected against deletion. Pass force=true to override "
@@ -157,7 +160,8 @@ def test_a_protected_projects_delete_is_refused_unless_forced(estate: Any, force
     if answer.status_code == 200:
         assert (answer.status_code, answer.json()) == answered
     else:
-        assert (answer.status_code, answer.headers["content-type"], answer.json()["code"], answer.json()["detail"]) == answered
+        problem = answer.json()
+        assert (answer.status_code, answer.headers["content-type"], problem["code"], problem["detail"], problem["type"]) == (*answered, PROTECTED)
     assert estate.client.get(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(ADMIN)).status_code == read_after
     assert (maintenance_policies.get_policy(root, so, "project", key=PROJECT) is not None) is left_behind
     stored = [info for info in fs.get_file_info(pafs.FileSelector(definitions, allow_not_found=True)) if info.type == pafs.FileType.File]
@@ -231,6 +235,20 @@ def test_a_delete_that_failed_after_its_revoke_is_finished_by_its_retry(
         (event.action, event.extra.get("subject")) for event in announced.events[told:] if ids.get(event.event_id) != (event.action, event.extra.get("subject"))
     ]
     assert sorted(late) == [("grant_revoked", estate.person(who)) for who in sorted((ADMIN, CO_ADMIN, MEMBER))]
+
+
+def test_a_project_that_still_holds_a_warehouse_is_refused_and_names_it_in_a_member_a_client_parses(estate: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
+    """The same door answers the same code (3) for a protected project, so the refusal's problem type tells the two
+    apart and its `holds` member names what to delete first: no client reads either out of the sentence."""
+    settings = get_settings()
+    record = {"id": "acme-wh", "project": PROJECT, "bucket": "acme-lake", "root_uri": settings.registry_root}
+    seeding.put_warehouse(settings.registry_root, settings.storage_options(), record)
+
+    answer = estate.client.delete(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(ADMIN))
+
+    problem = answer.json()
+    assert (answer.status_code, problem["code"], problem["type"], problem["holds"]) == (409, 3, "https://lance.org/problems/containerholdserror", ["acme-wh"])
+    assert estate.client.get(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(ADMIN)).status_code == 200
 
 
 def test_a_projects_delete_is_refused_while_a_warehouse_record_cannot_be_read(estate: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog

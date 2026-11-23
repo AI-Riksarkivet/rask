@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { ApiFailure } from '#lib/api/client.ts';
 	// Project creation — an estate-admin flow that COMPOSES existing APIs: it registers the project,
 	// then provisions its first warehouse under it; the
 	// initial admin grant is one raw FGA tuple written through the shared `writeTuple` remote command
@@ -66,7 +67,7 @@
 		error = null;
 	}
 
-	function failText(what: string, status: number, detail: string): string {
+	function failText(what: string, { status, detail, timedOut }: ApiFailure): string {
 		if (status === 401) return `Sign in — ${what} is a per-user action.`;
 		if (status === 403) return `Denied: ${what} needs the estate/project-admin rung.`;
 		if (status === 409) return `Conflict: ${what} — the id already exists.`;
@@ -75,7 +76,7 @@
 			// transport rule): the fetch's own timeout — where the catalog may still commit the write
 			// after we gave up — vs a true network refusal where nothing reached it. Only the latter can
 			// honestly claim "not applied".
-			return /TimeoutError|AbortError/.test(detail)
+			return timedOut
 				? `Timed out waiting on the catalog — ${what} may or may not have been applied; check the projects list before retrying.`
 				: `Catalog unreachable — ${what} was not applied.`;
 		}
@@ -96,7 +97,7 @@
 			// why creating a second project silently provisioned nothing.
 			const made = await createProject({ id: project, name: project });
 			if (!made.ok) {
-				error = failText(`registering project ${project}`, made.status, made.detail);
+				error = failText(`registering project ${project}`, made);
 				toast.error(error);
 				return;
 			}
@@ -105,7 +106,7 @@
 			if (!first.ok) {
 				// No confirmed creation (a timeout may still land server-side — failText says so) — stay
 				// open so the form can be corrected and retried.
-				error = failText(`provisioning warehouse ${wh}`, first.status, first.detail);
+				error = failText(`provisioning warehouse ${wh}`, first);
 				toast.error(error);
 				return;
 			}
@@ -121,9 +122,7 @@
 					object: `project:${project}`,
 				});
 				if (!res.ok) {
-					partials.push(
-						`admin grant for ${adminUser} failed: ${failText('the admin grant', res.status, res.detail)}`,
-					);
+					partials.push(`admin grant for ${adminUser} failed: ${failText('the admin grant', res)}`);
 				}
 			}
 			if (partials.length > 0) {

@@ -45,7 +45,78 @@ export function timeoutSignal(ms: number = FETCH_TIMEOUT_MS): AbortSignal {
  *   - `status: 502` — CONTRACT DRIFT: a 200 whose body is not JSON, or (via `parsed`) JSON that
  *                     fails its schema, so "the upstream is broken" and "our contract with it is
  *                     stale" stay distinguishable. */
-export type ApiResult<T> = { ok: true; data: T } | { ok: false; status: number; detail: string };
+export type ApiResult<T> = { ok: true; data: T } | ApiFailure;
+
+/** A request that did not succeed. Beyond the status and the sentence it carries what a door's problem
+ *  body says in members a client dispatches on (the doors answer RFC 9457 problem details): the spec's
+ *  error `code`, the problem's `type`, and every member beyond the standard ones (`members`), such as
+ *  `holds`, the children a refused delete names. A page branches on those and shows `detail`; it never
+ *  reads a branch out of the sentence. */
+export interface ApiFailure {
+	ok: false;
+	status: number;
+	detail: string;
+	/** The door's error code (`docs/catalog-openapi.json`, `ProblemDetails.code`), when it sent a problem. */
+	code?: number;
+	/** The problem's type URI, which tells apart refusals that share a code. */
+	type?: string;
+	/** The problem's extension members. */
+	members?: Readonly<Record<string, unknown>>;
+	/** No answer came because the request's own time ran out: unlike a refused connection, the door may
+	 *  still have acted. Only on `status: 0`. */
+	timedOut?: true;
+}
+
+/** The types of a delete refused because its object is protected against deletion: a table's, and a
+ *  namespace's, warehouse's or project's. */
+const PROTECTED_PROBLEMS: ReadonlySet<string> = new Set([
+	'https://lance.org/problems/protectedtableerror',
+	'https://lance.org/problems/protectedcontainererror',
+]);
+
+/** Whether a delete was refused because its object is protected against deletion. */
+export function refusedAsProtected(failure: ApiFailure): boolean {
+	return failure.type !== undefined && PROTECTED_PROBLEMS.has(failure.type);
+}
+
+/** The children a refused delete names (`holds`): what its container still holds. Empty when the
+ *  refusal names none. */
+export function heldChildren(failure: ApiFailure): string[] {
+	const holds = failure.members?.['holds'];
+	return Array.isArray(holds) ? holds.filter((id): id is string => typeof id === 'string') : [];
+}
+
+const PROBLEM_MEMBERS: ReadonlySet<string> = new Set([
+	'type',
+	'title',
+	'status',
+	'detail',
+	'code',
+	'error',
+	'instance',
+]);
+
+/** A door's refusal: its status, and what its body says when the body is a problem. */
+function refusal(status: number, body: unknown, fallback: string): ApiFailure {
+	const failure: ApiFailure = { ok: false, status, detail: detailFrom(body, fallback) };
+	if (body === null || typeof body !== 'object') return failure;
+	const problem = body as Record<string, unknown>;
+	if (typeof problem['code'] === 'number') failure.code = problem['code'];
+	if (typeof problem['type'] === 'string') failure.type = problem['type'];
+	const members = Object.fromEntries(
+		Object.entries(problem).filter(([name]) => !PROBLEM_MEMBERS.has(name)),
+	);
+	if (Object.keys(members).length > 0) failure.members = members;
+	return failure;
+}
+
+/** A request no answer came to. */
+function unanswered(err: unknown, detail: string = String(err)): ApiFailure {
+	const name = err instanceof Error ? err.name : '';
+	const failure: ApiFailure = { ok: false, status: 0, detail };
+	if (name === 'TimeoutError' || name === 'AbortError') failure.timedOut = true;
+	return failure;
+}
 
 let bearerProvider: () => string | undefined = () => undefined;
 
@@ -178,16 +249,12 @@ export async function upstreamJSON(req: UpstreamRequest): Promise<ApiResult<unkn
 			},
 		);
 	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
+		return unanswered(err);
 	}
 	if (!res.ok) {
-		let detail = `${upstream} answered ${res.status}`;
-		try {
-			detail = detailFrom(await res.json(), detail);
-		} catch {
-			/* a non-JSON error body keeps the status-line detail */
-		}
-		return { ok: false, status: res.status, detail };
+		// A non-JSON error body keeps the status-line detail.
+		const body: unknown = await res.json().catch(() => null);
+		return refusal(res.status, body, `${upstream} answered ${res.status}`);
 	}
 	// A 200 whose body is not JSON is CONTRACT DRIFT, not success.
 	try {
@@ -229,11 +296,10 @@ export async function requestJSON<T = unknown>(
 	try {
 		const res = await send(`${apiBase}/${path}`, init ?? {}, { timeoutMs: FETCH_TIMEOUT_MS });
 		const body: unknown = await res.json().catch(() => ({}));
-		if (!res.ok)
-			return { ok: false, status: res.status, detail: detailFrom(body, `HTTP ${res.status}`) };
+		if (!res.ok) return refusal(res.status, body, `HTTP ${res.status}`);
 		return { ok: true, data: declaredAs<T>(body) };
 	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
+		return unanswered(err);
 	}
 }
 
@@ -248,11 +314,11 @@ export async function requestBinary(
 		const res = await send(`${apiBase}/${path}`, init ?? {}, { timeoutMs: FETCH_TIMEOUT_MS });
 		if (!res.ok) {
 			const body: unknown = await res.json().catch(() => ({}));
-			return { ok: false, status: res.status, detail: detailFrom(body, `HTTP ${res.status}`) };
+			return refusal(res.status, body, `HTTP ${res.status}`);
 		}
 		return { ok: true, data: await res.arrayBuffer() };
 	} catch (err) {
-		return { ok: false, status: 0, detail: String(err) };
+		return unanswered(err);
 	}
 }
 
@@ -282,15 +348,10 @@ export async function requestBytes(
 			{ timeoutMs: WRITE_TIMEOUT_MS },
 		);
 		const payload: unknown = await res.json().catch(() => ({}));
-		if (!res.ok)
-			return { ok: false, status: res.status, detail: detailFrom(payload, `HTTP ${res.status}`) };
+		if (!res.ok) return refusal(res.status, payload, `HTTP ${res.status}`);
 		return { ok: true, data: payload };
 	} catch (err) {
-		return {
-			ok: false,
-			status: 0,
-			detail: `no answer came (${String(err)})`,
-		};
+		return unanswered(err, `no answer came (${String(err)})`);
 	}
 }
 

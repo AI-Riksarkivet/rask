@@ -25,7 +25,13 @@ test('the bell logs each write with its outcome, keeps it across a reload, and f
 		'GET /management/v1/projects/acme': { project: 'acme', warehouses: [], admins: ['user:alice'] },
 		'DELETE /management/v1/projects/acme': {
 			status: 409,
-			body: { title: 'NamespaceNotEmptyError', status: 409, detail: PROTECTED_DETAIL },
+			body: {
+				type: 'https://lance.org/problems/protectedcontainererror',
+				title: 'ProtectedContainerError',
+				status: 409,
+				code: 3,
+				detail: PROTECTED_DETAIL,
+			},
 		},
 		'DELETE /management/v1/projects/acme?force=true': { project: 'acme', tuples_revoked: 1 },
 		'GET /management/v1/projects': [],

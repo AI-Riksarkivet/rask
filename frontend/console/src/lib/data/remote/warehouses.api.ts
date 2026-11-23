@@ -166,8 +166,8 @@ export const setWarehouseActive = command(
  *  Three SEPARATE opt-ins that never share a default, sent only when the caller actually asked:
  *
  *  - `cascade` drops the namespaces under the warehouse. Without it a non-empty warehouse refuses 409
- *    with a detail that NAMES them — what this cascade would take, at the moment it was refused —
- *    which is why `WarehouseDeleteDialog` reads it out of the refusal.
+ *    whose `holds` member NAMES them — what this cascade would take, at the moment it was refused —
+ *    which is why `WarehouseDeleteDialog` reads them from the refusal.
  *  - `purgeBucket` is the ONLY thing that removes bytes, and it is irreversible. A catalog record is
  *    recoverable and a customer's bucket is not, so the dialog gates it behind typing the bucket name.
  *  - `force` overrides the `protected` flag and NOTHING else. The FGA gate has already run, identically,

@@ -56,7 +56,6 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
     InvalidInputError,
-    NamespaceNotEmptyError,
     PermissionDeniedError,
     ServiceUnavailableError,
     TableNotFoundError,
@@ -535,7 +534,8 @@ async def _start_delete(project_id: str, record: ProjectRecord, settings: Catalo
     """Judge a delete's start, its protection and the project's emptiness, and record it on the project's record.
 
     Raises:
-        NamespaceNotEmptyError: It is protected and ``force`` is false, or it still holds warehouses.
+        ProtectedContainerError: It is protected and ``force`` is false.
+        ContainerHoldsError: It still holds warehouses, which the problem's ``holds`` names.
         TableNotFoundError: Its record went meanwhile.
     """
     so = settings.storage_options()
@@ -548,11 +548,12 @@ async def _start_delete(project_id: str, record: ProjectRecord, settings: Catalo
     # read may be one of this project's own ([[LH-572]]).
     held = sorted(r.id for r in await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so) if r.project == project_id)
     if held:
-        raise NamespaceNotEmptyError(
+        raise hierarchy.ContainerHoldsError(
             f"project '{project_id}' still holds {len(held)} warehouse(s): {', '.join(held)}. "
             f"Delete each one first — DELETE /management/v1/warehouses/{{id}} (its own bucket purge is a separate "
             f"opt-in) — then delete the project. There is deliberately no cascade here: retiring a tenant "
-            f"must never be able to destroy its buckets transitively in one request."
+            f"must never be able to destroy its buckets transitively in one request.",
+            holds=held,
         )
     # Recorded before the first destructive step, so whichever step fails, the retry finds the delete and who started it.
     if await run_in_threadpool(project_registry.mark_deleting, settings.registry_root, so, project_id, by=current_subject(token)) is None:
@@ -609,7 +610,8 @@ async def delete_project(
         The retired project and how many tuples went with it.
 
     Raises:
-        NamespaceNotEmptyError: It is protected and ``force`` is false, or it still holds warehouses.
+        ProtectedContainerError: It is protected and ``force`` is false.
+        ContainerHoldsError: It still holds warehouses, which the problem's ``holds`` names.
         InternalError: A warehouse record is there and cannot be read as one, and nothing was deleted; or a role record,
             and the delete stands recorded for a retry to finish once it is written again.
         ServiceUnavailableError: The store did not answer a read, or OpenFGA could not revoke its tuples; a delete

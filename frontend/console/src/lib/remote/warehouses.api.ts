@@ -99,9 +99,9 @@ export const createProject = command(
 /** Retire a tenant — `DELETE /management/v1/projects/{id}`. Gated at the catalog on the project's OWN
  *  `can_administer` bar, and every refusal is a state the dialog renders rather than an exception:
  *
- *  · **409** is the interesting one, and it comes in two flavours the `detail` distinguishes. Either the
- *    project still holds warehouses — the detail NAMES them, and they are the caller's next click — or
- *    the record carries the `protected` flag, which `force` overrides.
+ *  · **409** is the interesting one, and it comes in two flavours the problem's `type` distinguishes. Either
+ *    the project still holds warehouses — the refusal's `holds` member names them, and they are the caller's
+ *    next click — or the record carries the `protected` flag, which `force` overrides.
  *  · **404** is deliberately indistinguishable from "not yours": the delete door refuses to be an
  *    existence oracle for the estate's tenants, so the UI must not invent a distinction either.
  *

@@ -303,6 +303,11 @@ and a 5xx `detail` is `Internal Server Error` whatever raised it, its message in
 its own name subclasses the spec class whose code it answers (`IdentityTokenUnavailableError`, `ProviderUnavailableError`
 and the mirror's `IssuerUnansweredError` are `ServiceUnavailableError`s, 503 code 17); one that carries what landed of
 the caller's own objects mixes in `ns_errors.ProblemExtensions`, whose members may never name one the envelope owns.
+A client dispatches on the problem's `code`, and where two refusals of one door share a code, on its `type`, which the
+envelope derives from the error's class name: a delete refused for protection is `ProtectedTableError` (code 19) or
+`ProtectedContainerError` (code 3), and a project or warehouse that still holds children is `ContainerHoldsError`
+(code 3), whose extension member `holds` lists them (`catalog.api.authz.hierarchy`, [[FE-021]]). The console reads
+those, never the sentence.
 Lineage answers a failed call through the catalog as one `CatalogAnsweredError`: 503 code 17, the catalog's answer in its log, for
 every call it makes as itself (its provenance tables) and for any answer that is no refusal a describe owes its caller
 (code 0 among them); only a describe asked under the caller's own bearer (`lineage.services.names`) relays what the

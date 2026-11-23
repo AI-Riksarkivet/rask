@@ -1,35 +1,11 @@
-<script lang="ts" module>
-	/** The id shape the catalog enforces on every control-plane id (`catalog.core.identifiers`):
-	 *  DNS-safe lowercase alphanumerics + hyphens, 3–63 chars. Used to filter what we lift out of a
-	 *  refusal message, so a prose change upstream degrades to "no links" rather than to garbage links. */
-	const CONTROL_ID = /^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/;
-
-	/**
-	 * The warehouse ids a 409 NAMED as blocking the delete.
-	 *
-	 * The catalog writes `…still holds 2 warehouse(s): acme-gold, acme-wh. Delete each one first — …`.
-	 * A control-plane id can contain no `.` and no `,`, so the run up to the first period IS the list,
-	 * and every candidate is re-checked against the id shape before it becomes a link. An unparseable
-	 * detail yields `[]` and the dialog simply shows the message verbatim — the refusal is still
-	 * actionable, it just costs the reader a copy-paste.
-	 */
-	export function blockingWarehouses(detail: string): string[] {
-		const named = /warehouse\(s\):\s*([^.]+)/.exec(detail)?.[1];
-		if (!named) return [];
-		return named
-			.split(',')
-			.map((id) => id.trim())
-			.filter((id) => CONTROL_ID.test(id));
-	}
-</script>
-
 <script lang="ts">
+	import { heldChildren, refusedAsProtected, type ApiFailure } from '#lib/api/client.ts';
 	import { resolve } from '$app/paths';
 	// Retiring a tenant — the confirm side of `DELETE /management/v1/projects/{id}`.
 	//
 	// The whole reason this is a dialog and not a one-shot button is the 409: a project that still holds
-	// warehouses refuses, and the catalog's `detail` NAMES them. Those names are the user's next action,
-	// so they are rendered as LINKS straight to each warehouse in the lakehouse — the delete that unblocks
+	// warehouses refuses, and the refusal NAMES them in its `holds` member (its `detail` is rendered
+	// verbatim, for the person). Those names are the user's next action, so they are rendered as LINKS straight to each warehouse in the lakehouse — the delete that unblocks
 	// this one is then one click away instead of a manual hunt through the catalog. There is deliberately
 	// no `cascade` on this route (a project cascade would reach a warehouse's bucket purge), so "go do the
 	// rung below" is not a limitation to apologise for — it is the design, and the copy says so.
@@ -59,16 +35,15 @@
 
 	let busy = $state(false);
 	let force = $state(false);
-	/** The last refusal, kept as status + detail rather than a rendered string — the branches below read
-	 *  BOTH (a 409 means two different things depending on the detail). */
-	let failure = $state<{ status: number; detail: string } | null>(null);
+	/** The last refusal, whole: the branches below read what the door's problem says in its own members
+	 *  (a 409 means two different things, told apart by the problem's type), never the sentence. */
+	let failure = $state.raw<ApiFailure | null>(null);
 
-	const blockers = $derived(failure ? blockingWarehouses(failure.detail) : []);
+	/** The warehouses the refusal names as still held (`holds`): what to delete first. */
+	const blockers = $derived(failure ? heldChildren(failure) : []);
 	/** The OTHER 409: the record carries the `protected` flag. `force` is offered only here — it turns
 	 *  exactly that lock and nothing else, so surfacing it on any other failure would misdescribe it. */
-	const protectedRefusal = $derived(
-		failure?.status === 409 && blockers.length === 0 && /protected/i.test(failure.detail),
-	);
+	const protectedRefusal = $derived(failure !== null && refusedAsProtected(failure));
 
 	/** What the status MEANS, on top of the verbatim detail — never instead of it. */
 	const gloss = $derived.by((): string | null => {
@@ -83,7 +58,7 @@
 		if (failure.status === 0) {
 			// A DELETE that timed out may still have committed server-side; a refused connection cannot
 			// have. Only the second may honestly claim "nothing was removed".
-			return /TimeoutError|AbortError/.test(failure.detail)
+			return failure.timedOut
 				? 'Timed out waiting on the catalog — the delete may or may not have been applied; re-read the projects list before retrying.'
 				: 'Catalog unreachable — nothing was deleted.';
 		}
@@ -118,7 +93,7 @@
 			// considered choice to leave protection on, which is not what an untouched checkbox means.
 			const res = await deleteProject(force ? { project, force: true } : { project });
 			if (!res.ok) {
-				failure = { status: res.status, detail: res.detail };
+				failure = res;
 				return;
 			}
 			// The toast is written from the RESPONSE, not the request: `tuples_revoked` is the one fact only

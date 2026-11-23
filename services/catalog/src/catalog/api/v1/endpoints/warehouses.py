@@ -38,7 +38,6 @@ from lance_namespace import (
     LanceNamespace,
     LanceNamespaceError,
     NamespaceAlreadyExistsError,
-    NamespaceNotEmptyError,
     NamespaceNotFoundError,
     PermissionDeniedError,
     ServiceUnavailableError,
@@ -1006,9 +1005,10 @@ async def _plan_the_delete(record: WarehouseRecord, asked: _DeleteAsked, *, requ
     ns_conn = await namespace_for_root(request, settings, record.root_uri, endpoint=record.endpoint or None) if in_estate_store else None
     held = await warehouse_removal.namespaces_in(ns_conn, warehouse_id) if ns_conn is not None else []
     if held and not asked.cascade:
-        raise NamespaceNotEmptyError(
+        raise hierarchy.ContainerHoldsError(
             f"warehouse '{warehouse_id}' still holds {len(held)} namespace(s): {', '.join(held)}. "
-            f"Drop them first, or pass ?cascade=true to drop exactly those with the warehouse."
+            f"Drop them first, or pass ?cascade=true to drop exactly those with the warehouse.",
+            holds=list(held),
         )
 
     if asked.purge_bucket:

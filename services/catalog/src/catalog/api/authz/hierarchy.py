@@ -25,9 +25,13 @@ from catalog.services import projects as project_registry
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.governed import fga_ids
 from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.problems.ns_errors import ProblemExtensions
 
 
 __all__ = [
+    "ContainerHoldsError",
+    "ProtectedContainerError",
+    "ProtectedTableError",
     "require_descendants_unprotected",
     "require_namespace_as_identified",
     "require_namespace_depth",
@@ -161,6 +165,37 @@ def require_namespace_depth(segments: list[str]) -> None:
         )
 
 
+class ProtectedTableError(InvalidTableStateError):
+    """A table that is protected against deletion.
+
+    The spec's code for it is the invalid state's (19). A class of its own gives the refusal a problem ``type`` of its
+    own (the envelope titles a problem by its error's class), so a client tells "protected" from every other invalid
+    state by a member it can dispatch on, where the sentence is for a person.
+    """
+
+
+class ProtectedContainerError(NamespaceNotEmptyError):
+    """A namespace, warehouse or project that is protected against deletion.
+
+    The spec's code for it is the not-empty container's (3), which the same doors also answer for a container that
+    still holds something. The remedies differ (clear the flag or force, against emptying it), so this refusal has a
+    problem ``type`` of its own to tell the two apart by.
+    """
+
+
+class ContainerHoldsError(ProblemExtensions, NamespaceNotEmptyError):
+    """A project or warehouse that still holds children, which its delete does not take with it.
+
+    The children ride the problem as the extension member ``holds``, the ids the caller must remove first, so a client
+    lists them from a member it parses instead of from the sentence. Raised only after the door has proven the caller
+    may delete the container, so the ids disclose nothing the caller could not list.
+    """
+
+    def __init__(self, message: str, *, holds: list[str]) -> None:
+        super().__init__(message)
+        self.extensions = {"holds": holds}
+
+
 def require_not_protected(protected: bool, *, kind: str, obj_id: str, force: bool) -> None:
     """Refuse to delete an object marked ``protected`` unless the caller passed ``force=true``.
 
@@ -193,7 +228,7 @@ def require_not_protected(protected: bool, *, kind: str, obj_id: str, force: boo
     """
     if force or not protected:
         return
-    refusal = InvalidTableStateError if kind == "table" else NamespaceNotEmptyError
+    refusal = ProtectedTableError if kind == "table" else ProtectedContainerError
     raise refusal(
         f"{kind} '{obj_id}' is protected against deletion. Pass force=true to override "
         f"(protection only — the same authorization is still required), or clear the flag first."

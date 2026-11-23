@@ -40,6 +40,24 @@ const PROTECTED_DETAIL =
 	"warehouse 'acme-wh' is protected against deletion. Pass force=true to override " +
 	'(protection only — the same authorization is still required), or clear the flag first.';
 
+/** The two refusals as the catalog answers them: a problem whose type tells them apart, the held
+ *  namespaces in `holds`. */
+const BOUND = {
+	type: 'https://lance.org/problems/containerholdserror',
+	title: 'ContainerHoldsError',
+	status: 409,
+	code: 3,
+	holds: ['acme-wh$bronze', 'acme-wh$silver'],
+	detail: BOUND_DETAIL,
+};
+const PROTECTED = {
+	type: 'https://lance.org/problems/protectedcontainererror',
+	title: 'ProtectedContainerError',
+	status: 409,
+	code: 3,
+	detail: PROTECTED_DETAIL,
+};
+
 let token: string;
 
 /** Pre-seed exact catalog responses for THIS test's bearer ("METHOD /path" → body, or {status, body}). */
@@ -86,7 +104,7 @@ test('the plain delete goes first, its 409 is verbatim, and only then is cascade
 	page,
 }) => {
 	await seed(page, {
-		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: { detail: BOUND_DETAIL } },
+		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: BOUND },
 	});
 	const dialog = await openDialog(page);
 
@@ -114,7 +132,7 @@ test('the cascade delete sends exactly ?cascade=true and the toast reports the R
 	page,
 }) => {
 	await seed(page, {
-		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: { detail: BOUND_DETAIL } },
+		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: BOUND },
 		'DELETE /management/v1/warehouses/acme-wh?cascade=true': {
 			id: 'acme-wh',
 			bucket: 'acme-bucket',
@@ -197,7 +215,7 @@ test('force is offered only after a protection refusal, and says what it does NO
 	page,
 }) => {
 	await seed(page, {
-		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: { detail: PROTECTED_DETAIL } },
+		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: PROTECTED },
 		'DELETE /management/v1/warehouses/acme-wh?force=true': {
 			id: 'acme-wh',
 			bucket: 'acme-bucket',
@@ -308,7 +326,7 @@ test('no opt-in survives a close: the next open starts from the plain delete aga
 	page,
 }) => {
 	await seed(page, {
-		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: { detail: BOUND_DETAIL } },
+		'DELETE /management/v1/warehouses/acme-wh': { status: 409, body: BOUND },
 	});
 	const dialog = await openDialog(page);
 	await dialog.getByRole('button', { name: 'Delete warehouse' }).click();

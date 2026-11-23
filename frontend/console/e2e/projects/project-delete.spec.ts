@@ -9,17 +9,19 @@ import { calls, seed as seedFor } from '../mock-client';
 // What is worth pinning here is the REFUSAL, not the happy path. The delete door has no `cascade` at
 // all: a project holding warehouses answers 409 and its RFC 9457 `detail` NAMES them, and the user's
 // next action is to go delete those warehouses. So the names have to survive the trip from a prose
-// error message onto the screen AS LINKS to each warehouse's catalog page. The hrefs are a runtime
-// product of parsing prose out of a 409, which is what the first test below pins.
+// error message onto the screen AS LINKS to each warehouse's catalog page. The hrefs come from the
+// refusal's `holds` member, which is what the first test below pins.
 
-/** The catalog's real 409 body when a project still holds warehouses (`endpoints/projects.py`) — the
- *  message is copied verbatim, because parsing the blocker names out of it is the thing under test. */
+/** The catalog's real 409 body when a project still holds warehouses (`endpoints/projects.py`): the
+ *  blockers ride its `holds` member, and the sentence is for the person. */
 const HELD_BY_WAREHOUSES = {
 	status: 409,
 	body: {
-		type: 'https://lance.org/problems/namespacenotemptyerror',
-		title: 'NamespaceNotEmptyError',
+		type: 'https://lance.org/problems/containerholdserror',
+		title: 'ContainerHoldsError',
 		status: 409,
+		code: 3,
+		holds: ['acme-gold', 'acme-wh'],
 		detail:
 			"project 'acme' still holds 2 warehouse(s): acme-gold, acme-wh. Delete each one first — " +
 			'DELETE /management/v1/warehouses/{id} (its own bucket purge is a separate opt-in) — then delete the ' +
@@ -32,9 +34,10 @@ const HELD_BY_WAREHOUSES = {
 const PROTECTED = {
 	status: 409,
 	body: {
-		type: 'https://lance.org/problems/namespacenotemptyerror',
-		title: 'NamespaceNotEmptyError',
+		type: 'https://lance.org/problems/protectedcontainererror',
+		title: 'ProtectedContainerError',
 		status: 409,
+		code: 3,
 		detail:
 			"project 'acme' is protected against deletion. Pass force=true to override (protection only " +
 			'— the same authorization is still required), or clear the flag first.',

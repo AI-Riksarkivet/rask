@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { heldChildren, refusedAsProtected } from '#lib/api/client.ts';
 	// The warehouse DESTROY door's confirmation (`DELETE /management/v1/warehouses/{id}`), and the shape of it is
 	// the point: the catalog's three opt-ins never share a default, so neither does this dialog.
 	//
@@ -37,7 +38,7 @@
 	/** The last RFC 9457 `detail`, rendered verbatim. Never rewritten, never summarised. */
 	let problem = $state<string | null>(null);
 	let problemStatus = $state(0);
-	/** Parsed out of a 409 that reported bound namespaces — what a cascade would actually drop. */
+	/** The `holds` of a 409 that reported bound namespaces — what a cascade would actually drop. */
 	let bound = $state<string[]>([]);
 	/** Set by a 409 that reported the `protected` flag — the only thing `force` can turn. */
 	let blockedByProtection = $state(false);
@@ -77,26 +78,10 @@
 		if (key !== null) reset();
 	});
 
-	// The catalog's emptiness refusal names what blocks the delete:
-	//
-	//   warehouse 'acme-wh' still holds 2 namespace(s): acme-wh$bronze, acme-wh$silver. Drop them
-	//   first, or pass ?cascade=true to drop exactly those with the warehouse.
-	//
-	// The warehouse page lists the same namespaces, but this refusal is what the cascade would take AT
-	// THE MOMENT it was refused, so the opt-in names exactly these. A name may hold a '.' or a ', '
-	// (ADR 0173 §4), which this parse would cut at, so the names it reads are held to the count the
-	// sentence states. A detail that does NOT match is not forced into the shape: it still renders
-	// verbatim, and the cascade opt-in is simply not offered, because we could not say what it would
-	// drop.
-	const BOUND_RE = /still holds (\d+) namespace\(s\):\s*(.+?)\. Drop them first/;
-	function boundNamespacesIn(detail: string): string[] {
-		const match = BOUND_RE.exec(detail);
-		const names = (match?.[2] ?? '')
-			.split(', ')
-			.map((name) => name.trim())
-			.filter(Boolean);
-		return names.length === Number(match?.[1] ?? -1) ? names : [];
-	}
+	// The catalog's emptiness refusal names what blocks the delete in its `holds` member. The warehouse
+	// page lists the same namespaces, but the refusal is what the cascade would take AT THE MOMENT it was
+	// refused, so the opt-in names exactly these. A refusal that names none still renders verbatim, and
+	// the cascade opt-in is not offered, because we could not say what it would drop.
 
 	async function submit(): Promise<void> {
 		const target = warehouse;
@@ -133,11 +118,11 @@
 			problem = res.detail;
 			problemStatus = res.status;
 			if (res.status === 409) {
-				const named = boundNamespacesIn(res.detail);
+				// The namespaces the refusal names as still held (`holds`), and the protection refusal, which
+				// is the same 409 with a problem type of its own.
+				const named = heldChildren(res);
 				if (named.length > 0) bound = named;
-				// The protection refusal is the same 409 status with a different sentence — it is the
-				// sentence, not the code, that says which lock is closed.
-				if (/is protected against deletion/.test(res.detail)) blockedByProtection = true;
+				if (refusedAsProtected(res)) blockedByProtection = true;
 			}
 		} finally {
 			busy = false;
