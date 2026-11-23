@@ -433,9 +433,9 @@ release-handoff: ## A release signs only the images its scan returned, and a cha
 # ErrImagePull. Measured 2026-08-06: a Dagger build succeeded (exit 0), `kubectl set image` ->
 # ErrImagePull, rolled back.
 KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
-# Routed through scripts/helm.sh, which sets HELM_DRIVER=sql. NOT bare `helm`: the release lives in
-# Postgres, and against the default Secret backend helm reports it ABSENT and `upgrade --install`
-# re-installs over a live estate WITHOUT erroring. Read-only subcommands pass straight through.
+# Routed through scripts/helm.sh, NOT bare `helm`: it names the kubeconfig and refuses a call whose declared
+# context is not the one kubectl resolves, since `upgrade --install` against the wrong cluster installs there
+# WITHOUT erroring. Read-only subcommands pass straight through.
 # The release's namespace, stated rather than inherited from the kubeconfig context ([[XC-152]]): the fixtures it reads
 # by name (rask-rustfs, rask-dex, rask-openbao, rask-nats) install into `default` (each fixture.env), so the
 # release must share it. Helm reads HELM_NAMESPACE; kubectl takes the flag, and a later `-n`/`-A` in a recipe wins.
@@ -491,12 +491,12 @@ DEV_STORE_NODE_PORT := $(shell sed -n 's/^nodePort: *//p' deploy/fixtures/rustfs
 DEV_VENDED_ENDPOINT ?= http://$(DEV_NODE_IP):$(DEV_STORE_NODE_PORT)
 
 # The prerequisites a dev estate gets from deploy/fixtures, each its own release, installed before rask's
-# (NOT FOR PRODUCTION; deploy/fixtures/README.md). ESO comes first; the NATS bus every service dials follows. The CloudNativePG
-# operator serves the AGE-on-CNPG Cluster; its CRDs come from k3s-crds, which runs first. Dex is the dev OIDC issuer,
+# (NOT FOR PRODUCTION; deploy/fixtures/README.md). ESO comes first; the NATS bus every service dials follows. Postgres is the
+# stock server OpenFGA keeps its store in, which starts once rask is installed (its password is rask's). Dex is the dev OIDC issuer,
 # given the issuer rask is given; rustfs and openbao are the dev object and secret stores, which start once
 # rask is installed: the object store's root credential and the secret store's seed scripts are rask's; observability is
 # the OTLP gateway every service exports to (its Collector), the store, dashboards and alerting; marquez is the graph lineage forwards to.
-FIXTURES ?= external-secrets nats cloudnative-pg dex rustfs openbao observability marquez
+FIXTURES ?= external-secrets nats postgres dex rustfs openbao observability marquez
 
 # The dev estate's bus enforces what a platform's does: operator mode, TLS on the client port and the stand-in signer
 # (deploy/fixtures/nats, `nats.auth.server`), which deploy/values-local.yaml's `nats.url` and `nats.ca` name. The dev
@@ -521,10 +521,6 @@ k3s-fixtures: k3s-extra-values-check ## Install the development fixtures (FIXTUR
 	$(if $(filter nats,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh nats -- --set nats.auth.server=true)
 	$(if $(filter rustfs,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh rustfs -- --set-string events.busCa=$(DEV_BUS_CA))
 	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER) $(foreach f,$(K3S_DEX_EXTRA_VALUES),-f $(f)))
-
-k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), before the cloudnative-pg fixture
-	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.
-	kubectl apply --server-side -f chart/crds-bootstrap/
 
 # THE RELEASE'S VALUES ARE COMPOSED FROM GIT, NEVER READ BACK FROM THE RELEASE ([[XC-194]]). Each upgrade resets to the
 # chart's defaults and supplies exactly these: the estate's overlay, where its images come from, the image tags the pins
@@ -562,7 +558,7 @@ k3s-values-check: k3s-extra-values-check ## Refuse to compose the release's valu
 	@case '$(DEV_VENDED_ENDPOINT)' in http://:*|*:) echo "DEV_VENDED_ENDPOINT '$(DEV_VENDED_ENDPOINT)' names no node address or port: is kubectl pointed at the cluster?" >&2; exit 1;; esac
 	@case '$(DEV_ADMIN)' in dex~?*) ;; *) echo "the estate admin '$(DEV_ADMIN)' is no Dex principal: scripts/dex_principal.py $(DEV_ADMIN_EMAIL) failed" >&2; exit 1;; esac
 
-k3s-up: k3s-crds k3s-fixtures k3s-deps k3s-stem-check k3s-values-check ## Apply CRDs, install fixtures, vendor deps, then install/upgrade the release from git's values and wait for the catalog
+k3s-up: k3s-fixtures k3s-deps k3s-stem-check k3s-values-check ## Install fixtures, vendor deps, then install/upgrade the release from git's values and wait for the catalog
 	@$(K3S_PINS_CHECK)
 	$(HELM) upgrade --install rask ./chart --wait --wait-for-jobs --timeout 20m --take-ownership $(K3S_VALUES)
 	$(KUBECTL) rollout status deploy/rask-catalog --timeout=300s

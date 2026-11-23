@@ -14,7 +14,7 @@ installs each from `deploy/fixtures`, its own Helm release, before rask's (`make
 |---|---|
 | **External Secrets Operator** | the ExternalSecrets and SecretStore behind every credential a pod takes as a Kubernetes Secret (§ 8) |
 | **NATS JetStream** | the stream Job that declares rask's streams and durable consumers, and one bus user per app (§ 7) |
-| **CloudNativePG operator** | a `Cluster` only with `age.cnpgCluster.enabled`; see [`CNPG-AGE.md`](CNPG-AGE.md) |
+| **Postgres** | OpenFGA's config file (`<release>-infra-credentials`) names it, only while the chart runs OpenFGA: `postgres.externalHost`, or in development the `postgres` fixture (`postgres.enabled`) |
 | **The OTLP gateway** | `observability.export.endpoint` and `observability.identity.audience`: each service exports to the gateway as itself with its ServiceAccount token ([ADR 0215](adr/0215-each-service-exports-its-telemetry-to-the-platforms-gateway-as-itself.md)); the gateway, store, dashboards and alerting are the platform's |
 
 **Two things the platform's edge owes the lakehouse**, since rask runs neither a gateway nor a telemetry store:
@@ -439,11 +439,11 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   pod mounts them as one directory, and its seed writes the root to `secret/object-store-root` and the other generated field to its own
   secret (`postgres`) as `@file`. No workload's object-store identity is a secret: each signs with
   sessions its own ServiceAccount token is exchanged for (ADR 0197). The Secret outlives an
-  OpenBao replacement, so the AGE database and the object store, which keep what they were initialised with, see
+  OpenBao replacement, so the development Postgres and the object store, which keep what they were initialised with, see
   the same values after a re-seed. The seed re-reads the mounted Secret every 5 s and re-seeds when it changes,
   so a rotation never needs the OpenBao pod replaced. The lakehouse uses no third-party credential; one a client
   uses (a model-download token, say) is that client's release's to provide (ADR 0189).
-- **An estate whose stores already exist keeps its credentials.** If the AGE or object-store StatefulSet exists
+- **An estate whose stores already exist keeps its credentials.** If the development Postgres's or the object store's StatefulSet exists
   and the credential it holds (`postgres-password`, `object-store-secret-key`) has no Secret, the render refuses
   (`lookup`, so only against a cluster): generating beside live data would lock every consumer out of it. Create that
   credential's Secret, `<release>-dev-credential-<key>` with the one key `<key>`, from the value the estate holds first;
@@ -461,19 +461,20 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
      with the `force-sync`
      annotation, and wait for Ready. Their refresh is otherwise `externalSecrets.refreshInterval`, and a pod
      restarted before it takes the old value.
-  3. Tell the server, when one holds the credential: `ALTER ROLE` inside AGE from stdin for `postgres-password`;
+  3. Tell the server, when one holds the credential: `ALTER ROLE` inside the development Postgres (`rask-postgres`) from stdin for
+     `postgres-password`;
      restart `rask-rustfs` for `object-store-secret-key`. RustFS signs every STS session token with the root secret, so
      rotating root invalidates every outstanding session at once: every workload's own and every vended one. Clients
      re-vend, and a long write in flight fails.
-  4. Restart the consumers at once: OpenFGA reads its mounted config file at start, so nothing rolls on its own. AGE: OpenFGA (its migrate Job and the backup CronJob read it at their next run).
+  4. Restart the consumers at once: OpenFGA reads its mounted config file at start, so nothing rolls on its own. Postgres: OpenFGA (its migrate Job reads it at its next run).
      The root: the catalog, lineage and maintenance, whose store sessions the old root signed and which exchange a new
      one at boot rather than at half a session's life.
   5. Read it back by refusal: one `ListBuckets` signed with the old root answers 403 `SignatureDoesNotMatch`, and the
-     AGE role refuses the old password over the pod's own IP (`password authentication failed`). The image trusts
+     Postgres role refuses the old password over the pod's own IP (`password authentication failed`). The image trusts
      loopback, so a login from 127.0.0.1 succeeds with any password and proves nothing. Measured 2026-11-07, rotating
      the three values XC-164's read-back exposed.
 - **No workload's store identity needs rotation (ADR 0170, ADR 0197).** None holds a key pair: the catalog, lineage,
-  maintenance and each backup CronJob project a token for `objectStore.identity.audience`, which the kubelet replaces
+  maintenance and the control-root backup CronJob project a token for `objectStore.identity.audience`, which the kubelet replaces
   before it expires, and exchange it through STS `AssumeRoleWithWebIdentity` for a session. A service holds an hour's
   session and exchanges again once half of it is used; a backup run asks for one at its start. A service whose session
   cannot be renewed logs `store_session_renewal_failed`, then `store_session_expired` once the session runs out, and

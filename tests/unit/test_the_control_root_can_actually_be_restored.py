@@ -6,8 +6,8 @@ trash records that make a drop recoverable. Lose them and the Lance data survive
 about who may touch it does not.
 
 NOTHING COULD HAVE TESTED IT BEFORE, which is why the row said "untested" rather than "broken".
-Measured 2026-09-14: `backups.pgDump` covers the lineage and OpenFGA databases, `backups.volumeSnapshot`
-covers the object store's PVCs, both default OFF and neither is enabled in the live release — and this cluster
+Measured 2026-09-14: `backups.volumeSnapshot`
+covers the object store's PVCs, defaults OFF and is not enabled in the live release — and this cluster
 has no `volumesnapshotclass` resource type at all, so the snapshot path could not run here even if it
 were switched on.
 
@@ -225,12 +225,9 @@ def test_the_backup_states_which_failure_it_protects_against(s3: Any) -> None:
 
 def test_retention_prunes_the_oldest_backups_and_keeps_the_newest(s3: Any) -> None:
     """[[LH-110]]'s stated residual: the tool backs up and prunes nothing, so `_backups/control/` grows
-    without bound while its sibling `backups.pgDump` already honours `keep: 7`.
+    without bound.
 
-    The stamps are `%Y%m%dT%H%M%SZ`, so newest-first is a reverse lexical sort — the same property
-    the Postgres dump's uploader relies on (`scripts/pg_dump_upload.py`). Keeping that identical
-    across the two lanes matters more than it looks: an operator reading one and reasoning about the
-    other must not find two different orderings.
+    The stamps are `%Y%m%dT%H%M%SZ`, so newest-first is a reverse lexical sort.
     """
     for stamp in ("20260914T000000Z", "20260915T000000Z", "20260916T000000Z"):
         crb.do_backup(s3, root=ROOT, dest=None, stamp=stamp)
@@ -248,7 +245,7 @@ def test_retention_prunes_the_oldest_backups_and_keeps_the_newest(s3: Any) -> No
 
 
 def test_retention_keeps_everything_when_it_is_not_asked_for(s3: Any) -> None:
-    """`keep=0` is the default and means unbounded, matching `backups.pgDump`'s `gt 0` gate. A tool that
+    """`keep=0` is the default and means unbounded, matching the chart's `gt 0` gate. A tool that
     silently began deleting backups on upgrade is a worse failure than the unbounded growth."""
     for stamp in ("20260914T000000Z", "20260915T000000Z"):
         crb.do_backup(s3, root=ROOT, dest=None, stamp=stamp)

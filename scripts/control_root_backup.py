@@ -6,9 +6,9 @@ its uuid, and so every grant), protection, maintenance policies, data contracts,
 trash records that make a drop recoverable. Lose them and the Lance data survives while every statement about who may
 touch it does not.
 
-WHAT THE CHART OFFERS DOES NOT COVER THIS, measured 2026-09-14. `backups.pgDump` dumps the OpenFGA
-database; `backups.volumeSnapshot` takes a CSI VolumeSnapshot of the object store's PVCs. Both default
-OFF, neither is enabled in the live release, and this cluster has no `volumesnapshotclass` resource
+WHAT ELSE THE CHART OFFERS DOES NOT COVER THIS, measured 2026-09-14. `backups.volumeSnapshot` takes a CSI
+VolumeSnapshot of the object store's PVCs. It defaults
+OFF, is not enabled in the live release, and this cluster has no `volumesnapshotclass` resource
 type at all — the snapshot path could not run here even if it were switched on. So the control root's
 recoverability was untested because nothing was capable of testing it.
 
@@ -60,8 +60,7 @@ BACKED_UP_PREFIXES: tuple[str, ...] = tuple(f"{prefix}/" for prefix in sorted(RE
 #: restore would publish what the estate already handled, the leases, which lapse, and what is not a record.
 SKIPPED_PREFIXES: tuple[str, ...] = tuple(f"{prefix}/" for prefix in sorted(CONTROL_PREFIXES - RECORD_PREFIXES))
 
-#: Where a backup lands when `--dest` is not given, under the control root itself. Matches the
-#: convention `backups.pgDump` already uses (`_backups/pg/<date>/`).
+#: Where a backup lands when `--dest` is not given, under the control root itself (`_backups/control/<stamp>/`).
 DEFAULT_DEST_PREFIX = f"{BACKUPS}/control"
 
 MANIFEST_KEY = "MANIFEST.json"
@@ -198,21 +197,15 @@ def _copy_as_listed(
 def do_prune(client: Any, *, dest: str, keep: int) -> dict[str, Any]:  # noqa: ANN401
     """Keep the newest ``keep`` backups under ``dest`` and delete the rest.
 
-    WITHOUT THIS THE TOOL GREW WITHOUT BOUND while its sibling did not: ``backups.pgDump`` prunes to
-    ``keep: 7`` in `chart/templates/backup-pg.yaml`, and the control root — 1,454 small objects per run —
-    accumulated every run ever taken.
+    WITHOUT THIS THE TOOL GROWS WITHOUT BOUND: the control root, 1,454 small objects per run, would
+    accumulate every run ever taken.
 
     ``keep=0`` MEANS UNBOUNDED and is the default, matching the chart's ``gt 0`` gate. A tool that
     quietly started deleting backups the first time it was upgraded would be a worse failure than the
     growth it fixes.
 
-    Newest-first is a REVERSE LEXICAL SORT of the ``%Y%m%dT%H%M%SZ`` stamps — the same property the
-    Postgres dump's uploader relies on (``scripts/pg_dump_upload.py``). Both lanes order their
-    backups identically on purpose: an operator reading one and reasoning about the other must not meet
-    two different answers to "which is the newest".
+    Newest-first is a REVERSE LEXICAL SORT of the ``%Y%m%dT%H%M%SZ`` stamps.
     """
-    # ONE IMPLEMENTATION FOR BOTH BACKUP LANES: `_backup_store.prune_timestamped_prefixes` answers "which is the
-    # newest" for this tool and the Postgres dump's uploader alike, so the two cannot drift.
     bucket, prefix = split_uri(dest)
     kept, pruned = prune_timestamped_prefixes(client, bucket=bucket, base=_join(prefix), keep=keep)
     return {"dest": dest, "keep": keep, "kept": [{"stamp": s} for s in kept], "pruned": pruned}

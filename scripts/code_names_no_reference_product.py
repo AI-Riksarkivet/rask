@@ -29,7 +29,6 @@ CODE_TREES = ("packages", "services", "tests", "chart", "deploy", "scripts", "fr
 CODE_FILES = ("conftest.py", "Makefile", "pyproject.toml", "prek.toml", ".importlinter", ".vulture-whitelist.py")
 #: Vendored upstream files rask does not write, this lint, and its own test, which plants the name to show it refused.
 EXCLUDED = (
-    "chart/crds-bootstrap/",
     "/charts/",
     "scripts/code_names_no_reference_product.py",
     "tests/unit/test_the_code_names_no_reference_product.py",

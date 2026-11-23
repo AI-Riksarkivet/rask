@@ -32,7 +32,7 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # bus, a prerequisite values-prod leaves for the deployer to name.
 # observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name, and
 # auth.oidc.connectors the idp id of each of the platform's Dex connectors ([[LH-063]]),
-# auth.fgaApiUrl and age.externalHost the platform's OpenFGA and Postgres ([[XC-132]]), openbao.externalAddr its secret
+# auth.fgaApiUrl the platform's OpenFGA ([[XC-132]]), openbao.externalAddr its secret
 # store ([[XC-149]]), and route.parentRefs the platform's Gateway (ADR 0165),
 # and the egress that reaches the API server, the telemetry backend, the platform's OpenFGA, its secret store, its S3, its
 # bus and its IdP, which no URL can derive ([[XC-143]], [[XC-202]]). image.tags is the pin a released chart carries for each first-party image: the `dev`
@@ -50,7 +50,6 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret
         --set-string nats.url=tls://nats.example.com:4222
         --set-string observability.export.endpoint=https://otlp.example.com:4318/v1/otlp
         --set-string auth.fgaApiUrl=https://fga.example.com
-        --set-string age.externalHost=pg.example.com
         --set-string objectStore.externalEndpoint=https://s3.example.com
         --set-string openbao.externalAddr=https://vault.example.com:8200
         --set-json 'openbao.egress=[{"to":[{"ipBlock":{"cidr":"198.51.100.20/32"}}],"ports":[{"protocol":"TCP","port":8200}]}]'
@@ -88,8 +87,8 @@ done
 # without the exclusion the explicit nats rule is decorative (NetworkPolicies are additive). Then the
 # one explicit rule must render: 4222 from the bus's clients, and 6222 between the servers, whose cluster
 # routes a three-node bus runs on. The windowed grep pins the ports to THAT rule, not a stray match elsewhere.
-grep -qF "values: [openbao, age, rustfs, nats, authorization-controller]" "$OUT" \
-  || fail "the general intra-namespace ingress allow must exclude the nats pods (with openbao/age/rustfs)"
+grep -qF "values: [openbao, postgres, rustfs, nats, authorization-controller]" "$OUT" \
+  || fail "the general intra-namespace ingress allow must exclude the nats pods (with openbao/postgres/rustfs)"
 grep -q "name: rask-nats-clients" "$OUT" || fail "prod NetworkPolicy set missing the nats-clients (4222) rule"
 for port in 4222 6222; do
   grep -A40 "name: rask-nats-clients" "$OUT" | grep -q "port: $port" \
@@ -98,8 +97,8 @@ done
 
 # 2. OpenFGA and its Postgres are the platform's ([[XC-132]]): prod runs neither, and every client dials the endpoints
 # the deployer names.
-grep -qE "name: rask-(openfga|age)$" "$OUT" && fail "prod must not run an OpenFGA or a Postgres (the platform's)"
-grep -qE "rask-openfga:8080|host=rask-age |@rask-age:" "$OUT" && fail "a prod client dials the in-chart OpenFGA or Postgres"
+grep -qE "name: rask-(openfga|postgres)$" "$OUT" && fail "prod must not run an OpenFGA or a Postgres (the platform's)"
+grep -qE "rask-openfga:8080|@rask-postgres:|image: \"?(postgres|apache/age)" "$OUT" && fail "a prod client dials the in-chart OpenFGA or a development Postgres, or the render runs a database image"
 grep -q '"https://fga.example.com"' "$OUT" || fail "prod's FGA clients must dial auth.fgaApiUrl"
 # The secret store is the platform's too ([[XC-149]]): prod renders no OpenBao, and its readers read openbao.externalAddr.
 grep -qE "^  name: rask-(sa-)?openbao" "$OUT" && fail "prod must not render a secret store (the platform's)"
@@ -109,10 +108,6 @@ grep -q 'https://vault.example.com:8200' "$OUT" || fail "prod's secret readers m
 awk '/^kind: StatefulSet$/{f=1} f&&/^  name: /{print $2; f=0}' "$OUT" | grep -qx 'rask-nats' \
   && fail "prod must not render a NATS server (it is a prerequisite)"
 grep -q 'S="tls://nats.example.com:4222"' "$OUT" || fail "prod's stream Job must provision rask's streams on the bus nats.url names"
-# And the CloudNativePG operator ([[XC-130]]): prod runs no operator image and renders none of its webhooks.
-grep -qE "image: \"?ghcr.io/cloudnative-pg/cloudnative-pg:" "$OUT" \
-  && fail "prod must not run a CloudNativePG operator (it is a prerequisite)"
-grep -q "name: cnpg-validating-webhook-configuration$" "$OUT" && fail "prod must not render CloudNativePG's webhooks"
 
 # 4. PodDisruptionBudgets: the request-serving backends (catalog/lineage). NAMED asserts on the PDB
 # documents themselves, not a count: a raw count is inflated by the subcharts' PDBs.
@@ -193,7 +188,6 @@ grep -q "https://s3.example.com" "$OUT" || fail "the platform's S3 at objectStor
 # ExternalSecrets render, no Secret the chart renders carries a credential key, and nothing is generated
 # (the Password generator is the dev OpenBao's alone).
 grep -q "kind: SecretStore" "$OUT" || fail "prod must render the SecretStore ESO syncs from"
-grep -q "name: rask-infra-credentials" "$OUT" || fail "prod must render the infra-credentials ExternalSecret"
 grep -q "kind: Password" "$OUT" && fail "prod must not generate credentials (the Password generator is the dev OpenBao's)"
 
 # 12. Every Job/CronJob POD TEMPLATE carries a component label (the P4 landmine, docs/adr/0124-chart-unification-one-control-plane-each-one-object-store.md, audit 2026-07-24: the

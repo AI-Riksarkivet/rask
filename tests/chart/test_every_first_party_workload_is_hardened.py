@@ -112,7 +112,6 @@ _UNHARDENED_TODAY: dict[str, dict[str, tuple[str, ...]]] = {
     # Long-lived third-party servers the chart templates itself. `readOnlyRootFilesystem` is the key
     # that breaks each: every one writes under its own root unless given a mount, so each comes off
     # with its pod observed running rather than by adding a line here.
-    "StatefulSet/age/postgres": {"containers": BASELINE},
     # The nats CLI answers `could not load schema` as EVERY non-root uid tried — 65532, 1000 and 65534,
     # on nats-box 0.14.5 and 0.19.7, and 65532 on 0.20.2 — while the same command as root succeeds. Bisected key by key:
     # `readOnlyRootFilesystem` alone is fine. So it takes the other three and is listed for this one.

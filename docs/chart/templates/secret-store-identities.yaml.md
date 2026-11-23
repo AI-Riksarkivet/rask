@@ -41,6 +41,7 @@ that app's secret and is refused another's.
 ## `policy-{{ $es.role }}.json: {{ include "lance.storePolicy" (list . (include "lance.esoReads" . | fromJsonArray)) | quote }}`
 
 ESO READS EXACTLY WHAT THE CHART'S EXTERNALSECRETS NAME (`lance.esoReads`), for the pods that do not log in to the store
-themselves: AGE, OpenFGA, the backups and the NATS fixture. Its SecretStore logs in with ESO's own pod token
+themselves: OpenFGA and the development Postgres (the `postgres` secret, while the chart runs OpenFGA), the
+object store's root and the NATS fixture. Its SecretStore logs in with ESO's own pod token
 (it names no `serviceAccountRef`), so the role binds ESO's account and names no audience. ESO stays one identity for
 every pod it writes for, a residual ADR 0169 names.

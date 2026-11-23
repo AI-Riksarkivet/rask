@@ -64,13 +64,13 @@ hierarchy (`console/src/lib/flow`) and the workbench's dock (`console/src/lib/do
 
 **Deployables** (each = a member + a `.docker/<name>.dockerfile`): `rest-catalog` (image `lance-rest-catalog`, the
 three lakehouse services) and `frontend` (image `web-console`, the console's static-file server), both deployed by the
-product chart; plus `cnpg-age-ext` and `marquez` for the
+product chart; plus `marquez` and `bus-signer` for the
 development stand-ins. The lakehouse runs no ingest service (ADR 0154) and no stage, training or engine (ADR 0155): data
 enters through the catalog's namespace doors, and moving data between tables is the user's pipeline on their own compute.
 
 **The product chart deploys the lakehouse, its console, and nothing it does not own** (ADR 0153, ADR 0193). The prerequisites (the External
-Secrets Operator, NATS JetStream, the CloudNativePG operator, the telemetry store) and the
-development stand-ins (Dex, RustFS, OpenBao, Marquez) are each their own release, installed in development from
+Secrets Operator, NATS JetStream, the Postgres behind OpenFGA, the telemetry store) and the
+development stand-ins (Dex, RustFS, OpenBao, Postgres, Marquez) are each their own release, installed in development from
 `deploy/fixtures/<name>` by `make k3s-fixtures` (its `FIXTURES` list). A new lakehouse deployable is a chart
 Deployment; a new piece of infrastructure is a fixture, never a subchart (`rask-helm` §2); a client is a release of its
 own, in its own repository, whose admissions it supplies to a lakehouse install with `-f`.

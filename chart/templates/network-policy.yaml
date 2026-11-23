@@ -12,7 +12,7 @@
 #   (2) the kube-dns egress allow ships IN THIS SAME FILE (default-deny egress without it bricks
 #       name resolution — the audit's named footgun);
 #   (3) targeted allows for the guarded stores (the secret store ← the pods that log in to it,
-#       as ingress on the dev store and egress to the platform's; age-postgres:5432 ← its real clients; the object store:9000 ← the data plane; nats ← 4222 intra-namespace
+#       as ingress on the dev store and egress to the platform's; the development Postgres:5432 ← OpenFGA and its migrate Job; the object store:9000 ← the data plane; nats ← 4222 intra-namespace
 #       only, other ports closed) — every OTHER pod gets plain intra-namespace ingress,
 #       EXCLUDING the guarded stores so the targeted lists stay exclusive (NetworkPolicies are
 #       additive: the general allow must NOT cover the stores);
@@ -119,7 +119,7 @@ metadata:
 spec:
   podSelector:
     matchExpressions:
-      - { key: app.kubernetes.io/component, operator: NotIn, values: [openbao, age, rustfs, nats, authorization-controller] }
+      - { key: app.kubernetes.io/component, operator: NotIn, values: [openbao, postgres, rustfs, nats, authorization-controller] }
   policyTypes: [Ingress]
   ingress:
     - from:
@@ -189,36 +189,27 @@ spec:
         - { protocol: TCP, port: 2112 }
     {{- end }}
 {{- end }}
-{{- if .Values.age.enabled }}
+{{- if and .Values.postgres.enabled .Values.openfga.enabled }}
 ---
-# (3c) age-postgres:5432 — the OpenFGA datastore. Clients: openfga (subchart pods carry
-# app.kubernetes.io/name=openfga), the openfga-migrate job and the pg backup job.
+# (3c) the development Postgres:5432 (deploy/fixtures/postgres), OpenFGA's datastore. Clients: openfga (subchart pods
+# carry app.kubernetes.io/name=openfga) and the openfga-migrate job.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "lance.fullname" . }}-age-postgres
+  name: {{ include "lance.fullname" . }}-postgres
   labels: {{- include "lance.labels" . | nindent 4 }}
 spec:
   podSelector:
-    matchLabels: { app.kubernetes.io/component: age }
+    matchLabels: { app.kubernetes.io/component: postgres }
   policyTypes: [Ingress]
   ingress:
     - from:
         - podSelector:
-            matchExpressions:
-              - key: app.kubernetes.io/component
-                operator: In
-
-                {{- $ageClients := list "openfga-migrate" "backup-pg" }}
-
-                values:
-                  {{- range ($ageClients | uniq) }}
-                  - {{ . }}
-                  {{- end }}
+            matchLabels: { app.kubernetes.io/component: openfga-migrate }
         - podSelector:
             matchLabels: { app.kubernetes.io/name: openfga }
       ports:
-        - { protocol: TCP, port: {{ .Values.age.port }} }
+        - { protocol: TCP, port: {{ .Values.postgres.port }} }
 {{- end }}
 ---
 # (3d) the object store:9000 — the lakehouse bytes. Clients: every pod holding a store session (`lance.objectStoreClients`,

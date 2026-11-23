@@ -28,7 +28,7 @@ The load-bearing records, in reading order:
 
 ## Operations
 
-- [Deployment](../architecture/deployment.md) · [Durability](../DURABILITY.md) · [Resilience](../RESILIENCE.md) · [CNPG + AGE](../CNPG-AGE.md)
+- [Deployment](../architecture/deployment.md) · [Durability](../DURABILITY.md) · [Resilience](../RESILIENCE.md)
 - Runbooks: [On-call](../runbooks/RUNBOOK-oncall.md) · [Backup & Restore](../runbooks/RUNBOOK-restore.md)
 
 ## API snapshots (OpenAPI)

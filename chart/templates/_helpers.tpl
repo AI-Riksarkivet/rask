@@ -83,8 +83,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{- define "lance.ageHost" -}}{{ .Release.Name }}-age{{- end -}}
-
 {{- define "lance.openfgaHost" -}}{{ .Release.Name }}-openfga{{- end -}}
 
 {{- define "lance.dexHost" -}}{{ .Release.Name }}-dex{{- end -}}
@@ -105,11 +103,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end -}}
 
-{{- define "lance.ageConnectHost" -}}
-{{- if .Values.age.externalHost -}}{{ .Values.age.externalHost }}
-{{- else if .Values.age.enabled -}}{{ include "lance.ageHost" . }}
-{{- else if .Values.age.cnpgCluster.enabled -}}lance-pg-rw
-{{- else -}}{{ fail "age.enabled is false, so the Postgres behind AGE and OpenFGA is the platform's: set age.externalHost to its host (docs/architecture/deployment.md, Prerequisites)" }}
+{{- define "lance.postgresFixtureHost" -}}{{ .Release.Name }}-postgres{{- end -}}
+
+{{- define "lance.postgresHost" -}}
+{{- if and .Values.postgres.enabled .Values.postgres.externalHost -}}{{ fail "postgres.enabled says this estate uses the development Postgres (deploy/fixtures/postgres) and postgres.externalHost names the platform's: set one" }}
+{{- else if .Values.postgres.externalHost -}}{{ .Values.postgres.externalHost }}
+{{- else if .Values.postgres.enabled -}}{{ include "lance.postgresFixtureHost" . }}
+{{- else -}}{{ fail "postgres.enabled is false, so the Postgres behind the chart's OpenFGA is the platform's: set postgres.externalHost to its host, or run the platform's OpenFGA (openfga.enabled=false with auth.fgaApiUrl) and name no Postgres (docs/architecture/deployment.md, Prerequisites)" }}
 {{- end -}}
 {{- end -}}
 
@@ -670,8 +670,6 @@ securityContext:
 
 {{- define "lance.saComponents" -}}
 {{- $components := list "catalog" "lineage" "maintenance" "jobs" "issuer-mirror" "hooks" -}}
-{{- if .Values.age.enabled }}{{- $components = append $components "age" }}{{- end -}}
-{{- if .Values.backups.pgDump.enabled }}{{- $components = append $components "backup-pg" }}{{- end -}}
 {{- if .Values.backups.controlRoot.enabled }}{{- $components = append $components "backup-control-root" }}{{- end -}}
 {{- toJson $components -}}
 {{- end -}}
@@ -680,7 +678,7 @@ securityContext:
 {{- $root := . -}}
 {{- $identities := list -}}
 {{- range (include "lance.saComponents" . | fromJsonArray) }}
-{{- if and (has . (list "catalog" "lineage" "maintenance" "backup-pg" "backup-control-root")) (or (ne . "maintenance") $root.Values.maintenance.enabled) }}{{- $identities = append $identities . }}{{- end }}
+{{- if and (has . (list "catalog" "lineage" "maintenance" "backup-control-root")) (or (ne . "maintenance") $root.Values.maintenance.enabled) }}{{- $identities = append $identities . }}{{- end }}
 {{- end -}}
 {{- toJson $identities -}}
 {{- end -}}
@@ -722,14 +720,6 @@ buckets as the estate's reads already are. */ -}}
   (dict "Sid" "ReadTheRecordsItJudgesBy" "Effect" "Allow" "Action" (list "s3:GetObject") "Resource" $judged)
   (dict "Sid" "ReadEachBucketsEventConfiguration" "Effect" "Allow" "Action" (list "s3:GetBucketNotification") "Resource" (list "arn:aws:s3:::*"))
   (dict "Sid" "WriteItsOwnRecordsAndNothingElse" "Effect" "Allow" "Action" (list "s3:PutObject" "s3:DeleteObject") "Resource" $own)) -}}
-{{- end -}}
-
-{{- define "lance.objectStorePolicy.backup-pg" -}}
-{{- $control := .Values.objectStore.bucket -}}
-{{- toJson (list
-  (dict "Sid" "FindTheBucket" "Effect" "Allow" "Action" (list "s3:GetBucketLocation") "Resource" (list (printf "arn:aws:s3:::%s" $control)))
-  (dict "Sid" "ListItsOwnDumps" "Effect" "Allow" "Action" (list "s3:ListBucket") "Resource" (list (printf "arn:aws:s3:::%s" $control)) "Condition" (dict "StringLike" (dict "s3:prefix" (list "_backups/pg/" "_backups/pg/*"))))
-  (dict "Sid" "WriteAndPruneItsOwnDumps" "Effect" "Allow" "Action" (list "s3:GetObject" "s3:PutObject" "s3:DeleteObject" "s3:AbortMultipartUpload" "s3:ListMultipartUploadParts") "Resource" (list (printf "arn:aws:s3:::%s/_backups/pg/*" $control)))) -}}
 {{- end -}}
 
 {{- define "lance.objectStorePolicy.backup-control-root" -}}
@@ -1136,7 +1126,8 @@ activeDeadlineSeconds: 1800
 
 {{- define "lance.esoReads" -}}
 {{- $v := .Values -}}
-{{- $reads := list "postgres" -}}
+{{- $reads := list -}}
+{{- if $v.openfga.enabled }}{{- $reads = append $reads "postgres" }}{{- end -}}
 {{- if $v.objectStore.enabled }}{{- $reads = append $reads "object-store-root" }}{{- end -}}
 {{- range $files := include "lance.natsFiles" . | fromJson }}{{- $reads = concat $reads $files }}{{- end -}}
 {{- toJson ($reads | uniq | sortAlpha) -}}

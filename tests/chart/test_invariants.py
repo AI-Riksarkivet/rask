@@ -197,6 +197,9 @@ _REAL_REGISTRY = (
     "objectStore.events.provisioned=true",
     "objectStore.enabled=false",
     "objectStore.externalEndpoint=https://s3.example.com",
+    "postgres.enabled=false",
+    "postgres.externalHost=pg.example.com",
+    r"openfga.podAnnotations.rask\.dev/openfga-datastore=pg.example.com:5432/openfga",
 )
 
 
@@ -240,7 +243,7 @@ def test_an_image_reference_that_helm_parsed_as_a_number_is_refused_at_render(ke
     [
         pytest.param("undeclared:\n  enabled: true\n", r"\(root\)|at ''", id="top-level-key"),
         pytest.param("image:\n  tags:\n    undeclared: x\n", r"image\.tags|at '/image/tags'", id="image-the-chart-renders-none-of"),
-        pytest.param("age:\n  undeclared: oops\n", r"(?<![a-z])age|at '/age'", id="a-misspelt-key-of-a-block"),
+        pytest.param("postgres:\n  undeclared: oops\n", r"postgres|at '/postgres'", id="a-misspelt-key-of-a-block"),
         pytest.param("lifecycle:\n  undeclared: 1\n", r"lifecycle|at '/lifecycle'", id="a-misspelt-lifecycle-number"),
         pytest.param(
             "nats:\n  auth:\n    users:\n      catalog:\n        undeclared: [x]\n",
@@ -520,12 +523,12 @@ def test_a_production_render_runs_no_store_the_platform_serves_and_dials_the_pla
     names each (ADR 0153). The production render runs no workload or identity of any of
     them and holds no object of the secret store. Every FGA client, Postgres client and secret reader dials the named
     endpoint, the pods that log in to the secret store are the pods admitted to it and no others, and no credential rides
-    along in an env value: the FGA token is a projected file and the Postgres password the store's `postgres-password`,
-    both by reference."""
-    fga, pg, store = "https://fga.platform.example", "pg.platform.example", "https://vault.platform.example:8200"
+    along in an env value: the FGA token is a projected file. With the platform's OpenFGA the render names no Postgres
+    at all (ADR 0228)."""
+    fga, store = "https://fga.platform.example", "https://vault.platform.example:8200"
     docs = chart_render.render(
         *chart_render.PROD_ARGS,
-        "--set-string", f"auth.fgaApiUrl={fga}", "--set-string", f"age.externalHost={pg}", "--set-string", f"openbao.externalAddr={store}",
+        "--set-string", f"auth.fgaApiUrl={fga}", "--set-string", f"openbao.externalAddr={store}",
     )  # fmt: skip
 
     found = sorted(
@@ -536,12 +539,12 @@ def test_a_production_render_runs_no_store_the_platform_serves_and_dials_the_pla
     found += sorted(
         f"{doc['kind']}/{doc['metadata']['name']}"
         for doc in docs
-        if doc["metadata"]["name"] in {"rask-age", "rask-openfga", "rask-sa-age"} or "openbao" in doc["metadata"]["name"]
+        if doc["metadata"]["name"] in {"rask-postgres", "rask-openfga"} or "openbao" in doc["metadata"]["name"]
     )
     assert not found, f"the render runs part of a store the platform serves: {found}"
 
     text = json.dumps(docs)
-    in_chart = r"rask-(?:age|openfga|openbao)(?::\d| \d|\.[a-z0-9-]+\.svc)|(?:@|//|host=|-h )rask-(?:age|openfga|openbao)\b|'rask-(?:age|openfga|openbao)'"
+    in_chart = r"rask-(?:postgres|openfga|openbao)(?::\d| \d|\.[a-z0-9-]+\.svc)|(?:@|//|host=|-h )rask-(?:postgres|openfga|openbao)\b|'rask-(?:postgres|openfga|openbao)'"
     assert not re.findall(in_chart, text), "a client still dials the in-chart instance"
     fga_urls = {env[k] for _, _, c in chart_render.containers(docs) for k in ("RASK_FGA_API_URL", "FGA_API_URL") if k in (env := chart_render.env_of(c))}
     assert fga_urls == {fga}, fga_urls

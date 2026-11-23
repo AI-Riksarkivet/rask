@@ -1,0 +1,92 @@
+{{- $labels := dict "app.kubernetes.io/name" "postgres" "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "postgres" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+automountServiceAccountToken: false
+---
+# The server's password, read from the dev store through rask's SecretStore: the same `postgres` secret rask's own
+# ExternalSecret builds OpenFGA's connection string from, so the two cannot disagree.
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .Values.name }}-auth
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  refreshInterval: {{ .Values.rask.refreshInterval | quote }}
+  secretStoreRef: { name: {{ .Values.rask.release }}-vault, kind: SecretStore }
+  target:
+    name: {{ .Values.name }}-auth
+    creationPolicy: Owner
+  data:
+    - { secretKey: password, remoteRef: { key: postgres, property: password } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  selector: {{- toYaml $labels | nindent 4 }}
+  ports:
+    - { name: postgres, port: {{ .Values.port }}, targetPort: postgres }
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ .Values.name }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  serviceName: {{ .Values.name }}
+  replicas: 1
+  selector:
+    matchLabels: {{- toYaml $labels | nindent 6 }}
+  template:
+    metadata:
+      labels: {{- toYaml $labels | nindent 8 }}
+    spec:
+      serviceAccountName: {{ .Values.name }}
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: postgres
+          image: {{ .Values.image }}
+          env:
+            - { name: POSTGRES_USER, value: {{ .Values.user | quote }} }
+            - { name: POSTGRES_DB, value: {{ .Values.database | quote }} }
+            - { name: POSTGRES_PASSWORD_FILE, value: /run/secrets/postgres/password }
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          ports:
+            - { name: postgres, containerPort: 5432 }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: run, mountPath: /var/run/postgresql }
+            - { name: tmp, mountPath: /tmp }
+            - { name: password, mountPath: /run/secrets/postgres, readOnly: true }
+          readinessProbe:
+            exec: { command: ["pg_isready", "-U", {{ .Values.user | quote }}, "-d", {{ .Values.database | quote }}] }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: run
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+        - name: password
+          secret: { secretName: {{ .Values.name }}-auth, defaultMode: 0440 }
+  volumeClaimTemplates:
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources: { requests: { storage: {{ .Values.storage }} } }

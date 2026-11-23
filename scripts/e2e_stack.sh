@@ -202,11 +202,12 @@ export RASK_EXPECT_CONTEXT="kind-$CLUSTER"
 # before rask. fixtures.sh waits for each, so the bus is Ready before any rask pod exists. The bus runs with
 # operator mode off (the fixture's default), so it takes the credentials rask's clients present without checking them.
 # Dex, the dev OIDC issuer the lane mints its tokens from, the dev object store and the dev secret store are fixtures too
-# ([[XC-131]]). The two stores start once rask is installed (the object store's root credential and the secret store's
-# seed scripts are rask's), so fixtures.sh does not wait for them.
+# ([[XC-131]]), and so is the Postgres OpenFGA keeps its store in. The stores and that Postgres start once rask is
+# installed (the object store's root credential, the secret store's seed scripts and the Postgres password are
+# rask's), so fixtures.sh does not wait for them.
 # The observability fixture is the gateway every rask service exports to and its store (ADR 0214, ADR 0215), Ready before
 # any rask pod exports to it.
-"$(dirname "$0")/fixtures.sh" external-secrets nats dex openbao observability
+"$(dirname "$0")/fixtures.sh" external-secrets nats dex openbao postgres observability
 
 step "3/8 side-load the images"
 wait "$BUILD_PID" || { cat "$IMAGE_DIR/build.log"; echo "!! an image build failed (log above)" >&2; exit 1; }

@@ -65,7 +65,7 @@ func provenance(buildDate, vcsRef, version string) []dagger.BuildArg {
 }
 
 // extraArgs parses KEY=VALUE strings so ANY dockerfile is buildable through this one function —
-// cnpg-age-ext needs AGE_REF/CNPG_BASE, and a future image will need something else. Without this the
+// marquez needs MARQUEZ_VERSION, and a future image will need something else. Without this the
 // module would need a new Go function per dockerfile, which is how a build system drifts back into
 // special cases. A token with no "=" is ignored rather than silently becoming an empty-valued arg.
 func extraArgs(kv []string) []dagger.BuildArg {
@@ -80,7 +80,7 @@ func extraArgs(kv []string) []dagger.BuildArg {
 
 // Image builds ANY deployable from its own dockerfile under .docker/.
 //
-// `name` is the dockerfile stem: rest-catalog, frontend (the console), cnpg-age-ext, marquez, bus-signer.
+// `name` is the dockerfile stem: rest-catalog, frontend (the console), marquez, bus-signer.
 func (m *Rask) Image(
 	// +ignore=["**/.venv", ".git", "**/node_modules", "**/.svelte-kit", "**/.turbo",
 	//          ".localbin", ".playwright-cli", "**/e2e", "**/test-results", "**/playwright-report", "**/*.spec.ts",

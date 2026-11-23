@@ -102,7 +102,6 @@ PROD_ARGS: tuple[str, ...] = (
     "--set-string", "auth.fgaApiUrl=https://fga.example.com",
     "--set-string", "auth.oidc.idpId=corp",
     "--set-json", 'auth.oidc.connectors={"ldap":"corp"}',
-    "--set-string", "age.externalHost=pg.example.com",
     "--set-string", f"objectStore.externalEndpoint={OBJECT_STORE_URL}",
     "--set-string", f"openbao.externalAddr={SECRET_STORE_URL}",
     "--set-json", f'openbao.egress=[{{"to":[{{"ipBlock":{{"cidr":"{SECRET_STORE_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":8200}}]}}]',

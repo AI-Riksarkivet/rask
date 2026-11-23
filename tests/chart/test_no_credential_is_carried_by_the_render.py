@@ -46,8 +46,8 @@ def test_a_cluster_less_render_mints_no_credential(overlay: str) -> None:
 
 
 #: Helm's refusal of a key the schema does not declare, as two releases word it: 3.16.4, which the lanes pin
-#: (`- age: Additional property password is not allowed`), and 3.22.0
-#: (`- at '/age': additional properties 'password' not allowed`).
+#: (`- postgres: Additional property password is not allowed`), and 3.22.0
+#: (`- at '/postgres': additional properties 'password' not allowed`).
 _UNDECLARED_KEY = re.compile(r"- (?:at '/)?(?P<at>\w+)'?: [Aa]dditional propert(?:y|ies) '?(?P<key>\w+)'? (?:is )?not allowed")
 
 
@@ -55,10 +55,10 @@ def test_a_credential_passed_as_a_value_is_refused_naming_it() -> None:
     """A credential passed as a value is refused, by name, on any render: no credential is a key `values.yaml` declares, and
     the schema refuses a key it does not declare at every level, before anything is stored in the release."""
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        render_text(*DEFAULT_ARGS, "--set-string", "age.password=a-password", "--set-string", "objectStore.secretKey=a-root-secret")
+        render_text(*DEFAULT_ARGS, "--set-string", "postgres.password=a-password", "--set-string", "objectStore.secretKey=a-root-secret")
 
     refusals = {(found["at"], found["key"]) for line in refused.value.stderr.splitlines() if (found := _UNDECLARED_KEY.fullmatch(line))}
-    assert refusals == {("age", "password"), ("objectStore", "secretKey")}, refused.value.stderr
+    assert refusals == {("postgres", "password"), ("objectStore", "secretKey")}, refused.value.stderr
 
 
 @pytest.mark.parametrize(
@@ -125,36 +125,20 @@ def test_a_real_deployment_refuses_what_would_expose_it(setting: tuple[str, ...]
     assert reason in refused.value.stderr
 
 
-#: The AGE-on-CNPG path, the one part of the render that needs the CloudNativePG API ([[XC-130]]).
-_CNPG_CLUSTER = (
-    "--set",
-    "age.enabled=false",
-    "--set",
-    "age.cnpgCluster.enabled=true",
-    "--set-string",
-    f"age.cnpgCluster.extensionImage=reg.example/age@sha256:{'ab' * 32}",
-)
-
-
 @pytest.mark.parametrize(
-    ("api", "message", "enable"),
+    ("api", "message"),
     [
-        ("external-secrets.io", "the External Secrets Operator is a prerequisite: this cluster does not serve external-secrets.io/v1", ()),
-        ("nats.url", "NATS JetStream is a prerequisite: set nats.url", ()),
-        (
-            "postgresql.cnpg.io",
-            "CloudNativePG is a prerequisite: age.cnpgCluster.enabled is on and this cluster does not serve postgresql.cnpg.io/v1",
-            _CNPG_CLUSTER,
-        ),
+        ("external-secrets.io", "the External Secrets Operator is a prerequisite: this cluster does not serve external-secrets.io/v1"),
+        ("nats.url", "NATS JetStream is a prerequisite: set nats.url"),
     ],
-    ids=["external-secrets", "nats", "cloudnative-pg"],
+    ids=["external-secrets", "nats"],
 )
-def test_a_render_for_a_cluster_without_a_prerequisite_fails_naming_it(api: str, message: str, enable: tuple[str, ...]) -> None:
-    """ESO, the NATS bus and, for its Cluster, the CloudNativePG operator are prerequisites rask never installs
-    (ADR 0153): a render for a cluster that does not serve one, or that names no bus, stops and says which."""
+def test_a_render_for_a_cluster_without_a_prerequisite_fails_naming_it(api: str, message: str) -> None:
+    """ESO and the NATS bus are prerequisites rask never installs (ADR 0153): a render for a cluster that does not serve
+    the one, or that names no other, stops and says which."""
     pairs = zip(OIDC_ARGS[::2], OIDC_ARGS[1::2], strict=True)
     without = tuple(arg for flag, value in pairs if api not in value for arg in (flag, value))
-    argv = ["helm", "template", "rask", str(REPO / "chart"), *without, *DEFAULT_ARGS, *enable]
+    argv = ["helm", "template", "rask", str(REPO / "chart"), *without, *DEFAULT_ARGS]
     refused = subprocess.run(argv, capture_output=True, text=True, check=False)  # noqa: S603, S607
 
     assert refused.returncode != 0

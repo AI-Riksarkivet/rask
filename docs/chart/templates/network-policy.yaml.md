@@ -26,15 +26,15 @@ while they keep running, so the render refuses before any policy renders, in ONE
 with what it reaches and who dials it: a deployer fixes them all in one pass instead of one per render. The same rows
 render the policies below, so the requirement and the policy cannot drift.
 
-## `{{- $ageClients := list "openfga-migrate" "backup-pg" }}`
+## `matchLabels: { app.kubernetes.io/component: openfga-migrate }`
 
-The Postgres's component-labelled clients: OpenFGA's migrate Job and the pg backup job (OpenFGA's own pods are
-admitted by their subchart's name label below).
+The development Postgres's one component-labelled client: OpenFGA's migrate Job (OpenFGA's own pods are admitted by
+their subchart's name label below).
 
 ## `values: {{- toYaml (concat (include "lance.objectStoreClients" . | fromJsonArray) (list "object-store-provisioning" "bucket-events")) | nindent 18 }}`
 
 THE STORE ADMITS EXACTLY THE PODS THAT DIAL IT, by component label: every pod holding a store session
-(`lance.objectStoreClients`: the data-plane services, maintenance's workers and the backup Jobs, each writing under
+(`lance.objectStoreClients`: the data-plane services, maintenance's workers and the control-root backup Job, writing under
 `_backups/`), the same list the platform's S3 is reached from, so the dev store's ingress and the platform's egress
 cannot drift; the provisioning hook (`object-store-provisioning`), which creates every platform bucket and every canned
 policy and so must reach the store before anything else can; and the store fixture's own `bucket-events` Job, which

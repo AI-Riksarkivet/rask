@@ -23,12 +23,11 @@ from tests.chart.chart_render import containers, env_of, render, render_fixture
 REPO = Path(__file__).resolve().parents[2]
 
 #: `{workload: (the container that signs with the store, its settings' variable prefix)}`: every lakehouse workload that
-#: reaches the object store, with both backups on as the development estate runs them.
+#: reaches the object store, with the control-root backup on as the development estate runs it.
 STORE_CLIENTS = {
     "Deployment/rask-catalog": ("catalog", "LANCE"),
     "Deployment/rask-lineage": ("lineage", "LINEAGE"),
     "Deployment/rask-maintenance-worker": ("worker", "MAINTENANCE"),
-    "CronJob/rask-pg-backup": ("upload", "RASK"),
     "CronJob/rask-control-root-backup": ("backup", "RASK"),
 }
 

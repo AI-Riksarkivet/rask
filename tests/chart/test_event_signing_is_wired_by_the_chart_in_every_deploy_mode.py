@@ -48,6 +48,12 @@ _PLATFORM_STORE = (
     "objectStore.enabled=false",
     "--set-string",
     "objectStore.externalEndpoint=https://s3.example.com",
+    "--set",
+    "postgres.enabled=false",
+    "--set-string",
+    "postgres.externalHost=pg.example.com",
+    "--set-string",
+    r"openfga.podAnnotations.rask\.dev/openfga-datastore=pg.example.com:5432/openfga",
 )
 
 

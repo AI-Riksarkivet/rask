@@ -8,7 +8,6 @@
 #
 #   scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 #   scripts/dagger-image.sh --name frontend     --tag web-console:dev
-#   scripts/dagger-image.sh --name cnpg-age-ext --tag cnpg-age:dev --arg AGE_REF=<ref> --arg AGE_COMMIT=<the commit that ref names>
 #   scripts/dagger-image.sh --name rest-catalog --out build/k3s-images/lance-rest-catalog.tar   (no docker: what k3s-build does)
 #
 # DELIVERY: --load (default) exports an OCI tarball and `docker load`s it, which reproduces exactly what

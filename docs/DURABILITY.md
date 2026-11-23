@@ -2,8 +2,8 @@
 
 This makes explicit what the chart only *implied*: which parts of the system are **ephemeral compute**,
 which are the **durable data** that must be backed up, and which should be **external / managed in
-production**. The product chart runs rask's own services; the object store, the secret store, Dex, NATS and the
-observability store are prerequisites (ADR 0153), installed in development from `deploy/fixtures`.
+production**. The product chart runs rask's own services; the object store, the secret store, Dex, NATS, the
+Postgres behind OpenFGA and the observability store are prerequisites (ADR 0153), installed in development from `deploy/fixtures`.
 
 ## The three tiers
 
@@ -21,7 +21,7 @@ no-op for data.
 | Store | Holds | Persistence | Lifecycle |
 |-------|-------|-------------|-----------|
 | **Object store (S3)** | the **lakehouse** (Lance datasets), lineage's provenance tables (the commit feed and edge list, in the catalog's `lance_catalog$provenance` namespace), the lineage outbox, trash and the registries | the RustFS fixture's PVC in development; the platform's S3 in production | the permanent data asset — lives for months/years |
-| **Apache AGE / Postgres** | OpenFGA's authz store | PVC (`volumeClaimTemplates`) | grows with history; permanent |
+| **Postgres** | OpenFGA's authz store | the platform's Postgres; in development the `postgres` fixture's PVC, with no backup | grows with history; permanent |
 | **NATS JetStream** | the catalog→lineage event buffer | PVC (`fileStore`) | transient (replay window); survives restart so no event is lost across a roll |
 | **Secret store** | secrets | none in the chart ([[XC-149]]): the platform's Vault or OpenBao in production (tier 3); the dev OpenBao fixture is in memory and its seed writes it again | permanent, the platform's |
 
@@ -54,16 +54,16 @@ the apps at the external endpoint:
 | Service | Why external in prod | How (wired) |
 |---------|----------------------|-----|
 | **S3 lakehouse** | the permanent system of record; you want a managed, replicated, lifecycle-policied object store (AWS S3 / a multi-node RustFS or Ceph cluster) | `objectStore.enabled=false` + `objectStore.externalEndpoint=…` → catalog/lineage/maintenance + vending connect there |
-| **Postgres (AGE)** | a managed DB (RDS/Cloud SQL/CNPG) for backups, HA, PITR | `age.enabled=false` + `age.externalHost=…` (+ matching user/password/dbs) → the OpenFGA datastore Secret points there (also override the openfga subchart's `datastore.uri`) |
+| **Postgres** | a managed DB for backups, HA, PITR | the chart runs none. With the platform's OpenFGA (`openfga.enabled=false`) it names none; with the chart's OpenFGA, `postgres.enabled=false` + `postgres.externalHost=…` (+ `postgres.user`/`postgres.database`) → OpenFGA's config file names it |
 | **OpenBao / secrets — app tier** | a hardened external Vault / cloud KMS | `openbao.enabled=false` + `openbao.externalAddr=…` → each service logs in to the external Vault itself, as its own ServiceAccount, and reads its secrets there (`RASK_SECRET_STORE_ADDR`, `lakehouse.governed.secrets`), and there is **no** plaintext-env fallback; the chart renders no store in any mode, and `openbao.egress` admits only the store's readers to it |
-| **infra-tier Secret** | the `infra-credentials` Secret (the Postgres password the AGE server and OpenFGA's migrate read) and, on the dev store, `object-store-root` must come from the secret store, never from chart values | always synced from the store by the External Secrets Operator, a prerequisite (the render refuses a cluster without `external-secrets.io/v1`): `<release>-infra-credentials` from the store's `postgres` key, with the OpenFGA DSN assembled from the fetched password; `<release>-object-store-root` with `objectStore.enabled` (`chart/templates/external-secrets.yaml`) |
+| **infra-tier Secret** | the `infra-credentials` Secret (OpenFGA's config file, carrying the Postgres password OpenFGA and its migrate Job read; rendered only while the chart runs OpenFGA) and, on the dev store, `object-store-root` must come from the secret store, never from chart values | always synced from the store by the External Secrets Operator, a prerequisite (the render refuses a cluster without `external-secrets.io/v1`): `<release>-infra-credentials` from the store's `postgres` key (with `openfga.enabled`), with the OpenFGA DSN assembled from the fetched password; `<release>-object-store-root` with `objectStore.enabled` (`chart/templates/external-secrets.yaml`) |
 | **Observability** (each service → the platform's OTLP gateway → its store) | you don't want observability to die with the cluster it observes — run the store on a separate platform/cluster | the product chart renders no Collector (ADR 0215): with `observability.enabled` each lakehouse service exports OTLP/HTTP to **`observability.export.endpoint`**, the platform's gateway, presenting its pod's ServiceAccount token for `observability.identity.audience`. Tailing logs, scraping OpenFGA, routing the `lance.audit` scope to its own table and the store, dashboards and alerting are the platform's (ADR 0153; development: the `observability` fixture's Collector and GreptimeDB); the alert rules are `deploy/alerting/rules.yml`. In transit a record is durable only to the SDK's in-memory batch per pod, then to the gateway; the fixture's gateway queues on `file_storage` so its own restart loses nothing |
 
 > All five overrides are **wired and verified** (`prod-render-check` legs 10–11 + the OTel decoupling assert:
 > no in-cluster DNS leaks into app env when externalized);
 > external-Vault keeps every app reading the store under its own login, with no plaintext fallback, **and TLS
 > verification on for an https Vault** in every reader (the services' own client and ESO);
-> the external-secrets operator owns the infra + observability Secrets — the object store's secret key + AGE
+> the external-secrets operator owns the infra + observability Secrets — the object store's secret key + Postgres
 > password come from Vault, only the non-sensitive S3 access-key id stays templated). The
 > `values-prod.yaml` EXTERNALIZE block shows the full set.
 >
@@ -89,10 +89,8 @@ So: a long-lived lakehouse with provenance, and a version-expiry lifecycle that 
 - **Lakehouse (S3)** — the highest-value asset. In prod: an external object store with versioning +
   cross-region replication + lifecycle rules. In-cluster: `backups.volumeSnapshot` (off by default) snapshots the RustFS
   fixture's data PVC (`VolumeSnapshot` on a CSI StorageClass). Lance datasets are immutable-versioned on disk, so an object-store snapshot is consistent.
-- **AGE / Postgres** — `pg_dump` / WAL archiving (managed DB does PITR); or PVC `VolumeSnapshot`. The
-  in-cluster pg-backup CronJob (`backup-pg.yaml`) dumps `openfga` gzipped to
-  `_backups/pg/<UTC>/` on the object store and prunes all but the newest `backups.pgDump.keep` dumps (default 7;
-  0 disables).
+- **OpenFGA's Postgres** — the platform's: its dumps, WAL archiving and PITR. rask ships no database backup, and the
+  development `postgres` fixture has none.
 - **The secret store** — the platform's own backup; secrets are also re-derivable from the source of truth the
   operator populates from. The dev OpenBao fixture holds nothing its seed cannot write again.
 - **NATS** — transient; no backup needed (lineage's insert-only merges mean a replayed event lands no second
@@ -100,9 +98,6 @@ So: a long-lived lakehouse with provenance, and a version-expiry lifecycle that 
 
 **Known open gaps in the in-cluster path** (accept the loss window or externalize — see
 [docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md) and [RUNBOOK-restore.md](runbooks/RUNBOOK-restore.md)):
-- **Backup fate-sharing**: the pg_dump lands on the same object store, so a total store loss loses both the Lance data
-  *and* the DB dumps. Ship the dumps off-cluster (a second object store / off-site), or externalize
-  Postgres to CloudNativePG and use its PITR.
 - **RPO/RTO are undocumented**, and nothing verifies the lakehouse `VolumeSnapshot` actually succeeds (the
   empty `snapshotClassName` is a per-cluster value) — confirm both on your cluster before trusting the
   snapshot leg.
@@ -110,4 +105,4 @@ So: a long-lived lakehouse with provenance, and a version-expiry lifecycle that 
 ## Prod profile
 `deploy/values-prod.yaml` is a starting overlay — it flips the safe-by-default-off prod switches (the
 platform's secret store, governance on, the cluster route on the platform's Gateway) and turns the in-cluster OpenFGA and Postgres off in favour of
-the platform's (`openfga.enabled: false`, `age.enabled: false`). Apply with `helm upgrade … -f chart/values.yaml -f deploy/values-prod.yaml`.
+the platform's (`openfga.enabled: false`, `postgres.enabled: false`). Apply with `helm upgrade … -f chart/values.yaml -f deploy/values-prod.yaml`.

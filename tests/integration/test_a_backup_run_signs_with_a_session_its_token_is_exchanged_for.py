@@ -1,7 +1,7 @@
 """A backup run holds no key: it signs with one session its pod's ServiceAccount token is exchanged for ([[XC-084]]).
 
-Both backup CronJobs run a script out of rask's image (`scripts/pg_dump_upload.py`, `scripts/control_root_backup.py`),
-and each asks STS `AssumeRoleWithWebIdentity` once, at the run's start, for a session under the policy the store binds to
+The backup CronJob runs a script out of rask's image (`scripts/control_root_backup.py`),
+and it asks STS `AssumeRoleWithWebIdentity` once, at the run's start, for a session under the policy the store binds to
 its account (`scripts/_backup_store.py`'s `job_client`). The store here is a moto server that serves S3 and STS. The run's
 environment holds no credential at all, no key pair, no profile and no instance metadata, so a run that reached for
 boto3's default chain finds nothing to sign with, and what each exchange asked for is read back from moto's STS backend in
@@ -73,13 +73,6 @@ def role(moto_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     return role_arn
 
 
-def _upload_a_dump(bucket: str, tmp_path: Path) -> int:
-    dump = tmp_path / "dump"
-    dump.mkdir()
-    (dump / "openfga.sql.gz").write_bytes(b"\x1f\x8b dump")
-    return _script("pg_dump_upload").main(["pg_dump_upload.py", str(dump), f"s3://{bucket}/_backups/pg", "--keep", "7"])
-
-
 def _back_up_the_control_root(bucket: str, _tmp_path: Path) -> int:
     return _script("control_root_backup").main(["backup", "--root", f"s3://{bucket}"])
 
@@ -87,7 +80,6 @@ def _back_up_the_control_root(bucket: str, _tmp_path: Path) -> int:
 @pytest.mark.parametrize(
     ("run", "session_name", "landed_under", "landed_files"),
     [
-        pytest.param(_upload_a_dump, "backup-pg", "_backups/pg/", ["openfga.sql.gz"], id="the-pg-dump-upload"),
         pytest.param(
             _back_up_the_control_root, "control-root-backup", "_backups/control/", ["MANIFEST.json", "_projects/acme.json"], id="the-control-root-backup"
         ),

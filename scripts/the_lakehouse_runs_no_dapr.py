@@ -41,7 +41,7 @@ GUARDS = frozenset(
     }
 )
 #: Vendored upstream files rask does not write.
-VENDORED = ("chart/crds-bootstrap/", "/charts/")
+VENDORED = ("/charts/",)
 
 
 def code_files(root: Path) -> list[str]:

@@ -13,10 +13,10 @@ install or upgrade; a cluster-less render states the target with `--api-versions
 
 ## `{{- range $key, $name := include "lance.devCredentials" . | fromJson }}`
 
-AN ESTATE THAT ALREADY HOLDS DATA KEEPS ITS CREDENTIALS. The AGE database and the object store keep the
+AN ESTATE THAT ALREADY HOLDS DATA KEEPS ITS CREDENTIALS. The development Postgres and the object store keep the
 password and root they were initialised with, so generating fresh ones beside them hands every consumer a
-credential its server refuses. Each credential is guarded on its own (`$unlocks`): `postgres-password` while the AGE
-StatefulSet exists, `object-store-secret-key` while the object store does, which counts only when its StatefulSet and its
+credential its server refuses. Each credential is guarded on its own (`$unlocks`): `postgres-password` while the development
+Postgres's StatefulSet (`lance.postgresFixtureHost`) exists, `object-store-secret-key` while the object store does, which counts only when its StatefulSet and its
 root's Secret, `<release>-object-store-root`, both exist (`$objectStore`). On an upgrade of an estate whose store exists,
 that credential's Secret must already exist: carried forward from the current credential before the first upgrade, and
 rotated in place afterwards (docs/OPERATORS.md 8). A credential no store holds (one added later) is
@@ -28,7 +28,7 @@ store exists yet, generate.
 THE DEV OPENBAO'S CREDENTIALS, GENERATED IN THE CLUSTER. The render carries none: ESO's Password generator fills
 each credential's own Secret (`lance.devCredentials`) once (`CreatedOnce`) and never again, and the dev OpenBao's seed
 mounts them as one directory and writes each key into the in-memory store. It is a Secret rather than store-only because the store
-forgets: the AGE database and the object store keep what they were initialised with across an OpenBao
+forgets: the development Postgres and the object store keep what they were initialised with across an OpenBao
 replacement, so the next seed must write the same values. `keep` holds it through an uninstall for the same
 reason the data volumes are held. Rendered only for the chart's own dev store (`lance.mintsDevCredentials`);
 a real deployment is refused before it gets here (prod-credentials.yaml), and a platform store holds
@@ -39,10 +39,10 @@ since removing the owner would garbage-collect the Secret.
 
 ## `name: {{ include "lance.fullname" . }}-infra-credentials`
 
-THE INFRA TIER'S SECRET, for the pods that do not log in to the store and need the AGE password: the AGE server, OpenFGA and its
-migrate Job, each of which mounts it as a file and takes nothing from it through env ([[XC-081]]). It carries
-`postgres-password` (the server's `POSTGRES_PASSWORD_FILE`) and `openfga-config.yaml`, OpenFGA's config file with the
-datastore DSN assembled from that password, which `openfga run` and `openfga migrate` read from `/etc/openfga`
+THE INFRA TIER'S SECRET, for the pods that do not log in to the store and need the Postgres password: OpenFGA and its
+migrate Job, each of which mounts it as a file and takes nothing from it through env ([[XC-081]]). Rendered only while
+the chart runs OpenFGA (`openfga.enabled`). It carries `openfga-config.yaml`, OpenFGA's config file with the datastore
+DSN assembled from the store's `postgres` password and `lance.postgresHost`, which `openfga run` and `openfga migrate` read from `/etc/openfga`
 (OpenFGA v1.18.3 `cmd/root.go`). It holds no store credential: the object store's root has a Secret of its own
 (below), so a pod that mounts this one for the database reads nothing that signs an STS token.
 

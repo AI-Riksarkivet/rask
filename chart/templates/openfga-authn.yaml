@@ -26,6 +26,11 @@
 {{- if ne $named (include "lance.openfgaClients" .) }}
 {{- fail (printf "openfga.podAnnotations.rask.dev/openfga-clients is %q, but OpenFGA's clients are %q (lance.openfgaClients): a running OpenFGA would keep admitting the subjects it started with" $named (include "lance.openfgaClients" .)) }}
 {{- end }}
+{{- $datastore := printf "%s:%v/%s" (include "lance.postgresHost" .) .Values.postgres.port .Values.postgres.database }}
+{{- $dialled := index (($fga.podAnnotations) | default dict) "rask.dev/openfga-datastore" | default "" }}
+{{- if ne $dialled $datastore }}
+{{- fail (printf "openfga.podAnnotations.rask.dev/openfga-datastore is %q, but OpenFGA's Postgres is %q (postgres.externalHost or the development fixture's host, postgres.port, postgres.database): set the annotation to it, or a running OpenFGA would keep dialling the database it started with" $dialled $datastore) }}
+{{- end }}
 {{- $subjects := include "lance.openfgaSubjects" . }}
 
 {{- if not $subjects }}{{- $subjects = "system:serviceaccount:-:no-fga-client" }}{{- end }}

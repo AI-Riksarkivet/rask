@@ -146,7 +146,8 @@ asked for again by the lane that met it, on the numbers that lane names (`lakeho
 5. **Single points of failure (single-node infra).** Every stateful backing store runs as **one replica** on
    kind — this is a **demo topology, not an HA one**. If any of these pods dies, the pipeline stalls until it
    restarts (no data loss — PVCs persist — but no availability either):
-   - **AGE / Postgres** — one StatefulSet pod serving OpenFGA's datastore. Down →
+   - **Postgres** — OpenFGA's datastore: the `postgres` fixture's one StatefulSet pod in development, the
+     platform's in production. Down →
      authz checks fail (lineage's ingest gate asks for each delivery again, so events stay buffered for its 5
      attempts and are parked after them, gap 2). Lineage keeps no database: its tables live in the object store behind the catalog.
    - **The catalog** — lineage's feed and edge list are read and written through its doors. Down → lineage
@@ -160,7 +161,7 @@ asked for again by the lane that met it, on the numbers that lane names (`lakeho
      login the store last admitted it under has run out (`openbao.identity.tokenTtl`, 15m by default), drops the key at
      its next re-read (300 s), and from then the catalog refuses every write it would announce; the bus is dialled with the pod's own token, not a credential read from the store. OpenFGA down: every governed door answers 503 code 17. Dex down: a door that still holds
      its key set accepts the tokens it verifies for up to 300 s, and one that must fetch the key set answers 503 code 17.
-   *Fix (prod):* multi-replica + `streamReplicas=3` for NATS, a real Postgres HA (Patroni/CNPG), a replicated
+   *Fix (prod):* multi-replica + `streamReplicas=3` for NATS, the platform's Postgres HA behind OpenFGA, a replicated
    object store. Tracked as infra work; **the app tier is already `replicas`-ready** (stateless, PDBs shipped).
 
 6. **Lineage lifecycle emits.** **deregister** emits a lineage marker. **rename** emits one `RENAME` dataset change on

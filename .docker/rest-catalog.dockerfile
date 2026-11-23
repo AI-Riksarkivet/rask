@@ -97,9 +97,9 @@ ENV OMP_NUM_THREADS=1
 WORKDIR /srv
 # The venv is root-owned and the app runs as 10001, so it is immutable to the account running it.
 COPY --from=builder --link /opt/venv /opt/venv
-# FOUR FILES OUT OF `scripts/`, NAMED ONE BY ONE. Three are run by a chart workload and the fourth is what
-# two of them import, so each has to exist in an image; copying the whole directory would put every dev and ops
-# script into a request-serving image for the sake of four. Each imports stdlib plus what the venv above already
+# THREE FILES OUT OF `scripts/`, NAMED ONE BY ONE. Two are run by a chart workload and the third is what
+# one of them imports, so each has to exist in an image; copying the whole directory would put every dev and ops
+# script into a request-serving image for the sake of three. Each imports stdlib plus what the venv above already
 # carries (`lakehouse.storage`, boto3/botocore, pydantic), so none adds a dependency, and no chart Job needs a
 # third-party image that a registry could withdraw.
 #
@@ -107,13 +107,11 @@ COPY --from=builder --link /opt/venv /opt/venv
 # file staged there ships nowhere.
 #
 #   control_root_backup.py — the backup CronJob (`backups.controlRoot`).
-#   pg_dump_upload.py      — the `backups.pgDump` CronJob. What it uploads is the authorization store.
 #   rustfs_admin.py        — the provisioning hook (`object-store-provisioning`): RustFS's native
 #                            admin API, SigV4-signed with the root pair read from a mounted file.
-#   _backup_store.py       — the two backups' store session and retention walk, which `python /srv/<script>`
+#   _backup_store.py       — the backup's store session and retention walk, which `python /srv/<script>`
 #                            imports from the script's own directory.
 COPY --link scripts/control_root_backup.py /srv/control_root_backup.py
-COPY --link scripts/pg_dump_upload.py /srv/pg_dump_upload.py
 COPY --link scripts/_backup_store.py /srv/_backup_store.py
 COPY --link scripts/rustfs_admin.py /srv/rustfs_admin.py
 

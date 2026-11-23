@@ -68,12 +68,12 @@ rendered this pod", not "which build emitted this span".
 lance-ns — grafted verbatim from lance-ns main@083b49a chart/templates/_helpers.tpl.
 
 Every one of these is referenced by a grafted lance template (services.yaml, maintenance.yaml,
-object-store-provisioning.yaml, object-store-identities.yaml, openbao-seed.yaml, age-postgres.yaml,
+object-store-provisioning.yaml, object-store-identities.yaml, openbao-seed.yaml,
 network-policy.yaml, ha.yaml, …). None of them
 was renamed: no lance name collided with a rask name.
 
 VALUES THEY REQUIRE (the values.yaml merge must land these or the render breaks):
-  age.externalHost · auth.enabled · catalog.controlEmit ·
+  postgres.{enabled,externalHost} · auth.enabled · catalog.controlEmit ·
   auth.oidc.{issuer,audience} · dex.{enabled,port} · image.catalog.{repository,tag} · lifecycle.preStopSeconds ·
   nats.url ·
   observability.{enabled,environment,export.endpoint,identity.audience} · openbao.{enabled,port,externalAddr} · pubsub.topic ·
@@ -98,13 +98,14 @@ start against an unmigrated schema, and the migration is queued BEHIND the wait.
 reason scripts/e2e_stack.sh exists (it drops --wait and re-sequences by hand).
 
 Moving the hook EARLIER does not fix it: a `pre-install` hook runs before ANY release manifest
-exists, so the migrate Job would wait for an AGE Postgres that has not been created yet — the
-same deadlock, one phase further left, and now it also blocks every OTHER resource.
+exists, so the migrate Job would wait for a development Postgres whose password the release's own store has not
+seeded yet — the same deadlock, one phase further left, and it also blocks every OTHER resource.
 
 The fix is to take those four Jobs OUT of the hook lifecycle entirely and apply them in the same
 wave as everything else. `--wait` then waits for the Job to Complete *concurrently* with waiting
-for the servers to become Ready, and the dependency resolves itself: the migrate pod's wait-age
-init loops until the AGE StatefulSet (applied in the same wave) answers, migrates, exits; OpenFGA
+for the servers to become Ready, and the dependency resolves itself: the migrate pod's wait-postgres
+init loops until the Postgres answers (in development the `postgres` fixture, Ready once the release's store
+holds its password), migrates, exits; OpenFGA
 stops crash-looping and goes Ready; `--wait` returns. No wrapper script, no ordering knowledge
 outside the chart.
 
@@ -183,9 +184,10 @@ warehouse, `lance_catalog` (the catalog's `RASK_FGA_DEFAULT_WAREHOUSE_OBJECT`, w
 as the catalog's declaration converge does). The catalog refuses to boot on a namespace outside it, so the
 render refuses one first, naming the value, rather than leaving a pod to crash-loop on it.
 
-## `{{- define "lance.ageHost" -}}{{ .Release.Name }}-age{{- end -}}`
+## `{{- define "lance.postgresFixtureHost" -}}{{ .Release.Name }}-postgres{{- end -}}`
 
-In-cluster hostnames (subcharts derive their service name from the release).
+The development Postgres's in-cluster host: the `postgres` fixture's Service, named after the release
+(`deploy/fixtures/postgres`). `lance.postgresHost` returns it under `postgres.enabled`.
 
 ## `{{- define "lance.objectStoreHost" -}}{{ include "rask.fullname" . }}-rustfs{{- end -}}`
 
@@ -537,21 +539,18 @@ regressed to root fails to start instead of running privileged. drop ALL caps + 
 the RuntimeDefault seccomp profile = the restricted PodSecurity baseline. readOnlyRootFilesystem is on by
 default (values.security.readOnlyRootFilesystem) — each app mounts an emptyDir at /tmp for scratch (pyarrow
 spill, OTel), so nothing needs a writable rootfs. Container-level (NOT pod-level) so it never touches the
-busybox wait-age initContainer (which legitimately runs as root).
+busybox wait-postgres initContainer (which legitimately runs as root).
 
 The same baseline for a container whose IMAGE runs as root, so the uid must be pinned rather than
 inherited. `lance.securityContext` relies on the image's own USER (catalog uid 10001, web `bun`), and
 `runAsNonRoot: true` without a uid fails admission on an image that declares none — which is why the
 busybox waiters carried a hand-written context instead of the helper.
 
-UNCONDITIONAL, and that is the change ([[XC-061]]). These contexts sat behind
-`security.infraContexts.enabled`, which values.yaml defaults OFF — so the pods the flag exists to make
-PSA-restricted-compliant were not compliant by default, and the flag's own comment names the
-consequence: "labeling the namespace restricted would REJECT this pod until the init is hardened".
-Gating the hardening behind a flag postpones exactly the work that makes the flag safe to flip.
+UNCONDITIONAL ([[XC-061]]): a hardening behind a flag that defaults off leaves the pods it is for out of PSA
+restricted by default, so labelling the namespace restricted would reject them. No flag gates it.
 
-`readOnlyRootFilesystem` IS INCLUDED, which the hand-written contexts omitted: both waiters run
-`sh -c "until nc -z host port; do sleep 3; done"` and write nothing at all.
+`readOnlyRootFilesystem` IS INCLUDED: the waiter runs `sh -c "until nc -z host port; do sleep 3; done"` and
+writes nothing at all.
 
 Usage: {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
 
@@ -737,7 +736,6 @@ with none fails the render as an undefined template.
   Owner, 2026-11-03: a compromised maintenance pod must not be able to defeat an erasure or a hold, so every other
   maintenance write is signed by a catalog vend (the table's `maintain` tier, or a session deleting one due trash
   record's bytes), and the trash records themselves are the catalog's to write (ADR 0197).
-- `backup-pg`: list, write and prune under `<control bucket>/_backups/pg/`.
 - `backup-control-root`: read the control-root record prefixes it copies, and write and prune under
   `backups.controlRoot.dest`.
 

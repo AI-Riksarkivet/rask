@@ -55,7 +55,7 @@ acknowledgement lifts.
 THE SECRETS THE STORE MUST HOLD. Nothing seeds the platform's store and no credential is a chart value, so an
 unprovisioned secret is a fail-closed outage at first use, not a fallback. Each secret has exactly the readers it is for:
 - No object-store credential is a secret ([[XC-083]], [[XC-084]], ADR 0170, ADR 0197). Every lakehouse workload that
-  reaches the store (the catalog, lineage, maintenance and each backup CronJob) projects a token for
+  reaches the store (the catalog, lineage, maintenance and the control-root backup CronJob) projects a token for
   `objectStore.identity.audience` and exchanges it through STS `AssumeRoleWithWebIdentity`; the object store trusts the
   cluster's ServiceAccount issuer for that audience and grants each account's subject,
   `system:serviceaccount:<namespace>:<release>-sa-<component>`, the policy the ConfigMap
@@ -63,7 +63,8 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   that trust and those policies; on AWS it is an IAM OIDC provider and one role per account
   (`objectStore.identity.roleArns.<component>`), its trust policy naming the subject and its permission policy the
   ConfigMap's document.
-- `postgres` (field `password`), read by ESO for the AGE server and OpenFGA.
+- `postgres` (field `password`), read by ESO for OpenFGA's connection string while the chart runs OpenFGA, and in
+  development for the `postgres` fixture's server.
 - `commit-id-key` (field `key`, 32 random bytes as hex), read by the catalog alone: the key it derives every
   announcement's run id under (LH-497). It is never rotated, and the catalog is not Ready until it reads one.
 - For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
@@ -106,19 +107,6 @@ a session as that pod's bus user that ends within `nats.auth.sessionSeconds`, si
 the bus enforces the row of `nats.auth.users`. The development install runs this with a stand-in signer
 (`deploy/fixtures/nats`, `nats.auth.server`).
 
-## Prerequisite: the CloudNativePG operator, for the AGE-on-CNPG path
-
-The default Postgres (OpenFGA's datastore) is the `rask-age` StatefulSet, which needs no operator. The AGE-on-CNPG path
-(`age.cnpgCluster.enabled`, docs/CNPG-AGE.md) renders a CloudNativePG `Cluster`, so for it the **CloudNativePG operator
-is a prerequisite** (ADR 0153): the chart installs no operator, and with `age.cnpgCluster.enabled` on it refuses to
-render for a cluster that does not serve `postgresql.cnpg.io/v1` (a cluster-less `helm template` names it:
-`--api-versions postgresql.cnpg.io/v1/Cluster`). The operator's CRDs belong to no Helm release: a release that owned
-them would delete every CNPG CRD, and every `Cluster` with them, on uninstall.
-
-The version rask is tested against is in `deploy/fixtures/cloudnative-pg` (the development install `make k3s-up` runs,
-release `cloudnative-pg` in `cnpg-system`): chart 0.28.3, operator 1.29.1, CRDs applied server-side from
-`chart/crds-bootstrap/` by `make k3s-crds` before it. The path itself needs CNPG >= 1.27 and Kubernetes 1.33+.
-
 ## Prerequisite: an OTLP gateway, with `observability.enabled`
 
 Each lakehouse service exports its telemetry as itself, and the chart renders no Collector (ADR 0215). With
@@ -139,9 +127,10 @@ release is `https://` or `tls://`, and the render refuses a real deployment that
 
 ## Prerequisites in production: OpenFGA and its Postgres
 
-The chart can run OpenFGA (the `openfga` subchart) and the Postgres behind it (the
-`rask-age` StatefulSet). Development runs both. **Production names the platform's** ([[XC-132]], ADR 0153),
-and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.enabled: false`):
+The chart can run OpenFGA (the `openfga` subchart). It runs no Postgres (ADR 0228): the Postgres behind its OpenFGA
+is the platform's (`postgres.externalHost`), or in development the `postgres` fixture (`postgres.enabled`). **Production
+names the platform's OpenFGA** ([[XC-132]], ADR 0153), and `deploy/values-prod.yaml` turns both off
+(`openfga.enabled: false`, `postgres.enabled: false`), so the render names no Postgres at all:
 
 - `auth.fgaApiUrl` is the platform's OpenFGA HTTP API, https on a real deployment. Every FGA client and the `openfga-model`
   hook dial it. Each one presents its projected ServiceAccount token: audience `rask-openfga`, issuer
@@ -150,12 +139,15 @@ and `deploy/values-prod.yaml` turns both off (`openfga.enabled: false`, `age.ena
   mirror and subject ConfigMap serve only the in-chart OpenFGA. The subjects to admit are the ones
   `lance.openfgaSubjects` (chart/templates/_helpers.tpl) computes for the overlay. A render with `openfga.enabled=true`
   prints them in the `<release>-openfga-authn` ConfigMap.
-- `age.externalHost` is the platform's Postgres, which needs the `openfga` database owned by
-  `age.user`; lineage keeps no database (ADR 0158). Its password is the secret store's
-  `postgres-password`, which ESO delivers. No chart value carries it.
+- A deployment that runs the chart's OpenFGA (`openfga.enabled: true`) names the platform's Postgres in
+  `postgres.externalHost`, which needs the `postgres.database` database (`openfga`) owned by `postgres.user`; lineage
+  keeps no database (ADR 0158). Its password is the secret store's `postgres` secret (field `password`), which ESO
+  delivers into OpenFGA's config file. No chart value carries it. A real deployment's render refuses
+  `postgres.enabled` there.
 
-The render refuses either one when it is empty and its part is off. Under the production NetworkPolicy (default-deny egress), every endpoint the platform serves outside the namespace takes its own egress rules, admitting only the pods that dial it: the API server its endpoints in `networkPolicy.apiServerEgress`, an external OpenFGA its addresses in `auth.fgaEgress`, the secret store in `openbao.egress`, the OTLP backend in `observability.export.egress`, the S3 and its STS in `objectStore.egress`, the NATS bus in `nats.egress`, the IdP in `auth.oidc.egress`, and the graph backend lineage forwards to in `services.lineage.forward.egress`. The render refuses every one left empty, in one message naming them all ([[XC-202]]); `networkPolicy.extraEgress` takes a rule for an endpoint none of them names (the Postgres, should OpenFGA run in the chart). Every such rule names its `to` peers: the render refuses one that admits every destination. OpenFGA's own datastore, availability and
-backups belong to the platform, so production runs no `pg_dump` CronJob.
+The render refuses `auth.fgaApiUrl` empty with `openfga.enabled` off, and `postgres.externalHost` empty with the chart's
+OpenFGA and `postgres.enabled` off. Under the production NetworkPolicy (default-deny egress), every endpoint the platform serves outside the namespace takes its own egress rules, admitting only the pods that dial it: the API server its endpoints in `networkPolicy.apiServerEgress`, an external OpenFGA its addresses in `auth.fgaEgress`, the secret store in `openbao.egress`, the OTLP backend in `observability.export.egress`, the S3 and its STS in `objectStore.egress`, the NATS bus in `nats.egress`, the IdP in `auth.oidc.egress`, and the graph backend lineage forwards to in `services.lineage.forward.egress`. The render refuses every one left empty, in one message naming them all ([[XC-202]]); `networkPolicy.extraEgress` takes a rule for an endpoint none of them names (the Postgres, should OpenFGA run in the chart). Every such rule names its `to` peers: the render refuses one that admits every destination. OpenFGA's datastore, its availability and
+its backups belong to the platform, and rask ships no database backup.
 
 ## Development stand-ins
 
@@ -192,6 +184,10 @@ Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart rend
   credentials, every signing identity's Ed25519 pair, the bus trust root and users) and the store's roles and policies
   into `<release>-secret-store-identities` (a role and a policy for each identity that reads the store), and the
   fixture's pod runs the scripts beside the server and applies the documents.
+- **Postgres** (`deploy/fixtures/postgres`, release `postgres`, StatefulSet and Service `rask-postgres`): OpenFGA's
+  datastore, stock `postgres:16.13` pinned by digest, one database `openfga` owned by the role `lance`. Its password is
+  the dev store's `postgres` secret, delivered by its own ExternalSecret `rask-postgres-auth`. `postgres.enabled` says
+  the estate uses it, and a real deployment's render refuses it while the chart runs OpenFGA. It has no backup.
 - **Marquez** (`deploy/fixtures/marquez`, release `marquez`, Service `rask-marquez:5000`): the graph backend, with its
   own Postgres. The lineage graph is bring-your-own (ADR 0158), and `deploy/values-local.yaml` points lineage's
   forwarder (`services.lineage.forward.url`) at it, as a platform would point it at its own Marquez, DataHub or
@@ -319,12 +315,13 @@ address, token, scrape job, alert or network peer (ADR 0189).
   `traefik-gateway` in kube-system, listener `web` on the node's port 80). The Gateway must allow 64 MB request bodies;
   that is Gateway policy, not route (ADR 0165).
 - **Optional, in-chart for development and the platform's in production** ([[XC-132]]): `openfga.enabled` (the
-  OpenFGA subchart) and `age.enabled` (the apache/age Postgres StatefulSet behind OpenFGA); see *Prerequisites in production*.
+  OpenFGA subchart); see *Prerequisites in production*. The chart runs no Postgres: `postgres.*` names the one behind
+  its OpenFGA.
 - **Its own configuration of what it does not run**: the NATS stream
   Job (its streams and durable consumers), the ExternalSecrets and SecretStore, the object store's bucket and user hooks, and the dev OpenBao's seed scripts.
 
 Everything else is a separate release ([[XC-085]], ADR 0153). `make k3s-up` installs the development set from
-`deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, NATS, the CloudNativePG operator,
+`deploy/fixtures` first (`make k3s-fixtures`): the External Secrets Operator, NATS, Postgres,
 Dex, RustFS, OpenBao, the telemetry chain and the lineage graph backend. It installs no client; a client's own
 repository supplies its values to a lakehouse install with `-f`. A platform brings its own.
 
@@ -495,5 +492,5 @@ A client integrates with it as its production release does ([[XC-189]]), with no
   governs (lineage's commit feed, edge list, outbox refusals and forwarder cursors among them, in the catalog's
   provenance namespace, ADR 0158), the outbox, the trash and the registries. Lance puts its commit CAS in the store,
   so neither the catalog nor lineage needs a relational database.
-- **Postgres**: OpenFGA's datastore, served by the `rask-age` StatefulSet in development and
-  by the platform in production. Lineage keeps no database (ADR 0158, LH-468 #592).
+- **Postgres**: OpenFGA's datastore, served by the `postgres` fixture (`rask-postgres`) in development and
+  by the platform in production; the chart runs none (ADR 0228). Lineage keeps no database (ADR 0158, LH-468 #592).

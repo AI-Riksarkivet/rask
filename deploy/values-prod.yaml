@@ -16,8 +16,8 @@ image:
 auth:
   enabled: true
 
-# --- HA (P3): multi-replica stateless services + a PodDisruptionBudget. Stateful HA (AGE) is the platform's
-# CloudNativePG operator's job (age.cnpgCluster; docs/architecture/deployment.md), not here. Optionally also set autoscaling.enabled. -----
+# --- HA (P3): multi-replica stateless services + a PodDisruptionBudget. A stateful store's HA is the platform's
+# (docs/architecture/deployment.md), not here. Optionally also set autoscaling.enabled. -----
 services:
   catalog:
     replicas: 2
@@ -40,18 +40,17 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
-# OpenFGA and the Postgres behind AGE and OpenFGA are the platform's ([[XC-132]], ADR 0153): production runs neither
-# and names them. The deployer sets `auth.fgaApiUrl` (the platform's OpenFGA HTTP API) with `auth.fgaEgress` (the
-# NetworkPolicy rule reaching its addresses, for the pods that dial it) and `age.externalHost`, and the render refuses
-# any of them empty and an http `auth.fgaApiUrl`. No credential is a value: an FGA client presents its projected `rask-openfga`
+# OpenFGA is the platform's ([[XC-132]], ADR 0153), and so is the Postgres behind it (ADR 0228): production runs
+# neither, names the first and knows nothing of the second. The deployer sets `auth.fgaApiUrl` (the platform's OpenFGA
+# HTTP API) with `auth.fgaEgress` (the NetworkPolicy rule reaching its addresses, for the pods that dial it), and the
+# render refuses either empty and an http `auth.fgaApiUrl`. No credential is a value: an FGA client presents its projected `rask-openfga`
 # ServiceAccount token, which the platform's OpenFGA admits by OIDC against the cluster's ServiceAccount issuer for the
-# subjects `lance.openfgaSubjects` lists, and the Postgres password is the store's `postgres` secret, which ESO
-# delivers. The platform's Postgres carries the `openfga` database; lineage keeps no database
-# (ADR 0158). OpenFGA is the authz chokepoint every governed call fails closed through, so the platform runs it highly
+# subjects `lance.openfgaSubjects` lists. A deployment that runs the chart's OpenFGA instead names the platform's
+# Postgres in `postgres.externalHost`, and its password is the store's `postgres` secret, which ESO delivers. OpenFGA is the authz chokepoint every governed call fails closed through, so the platform runs it highly
 # available.
 openfga:
   enabled: false
-age:
+postgres:
   enabled: false
 
 # The lakehouse's bytes live on the platform's S3: rask names it and provisions nothing on it (no buckets, no users).
@@ -108,12 +107,9 @@ resources:
     requests: { cpu: 200m, memory: 512Mi }
     limits: { cpu: "2", memory: 1Gi } # sized by catalog.maxConcurrentWrites above (cap×256MiB + 512Mi)
 
-# --- Backups (P4): the Postgres is the platform's, and its operator does PITR and scheduled backups, so the pg_dump
-# CronJob is off. The volume snapshot covers the development store's PVC, and the store here is the platform's S3, whose
+# --- Backups (P4): the volume snapshot covers the development store's PVC, and the store here is the platform's S3, whose
 # durability is its operator's, so there is no volume to snapshot. ----
 backups:
-  pgDump:
-    enabled: false
   volumeSnapshot:
     enabled: false
 
@@ -139,14 +135,6 @@ openbao:
 #   auth: {oidc: {egress: [{to: [{ipBlock: {cidr: 10.0.1.40/32}}], ports: [{protocol: TCP, port: 443}]}]}}
 dex:
   enabled: false
-
-# --- Infra pod security contexts. Default OFF in values.yaml because the dev loop runs PSA-unlabelled;
-# live-proven on 2026-07-13. Pod IDENTITY is not a switch: every first-party pod runs as its own
-# tokenless SA in every overlay (templates/security-sa.yaml). `scripts/prod_render_check.sh` asserts
-# both on this render. ------------------------------------------------------------------------------
-security:
-  infraContexts:
-    enabled: true
 
 # --- Version retention (the backstop sweep keeps the chart's cadence, under the clone-list maximum age) ---
 maintenance:

@@ -1,6 +1,6 @@
 {{- if .Values.openfga.enabled }}
 {{- $spec := include "lance.openfgaMigrateSpec" . }}
-# OpenFGA schema migration against the AGE Postgres (the chart's bundled migrate is broken in 0.3.9 —
+# OpenFGA schema migration against its Postgres (the chart's bundled migrate is broken in 0.3.9 —
 # it fails to pass the datastore flags). Waits for Postgres (nc succeeds only once initdb has created
 # the openfga db and TCP is open), then runs `openfga migrate` with explicit flags (idempotent).
 #
@@ -8,7 +8,7 @@
 # --wait` deadlock: as a post-install hook it could not run until --wait finished, and --wait could not
 # finish until the OpenFGA server was Ready, which it cannot be against an unmigrated schema. Applied
 # in the ordinary wave the cycle disappears — helm waits for this Job and for the server at the same
-# time, and this Job's own wait-age init supplies the only ordering that was ever really needed.
+# time, and this Job's own wait-postgres init supplies the only ordering that was ever really needed.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -22,9 +22,9 @@ spec:
   backoffLimit: 30
   template:
     metadata:
-      # Load-bearing under the prod NetworkPolicy: the age-postgres ingress allows `from`
-      # component=openfga-migrate. Without this label the pod (and its wait-age init) can't reach
-      # age:5432 — the init loops forever, the Job never completes, and `--wait` times the release out
+      # Load-bearing under a NetworkPolicy: the development Postgres's ingress allows `from`
+      # component=openfga-migrate. Without this label the pod (and its wait-postgres init) can't reach
+      # it — the init loops forever, the Job never completes, and `--wait` times the release out
       # on a policy-enforcing CNI (default-deny drops the SYN).
       labels:
         {{- include "lance.labels" . | nindent 8 }}
@@ -33,12 +33,12 @@ spec:
       restartPolicy: OnFailure
       securityContext: { fsGroup: 65532 }
       initContainers:
-        - name: wait-age
+        - name: wait-postgres
           image: busybox:1.36
           resources:
             requests: { cpu: "10m", memory: "16Mi" }
             limits: { cpu: "100m", memory: "64Mi" }
-          command: ["sh", "-c", "until nc -z {{ include "lance.ageConnectHost" . }} {{ .Values.age.port }}; do echo wait-age; sleep 3; done"]
+          command: ["sh", "-c", "until nc -z {{ include "lance.postgresHost" . }} {{ .Values.postgres.port }}; do echo wait-postgres; sleep 3; done"]
           {{- include "lance.rootlessSecurityContext" 65532 | nindent 10 }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
       volumes:

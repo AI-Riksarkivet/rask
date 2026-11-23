@@ -36,6 +36,11 @@ are external in production: a real deployment sets `objectStore.enabled=false` a
 the platform's S3, whose operator provisions rask's identities (`lance.s3Endpoint` fails the render when neither is
 set).
 
+A REAL DEPLOYMENT THAT RUNS THE CHART'S OPENFGA REFUSES THE DEVELOPMENT POSTGRES (`postgres.enabled=true`, the
+postgres fixture): one server on one volume with no backup, which would hold every grant of the estate. It sets
+`postgres.enabled=false` and `postgres.externalHost` to the platform's Postgres, or runs the platform's OpenFGA
+(`openfga.enabled=false` with `auth.fgaApiUrl`), which names no Postgres at all.
+
 ## `{{- $local := ternary ... .Values.openbao.enabled -}}`
 
 The way out for an estate that is local after all follows the signal that made the render real: with the platform's
@@ -73,7 +78,7 @@ A development estate reaches its fixtures over http (the store's node port, the 
 `rask.isRealDeployment` rather than refusing every http address. The platform's secret store (`lance.platformStoreAddr`)
 and IdP (`lance.oidcIssuer`) are refused http by their own helpers on any render that names them. The release's own
 Services (the bundled OpenFGA, the issuer mirror) are in-cluster hops and not judged here; nor is the Postgres
-(`age.externalHost`), which speaks its own protocol. The bus (`nats.url`) is judged by its own scheme, below.
+(`postgres.externalHost`), which speaks its own protocol. The bus (`nats.url`) is judged by its own scheme, below.
 
 ## `{{- range (splitList "," (.Values.nats.url | default "")) -}}`
 

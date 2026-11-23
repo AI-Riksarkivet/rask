@@ -1,22 +1,18 @@
 # Backup & restore runbook
 
-How the estate is backed up, and the **order-sensitive** procedure to restore it. The Postgres leg covers the
-`rask-age` server's one database that holds state, OpenFGA's datastore; lineage keeps no database (its
-commit feed and edge list are Lance tables in the catalog's `lance_catalog$provenance` namespace, so they come back with the
-object store). Neither the Postgres leg nor the object-store `VolumeSnapshot` leg is drilled: rehearse the
-pg_dump→drop→restore below on a throwaway database, and validate the snapshot leg on your cluster's CSI driver,
-before trusting either in an incident.
+How the estate is backed up, and the **order-sensitive** procedure to restore it. rask runs no database: OpenFGA's
+datastore is the platform's Postgres, which the platform backs up and restores (in development, the `postgres` fixture,
+which has no backup). Lineage keeps no database: its commit feed and edge list are Lance tables in the catalog's
+`lance_catalog$provenance` namespace, so they come back with the object store. The object-store `VolumeSnapshot` leg is
+not drilled: validate it on your cluster's CSI driver before trusting it in an incident.
 
-> The in-cluster backups are the SELF-CONTAINED-prod path. If you externalize to CloudNativePG (Postgres)
-> and a managed S3 (object store), use THEIR PITR + snapshots instead — set
-> `backups.pgDump.enabled=false` + `backups.volumeSnapshot.enabled=false`. This runbook is for the
-> in-cluster path.
+> The in-cluster backups are the SELF-CONTAINED path. With a managed S3 (object store), use ITS PITR + snapshots
+> instead and set `backups.volumeSnapshot.enabled=false`. This runbook is for the in-cluster path.
 
 ## What is backed up (and what is NOT)
 
 | Artifact | What | Where | Template |
 |---|---|---|---|
-| **pg_dump** (gzip) | the `openfga` DB (authz tuples) | the object store, `_backups/pg/<UTC>/` | `backup-pg.yaml` (CronJob, `backups.pgDump`) |
 | **VolumeSnapshot** | the RustFS fixture's data PVC = the **Lance lakehouse** (every tier + registry data, and lineage's provenance tables) | cluster CSI VolumeSnapshot | `backup-snapshot.yaml` (`backups.volumeSnapshot`) |
 | **control-root records** | the governance objects: `_projects/`, `_warehouses/` (registry + bucket claims), `_declared_grants/` (the tuples the catalog wrote from git's declaration), `_trash/`, `_protection/`, `_policies/`, `_contracts/`, `_labels/`, `_label_definitions/`, `_transforms/`, `_tasks/` | a timestamped prefix, `_backups/control/<UTC>/` by default | `scripts/control_root_backup.py` |
 
@@ -29,37 +25,16 @@ before trusting either in an incident.
 
 **Not backed up** (accept the loss window or externalize — see [docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](../adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md) and
 [DURABILITY.md](../DURABILITY.md)): GreptimeDB local WAL/metadata (metrics — reconstructable; the secret store
-is the platform's and backs itself up), and note the pg_dump lands on the same object
-store, so a **total store loss loses both the Lance data AND the DB dumps** unless you also ship the dumps
-off-cluster (the "fate-sharing" gap).
+is the platform's and backs itself up), and OpenFGA's database, which is the platform's to back up. The
+development `postgres` fixture has no backup.
 
-## Consistency: restore the dumps + the object store as a pair
+## Consistency: restore OpenFGA's database and the object store as a pair
 
 OpenFGA's tuples name the tables and namespaces the object store holds. Restoring one far from the other leaves
-grants on objects that do not exist. **Restore the pg_dump and the object-store snapshot from the SAME backup
-window.** A follower's cursor ahead of a restored feed does not stall: the feed answers a cursor beyond its head with
-its newest seq, and the follower re-reads it from its oldest row ([COMMIT-EVENTS.md](../COMMIT-EVENTS.md) § The cursor
-rule).
-
-## Restore — Postgres (OpenFGA)
-
-Every database on the `rask-age` server carries the `age` extension: the server preloads AGE into every backend,
-and AGE's hook needs `ag_catalog` to exist, so a database without it fails every `DROP` (`age-postgres.yaml`). The
-target must therefore have the extension available. Do NOT `psql < dump` into a database that already holds data —
-drop/recreate it first.
-
-1. **Fetch the dump** from S3 under the pg backup's own identity, a session its ServiceAccount's token is exchanged for
-   (ADR 0197): write `kubectl create token <release>-sa-backup-pg --audience <objectStore.identity.audience>` to a file,
-   then, with `RASK_S3_ENDPOINT_URL` and `RASK_S3_STS_ENDPOINT` at the store, `RASK_S3_ASSUME_ROLE_ARN` at
-   `objectStore.identity.roleArns.backup-pg` and `RASK_S3_WEB_IDENTITY_TOKEN_FILE` at that file, run from `scripts/`,
-   where the backups' helper `_backup_store.py` lives:
-   `uv run python -c "from _backup_store import JobStoreIdentity, job_client; job_client(JobStoreIdentity(), session_name='restore').download_file('<bucket>', '_backups/pg/<UTC>/openfga.sql.gz', 'openfga.sql.gz')"`.
-2. **Recreate the target DB** clean (managed PG or the in-cluster `age-postgres`):
-   `DROP DATABASE IF EXISTS openfga; CREATE DATABASE openfga;`
-3. **Ensure the extension is installable** in the target (the AGE image ships it):
-   `psql -d openfga -c "CREATE EXTENSION IF NOT EXISTS age;"`
-4. **Restore**: `gunzip -c openfga.sql.gz | psql -d openfga`.
-5. **App recovery is automatic**: OpenFGA reconnects on its own.
+grants on objects that do not exist. **Restore OpenFGA's database (through the platform's Postgres restore) and the
+object-store snapshot from the SAME backup window.** A follower's cursor ahead of a restored feed does not stall: the
+feed answers a cursor beyond its head with its newest seq, and the follower re-reads it from its oldest row
+([COMMIT-EVENTS.md](../COMMIT-EVENTS.md) § The cursor rule).
 
 ## Restore — the object store (the Lance lakehouse)
 
@@ -75,7 +50,9 @@ The control root holds the estate's governance as small JSON objects. The Lance 
 while every statement about **who may touch it** is gone, and that is a different failure from losing a
 dataset — so it has its own backup and its own restore.
 
-Every run signs with a session a ServiceAccount token is exchanged for (`RASK_S3_*`, as in the Postgres fetch above):
+Every run signs with a session a ServiceAccount token is exchanged for (`RASK_S3_*`: `RASK_S3_ENDPOINT_URL` and `RASK_S3_STS_ENDPOINT` at the
+store, `RASK_S3_ASSUME_ROLE_ARN` at the identity's role and `RASK_S3_WEB_IDENTITY_TOKEN_FILE` at a token from
+`kubectl create token <ServiceAccount> --audience <objectStore.identity.audience>`):
 `backup` and `verify` with the control-root backup's (`<release>-sa-backup-control-root`, whose policy reads the records
 and writes only the backups), and `restore`, which writes records, with the catalog's (`<release>-sa-catalog`), the one
 identity whose policy writes them.
@@ -132,74 +109,3 @@ Three things that exercise taught, each of which had already produced a wrong an
   the forwarder notices only while the feed's newest row is still behind the cursor (WARN
   `lineage_forward_cursor_ahead_of_feed`, after which it follows the feed from its oldest row).
 - See [RUNBOOK-oncall.md](RUNBOOK-oncall.md) for the failure modes you may hit during recovery.
-
-## Planned migration — bumping AGE across a Postgres major
-
-**The AGE image tag is not a routine bump.** `age.image` (chart/values.yaml) pins
-`apache/age:release_PG16_1.6.0` — the tag encodes **both** the Postgres major and the AGE build, because the
-extension is compiled per major (the `release_PG16_*` line vs a `release_PG17_*` line). Moving to a
-PG17-based tag is a data migration, not an upgrade. (On `age.externalHost` — a managed Postgres — use the
-provider's major-upgrade path instead; this section is the in-cluster StatefulSet.)
-
-**How the naive bump presents**: after `helm upgrade` with a PG17-based tag, the `<release>-age-0` pod goes
-`CrashLoopBackOff` with `FATAL: database files are incompatible with server` — the retained PVC
-(`data-<release>-age-0`, from the volumeClaimTemplate in `age-postgres.yaml`) still holds a PG16-format data
-directory, and a Postgres major changes the on-disk format. Downstream: OpenFGA loses its datastore, so every governed API fails closed with 503 — see the
-[CrashLoop section of RUNBOOK-oncall.md](RUNBOOK-oncall.md#crashloop-on-boot) for the triage shape.
-
-**Why there is no in-place path**: `pg_upgrade` needs the old *and* new majors' binaries side by side plus a
-second data directory — the AGE image ships only one major. And a plain `postgres:17` image can't bridge it
-either: the restore replays `CREATE EXTENSION age`, which needs an AGE build for that major. The only
-supported route is logical: dump on the old major → fresh data directory on the new major → restore.
-
-**Procedure** (rehearse it once on a throwaway install before touching a real estate):
-
-1. **Quiesce writers**: `kubectl scale deploy <release>-openfga --replicas=0`.
-   Governed APIs 503 (authz fail-closed) for the window — expected and the point: the dump you take next is
-   final.
-2. **Take a fresh dump of OpenFGA's DB**: trigger the backup CronJob out of schedule —
-   `kubectl create job --from=cronjob/<release>-pg-backup pg-migrate-dump` (`backup-pg.yaml`; it dumps
-   `openfga` gzipped to `_backups/pg/<UTC>/` on the object store) — or run the equivalent manual
-   `pg_dump` per database. Manually, do NOT write it as `pg_dump | gzip`: the pipeline reports only gzip's
-   status, so a dump that dies mid-stream leaves a valid gzip and a zero exit — see `backup-pg.yaml` for the
-   form that catches it. Then copy the dumps somewhere off the estate too; don't let the only copy
-   fate-share with the cluster you're about to operate on. (Postgres recommends dumping with the *new*
-   major's `pg_dump`; if you want that, run a one-off pod on the new image pointed at `<release>-age:5432`
-   before cutover.)
-3. **Keep a rollback for the datadir**: take a manual CSI VolumeSnapshot of `data-<release>-age-0`
-   (`backup-snapshot.yaml` only snapshots the object store's PVCs, so this one is by hand). No snapshotter? Then the
-   step-2 dumps are your only rollback — verify they exist and gunzip cleanly before proceeding.
-4. **Cut over**: `kubectl scale sts <release>-age --replicas=0`, delete the PVC `data-<release>-age-0`, then
-   `helm upgrade` with the new `age.image`. The fresh PVC makes initdb run the `age-postgres.yaml` ConfigMap
-   scripts on the new major: the extension and the `openfga` database.
-5. **Restore the dump** per [Restore — Postgres](#restore--postgres-openfga) above —
-   including its "drop/recreate the DB first" rule, which applies unconditionally: initdb just
-   pre-created the database empty in step 4.
-6. **Prove the restore on the new major before re-opening writes**: list the tuples of a store you know
-   (`fga tuple read`, or OpenFGA's `/stores/<id>/read`) and compare the count with the old major's.
-7. **Un-quiesce**: scale openfga back up, then run the [After restore](#after-restore) checks.
-
-**Rollback**: until step 6 matches *and* the estate has been driven on the new major, keep the old image
-tag, the step-3 snapshot, and the step-2 dumps. Reverting = `helm upgrade` back to the old tag + a PVC
-restored from the snapshot (or delete the PVC and restore the dumps under the old image — they were made by
-the old major's `pg_dump` and load clean there). Do not prune any of the rollback artifacts in the same
-maintenance window.
-
-**OpenFGA migrates in the same window** — it has no Postgres of its own: `age.openfgaDb` lives in this same
-server and the openfga subchart's datastore DSN points at it. Skipping `openfga.sql.gz` in step 5 means every
-governed call keeps failing closed after an otherwise-successful cutover.
-
-## Resizing `age.storage` (volumeClaimTemplate immutability)
-
-StatefulSet volumeClaimTemplates are immutable, so bumping `age.storage` in values does not resize anything —
-the chart's upgrade-time guard (chart/templates/age-postgres.yaml) fails the upgrade up-front with the exact
-commands instead of letting the apply die deep in the StatefulSet patch. The resize path (no data loss, no
-restore needed, requires a storage class with `allowVolumeExpansion: true`):
-
-1. Patch the PVC directly: `kubectl patch pvc data-<release>-age-0 -p '{"spec":{"resources":{"requests":{"storage":"<new-size>"}}}}'`.
-2. Delete the StatefulSet WITHOUT touching the pod or PVC: `kubectl delete sts <release>-age --cascade=orphan`.
-3. Re-run the `helm upgrade` with the new `age.storage` — the recreated StatefulSet's template now matches
-   the resized PVC and the guard passes.
-
-Write the size in the same unit the chart installed (`Gi`): the guard compares textually, so `1024Mi` vs a
-deployed `1Gi` trips it even though the quantities are equal.

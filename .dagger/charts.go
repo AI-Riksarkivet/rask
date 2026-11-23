@@ -228,6 +228,9 @@ const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set objectStore.events.provisioned=true " +
 	"--set objectStore.enabled=false " +
 	"--set-string objectStore.externalEndpoint=https://s3.example.com " +
+	"--set postgres.enabled=false " +
+	"--set-string postgres.externalHost=pg.example.com " +
+	"--set-string openfga.podAnnotations.rask\\\\.dev/openfga-datastore=pg.example.com:5432/openfga " +
 	"--set objectStore.egress[0].to[0].ipBlock.cidr=203.0.113.20/32 " +
 	"--set objectStore.egress[0].ports[0].port=443 " +
 	"--set nats.egress[0].to[0].ipBlock.cidr=198.51.100.30/32 " +
@@ -266,8 +269,8 @@ grep -q "k8s-app: kube-dns" /tmp/np.yaml
 grep -q -- "-allow-secret-store-egress" /tmp/np.yaml
 grep -q "NotIn" /tmp/np.yaml`
 
-// securityGate: the DEFAULT render wires a dedicated tokenless SA into every first-party pod; the infra
-// security contexts stay a switch whose ON render carries the non-root runAsUser tiers.
+// securityGate: the DEFAULT render wires a dedicated tokenless SA into every first-party pod, and runs no pod as
+// a database's uid: the chart renders no database server.
 const securityGate = `set -euo pipefail
 RENDER_ARGS="` + renderArgs + `"
 # Render CONFIGURATION, not prose. Every assertion in these gates is about what the chart produces for
@@ -296,9 +299,7 @@ bound=$(grep -A1 -E '^ +- kind: ServiceAccount$' /tmp/sa.yaml | awk '/name:/{pri
 [ -z "$(comm -23 <(echo "$tokened") <(echo "$bound"))" ] || exit 1
 # 'if', not '!': set -e ignores a negated command, so '! grep -q' could never fail this gate.
 if grep -q "runAsUser: 999" /tmp/sa.yaml; then exit 1; fi
-render --set security.infraContexts.enabled=true > /tmp/sec.yaml
-grep -q "runAsUser: 999" /tmp/sec.yaml
-grep -q "runAsUser: 65532" /tmp/sec.yaml`
+grep -q "runAsUser: 65532" /tmp/sa.yaml`
 
 // AlertRulesDrill replays every shipped alert rule against a REAL GreptimeDB, hermetically.
 //

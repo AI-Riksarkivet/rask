@@ -61,7 +61,7 @@ on RustFS", git history at `64ef118a9`; `scripts/rustfs_sts_measure.py`): 26 che
 ## 3. The zero-trust model rask relies on
 
 - **Every workload's store identity is its ServiceAccount token, and none holds a key** (ADR 0170, [[XC-084]]): the
-  catalog, lineage, maintenance and the two backup CronJobs (`<release>-sa-backup-pg`, `<release>-sa-backup-control-root`),
+  catalog, lineage, maintenance and the control-root backup CronJob (`<release>-sa-backup-control-root`),
   each with the env `lance.objectStoreSessionEnv` renders. The catalog's pod projects a token
   for `objectStore.identity.audience` (`rask-object-store`), and unsigned STS `AssumeRoleWithWebIdentity` exchanges it
   for every session the catalog signs with: its own IO's (an hour, renewed at half life,

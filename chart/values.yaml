@@ -220,32 +220,6 @@ image:
   console: { repository: web-console }
 
 resources:
-  # AGE is a DATABASE and was sized as a stateless app container, which is a different thing. It asks
-  # `lance.resources` for a `comp="age"` tier (templates/age-postgres.yaml:155); with no such key it
-  # silently fell through to `default` below — 128Mi request, 512Mi limit — and Postgres does not
-  # degrade gracefully at a memory ceiling: the kernel kills ONE BACKEND and Postgres then terminates
-  # every other active backend and reinitialises, so a single OOM takes the whole graph into crash
-  # recovery and drops every in-flight connection.
-  #
-  # THE SYMPTOM IS INVISIBLE TO KUBERNETES, which is why this stood. Measured on the live estate
-  # 2026-09-14: `rask-age-0` steady at 385Mi against the 512Mi cap, FIVE `server process ... was
-  # terminated by signal 9: Killed` events in 24 hours — and `restartCount: 0`, Running 48d. The pod
-  # never restarts because the container's PID 1 survives; only backends die. Downstream it surfaced as
-  # `psycopg.OperationalError: consuming input failed: server closed the connection unexpectedly`,
-  # eight times in two hours, four of them reaching a caller as a 500 on `GET /runs` — and as one of
-  # the two e2e legs that flip between consecutive runs ([[LH-109]]).
-  #
-  # THE WORKING SET NEVER FIT, which the post-fix measurement settles: given room, this pod settles at
-  # 652Mi — ABOVE the old 512Mi limit. The 385Mi "steady" figure was a process being held under its
-  # ceiling by the kernel, not a process that wanted 385Mi, so the kills were structural rather than a
-  # bad-luck spike and no amount of load-shedding would have avoided them.
-  #
-  # The request is raised as well as the limit: a database's working set is resident, not burstable, so
-  # a 50m/128Mi request misdescribes it to the scheduler.
-  # -- CPU/memory requests and limits for the AGE Postgres StatefulSet (lineage and OpenFGA databases).
-  age:
-    requests: { cpu: 250m, memory: 512Mi }
-    limits: { cpu: "1", memory: 2Gi }
   # lance-ns default tier — every app container that doesn't name its own key (lance.resources helper).
   # -- CPU/memory requests and limits for every lakehouse app container that names no tier of its own (lance.resources).
   default:
@@ -318,7 +292,6 @@ lifecycle:
 # services.yaml and maintenance.yaml call the helper for every lakehouse workload, and
 # tests/chart/test_every_first_party_workload_is_hardened.py derives its subject list from the render, so a new
 # first-party workload is covered by default rather than by memory.
-# INFRA pods are a separate, deliberately staged decision — see security.infraContexts below.
 # runAsNonRoot + drop-ALL-caps + RuntimeDefault seccomp are unconditional (the restricted PodSecurity
 # baseline). readOnlyRootFilesystem is the one tunable: on by default (each app has a writable /tmp
 # emptyDir for pyarrow/Lance spill + OTel), flip off only if a workload genuinely needs a writable rootfs.
@@ -345,23 +318,13 @@ security:
   # `default` is the identity every unnamed pod in the namespace shares, and a subchart or platform chart
   # may bind `secrets: get` to it. Pinned by
   # tests/chart/test_a_first_party_pod_cannot_read_a_secret_through_the_kube_api.py.
-  # securityContexts for the INFRA pods (app tier is already hardened via lance.securityContext)
-  # + PSA-restricted compliance for the root busybox wait-age init containers (the audit's
-  # sequencing footgun: label the namespace `pod-security.kubernetes.io/enforce=restricted` ONLY
-  # after these boot green — the label itself is a kubectl step, the namespace isn't chart-owned).
-  # Per-image uid/fsGroup (data/secret holders need the RIGHT ids for their PVCs, not helper reuse):
-  infraContexts:
-    # -- Applies pinned runAsUser/fsGroup securityContexts to the infra pods (the AGE Postgres). Off by default.
-    enabled: false
-    # -- uid/fsGroup for the AGE Postgres pod (postgres image uid/gid 999).
-    age: { runAsUser: 999, fsGroup: 999 } # postgres official image uid/gid
 
 # === Network isolation (opt-in; requires a policy-enforcing CNI e.g. Calico/Cilium) ===============
 # k3s's default kindnet/flannel does NOT enforce NetworkPolicy, so this is a no-op there — it is prod
 # hardening. When enabled: namespace default-deny Ingress+Egress, kube-dns egress allow (same change —
 # the audit's footgun), intra-namespace allows, api-server egress, and EXCLUSIVE client lists for the
 # guarded stores (the secret store ← the pods that log in to it ONLY, as the dev store's ingress or
-# as egress to the platform's; age-postgres ← its real clients; the object store ← the data plane). Default OFF;
+# as egress to the platform's; the development Postgres ← OpenFGA and its migrate Job; the object store ← the data plane). Default OFF;
 # flip in values-prod on a policy-enforcing CNI.
 # ⚠ Under default-deny, EVERY Job/CronJob pod template needs explicit component labels or the policy
 # blocks it silently (kindnet hides the failure) — see the templates' job specs.
@@ -382,7 +345,7 @@ networkPolicy:
   # -- List of NetworkPolicy `from` peers allowed to scrape the in-chart OpenFGA's metrics port (2112): the platform's collector, e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}}]. Empty admits none.
   openfgaMetricsFrom: []
   # Extra egress rules (verbatim NetworkPolicy egress entries) for every pod but the console, to an endpoint no value of
-  # its own names: the platform's Postgres (age.externalHost) when OpenFGA runs in the chart. The API server, OpenFGA, the
+  # its own names: the platform's Postgres (postgres.externalHost) when OpenFGA runs in the chart. The API server, OpenFGA, the
   # secret store, the telemetry backend, the S3, the bus and the IdP take rules of their own, scoped to the pods that dial
   # them (`lance.platformEgress`).
   # -- List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names (the platform's Postgres when OpenFGA runs in the chart). Each rule names its `to` peers; the render refuses one that admits every destination.
@@ -1002,19 +965,8 @@ maintenance:
   # -- Announce each reclamation on the catalog control topic (catalog.control.v1) over the worker's own bus connection. Off by default.
   controlEmit: false
 
-# === Backups — a FALLBACK for the SELF-CONTAINED in-cluster path only. OFF by default. When you run the
-# managed/operator path (CloudNativePG for AGE — the rask deployment), DISABLE these
-# and let the operators do backups (PITR + scheduled, better than this). These exist so a self-contained
-# in-cluster-prod deploy (in-cluster object-store PVC + AGE) isn't backup-less. ---------------------------------
+# === Backups: the control root's, OFF by default. A platform backs up its own Postgres and S3. ================
 backups:
-  # pg_dump the OpenFGA database (gzip) → the lakehouse S3 under _backups/pg/<date>/.
-  pgDump:
-    # -- Schedule a CronJob that pg_dumps the OpenFGA database (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. It signs with a session its own ServiceAccount's token is exchanged for, and pg_dump reads its password from a PGPASSFILE. Off by default.
-    enabled: false
-    # -- Cron schedule of the pg dump (default daily 02:00).
-    schedule: "0 2 * * *" # daily 02:00
-    # -- Number of newest daily pg dumps kept; older ones are pruned on each run.
-    keep: 7 # retention: prune all but the newest N daily dumps each run, so the backups don't grow unbounded
   # THE CONTROL ROOT — the registry that holds every project, warehouse and bucket claim. Lose
   # it and the Lance data survives while nothing can route to it. `scripts/control_root_backup.py`
   # ships backup/verify/restore/prune and `docs/runbooks/RUNBOOK-restore.md` documents the drill; this
@@ -1022,8 +974,8 @@ backups:
   controlRoot:
     # -- Schedule a CronJob that backs up the control root (project, warehouse and bucket-claim registries). Off by default.
     enabled: false
-    # -- Cron schedule of the control-root backup (default daily 01:00, ahead of the pg dump).
-    schedule: "0 1 * * *" # daily 01:00, ahead of the pg dump so the two do not contend for the store
+    # -- Cron schedule of the control-root backup (default daily 01:00).
+    schedule: "0 1 * * *" # daily 01:00
     # -- Number of newest control-root backups kept after each successful copy; 0 keeps every run.
     keep: 14 # prune to the newest N after each successful copy; 0 keeps every run, unbounded
     # ANOTHER BUCKET is the point of a backup. Empty writes `_backups/control/` inside the control root
@@ -1045,7 +997,7 @@ backups:
     kubectlImage: alpine/k8s:1.31.3
 
 # === HA: PodDisruptionBudget + (optional) HPA for the stateless request-serving services. Off by default
-# (single-node dev); the prod overlay turns the PDB on. Stateful stores (AGE, the object store) get HA from
+# (single-node dev); the prod overlay turns the PDB on. Stateful stores (Postgres, the object store) get HA from
 # their operators or the platform, NOT from here. ------------------------------------------------
 podDisruptionBudget:
   # -- Renders a PodDisruptionBudget for each service running more than one replica.
@@ -1126,8 +1078,6 @@ objectStore:
       lineage: "arn:aws:iam::000000000000:role/rask-lineage"
       # -- The role maintenance's token is exchanged for.
       maintenance: "arn:aws:iam::000000000000:role/rask-maintenance"
-      # -- The role the pg dump's token is exchanged for (`backups.pgDump`).
-      backup-pg: "arn:aws:iam::000000000000:role/rask-backup-pg"
       # -- The role the control-root backup's token is exchanged for (`backups.controlRoot`).
       backup-control-root: "arn:aws:iam::000000000000:role/rask-backup-control-root"
     # -- Store identities of the release's namespace outside the lakehouse's own workloads, as `{<ServiceAccount name>: [<policy statement>, ...]}`: each ServiceAccount is rendered with no token mounted, and on the development store the provisioning hook writes its statements as the canned policy its token's subject names, beside the workloads' own, so the hook's prune keeps it. Empty: no other identity holds a store session.
@@ -1468,7 +1418,7 @@ nats:
         subscribe: [_INBOX.>]
 
 # === OpenFGA (subchart) — Zanzibar authz. lance-ns's values REPLACE rask's `engine: memory`: the
-# datastore is the AGE Postgres (it's just postgres), so grants survive a restart. -----------------
+# datastore is the Postgres `postgres` names, so grants survive a restart. -----------------
 openfga: # @schema skipProperties: true; additionalProperties: true
   # -- Install the OpenFGA authorization server subchart, plus rask's migrate Job, authn subject ConfigMap and PodDisruptionBudget for it.
   enabled: true
@@ -1626,10 +1576,15 @@ openfga: # @schema skipProperties: true; additionalProperties: true
   # subchart's pod template says nothing about the token, so a change to the account alone replaces no pod: a running
   # OpenFGA would keep the token it mounted. templates/openfga-authn.yaml refuses a render where the annotation is not
   # `openfga.serviceAccount.name`.
-  # -- Subchart passthrough: OpenFGA's pod annotations; `rask.dev/openfga-clients` names the ServiceAccounts its subject list admits and `rask.dev/openfga-account` the tokenless account it runs as, so a change to either restarts it.
+  # THE POD NAMES THE DATABASE IT DIALS as well. OpenFGA reads its connection string from the mounted config file at
+  # start, so a change to `postgres` alone replaces no pod: a running OpenFGA would keep dialling the address it started
+  # with. templates/openfga-authn.yaml refuses a render where the annotation is not `<host>:<port>/<database>` as
+  # `postgres` names them.
+  # -- Subchart passthrough: OpenFGA's pod annotations; `rask.dev/openfga-clients` names the ServiceAccounts its subject list admits, `rask.dev/openfga-account` the tokenless account it runs as and `rask.dev/openfga-datastore` the Postgres it dials (`<host>:<port>/<database>`), so a change to any restarts it.
   podAnnotations:
     rask.dev/openfga-clients: "catalog,hooks"
     rask.dev/openfga-account: rask-openfga
+    rask.dev/openfga-datastore: "rask-postgres:5432/openfga"
   # AUTHENTICATED ([[XC-077]]). With no authn the API answers any pod that presents no credential, so code in any pod
   # could write `estate#admin` for itself or replace the model with no rask audit record. The API authenticates
   # each client as an OIDC client of the cluster ServiceAccount issuer (D1), so a client presents its pod's
@@ -1682,19 +1637,19 @@ openfga: # @schema skipProperties: true; additionalProperties: true
   # -- Subchart passthrough: mounts the `openfga-config` volume at `/etc/openfga`, where OpenFGA reads its config file.
   extraVolumeMounts:
     - { name: openfga-config, mountPath: /etc/openfga, readOnly: true }
-  # -- Subchart passthrough: Postgres datastore on the AGE server, its DSN from the mounted config file, bundled migrations off (rask's Job migrates), pool 30 open/10 idle.
+  # -- Subchart passthrough: Postgres datastore, its DSN from the mounted config file, bundled migrations off (rask's Job migrates), pool 30 open/10 idle.
   datastore:
     engine: postgres
     # The chart's bundled migrate (both job + initContainer types) failed to pass the datastore flags in
     # 0.3.9, so we disable it and run our own proven migrate Job (templates/openfga-migrate.yaml) that
-    # waits for the AGE Postgres first. The server then connects to the already-migrated db. KEPT on the
-    # 0.3.12 bump on purpose — our Job also carries the NetworkPolicy component label and the wait-age
+    # waits for Postgres first. The server then connects to the already-migrated db. KEPT on the
+    # 0.3.12 bump on purpose — our Job also carries the NetworkPolicy component label and the wait-postgres
     # init that the bundled one has no equivalent for, so re-testing the bundled path is its own change,
     # not a side effect of a version bump.
     applyMigrations: false
     waitForMigrations: false
-    # THE SHARE OF A SHARED SERVER, declared rather than inherited ([[XC-016]]). `rask-age` serves
-    # openfga from a Postgres running the stock `max_connections=100` — the chart overrides nothing — so
+    # THE SHARE OF A SERVER, declared rather than inherited ([[XC-016]]). A stock Postgres admits
+    # `max_connections=100`, the development fixture's and many a platform's, so
     # openfga's pool is declared as a share of that server rather than left at the driver's default.
     #
     # MEASURED 2026-09-23, twelve samples over 2.5 minutes spanning a maintenance sweep tick: openfga
@@ -1717,59 +1672,21 @@ openfga: # @schema skipProperties: true; additionalProperties: true
     maxOpenConns: 30
     maxIdleConns: 10
 
-# === Apache AGE Postgres (first-party template) — the lineage graph store AND openfga's datastore --
-# The ONLY relational store post-P7a (the rask batches/chunks CNPG Cluster is gone): CNPG's stock image
-# has no AGE extension, so this is a plain StatefulSet on apache/age. See docs/CNPG-AGE.md for the
-# ImageVolume path that eventually folds it into CloudNativePG.
-age:
-  # -- Run the in-cluster apache/age Postgres StatefulSet that serves OpenFGA's database.
+# === Postgres: OpenFGA's datastore, the platform's, or the dev fixture (deploy/fixtures/postgres) ===============
+# The chart runs no Postgres (ADR 0228). It names one only while it runs OpenFGA (`openfga.enabled`), whose connection
+# string the ExternalSecret assembles from this host and the store's `postgres` secret; with the platform's OpenFGA
+# (`auth.fgaApiUrl`) nothing here is read.
+postgres:
+  # -- This estate uses the development Postgres (deploy/fixtures/postgres, Service `<release>-postgres`), and a real deployment refuses it. The chart renders no Postgres. False reads the platform's at `externalHost`.
   enabled: true
-  # PG16 THROUGHOUT, and the patch is chosen for the PLATFORM rather than for features: 1.5.0 ships
-  # `linux/amd64` ONLY — read from the image's config blob, since a v2 manifest carries no top-level
-  # architecture — while 1.6.0 is a manifest list carrying amd64 AND arm64 ([[XC-070]], measured
-  # against the registry 2026-09-23). This StatefulSet serves OpenFGA, so on the older pin nothing
-  # governed comes up on an arm64 host at all.
-  # -- Postgres+AGE image for the StatefulSet and the pg_dump backup job (PG16; 1.6.0 is multi-arch amd64+arm64).
-  image: apache/age:release_PG16_1.6.0
-  # -- Postgres user every AGE client connects as; its password is the store's `postgres` secret (field `password`), never a value.
-  user: lance
-  # No password value: the AGE password is the store's `postgres` secret ([[XC-004]]).
-  # The database the server initialises (`POSTGRES_DB`) and its readiness probe names. No client reads it: lineage
-  # keeps no database (ADR 0158), and OpenFGA has its own below. It keeps the name the deployed volume was
-  # initialised with, because a new one rolls the StatefulSet that serves OpenFGA; it leaves with this StatefulSet
-  # (LH-496).
-  # -- Name of the database the AGE server initialises and probes; no client reads it.
-  bootstrapDb: lineage
-  # -- Name of the database OpenFGA uses as its datastore.
-  openfgaDb: openfga
-  # -- Postgres port of the AGE store, used by every client DSN, the backup job and the network policy.
+  # -- Host of the platform's Postgres, which carries OpenFGA's database; the render refuses it empty with `enabled` false while the chart runs OpenFGA, and refuses both set.
+  externalHost: ""
+  # -- Port of the Postgres OpenFGA and its migrate Job dial.
   port: 5432
-  # Externalize ([[XC-132]]): with age.enabled=false every client (the in-chart OpenFGA's datastore DSN, the dump)
-  # dials THIS host. user and the database names must match the platform's; the password is never a value: it is the
-  # secret store's `postgres` secret, which ESO delivers and the dev seed writes into its DSNs.
-  # -- Postgres host OpenFGA uses instead of the in-cluster AGE; the render refuses it empty with age.enabled=false.
-  externalHost: "" # e.g. rask-postgres-rw (the CNPG Cluster's -rw service)
-  # Effectively immutable after first install: StatefulSet volumeClaimTemplates can't be updated in
-  # place, so the chart fails the upgrade if this differs from the deployed StatefulSet instead of
-  # silently not resizing. To resize: patch the PVC, recreate the StatefulSet with --cascade=orphan,
-  # then upgrade — see docs/runbooks/RUNBOOK-restore.md.
-  # -- PVC size of the AGE StatefulSet. Immutable after install: the chart fails an upgrade that changes it (see docs/runbooks/RUNBOOK-restore.md).
-  storage: 1Gi
-  # === AGE-on-CNPG cutover gate (audit 2026-07-27 defect 3; docs/adr/0125-age-on-cnpg-via-imagevolume-behind-its-own-gate-merge.md) ===
-  # templates/age-cluster.yaml (CNPG Cluster + ImageVolume AGE extension, docs/CNPG-AGE.md) used to
-  # render UNGATED — a second 3-instance graph store with a placeholder extension image, alongside
-  # this StatefulSet stack, on every render. It is now gated here and MUTUALLY EXCLUSIVE with
-  # age.enabled (the template fails the render if both are on). Default OFF: the estate runs the
-  # apache/age StatefulSet today, and the cutover needs a real extension image built + pushed first
-  # (.docker/cnpg-age-ext.dockerfile) plus K8s 1.33+ (ImageVolume) and CNPG >= 1.27.
-  cnpgCluster:
-    # -- Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and the CloudNativePG operator (>= 1.27), a prerequisite: the render refuses on a cluster that does not serve postgresql.cnpg.io/v1.
-    enabled: false
-    # The built AGE extension image, named by the digest its push reported. Deliberately NO default: required() when
-    # enabled, so a placeholder can never render, and a tag alone is refused, since a tag is mutable and the extension is
-    # code loaded into the database server.
-    # -- The built AGE extension image for the CNPG cluster, by digest (`ghcr.io/<org>/age-cnpg-ext@sha256:<digest>`; a tag alone is refused); required when `cnpgCluster.enabled`, no default.
-    extensionImage: ""
+  # -- Role OpenFGA connects as; its password is the store's `postgres` secret (field `password`), never a value.
+  user: lance
+  # -- Name of the database OpenFGA keeps its store in.
+  database: openfga
 
 # === Dex — the development OIDC issuer, a fixture (deploy/fixtures/dex) ===========================
 dex:

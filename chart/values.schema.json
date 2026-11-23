@@ -2,58 +2,6 @@
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "properties": {
-        "age": {
-            "type": "object",
-            "properties": {
-                "bootstrapDb": {
-                    "description": "Name of the database the AGE server initialises and probes; no client reads it.",
-                    "type": "string"
-                },
-                "cnpgCluster": {
-                    "type": "object",
-                    "properties": {
-                        "enabled": {
-                            "description": "Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and the CloudNativePG operator (\u003e= 1.27), a prerequisite: the render refuses on a cluster that does not serve postgresql.cnpg.io/v1.",
-                            "type": "boolean"
-                        },
-                        "extensionImage": {
-                            "description": "The built AGE extension image for the CNPG cluster, by digest (`ghcr.io/\u003corg\u003e/age-cnpg-ext@sha256:\u003cdigest\u003e`; a tag alone is refused); required when `cnpgCluster.enabled`, no default.",
-                            "type": "string"
-                        }
-                    },
-                    "additionalProperties": false
-                },
-                "enabled": {
-                    "description": "Run the in-cluster apache/age Postgres StatefulSet that serves OpenFGA's database.",
-                    "type": "boolean"
-                },
-                "externalHost": {
-                    "description": "Postgres host OpenFGA uses instead of the in-cluster AGE; the render refuses it empty with age.enabled=false.",
-                    "type": "string"
-                },
-                "image": {
-                    "description": "Postgres+AGE image for the StatefulSet and the pg_dump backup job (PG16; 1.6.0 is multi-arch amd64+arm64).",
-                    "type": "string"
-                },
-                "openfgaDb": {
-                    "description": "Name of the database OpenFGA uses as its datastore.",
-                    "type": "string"
-                },
-                "port": {
-                    "description": "Postgres port of the AGE store, used by every client DSN, the backup job and the network policy.",
-                    "type": "integer"
-                },
-                "storage": {
-                    "description": "PVC size of the AGE StatefulSet. Immutable after install: the chart fails an upgrade that changes it (see docs/runbooks/RUNBOOK-restore.md).",
-                    "type": "string"
-                },
-                "user": {
-                    "description": "Postgres user every AGE client connects as; its password is the store's `postgres` secret (field `password`), never a value.",
-                    "type": "string"
-                }
-            },
-            "additionalProperties": false
-        },
         "allocator": {
             "type": "object",
             "properties": {
@@ -205,25 +153,7 @@
                             "type": "integer"
                         },
                         "schedule": {
-                            "description": "Cron schedule of the control-root backup (default daily 01:00, ahead of the pg dump).",
-                            "type": "string"
-                        }
-                    },
-                    "additionalProperties": false
-                },
-                "pgDump": {
-                    "type": "object",
-                    "properties": {
-                        "enabled": {
-                            "description": "Schedule a CronJob that pg_dumps the OpenFGA database (gzip) to `_backups/pg/\u003cdate\u003e/` in the lakehouse bucket. It signs with a session its own ServiceAccount's token is exchanged for, and pg_dump reads its password from a PGPASSFILE. Off by default.",
-                            "type": "boolean"
-                        },
-                        "keep": {
-                            "description": "Number of newest daily pg dumps kept; older ones are pruned on each run.",
-                            "type": "integer"
-                        },
-                        "schedule": {
-                            "description": "Cron schedule of the pg dump (default daily 02:00).",
+                            "description": "Cron schedule of the control-root backup (default daily 01:00).",
                             "type": "string"
                         }
                     },
@@ -1132,10 +1062,6 @@
                                     "description": "The role the control-root backup's token is exchanged for (`backups.controlRoot`).",
                                     "type": "string"
                                 },
-                                "backup-pg": {
-                                    "description": "The role the pg dump's token is exchanged for (`backups.pgDump`).",
-                                    "type": "string"
-                                },
                                 "catalog": {
                                     "description": "The role the catalog's token is exchanged for, for its own IO and every vend.",
                                     "type": "string"
@@ -1295,6 +1221,32 @@
             },
             "additionalProperties": false
         },
+        "postgres": {
+            "type": "object",
+            "properties": {
+                "database": {
+                    "description": "Name of the database OpenFGA keeps its store in.",
+                    "type": "string"
+                },
+                "enabled": {
+                    "description": "This estate uses the development Postgres (deploy/fixtures/postgres, Service `\u003crelease\u003e-postgres`), and a real deployment refuses it. The chart renders no Postgres. False reads the platform's at `externalHost`.",
+                    "type": "boolean"
+                },
+                "externalHost": {
+                    "description": "Host of the platform's Postgres, which carries OpenFGA's database; the render refuses it empty with `enabled` false while the chart runs OpenFGA, and refuses both set.",
+                    "type": "string"
+                },
+                "port": {
+                    "description": "Port of the Postgres OpenFGA and its migrate Job dial.",
+                    "type": "integer"
+                },
+                "user": {
+                    "description": "Role OpenFGA connects as; its password is the store's `postgres` secret (field `password`), never a value.",
+                    "type": "string"
+                }
+            },
+            "additionalProperties": false
+        },
         "pubsub": {
             "type": "object",
             "properties": {
@@ -1312,37 +1264,6 @@
         "resources": {
             "type": "object",
             "properties": {
-                "age": {
-                    "description": "CPU/memory requests and limits for the AGE Postgres StatefulSet (lineage and OpenFGA databases).",
-                    "type": "object",
-                    "properties": {
-                        "limits": {
-                            "type": "object",
-                            "properties": {
-                                "cpu": {
-                                    "type": "string"
-                                },
-                                "memory": {
-                                    "type": "string"
-                                }
-                            },
-                            "additionalProperties": false
-                        },
-                        "requests": {
-                            "type": "object",
-                            "properties": {
-                                "cpu": {
-                                    "type": "string"
-                                },
-                                "memory": {
-                                    "type": "string"
-                                }
-                            },
-                            "additionalProperties": false
-                        }
-                    },
-                    "additionalProperties": false
-                },
                 "catalog": {
                     "description": "CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful.",
                     "type": "object",
@@ -1491,29 +1412,6 @@
         "security": {
             "type": "object",
             "properties": {
-                "infraContexts": {
-                    "type": "object",
-                    "properties": {
-                        "age": {
-                            "description": "uid/fsGroup for the AGE Postgres pod (postgres image uid/gid 999).",
-                            "type": "object",
-                            "properties": {
-                                "fsGroup": {
-                                    "type": "integer"
-                                },
-                                "runAsUser": {
-                                    "type": "integer"
-                                }
-                            },
-                            "additionalProperties": false
-                        },
-                        "enabled": {
-                            "description": "Applies pinned runAsUser/fsGroup securityContexts to the infra pods (the AGE Postgres). Off by default.",
-                            "type": "boolean"
-                        }
-                    },
-                    "additionalProperties": false
-                },
                 "readOnlyRootFilesystem": {
                     "description": "Read-only root filesystem for every first-party app container; each gets a writable /tmp emptyDir.",
                     "type": "boolean"

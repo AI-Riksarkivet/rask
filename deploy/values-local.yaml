@@ -58,9 +58,6 @@ docs:
 # survive losing the bucket — the failure a backup exists for. Any deployment that matters sets a separate bucket,
 # which is what the chart's own values say.
 backups:
-  pgDump:
-    enabled: true
-    keep: 3
   controlRoot:
     enabled: true
     keep: 3

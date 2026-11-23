@@ -1,0 +1,8 @@
+apiVersion: v2
+name: postgres
+description: >-
+  NOT FOR PRODUCTION. A development Postgres for rask: one stock PostgreSQL server on one local volume, holding the
+  database OpenFGA keeps its store in, with no backup. A platform runs its own Postgres; rask names it.
+type: application
+version: 0.1.0
+appVersion: "16.13"

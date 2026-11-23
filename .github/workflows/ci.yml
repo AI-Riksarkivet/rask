@@ -185,7 +185,7 @@ jobs:
   # DOES add is the layer no lockfile describes: Debian CVEs in the trixie/bun base images.
   #
   # The two deployables: the lakehouse (rest-catalog) and the console (frontend). The development fixtures'
-  # images, cnpg-age-ext and marquez, are NOT scanned by this job. Widening it is a matter of adding matrix rows and
+  # images, marquez and bus-signer, are NOT scanned by this job. Widening it is a matter of adding matrix rows and
   # paying the build minutes.
   #
   # BLOCKING ([[XC-184]]): a fixable HIGH or CRITICAL finding in either image fails the nightly run, so a base image that

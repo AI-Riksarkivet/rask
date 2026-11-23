@@ -86,8 +86,8 @@ service directly. See `rask-frontend`.
 
 ## Load-bearing invariants
 
-1. **No service owns relational state.** The only database server is the chart-managed `rask-age` Postgres, serving
-   OpenFGA. Lineage keeps no database: its commit feed,
+1. **No service owns relational state.** The chart runs no database server: OpenFGA's Postgres is the
+   platform's (the `postgres` fixture in development, ADR 0228). Lineage keeps no database: its commit feed,
    edge list, outbox refusals and forwarder cursors are Lance tables in the catalog's provenance namespace, written and
    read through the catalog's doors (ADR 0158), and the lineage graph is bring-your-own, fed by its forwarder.
 2. **Each service builds only its own `app.state` subset in its own lifespan.** Don't widen a lifespan to grab

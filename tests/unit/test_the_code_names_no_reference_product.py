@@ -22,7 +22,7 @@ _PLANTED = {
     "services/catalog/src/catalog/doors.py": "LIMIT = 1000  # the ceiling Lakekeeper's batch check uses\n",
     "tests/unit/test_doors.py": "# LAKEKEEPER parity\n",
     "docs/research.md": "Lakekeeper's console keeps its notifications in the browser.\n",
-    "chart/crds-bootstrap/crd.yaml": "# vendored upstream: lakekeeper\n",
+    "deploy/fixtures/nats/chart/charts/nats/values.yaml": "# vendored upstream: lakekeeper\n",
     "frontend/console/node_modules/pkg/index.js": "// lakekeeper\n",
 }
 

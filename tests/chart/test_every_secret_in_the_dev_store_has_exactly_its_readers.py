@@ -44,7 +44,7 @@ from tests.chart.chart_render import (
 #: The dev estate as `make k3s-up` renders it, with the planes that hold a credential switched on.
 DEV_ESTATE: Final = (
     "--set", "image.localImages=true", "-f", str(REPO / "deploy/values-local.yaml"),
-    "--set", "backups.pgDump.enabled=true", "--set", "backups.controlRoot.enabled=true",
+    "--set", "backups.controlRoot.enabled=true",
 )  # fmt: skip
 
 #: The External Secrets Operator's own account, which values.yaml `externalSecrets` binds its role to.
@@ -54,7 +54,7 @@ STORE_POD: Final = "Deployment/rask-openbao"
 #: The KV v2 data path a policy grants a secret by.
 _DATA_PATH: Final = re.compile(r"^secret/data/([^/*]+)$")
 
-_POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-age", "Deployment/rask-openfga", "Job/rask-openfga-migrate-<digest>", "CronJob/rask-pg-backup"})
+_POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-postgres", "Deployment/rask-openfga", "Job/rask-openfga-migrate-<digest>"})
 _CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 
@@ -317,7 +317,7 @@ def _names_the_root_id(container: dict, root_id: str) -> bool:
 
 def test_every_secret_in_the_dev_store_has_exactly_its_readers_and_no_published_token_reads_it() -> None:
     chart = render(*DEV_ESTATE)
-    estate = (*with_dev_store(chart), *render_fixture("rustfs"), *render_fixture("nats", "--set", "nats.auth.server=true"))
+    estate = (*with_dev_store(chart), *render_fixture("rustfs"), *render_fixture("postgres"), *render_fixture("nats", "--set", "nats.auth.server=true"))
     namespace = "default"
 
     store, unbound = _store_readers(estate, chart, namespace)

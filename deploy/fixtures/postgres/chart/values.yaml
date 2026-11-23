@@ -1,0 +1,23 @@
+# NOT FOR PRODUCTION (deploy/fixtures/README.md).
+
+# -- The Service and StatefulSet name: `<rask release>-postgres`, the host rask's chart dials under `postgres.enabled`.
+name: rask-postgres
+# Stock PostgreSQL, a multi-arch image named by digest: a tag is mutable, and this server holds every grant of the
+# estate it serves.
+image: postgres:16.13@sha256:5d143123fdf80462d1778cd4f24b9f7ca13c87174bca19141fb194c5a1ebca59
+# -- The Service's port: rask's `postgres.port`.
+port: 5432
+# -- The role OpenFGA connects as: rask's `postgres.user`.
+user: lance
+# -- The one database the server is initialised with, OpenFGA's: rask's `postgres.database`.
+database: openfga
+# -- The claim the database lives on. A StatefulSet's claim template is immutable after install.
+storage: 1Gi
+rask:
+  # -- The rask release whose SecretStore (`<release>-vault`) holds the password, the dev store's `postgres` secret.
+  release: rask
+  # -- Refresh interval of the ExternalSecret that delivers the password.
+  refreshInterval: "1h"
+resources:
+  requests: { cpu: 50m, memory: 128Mi }
+  limits: { cpu: "1", memory: 512Mi }

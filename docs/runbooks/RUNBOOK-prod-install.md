@@ -25,7 +25,6 @@ result.
 | Gateway API Gateway | A conformant implementation serving Core matches and `URLRewrite`; a Gateway rask's routes attach to (`route.parentRefs`), allowing 64 MB request bodies (Gateway policy, ADR 0165) | `kubectl get gateway -A` lists the Gateway you will name | `route.yaml`: `route.parentRefs must name the Gateway …` |
 | A NetworkPolicy-enforcing CNI | `deploy/values-prod.yaml` sets `networkPolicy.enabled: true` (default-deny); a CNI that ignores NetworkPolicy leaves the estate open with no error | The negative probe in step 7 | Nothing refuses: the policies render and are silently not enforced |
 | The cluster's ServiceAccount issuer | Its `iss` is what `auth.serviceAccountIssuer` names (default `https://kubernetes.default.svc.cluster.local`); OpenFGA, the S3 STS, the bus signer and the OTLP gateway verify pod tokens against it | `kubectl get --raw /.well-known/openid-configuration` and compare `issuer` | Every FGA, store, bus and telemetry login is refused at runtime |
-| Kubernetes 1.33+ and CloudNativePG >= 1.27 | Only for `age.cnpgCluster.enabled` ([CNPG-AGE.md](../CNPG-AGE.md)); production names the platform's Postgres instead | — | `age-cluster.yaml`: `CloudNativePG is a prerequisite …` |
 | A CSI VolumeSnapshotClass | Only with `backups.volumeSnapshot.enabled`, which snapshots the development store's claim; with the platform's S3 there is nothing to snapshot (`chart/templates/backup-snapshot.yaml`), so set it `false` (step 4) | `kubectl get volumesnapshotclass` | The CronJob runs and finds no claim |
 
 ## 1 · Platform services
@@ -38,7 +37,7 @@ tested version of each from `deploy/fixtures/<name>` (each fixture's `fixture.en
 | **External Secrets Operator** | Serves `external-secrets.io/v1`; its ServiceAccount is the one `externalSecrets.serviceAccount` / `externalSecrets.namespace` name (default `external-secrets` / `external-secrets`) | — | `deploy/fixtures/external-secrets/fixture.env` |
 | **Vault or OpenBao** | https; KV v2 at `externalSecrets.kvMount` (`secret`); Kubernetes auth at `externalSecrets.kubernetesAuthPath` (`kubernetes`) against this cluster | `openbao.externalAddr`, `openbao.ca.configMap` for a private CA, `openbao.egress` | deployment.md § the secret store |
 | **NATS JetStream** | NATS 2.15.2; JetStream on a file store; a cluster of at least `nats.streamReplicas` (3) nodes; TLS on the client port, `tls { handshake_first: true }` or `auto`; operator mode with one APP account holding JetStream and every rask user and an AUTH account whose auth callout is the platform's **signer**; the signer checks a pod's token by TokenReview for `nats.auth.audience` (`rask-bus`) and answers with a session of at most `nats.auth.sessionSeconds` signed by a key scoped to the user's row of ConfigMap `rask-nats-permissions` | `nats.url` (`tls://`), `nats.ca.configMap`, `nats.egress` | `deploy/fixtures/nats`; [OPERATORS.md § 7](../OPERATORS.md) |
-| **Postgres + OpenFGA** | OpenFGA HA, https, OIDC authn against the cluster's ServiceAccount issuer for audience `rask-openfga`, admitting the subjects `lance.openfgaSubjects` computes (step 2); its Postgres holds the `openfga` database owned by `age.user` | `auth.fgaApiUrl`, `auth.fgaEgress`, `age.externalHost` | deployment.md § OpenFGA and its Postgres |
+| **OpenFGA** | OpenFGA HA, https, OIDC authn against the cluster's ServiceAccount issuer for audience `rask-openfga`, admitting the subjects `lance.openfgaSubjects` computes (step 2); its Postgres is the platform's, and rask names none | `auth.fgaApiUrl`, `auth.fgaEgress` | deployment.md § OpenFGA and its Postgres |
 | **S3 + STS** | Trusts the cluster's ServiceAccount issuer for `objectStore.identity.audience` (`rask-object-store`; `sts.amazonaws.com` on AWS) and grants each workload's subject the policy step 2 renders; answers STS `AssumeRoleWithWebIdentity` at the same address (the chart sets `*_S3_STS_ENDPOINT` to `objectStore.externalEndpoint`); delivers every object write of every rask bucket (`s3:ObjectCreated:*`) to the bus subject `store.events`, kept through a bus outage | `objectStore.externalEndpoint` (https), `objectStore.egress`, `objectStore.identity.roleArns.*` on AWS | `.claude/skills/rask-rustfs` (what rask demands of a store) |
 | **The IdP** | An https OIDC issuer; issues tokens with audience `auth.oidc.audience` (`rask-lakehouse`) to the clients it trusts, through `auth.oidc.audienceScope`; registers the console's public client (`console.oidc.clientId`, `rask-console`: PKCE, no secret, redirect `https://<host>/auth/callback`) | `auth.oidc.issuer`, `auth.oidc.idpId`, `auth.oidc.egress` (and `connectors`/`subjectClaims`/`providers` as its shape needs) | deployment.md § Development stand-ins, Dex fixture |
 | **OTLP gateway** | OTLP/HTTP, https; admits a token of `observability.identity.audience` (`rask-otlp`) signed by the cluster's issuer; routes the `lance.audit` instrumentation scope to a store that refuses unauthenticated writes and deletes | `observability.export.endpoint`, `observability.export.egress` | [ADR 0215](../adr/0215-each-service-exports-its-telemetry-to-the-platforms-gateway-as-itself.md); `deploy/fixtures/observability` |
@@ -106,7 +105,7 @@ objectStore: {events: {provisioned: true}}
 
 Copy `deploy/values-prod.yaml` from the tag `lakehouse-vX.Y.Z` into the platform's git and layer `<env>.yaml` over it.
 values-prod already sets auth on, OpenFGA, Postgres, the dev store, Dex and the dev OpenBao off, NetworkPolicy on,
-two replicas and PDBs, the catalog's memory tier and write cap, infra security contexts and `observability.enabled`.
+two replicas and PDBs, the catalog's memory tier and write cap, and `observability.enabled`.
 
 **Every value the production render refuses empty:**
 
@@ -116,7 +115,6 @@ two replicas and PDBs, the catalog's memory tier and write cap, infra security c
 | `nats.url` | `tls://nats.internal:4222` | `lance.natsUrl` (required); `prod-credentials.yaml` (`tls://` only) |
 | `objectStore.externalEndpoint` | `https://s3.<region>.amazonaws.com` | `lance.s3Endpoint`; `prod-credentials.yaml` (https only) |
 | `auth.fgaApiUrl` | `https://fga.internal` | `lance.openfgaUrl`; `prod-credentials.yaml` (https only) |
-| `age.externalHost` | the platform's Postgres host | `lance.ageConnectHost`, reached from `NOTES.txt` |
 | `auth.oidc.issuer` | the IdP, https | `_helpers.tpl` (required; https without Dex) |
 | `auth.oidc.idpId` | `corp` | `auth.oidc.idpId must name the idp id …` |
 | `observability.export.endpoint` | the gateway, https | `lance.otlpEndpoint`; `prod-credentials.yaml` |
@@ -153,7 +151,7 @@ two replicas and PDBs, the catalog's memory tier and write cap, infra security c
    ```
 
    It exits 0 only with every guard in the table at the end satisfied.
-2. Read the render: no `rask-openbao`, `rask-age`, `rask-openfga` or `rask-rustfs` object; four Deployments
+2. Read the render: no `rask-openbao`, `rask-postgres`, `rask-openfga` or `rask-rustfs` object, and no `rask-infra-credentials` ExternalSecret; four Deployments
    (`rask-catalog`, `rask-lineage`, `rask-maintenance-worker`, `rask-console`); the SecretStore `rask-vault` at your
    `openbao.externalAddr`; `deployment.environment.name=prod` on every service; a `rask-allow-*-egress` policy per
    platform endpoint carrying your addresses.
@@ -232,8 +230,8 @@ The install is done when each row is observed, not when Argo CD reports Synced.
 
 ## 8 · After the install
 
-- **Backups.** OpenFGA's Postgres and the S3 data are the platform's to back up (values-prod keeps `backups.pgDump`
-  off). The control-root records (projects, warehouses, declared grants, trash, protection) have their own backup,
+- **Backups.** OpenFGA's Postgres and the S3 data are the platform's to back up (rask ships no database
+  backup). The control-root records (projects, warehouses, declared grants, trash, protection) have their own backup,
   `backups.controlRoot` with `dest` outside the control root's bucket; restore is
   [RUNBOOK-restore.md](RUNBOOK-restore.md).
 - **Signing-key rotation** on the platform's store has no procedure in the repository yet (OPERATORS.md § 6); the rule
@@ -253,7 +251,7 @@ refuses each of these, in the order a fresh `<env>.yaml` meets them:
 | `signing-provisioned.yaml` | `signing.provisioned` false with the platform's store | Step 3.2 |
 | `nats-provisioned.yaml` | `nats.auth.provisioned` false with the platform's store | Step 3.5 |
 | `object-store-events-provisioned.yaml` | `objectStore.events.provisioned` false with the platform's S3 | Step 3.7 |
-| `_helpers.tpl` | Empty `observability.export.endpoint`, `observability.identity.audience`, `objectStore.externalEndpoint`, `openbao.externalAddr` (or http), `nats.url`, `auth.fgaApiUrl`, `age.externalHost`, `auth.oidc.issuer` (or http), `auth.oidc.idpId`, `image.repository` | Step 4 |
+| `_helpers.tpl` | Empty `observability.export.endpoint`, `observability.identity.audience`, `objectStore.externalEndpoint`, `openbao.externalAddr` (or http), `nats.url`, `auth.fgaApiUrl`, `auth.oidc.issuer` (or http), `auth.oidc.idpId`, `image.repository` | Step 4 |
 | `route.yaml` | Empty `route.parentRefs`; empty `route.hostnames` | Step 4 |
 | `prod-credentials.yaml` | The dev store, dev S3 or Dex on; auth off; a `:dev` first-party image; an http FGA, S3, vending, OTLP or lineage-forward address; a `nats.url` that is not `tls://` | Steps 4 and 5 |
 | `network-policy.yaml` | Any `lance.platformEgress` value left empty under `networkPolicy.enabled` | Step 4 |

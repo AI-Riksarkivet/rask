@@ -14,13 +14,13 @@ _Avoid_: umbrella chart, platform chart, the chart
 
 **Prerequisite**:
 A service rask needs that someone other than rask installs and runs, named by reference: NATS JetStream, an OTLP
-endpoint, an object store and an OIDC issuer.
+endpoint, an object store, an OIDC issuer and the Postgres behind OpenFGA.
 _Avoid_: dependency, bundled service, platform component
 
 **Optional subchart**:
 A dependency the product chart can install for development and that production replaces with an external instance:
-OpenFGA, the chart's one subchart (`chart/Chart.yaml`). The Postgres behind OpenFGA is a first-party template of the
-chart (`chart/templates/age-postgres.yaml`), not a subchart.
+OpenFGA, the chart's one subchart (`chart/Chart.yaml`). The Postgres behind OpenFGA is a prerequisite, the
+`postgres` fixture in development (ADR 0228); the chart runs none.
 _Avoid_: embedded database, internal service
 
 **Fixture**:

@@ -14,7 +14,7 @@ fixture's) or a user report — not a page.
   the durable `GET /events` log; the relay tick that drains the outbox and forwards to the graph backend), `maintenance` (a NATS work queue its replicas share: each table's pass, the hourly audit with the drift report, the daily scan; and the write-event lane, ADR 0198),
   and the console's static-file server `rask-console`; public `/api/*` reaches the lakehouse through the platform's Gateway on the chart's HTTPRoutes (`chart/templates/route.yaml`), and `/` reaches the console on the chart's HTTPRoute `rask-console` (`chart/templates/console.yaml`). The lakehouse runs no stage and no pipeline: moving data
   between tables is the user's job on their own compute ([ADR 0155](../adr/0155-the-medallion-is-tier-governance-in-the-catalog.md)).
-- **Stores**: `age-postgres` (OpenFGA's datastore),
+- **Stores**: OpenFGA's Postgres (the platform's; the `rask-postgres` fixture in development),
   the object store (RustFS in development: every Lance table, lineage's provenance tables included, and the registries), `openfga` (authz), the secret store (the openbao
   fixture in development; the platform's Vault or OpenBao in production), `greptimedb` (metrics), `dex` (OIDC).
 - **Signals**: Perses panels, `kubectl logs`, and the domain metrics —
@@ -49,7 +49,7 @@ fixture's) or a user report — not a page.
 | `ErasureDerivedAfterRelease` or `ErasureLateDerivedUnwatched` firing | [A table derived from an erased table found after the release](#a-table-derived-from-an-erased-table-found-after-the-release) |
 | Catalog reads/writes fail, Lance data unreachable | [Object store down](#object-store-down--data-plane) |
 | `LanceObjectStoreThrottled` or `LanceObjectStoreRetriesHigh` firing: writes and passes slow, nothing failing yet | [The object store throttles or retries](#the-object-store-throttles-or-retries) |
-| FGA failing across the estate | [AGE down](#age-postgres-down--fga) |
+| FGA failing across the estate | [Postgres down](#openfgas-postgres-down--fga) |
 | `BusConsumerRetrying` or `MaintenanceArrivalLaneRetrying` firing: a service asking for its bus deliveries again without end | [A subscriber retries without end](#a-subscriber-retries-without-end) |
 | `HttpServerMetricsMissing` firing | [No app reports HTTP metrics](#no-app-reports-http-metrics) |
 | `HttpServerErrorRatioHigh` or `HttpServerLatencyHigh` firing | [A service answers 5xx or slowly](#a-service-answers-5xx-or-slowly) |
@@ -70,11 +70,11 @@ its deliveries retrying until OpenFGA answers.
 single-replica OpenFGA (kind) that is drained/OOMed/rescheduling takes the whole estate down until it
 returns. The prod overlay runs 3 replicas + a PDB, which makes this a quorum event, not a total outage.
 
-**Diagnose.** `kubectl get pods -l app.kubernetes.io/name=openfga`; check its datastore (`age-postgres`) is
-up — OpenFGA stores tuples in the `rask-age` Postgres.
+**Diagnose.** `kubectl get pods -l app.kubernetes.io/name=openfga`; check its datastore is
+up — OpenFGA stores tuples in a Postgres (`postgres.externalHost`, or `rask-postgres` in development).
 
 **Act.** Wait for reschedule / scale it back up; if the datastore is the real cause, see
-[AGE down](#age-postgres-down--fga). Never "fix" a fail-closed 503 by disabling auth in prod.
+[Postgres down](#openfgas-postgres-down--fga). Never "fix" a fail-closed 503 by disabling auth in prod.
 
 ## The secret store sealed → no app starts
 
@@ -408,19 +408,19 @@ the platform store's limits for the buckets the estate uses.
 **Act.** Lower what drives the load (a bring-your-own job's concurrency, a burst of commits), or raise the store's
 limits. If requests begin to fail, see [Object store down](#object-store-down--data-plane).
 
-## AGE Postgres down → FGA
+## OpenFGA's Postgres down → FGA
 
 **Symptom.** Authz fails across the estate (lineage's ingest gate answers `RETRY`, so events stay on the bus),
-because this one pod is OpenFGA's datastore.
+because this Postgres is OpenFGA's datastore.
 
-**Cause.** Single StatefulSet replica (kind), a SPOF. Prod answer is managed Postgres
-(`age.externalHost` / CloudNativePG — see [docs/adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md "P4/P7"](../adr/0033-p4-p7-backups-structural-spofs-the-prod-answer-is.md) and docs/CNPG-AGE.md) —
-sized via the `resources.age` tier (1Gi in prod).
+**Cause.** In production the Postgres is the platform's (`postgres.externalHost`, or behind the platform's OpenFGA), and
+its availability is the platform's. In development it is the `postgres` fixture: one StatefulSet replica on one
+volume, with no backup.
 
-**Diagnose.** `kubectl get pods -l app.kubernetes.io/component=age-postgres`; `pg_isready`; PVC bound?
+**Diagnose.** In development, `kubectl get pods -l app.kubernetes.io/component=postgres`; `pg_isready`; PVC bound?
+In production, the platform's Postgres status.
 
-**Act.** Recover the pod/volume; OpenFGA reconnects on its own. For
-prod, externalize to a replicated managed Postgres and take real backups
+**Act.** Recover the server; OpenFGA reconnects on its own. A restore of its data is the platform's
 ([RUNBOOK-restore.md](RUNBOOK-restore.md)).
 
 ## A subscriber retries without end

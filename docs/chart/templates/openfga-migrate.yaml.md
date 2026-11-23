@@ -16,7 +16,7 @@ error, and the migrate runs with an empty DSN.
 
 ## `- { name: openfga-config, mountPath: /etc/openfga, readOnly: true }`
 
-The datastore DSN carries the AGE password, so it reaches the Job as a mounted file, never as an argument or an env
+The datastore DSN carries the Postgres password, so it reaches the Job as a mounted file, never as an argument or an env
 value ([[XC-081]]). `openfga migrate` reads `datastore.uri` from `/etc/openfga/config.yaml` (OpenFGA v1.18.3
 `cmd/root.go`: flags, then `OPENFGA_*` env, then the file); the file is the infra-credentials Secret's
 `openfga-config.yaml`, the same key the server mounts. `--datastore-engine` stays an argument: it is no secret.

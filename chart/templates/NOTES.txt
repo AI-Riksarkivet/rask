@@ -11,7 +11,9 @@ Services (ClusterIP):
 {{- if .Values.console.enabled }}
   - console:   {{ include "lance.fullname" $root }}-console:{{ .Values.console.port }} (the lakehouse's UI, routed at `/`)
 {{- end }}
-  - age:       {{ include "lance.ageConnectHost" . }}:{{ .Values.age.port }} (Postgres — OpenFGA's database{{ if .Values.age.externalHost }}; the platform's Postgres{{ end }})
+{{- if .Values.openfga.enabled }}
+  - postgres:  {{ include "lance.postgresHost" . }}:{{ .Values.postgres.port }} (OpenFGA's database: {{ if .Values.postgres.enabled }}the postgres fixture's development server{{ else }}the platform's Postgres{{ end }})
+{{- end }}
 {{- if .Values.objectStore.enabled }}
   - store:     {{ include "lance.objectStoreHost" $root }}:{{ .Values.objectStore.port }} (the rustfs fixture's development store)
 {{- end }}

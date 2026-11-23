@@ -80,14 +80,10 @@ Helm's own CRD guidance gives two methods: a non-templated `crds/` directory (in
 upgraded or deleted), or the CRDs in a **separate chart installed on its own**. Operators are the
 second case. Kueue's upstream docs only ever install it as its own release in `kueue-system`.
 
-- **CNPG is the precedent** (`b56a49c9`, 2026-08-19): its 1.2 MB CRD file moved to
-  `chart/crds-bootstrap/`, `.helmignore`d, applied out-of-band by `make k3s-crds`. The operator followed as a
-  prerequisite ([[XC-130]]): the `cloudnative-pg` fixture, `crds.create: false`, and `age-cluster.yaml` refuses to render
-  a `Cluster` for a cluster that does not serve `postgresql.cnpg.io/v1`.
 - **Kueue left the chart ([[XC-126]])**, as BYO compute: its 11 CRDs, annotated keep and with their conversion
   webhook repointed at `kueue-system/kueue-webhook-service`, are served by the cluster's own Kueue (not a rask
   release, and no rask fixture). What follows is why it could not stay as a vendored copy.
-- **Kueue cannot follow it from inside the umbrella.** It templates its 11 CRDs under
+- **A vendored Kueue cannot keep its CRDs out of the umbrella.** It templates its 11 CRDs under
   `templates/crd/` with no switch — 0.18.1 and 0.19.6 alike, and the upstream request to move them was
   closed as not-planned. The conversion webhook's service name and namespace are templated, so a
   vendored copy must be pre-rendered with release `rask` and namespace `default` baked in.
@@ -96,9 +92,9 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
 - **What leaves the chart lands in `deploy/fixtures/`** (ADR 0153, [[XC-124]]): one directory per prerequisite, an
   upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
   (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets nats
-  cloudnative-pg dex rustfs openbao observability marquez`: the NATS
-  JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), the CloudNativePG operator in
-  cnpg-system that the AGE-on-CNPG `Cluster` needs, its CRDs still applied by `make k3s-crds` first ([[XC-130]]), the dev OIDC issuer `rask-dex`, object store `rask-rustfs` ([[XC-163]], ADR 0168) and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the telemetry chain whose Collector every service exports to as itself ([[XC-127]], ADR 0215), and the OpenLineage graph backend
+  postgres dex rustfs openbao observability marquez`: the NATS
+  JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), OpenFGA's development Postgres
+  `rask-postgres` that `postgres.enabled` names (ADR 0228; `WAIT=false`, its password is the dev store's), the dev OIDC issuer `rask-dex`, object store `rask-rustfs` ([[XC-163]], ADR 0168) and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the telemetry chain whose Collector every service exports to as itself ([[XC-127]], ADR 0215), and the OpenLineage graph backend
   `rask-marquez` lineage's forwarder sends to (ADR 0158)). **The Dex fixture** (`deploy/fixtures/dex/chart`) enforces PKCE for every
   authorization code (`oauth2.pkce.enforce: true`, `codeChallengeMethodsSupported: [S256]`; the password,
   client-credentials and token-exchange grants never pass `/auth`), serves no device grant (its `/auth` leg carries no
@@ -144,8 +140,8 @@ Before ANY change that removes a CRD-owning subchart:
 kubectl annotate crd <each crd> helm.sh/resource-policy=keep
 ```
 
-then hand them to the new owner (`helm install … --take-ownership`). CNPG's CRDs carry
-`resource-policy: keep` already, and Kueue's carried it before rask's release stopped rendering them
+then hand them to the new owner (`helm install … --take-ownership`). Kueue's CRDs carried
+`resource-policy: keep` before rask's release stopped rendering them
 ([[XC-126]]).
 
 ## 4. Upgrade flags — `--reset-then-reuse-values`, never `--reuse-values`
@@ -401,10 +397,11 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   (`lance.serviceAccounts`) or `default`; and an empty or non-name secret list. An external reader gets a
   store role and policy. The gate is
   `tests/chart/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
-- **OpenFGA and its Postgres are optional, and production names the platform's** ([[XC-132]]): `openfga.enabled` and
-  `age.enabled` off, `auth.fgaApiUrl` and `age.externalHost` set (the render refuses either empty). Every FGA client
-  dials `lance.openfgaUrl` and every Postgres client `lance.ageConnectHost` (on the AGE-on-CNPG path, `lance-pg-rw`);
-  a template never builds either address itself. The OpenFGA subchart's schema refuses unknown keys, so a rask value
+- **OpenFGA is optional, production names the platform's, and the chart runs no Postgres** ([[XC-132]], ADR 0228):
+  `deploy/values-prod.yaml` sets `openfga.enabled` and `postgres.enabled` off and `auth.fgaApiUrl` (the render refuses
+  it empty), so the render names no Postgres. The chart reads `postgres.*` only while it runs OpenFGA: the development
+  fixture under `postgres.enabled`, else the platform's `postgres.externalHost`. Every FGA client dials
+  `lance.openfgaUrl` and every Postgres client `lance.postgresHost`; a template never builds either address itself. The OpenFGA subchart's schema refuses unknown keys, so a rask value
   about OpenFGA lives under `auth`, never under `openfga`.
 - **A real deployment is refused what would expose it** ([[XC-184]]): `templates/prod-credentials.yaml`, on
   `rask.isRealDeployment`, refuses a published dev credential, `auth.enabled=false` (the chart would write the services'

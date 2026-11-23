@@ -31,16 +31,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| age.bootstrapDb | string | `"lineage"` | Name of the database the AGE server initialises and probes; no client reads it. |
-| age.cnpgCluster.enabled | bool | `false` | Render the AGE-on-CNPG `Cluster` (templates/age-cluster.yaml); mutually exclusive with `age.enabled`. Needs an extension image, K8s 1.33+ and the CloudNativePG operator (>= 1.27), a prerequisite: the render refuses on a cluster that does not serve postgresql.cnpg.io/v1. |
-| age.cnpgCluster.extensionImage | string | `""` | The built AGE extension image for the CNPG cluster, by digest (`ghcr.io/<org>/age-cnpg-ext@sha256:<digest>`; a tag alone is refused); required when `cnpgCluster.enabled`, no default. |
-| age.enabled | bool | `true` | Run the in-cluster apache/age Postgres StatefulSet that serves OpenFGA's database. |
-| age.externalHost | string | `""` | Postgres host OpenFGA uses instead of the in-cluster AGE; the render refuses it empty with age.enabled=false. |
-| age.image | string | `"apache/age:release_PG16_1.6.0"` | Postgres+AGE image for the StatefulSet and the pg_dump backup job (PG16; 1.6.0 is multi-arch amd64+arm64). |
-| age.openfgaDb | string | `"openfga"` | Name of the database OpenFGA uses as its datastore. |
-| age.port | int | `5432` | Postgres port of the AGE store, used by every client DSN, the backup job and the network policy. |
-| age.storage | string | `"1Gi"` | PVC size of the AGE StatefulSet. Immutable after install: the chart fails an upgrade that changes it (see docs/runbooks/RUNBOOK-restore.md). |
-| age.user | string | `"lance"` | Postgres user every AGE client connects as; its password is the store's `postgres` secret (field `password`), never a value. |
 | allocator.arenaMax | int | `2` | MALLOC_ARENA_MAX set on every lakehouse container (lance.allocatorEnv) to cap glibc malloc arenas. Default 2. |
 | allocator.arrowMemoryPool | string | `"system"` | ARROW_DEFAULT_MEMORY_POOL on every lakehouse container; `system` routes Arrow through malloc so `arenaMax` bounds it. |
 | auth.audit | bool | `true` | Emit the structured authn/authz/credential-vending audit stream (RASK_AUDIT_ENABLED); takes effect only with auth on. false silences it. |
@@ -69,10 +59,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | backups.controlRoot.dest | string | `""` | S3 URI the control-root backup is copied to. Empty writes `_backups/control/` inside the control root itself, which does not survive losing the bucket. |
 | backups.controlRoot.enabled | bool | `false` | Schedule a CronJob that backs up the control root (project, warehouse and bucket-claim registries). Off by default. |
 | backups.controlRoot.keep | int | `14` | Number of newest control-root backups kept after each successful copy; 0 keeps every run. |
-| backups.controlRoot.schedule | string | `"0 1 * * *"` | Cron schedule of the control-root backup (default daily 01:00, ahead of the pg dump). |
-| backups.pgDump.enabled | bool | `false` | Schedule a CronJob that pg_dumps the OpenFGA database (gzip) to `_backups/pg/<date>/` in the lakehouse bucket. It signs with a session its own ServiceAccount's token is exchanged for, and pg_dump reads its password from a PGPASSFILE. Off by default. |
-| backups.pgDump.keep | int | `7` | Number of newest daily pg dumps kept; older ones are pruned on each run. |
-| backups.pgDump.schedule | string | `"0 2 * * *"` | Cron schedule of the pg dump (default daily 02:00). |
+| backups.controlRoot.schedule | string | `"0 1 * * *"` | Cron schedule of the control-root backup (default daily 01:00). |
 | backups.volumeSnapshot.enabled | bool | `false` | Schedule a CronJob that creates a CSI VolumeSnapshot of the lakehouse PVC; needs a CSI snapshotter and a VolumeSnapshotClass. Off by default. |
 | backups.volumeSnapshot.kubectlImage | string | `"alpine/k8s:1.31.3"` | Image the snapshot job runs; it needs both a shell and kubectl. |
 | backups.volumeSnapshot.schedule | string | `"0 3 * * *"` | Cron schedule of the volume snapshot (default daily 03:00). |
@@ -199,7 +186,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | objectStore.identity.audience | string | `"rask-object-store"` | The audience every lakehouse workload's store token is projected for, which the object store trusts as its identity provider's client (the rustfs fixture's `identityProvider.clientId`; `sts.amazonaws.com` for AWS). Required. |
 | objectStore.identity.extra | object | `{}` | Store identities of the release's namespace outside the lakehouse's own workloads, as `{<ServiceAccount name>: [<policy statement>, ...]}`: each ServiceAccount is rendered with no token mounted, and on the development store the provisioning hook writes its statements as the canned policy its token's subject names, beside the workloads' own, so the hook's prune keeps it. Empty: no other identity holds a store session. |
 | objectStore.identity.roleArns.backup-control-root | string | `"arn:aws:iam::000000000000:role/rask-backup-control-root"` | The role the control-root backup's token is exchanged for (`backups.controlRoot`). |
-| objectStore.identity.roleArns.backup-pg | string | `"arn:aws:iam::000000000000:role/rask-backup-pg"` | The role the pg dump's token is exchanged for (`backups.pgDump`). |
 | objectStore.identity.roleArns.catalog | string | `"arn:aws:iam::000000000000:role/lance-vend"` | The role the catalog's token is exchanged for, for its own IO and every vend. |
 | objectStore.identity.roleArns.lineage | string | `"arn:aws:iam::000000000000:role/rask-lineage"` | The role lineage's token is exchanged for. |
 | objectStore.identity.roleArns.maintenance | string | `"arn:aws:iam::000000000000:role/rask-maintenance"` | The role maintenance's token is exchanged for. |
@@ -225,7 +211,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | openfga.authn.method | string | `"oidc"` | Subchart passthrough: OpenFGA API authentication method; `oidc` admits only projected ServiceAccount tokens. |
 | openfga.authn.oidc.audience | string | `"rask-openfga"` | Token audience OpenFGA requires; templates/openfga-authn.yaml refuses a render unless it equals `lance.openfgaAudience` (rask-openfga). |
 | openfga.authn.oidc.issuer | string | `"http://{{ .Release.Name }}-issuer-mirror:8080"` | Subchart passthrough (tpl-rendered): the OIDC issuer OpenFGA fetches keys from, the release's ServiceAccount issuer mirror. |
-| openfga.datastore | object | `{"applyMigrations":false,"engine":"postgres","maxIdleConns":10,"maxOpenConns":30,"waitForMigrations":false}` | Subchart passthrough: Postgres datastore on the AGE server, its DSN from the mounted config file, bundled migrations off (rask's Job migrates), pool 30 open/10 idle. |
+| openfga.datastore | object | `{"applyMigrations":false,"engine":"postgres","maxIdleConns":10,"maxOpenConns":30,"waitForMigrations":false}` | Subchart passthrough: Postgres datastore, its DSN from the mounted config file, bundled migrations off (rask's Job migrates), pool 30 open/10 idle. |
 | openfga.enabled | bool | `true` | Install the OpenFGA authorization server subchart, plus rask's migrate Job, authn subject ConfigMap and PodDisruptionBudget for it. |
 | openfga.extraEnvVars | list | `[{"name":"OPENFGA_EXPERIMENTALS","value":"weighted_graph_check"},{"name":"OPENFGA_AUTHN_OIDC_ISSUER_ALIASES","value":"https://kubernetes.default.svc.cluster.local"},{"name":"OPENFGA_AUTHN_OIDC_SUBJECTS","valueFrom":{"configMapKeyRef":{"key":"subjects","name":"rask-openfga-authn"}}}]` | Subchart passthrough env: OPENFGA_EXPERIMENTALS=weighted_graph_check, the OIDC issuer alias, and the subject allow-list from `rask-openfga-authn`. |
 | openfga.extraVolumeMounts | list | `[{"mountPath":"/etc/openfga","name":"openfga-config","readOnly":true}]` | Subchart passthrough: mounts the `openfga-config` volume at `/etc/openfga`, where OpenFGA reads its config file. |
@@ -233,7 +219,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | openfga.http | object | `{"corsAllowedHeaders":["Authorization"],"corsAllowedOrigins":["https://openfga.invalid"]}` | Subchart passthrough: CORS for the OpenFGA HTTP API, closed by allowing only the unreachable origin `https://openfga.invalid`. |
 | openfga.image.tag | string | `"v1.18.3"` | OpenFGA image tag for the subchart server and for rask's own migrate Job (templates/openfga-migrate.yaml), so schema and binary match. |
 | openfga.playground.enabled | bool | `false` | Subchart passthrough: the OpenFGA browser playground; off, since it only runs with authn `none`. |
-| openfga.podAnnotations | object | `{"rask.dev/openfga-account":"rask-openfga","rask.dev/openfga-clients":"catalog,hooks"}` | Subchart passthrough: OpenFGA's pod annotations; `rask.dev/openfga-clients` names the ServiceAccounts its subject list admits and `rask.dev/openfga-account` the tokenless account it runs as, so a change to either restarts it. |
+| openfga.podAnnotations | object | `{"rask.dev/openfga-account":"rask-openfga","rask.dev/openfga-clients":"catalog,hooks","rask.dev/openfga-datastore":"rask-postgres:5432/openfga"}` | Subchart passthrough: OpenFGA's pod annotations; `rask.dev/openfga-clients` names the ServiceAccounts its subject list admits, `rask.dev/openfga-account` the tokenless account it runs as and `rask.dev/openfga-datastore` the Postgres it dials (`<host>:<port>/<database>`), so a change to any restarts it. |
 | openfga.podSecurityContext | object | `{"fsGroup":65532}` | Subchart passthrough: the OpenFGA pod's securityContext; fsGroup 65532, the image's own user, which may read the mounted config file. |
 | openfga.replicaCount | int | `1` | Subchart passthrough: number of OpenFGA server replicas. |
 | openfga.resources | object | `{"limits":{"memory":"2Gi"},"requests":{"cpu":"50m","memory":"512Mi"}}` | Subchart passthrough: CPU and memory requests/limits for the OpenFGA server. |
@@ -242,9 +228,13 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | openfga.telemetry | object | `{"trace":{"enabled":false,"otlp":{"endpoint":""},"sampleRatio":0.001}}` | Subchart passthrough: OpenFGA OTLP tracing to the platform's gateway; off by default, ratio 0.001 because each Check emits ~1,900 spans. |
 | podDisruptionBudget.enabled | bool | `false` | Renders a PodDisruptionBudget for each service running more than one replica. |
 | podDisruptionBudget.minAvailable | int | `1` | minAvailable of every rendered PodDisruptionBudget. |
+| postgres.database | string | `"openfga"` | Name of the database OpenFGA keeps its store in. |
+| postgres.enabled | bool | `true` | This estate uses the development Postgres (deploy/fixtures/postgres, Service `<release>-postgres`), and a real deployment refuses it. The chart renders no Postgres. False reads the platform's at `externalHost`. |
+| postgres.externalHost | string | `""` | Host of the platform's Postgres, which carries OpenFGA's database; the render refuses it empty with `enabled` false while the chart runs OpenFGA, and refuses both set. |
+| postgres.port | int | `5432` | Port of the Postgres OpenFGA and its migrate Job dial. |
+| postgres.user | string | `"lance"` | Role OpenFGA connects as; its password is the store's `postgres` secret (field `password`), never a value. |
 | pubsub.topic | string | `"lineage.events.v1"` | Topic OpenLineage events are published on and each consumer of them is filtered to (RASK_LINEAGE_TOPIC). |
 | readOnlyWindow | bool | `false` | Puts the whole lakehouse in a read-only window: the catalog refuses writes and holds its timers, maintenance's worker takes no task, and lineage's relay is held. Flipping it rolls the three services. |
-| resources.age | object | `{"limits":{"cpu":"1","memory":"2Gi"},"requests":{"cpu":"250m","memory":"512Mi"}}` | CPU/memory requests and limits for the AGE Postgres StatefulSet (lineage and OpenFGA databases). |
 | resources.catalog | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful. |
 | resources.default | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"50m","memory":"128Mi"}}` | CPU/memory requests and limits for every lakehouse app container that names no tier of its own (lance.resources). |
 | resources.lineage | object | `{"limits":{"cpu":"1","memory":"512Mi"},"requests":{"cpu":"250m","memory":"128Mi"}}` | CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful. |
@@ -252,8 +242,6 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | route.enabled | bool | `true` | Renders the HTTPRoutes publishing each `/api/*` prefix, and `/dex` with the development Dex, on the Gateway `parentRefs` names. |
 | route.hostnames | list | `[]` | Hostnames the platform's Gateway routes to this release. Required while `enabled` on a real deployment; empty, on a development estate, the routes match every host the Gateway's listener accepts. |
 | route.parentRefs | list | `[]` | Gateways the routes attach to, as Gateway API parentRefs ([{name, namespace, sectionName}]). Required while `enabled`. |
-| security.infraContexts.age | object | `{"fsGroup":999,"runAsUser":999}` | uid/fsGroup for the AGE Postgres pod (postgres image uid/gid 999). |
-| security.infraContexts.enabled | bool | `false` | Applies pinned runAsUser/fsGroup securityContexts to the infra pods (the AGE Postgres). Off by default. |
 | security.readOnlyRootFilesystem | bool | `true` | Read-only root filesystem for every first-party app container; each gets a writable /tmp emptyDir. |
 | security.tmpSizeLimit | string | `"2Gi"` | sizeLimit of each app's /tmp emptyDir (upload spool, Lance spill, OTel queue); stops one pod filling the node's disk. |
 | services.catalog.appId | string | `"catalog"` | The catalog's app id: its secret-store role (`<release>-<id>`), its bus user and its OTel service. |

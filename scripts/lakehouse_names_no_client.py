@@ -39,7 +39,7 @@ LAKEHOUSE_MEMBERS = (
     "packages/lakehouse",
 )
 #: The platform's development fixtures: stand-ins for what a platform team runs, none of them a client.
-PLATFORM_FIXTURES = ("cloudnative-pg", "dex", "external-secrets", "marquez", "nats", "observability", "openbao", "registry", "rustfs")
+PLATFORM_FIXTURES = ("dex", "external-secrets", "marquez", "nats", "observability", "openbao", "postgres", "registry", "rustfs")
 #: The lakehouse's console: the single-page app, its packages and its image.
 LAKEHOUSE_CONSOLE = ("frontend", ".docker/frontend.dockerfile")
 #: The rest of what the lakehouse deploys with.
@@ -47,7 +47,7 @@ LAKEHOUSE_DEPLOY = ("chart", "deploy/values-local.yaml", "deploy/values-prod.yam
 #: The lakehouse's root suites.
 LAKEHOUSE_TESTS = ("tests/unit", "tests/chart", "tests/integration", "tests/e2e-py")
 #: Vendored upstream files the lakehouse does not write.
-VENDORED = ("chart/crds-bootstrap/", "/charts/")
+VENDORED = ("/charts/",)
 #: The gates' own tests, the product chart's render gate and this lint's: each names a client to show it is refused, as
 #: `AMBIGUOUS` and `DEPARTED` here do, and reads no client's file, so deleting every client leaves them green.
 CLIENT_GATES = ("tests/chart/test_the_product_chart_renders_no_client.py", "tests/unit/test_the_no_client_lint_sees_a_departed_client.py")

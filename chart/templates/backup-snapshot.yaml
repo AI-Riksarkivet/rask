@@ -51,7 +51,7 @@ spec:
       backoffLimit: 3
       template:
         metadata:
-          # The explicit component label (the P4 landmine, see backup-pg.yaml): object-store-backup is the
+          # The explicit component label (the P4 landmine: a pod with no component label matches no ingress allow): object-store-backup is the
           # component the API server's egress admits (network-policy.yaml's platform rows; the pod calls nothing
           # else) and the label the created VolumeSnapshot CRs carry — one name for the whole backup surface.
           labels:

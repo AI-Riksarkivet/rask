@@ -1,7 +1,7 @@
-"""What the two backup CronJobs' scripts share: the run's one store session, and the walk that keeps the newest runs.
+"""What a backup CronJob's script runs on: the run's one store session, and the walk that keeps the newest runs.
 
-`scripts/control_root_backup.py` and `scripts/pg_dump_upload.py` import it as their sibling, which `python /srv/<script>`
-resolves from the script's own directory: the image copies it beside them (`.docker/rest-catalog.dockerfile`). No
+`scripts/control_root_backup.py` imports it as its sibling, which `python /srv/<script>`
+resolves from the script's own directory: the image copies it beside it (`.docker/rest-catalog.dockerfile`). No
 service reaches the store this way, so it lives with the scripts rather than in the library.
 
 Every S3 call is wrapped in :func:`lakehouse.storage.errors.store_call`, so a missing bucket reaches a caller as storage's
