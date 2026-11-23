@@ -7,6 +7,8 @@
 		type FeedEntry,
 	} from '#lib/admin/control.ts';
 	import { Activity, ShieldAlert } from '@lucide/svelte';
+	import { Input } from '@riksarkivet/ui/input';
+	import { Select } from '@riksarkivet/ui/select';
 	import ControlEventLine from './ControlEventLine.svelte';
 
 	// The page's one control feed (`feeds.api.ts`): the same poller every surface that re-reads on a
@@ -78,19 +80,21 @@
 			</p>
 		{:else}
 			<div class="filters">
-				<input
-					class="mono"
+				<Input
+					class="max-w-85 flex-1 font-mono text-xs"
 					type="search"
 					placeholder="filter by action, object, subject or actor…"
 					aria-label="Filter events"
 					bind:value={q}
 				/>
-				<select aria-label="Filter by object type" bind:value={typeFilter}>
-					<option value="">all types</option>
-					{#each typesIn(events) as t (t)}
-						<option value={t}>{t}</option>
-					{/each}
-				</select>
+				<Select
+					bind:value={typeFilter}
+					ariaLabel="Filter by object type"
+					options={[
+						{ value: '', label: 'all types' },
+						...typesIn(events).map((t) => ({ value: t, label: t })),
+					]}
+				/>
 				{#if q || typeFilter}
 					<span class="count">{shown.length} of {events.length}</span>
 				{/if}
@@ -150,24 +154,6 @@
 		gap: 8px;
 		margin-bottom: 12px;
 	}
-	.filters input {
-		flex: 1;
-		max-width: 340px;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: inherit;
-		font-size: 12px;
-		padding: 5px 8px;
-	}
-	.filters select {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: inherit;
-		font-size: 12px;
-		padding: 5px 6px;
-	}
 	.count {
 		color: var(--muted-foreground);
 		font-size: 12px;
@@ -181,8 +167,5 @@
 		color: var(--muted-foreground);
 		font-size: 12px;
 		padding: 6px 0;
-	}
-	.mono {
-		font-family: ui-monospace, monospace;
 	}
 </style>

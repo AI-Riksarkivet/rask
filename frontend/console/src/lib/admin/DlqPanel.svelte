@@ -20,17 +20,21 @@
 		type SortingState,
 		sortableHeader,
 	} from '@riksarkivet/ui/data-table';
-	import * as Sheet from '@riksarkivet/ui/sheet';
-	import { ExternalLink, RefreshCw, RotateCcw, ShieldAlert, Inbox } from '@lucide/svelte';
+	import { Button } from '@riksarkivet/ui/button';
+	import { RefreshCw, RotateCcw, ShieldAlert, Inbox } from '@lucide/svelte';
 	import { page } from '$app/state';
 	import { fetchDlq, replayDlq } from '#lib/lineage/remote/lineage.api.ts';
 	import type { DlqBacklog, DlqEvent } from '#lib/api/lineage/index.ts';
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
+	import DlqEventDrawer from './DlqEventDrawer.svelte';
 
-	let backlog = $state<DlqBacklog | null>(null);
-	let lastStatus = $state(0);
-	let settled = $state(false);
-	let inflight = 0;
+	const dlqRead = fetchDlq(200);
+	const result = $derived(dlqRead.current);
+	// A failed read clears the view, so the auth/offline state reflects reality: a session that expires
+	// after a first successful load shows the sign-in prompt, not the old event table.
+	const backlog = $derived<DlqBacklog | null>(result?.ok ? result.data : null);
+	const lastStatus = $derived(result === undefined ? 0 : result.ok ? 200 : result.status);
+	const settled = $derived(result !== undefined);
 	let busy = $state<string | null>(null); // run_id currently replaying
 	let msg = $state<{ ok: boolean; text: string } | null>(null);
 
@@ -39,25 +43,9 @@
 	// reports status 0 and must render as offline, not hang on the loading message (audit finding).
 	const offline = $derived(backlog === null && settled && ![200, 401].includes(lastStatus));
 
+	/** Read the backlog again: `refresh()`, as a held read hands back what it already holds. */
 	async function load(): Promise<void> {
-		const seq = ++inflight;
-		// `refresh()`, not a bare call: a query instance is cached by its argument, so re-awaiting it on
-		// a cursor tick (or after a replay) would hand back the backlog it already holds.
-		const backlogQuery = fetchDlq(200);
-		await backlogQuery.refresh();
-		const res = backlogQuery.current;
-		if (seq !== inflight || res === undefined) return; // latest-wins
-		settled = true;
-		if (res.ok) {
-			backlog = res.data;
-			lastStatus = 200;
-		} else {
-			// Clear the stale view on failure so the auth/offline state reflects reality — else a session that
-			// expires after a first successful load would keep showing the old event table (the derivations
-			// gate on backlog === null) instead of the sign-in prompt. (audit 2026-07-20)
-			backlog = null;
-			lastStatus = res.status;
-		}
+		await dlqRead.refresh();
 	}
 
 	async function replay(e: DlqEvent): Promise<void> {
@@ -98,11 +86,9 @@
 	// ── the row drawer (goal cond 8): click an at-risk event → the staged payload + replay. ──
 	let drawerEvent = $state<DlqEvent | null>(null);
 
-	async function replayFromDrawer(): Promise<void> {
-		const e = drawerEvent;
-		if (!e) return;
+	function replayFromDrawer(e: DlqEvent): void {
 		drawerEvent = null; // the outcome lands in the bar message; the list refreshes underneath
-		await replay(e);
+		void replay(e);
 	}
 
 	// ── the DataTable (goal cond 4): sortable/searchable at-risk rows, replay action preserved. ──
@@ -192,11 +178,12 @@
 {/snippet}
 {#snippet actionsCell(e: DlqEvent)}
 	{#if e.parseable}
-		<button
-			class="btn ghost"
+		<Button
+			variant="ghost"
+			size="xs"
 			disabled={busy !== null}
 			aria-label="Replay {e.run_id}"
-			onclick={() => replay(e)}><RotateCcw size={12} /> {busy === e.run_id ? '…' : 'Replay'}</button
+			onclick={() => replay(e)}><RotateCcw size={12} /> {busy === e.run_id ? '…' : 'Replay'}</Button
 		>
 	{:else}
 		<span class="mut" title="An unparseable object can't be replayed; the relay drops it."
@@ -215,7 +202,7 @@
 	</header>
 
 	<div class="bar">
-		<button class="btn" onclick={load}><RefreshCw size={13} /> Refresh</button>
+		<Button variant="outline" size="sm" onclick={load}><RefreshCw size={13} /> Refresh</Button>
 		{#if backlog}
 			<span class="depth mono" class:warn={backlog.depth > 0}>
 				depth {backlog.depth}{backlog.depth > 0
@@ -247,66 +234,12 @@
 	{/if}
 </div>
 
-<Sheet.Root
-	open={drawerEvent !== null}
-	onOpenChange={(o) => {
-		if (!o) drawerEvent = null;
-	}}
->
-	<Sheet.Content side="right">
-		{#if drawerEvent}
-			<Sheet.Header>
-				<Sheet.Title>Staged event {drawerEvent.run_id}</Sheet.Title>
-				<Sheet.Description>
-					{drawerEvent.parseable
-						? 'A committed write whose lineage is not yet confirmed delivered — replay re-ingests it now instead of waiting for the relay tick.'
-						: 'A poison object: unparseable, so it cannot be replayed — the relay drops it on its next pass.'}
-				</Sheet.Description>
-			</Sheet.Header>
-			<div class="drawer-body">
-				<dl class="record">
-					<dt>run</dt>
-					<dd class="mono">{drawerEvent.run_id}</dd>
-					<dt>type</dt>
-					<dd class="mono" class:poison={!drawerEvent.parseable}>
-						{drawerEvent.parseable ? (drawerEvent.event_type ?? '—') : 'poison'}
-					</dd>
-					<dt>event time</dt>
-					<dd class="mono">{drawerEvent.event_time ?? '—'}</dd>
-					<dt>job</dt>
-					<dd class="mono">{drawerEvent.job ?? '—'}</dd>
-					<dt>inputs</dt>
-					<dd class="mono">{(drawerEvent.inputs ?? []).join(', ') || '—'}</dd>
-					<dt>outputs</dt>
-					<dd class="mono">{(drawerEvent.outputs ?? []).join(', ') || '—'}</dd>
-				</dl>
-				<div>
-					<h4 class="drawer-h">Payload (parsed staged fields)</h4>
-					<pre class="payload" aria-label="Staged event payload"><code
-              >{JSON.stringify(drawerEvent, null, 2)}</code
-            ></pre>
-				</div>
-				<div class="drawer-links">
-					{#if drawerEvent.parseable}
-						<button class="btn" disabled={busy !== null} onclick={replayFromDrawer}>
-							<RotateCcw size={12} /> Replay this event
-						</button>
-					{/if}
-					{#each drawerEvent.outputs ?? [] as out (out)}
-						<!-- The output dataset's table page is in the catalog AREA of the console — soft nav. -->
-						<a
-							class="btn jumplink"
-							href={resolve('/catalog/tables/[table]', { table: encodeURIComponent(out) })}
-						>
-							<ExternalLink size={12} />
-							{out} ↗
-						</a>
-					{/each}
-				</div>
-			</div>
-		{/if}
-	</Sheet.Content>
-</Sheet.Root>
+<DlqEventDrawer
+	event={drawerEvent}
+	busy={busy !== null}
+	onclose={() => (drawerEvent = null)}
+	onreplay={replayFromDrawer}
+/>
 
 <style>
 	.page {
@@ -336,25 +269,6 @@
 		gap: 12px;
 		margin-bottom: 14px;
 		flex-wrap: wrap;
-	}
-	.btn {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 12px;
-		cursor: pointer;
-	}
-	.btn.ghost {
-		padding: 2px 8px;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
 	}
 	.depth {
 		font-size: 12px;
@@ -395,59 +309,6 @@
 	}
 	.mut {
 		color: var(--muted-foreground);
-	}
-	.drawer-body {
-		display: flex;
-		flex-direction: column;
-		gap: 14px;
-		padding: 0 16px 16px;
-		overflow-y: auto;
-	}
-	.record {
-		display: grid;
-		grid-template-columns: 84px 1fr;
-		gap: 6px 10px;
-		margin: 0;
-		font-size: 12px;
-	}
-	.record dt {
-		color: var(--muted-foreground);
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		font-size: 10.5px;
-	}
-	.record dd {
-		margin: 0;
-		color: var(--foreground);
-		word-break: break-all;
-	}
-	.drawer-h {
-		font-size: 11px;
-		text-transform: uppercase;
-		letter-spacing: 0.06em;
-		color: var(--muted-foreground);
-		margin: 0 0 6px;
-	}
-	.payload {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 11px;
-		line-height: 1.5;
-		padding: 10px 12px;
-		margin: 0;
-		overflow-x: auto;
-		font-family: ui-monospace, monospace;
-	}
-	.drawer-links {
-		display: flex;
-		flex-direction: column;
-		align-items: flex-start;
-		gap: 8px;
-	}
-	.jumplink {
-		text-decoration: none;
 	}
 	.mono {
 		font-family: ui-monospace, monospace;

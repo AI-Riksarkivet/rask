@@ -117,8 +117,12 @@ that library's content silently loses. Import it into `base` and every utility s
 
 The xyflow sheet needs **two** lines, in order: the vendor sheet, then `#lib/flow/styles.css`, which maps `--xy-*`
 onto the tokens. Skip the second and the vendor's light-mode hex defaults survive: the Controls widget and every edge
-label render as a white blob on a dark canvas. Every `--xy-*` resolves through a token that follows the mode, so
-`colorMode` on `<SvelteFlow>` is left unset.
+label render as a white blob on a dark canvas. Every `--xy-*` resolves through a token that follows the mode, and the
+vendor's own `.dark` palette is only the `--xy-*-default` fallbacks. The canvas still carries the page's mode
+(`colorMode={appearance.dark ? 'dark' : 'light'}`, in `GraphCanvas` and `StaticFlow`, the console's two mounts of
+`<SvelteFlow>`): Svelte Flow stamps `colorMode` on its root as a class, `light` when unset, and the design system
+declares its light token set on `.light` too, so an unset mode paints every token inside the canvas light under the
+page's light text (`e2e/projects/project-overview.spec.ts` measures the hierarchy's node names in both modes).
 
 ## Theming the workbench dock — `--hl-*`, zero JavaScript
 

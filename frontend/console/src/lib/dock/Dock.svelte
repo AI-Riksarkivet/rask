@@ -78,18 +78,19 @@
 {/snippet}
 
 {#snippet closeTab(id: Id)}
-	<button
-		type="button"
-		class="rask-dock-tab-close"
+	<Button
+		variant="ghost"
+		size="icon-xs"
+		class="size-4 opacity-60 hover:opacity-100 focus-visible:opacity-100"
 		aria-label="Close {titleOf(id)}"
 		title="Close {titleOf(id)}"
-		onclick={(e) => {
+		onclick={(e: MouseEvent) => {
 			e.stopPropagation();
 			close(id);
 		}}
 	>
 		<X class="size-3" />
-	</button>
+	</Button>
 {/snippet}
 
 {#snippet panelPicker(beside?: Id)}
@@ -206,22 +207,5 @@
 		align-items: center;
 		justify-content: center;
 		gap: 0.75rem;
-	}
-	.rask-dock-tab-close {
-		display: inline-grid;
-		place-items: center;
-		width: 1rem;
-		height: 1rem;
-		border: none;
-		border-radius: calc(var(--radius) - 6px);
-		background: transparent;
-		color: inherit;
-		opacity: 0.6;
-		cursor: pointer;
-	}
-	.rask-dock-tab-close:hover,
-	.rask-dock-tab-close:focus-visible {
-		opacity: 1;
-		background: var(--accent);
 	}
 </style>

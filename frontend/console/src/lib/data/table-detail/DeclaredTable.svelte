@@ -4,6 +4,7 @@
 	// here is its first write, which the catalog's create door lands into the declared location
 	// (`POST /v1/table/{id}/create` with an Arrow body); appending is refused until then.
 	import { Button } from '@riksarkivet/ui/button';
+	import { Textarea } from '@riksarkivet/ui/textarea';
 	import { createTableWithRows } from '../catalog';
 	import { parseJsonRows, rowsToArrow } from '../json-rows';
 	import { WriteKey } from '../write-key.svelte';
@@ -64,11 +65,12 @@
 		}}
 	>
 		<label for="first-rows">First rows, as a JSON array of objects</label>
-		<textarea
+		<Textarea
 			id="first-rows"
-			class="mono"
+			class="min-h-[90px] font-mono text-xs"
 			bind:value={rowsJson}
-			placeholder={'[{ "id": 1, "name": "a" }]'}></textarea>
+			placeholder={'[{ "id": 1, "name": "a" }]'}
+		/>
 		<div class="actions">
 			<Button type="submit" size="sm" disabled={busy || !rowsJson.trim()}>
 				{busy ? 'Writing…' : 'Write first rows'}
@@ -105,15 +107,6 @@
 		font-size: 12px;
 		color: var(--muted-foreground);
 	}
-	textarea {
-		min-height: 90px;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 6px 8px;
-	}
 	.actions {
 		display: flex;
 		align-items: center;
@@ -127,8 +120,5 @@
 		color: var(--destructive);
 		font-size: 12px;
 		margin: 0;
-	}
-	.mono {
-		font-family: ui-monospace, monospace;
 	}
 </style>

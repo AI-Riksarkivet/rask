@@ -2,6 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { ME_ADMIN, signIn, TOKEN } from '../session';
 import { postsTo, seed as seedFor } from '../mock-client';
 import { MOCK_CATALOG } from '../ports';
+import { contrastRatios } from '../contrast';
 
 // `/projects/<p>` — ONE project's metadata and overview, a top-level page because a project is the
 // TOP of the hierarchy. Its read is a `query` running in the browser, so the catalog answer is seeded
@@ -50,6 +51,38 @@ test('renders the project’s warehouse rows and effective admins', async ({ pag
 	await expect(
 		page.getByText('role:7d2c0f4e-5b1a-4c3e-9f6d-2a8b1c0e9f3a#assignee', { exact: true }),
 	).toBeVisible();
+});
+
+test('every rung of the hierarchy graph reads against its own box, in dark and in light', async ({
+	page,
+}) => {
+	await seed(page, {
+		'GET /management/v1/projects/acme': DETAIL,
+		'GET /v1/namespace/acme-wh/list': { namespaces: ['gold', 'silver'] },
+	});
+	await page.goto('/projects/acme');
+	await expect(page.getByRole('link', { name: /^namespace gold/ })).toBeVisible();
+	await page.addStyleTag({ content: '* { transition: none !important; }' });
+	// Each mode as a person picks it, through the account menu: the canvas follows the appearance, so
+	// flipping the class on <html> alone is not what a reader does.
+	const modes: boolean[] = [];
+	for (const step of ['as loaded', 'toggled']) {
+		if (step === 'toggled') {
+			await page.getByRole('button', { name: 'Account' }).click();
+			await page.getByRole('menuitem', { name: 'Toggle theme' }).click();
+		}
+		const dark = await page.evaluate(() => document.documentElement.classList.contains('dark'));
+		modes.push(dark);
+		const names = await contrastRatios(
+			page,
+			'[data-slot="hierarchy-node"] [data-slot="hierarchy-node-name"]',
+		);
+		expect(names.map((n) => n.text)).toEqual(expect.arrayContaining(['acme-wh', 'gold', 'silver']));
+		for (const name of names)
+			expect(name.ratio, `${name.text} node, dark=${dark}`).toBeGreaterThanOrEqual(4.5);
+	}
+	// The two passes measured the two modes, not one mode twice.
+	expect(new Set(modes).size).toBe(2);
 });
 
 test('each warehouse row links to its catalog page', async ({ page }) => {

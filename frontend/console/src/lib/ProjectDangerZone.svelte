@@ -23,7 +23,9 @@
 		declared: boolean;
 	} = $props();
 
-	let deleting = $state(false);
+	// The confirm is open only for the project it was opened on, and mounted per project, so a typed
+	// confirmation or a refusal never carries into another project's page.
+	let deletingFor = $state<string | null>(null);
 </script>
 
 <section class="danger">
@@ -44,21 +46,23 @@
 		size="sm"
 		disabled={declared}
 		aria-describedby={declared ? 'project-git-reason' : undefined}
-		onclick={() => (deleting = true)}
+		onclick={() => (deletingFor = project)}
 	>
 		<Trash2 size={14} /> Delete project
 	</Button>
 </section>
 
-<ProjectDeleteDialog
-	bind:open={deleting}
-	{project}
-	ondeleted={() => {
-		// The project is gone — this very route's read would 404 on the next tick. Back to the
-		// estate list, re-read from the server so the retired tenant is not still on it.
-		goto(resolve('/projects'), { refreshAll: true });
-	}}
-/>
+{#key project}
+	<ProjectDeleteDialog
+		bind:open={() => deletingFor === project, (open) => (deletingFor = open ? project : null)}
+		{project}
+		ondeleted={() => {
+			// The project is gone — this very route's read would 404 on the next tick. Back to the
+			// estate list, re-read from the server so the retired tenant is not still on it.
+			goto(resolve('/projects'), { refreshAll: true });
+		}}
+	/>
+{/key}
 
 <style>
 	.danger {

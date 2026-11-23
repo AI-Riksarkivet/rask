@@ -95,7 +95,6 @@
 		// namespace id -> { tables, more } (null = the read failed)
 		tables: Map<string, { tables: string[]; more: number } | null>;
 	};
-	let tree = $state<Tree | null>(null);
 
 	// The refetch key is the SUBJECT, not the props' identity. A caller whose `warehouses` array is
 	// re-derived on every render (the lakehouse's is, off a registry query) would otherwise re-walk
@@ -103,26 +102,17 @@
 	// nothing.
 	const key = $derived(`${project}\u0000${warehouses.map((w) => w.id).join('\u0001')}`);
 
-	$effect(() => {
+	// The walk, one per key. `untrack`: `load()` reads `warehouses` and both fetchers in its synchronous
+	// prologue, and tracked they would make a caller's re-derived array or inline arrow prop (the
+	// project page passes both) re-walk every warehouse and namespace on an identity-only change. The
+	// key IS the subject. The template awaits the latest walk only, so an answer to a superseded key, or
+	// one landing after the component is gone, is never drawn.
+	const walk = $derived.by(() => {
 		void key;
-		tree = null;
-		// untrack: `load()` reads `warehouses` + both fetchers in its synchronous prologue, so
-		// without this they are TRACKED and the key above buys nothing — a caller passing a
-		// re-derived array or an inline arrow prop (the lakehouse Overview does both) refetched
-		// every warehouse and every namespace rung on an identity-only change. The key IS the
-		// subject; these reads must not add dependencies.
-		//
-		// Latest-wins is the effect's own: its teardown (a new key, or the component unmounting, as when
-		// the page's project turns out not to exist) retires this walk, so an answer that lands later is
-		// dropped without reading `key` again, a derived of an effect that may be gone by then.
-		let isLatest = true;
-		untrack(() => void load(() => isLatest));
-		return () => {
-			isLatest = false;
-		};
+		return untrack(() => load());
 	});
 
-	async function load(isCurrent: () => boolean): Promise<void> {
+	async function load(): Promise<Tree> {
 		const cap = maxTables;
 		const namespaces = new Map<string, string[] | null>();
 		await Promise.all(
@@ -147,8 +137,7 @@
 				);
 			}),
 		);
-		if (!isCurrent()) return;
-		tree = { namespaces, tables };
+		return { namespaces, tables };
 	}
 
 	/** A tidy vertical tree: leaves take sequential slots, every parent centres over its children. */
@@ -231,18 +220,22 @@
 		node('p', project, 0, centre(warehouseXs), link('project', project, project));
 		return { nodes, edges, width: Math.max(slot, 1) * SLOT_W };
 	}
-
-	const graph = $derived(tree ? build(tree) : null);
 </script>
 
 {#if warehouses.length === 0}
 	<p class="text-muted-foreground text-sm">
 		No warehouses yet — the hierarchy starts when the first one is created.
 	</p>
-{:else if graph === null}
-	<p class="text-muted-foreground text-sm">Loading the hierarchy…</p>
 {:else}
-	<div data-slot="project-hierarchy" class="h-105 w-full min-w-0 overflow-hidden rounded-lg border">
-		<StaticFlow nodes={graph.nodes} edges={graph.edges} {nodeTypes} />
-	</div>
+	{#await walk}
+		<p class="text-muted-foreground text-sm">Loading the hierarchy…</p>
+	{:then tree}
+		{@const graph = build(tree)}
+		<div
+			data-slot="project-hierarchy"
+			class="h-105 w-full min-w-0 overflow-hidden rounded-lg border"
+		>
+			<StaticFlow nodes={graph.nodes} edges={graph.edges} {nodeTypes} />
+		</div>
+	{/await}
 {/if}

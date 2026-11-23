@@ -294,12 +294,8 @@ test('the Grant dialog simulates before it writes, and says when a grant is a no
 
 	await page.getByRole('button', { name: 'Grant' }).click();
 	await page.getByLabel('Grant subject').fill('user:carol');
-	await page
-		.getByLabel('Grant relation')
-		.selectOption('reader')
-		.catch(async () => {
-			await page.getByLabel('Grant relation').fill('reader');
-		});
+	await page.getByLabel('Grant relation').click();
+	await page.getByRole('option', { name: 'reader', exact: true }).click();
 	await page.getByRole('button', { name: 'Simulate' }).click();
 
 	// baseline=false, allowed=true → the grant genuinely unlocks access.
@@ -374,7 +370,8 @@ test('a time-boxed grant sends its condition to the store, and says its window w
 	await page.getByRole('button', { name: 'Grant' }).click();
 
 	await page.getByLabel('Grant subject').fill('user:contractor');
-	await page.getByLabel('Grant relation').selectOption('reader');
+	await page.getByLabel('Grant relation').click();
+	await page.getByRole('option', { name: 'reader', exact: true }).click();
 	await page.getByLabel('Time-box this grant').check();
 	// A time-boxed grant without its duration is refused by the catalog; the dialog does not send it,
 	// from the button or from Enter in the form.

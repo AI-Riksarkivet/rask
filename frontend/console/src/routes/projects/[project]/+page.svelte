@@ -7,6 +7,7 @@
 	//
 	// Gated by the catalog; every degrade state is named honestly rather than collapsed into "empty".
 	import { FolderKanban, RefreshCw, ShieldAlert } from '@lucide/svelte';
+	import * as v from 'valibot';
 	import { ProjectHierarchy, type HierarchyHref } from '#lib/flow/hierarchy/index.ts';
 	import { page } from '$app/state';
 	import ProjectActivity from '#lib/ProjectActivity.svelte';
@@ -71,13 +72,18 @@
 	// By value, so a re-read of the same record issues nothing new.
 	const visible = $derived(detail !== null);
 	const warehouseIds = $derived(JSON.stringify(detail?.warehouses.map((w) => w.id) ?? []));
+	/** The ids back from their key, narrowed rather than asserted. */
+	const WAREHOUSE_IDS = v.array(v.string());
 	// Issued together, policies first, once the project is there to read them for.
 	const reads = $derived(
 		visible
 			? {
 					policies: fetchProjectPolicies(project),
 					events: estateAdmin
-						? projectEvents({ project, warehouses: JSON.parse(warehouseIds) as string[] })
+						? projectEvents({
+								project,
+								warehouses: v.parse(WAREHOUSE_IDS, JSON.parse(warehouseIds)),
+							})
 						: null,
 				}
 			: null,
@@ -164,7 +170,9 @@
 									>
 								</td>
 								<td class="mono">{w.bucket}</td>
-								<td><span class="chip mono" class:off={w.status !== 'active'}>{w.status}</span></td>
+								<td
+									><span class={['chip mono', { off: w.status !== 'active' }]}>{w.status}</span></td
+								>
 							</tr>
 						{/each}
 					</tbody>

@@ -15,6 +15,7 @@
 	import { Button } from '@riksarkivet/ui/button';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import { untrack } from 'svelte';
 	import { fetchTables } from '#lib/data/remote/catalog.api.ts';
 	import DetailTabs from '#lib/data/DetailTabs.svelte';
 	import NamespaceGraphCard from '#lib/data/NamespaceGraphCard.svelte';
@@ -62,12 +63,22 @@
 		fetchMyPermissions: (kind, id) => fetchMyPermissions({ kind, id }),
 	};
 
-	// Read on each namespace the page shows, as a visit to it would: the registry is one shared
-	// instance, so the call re-reads it unless a read is out or just settled.
-	const tablesRead = $derived.by(() => {
-		void ns;
-		return fetchTables();
+	// The registry, the describe and the child listing go out together on each namespace the page shows.
+	// A read held in a derivation goes out when the markup first reads it, and each of these is read only
+	// in a branch another's answer decides, so held apart they would go out one after another. The child
+	// listing is skipped while the describe's kept answer already says this caller cannot see the
+	// namespace (its listing would be refused), and asked for once a fresh describe says it can. The
+	// registry is one shared instance, so the call re-reads it unless a read is out or just settled.
+	const reads = $derived.by(() => {
+		const describe = describeNamespace(ns);
+		const kept = untrack(() => describe.current);
+		return {
+			tables: fetchTables(),
+			describe,
+			children: kept === undefined || kept.ok ? fetchWarehouseNamespaces(ns) : null,
+		};
 	});
+	const tablesRead = $derived(reads.tables);
 	const tablesAnswer = $derived(tablesRead.current);
 	const tables = $derived(tablesAnswer?.ok ? tablesAnswer.data.tables : null);
 	const lastStatus = $derived(
@@ -80,16 +91,6 @@
 	// (`parentNamespace`, every segment but the last), not a local re-implementation of it: a copy that
 	// split on the FIRST delimiter would compare a nested namespace's top-level ancestor against `ns`.
 	const members = $derived((tables ?? []).filter((t) => parentNamespace(t) === ns).sort());
-
-	/** The namespaces directly under this one (the spec's ListNamespaces on its id), so a table in a nested
-	 *  namespace is reached from its warehouse through every namespace above it. `null`: the listing failed,
-	 *  said so on the page, never read as "none". */
-	const childrenRead = $derived(fetchWarehouseNamespaces(ns));
-	const children = $derived.by((): string[] | null => {
-		const res = childrenRead.current;
-		if (res === undefined) return [];
-		return res.ok ? [...res.data.namespaces].sort() : null;
-	});
 
 	/** The newest of a name's trash records: a name dropped twice keeps a record per drop. */
 	const newestDrop = (entries: readonly TrashEntry[]): TrashEntry | undefined =>
@@ -108,7 +109,7 @@
 	// be refused. A describe that failed any other way (a 5xx, an unreachable catalog) claims nothing.
 	// The read is held in its own derivation and read in another: a read created inside the derivation
 	// that reads it would not be tracked by it.
-	const describeRead = $derived(describeNamespace(ns));
+	const describeRead = $derived(reads.describe);
 	const described = $derived(describeRead.current);
 	const refused = $derived(
 		described !== undefined && !described.ok && [403, 404].includes(described.status),
@@ -131,6 +132,16 @@
 		return entry ? { kind: 'dropped', entry } : { kind: 'not-visible' };
 	});
 	const live = $derived(presence.kind === 'live');
+
+	/** The namespaces directly under this one (the spec's ListNamespaces on its id), so a table in a nested
+	 *  namespace is reached from its warehouse through every namespace above it. `null`: the listing failed,
+	 *  said so on the page, never read as "none". */
+	const childrenRead = $derived(reads.children ?? (live ? fetchWarehouseNamespaces(ns) : null));
+	const children = $derived.by((): string[] | null => {
+		const res = childrenRead?.current;
+		if (res === undefined) return [];
+		return res.ok ? [...res.data.namespaces].sort() : null;
+	});
 
 	// The governance reads, issued together, in this order, and only for a namespace the caller can
 	// see: the policy; what the SIGNED-IN caller may do here (the catalog's self-view: a single-table

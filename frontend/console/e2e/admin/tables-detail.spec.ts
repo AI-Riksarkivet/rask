@@ -178,6 +178,11 @@ test('the commit log lists every version newest-first, with branches and tags (#
 }) => {
 	await page.goto('/catalog/tables/db1%24t');
 	await expect(page.getByRole('heading', { name: 'db1 › t' })).toBeVisible();
+	// A tab names its panel only when that panel is on the page: no aria-controls points at nothing.
+	for (const tab of await page.getByRole('tab').all()) {
+		const panel = await tab.getAttribute('aria-controls');
+		if (panel !== null) await expect(page.locator(`[id="${panel}"]`)).toHaveCount(1);
+	}
 	// The old surface is GONE from overview — one version table in the app, not two.
 	await expect(page.getByText('Versions, branches & tags')).toHaveCount(0);
 	await openHistory(page);
@@ -455,6 +460,59 @@ test('the description is a first-class field and renders under the table name (#
 	});
 	await page.reload();
 	await expect(page.locator('p.tdesc')).toHaveText('Page images, one row per scan.');
+});
+
+test('a table visited again seeds its properties editor from the answer read on this visit', async ({
+	page,
+}) => {
+	// The read layer keeps a table's last answer for the session and paints it at once on a return, then
+	// re-reads. The editor seeds once, and a save upserts every row, so an editor seeded from the kept
+	// answer would write a property's earlier value back over the one the catalog holds now.
+	const withProperty = (value: string) => ({
+		[`POST /v1/table/${TABLE}/describe`]: { ...DESCRIBE, metadata: { k: value } },
+	});
+	await seed(page, {
+		...withProperty('old'),
+		...RENAMED_ROUTES,
+		'GET /v1/table': { tables: ['db1$t', 'db1$t2'] },
+	});
+	const nav = page.getByRole('navigation', { name: 'Pages' });
+	const properties = page.locator('section', { hasText: 'Properties' });
+
+	await page.clock.install();
+	await page.goto('/catalog/tables/db1%24t');
+	await expect(properties.getByLabel('Property value 1')).toHaveValue('old');
+	await nav.getByRole('link', { name: 'Tables', exact: true }).click();
+	await page.getByRole('link', { name: 'db1 › t2', exact: true }).click();
+	await expect(page.getByRole('heading', { name: 'db1 › t2' })).toBeVisible();
+
+	// The catalog's answer changes while the reader is elsewhere, and the return's re-read is held so the
+	// kept answer is on screen first.
+	await seed(page, withProperty('new'));
+	let release: () => void = () => {};
+	const released = new Promise<void>((resolve) => (release = resolve));
+	let held: () => void = () => {};
+	const asked = new Promise<void>((resolve) => (held = resolve));
+	// The describe carries a query, and a string glob is matched against the whole URL.
+	await page.route(`**/api/catalog/v1/table/${TABLE}/describe?*`, async (route) => {
+		held();
+		await released;
+		await route.continue();
+	});
+	// Past the read layer's reuse window, so the return reads again whatever the machine's pace.
+	await page.clock.fastForward(2000);
+	await nav.getByRole('link', { name: 'Tables', exact: true }).click();
+	await page.getByRole('link', { name: 'db1 › t', exact: true }).click();
+	await expect(page.getByRole('heading', { name: 'db1 › t', exact: true })).toBeVisible();
+	await asked;
+	await expect(properties.getByLabel('Property value 1')).toHaveCount(0);
+
+	release();
+	await expect(properties.getByLabel('Property value 1')).toHaveValue('new');
+	await properties.getByRole('button', { name: 'Save properties' }).click();
+	await expect
+		.poll(() => bodyOf(page, `/v1/table/${TABLE}/schema_metadata/update`))
+		.toEqual({ metadata: { k: 'new' } });
 });
 
 test('set a column property merges one key (#74 tail)', async ({ page }) => {

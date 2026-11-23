@@ -104,6 +104,19 @@
 	});
 	const lastStatus = $derived(answer === undefined ? 0 : answer.ok ? 200 : answer.status);
 
+	// The properties editor seeds once from what it mounts with, and its save upserts every row. On a
+	// return to a table the read layer paints the answer kept from the earlier visit while it re-reads,
+	// so the editor mounts only once this visit has read the table good: seeded from a kept answer, its
+	// save would write back a value the catalog has since changed. Once mounted it stays for the visit,
+	// so a re-read after its own save neither reseeds it nor unmounts it on a failure. The memo is a
+	// plain cache the derivation alone writes, keyed by the visit.
+	const detailVisit = $derived(detailRead.visit());
+	let readThisVisit: object | null = null;
+	const propertiesReady = $derived.by((): boolean => {
+		if (detailVisit.current?.ok) readThisVisit = detailVisit;
+		return readThisVisit === detailVisit;
+	});
+
 	// #81 the SvelteFlow authorization graph is lazy-mounted (heavy) behind this toggle, open only for
 	// the table it was opened on, so a navigation closes it by derivation.
 	let graphFor = $state<string | null>(null);
@@ -313,7 +326,21 @@
 				<SchemaSection {table} fields={schemaFields} onchanged={load} />
 
 				<!-- #74 tail — table + per-column property editor (writer-gated by the catalog, on the signed-in user's bearer). -->
-				<TableProperties {table} fields={schemaFields} {tableMeta} onchange={load} />
+				{#if propertiesReady}
+					<TableProperties {table} fields={schemaFields} {tableMeta} onchange={load} />
+				{:else}
+					<section>
+						<h2>Properties</h2>
+						{#if detailVisit.settled}
+							<p class="mut" data-testid="properties-unread">
+								This table could not be read again, so its properties are not shown: an editor
+								filled from an earlier answer could write old values back. Reload to try again.
+							</p>
+						{:else}
+							<p class="mut">Reading this table's properties…</p>
+						{/if}
+					</section>
+				{/if}
 
 				<InsertRowsSection {table} onchanged={load} />
 				<RowOpsSection {table} onchanged={load} />

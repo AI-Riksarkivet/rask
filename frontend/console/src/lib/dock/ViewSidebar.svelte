@@ -8,6 +8,8 @@
 	 * open a saved arrangement to LOOK at it without destroying it.
 	 */
 	import { Check, Plus, Save, Trash2 } from '@lucide/svelte';
+	import { Button } from '@riksarkivet/ui/button';
+	import { Input } from '@riksarkivet/ui/input';
 	import type { DockViews } from './views.svelte.ts';
 
 	interface Props {
@@ -31,15 +33,15 @@
 <aside class="views">
 	<header>
 		<span class="heading">Views</span>
-		<button
-			type="button"
-			class="icon"
+		<Button
+			variant="ghost"
+			size="icon-xs"
 			title="Save the current arrangement as a new view"
 			aria-label="New view"
 			onclick={() => (creating = !creating)}
 		>
 			<Plus size={14} />
-		</button>
+		</Button>
 	</header>
 
 	{#if creating}
@@ -51,10 +53,10 @@
 			}}
 		>
 			<!-- The field appears on an explicit click, so focusing it is what the click asked for. -->
-			<!-- svelte-ignore a11y_autofocus -->
-			<input
+			<Input
 				bind:value={draftName}
 				type="text"
+				class="h-7 text-xs"
 				placeholder="Name this view…"
 				aria-label="View name"
 				autofocus
@@ -72,15 +74,16 @@
 		<p class="problem">
 			Your saved views could not be read ({views.detail}). They have not been changed.
 		</p>
-		<button
-			type="button"
-			class="reset"
+		<Button
+			variant="outline"
+			size="xs"
+			class="mx-0.5 self-start"
 			disabled={views.busy}
 			title="Discard the saved views that could not be read, so views can be saved again"
 			onclick={() => void views.reset()}
 		>
 			Reset views
-		</button>
+		</Button>
 	{:else if views.views.length === 0}
 		<p class="empty">No saved views yet. Arrange the dock, then press +.</p>
 	{:else}
@@ -88,36 +91,41 @@
 			{#each views.views as v (v.id)}
 				{@const isActive = v.id === views.activeId}
 				<li>
-					<button type="button" class={['row', { on: isActive }]} onclick={() => onselect(v.id)}>
+					<Button
+						variant={isActive ? 'secondary' : 'ghost'}
+						size="sm"
+						class="min-w-0 flex-1 justify-start"
+						onclick={() => onselect(v.id)}
+					>
 						{#if isActive}<Check size={13} />{/if}
-						<span class="name">{v.name}</span>
+						<span class="truncate">{v.name}</span>
 						<!-- The whole point of the state model, in one dot. -->
 						{#if isActive && views.dirty}<span class="dot" title="Modified since it was saved"
 								>●</span
 							>{/if}
-					</button>
+					</Button>
 					{#if isActive}
-						<button
-							type="button"
-							class="icon"
+						<Button
+							variant="ghost"
+							size="icon-xs"
 							title="Save the current arrangement into this view"
 							aria-label="Save view"
 							disabled={!views.dirty || views.busy}
 							onclick={() => void views.save()}
 						>
 							<Save size={13} />
-						</button>
+						</Button>
 					{/if}
-					<button
-						type="button"
-						class="icon"
+					<Button
+						variant="ghost"
+						size="icon-xs"
 						title="Delete this view"
 						aria-label="Delete view"
 						disabled={views.busy}
 						onclick={() => void views.remove(v.id)}
 					>
 						<Trash2 size={13} />
-					</button>
+					</Button>
 				</li>
 			{/each}
 		</ul>
@@ -171,70 +179,10 @@
 		align-items: center;
 		gap: 2px;
 	}
-	.row {
-		display: flex;
-		flex: 1 1 auto;
-		align-items: center;
-		gap: 6px;
-		min-width: 0;
-		padding: 5px 6px;
-		border: none;
-		border-radius: calc(var(--radius) - 6px);
-		background: transparent;
-		color: var(--foreground);
-		font-size: 12px;
-		text-align: start;
-		cursor: pointer;
-	}
-	.row:hover {
-		background: var(--accent);
-	}
-	.row.on {
-		color: var(--primary);
-	}
-	.row:focus-visible,
-	.icon:focus-visible,
-	input:focus-visible {
-		outline: 2px solid var(--ring);
-		outline-offset: -2px;
-	}
-	.name {
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
 	.dot {
 		flex: 0 0 auto;
 		font-size: 9px;
 		color: var(--warning, var(--muted-foreground));
-	}
-	.icon {
-		display: grid;
-		place-items: center;
-		width: 22px;
-		height: 22px;
-		border: none;
-		border-radius: calc(var(--radius) - 6px);
-		background: transparent;
-		color: var(--muted-foreground);
-		cursor: pointer;
-	}
-	.icon:hover:not(:disabled) {
-		color: var(--foreground);
-		background: var(--accent);
-	}
-	.icon:disabled {
-		opacity: 0.35;
-		cursor: default;
-	}
-	input {
-		width: 100%;
-		padding: 4px 6px;
-		border: 1px solid var(--border);
-		border-radius: calc(var(--radius) - 6px);
-		background: var(--background);
-		color: var(--foreground);
-		font-size: 12px;
 	}
 	.empty,
 	.problem {
@@ -244,23 +192,5 @@
 	}
 	.problem {
 		color: var(--destructive);
-	}
-	.reset {
-		align-self: flex-start;
-		margin: 0 2px;
-		padding: 2px 8px;
-		border: 1px solid var(--border);
-		border-radius: calc(var(--radius) - 6px);
-		background: transparent;
-		color: var(--foreground);
-		font-size: 11px;
-		cursor: pointer;
-	}
-	.reset:hover:not(:disabled) {
-		background: var(--accent);
-	}
-	.reset:focus-visible {
-		outline: 2px solid var(--ring);
-		outline-offset: -2px;
 	}
 </style>

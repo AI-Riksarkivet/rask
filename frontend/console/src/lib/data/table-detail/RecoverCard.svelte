@@ -28,6 +28,9 @@
 	// round-trip for a question that cannot apply to it. The parent keys this card by table, and the
 	// read is held per table, so one table's record never shows on another's card.
 	const tasks = $derived(fetchTableTasks(table));
+	// The read keeps an earlier visit's answer and re-reads; a trash record is offered only from the
+	// answer read for this card, so a record since undropped or expired is never offered for a moment.
+	const visit = $derived(tasks.visit());
 	// Deliberately NOT a `'loading'` sentinel inside the `TrashEntry | null` union: that string is
 	// TRUTHY, so the recover branch would render for it and read fields a string does not have. A read
 	// that rejected (a dropped connection, a page-level failure) is a read failure, never "Checking…"
@@ -37,8 +40,9 @@
 			| { state: 'loading' }
 			| { state: 'done'; entry: TrashEntry | null }
 			| { state: 'failed'; detail: string } => {
+			if (!visit.settled) return { state: 'loading' };
 			if (tasks.error !== undefined) return { state: 'failed', detail: String(tasks.error) };
-			const res = tasks.current;
+			const res = visit.current;
 			if (res === undefined) return { state: 'loading' };
 			if (res.ok) return { state: 'done', entry: res.data[0] ?? null };
 			if (res.status === 404) return { state: 'done', entry: null };

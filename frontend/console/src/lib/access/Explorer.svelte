@@ -1,54 +1,37 @@
-<script lang="ts" module>
-	import AccessGraphNode, { type AccessNodeType } from './AccessGraphNode.svelte';
-	import { parentNamespaceOrNull } from '#lib/api/identifiers.ts';
-	import type { NodeTypes } from '@xyflow/svelte';
-
-	// svelte-flow rule: register node components ONCE at module scope, never inline.
-	const nodeTypes: NodeTypes = { access: AccessGraphNode };
-</script>
-
 <script lang="ts">
 	// The whole view. One canvas that stays mounted, a query bar that highlights it, a facet rail that
 	// narrows it, and an inspector beside it — replacing four tabs that shared no state, no URL and no
 	// question. Switching "tabs" used to throw away the graph you were looking at; nothing here does.
-	import { type Edge, MarkerType } from '@xyflow/svelte';
-	import { GraphCanvas } from '#lib/flow/index.ts';
+	import { parentNamespaceOrNull } from '#lib/api/identifiers.ts';
 	import { Badge } from '@riksarkivet/ui/badge';
-	import { Button } from '@riksarkivet/ui/button';
+	import { Button, buttonVariants } from '@riksarkivet/ui/button';
+	import * as Collapsible from '@riksarkivet/ui/collapsible';
 	import * as Popover from '@riksarkivet/ui/popover';
-	import { goto } from '$app/navigation';
-	import { onMount, untrack } from 'svelte';
+	import { cn } from '@riksarkivet/ui/utils';
+	import { afterNavigate, goto } from '$app/navigation';
+	import { onMount } from 'svelte';
 	import { page } from '$app/state';
 	import { Filter, RotateCcw, ShieldAlert } from '@lucide/svelte';
-	import { namedObject, parseModelTypes, type Tuple } from '../access';
-	import {
-		accessMe,
-		checkAccess,
-		expand,
-		fetchAccessModel,
-		fetchStore,
-		listObjects,
-		listUsers,
-	} from '../remote/access.api';
+	import { namedObject, parseModelTypes } from '../access';
+	import { accessMe, fetchAccessModel, fetchStore } from '../remote/access.api';
 	import { fetchTables } from '#lib/data/remote/catalog.api.ts';
 	import { controlTick, liveRead } from '#lib/live/tick.svelte.ts';
+	import AccessCanvas from './AccessCanvas.svelte';
+	import { askAccess, type Verdict } from './access-query';
 	import FacetRail from './FacetRail.svelte';
 	import Inspector from './Inspector.svelte';
 	import QueryBar from './QueryBar.svelte';
 	import {
 		applyFacets,
 		type BuiltGraph,
-		buildNeighbourhood,
 		buildWholeGraph,
 		asQueryKind,
 		idType,
 		isSubject,
-		layout,
 		overlay,
 		type QueryKind,
-		walkDerivation,
 	} from './graph';
-	import { buildModelGraph } from './model-graph';
+	import { buildModelGraph, definedRelations } from './model-graph';
 	import { clearHistory, type HistoryEntry, loadHistory, recordQuery } from './history';
 
 	const EMPTY: BuiltGraph = {
@@ -59,66 +42,41 @@
 	};
 
 	// ── URL is the state: a view must be linkable, and back/forward must work ──
-	let kind = $state<QueryKind>('why');
-	let user = $state('');
-	let relation = $state('');
-	let object = $state('');
-	let objectType = $state('table');
-	let depth = $state(3);
-	let seed = $state('');
-	let selectedTypes = $state(new Set<string>());
-	let selectedRelations = $state(new Set<string>());
+	const params = $derived(page.url.searchParams);
+	// Each field is the URL's until someone types into it: a writable derived, which a navigation (back,
+	// forward, a pasted link, this view's own `pushUrl`) sets again from the address it lands on. Every
+	// field is written to the URL by `pushUrl`, so this view's own push reads back what it wrote.
+	let kind = $derived<QueryKind>(asQueryKind(params.get('q')) ?? 'why');
+	let user = $derived(params.get('user') ?? '');
+	let relation = $derived(params.get('relation') ?? '');
+	let object = $derived(params.get('object') ?? '');
+	let objectType = $derived(params.get('type') ?? 'table');
+	let depth = $derived(Number(params.get('depth') ?? '3') || 3);
+	let seed = $derived(params.get('seed') ?? '');
+	let selectedTypes = $derived(new Set((params.get('types') ?? '').split(',').filter(Boolean)));
+	let selectedRelations = $derived(new Set((params.get('rels') ?? '').split(',').filter(Boolean)));
 	/** `data` = the live store (who has what NOW). `model` = the schema (what CAN grant what, ever).
 	 *  A toggle beside the canvas, not a tab: the tabs are dead and stay dead, and switching must not
 	 *  throw away the query you were reading. */
-	let view = $state<'data' | 'model'>('data');
+	let view = $derived<'data' | 'model'>(params.get('view') === 'model' ? 'model' : 'data');
 	/** Recent queries. The URL makes ONE query shareable; this makes the SEQUENCE retraceable, which
 	 *  replacing the history entry (done so the address bar does not fill with keystrokes) otherwise destroys. */
 	let history = $state<HistoryEntry[]>([]);
 
-	// The exact query string this component last wrote. Hydration compares against it so our own
-	// replacing `goto` does not bounce back into the fields mid-typing, while a real history navigation
-	// (back/forward, or a pasted link) still does. An earlier version stamped a synthetic `_w` token
-	// into the URL to achieve this — which worked, but put a meaningless parameter in every link the
-	// view exists to make shareable.
-	//
-	// NOT `$state`, and that is the whole point. The hydration effect READS this, so making it reactive
-	// makes the effect depend on it — and `pushUrl` assigns it, which re-fired the effect synchronously,
-	// BEFORE `goto` had updated `page.url`. The effect then compared the OLD query string against the
-	// NEW token, concluded the URL was foreign, and hydrated defaults straight over the user's query.
-	// The symptom was a facet click silently resetting the whole form. Plain bookkeeping, plain `let`.
+	// The exact query string this component last wrote, so a navigation to it is known as this view's
+	// own and does not run the query again, while a real history navigation (back/forward, or a pasted
+	// link) does. Plain bookkeeping, not `$state`: nothing renders from it.
 	let lastPushed: string | null = null;
 
 	const activeFacets = $derived(selectedTypes.size > 0 || selectedRelations.size > 0);
 
-	const params = $derived(page.url.searchParams);
-
-	// This one IS correctly an $effect, despite assigning state: it syncs an EXTERNAL source (history
-	// navigation) into fields the user also types into. `$derived` cannot express that — a derived
-	// value has one writer, and these have two.
-	//
-	// The body is `untrack`ed, and that is load-bearing rather than tidiness. Without it the effect
-	// READS the very state it just wrote — `seed` in the guard below, and `kind`/`user`/… inside
-	// `run()` — which makes it its own dependency and re-runs it. The visible symptom was a pasted
-	// link never reproducing its answer: the re-entrant effect clobbered the in-flight query.
-	// (Same idiom the console's other estate-gated readers use, for the same reason.)
-	$effect(() => {
-		const q = params;
+	// A navigation that names a query to run (`run=1`, a pasted link or a replayed history entry) runs
+	// it once the address has landed; the router says when, so this is its callback and not an effect.
+	afterNavigate(() => {
+		const q = page.url.searchParams;
 		if (q.toString() === lastPushed) return;
-		untrack(() => {
-			kind = asQueryKind(q.get('q')) ?? 'why';
-			user = q.get('user') ?? '';
-			relation = q.get('relation') ?? '';
-			object = q.get('object') ?? '';
-			objectType = q.get('type') ?? 'table';
-			depth = Number(q.get('depth') ?? '3') || 3;
-			seed = q.get('seed') ?? '';
-			selectedTypes = new Set((q.get('types') ?? '').split(',').filter(Boolean));
-			selectedRelations = new Set((q.get('rels') ?? '').split(',').filter(Boolean));
-			view = q.get('view') === 'model' ? 'model' : 'data';
-			if (seed) void loadNeighbourhood(seed);
-			if (q.get('run') === '1') void run();
-		});
+		if (seed) loadNeighbourhood(seed);
+		if (q.get('run') === '1') void run();
 	});
 
 	function pushUrl(extra: Record<string, string>): void {
@@ -143,21 +101,24 @@
 	}
 
 	// ── data ──
-	let neighbourhood = $state<BuiltGraph | null>(null);
 	let answer = $state<BuiltGraph | null>(null);
-	let verdict = $state<{ allowed: boolean; user: string; relation: string; object: string } | null>(
-		null,
-	);
+	let verdict = $state<Verdict | null>(null);
 	let chain = $state<string[]>([]);
 	let busy = $state(false);
-	let failure = $state<string | null>(null);
-	let denied = $state(false);
+	/** A query's own refusal or failure, cleared by the next run. */
+	let queryFailure = $state<string | null>(null);
+	let queryDenied = $state(false);
 	let selected = $state<string | null>(null);
-	let dsl = $state<string | null>(null);
-	let modelTypes = $state<string[]>([]);
+
+	/** The model, read once: model changes are code migrations, not runtime events, so no cursor can
+	 *  report one. */
+	const modelRead = fetchAccessModel();
+	const model = $derived(modelRead.current?.ok ? modelRead.current.data : null);
+	const dsl = $derived(model?.dsl ?? null);
+	const modelTypes = $derived(dsl ? parseModelTypes(dsl) : []);
 	/** `{condition: {parameter: type}}` served by GET /management/v1/access/model — the grant dialog renders TYPED
 	 *  inputs from this rather than from a copy that would drift the moment the model gains a parameter. */
-	let modelConditions = $state<Record<string, Record<string, string>>>({});
+	const modelConditions = $derived(model?.conditions ?? {});
 	/** The estate's tables, from the one read every page shares: a table dropped or declared anywhere
 	 *  refreshes it, so the seed list here is never a copy of its own. */
 	const tablesRead = fetchTables();
@@ -165,8 +126,30 @@
 		const read = tablesRead.current;
 		return read?.ok && Array.isArray(read.data.tables) ? [...read.data.tables].sort() : [];
 	});
+	/**
+	 * The WHOLE tuple store is the base graph: show every relationship, then let a query highlight within
+	 * it and the facets narrow it. `fetchStore` pages in the browser up to a bounded ceiling, and a store
+	 * larger than it is reported as truncated rather than silently clipped, because a graph that quietly
+	 * omits half the estate is worse than one that admits it.
+	 */
+	const storeRead = fetchStore();
+	const storeResult = $derived(storeRead.current);
 	/** Every tuple in the store — the canvas's base graph, and what the facet counts are computed on. */
-	let storeTuples = $state<Tuple[]>([]);
+	const storeTuples = $derived(storeResult?.ok ? storeResult.data.tuples : []);
+	// `focus` on nothing: the whole store has no single centre, so every node is ordinary until a
+	// query names one. buildWholeGraph lays subjects left and objects right off the tuple direction.
+	const neighbourhood = $derived(storeResult?.ok ? buildWholeGraph(storeResult.data.tuples) : null);
+	const storeDenied = $derived(
+		storeResult?.ok === false && (storeResult.status === 401 || storeResult.status === 403),
+	);
+	const modelDenied = $derived(
+		modelRead.current?.ok === false &&
+			(modelRead.current.status === 401 || modelRead.current.status === 403),
+	);
+	const denied = $derived(queryDenied || storeDenied || modelDenied);
+	const failure = $derived(
+		queryFailure ?? (storeResult?.ok === false && !storeDenied ? storeResult.detail : null),
+	);
 	/** The names the last query's answer gave its table and namespace objects (`table:<uuid>` → `db$t`). */
 	let answerNames = $state.raw<ReadonlyMap<string, string>>(new Map());
 	/**
@@ -174,30 +157,30 @@
 	 * would read `table:98792568-…` with nothing to say which table; the catalog answers each object's current name
 	 * beside it, on the tuple reads and on every query, and the uuid stays the node's id.
 	 */
-	const objectNames = $derived.by(() => {
-		const names = new Map(answerNames);
-		for (const t of storeTuples) if (t.name) names.set(t.object, t.name);
-		return names;
-	});
+	const storeNames = $derived(
+		new Map(storeTuples.flatMap((t) => (t.name ? [[t.object, t.name] as const] : []))),
+	);
+	const objectNames = $derived(new Map([...answerNames, ...storeNames]));
 	/** An id as a person reads it: a named object as `<type>:<name>`, anything else as written. */
 	const shown = (id: string): string => namedObject(id, objectNames.get(id));
 	/** The store is bigger than MAX_GRAPH_PAGES. Said out loud rather than silently clipped. */
-	let truncated = $state(false);
+	const truncated = $derived(storeResult?.ok ? storeResult.data.truncated : false);
 	/**
 	 * The signed-in identity. Load-bearing, not decoration: `sub` here is the principal key the tuple store
 	 * keys on (`<idp-id>~<user id>`, a long id like `dex~08a8684b-…`, LH-063). Nobody types that, and the
 	 * obvious `alice` names no principal. So the subject field is seeded from this, and a "me" chip puts it
 	 * back one click away.
 	 */
-	let me = $state<{ sub: string; name: string | null; estate_admin: boolean } | null>(null);
+	const meRead = accessMe();
+	// Fail-soft to null (no session, catalog down): the "me" chip simply does not render.
+	const me = $derived(meRead.current ?? null);
 
-	// onMount, not $effect: these two fetch once and depend on nothing reactive. An $effect with no
-	// dependencies happens to run once too, which is exactly why it is the wrong tool — it states
-	// "re-run when something changes" about code that has nothing to re-run for.
 	onMount(() => {
 		history = loadHistory();
-		void loadModel();
-		void loadMe();
+		// Seed the subject once the identity is read, only if the user has not already typed or linked one.
+		void meRead.then((parsed) => {
+			if (parsed && !user.trim()) user = parsed.sub;
+		});
 	});
 
 	// The resting graph is LIVE: read once on mount (liveRead's unconditional first read), then again
@@ -206,71 +189,23 @@
 	// same tick because table/namespace mutations move the same cursor. The model does not: model
 	// changes are code migrations, not runtime events, so no cursor can report one.
 	liveRead(controlTick, () => {
-		void loadWholeGraph();
-		void loadRegistry();
+		fetchStore();
+		void tablesRead.refresh();
 	});
-
-	async function loadMe(): Promise<void> {
-		// Fail-soft to null (no session, catalog down): the "me" chip simply does not render.
-		const parsed = await accessMe();
-		if (!parsed) return;
-		me = { sub: parsed.sub, name: parsed.name, estate_admin: parsed.estate_admin };
-		// Seed the subject only if the user has not already typed or linked one.
-		if (!user.trim()) user = parsed.sub;
-	}
-
-	async function loadModel(): Promise<void> {
-		const res = await fetchAccessModel();
-		if (!res.ok) {
-			denied = res.status === 401 || res.status === 403;
-			return;
-		}
-		dsl = res.data.dsl;
-		modelTypes = parseModelTypes(res.data.dsl);
-		modelConditions = res.data.conditions;
-	}
-
-	async function loadRegistry(): Promise<void> {
-		await tablesRead.refresh();
-	}
 
 	/** Relations the model defines on the type currently in play — the query bar's suggestions, so a
 	 *  phantom relation is a keystroke away from impossible rather than a 400 one round trip later. */
-	const relationOptions = $derived.by(() => {
-		if (!dsl) return [];
-		const target = kind === 'what' ? objectType : idType(object || seed || 'table');
-		const lines = dsl.split('\n');
-		const start = lines.findIndex((line) => new RegExp(`^\\s*type\\s+${target}\\s*$`).test(line));
-		if (start < 0) return [];
-		const out: string[] = [];
-		for (const line of lines.slice(start + 1)) {
-			if (/^\s*type\s+\S+\s*$/.test(line)) break;
-			const match = /^\s*define\s+([A-Za-z0-9_]+)\s*:/.exec(line);
-			if (match?.[1]) out.push(match[1]);
-		}
-		return out;
-	});
+	const relationOptions = $derived(
+		dsl
+			? definedRelations(dsl, kind === 'what' ? objectType : idType(object || seed || 'table'))
+			: [],
+	);
 
-	/**
-	 * The relations a grant on the SELECTED object may name — the model's directly-assignable ones for
-	 * that type. Parsed from the DSL: a `define x: [ ... ]` line declares direct assignment, whereas a
-	 * `define x: y or z` line is derived and the catalog refuses to write it. Without this the dialog
-	 * was a free-text box that taught the rule via a 400 one round trip later.
-	 */
-	const assignableForSelected = $derived.by(() => {
-		if (!dsl || !selected) return [];
-		const target = idType(selected);
-		const lines = dsl.split('\n');
-		const start = lines.findIndex((line) => new RegExp(`^\\s*type\\s+${target}\\s*$`).test(line));
-		if (start < 0) return [];
-		const out: string[] = [];
-		for (const line of lines.slice(start + 1)) {
-			if (/^\s*type\s+\S+\s*$/.test(line)) break;
-			const match = /^\s*define\s+([A-Za-z0-9_]+)\s*:\s*\[/.exec(line);
-			if (match?.[1]) out.push(match[1]);
-		}
-		return out;
-	});
+	/** The relations a grant on the SELECTED object may name — the model's directly-assignable ones for
+	 *  that type, so the grant dialog offers a choice rather than a free-text box the catalog corrects. */
+	const assignableForSelected = $derived(
+		dsl && selected ? definedRelations(dsl, idType(selected), true) : [],
+	);
 
 	/** The handful of ids worth offering as one-click seeds: the estate root, every namespace, every
 	 *  registered table. Derived from the LIVE store and registry, so it is never a hardcoded guess. */
@@ -299,138 +234,39 @@
 		),
 	]);
 
-	/**
-	 * Load the WHOLE tuple store as the base graph.
-	 *
-	 * This is the view's centre of gravity, and an earlier version got it backwards: the canvas began
-	 * empty and a query ADDED a handful of nodes, so "filter down" had nothing to filter and the first
-	 * thing anyone saw was an empty box with a free-text field. The whole point is the opposite — show
-	 * every relationship, then let a query highlight within it and the facets narrow it.
-	 *
-	 * The page loop lives in `fetchStore` in the browser now — one browser round trip instead of
-	 * forty — with the same bounded ceiling: a store larger than it is reported as truncated rather
-	 * than silently clipped, because a graph that quietly omits half the estate is worse than one that
-	 * admits it.
-	 */
-	async function loadWholeGraph(): Promise<void> {
-		const res = await fetchStore();
-		if (!res.ok) {
-			denied = res.status === 401 || res.status === 403;
-			if (!denied) failure = res.detail;
-			return;
-		}
-		storeTuples = res.data.tuples;
-		truncated = res.data.truncated;
-		// `focus` on nothing: the whole store has no single centre, so every node is ordinary until a
-		// query names one. buildWholeGraph lays subjects left and objects right off the tuple direction.
-		neighbourhood = buildWholeGraph(res.data.tuples);
-	}
-
 	/** One object's own tuples, for the inspector — the canvas already holds the whole store. */
-	async function loadNeighbourhood(target: string): Promise<void> {
-		if (!target) return;
-		await loadWholeGraph();
+	function loadNeighbourhood(target: string): void {
+		if (target) fetchStore();
 	}
 
 	function fail(res: { status: number; detail: string }): void {
-		denied = res.status === 401 || res.status === 403;
-		failure = denied ? 'This surface is estate-admin only.' : res.detail;
+		queryDenied = res.status === 401 || res.status === 403;
+		queryFailure = queryDenied ? 'This surface is estate-admin only.' : res.detail;
 	}
 
 	async function run(): Promise<void> {
 		if (busy) return;
 		busy = true;
-		failure = null;
+		queryFailure = null;
 		verdict = null;
 		chain = [];
 		answer = null;
 		try {
-			if (kind === 'what') await runWhat();
-			else if (kind === 'who') await runWho();
-			else await runWhy();
+			const out = await askAccess(kind, { user, relation, object, objectType, depth }, storeNames);
+			if (!out.ok) {
+				fail(out);
+				return;
+			}
+			answerNames = out.names;
+			answer = out.answer;
+			verdict = out.verdict;
+			chain = out.chain;
+			selected = out.selected;
+			if (out.seed !== null) seed = out.seed;
+			if (out.note !== null) queryFailure = out.note;
 		} finally {
 			busy = false;
 		}
-	}
-
-	async function runWhat(): Promise<void> {
-		const res = await listObjects({
-			user: user.trim(),
-			relation: relation.trim(),
-			type: objectType.trim(),
-		});
-		if (!res.ok) {
-			fail(res);
-			return;
-		}
-		const parsed = res.data;
-		answerNames = new Map(Object.entries(parsed.names));
-		answer = buildNeighbourhood(
-			parsed.user,
-			parsed.objects.map((o) => ({ user: parsed.user, relation: parsed.relation, object: o })),
-		);
-		seed = parsed.user;
-		selected = parsed.user;
-		chain = [
-			`${parsed.user} holds ${parsed.relation} on ${parsed.objects.length} ${parsed.type} object(s)`,
-		];
-	}
-
-	async function runWho(): Promise<void> {
-		const res = await listUsers({ object: object.trim(), relation: relation.trim() });
-		if (!res.ok) {
-			fail(res);
-			return;
-		}
-		const parsed = res.data;
-		answerNames = parsed.name ? new Map([[parsed.object, parsed.name]]) : new Map();
-		answer = buildNeighbourhood(
-			parsed.object,
-			parsed.users.map((u) => ({ user: u, relation: parsed.relation, object: parsed.object })),
-		);
-		seed = parsed.object;
-		selected = parsed.object;
-		chain = [
-			`${parsed.users.length} subject(s) hold ${parsed.relation} on ${shown(parsed.object)}` +
-				(parsed.truncated ? ' — TRUNCATED by the store, the real number is higher' : ''),
-		];
-	}
-
-	async function runWhy(): Promise<void> {
-		// Check AND Expand together: the verdict is the fact, the tree is the explanation. Shipping
-		// either alone is exactly what made the old Check tab a dead end.
-		const triple = { user: user.trim(), relation: relation.trim(), object: object.trim() };
-		const [checkRes, expandRes] = await Promise.all([
-			checkAccess(triple),
-			expand({ object: triple.object, relation: triple.relation, depth }),
-		]);
-		if (!checkRes.ok) {
-			fail(checkRes);
-			return;
-		}
-		const probed = checkRes.data;
-		// The catalog resolved a name to the uuid object it checked, so the verdict, the selection and the derivation
-		// all name that object, and the name rides beside it.
-		answerNames = probed.checked.name
-			? new Map([[probed.checked.object, probed.checked.name]])
-			: new Map();
-		verdict = {
-			allowed: probed.allowed,
-			user: probed.checked.user,
-			relation: probed.checked.relation,
-			object: probed.checked.object,
-		};
-		selected = probed.checked.object;
-		if (!expandRes.ok) {
-			failure = 'The verdict is live, but the derivation could not be read.';
-			return;
-		}
-		const parsed = expandRes.data;
-		answer = walkDerivation(parsed.tree, parsed.object, parsed.relation);
-		seed = parsed.object;
-		chain = answer.edges
-			.filter((e) => e.onPath)
-			.map((e) => `${shown(e.source)} → ${shown(e.target)} (${e.label})`);
 	}
 
 	// ── the rendered graph ──
@@ -445,99 +281,10 @@
 		applyFacets(composed, { types: selectedTypes, relations: selectedRelations }),
 	);
 
-	/**
-	 * The edges the pointer's subject touches — a node hover means "its edges", an edge hover means
-	 * exactly that one.
-	 *
-	 * Hover is PURE ADDITION, by ruling: the touched edges get a subtle primary tint and nothing else
-	 * on the canvas changes. An earlier version dimmed everything unrelated to 8% opacity — "highlight
-	 * by darkening the world" — which read as the UI breaking every time the pointer crossed the
-	 * graph, and a missed pointerleave (fast exits over SVG edges lose the event) left the whole
-	 * canvas stuck dark. Emphasis that only adds has nothing to get stuck: releasing the pointer just
-	 * loses a tint, and the container-level reset below clears it even when the per-element leave
-	 * event never fires.
-	 */
-	let hovered = $state<string | null>(null);
-	/** Hovering an EDGE, not a node. A node answers "what does this touch"; an edge answers "what does
-	 *  this one grant connect" — on a dense canvas those are different questions, and only the first
-	 *  was answerable. One tuple IS an edge, so it deserves the same emphasis its endpoints get. */
-	let hoveredEdge = $state<string | null>(null);
-	const touchedEdges = $derived.by(() => {
-		if (hoveredEdge) return new Set([hoveredEdge]);
-		if (!hovered) return null;
-		const edgeIds = new Set<string>();
-		for (const e of filtered.edges) {
-			if (e.source === hovered || e.target === hovered) edgeIds.add(e.id);
-		}
-		return edgeIds;
-	});
-
 	/** The node the last "Jump to" chip named — the canvas glides its viewport to it, so the chip has a
 	 *  visible consequence beyond prefilled form fields. A fresh object per click, so clicking the same
 	 *  chip again re-centres (see FlowFocus). */
 	let focusTarget = $state<{ id: string } | null>(null);
-
-	let nodes = $state.raw<AccessNodeType[]>([]);
-	let edges = $state.raw<Edge[]>([]);
-
-	/**
-	 * Layout in its OWN derivation, so it re-runs only when the graph actually changes.
-	 *
-	 * It used to live inside the node-build effect below, which also read the hover state. That made
-	 * every pointer enter/leave re-run the full barycentre pass and re-diff the whole canvas:
-	 * O(nodes+edges) work per mouse movement, on a canvas capped at 4000 tuples. The placer runs when
-	 * facets, the query, or the view flip — and since hover stopped touching nodes at all, pointer
-	 * movement now re-maps only the edge array.
-	 */
-	const positioned = $derived(layout(filtered.nodes, filtered.edges));
-
-	// Nodes owe NOTHING to hover: roles come from the query and the facets alone — `dim` means
-	// "filtered out or off-query", exactly what the legend says, and never "the pointer is elsewhere".
-	$effect(() => {
-		nodes = positioned.map((n) => ({
-			id: n.id,
-			type: 'access' as const,
-			position: { x: n.x, y: n.y },
-			data: {
-				fgaId: n.id,
-				fgaType: n.fgaType,
-				label: objectNames.get(n.id) ?? n.label,
-				role: n.role,
-				via: n.via,
-			},
-		}));
-	});
-
-	$effect(() => {
-		const touched = touchedEdges;
-		// Every edge gets an ARROWHEAD. A tuple is directional — `user:alice --owner--> table:x` — and an
-		// undirected line in an authorization graph is not a simplification, it is the wrong picture:
-		// "alice owns the table" and "the table owns alice" would render identically.
-		//
-		// The lit path is coloured EXPLICITLY here rather than through `--xy-edge-stroke-selected`. That
-		// variable looks like the right lever and is not: the vendor stylesheet scopes it to
-		// `.svelte-flow__edge.selected` / `:focus`, i.e. USER selection, which this never sets. Driving
-		// the highlight through it meant the derivation was distinguished only by animation and opacity,
-		// with a lit hop and a dimmed one sharing a stroke colour. `--primary`/`--muted-foreground` are
-		// token `var()`s, which resolve inside inline SVG styles and marker defs, so this stays on-token
-		// and flips with the theme.
-		edges = filtered.edges.map((e) => ({
-			id: e.id,
-			source: e.source,
-			target: e.target,
-			label: e.condition ? `${e.label} ⏳` : e.label,
-			animated: e.onPath,
-			markerEnd: {
-				type: MarkerType.ArrowClosed,
-				width: 18,
-				height: 18,
-				// The arrowhead wears the same colour as its line — a green grant ending in a grey
-				// arrow reads as two different edges meeting.
-				color: e.onPath ? 'var(--primary)' : restingStroke(e.kind),
-			},
-			style: edgeStyle(e, touched?.has(e.id) ?? false),
-		}));
-	});
 
 	/**
 	 * The stored tuples the current derivation rests on — the store's own facts, restricted to the
@@ -555,33 +302,6 @@
 		return storeTuples.filter((t) => inAnswer.has(t.user) && inAnswer.has(t.object));
 	});
 
-	/** Resting stroke per edge KIND — colour is the code (the legend names it): grants green,
-	 *  role membership amber, `parent` scaffolding muted. Uncoded edges (the model view) keep
-	 *  the muted look. */
-	const KIND_STROKE: Record<string, string> = {
-		grant: 'var(--success)',
-		membership: 'var(--warning)',
-		structural: 'var(--muted-foreground)',
-	};
-	const restingStroke = (kind: string | undefined): string =>
-		KIND_STROKE[kind ?? 'structural'] ?? 'var(--muted-foreground)';
-
-	/** Edge chrome: the query's lit path owns "lit" outright; hover ADDS a subtle primary tint to the
-	 *  touched edges and takes nothing from the rest — there is no dimming pass, so releasing the
-	 *  pointer has nothing to restore and a lost leave event has nothing to leave stuck. */
-	function edgeStyle(
-		e: { onPath: boolean; kind?: string; condition?: string | null },
-		touched: boolean,
-	): string {
-		// A time-boxed grant is DASHED wherever it appears — "this expires" must stay legible whether
-		// the edge is resting, tinted, or lit.
-		const dash = e.condition ? ' stroke-dasharray: 6 4;' : '';
-		if (e.onPath) return `stroke: var(--primary); stroke-width: 2;${dash}`;
-		if (touched) return `stroke: var(--primary); stroke-width: 1.75; opacity: 0.75;${dash}`;
-		const faint = e.kind === 'structural' || e.kind === undefined ? 0.35 : 0.5;
-		return `stroke: ${restingStroke(e.kind)}; opacity: ${faint};${dash}`;
-	}
-
 	/** Is anything narrowing the view right now? Drives whether Clear is offered at all — an always-on
 	 *  reset next to Run reads as a second action rather than an escape hatch. */
 	const hasQuery = $derived(
@@ -594,7 +314,6 @@
 			!!object.trim(),
 	);
 
-	/** Reset EVERYTHING — query, answer, facets, selection — back to the whole graph at rest. */
 	/** Replay a stored query VERBATIM through the same hydration path a pasted link takes, so a re-run
 	 *  cannot diverge from what the history entry says it was. */
 	function replay(query: string): void {
@@ -603,6 +322,7 @@
 		void goto(`?${query}`, { reset: false });
 	}
 
+	/** Reset EVERYTHING — query, answer, facets, selection — back to the whole graph at rest. */
 	function clearAll(): void {
 		kind = 'why';
 		user = me?.sub ?? '';
@@ -617,16 +337,17 @@
 		answer = null;
 		verdict = null;
 		chain = [];
-		failure = null;
+		queryFailure = null;
 		lastPushed = '';
+		// The fields follow the emptied URL; the subject goes back to the signed-in principal after it.
 		// eslint-disable-next-line svelte/no-navigation-without-resolve -- a query on the current page, and resolve() refuses one that does not start with /
-		void goto('?', { replace: true, reset: false });
+		void goto('?', { replace: true, reset: false }).then(() => (user = me?.sub ?? ''));
 	}
 
 	function onNodeClick(event: { node: { id: string } }): void {
 		selected = event.node.id;
 		seed = event.node.id;
-		void loadNeighbourhood(event.node.id);
+		loadNeighbourhood(event.node.id);
 		pushUrl({ seed: event.node.id });
 	}
 </script>
@@ -670,30 +391,38 @@
 	     Nothing is stored that the URL does not already carry — see history.ts — because subject and
 	     object ids are exactly the sensitive part of this surface. -->
 	{#if history.length}
-		<details class="rounded-md border border-border px-2 py-1.5">
-			<summary class="cursor-pointer text-xs font-medium">
-				Recent queries <span class="text-muted-foreground">({history.length})</span>
-			</summary>
-			<ul class="mt-1.5 flex flex-col gap-0.5">
-				{#each history as entry (entry.query)}
-					<li>
-						<button
-							class="w-full truncate rounded px-1.5 py-1 text-left font-mono text-[11px] hover:bg-muted"
-							title={entry.label}
-							onclick={() => replay(entry.query)}
-						>
-							{entry.label}
-						</button>
-					</li>
-				{/each}
-			</ul>
-			<button
-				class="mt-1 px-1.5 text-[11px] text-muted-foreground hover:text-foreground"
-				onclick={() => (history = clearHistory())}
+		<Collapsible.Root class="rounded-md border border-border px-2 py-1.5">
+			<Collapsible.Trigger
+				class={cn(buttonVariants({ variant: 'ghost', size: 'xs' }), 'w-full justify-start')}
 			>
-				Clear history
-			</button>
-		</details>
+				Recent queries <span class="text-muted-foreground">({history.length})</span>
+			</Collapsible.Trigger>
+			<Collapsible.Content>
+				<ul class="mt-1.5 flex flex-col gap-0.5">
+					{#each history as entry (entry.query)}
+						<li>
+							<Button
+								variant="ghost"
+								size="xs"
+								class="w-full justify-start font-mono"
+								title={entry.label}
+								onclick={() => replay(entry.query)}
+							>
+								<span class="truncate">{entry.label}</span>
+							</Button>
+						</li>
+					{/each}
+				</ul>
+				<Button
+					variant="ghost"
+					size="xs"
+					class="text-muted-foreground mt-1"
+					onclick={() => (history = clearHistory())}
+				>
+					Clear history
+				</Button>
+			</Collapsible.Content>
+		</Collapsible.Root>
 	{/if}
 
 	<!-- DATA vs MODEL. Two different questions about the same authorization system: what is granted
@@ -832,63 +561,15 @@
 		</div>
 
 		<div class="flex min-h-0 flex-1 gap-4">
-			<!-- Container-level reset: per-element pointerleave is lost on fast exits over SVG, and a
-			     hover emphasis that survives its own pointer is a bug regardless of how subtle it is.
-			     role="presentation": the handler is housekeeping on a layout wrapper, not interactivity —
-			     nothing here is focusable or announced. -->
-			<div
-				role="presentation"
-				class="relative min-w-0 flex-1 overflow-hidden rounded-md border border-border"
-				onpointerleave={() => {
-					hovered = null;
-					hoveredEdge = null;
-				}}
-			>
-				{#if composed.nodes.length === 0}
-					<div
-						class="flex h-full items-center justify-center p-6 text-center text-sm text-muted-foreground"
-					>
-						Ask a question above to put the live graph on the canvas.
-					</div>
-				{:else}
-					<GraphCanvas
-						bind:nodes
-						bind:edges
-						{nodeTypes}
-						focus={focusTarget}
-						fitTrigger={`${view}:${filtered.nodes.length}:${filtered.edges.length}`}
-						fitPadding={0.2}
-						fitMaxZoom={1.25}
-						onnodeclick={onNodeClick}
-						onnodepointerenter={(e: { node: { id: string } }) => (hovered = e.node.id)}
-						onnodepointerleave={() => (hovered = null)}
-						onedgepointerenter={(e: { edge: { id: string } }) => (hoveredEdge = e.edge.id)}
-						onedgepointerleave={() => (hoveredEdge = null)}
-					/>
-				{/if}
-				{#if answer}
-					<Badge variant="secondary" class="absolute right-2 top-2 font-mono text-[10px]">
-						{chain.length} hop{chain.length === 1 ? '' : 's'} lit
-					</Badge>
-				{/if}
-				<!-- The encodings, named ON the canvas. Dashed-means-expiring and dimmed-means-filtered are
-				     inventions of this view; a reader should not need the source code to decode them. One
-				     line, muted, bottom-RIGHT — bottom-left belongs to Svelte Flow's Controls, and the two
-				     overlapped there. -->
-				{#if composed.nodes.length > 0}
-					<div
-						class="pointer-events-none absolute bottom-2 right-2 rounded bg-background/80 px-2 py-0.5 text-[10px] text-muted-foreground"
-						data-slot="canvas-legend"
-					>
-						<span class="text-primary">━</span> derivation path ·
-						<span class="text-success">━</span> grant ·
-						<span class="text-warning">━</span> role ·
-						<span>─</span> parent ·
-						<span>┅ ⏳</span> time-boxed ·
-						<span class="opacity-50">▢</span> dimmed = filtered out or off-query
-					</div>
-				{/if}
-			</div>
+			<AccessCanvas
+				graph={filtered}
+				total={composed.nodes.length}
+				names={objectNames}
+				focus={focusTarget}
+				fitTrigger={`${view}:${filtered.nodes.length}:${filtered.edges.length}`}
+				litHops={answer ? chain.length : null}
+				onnodeclick={onNodeClick}
+			/>
 
 			<Inspector
 				{selected}
@@ -901,7 +582,7 @@
 				{supportingTuples}
 				{modelConditions}
 				onchanged={() => {
-					void loadNeighbourhood(seed);
+					loadNeighbourhood(seed);
 				}}
 			/>
 		</div>

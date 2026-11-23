@@ -141,10 +141,14 @@
 	// `WarehouseDeleteDialog`. The list re-reads on `ondeleted` for immediacy; the catalog also emits a
 	// `warehouse_deleted` control event, so the `liveRead(controlTick, …)` above re-reads every OTHER
 	// open warehouse list on the estate too.
+	// The dialog is mounted once per opening (`deleteOpening` counts them), so a refusal, the namespaces
+	// it names and every opt-in belong to that opening alone, whichever warehouse the next one targets.
 	let deleteOpen = $state(false);
 	let deleteRow = $state<Warehouse | null>(null);
+	let deleteOpening = $state(0);
 	function openDelete(row: Warehouse): void {
 		deleteRow = row;
+		deleteOpening += 1;
 		deleteOpen = true;
 	}
 
@@ -261,7 +265,7 @@
 	{#if w.estate}
 		<span class="mut">—</span>
 	{:else}
-		<span class="chip mono" class:off={statusOf(w) !== 'active'}>{statusOf(w)}</span>
+		<span class={['chip mono', { off: statusOf(w) !== 'active' }]}>{statusOf(w)}</span>
 	{/if}
 {/snippet}
 {#snippet actionsCell(w: Row)}
@@ -308,7 +312,7 @@
 	</header>
 
 	{#if banner}
-		<div class="banner" class:ok={banner.tone === 'ok'} class:fail={banner.tone === 'fail'}>
+		<div class={['banner', { ok: banner.tone === 'ok', fail: banner.tone === 'fail' }]}>
 			{banner.text}
 		</div>
 	{/if}
@@ -406,7 +410,7 @@
 			<dd class="mono">{drawerRow.root_uri}</dd>
 			<dt>status</dt>
 			<dd>
-				<span class="chip mono" class:off={statusOf(drawerRow) !== 'active'}
+				<span class={['chip mono', { off: statusOf(drawerRow) !== 'active' }]}
 					>{statusOf(drawerRow)}</span
 				>
 			</dd>
@@ -435,7 +439,9 @@
 	{/if}
 </RowDrawer>
 
-<WarehouseDeleteDialog bind:open={deleteOpen} warehouse={deleteRow} ondeleted={() => load()} />
+{#key deleteOpening}
+	<WarehouseDeleteDialog bind:open={deleteOpen} warehouse={deleteRow} ondeleted={() => load()} />
+{/key}
 
 <style>
 	.page {

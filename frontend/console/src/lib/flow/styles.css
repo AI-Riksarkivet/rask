@@ -8,8 +8,10 @@
  *
  * Same approach as the workbench dock's `--hl-*` block, and for the same reason: the library exposes
  * `--xy-*` custom properties, every one of them resolves through a rask token that is itself
- * re-declared under `.dark`, so the light/dark flip needs NO JavaScript. `colorMode` on <SvelteFlow>
- * is therefore left alone — it is a second source of truth that can only go stale.
+ * re-declared under `.dark`, so the light/dark flip needs NO JavaScript. The vendor's own `.dark`
+ * palette is only the `--xy-*-default` fallbacks, which these win over. The canvases still pass
+ * `colorMode` (the page's mode, `GraphCanvas` and `StaticFlow`): Svelte Flow stamps it on its root as
+ * a class, `light` by default, and the design system's light token set is also declared on `.light`.
  *
  * Import ONCE per page, after the vendor sheet, both under `layer(base)` so Tailwind utilities keep
  * winning over both (svelte-flow rule 3).

@@ -29,6 +29,7 @@
 	import type { Snippet } from 'svelte';
 	import FlowAutoFit from './FlowAutoFit.svelte';
 	import FlowFocus from './FlowFocus.svelte';
+	import { appearance } from '@riksarkivet/ui/appearance';
 
 	type Props = {
 		nodes: Node[];
@@ -69,10 +70,16 @@
 		overlay,
 		...rest
 	}: Props & Record<string, unknown> = $props();
+
+	// Svelte Flow stamps its `colorMode` on its root as a class, `light` when none is given, and the
+	// design system declares its light token set on `.light` as well as on the root: an unset mode
+	// paints every token inside the canvas light while text inherits the page's colour. The canvas
+	// therefore carries the page's own mode.
+	const colorMode = $derived(appearance.dark ? 'dark' : 'light');
 </script>
 
 <div class="relative h-full w-full" data-slot="graph-canvas">
-	<SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} fitView {...rest}>
+	<SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} {colorMode} fitView {...rest}>
 		<Background variant={BackgroundVariant.Dots} gap={backgroundGap} />
 		<Controls />
 		{#if minimap}<MiniMap />{/if}

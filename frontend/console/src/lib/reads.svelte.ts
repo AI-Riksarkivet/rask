@@ -16,6 +16,9 @@
  *  - Calling a read never makes the CALLER depend on the read's own bookkeeping: an effect that calls
  *    `read()` must not re-run because that read started or settled (its `loading`), or a refresh from
  *    anywhere would re-run every effect that once asked for it.
+ *  - `.current` may be an answer from an earlier visit, painted at once while the re-read is out. A
+ *    holder that must act only on what was read now (an editor that seeds once from it) holds
+ *    `read().visit()` and waits for its `settled`.
  */
 import { error, isHttpError } from '@sveltejs/kit';
 import type { ApiResult } from '#lib/api/client.ts';
@@ -55,6 +58,10 @@ class Query<T> implements Promise<T> {
 	current = $state.raw<T | undefined>(undefined);
 	error = $state.raw<unknown>(undefined);
 	loading = $state(false);
+	/** How many reads of this instance settled, and how many of those answered: what a {@link Visit}
+	 *  compares against to tell an answer read during it from one kept from before. */
+	settles = $state(0);
+	answers = $state(0);
 	#run: () => Promise<T>;
 	#promise: Promise<T>;
 	#settledAt = 0;
@@ -79,6 +86,8 @@ class Query<T> implements Promise<T> {
 					this.error = undefined;
 					this.loading = false;
 					this.#settledAt = Date.now();
+					this.answers += 1;
+					this.settles += 1;
 				}
 				return value;
 			},
@@ -87,6 +96,7 @@ class Query<T> implements Promise<T> {
 					this.error = err;
 					this.loading = false;
 					this.#settledAt = Date.now();
+					this.settles += 1;
 				}
 				throw err;
 			},
@@ -108,6 +118,11 @@ class Query<T> implements Promise<T> {
 		this.#promise = this.#start();
 	}
 
+	/** This read as a visit that starts now sees it (see {@link Visit}). */
+	visit(): Visit<T> {
+		return new Visit(this);
+	}
+
 	// A read IS a promise of its latest value, as a SvelteKit remote query is: `await read()` is how a
 	// page holds it, and that is the point rather than an accident.
 	// oxlint-disable-next-line unicorn/no-thenable
@@ -127,6 +142,39 @@ class Query<T> implements Promise<T> {
 	}
 
 	readonly [Symbol.toStringTag] = 'Query';
+}
+
+/** One visit's view of a read: a page, or a part of one, that must act only on what was read since it
+ *  began. `settled` holds once a read counted as this visit's has landed, answered or failed, and
+ *  `current` is the answer only when it was read during the visit.
+ *
+ *  A read in flight when the visit begins is this visit's (calling a read starts one unless an answer
+ *  is under {@link FRESH_MS} old). A read idle when it begins settled within that window, which the read
+ *  layer already treats as now, so its last settle counts. */
+class Visit<T> {
+	readonly #read: Query<T>;
+	readonly #settlesBefore: number;
+	readonly #answersBefore: number;
+
+	constructor(read: Query<T>) {
+		this.#read = read;
+		const { settles, answers, loading, failed } = untrack(() => ({
+			settles: read.settles,
+			answers: read.answers,
+			loading: read.loading,
+			failed: read.error !== undefined,
+		}));
+		this.#settlesBefore = loading ? settles : settles - 1;
+		this.#answersBefore = loading || failed ? answers : answers - 1;
+	}
+
+	get settled(): boolean {
+		return this.#read.settles > this.#settlesBefore;
+	}
+
+	get current(): T | undefined {
+		return this.#read.answers > this.#answersBefore ? this.#read.current : undefined;
+	}
 }
 
 const keyOf = (args: unknown[]): string => JSON.stringify(args);

@@ -350,6 +350,55 @@ test('no opt-in survives a close: the next open starts from the plain delete aga
 	await expect(reopened.getByRole('button', { name: /^Delete/ })).toHaveText('Delete warehouse');
 });
 
+test('a refusal that lands after its opening closed reaches no later opening', async ({ page }) => {
+	// The first warehouse's delete is answered only after its dialog was dismissed: its refusal and the
+	// namespaces it names belong to that opening, and consent to cascade on the second warehouse can only be
+	// given after the second warehouse's own refusal.
+	await seed(page, {
+		'GET /management/v1/warehouses': [
+			WAREHOUSE,
+			{ ...WAREHOUSE, id: 'beta-wh', bucket: 'beta-bucket' },
+		],
+		'DELETE /management/v1/warehouses/beta-wh': {
+			id: 'beta-wh',
+			bucket: 'beta-bucket',
+			namespaces_dropped: [],
+			tuples_revoked: 0,
+			bucket_purged: false,
+			objects_purged: 0,
+		},
+	});
+	let answer: () => Promise<void> = async () => {};
+	const asked = new Promise<void>((resolve) => {
+		void page.route('**/api/catalog/management/v1/warehouses/acme-wh*', async (route) => {
+			if (route.request().method() !== 'DELETE') return route.fallback();
+			answer = () =>
+				route.fulfill({
+					status: 409,
+					contentType: 'application/problem+json',
+					body: JSON.stringify(BOUND),
+				});
+			resolve();
+		});
+	});
+
+	const dialog = await openDialog(page);
+	await dialog.getByRole('button', { name: 'Delete warehouse' }).click();
+	await asked;
+	await page.keyboard.press('Escape');
+	await expect(page.getByRole('dialog')).toHaveCount(0);
+	await answer();
+
+	await page.getByRole('button', { name: 'Delete warehouse beta-wh', exact: true }).click();
+	const second = page.getByRole('dialog');
+	await expect(second.getByText('Delete warehouse beta-wh')).toBeVisible();
+	await expect(second.getByTestId('delete-problem')).toHaveCount(0);
+	await expect(second.getByRole('checkbox', { name: /cascade/i })).toHaveCount(0);
+	await second.getByRole('button', { name: 'Delete warehouse' }).click();
+	await expect(page.getByText('Deleted warehouse beta-wh:')).toBeVisible();
+	expect(await deletePaths(page)).toEqual(['/management/v1/warehouses/beta-wh']);
+});
+
 test('a warehouse git declares says so, and offers no lifecycle control its doors refuse', async ({
 	page,
 }) => {

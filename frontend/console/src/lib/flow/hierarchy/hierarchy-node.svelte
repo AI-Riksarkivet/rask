@@ -66,7 +66,7 @@
 	<Icon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
 	<div class="min-w-0 leading-tight">
 		<div class="text-muted-foreground text-[10px] tracking-wide uppercase">{data.level}</div>
-		<div class="truncate text-sm font-medium">{data.label}</div>
+		<div data-slot="hierarchy-node-name" class="truncate text-sm font-medium">{data.label}</div>
 		{#if data.detail}<div class="text-muted-foreground truncate text-xs">{data.detail}</div>{/if}
 	</div>
 	<Handle type="target" position={Position.Top} class="!opacity-0" />

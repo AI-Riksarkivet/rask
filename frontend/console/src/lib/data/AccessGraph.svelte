@@ -15,7 +15,7 @@
 	import { GrantForm } from '#lib/access/grant-form/index.ts';
 	import { enter } from '@riksarkivet/ui/motion';
 	import { Network, ShieldAlert } from '@lucide/svelte';
-	import { Background, BackgroundVariant, Controls, type Edge, SvelteFlow } from '@xyflow/svelte';
+	import type { Edge } from '@xyflow/svelte';
 	import type { AccessGraph } from './namespace';
 	import {
 		fetchAccessGraph,
@@ -23,27 +23,35 @@
 		grantAccess,
 		revokeAccess,
 	} from './remote/access-objects.api';
-	import { FlowAutoFit } from '#lib/flow/index.ts';
+	import { GraphCanvas } from '#lib/flow/index.ts';
 
 	let { dataset }: { dataset: string } = $props();
 
-	let nodes = $state.raw<AccessNodeType[]>([]);
-	let edges = $state.raw<Edge[]>([]);
-	let graph = $state<AccessGraph | null>(null);
-	let selectedId = $state<string | null>(null);
-	let fitKey = $state(0);
-	let status = $state<'loading' | 'ok' | 'denied' | 'offline'>('loading');
+	const target = $derived({ kind: 'table' as const, id: dataset });
+	const graphRead = $derived(fetchAccessGraph(target));
+	// The caller's own verdicts, for the #143 gate on Grant/Revoke below, read beside the graph: a failed
+	// permission read must not blank the graph, it just leaves the verdicts unknown, which renders the
+	// controls live. Each read is the object's own, so one object's verdicts never gate another's.
+	const permsRead = $derived(fetchMyPermissions(target));
+	const permMap = $derived(permsRead.current?.ok ? permsRead.current.data.permissions : null);
+	const result = $derived(graphRead.current);
+	const graph = $derived(result?.ok ? result.data : null);
+	const status = $derived<'loading' | 'ok' | 'denied' | 'offline'>(
+		result === undefined
+			? 'loading'
+			: result.ok
+				? 'ok'
+				: result.status === 401 || result.status === 403
+					? 'denied'
+					: 'offline',
+	);
+
+	// The node clicked last, keyed by the object it was clicked on.
+	let selection = $state<{ for: string; id: string } | null>(null);
+	const selectedId = $derived(selection?.for === dataset ? selection.id : null);
 	let mgUser = $state('');
 
-	// #143, same treatment as the GrantsPanel — this component carries a SECOND copy of the
-	// grant/revoke UI, which is how the wrong denial message survived in two places. Keyed by dataset,
-	// so one object's verdicts never gate another's buttons after a navigation. Declared AFTER the
-	// `mg*` state it reads: `$derived` is lazy, but keeping the reading order honest is cheaper than
-	// relying on that.
-	let perms = $state<{ for: string; map: Record<string, boolean> } | null>(null);
-	const permMap = $derived(perms?.for === dataset ? perms.map : null);
-
-	function rebuild(g: AccessGraph): void {
+	function build(g: AccessGraph, selected: string | null): AccessNodeType[] {
 		const obj = g.object;
 		const inbound = g.edges.filter((e) => e.target === obj); // grants: subject → obj
 		const outbound = g.edges.filter((e) => e.source === obj); // container: obj → parent
@@ -59,7 +67,7 @@
 					fgaType: n.type,
 					label: n.label,
 					focus: id === obj,
-					selected: id === selectedId,
+					selected: id === selected,
 				},
 			};
 		};
@@ -67,56 +75,41 @@
 		inbound.forEach((e, i) => next.push(mk(e.source, 20, 20 + i * 82)));
 		next.push(mk(obj, 330, 20 + (Math.max(1, inbound.length) - 1) * 41));
 		outbound.forEach((e, i) => next.push(mk(e.target, 640, 20 + i * 82)));
-		nodes = next;
-		edges = g.edges.map((e, i) => ({
+		return next;
+	}
+
+	// Writable deriveds: Svelte Flow writes a drag back through the binding, and the next graph or
+	// selection replaces it.
+	let nodes = $derived(graph ? build(graph, selectedId) : []);
+	let edges = $derived<Edge[]>(
+		(graph?.edges ?? []).map((e, i) => ({
 			id: `e${i}`,
 			source: e.source,
 			target: e.target,
 			label: e.relation,
 			animated: e.relation !== 'parent' && e.relation !== 'project',
-		}));
-		fitKey++;
-	}
+		})),
+	);
+	// The canvas re-frames when the object, its graph's shape or the selection changes.
+	const fitTrigger = $derived(
+		`${dataset}:${graph?.nodes.length ?? 0}:${graph?.edges.length ?? 0}:${selectedId ?? ''}`,
+	);
 
-	async function load(): Promise<void> {
-		const current = dataset;
-		const res = await fetchAccessGraph({ kind: 'table', id: current });
-		// The caller's own verdicts, for the #143 gate on Grant/Revoke below. Fire-and-forget with the
-		// same latest-wins guard: a failed permission read must not blank the graph, it just leaves the
-		// verdicts unknown, which renders the controls live.
-		void fetchMyPermissions({ kind: 'table', id: current }).then((r) => {
-			if (dataset !== current) return;
-			perms = r.ok ? { for: current, map: r.data.permissions } : null;
-		});
-		if (dataset !== current) return; // navigated away — drop stale
-		if (res.ok) {
-			graph = res.data;
-			status = 'ok';
-			rebuild(res.data);
-		} else if (res.status === 401 || res.status === 403) {
-			status = 'denied';
-		} else {
-			status = 'offline';
-		}
+	/** After a grant or revoke: read the graph and the verdicts again (the write refreshes the graph
+	 *  itself, so that read is joined rather than repeated). */
+	function reread(): void {
+		fetchAccessGraph(target);
+		fetchMyPermissions(target);
 	}
-
-	$effect(() => {
-		void dataset;
-		status = 'loading';
-		graph = null;
-		selectedId = null;
-		load();
-	});
 
 	function selectNode(e: { node: { id: string; data: unknown } }): void {
-		selectedId = e.node.id;
+		selection = { for: dataset, id: e.node.id };
 		const t = (e.node.data as { fgaType?: string }).fgaType ?? '';
 		// clicking a subject prefills the grant form with its node id: a user's is the OpenFGA user the store holds,
 		// which a grant names as written (the catalog reads a `user:` grantee as that stored id)
 		if (['user', 'role'].includes(t)) {
 			mgUser = e.node.id;
 		}
-		if (graph) rebuild(graph);
 	}
 </script>
 
@@ -135,18 +128,7 @@
 		<div class="empty">Loading the authorization graph…</div>
 	{:else}
 		<div class="canvas">
-			<SvelteFlow
-				bind:nodes
-				bind:edges
-				{nodeTypes}
-				colorMode="dark"
-				fitView
-				onnodeclick={selectNode}
-			>
-				<Background variant={BackgroundVariant.Dots} gap={16} />
-				<Controls />
-				<FlowAutoFit trigger={`${dataset}:${fitKey}`} />
-			</SvelteFlow>
+			<GraphCanvas bind:nodes bind:edges {nodeTypes} {fitTrigger} onnodeclick={selectNode} />
 		</div>
 
 		<!-- The grant form the grants panel renders too, so both offer the same rungs behind the same
@@ -158,7 +140,7 @@
 			knownSubjects={(graph?.nodes ?? []).map((n) => n.id)}
 			grant={(user, relation) => grantAccess({ kind: 'table', id: dataset, user, relation })}
 			revoke={(user, relation) => revokeAccess({ kind: 'table', id: dataset, user, relation })}
-			onmutated={load}
+			onmutated={reread}
 		/>
 	{/if}
 </div>

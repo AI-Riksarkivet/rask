@@ -8,7 +8,9 @@
 	// Collapsed by default: one review round-trip per object, with definitive outcomes (the ACL,
 	// 401/403/406) cached and transient failures (offline, 5xx) retried on the next open.
 	import { ChevronRight, ShieldCheck } from '@lucide/svelte';
-	import { Select } from '@riksarkivet/ui/select';
+	import { buttonVariants } from '@riksarkivet/ui/button';
+	import * as Collapsible from '@riksarkivet/ui/collapsible';
+	import { cn } from '@riksarkivet/ui/utils';
 	import type { ApiResult } from '#lib/api/client.ts';
 	import type {
 		AccessCheck,
@@ -21,6 +23,7 @@
 	import { hasAccessCheck } from '#lib/data/namespace.ts';
 	import { GrantForm } from '../grant-form/index.ts';
 	import Subject from '../identity/subject.svelte';
+	import AccessCheckForm from './access-check.svelte';
 
 	/** The catalog calls the panel makes: the review, a check, and grant/revoke, each gated by the
 	 *  catalog. */
@@ -71,7 +74,7 @@
 
 	const checkClient = $derived(hasAccessCheck(kind) ? (client.checkAccess ?? null) : null);
 
-	// #143: the caller's own verdicts, KEYED BY DATASET like `review.for` / `simFor` / `mgFor` above.
+	// #143: the caller's own verdicts, KEYED BY DATASET like `review.for` below.
 	// An unkeyed field would let one object's permissions gate another's buttons on navigation — the
 	// exact cross-dataset bleed every other piece of state in this component is keyed to avoid.
 	let perms = $state<{ for: string; map: Record<string, boolean> } | null>(null);
@@ -92,24 +95,18 @@
 	let failedFor = $state<string | null>(null); // transient failure — never cached, reopen retries
 	let failedDetail = $state('');
 
-	// #68 access-check simulator — probe an arbitrary (user, relation) against THIS dataset. Gated at the
-	// catalog on `can_review_access`, as the review is. Keyed by dataset so a verdict never bleeds across nav.
-	let simUser = $state('');
-	let simRelation = $state('');
-	let simFor = $state<string | null>(null);
-	let simVerdict = $state<{ user: string; relation: string; allowed: boolean } | null>(null);
-	let simBusy = $state(false);
-	let simError = $state<string | null>(null);
-
-	// #72 manage-access form — grant/revoke a base rung to a subject. Keyed by dataset like the simulator.
+	// #72 manage-access form — grant/revoke a base rung to a subject.
 	let mgUser = $state('');
+
+	// The access check's draft subject and relation. Its form is unmounted with the collapsible, so the
+	// draft lives here, keyed by the object: closing and reopening the review keeps it, and another
+	// object starts blank.
+	let checkDraft = $state<{ for: string; user: string; relation: string } | null>(null);
+	const checkUser = $derived(checkDraft?.for === dataset ? checkDraft.user : '');
+	const checkRelation = $derived(checkDraft?.for === dataset ? checkDraft.relation : '');
 
 	const open = $derived(openedFor === dataset);
 	const shown = $derived(review?.for === dataset ? review : null);
-
-	// Declared AFTER `shown`, which it reads. `$derived` is lazy so the original order worked at
-	// runtime, but TypeScript reported a genuine use-before-declaration and a gate that has to be
-	// argued with is a gate that stops being read.
 
 	const loading = $derived(loadingFor === dataset);
 	const failed = $derived(failedFor === dataset);
@@ -160,36 +157,8 @@
 	// Hide the empty rows: a relation nobody holds is noise in a review of who has access.
 	const held = $derived(shown?.access ? shown.access.grants.filter((g) => g.users.length > 0) : []);
 	// Every can_* action the model defines on this type (incl. ones nobody holds) — the options you can
-	// simulate, taken from the unfiltered grants the review already fetched. Verdict keyed to this dataset.
+	// simulate, taken from the unfiltered grants the review already fetched.
 	const relations = $derived(shown?.access ? shown.access.grants.map((g) => g.relation) : []);
-	const simVerdictShown = $derived(simFor === dataset ? simVerdict : null);
-
-	async function runCheck(): Promise<void> {
-		const user = simUser.trim();
-		const check = checkClient;
-		if (simBusy || !user || !simRelation || !check || !hasAccessCheck(kind)) return;
-		simBusy = true;
-		simError = null;
-		const current = dataset;
-		try {
-			const res = await check(kind, current, user, simRelation);
-			if (dataset !== current) return; // navigated away — drop the stale verdict
-			if (res.ok) {
-				simVerdict = {
-					user: res.data.user,
-					relation: res.data.relation,
-					allowed: res.data.allowed,
-				};
-				simFor = current;
-			} else if (res.status === 401 || res.status === 403) {
-				simError = `Simulating access needs the modifier rung on this ${kind}.`;
-			} else {
-				simError = `Check failed (HTTP ${res.status}).`;
-			}
-		} finally {
-			simBusy = false;
-		}
-	}
 
 	// #72 grant or revoke a base rung, then re-fetch the review so the change is visible immediately.
 	// Named rather than inlined into `onmutated=` deliberately: this comment described a handler that
@@ -206,13 +175,27 @@
 	}
 </script>
 
-<div class="grants">
-	<button class="head" onclick={toggle} aria-expanded={open}>
-		<span class={['chev', { open }]}><ChevronRight size={12} /></span>
+<!-- A disclosure: opening it is what starts the review, so `onOpenChange` runs `toggle`, and `open`
+     stays the one keyed by the dataset. -->
+<Collapsible.Root
+	{open}
+	onOpenChange={() => void toggle()}
+	class="mt-0.5 mb-2.5 flex flex-col gap-1.5"
+>
+	<Collapsible.Trigger
+		class={cn(
+			buttonVariants({ variant: 'ghost', size: 'sm' }),
+			'group/review text-muted-foreground self-start',
+		)}
+	>
+		<ChevronRight
+			size={12}
+			class="transition-transform duration-(--duration-fast) group-data-[state=open]/review:rotate-90"
+		/>
 		<ShieldCheck size={12} />
 		<span>Access review</span>
-	</button>
-	{#if open}
+	</Collapsible.Trigger>
+	<Collapsible.Content class="flex flex-col gap-1.5">
 		{#if loading}
 			<p class="mut">Reviewing access…</p>
 		{:else if failed}
@@ -253,49 +236,27 @@
 				</table>
 			{/if}
 
-			{#if checkClient}
-				<div class="sim">
-					<div class="sim-head">Check a specific access</div>
-					<div class="sim-form">
-						<input
-							class="mono"
-							placeholder="principal (idp~user id), or role:…#assignee"
-							bind:value={simUser}
-							onkeydown={(e) => e.key === 'Enter' && runCheck()}
-						/>
-						<Select
-							bind:value={simRelation}
-							ariaLabel="Simulate action"
-							placeholder="action…"
-							options={relations.map((r) => ({ value: r, label: r }))}
-						/>
-						<button
-							class="btn"
-							disabled={simBusy || !simUser.trim() || !simRelation}
-							onclick={runCheck}
-						>
-							{simBusy ? '…' : 'Check'}
-						</button>
-					</div>
-					{#if simError}
-						<p class="mut">{simError}</p>
-					{:else if simVerdictShown}
-						<p
-							class={[
-								'verdict',
-								{ allow: simVerdictShown.allowed, deny: !simVerdictShown.allowed },
-							]}
-						>
-							<Subject value={simVerdictShown.user} />
-							{simVerdictShown.allowed ? 'can' : 'cannot'}
-							<span class="mono">{simVerdictShown.relation}</span> on this {kind}.
-						</p>
-					{/if}
-				</div>
+			{#if checkClient && hasAccessCheck(kind)}
+				<AccessCheckForm
+					{kind}
+					{dataset}
+					{relations}
+					check={checkClient}
+					bind:user={
+						() => checkUser,
+						(user) => (checkDraft = { for: dataset, user, relation: checkRelation })
+					}
+					bind:relation={
+						() => checkRelation,
+						(relation) => (checkDraft = { for: dataset, user: checkUser, relation })
+					}
+				/>
 			{/if}
 
-			<div class="sim">
-				<div class="sim-head">Manage access (grant / revoke)</div>
+			<div class="border-border/55 mt-2.5 border-t pt-2">
+				<div class="text-muted-foreground mb-1.5 text-[11px] tracking-wider uppercase">
+					Manage access (grant / revoke)
+				</div>
 				<!-- The grant form the access graph renders too. `knownSubjects` comes from the review this
 				     panel already renders, the only subject directory there is. -->
 				<!-- Keyed by the object: a rung picked for one is no draft for the next. -->
@@ -312,38 +273,10 @@
 				{/key}
 			</div>
 		{/if}
-	{/if}
-</div>
+	</Collapsible.Content>
+</Collapsible.Root>
 
 <style>
-	.grants {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-		margin: 2px 0 10px;
-	}
-	.head {
-		display: inline-flex;
-		align-items: center;
-		gap: 5px;
-		background: none;
-		border: none;
-		padding: 0;
-		color: var(--muted-foreground);
-		font: inherit;
-		font-size: 12px;
-		cursor: pointer;
-	}
-	.head:hover {
-		color: var(--foreground);
-	}
-	.chev {
-		display: inline-flex;
-		transition: transform 0.12s ease;
-	}
-	.chev.open {
-		transform: rotate(90deg);
-	}
 	.mut {
 		color: var(--muted-foreground);
 		font-size: 12px;
@@ -383,58 +316,5 @@
 	}
 	.who.wild {
 		border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
-	}
-	.sim {
-		margin-top: 10px;
-		padding-top: 8px;
-		border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
-	}
-	.sim-head {
-		color: var(--muted-foreground);
-		font-size: 11px;
-		text-transform: uppercase;
-		letter-spacing: 0.05em;
-		margin-bottom: 5px;
-	}
-	.sim-form {
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-		align-items: center;
-	}
-	.sim-form input {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 7px;
-	}
-	.sim-form input {
-		flex: 1 1 220px;
-		min-width: 160px;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 12px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.verdict {
-		font-size: 12px;
-		margin: 8px 0 0;
-	}
-	.verdict.allow {
-		color: var(--success);
-	}
-	.verdict.deny {
-		color: var(--destructive);
 	}
 </style>

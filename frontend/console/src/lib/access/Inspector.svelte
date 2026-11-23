@@ -2,33 +2,19 @@
 	// The right-hand drawer: the verdict, the selected node's raw tuples, and the model — the three
 	// things that were separate tabs. They live here BESIDE the canvas, not instead of it, so reading a
 	// tuple never costs you the graph you were reading it about.
-	import { AlertDialog } from '@riksarkivet/ui/alert-dialog';
 	import { Badge } from '@riksarkivet/ui/badge';
-	import { Button } from '@riksarkivet/ui/button';
-	import { Dialog } from '@riksarkivet/ui/dialog';
-	import { Input } from '@riksarkivet/ui/input';
+	import { Button, buttonVariants } from '@riksarkivet/ui/button';
+	import * as Collapsible from '@riksarkivet/ui/collapsible';
 	import { Skeleton } from '@riksarkivet/ui/skeleton';
-	import {
-		Check,
-		CircleCheck,
-		CircleX,
-		ClipboardCopy,
-		Plus,
-		ShieldAlert,
-		Trash2,
-		TriangleAlert,
-	} from '@lucide/svelte';
-	import { assertionName, toFgaYaml } from './assertion';
+	import { cn } from '@riksarkivet/ui/utils';
+	import { Plus, ShieldAlert, Trash2 } from '@lucide/svelte';
 	import { Subject } from './identity/index.ts';
 	import { timeBoxLabel } from './time-box.ts';
-	import { namedObject, type Tuple } from '../access';
-	import {
-		deleteTuple,
-		fetchObjectTuples,
-		listUsers,
-		simulate,
-		writeTuple,
-	} from '../remote/access.api';
+	import type { Tuple } from '../access';
+	import { fetchObjectTuples } from '../remote/access.api';
+	import GrantDialog from './InspectorGrantDialog.svelte';
+	import RevokeDialog from './InspectorRevokeDialog.svelte';
+	import Verdict from './InspectorVerdict.svelte';
 
 	type Props = {
 		selected: string | null;
@@ -68,307 +54,32 @@
 		onchanged,
 	}: Props = $props();
 
-	let tuples = $state<Tuple[] | null>(null);
-	let truncated = $state(false);
-	let status = $state(0);
+	// The tuples stored on the selected node: one read per object, held here and read below.
+	const tuplesRead = $derived(selected ? fetchObjectTuples(selected) : null);
+	const tuplesResult = $derived(tuplesRead?.current);
+	const tuples = $derived(tuplesResult?.ok ? tuplesResult.data.tuples : null);
+	const truncated = $derived(tuplesResult?.ok ? tuplesResult.data.truncated : false);
+	/** 0 while the first answer is out, else the answer's status. */
+	const status = $derived(
+		tuplesResult === undefined ? 0 : tuplesResult.ok ? 200 : tuplesResult.status,
+	);
+
 	let message = $state<{ ok: boolean; text: string } | null>(null);
-	let busy = $state(false);
-	let showModel = $state(false);
-	let inflight = 0;
-
-	async function loadTuples(): Promise<void> {
-		if (!selected) {
-			tuples = null;
-			return;
-		}
-		const seq = ++inflight;
-		const res = await fetchObjectTuples(selected);
-		if (seq !== inflight) return; // latest-wins: a fast click-through must not resurrect a stale node
-		if (!res.ok) {
-			tuples = null;
-			status = res.status;
-			return;
-		}
-		tuples = res.data.tuples;
-		truncated = res.data.truncated;
-		status = 200;
-	}
-
-	$effect(() => {
-		void selected;
-		tuples = null;
-		status = 0;
-		loadTuples();
-	});
-
-	// ── revoke, with the blast radius measured BEFORE the write ──
-	// "Are you sure?" is not an answer to "how many". A tuple high in the hierarchy can cut access for
-	// every principal below it, and the only honest confirm names that number first.
-	/**
-	 * The verdict, rendered as a committable `.fga.yaml` test.
-	 *
-	 * Distinguishing a check RUN (a fact about this cluster now) from one COMMITTED (a fact CI enforces)
-	 * is the whole point — they are not the same claim, and only the second survives the next deploy.
-	 */
-	const assertionYaml = $derived.by(() => {
-		if (!verdict) return '';
-		const a = {
-			user: verdict.user,
-			object: verdict.object,
-			relation: verdict.relation,
-			allowed: verdict.allowed,
-		};
-		return toFgaYaml(assertionName(a), [a], supportingTuples);
-	});
-	let copied = $state(false);
-
-	async function copyAssertion(): Promise<void> {
-		if (!assertionYaml) return;
-		try {
-			await navigator.clipboard.writeText(assertionYaml);
-			copied = true;
-			setTimeout(() => (copied = false), 2000);
-		} catch (err) {
-			// A denied clipboard permission is normal, not exceptional — the <pre> below is always
-			// present and selectable, so the export never depends on the API being available.
-			console.error(`clipboard write failed: ${String(err)}`);
-		}
-	}
-
-	let revokeTarget = $state<Tuple | null>(null);
-	let blast = $state<{ count: number; truncated: boolean } | null>(null);
-	let blastPending = $state(false);
-
-	async function askRevoke(t: Tuple): Promise<void> {
-		revokeTarget = t;
-		blast = null;
-		blastPending = true;
-		const res = await listUsers({ object: t.object, relation: t.relation });
-		blastPending = false;
-		if (revokeTarget !== t) return;
-		if (!res.ok) return; // the dialog says "could not measure" — never a reassuring zero
-		blast = { count: res.data.users.length, truncated: res.data.truncated };
-	}
-
-	async function revoke(): Promise<void> {
-		const t = revokeTarget;
-		if (!t || busy) return;
-		busy = true;
-		try {
-			const res = await deleteTuple(t);
-			message = res.ok
-				? { ok: true, text: `Revoked (${t.user}, ${t.relation}, ${t.object}).` }
-				: { ok: false, text: res.status === 403 ? 'Denied: estate-admin only.' : res.detail };
-			if (res.ok) {
-				await loadTuples();
-				onchanged();
-			}
-		} finally {
-			busy = false;
-			revokeTarget = null;
-			blast = null;
-		}
-	}
-
-	// ── grant ──
 	let grantOpen = $state(false);
-	let gUser = $state('');
-	let gRelation = $state('');
-	/** The condition to attach, '' for a permanent grant. */
-	let gCondition = $state('');
-	/** Parameter values, keyed by name. Only the tuple-side parameters are collected — `current_time`
-	 *  is the CALLER's clock at check time and must never be frozen into the grant. */
-	let gParams = $state<Record<string, string>>({});
+	let showModel = $state(false);
+	let revokeTarget = $state<Tuple | null>(null);
 
-	/** Conditions this (type, relation) actually accepts, per the model. Empty ⇒ permanent-only, and the
-	 *  control is not offered at all rather than offered and then rejected by the catalog. */
-	const conditionChoices = $derived(Object.keys(modelConditions));
-
-	/** The parameters the chosen condition needs FROM THE GRANT. `current_time` is excluded on purpose:
-	 *  it is supplied per check, so collecting it here would pin "now" at the moment of granting and the
-	 *  window would be evaluated against a frozen clock forever. */
-	const conditionParams = $derived(
-		Object.entries(modelConditions[gCondition] ?? {}).filter(([name]) => name !== 'current_time'),
-	);
-
-	/** A `duration` parameter is the one an operator actually thinks in, so it gets presets rather than
-	 *  a free-text box that has to be taught Go duration syntax by a 400. */
-	const DURATION_PRESETS = ['1h', '4h', '8h', '24h', '72h', '168h'];
-
-	/** Whether the chosen condition has what the grant must carry. A blank `timestamp` is filled with
-	 *  the moment of writing (see `grant`), so only the other parameters must be given; a time-boxed
-	 *  grant sent without its duration is a write the catalog refuses with a 400. The catalog still
-	 *  decides every write: this only keeps the dialog from sending one it knows is incomplete. */
-	const conditionReady = $derived(
-		!gCondition ||
-			conditionParams.every(
-				([name, type]) => type === 'timestamp' || (gParams[name] ?? '').trim().length > 0,
-			),
-	);
-
-	/**
-	 * What the proposed grant would actually change, answered by the store BEFORE anything is written.
-	 *
-	 * `allowed` on its own is unusable here: a grant that unlocks access and a grant that changes
-	 * nothing both come back true. Only the delta against `baseline` separates them, and "this grant is
-	 * a no-op" turns out to be the more common finding — a concentric model means the subject often
-	 * already holds the access by inheritance, and granting again just adds a tuple somebody must later
-	 * reason about when revoking.
-	 */
-	let preview = $state<{ allowed: boolean; baseline: boolean } | null>(null);
-	let previewing = $state(false);
-	let previewFailed = $state(false);
-
-	async function runPreview(): Promise<void> {
-		const subject = gUser.trim();
-		const rel = gRelation.trim();
-		if (!subject || !rel || !selected || !conditionReady) return;
-		previewing = true;
-		preview = null;
-		previewFailed = false;
-		try {
-			// The question is deliberately about the RELATION BEING GRANTED, on the object in hand —
-			// "would writing this tuple make this true" — rather than some derived `can_*` the dialog
-			// would have to guess at.
-			const res = await simulate({
-				user: subject,
-				relation: rel,
-				object: selected,
-				hypothetical: [{ user: subject, relation: rel, object: selected }],
-			});
-			if (!res.ok) {
-				previewFailed = true;
-				return;
-			}
-			preview = { allowed: res.data.allowed, baseline: res.data.baseline };
-		} catch (err) {
-			// A rejected remote call is a transport failure, not a verdict — the dialog says so.
-			console.error(`simulate transport failure: ${String(err)}`);
-			previewFailed = true;
-		} finally {
-			previewing = false;
-		}
-	}
-
-	async function grant(): Promise<void> {
-		const t = {
-			user: gUser.trim(),
-			relation: gRelation.trim(),
-			object: selected ?? '',
-			name: selectedName,
-			// Only the tuple-side parameters. `grant_time` defaults to NOW at the moment of writing —
-			// that is what "starting now, for 4 hours" means, and asking an operator to type an ISO
-			// timestamp for the present instant is friction with no decision in it.
-			...(gCondition
-				? {
-						condition: {
-							name: gCondition,
-							context: Object.fromEntries(
-								conditionParams.map(([name, type]) => [
-									name,
-									(gParams[name] ?? '').trim() ||
-										(type === 'timestamp' ? new Date().toISOString() : ''),
-								]),
-							),
-						},
-					}
-				: {}),
-		};
-		// The form also submits on Enter, so the button's guard is repeated here.
-		if (busy || !conditionReady || !t.user || !t.relation || !t.object) return;
-		busy = true;
-		try {
-			const res = await writeTuple(t);
-			message = res.ok
-				? {
-						ok: true,
-						text: `Wrote (${t.user}, ${t.relation}, ${namedObject(t.object, t.name)}).`,
-					}
-				: { ok: false, text: res.status === 403 ? 'Denied: estate-admin only.' : res.detail };
-			if (res.ok) {
-				grantOpen = false;
-				gUser = gRelation = gCondition = '';
-				gParams = {};
-				preview = null;
-				await loadTuples();
-				onchanged();
-			}
-		} finally {
-			busy = false;
-		}
+	/** A write's outcome: say it, and on success read the node's tuples again and tell the explorer. */
+	async function written(outcome: { ok: boolean; text: string }): Promise<void> {
+		message = outcome;
+		if (!outcome.ok) return;
+		await tuplesRead?.refresh();
+		onchanged();
 	}
 </script>
 
 <aside class="flex w-96 shrink-0 flex-col gap-4 overflow-y-auto border-l border-border pl-4">
-	{#if verdict}
-		<section
-			class="flex flex-col gap-2 rounded-md border p-3 {verdict.allowed
-				? 'border-success/50 bg-success/10'
-				: 'border-destructive/50 bg-destructive/10'}"
-		>
-			<div class="flex items-center gap-2">
-				{#if verdict.allowed}
-					<CircleCheck size={20} class="text-success" />
-					<span class="text-lg font-bold tracking-wide text-success">ALLOWED</span>
-				{:else}
-					<CircleX size={20} class="text-destructive" />
-					<span class="text-lg font-bold tracking-wide text-destructive">DENIED</span>
-				{/if}
-			</div>
-			<p class="font-mono text-[11px] text-muted-foreground">
-				({verdict.user}, {verdict.relation}, {verdict.object})
-			</p>
-			{#if chain.length === 0}
-				<p class="text-[11px] text-muted-foreground">
-					{verdict.allowed
-						? 'Allowed, but the store returned no derivation — the grant is direct.'
-						: 'Denied, and nothing in the model derives it.'}
-				</p>
-			{/if}
-		</section>
-	{/if}
-
-	{#if verdict}
-		<section class="flex flex-col gap-1.5">
-			<div class="flex items-center justify-between gap-2">
-				<h3 class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-					Commit as a test
-				</h3>
-				<Button size="sm" variant="outline" class="h-6 text-[11px]" onclick={copyAssertion}>
-					{#if copied}<Check size={11} /> Copied{:else}<ClipboardCopy size={11} /> Copy{/if}
-				</Button>
-			</div>
-			<p class="text-[11px] text-muted-foreground">
-				This verdict is true <em>now</em>. Paste into
-				<span class="font-mono">model.fga.yaml</span> and CI enforces it on every change.
-			</p>
-			<pre
-				class="overflow-x-auto rounded border border-border bg-muted p-2 font-mono text-[10px] leading-relaxed">{assertionYaml}</pre>
-		</section>
-	{/if}
-
-	<!-- The result summary is OUTSIDE the verdict block on purpose. Only "why" produces a verdict;
-	     "what can" and "who can" produce an answer with no boolean attached, and rendering their
-	     summary inside `{#if verdict}` meant those two queries silently displayed nothing at all
-	     beside the canvas. Found by the e2e spec, which is the only place the three shapes are
-	     exercised against one component. -->
-	{#if chain.length}
-		<section class="flex flex-col gap-1">
-			<h3 class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-				{verdict ? 'Derivation' : 'Result'}
-			</h3>
-			<!-- Hop by hop. A permission that resolves through three objects looks identical to a direct
-			     grant in a tuple table, and they are not the same thing to revoke. -->
-			<ol class="flex flex-col gap-0.5">
-				{#each chain as step, i (step)}
-					<li class="flex gap-1.5 font-mono text-[11px]">
-						{#if verdict}<span class="tabular-nums text-muted-foreground">{i + 1}.</span>{/if}
-						<span class={step.includes('EXCLUDED') ? 'text-destructive' : ''}>{step}</span>
-					</li>
-				{/each}
-			</ol>
-		</section>
-	{/if}
+	<Verdict {verdict} {chain} {supportingTuples} />
 
 	<section class="flex flex-col gap-2">
 		<div class="flex items-center justify-between gap-2">
@@ -418,9 +129,8 @@
 							<Button
 								size="sm"
 								variant="ghost"
-								disabled={busy}
 								aria-label="Revoke {t.user} {t.relation} {t.object}"
-								onclick={() => askRevoke(t)}
+								onclick={() => (revokeTarget = t)}
 							>
 								<Trash2 size={12} />
 							</Button>
@@ -441,300 +151,35 @@
 	</section>
 
 	{#if dsl}
-		<section class="flex flex-col gap-2">
+		<Collapsible.Root bind:open={showModel} class="flex flex-col gap-2">
 			<!-- "Model DSL", not "Model": the shared sidebar already owns a nav group called "Models", and
 			     a bare "Model" collides with it for anything selecting by accessible name. -->
-			<button
-				class="flex items-center justify-between text-xs font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
-				aria-expanded={showModel}
-				onclick={() => (showModel = !showModel)}
+			<Collapsible.Trigger
+				class={cn(
+					buttonVariants({ variant: 'ghost', size: 'sm' }),
+					'text-muted-foreground justify-between',
+				)}
 			>
 				Model DSL {showModel ? '−' : '+'}
-			</button>
-			{#if showModel}
+			</Collapsible.Trigger>
+			<Collapsible.Content>
 				<!-- Read-only, permanently. The model lives in three checked-in files with a CI drift gate;
 				     a UI that mutated it would make that gate a liar. Tuples are data; the model is code. -->
 				<pre
 					class="max-h-72 overflow-auto rounded border border-border bg-muted p-2 font-mono text-[10px] leading-relaxed">{dsl}</pre>
-			{/if}
-		</section>
+			</Collapsible.Content>
+		</Collapsible.Root>
 	{/if}
 </aside>
 
-<Dialog.Root bind:open={grantOpen}>
-	<Dialog.Content>
-		<Dialog.Title>Grant on {selected}</Dialog.Title>
-		<Dialog.Description>
-			Writes one relationship tuple to the live store. Only a directly-assignable relation is
-			accepted — a derived <span class="font-mono">can_*</span> is rejected by the catalog.
-		</Dialog.Description>
-		<form
-			class="flex flex-col gap-2"
-			onsubmit={(e) => {
-				e.preventDefault();
-				grant();
-			}}
-		>
-			<div class="flex flex-col gap-1">
-				<div class="flex items-center justify-between gap-2">
-					<span class="text-xs font-medium">Subject</span>
-					{#if mySub}
-						<Button
-							size="sm"
-							variant="ghost"
-							type="button"
-							class="h-6 text-[11px]"
-							onclick={() => {
-								gUser = mySub ?? '';
-								preview = null;
-							}}
-						>
-							use my identity
-						</Button>
-					{/if}
-				</div>
-				<Input
-					bind:value={gUser}
-					class="font-mono text-xs"
-					placeholder="&lt;idp-id&gt;~&lt;user id&gt;"
-					aria-label="Grant subject"
-					oninput={() => {
-						preview = null;
-						previewFailed = false;
-					}}
-				/>
-				<!-- The single most confusing thing about this store, stated rather than implied: a person
-				     is a PRINCIPAL, the identity provider that vouched for them and the id it reports
-				     (LH-063), not a username, and the catalog refuses a bare name no token could prove. -->
-				<p class="text-[11px] text-muted-foreground">
-					<span class="font-mono">&lt;idp-id&gt;~&lt;user id&gt;</span> — not a username. Or a
-					userset:
-					<span class="font-mono">role:&lt;id&gt;#assignee</span>.
-				</p>
-			</div>
+<GrantDialog
+	bind:open={grantOpen}
+	{selected}
+	{selectedName}
+	{assignableRelations}
+	{mySub}
+	{modelConditions}
+	ondone={written}
+/>
 
-			<div class="flex flex-col gap-1">
-				<span class="text-xs font-medium">Relation</span>
-				{#if assignableRelations.length}
-					<!-- Driven by the MODEL, so an ungrantable relation is unrepresentable rather than merely
-					     discouraged. A derived `can_*` is computed and the catalog refuses to write it; a
-					     free-text box taught that rule via a 400 one round trip later. -->
-					<select
-						bind:value={gRelation}
-						class="rounded-md border border-border bg-background px-2 py-1.5 font-mono text-xs"
-						aria-label="Grant relation"
-						onchange={() => {
-							preview = null;
-							previewFailed = false;
-						}}
-					>
-						<option value="" disabled>choose a relation…</option>
-						{#each assignableRelations as r (r)}
-							<option value={r}>{r}</option>
-						{/each}
-					</select>
-					<p class="text-[11px] text-muted-foreground">
-						Only directly-assignable relations on
-						<span class="font-mono">{selected?.split(':')[0]}</span>. A derived
-						<span class="font-mono">can_*</span> is computed by the model and cannot be granted.
-					</p>
-
-					<!-- ── time-boxed grants ──────────────────────────────────────────────────────────────────
-			     A grant that expires on its own. The failure this kills is the contractor who still has
-			     `writer` on bronze eight months after the engagement ended, because revoking was a
-			     separate task nobody owned. The condition list and its parameters come from the MODEL
-			     (GET /management/v1/access/model), so an unsupported condition or a missing operand is
-			     unrepresentable here rather than a 400 one round trip later. -->
-					{#if conditionChoices.length}
-						<div class="flex flex-col gap-1 rounded-md border border-border p-2">
-							<label class="flex items-center gap-2 text-xs font-medium">
-								<input
-									type="checkbox"
-									checked={gCondition !== ''}
-									aria-label="Time-box this grant"
-									onchange={(e) => {
-										gCondition = e.currentTarget.checked ? (conditionChoices[0] ?? '') : '';
-										gParams = {};
-										preview = null;
-									}}
-								/>
-								Time-box this grant
-							</label>
-
-							{#if gCondition}
-								<p class="text-[11px] text-muted-foreground">
-									Expires by itself — nobody has to remember to revoke it. Evaluated by
-									<span class="font-mono">{gCondition}</span> at every check.
-								</p>
-								{#each conditionParams as [name, type] (name)}
-									<div class="flex flex-col gap-1 pt-1">
-										<span class="text-[11px] font-medium">
-											{name}
-											<span class="font-normal text-muted-foreground">({type})</span>
-										</span>
-										{#if type === 'duration'}
-											<!-- Presets, because a duration is the thing an operator actually decides. A
-									     free-text box here means learning Go duration syntax from a rejection. -->
-											<div class="flex flex-wrap gap-1">
-												{#each DURATION_PRESETS as preset (preset)}
-													<Button
-														size="sm"
-														variant={gParams[name] === preset ? 'default' : 'outline'}
-														onclick={() => {
-															gParams = { ...gParams, [name]: preset };
-															preview = null;
-														}}
-													>
-														{preset}
-													</Button>
-												{/each}
-											</div>
-										{:else}
-											<Input
-												value={gParams[name] ?? ''}
-												class="font-mono text-xs"
-												placeholder={type === 'timestamp' ? 'now (leave blank)' : type}
-												aria-label="Condition parameter {name}"
-												oninput={(e) => {
-													gParams = { ...gParams, [name]: e.currentTarget.value };
-													preview = null;
-												}}
-											/>
-											{#if type === 'timestamp'}
-												<p class="text-[11px] text-muted-foreground">
-													Blank means <span class="font-mono">now</span> — the window opens when you grant.
-												</p>
-											{/if}
-										{/if}
-									</div>
-								{/each}
-							{/if}
-						</div>
-					{/if}
-				{:else}
-					<Input
-						bind:value={gRelation}
-						class="font-mono text-xs"
-						placeholder="reader"
-						aria-label="Grant relation"
-						oninput={() => {
-							preview = null;
-							previewFailed = false;
-						}}
-					/>
-				{/if}
-			</div>
-			<!-- ASSERT BEFORE YOU GRANT. Nothing is written: the store evaluates the tuple as a hypothesis
-			     and answers with the delta. Offered rather than forced, because a required round trip
-			     before every write turns a two-field dialog into a wizard. -->
-			<div class="flex flex-col gap-2 rounded-md border border-border p-2">
-				<div class="flex items-center justify-between gap-2">
-					<span class="text-xs font-medium">Effect</span>
-					<Button
-						size="sm"
-						variant="outline"
-						type="button"
-						disabled={previewing || !conditionReady || !gUser.trim() || !gRelation.trim()}
-						onclick={runPreview}
-					>
-						{previewing ? 'Checking…' : 'Simulate'}
-					</Button>
-				</div>
-				{#if previewFailed}
-					<p class="text-[11px] text-muted-foreground">
-						Could not simulate — the store did not answer. Granting anyway is still possible; its
-						effect is simply unknown.
-					</p>
-				{:else if preview === null}
-					<p class="text-[11px] text-muted-foreground">
-						Ask the store what this would change, without writing it.
-					</p>
-				{:else if preview.baseline}
-					<!-- The finding people least expect: in a concentric model the subject often already
-					     holds the access by inheritance, so the grant adds a tuple that changes nothing and
-					     that someone must later reason about when revoking. -->
-					<p class="text-[11px] text-warning">
-						<strong>No change.</strong> This subject already holds
-						<span class="font-mono">{gRelation}</span> here — inherited, not stored. The tuple would be
-						redundant.
-					</p>
-				{:else if preview.allowed}
-					<p class="text-[11px] text-success">
-						<strong>Grants access.</strong> Currently denied; after this write
-						<span class="font-mono">{gRelation}</span> resolves.
-					</p>
-				{:else}
-					<p class="text-[11px] text-destructive">
-						<strong>Would not take effect.</strong> Even with this tuple the relation still does not resolve
-						— the model excludes it, or something else is required.
-					</p>
-				{/if}
-			</div>
-
-			<div class="mt-1 flex justify-end gap-2">
-				<Button variant="outline" type="button" disabled={busy} onclick={() => (grantOpen = false)}>
-					Cancel
-				</Button>
-				<Button
-					type="submit"
-					disabled={busy || !conditionReady || !gUser.trim() || !gRelation.trim()}
-				>
-					{busy ? '…' : 'Write tuple'}
-				</Button>
-			</div>
-		</form>
-	</Dialog.Content>
-</Dialog.Root>
-
-<AlertDialog.Root
-	open={revokeTarget !== null}
-	onOpenChange={(open) => {
-		if (!open) {
-			revokeTarget = null;
-			blast = null;
-		}
-	}}
->
-	<AlertDialog.Content>
-		<AlertDialog.Title>Revoke this tuple</AlertDialog.Title>
-		<AlertDialog.Description>
-			{#if revokeTarget}
-				<span class="font-mono"
-					>({revokeTarget.user}, {revokeTarget.relation}, {revokeTarget.object})</span
-				>
-			{/if}
-		</AlertDialog.Description>
-
-		<div class="flex items-start gap-2 rounded border border-warning/50 bg-warning/10 p-2 text-xs">
-			<TriangleAlert size={14} class="mt-0.5 shrink-0 text-warning" />
-			{#if blastPending}
-				<span>Measuring blast radius…</span>
-			{:else if blast}
-				<span>
-					<strong class="tabular-nums">{blast.count}</strong>
-					principal{blast.count === 1 ? '' : 's'} currently hold
-					<span class="font-mono">{revokeTarget?.relation}</span> here.
-					{#if blast.truncated}
-						At least — the store truncated the list, so the real number is higher.
-					{/if}
-				</span>
-			{:else}
-				<span>
-					Could not measure the blast radius. Revoking anyway may remove access for principals this
-					dialog cannot name.
-				</span>
-			{/if}
-		</div>
-
-		<div class="mt-2 flex justify-end gap-2">
-			<AlertDialog.Cancel disabled={busy}>Cancel</AlertDialog.Cancel>
-			<AlertDialog.Action
-				class="border-destructive/40 bg-destructive/15 text-destructive hover:bg-destructive/25"
-				disabled={busy}
-				onclick={revoke}
-			>
-				Revoke
-			</AlertDialog.Action>
-		</div>
-	</AlertDialog.Content>
-</AlertDialog.Root>
+<RevokeDialog target={revokeTarget} onclose={() => (revokeTarget = null)} ondone={written} />

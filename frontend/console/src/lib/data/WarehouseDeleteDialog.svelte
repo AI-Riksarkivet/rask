@@ -14,12 +14,13 @@
 	//   4. `force` appears ONLY when the refusal says the warehouse is protected, and says plainly what
 	//      it does and does not turn off: the protection flag, never the authorization.
 	//
-	// Nothing is remembered between opens. Consent given for one warehouse (or one attempt) is not
-	// consent for the next.
+	// Nothing is remembered between opens: the page mounts the dialog afresh for each. Consent given for
+	// one warehouse (or one attempt) is not consent for the next.
 	import { Dialog } from '@riksarkivet/ui/dialog';
 	import { Button } from '@riksarkivet/ui/button';
 	import { Checkbox } from '@riksarkivet/ui/checkbox';
 	import { Input } from '@riksarkivet/ui/input';
+	import { onDestroy } from 'svelte';
 	import { toast } from 'svelte-sonner';
 	import type { Warehouse } from './catalog';
 	import { deleteWarehouse } from './remote/warehouses.api';
@@ -54,28 +55,20 @@
 	const purgeArmed = $derived(purge && !!warehouse && bucketTyped === warehouse.bucket);
 	const canConfirmPurge = $derived(!!warehouse && bucketTyped === warehouse.bucket);
 
-	function reset(): void {
-		problem = null;
-		problemStatus = 0;
-		bound = [];
-		blockedByProtection = false;
-		cascade = false;
-		force = false;
-		purge = false;
-		bucketTyped = '';
-	}
+	// The page mounts this dialog once per opening, so nothing here outlives the opening it was made in.
+	// An answer can still land after its opening closed (Escape, the overlay or the close button while the
+	// delete is out): `closed` marks that, and such an answer sets no refusal, since the dialog it would
+	// argue in is gone. A delete that did go through is still reported, because the warehouse is gone.
+	let closed = false;
+	onDestroy(() => (closed = true));
 
-	// Cleared on every close, so the next opening starts clean whichever warehouse it is pointed at. The
-	// page opens the dialog by assignment, for which Bits reports no `onOpenChange`, so the closes are
-	// where a reset is observable: the ones Bits performs (Escape, the overlay, its close button) report
-	// through `onOpenChange`, and Cancel and a confirmed delete reset as they close.
 	function close(): void {
+		closed = true;
 		open = false;
-		reset();
 	}
 
 	function onOpenChange(next: boolean): void {
-		if (!next) reset();
+		if (!next) closed = true;
 	}
 
 	// The catalog's emptiness refusal names what blocks the delete in its `holds` member. The warehouse
@@ -111,10 +104,11 @@
 						: `bucket ${r.bucket} kept`,
 				];
 				toast.success(`Deleted warehouse ${r.id}: ${parts.join('; ')}.`);
-				close();
+				if (!closed) close();
 				ondeleted?.();
 				return;
 			}
+			if (closed) return;
 			problem = res.detail;
 			problemStatus = res.status;
 			if (res.status === 409) {
@@ -207,7 +201,7 @@
 							disabled={!canConfirmPurge}
 							aria-label="Purge the bucket permanently"
 						/>
-						<span class:dim={!canConfirmPurge}>Purge {warehouse.bucket} permanently</span>
+						<span class={{ dim: !canConfirmPurge }}>Purge {warehouse.bucket} permanently</span>
 					</label>
 				</section>
 			</div>

@@ -254,3 +254,24 @@ export function buildModelGraph(dsl: string): BuiltGraph {
 	}
 	return { nodes: nodeList, edges, typeCounts, relationCounts };
 }
+
+/**
+ * The relations the model defines on `type`, in the DSL's order. With `assignableOnly`, only the
+ * directly-assignable ones: a `define x: [ ... ]` line declares direct assignment, whereas a
+ * `define x: y or z` line is derived and the catalog refuses to write it.
+ */
+export function definedRelations(dsl: string, type: string, assignableOnly = false): string[] {
+	const lines = dsl.split('\n');
+	const start = lines.findIndex((line) => new RegExp(`^\\s*type\\s+${type}\\s*$`).test(line));
+	if (start < 0) return [];
+	const define = assignableOnly
+		? /^\s*define\s+([A-Za-z0-9_]+)\s*:\s*\[/
+		: /^\s*define\s+([A-Za-z0-9_]+)\s*:/;
+	const out: string[] = [];
+	for (const line of lines.slice(start + 1)) {
+		if (/^\s*type\s+\S+\s*$/.test(line)) break;
+		const match = define.exec(line);
+		if (match?.[1]) out.push(match[1]);
+	}
+	return out;
+}

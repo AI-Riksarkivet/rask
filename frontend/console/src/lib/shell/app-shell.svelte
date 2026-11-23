@@ -5,6 +5,7 @@
 	import AppSidebar from './app-sidebar.svelte';
 	import NavbarUser from './navbar-user.svelte';
 	import ActivityCenter from './activity-center.svelte';
+	import { Button } from '@riksarkivet/ui/button';
 	import * as DropdownMenu from '@riksarkivet/ui/dropdown-menu';
 	import { IsMobile, SHELL_COLLAPSE_BREAKPOINT } from '@riksarkivet/ui/sidebar';
 	import { ChevronRight, MoreHorizontal } from '@lucide/svelte';
@@ -163,15 +164,16 @@
 							<DropdownMenu.Root>
 								<DropdownMenu.Trigger>
 									{#snippet child({ props })}
-										<button
+										<Button
 											{...props}
-											type="button"
+											variant="ghost"
+											size="icon-xs"
 											data-slot="breadcrumb-ellipsis"
 											aria-label="Show hidden breadcrumbs"
-											class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 flex size-5 items-center justify-center rounded-sm transition-colors outline-none focus-visible:ring-3"
+											class="text-muted-foreground size-5"
 										>
 											<MoreHorizontal class="size-3.5" />
-										</button>
+										</Button>
 									{/snippet}
 								</DropdownMenu.Trigger>
 								<DropdownMenu.Content class="min-w-40 rounded-lg" side="bottom" align="start">

@@ -1,6 +1,8 @@
 <script lang="ts">
 	// The detail-page tab bar (goal cond 3): the design system's tab strip, with the panels left to the
 	// page (it renders the active one itself). Overview stays the default; Access hosts the FGA view.
+	// No `Tabs.Content` is rendered, so Bits sets no `aria-controls` on a trigger (it names a panel only
+	// once one registers, `bits-ui` tabs.svelte.js): nothing points at a missing element.
 	// State lives in the page (bindable), so a route can reset it on id change. A page that keeps the
 	// active tab in the URL passes `onselect` instead and owns the transition: binding AND writing the
 	// URL from an effect races on entry (the effect order decides whether a `?tab=` deep link survives).

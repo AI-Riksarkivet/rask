@@ -31,6 +31,8 @@
 	// offered, the gate each button names and the subject advisory are decided once. `grant` and
 	// `revoke` arrive as props, bound by the page to its object.
 	import { GatedAction } from '../gated-action/index.ts';
+	import { Button } from '@riksarkivet/ui/button';
+	import { Input } from '@riksarkivet/ui/input';
 	import { Select } from '@riksarkivet/ui/select';
 	import { TriangleAlert } from '@lucide/svelte';
 
@@ -200,8 +202,8 @@
 </script>
 
 <div data-slot="grant-form" class="form">
-	<input
-		class="mono"
+	<Input
+		class="min-w-0 flex-[1_1_220px] font-mono text-xs"
 		placeholder="principal (idp~user id), or role:…#assignee"
 		aria-label="Subject to grant to"
 		bind:value={subject}
@@ -222,22 +224,23 @@
 		action={`Grant ${selected?.name ?? 'a rung'}`}
 		reason={grantReason}
 	>
-		<button
-			class="btn"
+		<Button
+			size="sm"
 			disabled={mayGrant && (busy || !subject.trim() || !selected)}
 			onclick={() => run(true)}
 		>
 			{busy ? '…' : 'Grant'}
-		</button>
+		</Button>
 	</GatedAction>
 	<GatedAction allowed={mayRevoke} action="Revoke" reason={revokeReason}>
-		<button
-			class="btn ghost"
+		<Button
+			variant="outline"
+			size="sm"
 			disabled={mayRevoke && (busy || !subject.trim() || !selected)}
 			onclick={() => run(false)}
 		>
 			Revoke
-		</button>
+		</Button>
 	</GatedAction>
 	{#if looksUnresolvable}
 		<p class="advice">
@@ -267,31 +270,7 @@
 		gap: 6px;
 	}
 	.mono {
-		flex: 1 1 220px;
-		min-width: 0;
 		font-family: var(--font-mono, ui-monospace, monospace);
-		font-size: 12px;
-		padding: 4px 8px;
-		border: 1px solid var(--color-border);
-		border-radius: 6px;
-		background: var(--color-background);
-		color: var(--color-foreground);
-	}
-	.btn {
-		font-size: 12px;
-		padding: 4px 10px;
-		border: 1px solid var(--color-border);
-		border-radius: 6px;
-		background: var(--color-card);
-		color: var(--color-foreground);
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: not-allowed;
-	}
-	.btn.ghost {
-		background: transparent;
 	}
 	.advice,
 	.verdict {
