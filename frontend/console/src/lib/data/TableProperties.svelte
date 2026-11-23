@@ -232,14 +232,14 @@
 	}
 	h3 {
 		font-size: 12px;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-weight: 600;
 		margin: 16px 0 4px;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
 	}
 	.mut {
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font-size: 12px;
 		margin: 0 0 8px;
 	}
@@ -262,22 +262,22 @@
 		flex-wrap: wrap;
 	}
 	input {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 4px 8px;
 		flex: 1 1 140px;
 		min-width: 100px;
 	}
-	/* Deliberately NOT the design system's Textarea: this section is on the legacy --ink/--line bridge at 12px, and
-	   the Tailwind component would land a 16px rounded-lg field among 12px radius-sm ones. */
+	/* Deliberately NOT the design system's Textarea: this section's fields are 12px with a small radius, and the
+	   component would land a 16px rounded-lg field among them. */
 	textarea {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font: inherit;
 		font-size: 12px;
 		line-height: 1.5;
@@ -286,10 +286,10 @@
 		resize: vertical;
 	}
 	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 4px 12px;
 		cursor: pointer;
@@ -311,8 +311,8 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		padding: 1px 4px 1px 8px;
 		font-size: 12px;
@@ -320,20 +320,20 @@
 	.chip-x {
 		background: transparent;
 		border: none;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		cursor: pointer;
 		font-size: 13px;
 		padding: 0 4px;
 	}
 	.chip-x:hover {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.okmsg {
-		color: var(--ok);
+		color: var(--success);
 		font-size: 12px;
 	}
 	.error {
-		color: var(--fail);
+		color: var(--destructive);
 		font-size: 12px;
 		margin-top: 8px;
 	}

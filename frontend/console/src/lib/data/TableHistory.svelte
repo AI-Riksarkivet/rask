@@ -839,7 +839,7 @@
 		font-size: 13px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		margin: 0 0 8px;
 	}
 	h3 {
@@ -850,24 +850,24 @@
 		letter-spacing: 0.04em;
 	}
 	.mut {
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font-size: 12px;
 		margin: 0 0 8px;
 	}
 	.banner {
-		border: 1px solid var(--line);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		font-size: 12px;
 		padding: 6px 10px;
 		margin-bottom: 10px;
 	}
 	.banner.warn {
-		border-color: color-mix(in oklab, var(--warn) 45%, transparent);
-		background: color-mix(in oklab, var(--warn) 12%, transparent);
+		border-color: color-mix(in oklab, var(--warning) 45%, transparent);
+		background: color-mix(in oklab, var(--warning) 12%, transparent);
 	}
 	.banner.fail {
-		border-color: color-mix(in oklab, var(--fail) 45%, transparent);
-		background: color-mix(in oklab, var(--fail) 12%, transparent);
+		border-color: color-mix(in oklab, var(--destructive) 45%, transparent);
+		background: color-mix(in oklab, var(--destructive) 12%, transparent);
 	}
 	.toolbar {
 		display: flex;
@@ -882,21 +882,21 @@
 		gap: 4px;
 	}
 	.fchip {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: 999px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		cursor: pointer;
 		font-size: 11px;
 		padding: 2px 8px;
 	}
 	.fchip.on {
-		border-color: color-mix(in oklab, var(--ink) 40%, transparent);
-		color: var(--ink);
+		border-color: color-mix(in oklab, var(--foreground) 40%, transparent);
+		color: var(--foreground);
 	}
 	.toggle {
 		align-items: center;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		display: flex;
 		font-size: 12px;
 		gap: 4px;
@@ -906,10 +906,10 @@
 		min-width: 120px;
 	}
 	input {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 4px 8px;
 	}
@@ -918,10 +918,10 @@
 	}
 	.btn {
 		align-items: center;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		cursor: pointer;
 		display: inline-flex;
 		font-size: 12px;
@@ -939,8 +939,8 @@
 		padding: 2px 4px;
 	}
 	.btn.danger {
-		border-color: color-mix(in oklab, var(--fail) 50%, transparent);
-		color: var(--fail);
+		border-color: color-mix(in oklab, var(--destructive) 50%, transparent);
+		color: var(--destructive);
 	}
 	.btn:disabled {
 		cursor: default;
@@ -957,21 +957,21 @@
 	}
 	.tip,
 	.tagchip {
-		border: 1px solid var(--line);
+		border: 1px solid var(--border);
 		border-radius: 999px;
 		font-size: 10px;
 		padding: 0 5px;
 	}
 	.tip {
-		background: color-mix(in oklab, var(--ok) 15%, transparent);
-		border-color: color-mix(in oklab, var(--ok) 45%, transparent);
+		background: color-mix(in oklab, var(--success) 15%, transparent);
+		border-color: color-mix(in oklab, var(--success) 45%, transparent);
 	}
 	.tagchip {
-		background: color-mix(in oklab, var(--amber) 15%, transparent);
-		border-color: color-mix(in oklab, var(--amber) 45%, transparent);
+		background: color-mix(in oklab, var(--warning) 15%, transparent);
+		border-color: color-mix(in oklab, var(--warning) 45%, transparent);
 	}
 	.schemadot {
-		color: var(--warn);
+		color: var(--warning);
 		font-size: 10px;
 	}
 	/* The log stays scannable only if no single cell can stretch the table: a long predicate and a long
@@ -987,17 +987,17 @@
 		vertical-align: bottom;
 	}
 	.sep {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		padding: 0 3px;
 	}
 	.naive {
-		border-bottom: 1px dotted var(--faint);
+		border-bottom: 1px dotted var(--muted-foreground);
 	}
 	.when {
 		font-size: 11px;
 	}
 	.panel {
-		border: 1px solid var(--line);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		margin-top: 12px;
 		padding: 12px;
@@ -1018,7 +1018,7 @@
 		margin: 0;
 	}
 	.kv dt {
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font-size: 11px;
 	}
 	.kv dd {
@@ -1032,12 +1032,12 @@
 		width: 100%;
 	}
 	table.raw td {
-		border-bottom: 1px solid var(--line);
+		border-bottom: 1px solid var(--border);
 		padding: 3px 8px 3px 0;
 		overflow-wrap: anywhere;
 	}
 	table.raw td.k {
-		color: var(--mut);
+		color: var(--muted-foreground);
 		width: 40%;
 	}
 	.acts {
@@ -1074,8 +1074,8 @@
 	}
 	.chip {
 		align-items: center;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		display: inline-flex;
 		font-size: 12px;
@@ -1085,22 +1085,22 @@
 	.chip-x {
 		background: transparent;
 		border: none;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		cursor: pointer;
 		font-size: 12px;
 		padding: 0 4px;
 	}
 	.chip-x:hover {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.chip-x.danger {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.movesel {
 		display: inline-flex;
 	}
 	.error {
-		color: var(--fail);
+		color: var(--destructive);
 		font-size: 12px;
 		margin-top: 8px;
 	}

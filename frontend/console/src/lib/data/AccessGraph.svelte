@@ -179,12 +179,12 @@
 		margin: 0;
 	}
 	.sub {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 11px;
 	}
 	.canvas {
 		height: 340px;
-		border: 1px solid var(--line);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		overflow: hidden;
 	}
@@ -192,7 +192,7 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font-size: 12px;
 		padding: 24px 0;
 	}

@@ -133,14 +133,14 @@
 		margin: 0;
 	}
 	.sub {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.empty {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font-size: 13px;
 		padding: 30px 0;
 	}
@@ -153,23 +153,23 @@
 	.filters input {
 		flex: 1;
 		max-width: 340px;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		color: inherit;
 		font-size: 12px;
 		padding: 5px 8px;
 	}
 	.filters select {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		color: inherit;
 		font-size: 12px;
 		padding: 5px 6px;
 	}
 	.count {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.events {

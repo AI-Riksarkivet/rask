@@ -597,14 +597,14 @@
 		align-items: center;
 		gap: 8px;
 		margin-bottom: 18px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	h1 {
 		font-size: var(--text-xl);
 		line-height: var(--text-xl--line-height);
 		letter-spacing: var(--text-xl--letter-spacing);
 		margin: 0;
-		color: var(--ink);
+		color: var(--foreground);
 	}
 	.catalog-links {
 		display: flex;
@@ -631,10 +631,10 @@
 	h3 {
 		font-size: 12px;
 		margin: 18px 0 6px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 		margin: 4px 0;
 	}
@@ -644,7 +644,7 @@
 	}
 	.error {
 		font-size: 12px;
-		color: var(--fail);
+		color: var(--destructive);
 		margin: 6px 0 0;
 	}
 	.policy-edit {
@@ -653,18 +653,18 @@
 		align-items: center;
 		gap: 10px 16px;
 		font-size: 12px;
-		color: var(--mut);
-		border: 1px solid var(--line);
+		color: var(--muted-foreground);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		padding: 12px;
 	}
 	.policy-edit input[type='number'] {
 		width: 8ch;
 		margin-left: 6px;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		padding: 2px 6px;
 	}
 	.policy-edit .check {
@@ -687,30 +687,30 @@
 	}
 	th {
 		text-align: left;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-weight: 500;
 		padding: 3px 14px 3px 0;
-		border-bottom: 1px solid var(--line);
+		border-bottom: 1px solid var(--border);
 	}
 	td {
 		padding: 5px 14px 5px 0;
-		border-bottom: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
+		border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 	}
 	.whlink {
-		color: var(--ink);
+		color: var(--foreground);
 		text-decoration: none;
 	}
 	.whlink:hover {
 		text-decoration: underline;
 	}
 	.chip {
-		background: var(--panel-2);
-		border: 1px solid color-mix(in srgb, var(--ok) 45%, var(--line));
+		background: var(--muted);
+		border: 1px solid color-mix(in srgb, var(--success) 45%, var(--border));
 		border-radius: var(--radius-sm);
 		padding: 0 7px;
 	}
 	.chip.off {
-		border-color: color-mix(in srgb, var(--amber, #d18b28) 55%, var(--line));
+		border-color: color-mix(in srgb, var(--warning, #d18b28) 55%, var(--border));
 	}
 	.refs {
 		display: flex;
@@ -721,15 +721,15 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		padding: 32px 0;
 	}
 	.danger {
-		border-top: 1px solid var(--line);
+		border-top: 1px solid var(--border);
 		padding-top: 16px;
 	}
 	.danger h2 {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.danger p {
 		max-width: 62ch;

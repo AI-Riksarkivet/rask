@@ -299,15 +299,15 @@
 		font-size: 13px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		margin: 0 0 8px;
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.error {
-		color: var(--fail);
+		color: var(--destructive);
 		font-size: 12px;
 	}
 	.refs {
@@ -319,13 +319,13 @@
 		font-size: 12px;
 	}
 	.chip {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		padding: 0 7px;
 	}
 	.chip.off {
-		border-color: color-mix(in srgb, var(--amber) 55%, var(--line));
+		border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
 	}
 	.policy-edit {
 		display: flex;
@@ -333,7 +333,7 @@
 		gap: 12px;
 		align-items: end;
 		font-size: 12px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.policy-edit label {
 		display: flex;
@@ -348,17 +348,17 @@
 	.policy-edit input[type='number'],
 	.gc input[type='number'] {
 		width: 110px;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		padding: 4px 8px;
 		font-size: 12px;
 	}
 	.gc {
 		margin-top: 14px;
 		padding-top: 12px;
-		border-top: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
+		border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 	}
 	.gc h3 {
 		font-size: 13px;
@@ -369,17 +369,17 @@
 		flex-direction: column;
 		gap: 3px;
 		font-size: 12px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.row {
 		display: flex;
 		gap: 8px;
 	}
 	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 3px 10px;
 		cursor: pointer;
@@ -390,9 +390,9 @@
 	}
 	.btn.ghost {
 		background: none;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.btn.danger {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 </style>

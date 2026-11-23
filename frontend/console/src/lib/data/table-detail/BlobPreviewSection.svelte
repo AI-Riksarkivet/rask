@@ -90,11 +90,11 @@
 		font-size: 13px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		margin: 0 0 8px;
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.refs {
@@ -112,15 +112,15 @@
 		display: block;
 		max-width: 100%;
 		max-height: 320px;
-		border: 1px solid var(--line);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		margin-top: 10px;
 	}
 	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 3px 10px;
 		cursor: pointer;

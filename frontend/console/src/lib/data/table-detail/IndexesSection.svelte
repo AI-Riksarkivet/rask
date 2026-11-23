@@ -81,15 +81,15 @@
 		font-size: 13px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		margin: 0 0 8px;
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.error {
-		color: var(--fail);
+		color: var(--destructive);
 		font-size: 12px;
 	}
 	.refs {
@@ -101,8 +101,8 @@
 		font-size: 12px;
 	}
 	.chip {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		padding: 0 7px;
 	}
@@ -111,12 +111,12 @@
 		background: none;
 		border: none;
 		padding: 0;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font: inherit;
 		cursor: pointer;
 	}
 	.chip-x:hover {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.chip-x:disabled {
 		opacity: 0.4;

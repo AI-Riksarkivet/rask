@@ -327,7 +327,7 @@
 		margin: 0;
 	}
 	.sub {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.bar {
@@ -341,10 +341,10 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 5px;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 4px 12px;
 		cursor: pointer;
@@ -358,25 +358,25 @@
 	}
 	.depth {
 		font-size: 12px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.depth.warn {
-		color: var(--warn, #d18b28);
+		color: var(--warning, #d18b28);
 	}
 	.msg {
 		font-size: 12px;
 	}
 	.okmsg {
-		color: var(--ok);
+		color: var(--success);
 	}
 	.error {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.empty {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font-size: 13px;
 		padding: 30px 0;
 	}
@@ -387,14 +387,14 @@
 		margin-bottom: 10px;
 	}
 	.run {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		white-space: nowrap;
 	}
 	.poison {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 	}
 	.drawer-body {
 		display: flex;
@@ -411,28 +411,28 @@
 		font-size: 12px;
 	}
 	.record dt {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
 		font-size: 10.5px;
 	}
 	.record dd {
 		margin: 0;
-		color: var(--ink);
+		color: var(--foreground);
 		word-break: break-all;
 	}
 	.drawer-h {
 		font-size: 11px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		margin: 0 0 6px;
 	}
 	.payload {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 11px;
 		line-height: 1.5;
 		padding: 10px 12px;

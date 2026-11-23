@@ -34,15 +34,15 @@
 
 <style>
 	.close {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 4px 12px;
 		cursor: pointer;
 	}
 	.close:hover {
-		border-color: var(--mut);
+		border-color: var(--muted-foreground);
 	}
 </style>

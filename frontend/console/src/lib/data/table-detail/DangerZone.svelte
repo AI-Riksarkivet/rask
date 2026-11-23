@@ -172,15 +172,15 @@
 		font-size: 13px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		margin: 0 0 8px;
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.error {
-		color: var(--fail);
+		color: var(--destructive);
 		font-size: 12px;
 	}
 	.row {
@@ -188,10 +188,10 @@
 		gap: 8px;
 	}
 	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 3px 10px;
 		cursor: pointer;
@@ -201,10 +201,10 @@
 		cursor: default;
 	}
 	.btn.danger {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.dangerzone {
-		border-top: 1px solid color-mix(in srgb, var(--fail) 30%, var(--line));
+		border-top: 1px solid color-mix(in srgb, var(--destructive) 30%, var(--border));
 		padding-top: 12px;
 	}
 	.dangerzone form {

@@ -113,8 +113,8 @@
 
 <style>
 	.recover {
-		border: 1px solid color-mix(in srgb, var(--warn) 45%, var(--line));
-		background: color-mix(in srgb, var(--warn) 7%, transparent);
+		border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
+		background: color-mix(in srgb, var(--warning) 7%, transparent);
 		border-radius: var(--radius-sm);
 		padding: 16px 18px;
 		margin: 24px 0;
@@ -126,24 +126,24 @@
 		font-size: 15px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: var(--faint);
+		color: var(--muted-foreground);
 	}
 	.recover p {
 		margin: 0 0 8px;
 		font-size: 13px;
 	}
 	.recover .problem {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.empty {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		padding: 32px 0;
 	}
 	/* The read-failure branch stacks two lines (the plain-English cause, then the upstream's verbatim
@@ -154,7 +154,7 @@
 		gap: 4px;
 	}
 	.empty .problem {
-		color: var(--fail);
+		color: var(--destructive);
 		font-size: 13px;
 	}
 </style>

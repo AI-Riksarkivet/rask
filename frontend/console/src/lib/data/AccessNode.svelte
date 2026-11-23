@@ -40,7 +40,7 @@
 		['user', 'role'].includes(data.fgaType) ? 'subject' : data.focus ? 'focus' : 'container',
 	);
 	const accent = $derived(
-		kind === 'subject' ? '#6aa9ff' : kind === 'focus' ? 'var(--amber, #ffc14d)' : '#8aa0bd',
+		kind === 'subject' ? '#6aa9ff' : kind === 'focus' ? 'var(--warning, #ffc14d)' : '#8aa0bd',
 	);
 </script>
 
@@ -70,8 +70,8 @@
 		padding: 6px 10px;
 		border: 1.5px solid var(--accent);
 		border-radius: var(--radius-sm, 6px);
-		background: linear-gradient(180deg, var(--panel-2), var(--panel));
-		color: var(--ink);
+		background: linear-gradient(180deg, var(--muted), var(--card));
+		color: var(--foreground);
 		font-family: ui-sans-serif, system-ui, sans-serif;
 		box-shadow: var(--shadow, 0 2px 8px rgb(0 0 0 / 0.2));
 	}
@@ -96,6 +96,6 @@
 		font-size: 9.5px;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
-		color: var(--faint);
+		color: var(--muted-foreground);
 	}
 </style>

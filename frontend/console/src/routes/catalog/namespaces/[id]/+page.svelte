@@ -661,11 +661,11 @@
 		align-items: center;
 		gap: 8px;
 		margin-bottom: 18px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.count {
 		font-size: 12px;
-		color: var(--faint);
+		color: var(--muted-foreground);
 	}
 	section {
 		margin-bottom: 26px;
@@ -675,22 +675,18 @@
 		margin: 0 0 8px;
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 		margin: 4px 0;
 	}
 
-	/* Real tokens, not the legacy `--ink/--line/--faint` bridge this file otherwise uses: those names
-	   were undefined for a long time and fell back to `currentColor`, which is the estate's
-	   long-standing "why does this look weird". Migrating the whole page is its own change; new rules
-	   should not add to the debt. */
 	.managed {
 		border-left: 2px solid var(--border);
 		padding-left: 8px;
 		color: var(--muted-foreground);
 	}
 	.error {
-		color: var(--fail);
+		color: var(--destructive);
 		font-size: 12px;
 		margin: 6px 0 0;
 	}
@@ -702,13 +698,13 @@
 	.row {
 		display: block;
 		padding: 6px 10px;
-		border-bottom: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
-		color: var(--ink);
+		border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+		color: var(--foreground);
 		text-decoration: none;
 		font-size: 13px;
 	}
 	.row:hover {
-		background: var(--panel-2);
+		background: var(--muted);
 	}
 	.dropped {
 		border: 1px solid color-mix(in srgb, var(--warning) 45%, var(--border));
@@ -724,7 +720,7 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		padding: 32px 0;
 	}
 	.refs {
@@ -734,15 +730,15 @@
 		gap: 6px;
 	}
 	.chip {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font-size: 12px;
 		padding: 1px 8px;
 	}
 	.chip.off {
-		border-color: color-mix(in srgb, var(--amber) 55%, var(--line));
+		border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
 	}
 	.policy-edit {
 		display: flex;
@@ -754,7 +750,7 @@
 		display: flex;
 		flex-direction: column;
 		gap: 3px;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 11px;
 	}
 	.policy-edit label.check {
@@ -762,13 +758,13 @@
 		align-items: center;
 		gap: 6px;
 		font-size: 12px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.policy-edit input[type='number'] {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 3px 7px;
 		width: 130px;
@@ -781,20 +777,20 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 4px;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 3px 12px;
 		cursor: pointer;
 	}
 	.btn.ghost {
 		background: none;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.btn.danger {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.btn:disabled {
 		opacity: 0.5;
@@ -804,9 +800,9 @@
 		margin: 10px 0 8px;
 	}
 	.graphcard {
-		border: 1px solid var(--line);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		background: var(--panel-2);
+		background: var(--muted);
 		padding: 10px 12px;
 	}
 	.graphhead {
@@ -830,15 +826,15 @@
 		align-items: center;
 		gap: 8px;
 		padding: 3px 0;
-		border-bottom: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
+		border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 	}
 	.edges li:last-child {
 		border-bottom: none;
 	}
 	.subject {
-		color: var(--ink);
+		color: var(--foreground);
 	}
 	.chip.rel {
-		border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
+		border-color: color-mix(in srgb, var(--success) 45%, var(--border));
 	}
 </style>

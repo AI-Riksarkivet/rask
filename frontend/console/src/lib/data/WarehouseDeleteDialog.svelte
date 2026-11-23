@@ -230,54 +230,54 @@
 		flex-direction: column;
 		gap: 12px;
 		font-size: 12px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.problem {
 		margin: 0;
 		padding: 8px 10px;
-		border: 1px solid color-mix(in srgb, var(--fail) 45%, var(--line));
+		border: 1px solid color-mix(in srgb, var(--destructive) 45%, var(--border));
 		border-radius: var(--radius-sm);
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.opt {
 		display: flex;
 		flex-direction: column;
 		gap: 6px;
 		padding: 8px 10px;
-		border: 1px solid var(--line);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 	}
 	.opt.danger {
-		border-color: color-mix(in srgb, var(--fail) 40%, var(--line));
+		border-color: color-mix(in srgb, var(--destructive) 40%, var(--border));
 	}
 	.lead {
 		margin: 0;
-		color: var(--ink);
+		color: var(--foreground);
 		font-weight: 600;
 	}
 	.check {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--ink);
+		color: var(--foreground);
 	}
 	.dim {
-		color: var(--faint);
+		color: var(--muted-foreground);
 	}
 	.named {
 		margin: 0;
 		padding-left: 18px;
-		color: var(--ink);
+		color: var(--foreground);
 	}
 	.hint {
 		margin: 0;
-		color: var(--faint);
+		color: var(--muted-foreground);
 	}
 	input {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		padding: 5px 9px;
 		font-size: 12px;
 	}
@@ -287,10 +287,10 @@
 		gap: 8px;
 	}
 	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 4px 12px;
 		cursor: pointer;
@@ -301,10 +301,10 @@
 	}
 	.btn.ghost {
 		background: none;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.btn.destroy {
-		border-color: color-mix(in srgb, var(--fail) 55%, var(--line));
-		color: var(--fail);
+		border-color: color-mix(in srgb, var(--destructive) 55%, var(--border));
+		color: var(--destructive);
 	}
 </style>

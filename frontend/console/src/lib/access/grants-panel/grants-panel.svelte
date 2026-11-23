@@ -329,13 +329,13 @@
 		background: none;
 		border: none;
 		padding: 0;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font: inherit;
 		font-size: 12px;
 		cursor: pointer;
 	}
 	.head:hover {
-		color: var(--ink);
+		color: var(--foreground);
 	}
 	.chev {
 		display: inline-flex;
@@ -345,7 +345,7 @@
 		transform: rotate(90deg);
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 		margin: 0;
 	}
@@ -355,7 +355,7 @@
 	}
 	.acl th {
 		text-align: left;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-weight: 500;
 		padding: 2px 14px 2px 0;
 	}
@@ -364,7 +364,7 @@
 		vertical-align: top;
 	}
 	.rel {
-		color: var(--mut);
+		color: var(--muted-foreground);
 		white-space: nowrap;
 	}
 	.whos {
@@ -375,22 +375,22 @@
 	}
 	.who {
 		display: inline-block;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		padding: 0 6px;
 		margin: 0 4px 3px 0;
 	}
 	.who.wild {
-		border-color: color-mix(in srgb, var(--amber) 55%, var(--line));
+		border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
 	}
 	.sim {
 		margin-top: 10px;
 		padding-top: 8px;
-		border-top: 1px solid color-mix(in srgb, var(--line) 55%, transparent);
+		border-top: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
 	}
 	.sim-head {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 11px;
 		text-transform: uppercase;
 		letter-spacing: 0.05em;
@@ -403,10 +403,10 @@
 		align-items: center;
 	}
 	.sim-form input {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 3px 7px;
 	}
@@ -415,10 +415,10 @@
 		min-width: 160px;
 	}
 	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 3px 12px;
 		cursor: pointer;
@@ -432,9 +432,9 @@
 		margin: 8px 0 0;
 	}
 	.verdict.allow {
-		color: var(--ok);
+		color: var(--success);
 	}
 	.verdict.deny {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 </style>

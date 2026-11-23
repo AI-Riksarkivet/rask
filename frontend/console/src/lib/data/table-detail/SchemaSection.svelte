@@ -271,7 +271,7 @@
 		font-size: 13px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		margin: 0 0 8px;
 	}
 	table {
@@ -281,14 +281,14 @@
 	}
 	th {
 		text-align: left;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-weight: 500;
 		padding: 3px 14px 3px 0;
-		border-bottom: 1px solid var(--line);
+		border-bottom: 1px solid var(--border);
 	}
 	td {
 		padding: 3px 14px 3px 0;
-		border-bottom: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
+		border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
 	}
 	td.actions {
 		text-align: right;
@@ -296,10 +296,10 @@
 	}
 	.rn {
 		width: 110px;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 2px 6px;
 	}
@@ -311,30 +311,30 @@
 		background: none;
 		border: none;
 		padding: 0;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font: inherit;
 		cursor: pointer;
 	}
 	.chip-x:hover {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.chip-x:disabled {
 		opacity: 0.4;
 		cursor: default;
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.error {
-		color: var(--fail);
+		color: var(--destructive);
 		font-size: 12px;
 	}
 	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 3px 10px;
 		cursor: pointer;
@@ -345,7 +345,7 @@
 	}
 	.btn.ghost {
 		background: none;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.row {
 		display: flex;

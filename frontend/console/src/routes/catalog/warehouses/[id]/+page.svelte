@@ -223,14 +223,14 @@
 		align-items: center;
 		gap: 8px;
 		margin-bottom: 18px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	h1 {
 		font-size: var(--text-xl);
 		line-height: var(--text-xl--line-height);
 		letter-spacing: var(--text-xl--letter-spacing);
 		margin: 0;
-		color: var(--ink);
+		color: var(--foreground);
 	}
 	section {
 		margin-bottom: 26px;
@@ -240,7 +240,7 @@
 		margin: 0 0 8px;
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 		margin: 4px 0;
 	}
@@ -249,27 +249,27 @@
 		flex-wrap: wrap;
 		gap: 14px;
 		font-size: 12px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.loc {
-		color: var(--faint);
+		color: var(--muted-foreground);
 	}
 	.plink {
-		color: var(--ink);
+		color: var(--foreground);
 		text-decoration: none;
 	}
 	.plink:hover {
 		text-decoration: underline;
 	}
 	.chip {
-		background: var(--panel-2);
-		border: 1px solid color-mix(in srgb, var(--ok) 45%, var(--line));
+		background: var(--muted);
+		border: 1px solid color-mix(in srgb, var(--success) 45%, var(--border));
 		border-radius: var(--radius-sm);
 		font-size: 11px;
 		padding: 0 7px;
 	}
 	.chip.off {
-		border-color: color-mix(in srgb, var(--amber, #d18b28) 55%, var(--line));
+		border-color: color-mix(in srgb, var(--warning, #d18b28) 55%, var(--border));
 	}
 	.list {
 		list-style: none;
@@ -281,24 +281,24 @@
 		align-items: center;
 		gap: 10px;
 		padding: 7px 10px;
-		border-bottom: 1px solid color-mix(in srgb, var(--line) 45%, transparent);
-		color: var(--ink);
+		border-bottom: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
+		color: var(--foreground);
 		text-decoration: none;
 		font-size: 13px;
 	}
 	.row:hover {
-		background: var(--panel-2);
+		background: var(--muted);
 	}
 	.count {
 		margin-left: auto;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.empty {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		padding: 32px 0;
 	}
 </style>

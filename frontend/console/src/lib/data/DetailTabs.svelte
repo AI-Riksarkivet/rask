@@ -29,24 +29,24 @@
 	.tabs {
 		display: flex;
 		gap: 2px;
-		border-bottom: 1px solid var(--line);
+		border-bottom: 1px solid var(--border);
 		margin-bottom: 18px;
 	}
 	button {
 		background: none;
 		border: none;
 		border-bottom: 2px solid transparent;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font-size: 13px;
 		padding: 6px 12px;
 		cursor: pointer;
 		text-transform: capitalize;
 	}
 	button:hover {
-		color: var(--ink);
+		color: var(--foreground);
 	}
 	button.active {
-		color: var(--ink);
+		color: var(--foreground);
 		border-bottom-color: var(--accent, #ffc14d);
 	}
 </style>

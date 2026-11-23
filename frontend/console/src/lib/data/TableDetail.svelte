@@ -341,7 +341,7 @@
 	.tdesc {
 		margin: 0 0 18px;
 		max-width: 78ch;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font-size: 13px;
 		line-height: 1.5;
 		white-space: pre-wrap;
@@ -350,14 +350,14 @@
 		font-size: 13px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		margin: 0 0 8px;
 	}
 	section {
 		margin-bottom: 22px;
 	}
 	.sub {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.stats {
@@ -365,40 +365,40 @@
 		flex-wrap: wrap;
 		gap: 14px;
 		font-size: 12px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.loc {
-		color: var(--faint);
+		color: var(--muted-foreground);
 	}
 	.fmt {
-		border: 1px solid color-mix(in srgb, var(--accent, #ffc14d) 45%, var(--line));
+		border: 1px solid color-mix(in srgb, var(--accent, #ffc14d) 45%, var(--border));
 		border-radius: var(--radius-sm);
 		padding: 0 6px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.empty {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		padding: 32px 0;
 	}
 	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 3px 10px;
 		cursor: pointer;
 	}
 	.btn.ghost {
 		background: none;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.graphtoggle {
 		margin: 10px 0 8px;

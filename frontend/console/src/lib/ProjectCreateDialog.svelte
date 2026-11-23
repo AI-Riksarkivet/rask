@@ -203,7 +203,7 @@
 		flex-direction: column;
 		gap: 10px;
 		font-size: 12px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	label {
 		display: flex;
@@ -216,15 +216,15 @@
 		gap: 10px;
 	}
 	input {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		padding: 5px 9px;
 		font-size: 12px;
 	}
 	.error {
-		color: var(--fail);
+		color: var(--destructive);
 		margin: 0;
 	}
 	.hint {
@@ -239,10 +239,10 @@
 		margin-top: 4px;
 	}
 	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 4px 12px;
 		cursor: pointer;
@@ -253,6 +253,6 @@
 	}
 	.btn.ghost {
 		background: none;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 </style>

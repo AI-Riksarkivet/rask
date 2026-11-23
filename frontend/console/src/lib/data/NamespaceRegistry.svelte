@@ -613,7 +613,7 @@
 		margin: 0;
 	}
 	.sub {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.new {
@@ -622,38 +622,38 @@
 		gap: 5px;
 		margin-left: auto;
 		cursor: pointer;
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 4px 12px;
 		text-decoration: none;
 	}
 	.new:hover {
-		border-color: var(--mut);
+		border-color: var(--muted-foreground);
 	}
 	.banner {
 		padding: 8px 12px;
 		border-radius: var(--radius-sm);
-		border: 1px solid var(--line);
+		border: 1px solid var(--border);
 		margin-bottom: 12px;
 		font-size: 13px;
 	}
 	.banner.ok {
-		border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
-		color: var(--ok);
+		border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+		color: var(--success);
 	}
 	.banner.degraded p {
 		margin: 0;
 	}
 	.banner.degraded {
-		border-color: color-mix(in srgb, var(--warn) 50%, var(--line));
-		background: color-mix(in srgb, var(--warn) 7%, transparent);
+		border-color: color-mix(in srgb, var(--warning) 50%, var(--border));
+		background: color-mix(in srgb, var(--warning) 7%, transparent);
 	}
 	.banner.fail {
-		border-color: color-mix(in srgb, var(--fail) 45%, var(--line));
-		color: var(--fail);
+		border-color: color-mix(in srgb, var(--destructive) 45%, var(--border));
+		color: var(--destructive);
 	}
 	.create {
 		display: flex;
@@ -666,14 +666,14 @@
 		display: flex;
 		flex-direction: column;
 		gap: 4px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.create input {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		padding: 5px 9px;
 		font-size: 12px;
 	}
@@ -689,7 +689,7 @@
 		margin-bottom: 10px;
 	}
 	.ns-name {
-		color: var(--ink);
+		color: var(--foreground);
 		text-decoration: none;
 	}
 	.ns-name:hover {
@@ -703,13 +703,13 @@
 		text-decoration: underline;
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 	}
 	.empty {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		padding: 32px 0;
 	}
 	.drop {
@@ -719,14 +719,14 @@
 		background: none;
 		border: none;
 		border-radius: var(--radius-sm);
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 11px;
 		padding: 2px 6px;
 		cursor: pointer;
 	}
 	.drop:hover {
-		color: var(--fail);
-		background: var(--panel-2);
+		color: var(--destructive);
+		background: var(--muted);
 	}
 	.drop:disabled {
 		opacity: 0.5;
@@ -736,7 +736,7 @@
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		font-size: 13px;
 	}
 	/* drawer record + jump links */
@@ -748,11 +748,11 @@
 		font-size: 12px;
 	}
 	.rec dt {
-		color: var(--faint);
+		color: var(--muted-foreground);
 	}
 	.rec dd {
 		margin: 0;
-		color: var(--ink);
+		color: var(--foreground);
 		word-break: break-all;
 	}
 	.jumps {
@@ -760,16 +760,16 @@
 		gap: 8px;
 	}
 	.jbtn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 4px 12px;
 		text-decoration: none;
 	}
 	.jbtn:hover {
-		border-color: var(--mut);
+		border-color: var(--muted-foreground);
 	}
 	.dialog-actions {
 		display: flex;

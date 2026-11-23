@@ -508,36 +508,36 @@
 		font-size: 13px;
 		text-transform: uppercase;
 		letter-spacing: 0.06em;
-		color: var(--faint);
+		color: var(--muted-foreground);
 		margin: 18px 0 8px;
 	}
 	.sub {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.banner {
 		padding: 8px 12px;
 		border-radius: var(--radius-sm);
-		border: 1px solid var(--line);
+		border: 1px solid var(--border);
 		margin-bottom: 12px;
 		font-size: 13px;
 	}
 	.banner.ok {
-		border-color: color-mix(in srgb, var(--ok) 45%, var(--line));
-		color: var(--ok);
+		border-color: color-mix(in srgb, var(--success) 45%, var(--border));
+		color: var(--success);
 	}
 	.banner.fail {
-		border-color: color-mix(in srgb, var(--fail) 45%, var(--line));
-		color: var(--fail);
+		border-color: color-mix(in srgb, var(--destructive) 45%, var(--border));
+		color: var(--destructive);
 	}
 	.chip {
-		background: var(--panel-2);
-		border: 1px solid color-mix(in srgb, var(--ok) 45%, var(--line));
+		background: var(--muted);
+		border: 1px solid color-mix(in srgb, var(--success) 45%, var(--border));
 		border-radius: var(--radius-sm);
 		padding: 0 7px;
 	}
 	.chip.off {
-		border-color: color-mix(in srgb, var(--amber) 55%, var(--line));
+		border-color: color-mix(in srgb, var(--warning) 55%, var(--border));
 	}
 	.row {
 		display: flex;
@@ -546,38 +546,38 @@
 		gap: 8px;
 	}
 	input {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		padding: 5px 9px;
 		font-size: 12px;
 	}
 	.btn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 4px 12px;
 		cursor: pointer;
 	}
 	.btn.ghost {
 		background: none;
-		color: var(--mut);
+		color: var(--muted-foreground);
 	}
 	.btn.destroy {
-		color: var(--fail);
+		color: var(--destructive);
 	}
 	.mut {
-		color: var(--faint);
+		color: var(--muted-foreground);
 		font-size: 12px;
 	}
 	.empty {
 		display: flex;
 		align-items: center;
 		gap: 8px;
-		color: var(--mut);
+		color: var(--muted-foreground);
 		padding: 32px 0;
 	}
 	.toolbar {
@@ -592,7 +592,7 @@
 		gap: 6px;
 	}
 	.whlink {
-		color: var(--ink);
+		color: var(--foreground);
 		text-decoration: none;
 	}
 	.whlink:hover {
@@ -607,30 +607,30 @@
 		font-size: 12px;
 	}
 	.rec dt {
-		color: var(--faint);
+		color: var(--muted-foreground);
 	}
 	.rec dd {
 		margin: 0;
-		color: var(--ink);
+		color: var(--foreground);
 		word-break: break-all;
 	}
 	.jump {
-		color: var(--ink);
+		color: var(--foreground);
 	}
 	.jumps {
 		display: flex;
 		gap: 8px;
 	}
 	.jbtn {
-		background: var(--panel-2);
-		border: 1px solid var(--line);
+		background: var(--muted);
+		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
-		color: var(--ink);
+		color: var(--foreground);
 		font-size: 12px;
 		padding: 4px 12px;
 		text-decoration: none;
 	}
 	.jbtn:hover {
-		border-color: var(--mut);
+		border-color: var(--muted-foreground);
 	}
 </style>

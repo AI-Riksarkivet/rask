@@ -54,10 +54,11 @@ picks the dark half of each pair (`DESIGN.md` § Colour). Reach for the utility 
 `border-border`, `border-field-line`, `bg-success`, `bg-warning`), which follows every theme and both modes at once.
 A colour the console needs and the tokens lack is a change in the ui repository.
 
-**The legacy bridge.** The tokens alias `--ink/--mut/--faint/--line/--panel/--panel-2/--ok/--fail/--warn/--amber`
-onto the real tokens. Those names carry 423 references in 28 files under `frontend/console/src` (measured
-2026-11-20), and without the bridge each is **undefined**, so `border-color: var(--line)` falls back to
-`currentColor`. When you touch a component still on the bridge, move it to the token name.
+**No legacy palette name.** The tokens still alias `--ink/--mut/--faint/--line/--panel/--panel-2/--ok/--fail/--warn/--amber`
+for other consumers; the console references none of them (0 under `frontend/console/src`, measured 2026-11-23). A
+component's own `<style>` names the token itself (`var(--foreground)`, `var(--muted-foreground)`, `var(--border)`,
+`var(--card)`, `var(--muted)`, `var(--success)`, `var(--destructive)`, `var(--warning)`), and new markup uses the
+utility.
 
 `e2e/admin/tables-registry.spec.ts` measures the contrast of the label chips, muted text and primary fills in light
 and dark in the built app.
