@@ -39,5 +39,5 @@ Idea taken from: Lakekeeper's separate `sts-endpoint` setting.
 - Per-base vending is a Lance SDK convention rask carries, not spec: the spec's `storage_options` is a flat map. Its
   constraints: base ids are assigned by the manifest, so the vendor reads them from it; `base_store_params`, keyed by
   URI, takes precedence over `base_<id>.<key>` (`lance_docs/lance/guide/object_store.md:214-216`); and an S3-compatible client needs both region
-  and endpoint (`lance_docs/lance/guide/object_store.md:332-333`).
+  and endpoint (`lance_docs/lance/guide/object_store.md:356-357`).
 - Unconfirmed: whether `vending.py` already scopes per base for multi-base and shallow-cloned tables; LH-177 checks it.

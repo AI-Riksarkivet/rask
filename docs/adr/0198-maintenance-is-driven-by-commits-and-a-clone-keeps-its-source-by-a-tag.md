@@ -299,7 +299,7 @@ through the multi-question tool, 2026-11-09 and 2026-11-10:
 
 Two fixes every per-table check needed. A file the store cannot place before the scan began reading its referenced set
 is no finding, since a commit landing during the check writes files that look stranded and age is the only evidence an
-unverified file has (`lance_docs/lance/guide/read_and_write.md:996-1003`). And a table carrying the raise's stamp is raised
+unverified file has (`lance_docs/lance/guide/read_and_write.md:997-1004`). And a table carrying the raise's stamp is raised
 again once its floor has moved past the stamp, instead of never again; the stamp carries the epoch to the fraction, so a
 manifest written earlier in the stamp's second cannot read as having passed it.
 

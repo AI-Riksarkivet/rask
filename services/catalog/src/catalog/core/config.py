@@ -101,7 +101,7 @@ class CatalogStorageSettings(StoreIdentitySettings):
     #: straight to object storage with the catalog out of the path, so whatever the estate intends must
     #: travel in the storage options or it does not happen.
     #:
-    #: Key names and their contract are verified against `lance_docs/lance/guide/object_store.md:294-296`, and
+    #: Key names and their contract are verified against `lance_docs/lance/guide/object_store.md:296-298`, and
     #: `lance_storage_options` REFUSES an invalid pairing rather than passing it on: object_store drops
     #: an option it does not recognise, so a wrong value here would land plaintext under a config that
     #: claims encryption — the one failure with no later signal.

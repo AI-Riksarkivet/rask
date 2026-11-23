@@ -1,7 +1,7 @@
 """Version reclamation has one owner, maintenance's pass, and no writer's commit deletes a version ([[LH-245]]).
 
 Lance's automatic cleanup runs INSIDE the commit of whoever writes, every N commits, from the
-`lance.auto_cleanup.*` manifest keys (`lance_docs/lance/guide/read_and_write.md:1042-1104`). Measured on pylance 12.0.0: with
+`lance.auto_cleanup.*` manifest keys (`lance_docs/lance/guide/read_and_write.md:1043-1105`). Measured on pylance 12.0.0: with
 `interval=1, older_than=0s`, one ordinary append took a table from versions 1..7 to 7..8. That deletion
 passes none of maintenance's gates (a legal hold among them), runs under the writer's identity, and is recorded nowhere,
 so a pass removes every key before any gate can return.

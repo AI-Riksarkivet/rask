@@ -3,7 +3,7 @@
 **Status:** accepted.
 
 Lance runs automatic cleanup inside the commit of whoever writes, every N commits, from the
-`lance.auto_cleanup.*` manifest keys (`lance_docs/lance/guide/read_and_write.md:1042-1104`). Measured on pylance 12.0.0: with
+`lance.auto_cleanup.*` manifest keys (`lance_docs/lance/guide/read_and_write.md:1043-1105`). Measured on pylance 12.0.0: with
 `interval=1, older_than=0s` one ordinary append took a table from versions 1..7 to 7..8, and a
 `LanceDataset.commit` of an `Append` (the catalog's `/commit` shape) did the same. That deletion passes none of
 the sweep's gates: a `cleanup_enabled=False` hold and a protected base both return before reclamation, it runs

@@ -2,7 +2,7 @@
 
 Every model that reaches the object store holds `lakehouse.storage.options.StorageOptions`: the key pair as
 `S3KeyPair`, its secret and session token `SecretStr`, beside every other option in clear. The flat map Lance takes
-(`lance_docs/lance/guide/object_store.md:282-296`) is built only at the Lance, boto3 or pyarrow call, so a repr, a str, a
+(`lance_docs/lance/guide/object_store.md:283-298`) is built only at the Lance, boto3 or pyarrow call, so a repr, a str, a
 model dump, a log line or an error that echoes one of these models carries neither, as a vend carries neither
 ([[LH-072]]).
 

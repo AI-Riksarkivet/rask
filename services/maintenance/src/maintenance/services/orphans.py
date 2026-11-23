@@ -393,7 +393,7 @@ def scan_dataset(fs: pafs.FileSystem, dataset_uri: str, *, prefix: str, storage_
 
     A file the store cannot place before the instant the referenced set began to be read is no finding: a commit
     landing while the scan reads writes its files after that instant, and they look unreferenced. Age is the only
-    evidence an unverified file has (`lance_docs/lance/guide/read_and_write.md:996-1003`), so a file is an orphan only
+    evidence an unverified file has (`lance_docs/lance/guide/read_and_write.md:997-1004`), so a file is an orphan only
     when its mtime, listed to the whole second or not, lies surely before that instant (:func:`surely_before`).
     """
     read_at = time.time()

@@ -71,9 +71,9 @@ def test_every_flag_upstream_DEFINES_is_named_in_a_refusal(tmp_path: pathlib.Pat
     a refusal nobody can act on — the module's stated purpose, failing exactly one bit past where it was
     last checked.
 
-    The vendored `lance_docs/lance/format/table/versioning.md` allocates `2^0` through `2^19` and says "Bits at
-    positions 20 and above are unknown", two flags ahead of pylance 14.0.3 (`lance_docs/PROVENANCE.md` § "These docs
-    run ahead of the installed pylance").
+    The vendored `lance_docs/lance/format/table/versioning.md` allocates `2^0` through `2^22` and says "Bits at
+    positions 23 and above are unknown", five flags ahead of pylance 14.0.3 (`lance_docs/PROVENANCE.md` § "These docs
+    run ahead of the installed pylance"). The newest it allocates is named as the oldest is.
 
     NAMING IS NOT SUPPORTING, which is why this asserts both halves: 256 must be named AND must still
     refuse. A dataset mixing exact V2 file versions is one whose layout a rewrite has not been checked
@@ -87,6 +87,9 @@ def test_every_flag_upstream_DEFINES_is_named_in_a_refusal(tmp_path: pathlib.Pat
     assert refusal is not None, "an unsupported flag must refuse"
     assert "unknown" not in refusal, f"the refusal names no feature, so an operator cannot act on it: {refusal}"
     assert "mixed" in refusal.lower(), f"the refusal should name the feature upstream calls it: {refusal}"
+
+    newest = features.describe_unsupported_flags(0, 1 << 22)
+    assert newest is not None and "btree key layout" in newest and "unknown" not in newest, newest
 
 
 @pytest.mark.parametrize(

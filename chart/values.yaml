@@ -561,7 +561,7 @@ vending:
   # reaches it.
   #
   # EMPTY BY DEFAULT = whatever the bucket does, which is every deployment's behaviour today. The names
-  # and their contract come from `lance_docs/lance/guide/object_store.md:294-296`: algorithm must be AES256, aws:kms or
+  # and their contract come from `lance_docs/lance/guide/object_store.md:296-298`: algorithm must be AES256, aws:kms or
   # aws:kms:dsse, and a kmsKeyId REQUIRES one of the two kms values. The catalog refuses an invalid
   # pairing at boot rather than passing it on — object_store ignores an option it does not recognise,
   # so a wrong value would write plaintext while the config claimed encryption.

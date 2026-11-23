@@ -55,7 +55,7 @@ Idea taken from: Lakekeeper's two-step expiry (mark first, reclaim later).
   grace period:
   - the grace period ends and every pin (branch subtree, tag) is released;
   - compaction rewrites the fragments holding the subject, since a delete is a deletion file over an unchanged data
-    file until "deletions can be materialized by rewriting data files" (`lance_docs/lance/format/table/index.md:218`). Compaction
+    file until "deletions can be materialized by rewriting data files" (`lance_docs/lance/format/table/index.md:237`). Compaction
     also rewrites managed blob-v2 sidecars (inline, packed and dedicated), so their old `.blob` files go at the next
     cleanup (`prototypes/lance-erasure-and-commit-door/a4_blob_v2.py`, `a4b_blob_dedicated.py`);
   - every index over an erased column is rebuilt (`create_*_index(..., replace=True)`) or dropped, because compaction

@@ -399,7 +399,7 @@ def _discard_unlanded_attempt(
     Called only once the attempt cannot land, its finalize lost to another commit's manifest or the attempt refused before
     its finalize, so no version names these files, and the next attempt plans afresh and writes its own. Lance would keep
     them 7 days, since a store cannot tell a dead commit's file from one still being written
-    (``lance_docs/lance/guide/read_and_write.md:996-1003``); the catalog knows them for its own. It raises nothing, since it
+    (``lance_docs/lance/guide/read_and_write.md:997-1004``); the catalog knows them for its own. It raises nothing, since it
     runs while another error is on its way: a delete the store refuses is logged and leaves its file to Lance's rule.
     """
     own = committed_files.written_by(transaction, wrote, branch=branch)

@@ -61,14 +61,17 @@ __all__ = [
     "CREATE_FORMAT",
     "DATA_STORAGE_VERSION_KEY",
     "FLAG_BASE_PATHS",
+    "FLAG_BTREE_KEY_LAYOUT",
     "FLAG_COVERED_INDEX_METADATA",
     "FLAG_DELETION_FILES",
+    "FLAG_DELETION_FILE_PATHS",
     "FLAG_DISABLE_TRANSACTION_FILE",
     "FLAG_FRAGMENT_REUSE_INDEX",
     "FLAG_FRAGMENT_TREE",
     "FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS",
     "FLAG_INDEPENDENT_COVERING_FIELDS",
     "FLAG_INLINE_DELETIONS",
+    "FLAG_LOCAL_FRAGMENT_ALIASES",
     "FLAG_MANAGED_BLOBS",
     "FLAG_MIXED_DATA_FILE_VERSIONS",
     "FLAG_NON_REUSABLE_FIELD_IDS",
@@ -170,8 +173,9 @@ FLAG_TABLE_CONFIG = 8
 FLAG_BASE_PATHS = 16
 #: THE BITS ABOVE 16. Upstream's `rust/lance-table/src/feature_flags.rs` at v14.0.3 allocates EIGHTEEN
 #: flags and puts its `FLAG_UNKNOWN` sentinel at `1 << 18`. The vendored `lance_docs/lance/format/table/versioning.md`
-#: § Current Feature Flags names twenty (2^0 to 2^19, bits 16 and 17 reserved); the two above pylance 14.0.3's are
-#: newer than the installed release (`lance_docs/PROVENANCE.md` § "These docs run ahead of the installed pylance").
+#: § Current Feature Flags names twenty-three (2^0 to 2^22; bits 12, 20 and 22 reserved, and 13, 16 and 17 supported
+#: by the format); the five above pylance 14.0.3's are newer than the installed release (`lance_docs/PROVENANCE.md`
+#: § "These docs run ahead of the installed pylance").
 #: Named here so a refusal says WHICH feature it declined instead of "32 (unknown)": an operator can act on
 #: "disable_transaction_file", not on a bare bit. **Naming is not supporting** — none of them enters :data:`SUPPORTED`,
 #: so all of them still refuse.
@@ -215,12 +219,17 @@ FLAG_MANAGED_BLOBS = 16384
 #: it (`migrate_to_non_reusable_field_ids`); measured on pylance 14.0.3, no create, append, delete, update, merge,
 #: schema change, index build, compaction, tag, branch or config write sets it.
 FLAG_NON_REUSABLE_FIELD_IDS = 32768
-#: Reserved by the format and refused by pylance 14.0.3 itself.
+#: Supported by the format the vendored docs describe, and refused by pylance 14.0.3 itself.
 FLAG_ZONE_WRITE_SEEDS = 65536
 FLAG_OBJECT_METADATA = 131072
-#: Named by the vendored docs and newer than pylance 14.0.3, whose open refuses either as an unknown flag.
+#: Named by the vendored docs and newer than pylance 14.0.3, whose open refuses each as an unknown flag.
 FLAG_ROW_ADDR_INDICES = 262144
 FLAG_INLINE_DELETIONS = 524288
+FLAG_LOCAL_FRAGMENT_ALIASES = 1048576
+#: A fragment names its deletion file by `DeletionFile.path` rather than by its fragment id
+#: (`lance_docs/lance/format/table/index.md` § Deletion Files).
+FLAG_DELETION_FILE_PATHS = 2097152
+FLAG_BTREE_KEY_LAYOUT = 4194304
 
 #: Flags this pass can compact / GC / scan without being wrong.
 #:
@@ -272,13 +281,16 @@ _FLAG_NAMES = {
     FLAG_FRAGMENT_REUSE_INDEX: "fragment reuse index",
     FLAG_SPILLED_ROW_LINEAGE: "spilled row lineage (unstable)",
     FLAG_FRAGMENT_TREE: "fragment tree (reserved)",
-    FLAG_INDEPENDENT_COVERING_FIELDS: "independent covering fields (reserved)",
+    FLAG_INDEPENDENT_COVERING_FIELDS: "independent covering fields",
     FLAG_MANAGED_BLOBS: "managed blobs",
     FLAG_NON_REUSABLE_FIELD_IDS: "non-reusable field ids (writer-required only)",
-    FLAG_ZONE_WRITE_SEEDS: "zone write seeds (reserved)",
-    FLAG_OBJECT_METADATA: "object metadata (reserved, writer-required only)",
+    FLAG_ZONE_WRITE_SEEDS: "zone write seeds",
+    FLAG_OBJECT_METADATA: "object metadata (writer-required only)",
     FLAG_ROW_ADDR_INDICES: "row address indices (writer-required only)",
     FLAG_INLINE_DELETIONS: "inline deletions",
+    FLAG_LOCAL_FRAGMENT_ALIASES: "local fragment aliases (reserved)",
+    FLAG_DELETION_FILE_PATHS: "deletion file paths",
+    FLAG_BTREE_KEY_LAYOUT: "btree key layout (reserved, writer-required only)",
 }
 
 #: Manifest protobuf field numbers. Pinned by ``test_maintenance_features.py`` against the documented

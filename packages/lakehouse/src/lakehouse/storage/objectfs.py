@@ -134,10 +134,10 @@ class StoreTimeouts(BaseModel):
         }
 
 
-#: The three algorithms object_store accepts, verbatim from `lance_docs/lance/guide/object_store.md:294`. A fourth value
+#: The three algorithms object_store accepts, verbatim from `lance_docs/lance/guide/object_store.md:296`. A fourth value
 #: is not an error at the store — it is an ignored option, and the bytes land in plaintext.
 _SSE_ALGORITHMS: Final = ("AES256", "aws:kms", "aws:kms:dsse")
-#: The two that carry a customer key. `lance_docs/lance/guide/object_store.md:295`, on `aws_sse_kms_key_id`: "If set,
+#: The two that carry a customer key. `lance_docs/lance/guide/object_store.md:297`, on `aws_sse_kms_key_id`: "If set,
 #: `aws_server_side_encryption` must be `"aws:kms"` or `"aws:kms:dsse"`."
 SSE_KMS_ALGORITHMS: Final = ("aws:kms", "aws:kms:dsse")
 

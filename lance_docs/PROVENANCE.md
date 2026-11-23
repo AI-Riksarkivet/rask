@@ -13,7 +13,7 @@ edited; the repo's pre-commit hooks trim trailing whitespace and add final newli
 
 | Directory | Source | Pinned at | Read by |
 | --- | --- | --- | --- |
-| `lance/` | [`lance-format/lance`](https://github.com/lance-format/lance) `docs/src/` | `main` at `a254af62a491335861b77c589d55e6966c6b8511` (2026-11-17) | citations across the estate |
+| `lance/` | [`lance-format/lance`](https://github.com/lance-format/lance) `docs/src/` | `main` at `f9fd19edfb14e43d3981b20dfaf183672751414b` (2026-11-22) | citations across the estate |
 | `ns_catalog/` | [`lance-format/lance-namespace`](https://github.com/lance-format/lance-namespace) `docs/src/` | `main` at `a13c746bdf369b62d4fc583357564f0cddfad667` (2026-10-23) | `tests/integration/test_spec_conformance.py` and criterion 2's `tests/e2e-py/test_the_catalog_is_correct.py` read `ns_catalog/spec.yaml` |
 
 The site's Lance Reference pages (`docs/lance/file-format.md`, `guide.md`, `namespace.md`) embed every page of
@@ -30,11 +30,18 @@ installed package (pylance's own docstrings, measured behaviour), or to lance-ra
 not have, and a claim taken from them is settled on pylance 14.0.3 before rask relies on it (CLAUDE.md: "or by
 measuring on the installed pylance"). Measured examples of the gap:
 
-- **The feature-flag table allocates twenty flags** (`lance/format/table/versioning.md` § Current Feature Flags,
-  `2^0` through `2^19`). pylance 14.0.3 allocates eighteen (its release notes: flags `2^14` to `2^17` allocated,
-  `FLAG_UNKNOWN = 1 << 18`), so `FLAG_ROW_ADDR_INDICES` (`2^18`) and `FLAG_INLINE_DELETIONS` (`2^19`) are newer than the
-  installed release. `lakehouse.lancekit.features` names all twenty and supports none above `2^13`; a table carrying one is
-  refused by name, which is the refusal the format asks of a reader that does not support it.
+- **The feature-flag table allocates twenty-three flags** (`lance/format/table/versioning.md` § Current Feature Flags,
+  `2^0` through `2^22`). pylance 14.0.3 allocates eighteen (its release notes: flags `2^14` to `2^17` allocated,
+  `FLAG_UNKNOWN = 1 << 18`), so `FLAG_ROW_ADDR_INDICES` (`2^18`), `FLAG_INLINE_DELETIONS` (`2^19`),
+  `FLAG_LOCAL_FRAGMENT_ALIASES` (`2^20`, reserved), `FLAG_DELETION_FILE_PATHS` (`2^21`) and `FLAG_BTREE_KEY_LAYOUT`
+  (`2^22`, writer-only, reserved) are newer than the installed release. The docs call bits 13, 16 and 17 supported;
+  pylance 14.0.3 refuses each. `lakehouse.lancekit.features` names all twenty-three and supports none above `2^13`; a
+  table carrying one is refused by name, which is the refusal the format asks of a reader that does not support it.
+- **A fragment may name its deletion file by path** (`lance/format/table/index.md` § Deletion Files,
+  `FLAG_DELETION_FILE_PATHS`). pylance 14.0.3 writes none; the vend's `_deletions/*` glob covers such a file, and
+  where rask derives a deletion file's path from its fragment id it reads the form 14.0.3 writes.
+- **`aws_profile` is a storage option** (`lance/guide/object_store.md` § S3 Configuration: "Defaults to `AWS_PROFILE`").
+  It is not in pylance 14.0.3; the hostile-environment read-back measures it at the bump that brings it.
 - **The table layout adds `_blobs/{UUID}.blob`** (`lance/format/table/layout.md` § Basic Layout), Managed blob
   payloads under `FLAG_MANAGED_BLOBS`. pylance 14.0.3 writes them: a table created with schema metadata
   `lance.blob.managed = "true"` carries flags `(16386, 16386)` and a `_blobs/` directory (measured 2026-11-17). The
