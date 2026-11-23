@@ -1,4 +1,4 @@
-.PHONY: fga-store-check sbom registry-gc dagger-gc dev-gc help install build test lint lint-imports fmt clean typecheck knip comment-gate check coverage fga-test ci dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-values k3s-values-check helm-history helm-rollback k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth release-handoff go-fmt scan-config scan-secrets scan-image seed-dev compact-due e2e-isolation e2e-container-deletes e2e-fga-model
+.PHONY: k3s-extra-values-check fga-store-check sbom registry-gc dagger-gc dev-gc help install build test lint lint-imports fmt clean typecheck knip comment-gate check coverage fga-test ci dev dev-k3s frontend-build frontend-check console-image claude-bootstrap k3s-install k3s-fixtures k3s-deps k3s-build k3s-import k3s-up k3s-values k3s-values-check helm-history helm-rollback k3s-down k3s-purge k9s bootstrap dev-registry prod-render-check chart-docs chart-docs-check alert-rules-check alert-rules-drill audit smoke-rustfs rustfs-lifecycle rustfs-provisioning governance-chain nats-auth release-handoff go-fmt scan-config scan-secrets scan-image seed-dev compact-due e2e-isolation e2e-container-deletes e2e-fga-model
 
 help:
 	@echo "Targets:"
@@ -503,11 +503,24 @@ FIXTURES ?= external-secrets nats cloudnative-pg dex rustfs openbao observabilit
 # object store publishes its events there over the same CA.
 DEV_BUS_CA := rask-nats-ca
 
-k3s-fixtures: ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
+# VALUES FROM OUTSIDE THIS REPOSITORY ([[XC-220]]). What a lakehouse install must carry for something that is not the
+# lakehouse (a sign-in client at the dev issuer, a bus user, a store reader, a declared grant) is written where that
+# thing lives and named here, so the estate is still composed from git alone and every `make k3s-up` carries it again.
+# Each is a list of values files, absolute or relative to this directory, empty by default, appended after rask's own:
+# K3S_EXTRA_VALUES for the rask release, K3S_DEX_EXTRA_VALUES for the Dex fixture. Two lists, because the two charts
+# take different keys and the rask chart refuses a top-level key it does not declare. A value k3s-up derives and passes
+# with `--set` (the issuer, the vended endpoint, the estate admin, the registry) wins over any file, these included.
+K3S_EXTRA_VALUES ?=
+K3S_DEX_EXTRA_VALUES ?=
+
+k3s-extra-values-check: ## Refuse a values file K3S_EXTRA_VALUES or K3S_DEX_EXTRA_VALUES names that cannot be read
+	@for f in $(K3S_EXTRA_VALUES) $(K3S_DEX_EXTRA_VALUES); do [ -r "$$f" ] || { echo "values file '$$f' (K3S_EXTRA_VALUES / K3S_DEX_EXTRA_VALUES) is not readable from $(CURDIR)" >&2; exit 1; }; done
+
+k3s-fixtures: k3s-extra-values-check ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
 	$(if $(filter-out dex nats rustfs,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex nats rustfs,$(FIXTURES)))
 	$(if $(filter nats,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh nats -- --set nats.auth.server=true)
 	$(if $(filter rustfs,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh rustfs -- --set-string events.busCa=$(DEV_BUS_CA))
-	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER))
+	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER) $(foreach f,$(K3S_DEX_EXTRA_VALUES),-f $(f)))
 
 k3s-crds: ## Apply the vendored CRDs no release owns (see chart/.helmignore), before the cloudnative-pg fixture
 	@# Server-side apply: the CNPG CRD set exceeds kubectl's client-side annotation limit.
@@ -540,11 +553,12 @@ K3S_VALUES = --reset-values \
   -f deploy/values-e2e-suites.yaml \
   $(if $(K3S_REGISTRY),--set-string image.repository=$(K3S_REGISTRY),--set image.localImages=true) \
   $(K3S_PINS_ARG) \
+  $(foreach f,$(K3S_EXTRA_VALUES),-f $(f)) \
   --set-string auth.oidc.issuer=$(DEV_ISSUER) \
   --set-string vending.endpoint=$(DEV_VENDED_ENDPOINT) \
   --set-string auth.bootstrapAdmin=$(DEV_ADMIN)
 
-k3s-values-check: ## Refuse to compose the release's values when a derived one came out empty
+k3s-values-check: k3s-extra-values-check ## Refuse to compose the release's values when a derived one came out empty
 	@case '$(DEV_VENDED_ENDPOINT)' in http://:*|*:) echo "DEV_VENDED_ENDPOINT '$(DEV_VENDED_ENDPOINT)' names no node address or port: is kubectl pointed at the cluster?" >&2; exit 1;; esac
 	@case '$(DEV_ADMIN)' in dex~?*) ;; *) echo "the estate admin '$(DEV_ADMIN)' is no Dex principal: scripts/dex_principal.py $(DEV_ADMIN_EMAIL) failed" >&2; exit 1;; esac
 

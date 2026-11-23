@@ -218,6 +218,21 @@ it). Nothing is read back from the live release, so a value that exists only the
 values schema refuses a top-level key `values.yaml` does not declare, so a key the chart stopped reading fails the
 render.
 
+**Values written outside this repository are named, never copied in ([[XC-220]]).** What an install must carry for
+something that is not the lakehouse (a sign-in client at the dev issuer, a bus user, a store reader, a declared grant)
+lives in that thing's own repository and reaches the dev estate through two make variables, each a list of values files,
+empty by default and appended after rask's own:
+
+```bash
+make k3s-up K3S_EXTRA_VALUES=<file for the rask release> K3S_DEX_EXTRA_VALUES=<file for the Dex fixture>
+```
+
+They are two lists because the two charts take different keys, and the rask chart refuses a top-level key it does not
+declare. With both empty, `make k3s-values` prints what it prints without them. A file that cannot be read is refused
+before anything is installed. The values `make k3s-up` derives and passes with `--set` win over any file. A host that
+always installs with the same files exports the variables in its own environment; run without them, the next
+`make k3s-up` drops what the files added, as it drops any value git does not supply.
+
 **A new build reaches the release by tag through the pins file.** Push each image under its tag, name the tags, then
 upgrade:
 

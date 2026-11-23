@@ -157,7 +157,10 @@ measured 2026-09-25 on a maintenance setting, contained only because the rolling
 - **`make k3s-up` and `make k3s-converge` use `--reset-values`** ([[XC-194]]): the release's values are composed from
   git each time (`deploy/values-local.yaml`, `image.repository` from `K3S_REGISTRY` or `image.localImages`, the tags in
   `deploy/values-live-pins.yaml`, and the derived `auth.oidc.issuer`, `vending.endpoint` and `auth.bootstrapAdmin`),
-  so a value that exists only in the live release does not outlive the next run. `make k3s-values` prints the
+  so a value that exists only in the live release does not outlive the next run. Values written outside this
+  repository are named in `K3S_EXTRA_VALUES` (the rask release) and `K3S_DEX_EXTRA_VALUES` (the Dex fixture), lists of
+  values files, empty by default, appended after rask's own ([[XC-220]]); a `make k3s-up` run without them drops what
+  they added. `make k3s-values` prints the
   composition `helm get values rask -o json` equals afterwards. A new build reaches it by tag:
   `make k3s-pins TAGS="<stem>=<tag> ..."` writes the tags into the pins file without reading the cluster.
 - A hand-run upgrade that must keep the release's values uses `--reset-then-reuse-values` (helm ≥ 3.14; this estate
