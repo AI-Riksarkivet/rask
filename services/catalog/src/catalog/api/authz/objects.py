@@ -7,19 +7,20 @@ A table or namespace is asked about as the object its grants are held by, ``tabl
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from typing import Literal
 
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import LanceNamespace, NamespaceNotFoundError
-from pydantic import BaseModel, ConfigDict
 
 from catalog.api.authz.rungs import TRASH_DOORS
 from catalog.api.dependencies import Resolver
 from catalog.core import write_judge
 from catalog.core.config import CatalogStore
 from catalog.services import object_uuids, table_claims
+from catalog.services.governed_object import GovernedObject
 from lakehouse.governed import fga_ids
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.problems.outage import store_refusal
@@ -30,6 +31,7 @@ from lakehouse.records.trash import TrashKind
 __all__ = [
     "GovernedObject",
     "addressed_object",
+    "identify_descendants",
     "identify_namespace",
     "listed_object",
     "namespace_parent",
@@ -140,22 +142,6 @@ async def listed_object(resolver: Resolver, kind: Literal["table", "namespace"],
         return None
 
 
-class GovernedObject(BaseModel):
-    """A table or namespace a door acts on: its name and the uuid every record kept for it is keyed by (ADR 0173 §8)."""
-
-    model_config = ConfigDict(frozen=True)
-
-    kind: Literal["table", "namespace"]
-    segments: list[str]
-    uuid: str
-    #: A table's location as its name resolved; empty for a namespace, which has none.
-    location: str = ""
-
-    def fga_object(self) -> str:
-        """The FGA object its grants are held by: ``table:<uuid>`` or ``namespace:<uuid>`` ([[LH-524]])."""
-        return fga_ids.object_of(self.kind, self.uuid)
-
-
 async def identify_namespace(resolver: Resolver, ns: LanceNamespace, segments: list[str]) -> GovernedObject:
     """The namespace ``segments`` names as this request resolved it, with its uuid: the one the router authorized, so a
     door keeps every record under the uuid its caller was judged on (ADR 0173 §7), as a table door does through
@@ -187,6 +173,17 @@ async def standing(ns: LanceNamespace, settings: CatalogStore, kind: Literal["ta
         resolved = await run_in_threadpool(table_claims.resolve, ns, table_claims.claim_store(settings), segments)
         return GovernedObject(kind=kind, segments=segments, uuid=resolved.require_uuid(), location=resolved.location or "")
     return GovernedObject(kind=kind, segments=segments, uuid=await run_in_threadpool(object_uuids.require_namespace_uuid, ns, segments))
+
+
+async def identify_descendants(ns: LanceNamespace, settings: CatalogStore, descendants: list[tuple[str, list[str]]]) -> list[GovernedObject]:
+    """Every descendant a cascade is about to remove, with its uuid, read while it still stands.
+
+    CONCURRENT (catalog-api-11): one independent read per descendant on the pre-flight of a cascade, so its latency
+    does not grow with the subtree. Enumeration order is kept, so a refusal names the FIRST protected descendant.
+    """
+    return list(
+        await asyncio.gather(*(standing(ns, settings, "table" if resource == "table" else "namespace", segments=child) for resource, child in descendants))
+    )
 
 
 # --------------------------------------------------------------------------- #

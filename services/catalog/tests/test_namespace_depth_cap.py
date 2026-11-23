@@ -15,7 +15,7 @@ that dies is the one rooted at the WAREHOUSE, so a single pathological branch ta
 down for every object in that bucket and every user of it, owners included. A plain `writer` — the
 rung that may create namespaces — is enough to build one.
 
-Both read walkers (`tables.py::_collect_tables`, `namespaces.py::_collect_descendants`) had capped
+Both read walkers (`tables.py::_collect_tables`, `catalog.services.namespace_subtrees.collect_descendants`) had capped
 their recursion for a while. Nothing capped CREATION, so the estate could be driven into a shape its
 own authorization model cannot evaluate. These tests pin the door.
 

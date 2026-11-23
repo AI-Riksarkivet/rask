@@ -93,7 +93,7 @@ async def _drain(destroying: AsyncIterator[list[str]]) -> list[list[str]]:
 def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to(tmp_path: Path) -> None:
     """The dir backend refuses `behavior=Cascade` for every casing, so this door must do the work:
     tables first, then namespaces deepest-first, then the root — each drop hitting an EMPTY object."""
-    from catalog.api.v1.endpoints.namespaces import _destroy_subtree  # noqa: PLC2701 — the unit under test
+    from catalog.services.namespace_subtrees import destroy_subtree
 
     ns: Any = _RecordingNs()
     descendants = [
@@ -103,7 +103,7 @@ def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to(tmp_path: 
     ]
     asyncio.run(
         _drain(
-            _destroy_subtree(
+            destroy_subtree(
                 ns,
                 ["bronze"],
                 descendants,
@@ -130,7 +130,7 @@ def test_an_already_absent_child_is_DRIFT_not_an_error(tmp_path: Path) -> None:
     """A half-finished earlier delete must not make the subtree undeletable forever: a table removed before the
     cascade's deregister reached it answers TableNotFound there and no longer describes, and that is drift, never
     bytes reported left. The cascade did not remove it, so it lifts the fence it held the table's claim by."""
-    from catalog.api.v1.endpoints.namespaces import _destroy_subtree  # noqa: PLC2701
+    from catalog.services.namespace_subtrees import destroy_subtree
 
     class _Vanishing(_RecordingNs):
         def describe_table(self, request: Any) -> Any:
@@ -151,7 +151,7 @@ def test_an_already_absent_child_is_DRIFT_not_an_error(tmp_path: Path) -> None:
     claims = _claimed(tmp_path, ghost)
     asyncio.run(
         _drain(
-            _destroy_subtree(
+            destroy_subtree(
                 ns,
                 ["bronze"],
                 ghost,

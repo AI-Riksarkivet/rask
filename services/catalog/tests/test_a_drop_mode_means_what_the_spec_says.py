@@ -85,7 +85,7 @@ async def _drop(
             raise NamespaceNotFoundError("Namespace not found: ghost")
         return []
 
-    monkeypatch.setattr(ns_ep, "_collect_descendants", _collect)
+    monkeypatch.setattr(ns_ep.namespace_subtrees, "collect_descendants", _collect)
 
     def _native(_ns: Any, op: str, _req: Any) -> Any:
         if op == "describe_namespace":

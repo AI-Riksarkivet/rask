@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-import logging
+import asyncio
 
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
-    ConcurrentModificationError,
     InvalidInputError,
     InvalidTableStateError,
     LanceNamespace,
@@ -29,6 +28,7 @@ from lakehouse.naming import CATALOG_DELIMITER
 
 
 __all__ = [
+    "require_descendants_unprotected",
     "require_namespace_as_identified",
     "require_namespace_depth",
     "require_namespace_unprotected",
@@ -37,12 +37,8 @@ __all__ = [
     "require_parent_exists",
     "require_project_exists",
     "require_rename_within_its_warehouse",
-    "require_standing_as_identified",
     "require_table_unprotected",
 ]
-
-
-log = logging.getLogger(__name__)
 
 
 # --------------------------------------------------------------------------- #
@@ -186,7 +182,7 @@ def require_not_protected(protected: bool, *, kind: str, obj_id: str, force: boo
     THE TABLE CASE USED TO RAISE CODE 3 TOO, and that is a live defect rather than a cosmetic one:
     ``NamespaceNotEmpty`` tells a generated client the container has contents, so the correct response
     to it is to empty the container and retry — against a table that was never full, and whose refusal
-    no amount of emptying changes. The cascade path (`namespaces.py::_require_descendants_unprotected`)
+    no amount of emptying changes. The cascade path (:func:`require_descendants_unprotected`)
     makes it worse, because there the namespace genuinely IS non-empty: the client's retry is
     well-founded, it drops every unprotected sibling, and it still cannot pass the one protected table.
 
@@ -216,20 +212,7 @@ async def require_namespace_as_identified(ns: LanceNamespace, namespace: Governe
         ConcurrentModificationError: The name holds another namespace, or none.
     """
     standing = await run_in_threadpool(object_uuids.resolve_namespace_uuid, ns, namespace.segments)
-    require_standing_as_identified(namespace.segments, identified=namespace.uuid, standing=standing)
-
-
-def require_standing_as_identified(segments: list[str], *, identified: str, standing: str | None) -> None:
-    """:func:`require_namespace_as_identified` on a uuid its caller has just read for ``segments`` (``standing``), for a
-    walk that describes each namespace before it drops it.
-
-    Raises:
-        ConcurrentModificationError: ``standing`` is not ``identified``.
-    """
-    if standing != identified:
-        name = fga_ids.canonical_object_id(segments)
-        log.warning("door_refused_namespace_changed", extra={"object": name, "identified": identified, "standing": standing})
-        raise ConcurrentModificationError(f"namespace {name} was dropped or replaced while this request acted on it; retry")
+    object_uuids.require_standing_as_identified(namespace.segments, identified=namespace.uuid, standing=standing)
 
 
 async def require_table_unprotected(settings: CatalogStore, table: ResolvedTable, *, force: bool) -> None:
@@ -294,3 +277,17 @@ def require_rename_within_its_warehouse(source: list[str], destination: list[str
             f"table '{fga_ids.canonical_object_id(source)}' cannot be renamed to '{fga_ids.canonical_object_id(destination)}': a rename keeps a "
             f"table in its warehouse, so the new name is {source[0]}{CATALOG_DELIMITER}<namespace>{CATALOG_DELIMITER}<table>"
         )
+
+
+async def require_descendants_unprotected(settings: CatalogStore, descendants: list[GovernedObject], *, force: bool) -> None:
+    """Refuse a cascade that would destroy a PROTECTED descendant, naming the first one found.
+
+    The guard at the named rung only sees the id in the URL; a cascade's unit of destruction is the
+    whole subtree, and those children are destroyed inside one native call that never reaches a door.
+    So the check belongs here, where the destroyed set is actually enumerated.
+    """
+    if force or not descendants:
+        return
+    records = await asyncio.gather(*(run_in_threadpool(protections.read, settings, item.kind, item.uuid) for item in descendants))
+    for item, record in zip(descendants, records, strict=True):
+        require_not_protected(record is not None and record.protected, kind=item.kind, obj_id=fga_ids.canonical_object_id(item.segments), force=False)

@@ -66,7 +66,6 @@ from catalog.api.dependencies import (
 )
 from catalog.api.pagination import ListLimit
 from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken
-from catalog.api.v1.endpoints import namespaces as namespaces_api
 from catalog.core import native
 from catalog.core.config import CatalogStorageSettings, CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
@@ -82,7 +81,7 @@ from catalog.schemas import (
     TrashListing,
     WarehouseResponse,
 )
-from catalog.services import clone_endings, table_claims, trash_doors, warehouses
+from catalog.services import clone_endings, namespace_subtrees, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, Unregistered
 from catalog.services.clone_ending_records import CloneEnding
 from catalog.services.control_records import ProtectionChange, with_protection
@@ -764,7 +763,7 @@ async def _namespaces_in(ns: LanceNamespace, warehouse_id: str) -> list[str]:
     A warehouse whose row is gone holds none: a half-finished earlier delete dropped it last.
     """
     try:
-        _response, names = await namespaces_api._drain_namespaces(ns, [warehouse_id])  # noqa: SLF001 — one paged listing, deliberately
+        _response, names = await namespace_subtrees.drain_namespaces(ns, [warehouse_id])
     except NamespaceNotFoundError:
         return []
     return [fga_ids.canonical_object_id([warehouse_id, name]) for name in sorted(names)]
@@ -816,14 +815,14 @@ async def _cascade_subtrees(ns: LanceNamespace, settings: CatalogStore, held: li
         segments = parse_identifier(name)
         try:
             namespace = await objects.standing(ns, settings, "namespace", segments=segments)
-            listed = await run_in_threadpool(namespaces_api._collect_descendants, ns, segments)  # noqa: SLF001 — one walker, deliberately
+            listed = await run_in_threadpool(namespace_subtrees.collect_descendants, ns, segments)
         except NamespaceNotFoundError:
             subtrees.append(_NamespaceSubtree(segments=segments, uuid=None, descendants=[]))
             continue
-        descendants = await namespaces_api._identify(ns, settings, listed)  # noqa: SLF001 — one walker, deliberately
+        descendants = await objects.identify_descendants(ns, settings, listed)
         subtrees.append(_NamespaceSubtree(segments=segments, uuid=namespace.uuid, descendants=descendants))
     doomed = [item for subtree in subtrees for item in subtree.guarded]
-    await namespaces_api._require_descendants_unprotected(settings, doomed, force=force)  # noqa: SLF001 — one protection pre-flight, deliberately
+    await hierarchy.require_descendants_unprotected(settings, doomed, force=force)
     return subtrees
 
 

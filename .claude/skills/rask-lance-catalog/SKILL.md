@@ -669,7 +669,7 @@ governing their data. The project-scoped surface is the console's project page, 
   object with a live trash record, whose records and grants stay for its undrop. Of the tables it listed it ends only
   those it removed itself, each under its claim's fence ([[LH-586]], "A cascade removes each table as that door does"
   above): one a rename carried out before its turn keeps its grants. The namespace door's destroyed cascade
-  (`_destroy_subtree`, a generator) announces each table to lineage as it goes and ends the subtree through the same
+  (`catalog.services.namespace_subtrees.destroy_subtree`, a generator) announces each table to lineage as it goes and ends the subtree through the same
   walk, as do its Restrict, Skip and Overwrite paths. A part-way failure answers 503 `PartiallyAppliedError` naming
   `namespaces_dropped` (nested ones included), `tables_removed`, `trash_ended` and `tuples_revoked`, which counts each
   revoke as it lands and a partly revoked object's removed tuples through `fga_writes.RevokeInterruptedError`; re-issuing the call
@@ -786,7 +786,7 @@ governing their data. The project-scoped surface is the console's project page, 
   from two resolutions. Pinned by
   `tests/integration/test_a_rename_carries_what_the_table_holds.py`.
   A destructive CASCADE destroys its children INSIDE one native call, so they never re-enter this
-  door — `drop_namespace` therefore enumerates `_collect_descendants` whenever `behavior=cascade`
+  door — `drop_namespace` therefore enumerates `catalog.services.namespace_subtrees.collect_descendants` whenever `behavior=cascade`
   (no longer gated on `fga_enabled`) and protection-checks EVERY enumerated id before anything
   drops, refusing 409 and NAMING the protected descendant; `force` turns the subtree lock exactly
   as at the named rung, and on the force path the descendants' protection records are cleared after

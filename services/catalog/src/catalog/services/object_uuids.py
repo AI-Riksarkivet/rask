@@ -5,6 +5,9 @@ announced after the door's act, so the table is read through the location that a
 it: a rename or a re-create landing between the act and the announcement moves the name and leaves the location, so
 the event still names the table it was about. Best-effort, as the announcement is: a uuid that cannot be read is
 ``None``, and the event carries the name alone.
+
+A door or a walk that acts on a namespace by name is held to the uuid it identified it by
+(:func:`require_standing_as_identified`), which refuses rather than answer best-effort.
 """
 
 from __future__ import annotations
@@ -12,11 +15,12 @@ from __future__ import annotations
 import logging
 from typing import Literal
 
-from lance_namespace import DescribeNamespaceRequest, DescribeTableRequest, InternalError, LanceNamespace, NamespaceNotFoundError
+from lance_namespace import ConcurrentModificationError, DescribeNamespaceRequest, DescribeTableRequest, InternalError, LanceNamespace, NamespaceNotFoundError
 
 from catalog.core import native
 from lakehouse.events.control_events import ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
+from lakehouse.governed import fga_ids
 from lakehouse.naming import uuid_of
 from lakehouse.process.supervision import is_fault
 from lakehouse.records import location_claims
@@ -115,3 +119,16 @@ def of_table(ns: LanceNamespace, store: ClaimStore, segments: list[str], *, loca
 def of_namespace(ns: LanceNamespace, segments: list[str]) -> ControlUuids:
     """A namespace's uuid and its parent namespace's."""
     return ControlUuids(object_uuid=namespace_uuid(ns, segments), namespace_uuid=namespace_uuid(ns, segments[:-1]))
+
+
+def require_standing_as_identified(segments: list[str], *, identified: str, standing: str | None) -> None:
+    """Refuse unless the uuid its caller has just read for the namespace ``segments`` (``standing``) is the one it was
+    identified by: for a door acting on a namespace by name, and a walk that describes each namespace before it drops it.
+
+    Raises:
+        ConcurrentModificationError: ``standing`` is not ``identified``.
+    """
+    if standing != identified:
+        name = fga_ids.canonical_object_id(segments)
+        log.warning("door_refused_namespace_changed", extra={"object": name, "identified": identified, "standing": standing})
+        raise ConcurrentModificationError(f"namespace {name} was dropped or replaced while this request acted on it; retry")

@@ -48,7 +48,7 @@ def is_spelled_as_a_uuid(segment: str) -> bool:
 #:
 #: ONE constant, here rather than in an endpoint module, because
 #: three separate things now depend on agreeing about it: the two read walkers
-#: (`tables.py::_collect_tables`, `namespaces.py::_collect_descendants`) and — since 2026-08-15 — the
+#: (`tables.py::_collect_tables`, `catalog.services.namespace_subtrees.collect_descendants`) and — since 2026-08-15 — the
 #: CREATE guard. A second copy is how F10 item 10 happened, where one walker truncated a pathological
 #: tree while the other recursed into a stack overflow.
 #:

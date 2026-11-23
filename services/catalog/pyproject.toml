@@ -44,7 +44,7 @@ lakehouse = { workspace = true }
 # new top-level module name its layer here before the contract passes. Lance's failures read as the spec's refusals
 # (`core.lance_refusals`) are the floor a caller's expression is bounded on (`core.query_bounds`): the bound reads a
 # caller's SQL through the refusal that answers it, and no refusal asks a bound. The table operations
-# (`services.tables`) import one way: the doors' operations (writes, schema changes, a rename) over the commit path,
+# (`services.tables`) import one way: the doors' operations (writes, schema changes, a rename, a table's retirement) over the commit path,
 # a table's creation, its destruction, its reads and its refs, which share nothing, over what a committed version says.
 # The authorization modules (`api.authz`) import one way: the router's guard over the doors it judges (the write judge,
 # grant authority, a handler's own gates, a listing's visible page, an object's and a warehouse's grants), over the
@@ -73,7 +73,7 @@ name = "ADR 0224: the catalog's table operations import one way, the doors' oper
 type = "layers"
 containers = ["catalog.services.tables"]
 layers = [
-    "writes | schema | rename",
+    "writes | schema | rename | retirement",
     "commits | creation | destroy | reads | refs",
     "versions",
 ]

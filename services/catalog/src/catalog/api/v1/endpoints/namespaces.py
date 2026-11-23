@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from contextlib import suppress
 from functools import partial
 
 from fastapi import APIRouter, Response
@@ -13,20 +11,15 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     CreateNamespaceRequest,
     CreateNamespaceResponse,
-    DeregisterTableRequest,
     DescribeNamespaceRequest,
     DescribeNamespaceResponse,
-    DescribeTableRequest,
-    DescribeTableResponse,
     DropNamespaceRequest,
     DropNamespaceResponse,
     InternalError,
     InvalidInputError,
     InvalidTableStateError,
     LanceNamespace,
-    ListNamespacesRequest,
     ListNamespacesResponse,
-    ListTablesRequest,
     ListTablesResponse,
     NamespaceAlreadyExistsError,
     NamespaceExistsRequest,
@@ -34,7 +27,6 @@ from lance_namespace import (
     NamespaceNotFoundError,
     RegisterTableRequest,
     TableAlreadyExistsError,
-    TableNotFoundError,
 )
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
@@ -61,29 +53,22 @@ from catalog.api.security import Caller, CurrentToken
 from catalog.core import native, table_objects, write_judge
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.formats import reject_unsupported_properties
-from catalog.core.identifiers import MAX_NAMESPACE_DEPTH, UUID_PROPERTY, parse_identifier, reconcile_body_id, with_minted_uuid
+from catalog.core.identifiers import UUID_PROPERTY, parse_identifier, reconcile_body_id, with_minted_uuid
 from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE
-
-# `MAX_NAMESPACE_DEPTH` is IMPORTED, not redeclared: the point of F10 item 10 is that two walkers
-# over the same tree disagreed about how deep it may go, and a second copy of the number would let
-# them drift apart again the moment one is tuned.
 from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
 from catalog.core.pagination import paginate
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
-from catalog.services import clone_endings, object_uuids, protections, table_claims, trash_doors, warehouses
+from catalog.services import namespace_subtrees, protections, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves, Unregistered
-from catalog.services.clone_ending_records import CloneEnding
-from catalog.services.tables import destroy
 from lakehouse.events.control_emit import emit_control
 from lakehouse.events.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids
-from lakehouse.naming import CATALOG_DELIMITER, uuid_of
-from lakehouse.records import base_registry, clone_sources, location_claims, protection, trash
+from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.records import base_registry, location_claims, protection, trash
 from lakehouse.records.protection import ProtectionRecord
 from lakehouse.records.trash import TrashRecord
-from lakehouse.storage.options import StorageOptions
 
 
 log = logging.getLogger(__name__)
@@ -96,55 +81,6 @@ spec_router = APIRouter(prefix="/v1/namespace", tags=["namespace"])
 #: notion of a drop that can be taken back. It inherits the same three rungs as the
 #: spec router (`api/v1/router.py`), so moving a route does not move it out of its gate.
 management_router = APIRouter(prefix="/management/v1/namespace", tags=["namespace-management"])
-
-# Safety ceiling on the pagination loops in _collect_descendants — a runaway/looping backend token can't
-# spin forever. Far above any real namespace fan-out.
-_MAX_LIST_PAGES = 1000
-
-
-def _collect_descendants(ns: LanceNamespace, segments: list[str]) -> list[tuple[str, list[str]]]:
-    """Every ``(resource, segments)`` under ``segments`` — child tables AND nested namespaces, recursively.
-
-    Enumerated BEFORE a Cascade drop removes them (afterwards they can't be listed), so the caller can
-    revoke their FGA tuples once the drop commits. ``include_declared`` catches declared-only tables (they
-    hold an owner grant too). Blocking native list calls → the caller runs this in a threadpool.
-
-    DEPTH-CAPPED at the same bound the listing walk uses (diff2 F10 item 10). This recursed without one
-    while `tables.py::_collect_tables` capped at ``MAX_NAMESPACE_DEPTH``, so the identical pathological
-    tree was a truncated listing in one walker and a Python stack overflow in the other — and this is the
-    walker that runs on the DESTRUCTIVE path, where crashing mid-enumeration means the cascade proceeds
-    against a partial descendant list. Hitting the cap is reported the same way page truncation already
-    is, because it has the same consequence: an incomplete revoke leaves orphan grants.
-    """
-    if len(segments) >= MAX_NAMESPACE_DEPTH:
-        log.warning("namespace_depth_capped", extra={"namespace": segments, "cap": MAX_NAMESPACE_DEPTH})
-        return []
-    found: list[tuple[str, list[str]]] = []
-    token: str | None = None
-    for _ in range(_MAX_LIST_PAGES):
-        tables: ListTablesResponse = native.call(ns, "list_tables", ListTablesRequest(id=segments, include_declared=True, page_token=token))
-        found.extend(("table", [*segments, name]) for name in tables.tables or [])
-        token = tables.page_token or None
-        if not token:
-            break
-    else:
-        # Hit the ceiling with a token still outstanding → a PARTIAL enumeration. Surface it (a partial
-        # descendant list makes the cascade revoke silently incomplete → orphan grants), mirroring
-        # fga_reads.read_object_tuples' openfga_read_truncated warning. In practice unreachable at this ceiling.
-        log.warning("namespace_list_truncated", extra={"namespace": segments, "kind": "tables"})
-    token = None
-    for _ in range(_MAX_LIST_PAGES):
-        children: ListNamespacesResponse = native.call(ns, "list_namespaces", ListNamespacesRequest(id=segments, page_token=token))
-        for name in children.namespaces or []:
-            child = [*segments, name]
-            found.append(("namespace", child))
-            found.extend(_collect_descendants(ns, child))  # recurse into the nested namespace
-        token = children.page_token or None
-        if not token:
-            break
-    else:
-        log.warning("namespace_list_truncated", extra={"namespace": segments, "kind": "namespaces"})
-    return found
 
 
 @spec_router.post("/{id}/create", response_model_exclude_none=True)
@@ -304,56 +240,6 @@ async def _require_parent_or_drop(create: _NamespaceCreate, *, undo: Callable[[]
         raise
 
 
-async def _drain_tables(ns: LanceNamespace, segments: list[str]) -> tuple[ListTablesResponse, list[str]]:
-    """Every table under ``segments``, declared ones included, following the backend's cursor to exhaustion.
-
-    The twin of `_drain_namespaces` and for the identical reason: this route filters per item and then
-    applies its own cursor, so reading the backend's first page alone answers a short list whose
-    missing rows are indistinguishable from rows the caller may not read.
-    """
-    seen: list[str] = []
-    token: str | None = None
-    response = ListTablesResponse(tables=[])
-    for _ in range(_MAX_LIST_PAGES):
-        response = await run_in_threadpool(native.call, ns, "list_tables", ListTablesRequest(id=segments, include_declared=True, page_token=token))
-        seen.extend(response.tables or [])
-        token = response.page_token or None
-        if not token:
-            break
-    else:
-        log.warning("namespace_list_truncated", extra={"namespace": segments, "kind": "tables"})
-    return response, sorted(set(seen))
-
-
-async def _drain_namespaces(ns: LanceNamespace, segments: list[str]) -> tuple[ListNamespacesResponse, list[str]]:
-    """Every child namespace under ``segments``, following the backend's own cursor to exhaustion.
-
-    THE BACKEND'S PAGINATION IS NOT THE CALLER'S. This route applies its own keyset cursor AFTER the
-    authorization filter — correct and deliberate, because a backend `limit` truncates BEFORE the
-    filter, so a page could answer short and hand out a cursor that skips everything the filter
-    removed. But reading only the backend's first page has the same failure in a different place:
-    against a paginating backend the route answers a short list with a cursor that looks complete, and
-    the dropped rows are indistinguishable from rows the caller may not read.
-
-    `_collect_descendants` in this module already drains correctly; the two walkers over one tree
-    disagreed, and the DESTRUCTIVE one was the careful one.
-    """
-    seen: list[str] = []
-    token: str | None = None
-    response = ListNamespacesResponse(namespaces=[])
-    for _ in range(_MAX_LIST_PAGES):
-        response = await run_in_threadpool(native.call, ns, "list_namespaces", ListNamespacesRequest(id=segments, page_token=token))
-        seen.extend(response.namespaces or [])
-        token = response.page_token or None
-        if not token:
-            break
-    else:
-        # A token still outstanding at the ceiling is a PARTIAL enumeration, and a partial listing that
-        # answers 200 is exactly the silence this drain exists to remove. Logged like its sibling.
-        log.warning("namespace_list_truncated", extra={"namespace": segments, "kind": "namespaces"})
-    return response, sorted(set(seen))
-
-
 async def create_or_keep_namespace(ns: LanceNamespace, segments: list[str], req: CreateNamespaceRequest) -> tuple[CreateNamespaceResponse, bool]:
     """Create the namespace, or KEEP the one already there. Returns ``(response, kept_existing)``.
 
@@ -446,8 +332,8 @@ async def _create_or_replace_empty_namespace(
     replaced = await objects.identify_namespace(resolver, ns, segments)
     await door_gates.require_relation(context, relation="can_delete", obj=replaced.fga_object(), label=f"namespace:{canonical}")
     await hierarchy.require_namespace_unprotected(context.settings, replaced, force=False)
-    _, tables = await _drain_tables(ns, segments)
-    _, children = await _drain_namespaces(ns, segments)
+    _, tables = await namespace_subtrees.drain_tables(ns, segments)
+    _, children = await namespace_subtrees.drain_namespaces(ns, segments)
     if tables or children:
         raise NamespaceNotEmptyError(
             f"cannot overwrite namespace '{canonical}': Overwrite drops only an empty namespace, and it holds "
@@ -497,7 +383,7 @@ async def list_namespaces(
     # THE ROOT'S CHILDREN ARE THE WAREHOUSES ([[LH-593]]): the estate's own and each registered one. Each is judged
     # below like any other item, on `can_get_metadata`, so a caller is shown exactly the warehouses they may see.
     if segments:
-        response, names = await _drain_namespaces(ns, segments)
+        response, names = await namespace_subtrees.drain_namespaces(ns, segments)
     else:
         response = ListNamespacesResponse(namespaces=[])
         names = await run_in_threadpool(
@@ -525,352 +411,6 @@ def describe_namespace(id: str, ns: NamespaceDep, body: DescribeNamespaceRequest
     segments = reconcile_body_id(parse_identifier(id), body.id if body else None)
     req = DescribeNamespaceRequest(id=segments)
     return native.call(ns, "describe_namespace", req)
-
-
-async def _trash_subtree(
-    ns: LanceNamespace,
-    settings: CatalogStore,
-    token: Caller | None,
-    *,
-    segments: list[str],
-    descendants: list[objects.GovernedObject],
-    own: ControlUuids,
-    grace_days: float,
-) -> list[objects.GovernedObject]:
-    """DETACH the subtree instead of destroying it — the recoverable half of a cascade (#96); the tables it detached.
-
-    A trash record pointing at bytes the native cascade already deleted would be a LIE: undrop
-    re-registers still-present bytes, and `drop_namespace(cascade)` destroys its children inside one
-    native call. So with a grace period the cascade never reaches that call. Instead, exactly what
-    the single-table drop door does, per child: every descendant table is DEREGISTERED (pointer
-    detached, bytes untouched) and filed in the trash (:func:`_trash_listed_table`); every namespace — children
-    deepest-first, then the cascaded root — is then empty and dropped plainly, filed as a ``kind="namespace"``
-    record so undrop knows which manifest rows to rebuild. All records share one drop-time stamp
-    rule: ``expires_at`` is data on the record, never policy read at expiry.
-
-    Not atomic, deliberately: a mid-loop failure leaves every already-detached child RECOVERABLE
-    (its record is filed and its parent namespace still exists), which is strictly safer than the
-    all-or-nothing native destroy it replaces.
-
-    Each record is filed under its object's uuid, names its parent namespace's uuid, and carries the uuid of the
-    namespace the cascade dropped (``cascade``), so the namespace undrop restores exactly this cascade's records, never
-    another object dropped under one of their names ([[LH-525]]). ``descendants`` and ``own`` are what the door read
-    while the subtree stood, and ``grace_days`` the window its warehouse's delete profile gives (ADR 0146). A listed
-    table that left before its turn is detached by no one and is not among the tables answered.
-
-    Raises:
-        InternalError: The dropped namespace keeps no uuid, which no door leaves.
-    """
-    so = settings.storage_options()
-    dropped_by = f"user:{token.subject}" if token is not None else None
-    if own.object_uuid is None:
-        raise InternalError(f"namespace {fga_ids.canonical_object_id(segments)!r} keeps no uuid, so its trash cannot be filed")
-    cascade = own.object_uuid
-    uuid_at = {tuple(item.segments): item.uuid for item in descendants} | {tuple(segments): cascade}
-
-    def parent_of(child: list[str]) -> str | None:
-        return uuid_at.get(tuple(child[:-1]), own.namespace_uuid)
-
-    # Deepest-first, so every namespace is empty by the time its own drop runs.
-    child_namespaces = sorted((item.segments for item in descendants if item.kind == "namespace"), key=len, reverse=True)
-    tables = [item for item in descendants if item.kind == "table"]
-    # EVERY NAME RESOLVED FIRST, CONCURRENTLY (catalog-api-11): independent reads whose results are only collected, so a
-    # subtree of N tables pays no N sequential round trips before its first record is filed. Each table is then
-    # detached in turn under the claim its resolution read, so one that changed since answers 409 at its fence.
-    claims = table_claims.claim_store(settings)
-    resolved_all = await asyncio.gather(*(run_in_threadpool(table_claims.resolve, ns, claims, item.segments) for item in tables))
-    detached: list[objects.GovernedObject] = []
-    for item, resolved in zip(tables, resolved_all, strict=True):
-        trashed = await _trash_listed_table(
-            ns,
-            settings,
-            item,
-            resolved=resolved,
-            claims=claims,
-            namespace_uuid=parent_of(item.segments),
-            cascade=cascade,
-            dropped_by=dropped_by,
-            grace_days=grace_days,
-        )
-        if trashed:
-            detached.append(item)
-    for child in [*child_namespaces, segments]:
-        # Read before the drop removes the `__manifest` row that is their only copy.
-        described = await run_in_threadpool(native.call, ns, "describe_namespace", DescribeNamespaceRequest(id=child))
-        # The backend drops by name, so the namespace the walk listed is asked for in what it describes, the last read
-        # before the drop: one created under the name since would be dropped, and filed under the listed one's uuid.
-        hierarchy.require_standing_as_identified(child, identified=uuid_at[tuple(child)], standing=uuid_of(described.properties))
-        await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
-        record = trash.make_record(
-            fga_ids.canonical_object_id(child),
-            uuid=uuid_at[tuple(child)],
-            location="",
-            dropped_by=dropped_by,
-            grace_days=grace_days,
-            kind="namespace",
-            namespace_uuid=parent_of(child),
-            cascade=cascade,
-            properties=described.properties,
-        )
-        await run_in_threadpool(trash.put, settings.registry_root, so, record)
-    return detached
-
-
-async def _trash_listed_table(
-    ns: LanceNamespace,
-    settings: CatalogStore,
-    item: objects.GovernedObject,
-    *,
-    resolved: table_claims.ResolvedTable,
-    claims: location_claims.ClaimStore,
-    namespace_uuid: str | None,
-    cascade: str,
-    dropped_by: str | None,
-    grace_days: float,
-) -> bool:
-    """Detach one table a recoverable cascade listed and file it in the trash, under the fence the drop door holds its
-    table by; whether this cascade detached it.
-
-    ``resolved`` is what the table's name resolved to once the cascade had listed it, and its claim is fenced under
-    that reading (:func:`table_claims.fence_listed`, [[LH-586]]), so a rename landing while the table goes answers 409
-    rather than leaving a trash record on a table that lives on under another name. ``False`` for a table that left
-    the namespace since the listing: no record is filed for it.
-
-    RECORD FIRST, DETACH SECOND, as at the table door (diff2 F6 leg a): a crash between the two leaves a record on a
-    live table, which the purge refuses ``STILL_REGISTERED`` and a retry overwrites, where the other order left bytes
-    no undrop, purge or retry could reach. The trashed table keeps its location's claim until its undrop or the purge
-    ([[LH-204]]); only the fence is lifted, whether the detach landed or failed.
-
-    Raises:
-        ConcurrentModificationError: The table changed, or another request is acting on it; nothing of it changed here.
-        TableNotFoundError: The row went between the fence and the detach, by a hand the fence does not bind. Unlike the
-            destroying cascade, this one has already filed its record, so it answers rather than skip the table: the
-            record stays, and the call issued again lists only what still stands.
-    """
-    fenced = await run_in_threadpool(partial(table_claims.fence_listed, ns, claims, resolved, listed_uuid=item.uuid, verb="drop"))
-    if fenced is None:
-        return False
-    record = trash.make_record(
-        fga_ids.canonical_object_id(item.segments),
-        uuid=item.uuid,
-        location=fenced.location,
-        dropped_by=dropped_by,
-        grace_days=grace_days,
-        namespace_uuid=namespace_uuid,
-        cascade=cascade,
-    )
-    try:
-        await run_in_threadpool(trash.put, settings.registry_root, settings.storage_options(), record)
-        await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=item.segments))
-    finally:
-        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
-    return True
-
-
-async def _destroy_subtree(
-    ns: LanceNamespace,
-    segments: list[str],
-    descendants: list[objects.GovernedObject],
-    *,
-    root_uuid: str,
-    registry: base_registry.BaseRegistry,
-    claims: location_claims.ClaimStore,
-    storage_options: StorageOptions,
-    estate_roots: tuple[str, ...],
-    dropped_by: str | None = None,
-) -> AsyncIterator[list[str]]:
-    """Destroy the subtree BOTTOM-UP, ourselves (#117), yielding each table as it goes.
-
-    `drop_namespace(behavior=Cascade)` is not implemented by the `dir` backend the chart runs — it
-    answers `NamespaceNotEmpty` for EVERY casing (probed directly against the library). So the
-    destructive cascade this door has always documented never happened: with the shipped default
-    (`LANCE_TRASH_GRACE_DAYS=0`) a non-empty namespace could not be dropped at all, forced or not,
-    and `purge=true` — the documented destroy-now opt-out — was equally dead. Three guarded loops
-    below it (the force-path protection clear, the descendant revoke, the descendant protection
-    sweep) were unreachable code on that backend.
-
-    The fix is the same shape as `_trash_subtree`'s, minus the trash records: tables first (each one's bytes are
-    deleted at the location it is described at, by `tables.destroy.destroy_table`, [[LH-532]] — this is the destructive
-    path by definition), then namespaces
-    deepest-first so each is empty when its own drop runs, then the cascaded root. Not atomic, and
-    deliberately so: a mid-loop failure leaves a SMALLER subtree that the same call can finish on a
-    retry, which is strictly better than the all-or-nothing native call it replaces (that one simply
-    refused). An already-absent child is tolerated: drift, not an error.
-
-    Each destroyed table's base record goes with its bytes ([[LH-279]]): left behind, it would sanction its bases for
-    the next table registered there. Its location claim goes too ([[LH-204]]), or the location stays held for the
-    claim's lease.
-
-    Each table is yielded once this cascade has removed it, so the caller announces it before the next one goes
-    ([[LH-495]]): the retry lists only what still stands, so a table the first attempt destroyed is announced then or
-    not at all. A listed table that left before its turn (:func:`_destroy_listed_table`) is yielded by no one: its own
-    drop announced and ended it, or a rename carried it out alive, and the caller ends only what was yielded.
-
-    A table's residue record, filed while its bytes are deleted, names its uuid and its parent namespace's: the root's,
-    ``root_uuid``, or the descendant namespace's it sits in.
-    """
-    uuid_at = {tuple(item.segments): item.uuid for item in descendants} | {tuple(segments): root_uuid}
-    tables = [item for item in descendants if item.kind == "table"]
-    child_namespaces = sorted((item.segments for item in descendants if item.kind == "namespace"), key=len, reverse=True)
-    # SEQUENTIAL, DELIBERATELY (catalog-api-11 asked about this loop and the answer is no). Every call
-    # here DESTROYS bytes, and the ordered partial progress is the property the docstring above trades
-    # for: a mid-loop failure must leave a strictly SMALLER subtree that the same call finishes on a
-    # retry, and the namespace drops must run deepest-first so each is empty when its own drop lands.
-    # Concurrency buys latency on a path nobody is waiting on and costs both of those.
-    #
-    # [[LH-204]] BEFORE ANYTHING IS DESTROYED, every table's location is checked against its claim: a
-    # location another live table holds refuses the whole cascade, as a protected descendant does. So is every table a
-    # registered clone outside the subtree reads (ADR 0198 §1), and the clones inside it go before their sources.
-    located: dict[tuple[str, ...], str] = {}
-    for item in tables:
-        with suppress(TableNotFoundError):
-            doomed: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=item.segments))
-            if doomed.location:
-                await run_in_threadpool(table_claims.require_no_other_holder, ns, claims, doomed.location, table=fga_ids.canonical_object_id(item.segments))
-                located[tuple(item.segments)] = doomed.location
-    carried = {
-        key: await run_in_threadpool(partial(destroy.clone_readers, location, storage_options, table=fga_ids.canonical_object_id(list(key))))
-        for key, location in located.items()
-    }
-    try:
-        order = clone_sources.destroy_order({key: clone_sources.tag_of(location) for key, location in located.items()}, carried)
-    except clone_sources.ReadFromOutsideError as exc:
-        log.warning(
-            "cascade_refused_clone_sources",
-            extra={"namespace": segments, "read": {fga_ids.canonical_object_id(list(k)): sorted(v) for k, v in exc.read.items()}},
-        )
-        raise InvalidTableStateError(
-            f"namespace {fga_ids.canonical_object_id(segments)} cannot be destroyed: {len(exc.read)} table(s) in it are read by registered clones outside "
-            "it; drop or deregister those clones first, or drop the namespace recoverably"
-        ) from exc
-    tables = sorted(tables, key=lambda item: order.index(tuple(item.segments)) if tuple(item.segments) in located else len(order))
-    for item in tables:
-        removed = await _destroy_listed_table(
-            ns,
-            item,
-            namespace_uuid=uuid_at.get(tuple(item.segments[:-1])),
-            registry=registry,
-            claims=claims,
-            storage_options=storage_options,
-            estate_roots=estate_roots,
-            dropped_by=dropped_by,
-        )
-        if removed:
-            yield item.segments
-    for child in child_namespaces:
-        with suppress(NamespaceNotFoundError):
-            await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=child))
-    # The root by name, once the name is asked to hold it still: the walk took the time a drop and a create need. A root
-    # already gone is the drift the drops above tolerate; one another namespace replaced is refused.
-    standing = await run_in_threadpool(object_uuids.resolve_namespace_uuid, ns, segments)
-    if standing is not None:
-        hierarchy.require_standing_as_identified(segments, identified=root_uuid, standing=standing)
-    with suppress(NamespaceNotFoundError):
-        await run_in_threadpool(native.call, ns, "drop_namespace", DropNamespaceRequest(id=segments))
-
-
-async def _destroy_listed_table(
-    ns: LanceNamespace,
-    item: objects.GovernedObject,
-    *,
-    namespace_uuid: str | None,
-    registry: base_registry.BaseRegistry,
-    claims: location_claims.ClaimStore,
-    storage_options: StorageOptions,
-    estate_roots: tuple[str, ...],
-    dropped_by: str | None,
-) -> bool:
-    """Destroy one table a cascade listed, under the fence the drop door holds its table by; whether this cascade removed it.
-
-    The table's name is resolved again as its turn comes and its claim fenced (:func:`table_claims.fence_listed`,
-    [[LH-586]]), so the bytes deleted are those of the row removed ([[LH-532]]) and a rename landing while the table
-    goes answers 409 rather than carrying it out of a cascade that then ends its grants. ``False`` for a table that
-    left the namespace since the listing: it is neither destroyed, announced nor ended here.
-
-    A clone's ending is filed once every judgement has passed, right before its row goes (ADR 0198 §1), so a refusal
-    files none: a tag release failing afterwards is finished by maintenance's audit, where a re-issued cascade would no
-    longer list the clone it belongs to. One filed before a failure stays, for the finish to judge.
-
-    Raises:
-        ConcurrentModificationError: The table changed, or another request is acting on it; nothing of it changed here.
-        TableBytesLeftError: Its row is gone and bytes remain, so its claim stays held and fenced, as at the drop door.
-    """
-    child = item.segments
-    canonical = fga_ids.canonical_object_id(child)
-    resolved = await run_in_threadpool(table_claims.resolve, ns, claims, child)
-    fenced = await run_in_threadpool(partial(table_claims.fence_listed, ns, claims, resolved, listed_uuid=item.uuid, verb="drop"))
-    if fenced is None:
-        return False
-    filed: list[CloneEnding] = []
-
-    def _file_the_ending() -> None:
-        found = clone_endings.file_ending(registry, claims, fenced.location, table=canonical, forget_record=True, door="namespace_cascade", filing=fenced.token)
-        if found is not None:
-            filed.append(found)
-
-    try:
-        await run_in_threadpool(
-            partial(
-                destroy.destroy_table,
-                ns,
-                storage_options,
-                child,
-                location=fenced.location,
-                estate_roots=estate_roots,
-                table_uuid=item.uuid,
-                namespace_uuid=namespace_uuid,
-                control=claims,
-                dropped_by=dropped_by,
-                before_removal=_file_the_ending,
-            )
-        )
-    except destroy.TableBytesLeftError:
-        raise
-    except TableNotFoundError:
-        # The row went by a hand the fence does not bind, so the table is not this cascade's to announce or end. An
-        # ending filed before it stays, for the finish to judge; the fence is lifted, as the drop door lifts its own.
-        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
-        return False
-    except Exception:
-        # The row stands, so the fence is lifted for the re-issue that finishes the cascade.
-        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
-        raise
-    # The base record goes with the bytes ([[LH-279]]) and the location's claim with the row ([[LH-204]]); the clone's
-    # ending last. The claim is released under the uuid this cascade listed the table by, as well as under its fence: a
-    # table's bytes can take longer to go than a fence stands, and the same name registered at the location once the
-    # fence has lapsed holds the claim under a uuid of its own.
-    await run_in_threadpool(partial(base_registry.forget_base_record, registry, fenced.location, uuid=item.uuid))
-    await run_in_threadpool(partial(location_claims.release, claims, fenced.location, canonical, uuid=item.uuid))
-    if filed:
-        await run_in_threadpool(clone_endings.clear_ending, claims, filed[0])
-    return True
-
-
-async def _identify(ns: LanceNamespace, settings: CatalogStore, descendants: list[tuple[str, list[str]]]) -> list[objects.GovernedObject]:
-    """Every descendant a cascade is about to remove, with its uuid, read while it still stands.
-
-    CONCURRENT (catalog-api-11): one independent read per descendant on the pre-flight of a cascade, so its latency
-    does not grow with the subtree. Enumeration order is kept, so a refusal names the FIRST protected descendant.
-    """
-    return list(
-        await asyncio.gather(
-            *(objects.standing(ns, settings, "table" if resource == "table" else "namespace", segments=child) for resource, child in descendants)
-        )
-    )
-
-
-async def _require_descendants_unprotected(settings: CatalogStore, descendants: list[objects.GovernedObject], *, force: bool) -> None:
-    """Refuse a cascade that would destroy a PROTECTED descendant, naming the first one found.
-
-    The guard at the named rung only sees the id in the URL; a cascade's unit of destruction is the
-    whole subtree, and those children are destroyed inside one native call that never reaches a door.
-    So the check belongs here, where the destroyed set is actually enumerated.
-    """
-    if force or not descendants:
-        return
-    records = await asyncio.gather(*(run_in_threadpool(protections.read, settings, item.kind, item.uuid) for item in descendants))
-    for item, record in zip(descendants, records, strict=True):
-        hierarchy.require_not_protected(record is not None and record.protected, kind=item.kind, obj_id=fga_ids.canonical_object_id(item.segments), force=False)
 
 
 @spec_router.post("/{id}/drop", response_model_exclude_none=True)
@@ -1036,7 +576,7 @@ async def _identify_the_drop(
         # retrying. Narrow on purpose: this covers the NAMED namespace being absent, never a descendant
         # vanishing mid-destroy, which is a real error and must not read as a skip.
         try:
-            descendants = await _identify(ns, settings, await run_in_threadpool(_collect_descendants, ns, target.segments))
+            descendants = await objects.identify_descendants(ns, settings, await run_in_threadpool(namespace_subtrees.collect_descendants, ns, target.segments))
         except NamespaceNotFoundError:
             if target.drop_mode is not DropMode.SKIP:
                 raise
@@ -1044,7 +584,7 @@ async def _identify_the_drop(
         # Protection is a property of the SUBTREE, so it is checked against every id about to die, and
         # the refusal NAMES the protected descendant — "something in here is protected" is not an
         # answer anyone can act on. `force` turns this lock exactly as it does at the named rung.
-        await _require_descendants_unprotected(settings, descendants, force=target.force)
+        await hierarchy.require_descendants_unprotected(settings, descendants, force=target.force)
     # The backend drops by name, so the name is asked once more, as late as the drop allows, to hold that namespace.
     await hierarchy.require_namespace_as_identified(ns, dropped)
     return _IdentifiedDrop(target=target, dropped=dropped, descendants=descendants)
@@ -1063,7 +603,7 @@ async def _plan_the_drop(drop: _IdentifiedDrop, *, uuids: ObjectUuids, settings:
     own = await uuids.namespace(drop.target.segments)
     known = {tuple(item.segments): await uuids.table(item.segments, uuid=item.uuid) for item in drop.descendants if item.kind == "table"}
     # #96: with a grace period, a cascade DETACHES the subtree (trash record per child) instead of
-    # destroying it inside the one native call — see _trash_subtree for why the native cascade and a
+    # destroying it inside the one native call — see `namespace_subtrees.trash_subtree` for why the native cascade and a
     # trash record cannot coexist. `purge=true` is the explicit destroy-now, as at the table door.
     grace = 0.0 if drop.target.purge or not drop.target.cascade else await trash_doors.drop_grace_days(settings, drop.target.segments)
     recoverable = grace > 0
@@ -1075,7 +615,7 @@ async def _plan_the_drop(drop: _IdentifiedDrop, *, uuids: ObjectUuids, settings:
     # once the namespace's name names it no longer. Its limits:
     # the store cannot tell which actor retired a table, so another's deregister or destroying drop after this door died
     # satisfies it too, and this door's event goes out as well, under its own ids.
-    # And a recoverable cascade files a table's trash record before its detach (`_trash_listed_table`) and has no stamp
+    # And a recoverable cascade files a table's trash record before its detach (`namespace_subtrees.trash_subtree`) and has no stamp
     # to tell the two apart, so one failing between them leaves a record on a live table.
     dropped_tables = {
         tuple(item.segments): Announcement(
@@ -1128,10 +668,10 @@ async def _trash_the_cascade(ns: LanceNamespace, plan: _DropPlan, *, settings: S
     drop = plan.drop
     # The cascade's records are keyed by the uuid the door identified the namespace by, not the best-effort read its
     # announcements name it by, which answers ``None`` on a failed describe.
-    detached = await _trash_subtree(
+    detached = await namespace_subtrees.trash_subtree(
         ns,
         settings,
-        token,
+        dropped_by=f"user:{token.subject}" if token is not None else None,
         segments=drop.target.segments,
         descendants=drop.descendants,
         own=ControlUuids(object_uuid=drop.dropped.uuid, namespace_uuid=plan.own.namespace_uuid),
@@ -1149,7 +689,7 @@ async def _destroy_announcing_each_table(ns: LanceNamespace, plan: _DropPlan, *,
     drop = plan.drop
     removed_tables: set[tuple[str, ...]] = set()
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
-    async for table in _destroy_subtree(
+    async for table in namespace_subtrees.destroy_subtree(
         ns,
         drop.target.segments,
         drop.descendants,
@@ -1526,7 +1066,7 @@ async def list_tables(
     stable only over an ordered one.
     """
     segments = parse_identifier(id)
-    response, names = await _drain_tables(ns, segments)
+    response, names = await namespace_subtrees.drain_tables(ns, segments)
     candidates = [(name, [*segments, name]) for name in names]
     if not include_declared:
         candidates = await listings.holding_a_version(resolver, so, candidates)

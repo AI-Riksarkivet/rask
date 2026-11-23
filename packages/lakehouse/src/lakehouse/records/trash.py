@@ -367,7 +367,7 @@ def stamp_detached(control_root: str, storage_options: StorageOptions, record: T
     kept or the stamp lost. A record another drop filed is left as it stands: ``False``. A record that is gone is left
     gone, ``False``, unless ``refile``: the door whose detach returned files it again, stamped, create-if-absent, where
     the finish withdrew it, having judged the table still registered while the door's detach was in flight and its fence
-    lapsed (the door re-files only once it finds the table registered under no name, ``tables._stamp_the_drop``).
+    lapsed (the door re-files only once it finds the table registered under no name, ``catalog.services.tables.retirement._stamp_the_drop``).
 
     Raises:
         ValueError: The record names no uuid, or the one filed is no trash record.

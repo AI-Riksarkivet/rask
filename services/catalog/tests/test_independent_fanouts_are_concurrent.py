@@ -4,13 +4,13 @@ Three loops awaited a round trip per item with nothing between them that made th
 
 * ``list_all_tables`` walks each warehouse's own directory catalog — an estate with N warehouses walked one at a
   time pays N sequential walks on the registry page every browser render;
-* ``_trash_subtree`` described every descendant table one at a time before filing any trash record;
-* ``_require_descendants_unprotected`` read one protection record per descendant, sequentially, as the
+* ``namespace_subtrees.trash_subtree`` described every descendant table one at a time before filing any trash record;
+* ``hierarchy.require_descendants_unprotected`` read one protection record per descendant, sequentially, as the
   PRE-FLIGHT of a cascade — so the guard's cost scaled with the subtree it is protecting.
 
 None of the three is order-sensitive: they are reads whose results are collected before anything is
 decided. The DESTRUCTIVE loops next to them (the deregister/trash pair per child, and
-``_destroy_subtree``'s drops) are deliberately left sequential and are not asserted here — see their
+``namespace_subtrees.destroy_subtree``'s drops) are deliberately left sequential and are not asserted here — see their
 docstrings for why partial, ordered progress is the property they trade concurrency for.
 
 Measured as MAX CONCURRENT IN FLIGHT through the real coroutines: a sequential loop can never exceed
@@ -29,16 +29,17 @@ import pytest
 from fastapi import Request
 from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse, LanceNamespace
 
+from catalog.api.authz import hierarchy
 from catalog.api.authz.context import AuthzContext
 from catalog.api.authz.objects import GovernedObject
 from catalog.api.pagination import MAX_LIST_LIMIT
-from catalog.api.v1.endpoints import namespaces as n_ep
 from catalog.api.v1.endpoints import tables as t_ep
+from catalog.core import native
 from catalog.core.config import Settings
-from catalog.services import table_claims
+from catalog.services import namespace_subtrees, table_claims
 from lakehouse.events.control_events import ControlUuids
 from lakehouse.naming import UUID_PROPERTY
-from lakehouse.records import location_claims
+from lakehouse.records import location_claims, protection, trash
 from lakehouse.storage.options import StorageOptions
 
 
@@ -94,10 +95,10 @@ def _slow(tracker: _Tracker, result: Any = None):
 
 def test_the_protection_preflight_reads_every_descendant_concurrently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tracker = _Tracker()
-    monkeypatch.setattr(n_ep.protection, "get_protection", _slow(tracker, None))
+    monkeypatch.setattr(protection, "get_protection", _slow(tracker, None))
     descendants = [GovernedObject(kind="table", segments=["bronze", f"t{i}"], uuid=str(uuid4())) for i in range(8)]
 
-    asyncio.run(n_ep._require_descendants_unprotected(_settings(tmp_path), descendants, force=False))
+    asyncio.run(hierarchy.require_descendants_unprotected(_settings(tmp_path), descendants, force=False))
 
     assert tracker.total == 8, f"only {tracker.total} protection records were read for 8 descendants"
     assert tracker.peak > 1, "the cascade's protection pre-flight reads one descendant at a time"
@@ -129,10 +130,14 @@ def test_the_trash_subtree_describes_every_table_concurrently(tmp_path: Path, mo
         # The cascaded namespace, as it stands under the uuid the door identified it by.
         return DescribeNamespaceResponse(properties={UUID_PROPERTY: own_uuid})
 
-    monkeypatch.setattr(n_ep.native, "call", native_call)
-    monkeypatch.setattr(n_ep.trash, "put", lambda *_a, **_kw: None)
+    monkeypatch.setattr(native, "call", native_call)
+    monkeypatch.setattr(trash, "put", lambda *_a, **_kw: None)
 
-    asyncio.run(n_ep._trash_subtree(cast("LanceNamespace", object()), settings, None, segments=["bronze"], descendants=descendants, own=own, grace_days=7))
+    asyncio.run(
+        namespace_subtrees.trash_subtree(
+            cast("LanceNamespace", object()), settings, dropped_by=None, segments=["bronze"], descendants=descendants, own=own, grace_days=7
+        )
+    )
 
     assert tracker.total == 8, f"only {tracker.total} describes for 8 descendant tables"
     assert tracker.peak > 1, "the recoverable cascade describes its descendants one at a time"
