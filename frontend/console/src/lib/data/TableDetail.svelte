@@ -14,6 +14,7 @@
 	// confirm belongs to one table and resets by construction, with no hand-written reset.
 	import { GrantsPanel, type GrantsClient } from '#lib/access/grants-panel/index.ts';
 	import { Database, RefreshCw, ShieldAlert } from '@lucide/svelte';
+	import { Button } from '@riksarkivet/ui/button';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import AccessGraph from './AccessGraph.svelte';
@@ -86,47 +87,42 @@
 		fetchMyPermissions: (kind, id) => fetchMyPermissions({ kind, id }),
 	};
 
-	let detail = $state<TableDetail | null>(null);
-	let lastStatus = $state(0);
+	// The detail aggregate, held through the read layer: one instance per table, so a navigation reads
+	// the new table's instance (no latest-wins guard to hand-write) and a write's `load()` re-reads it.
+	const detailRead = $derived(fetchTableDetail({ table }));
+	const answer = $derived(detailRead.current);
+	// A failed re-read after a write keeps the last good detail on screen, as a refused write does: the
+	// page only falls back to its failure states while no answer for this table has ever been good. The
+	// memo is a plain (non-reactive) cache the derivation alone writes.
+	let lastGood: { for: string; value: TableDetail } | null = null;
+	const detail = $derived.by((): TableDetail | null => {
+		if (answer?.ok) {
+			lastGood = { for: table, value: answer.data };
+			return answer.data;
+		}
+		return lastGood?.for === table ? lastGood.value : null;
+	});
+	const lastStatus = $derived(answer === undefined ? 0 : answer.ok ? 200 : answer.status);
 
-	// #81 the SvelteFlow authorization graph is lazy-mounted (heavy) behind this toggle.
-	let showGraph = $state(false);
+	// #81 the SvelteFlow authorization graph is lazy-mounted (heavy) behind this toggle, open only for
+	// the table it was opened on, so a navigation closes it by derivation.
+	let graphFor = $state<string | null>(null);
+	const showGraph = $derived(graphFor === table);
 
 	const unauthorized = $derived(detail === null && lastStatus === 401);
 	const notInCatalog = $derived(detail === null && lastStatus === 404);
 	const denied = $derived(detail === null && lastStatus === 403);
 	const offline = $derived(detail === null && ![0, 200, 401, 403, 404].includes(lastStatus));
 
+	/** Read the detail again (a write changed it): the call re-reads unless a read is already out. */
 	async function load(): Promise<void> {
-		// Latest-wins: the user may navigate table A→B while A's request is in flight (the route reuses
-		// this instance), so drop a response for a table we have already navigated away from.
-		const requested = table;
-		const res = await fetchTableDetail({ table: requested });
-		if (table !== requested) return;
-		if (res.ok) {
-			detail = res.data;
-			lastStatus = 200;
-		} else {
-			lastStatus = res.status;
-		}
+		await fetchTableDetail({ table });
 	}
 
 	/** Read the detail again past the read cache: the first write made it a different table. */
 	async function reread(): Promise<void> {
 		await fetchTableDetail({ table }).refresh();
-		await load();
 	}
-
-	$effect(() => {
-		// Reset THIS component's state on a table change. The workflow sections need no entry here:
-		// they mount under `{#key table}` below, so a navigation destroys and recreates them — an
-		// editor opened on A cannot survive into B by construction.
-		void table;
-		detail = null;
-		lastStatus = 0;
-		showGraph = false;
-		load();
-	});
 
 	// Split each part into "resolved value" vs "upstream failed" so the markup can render an honest
 	// "unavailable" instead of an affirmative empty state (which for policy would invite an overwrite).
@@ -244,7 +240,10 @@
 		<!-- Goal cond 3: overview (default) | preview (goal cond 5) | history (#113) | access. -->
 		<DetailTabs tabs={TABS} active={tab} onselect={selectTab} />
 		{#if tab === 'preview'}
-			<TablePreview {table} />
+			<!-- Keyed by table: a navigation remounts the preview, so its typed limit and rows reset. -->
+			{#key table}
+				<TablePreview {table} />
+			{/key}
 		{:else if tab === 'versions'}
 			<!-- #113 the commit log. Keyed by table so a navigation REMOUNTS it: every selection, armed
 			     confirm and filter belongs to one table and resets by construction. -->
@@ -265,9 +264,14 @@
 				<h2>Access</h2>
 				<GrantsPanel dataset={table} client={grantsClient} />
 				<!-- #81 the relationship graph is heavy (SvelteFlow) — lazy-mount behind a toggle. -->
-				<button class="btn ghost graphtoggle" onclick={() => (showGraph = !showGraph)}>
+				<Button
+					variant="ghost"
+					size="sm"
+					class="mt-2.5 mb-2"
+					onclick={() => (graphFor = showGraph ? null : table)}
+				>
 					{showGraph ? 'Hide' : 'Show'} authorization graph
-				</button>
+				</Button>
 				{#if showGraph}<AccessGraph dataset={table} />{/if}
 			</section>
 		{/if}
@@ -386,21 +390,5 @@
 		gap: 8px;
 		color: var(--muted-foreground);
 		padding: 32px 0;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 10px;
-		cursor: pointer;
-	}
-	.btn.ghost {
-		background: none;
-		color: var(--muted-foreground);
-	}
-	.graphtoggle {
-		margin: 10px 0 8px;
 	}
 </style>

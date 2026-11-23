@@ -4,6 +4,8 @@
 	//
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation — a draft typed on table A cannot land on B.
+	import { Button } from '@riksarkivet/ui/button';
+	import { Textarea } from '@riksarkivet/ui/textarea';
 	import { insertRows } from '../catalog';
 	import { parseJsonRows, rowsToArrow } from '../json-rows';
 	import { WriteKey } from '../write-key.svelte';
@@ -69,12 +71,15 @@
 <section>
 	<h2>Insert rows</h2>
 	<p class="mut">Append rows as a JSON array of objects whose keys match the schema.</p>
-	<textarea class="mono ins" bind:value={insertJson} placeholder={'[{ "id": 1, "name": "a" }]'}
-	></textarea>
+	<Textarea
+		class="ins min-h-18 resize-y font-mono text-xs"
+		bind:value={insertJson}
+		placeholder={'[{ "id": 1, "name": "a" }]'}
+	/>
 	<div class="ins-row">
-		<button class="btn" disabled={insertBusy || !insertJson.trim()} onclick={runInsert}>
+		<Button size="sm" disabled={insertBusy || !insertJson.trim()} onclick={runInsert}>
 			{insertBusy ? '…' : writeKey.pending(insertJson) ? 'Retry' : 'Insert'}
-		</button>
+		</Button>
 		{#if insertMsg}<span class={['ins-msg', { okmsg: insertMsg.ok, error: !insertMsg.ok }]}
 				>{insertMsg.text}</span
 			>{/if}
@@ -96,17 +101,6 @@
 		color: var(--muted-foreground);
 		font-size: 12px;
 	}
-	.ins {
-		width: 100%;
-		min-height: 72px;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 7px 9px;
-		resize: vertical;
-	}
 	.ins-row {
 		display: flex;
 		align-items: center;
@@ -122,18 +116,5 @@
 	.error {
 		color: var(--destructive);
 		font-size: 12px;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 10px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
 	}
 </style>

@@ -1,22 +1,19 @@
 <script lang="ts">
-	// The maintenance plane: the #50 policy (owner-gated set/delete) and the #75 on-demand GC
-	// (preview → two-click destructive reclaim). The catalog compacts nothing — compaction and index
+	// The maintenance plane: the #50 policy (owner-gated set/delete), and the #75 on-demand GC
+	// (preview → two-click destructive reclaim) in `./GarbageCollection.svelte`. The catalog compacts nothing — compaction and index
 	// rebuilds are bring-your-own compute, which the policy's compaction fields steer through the
 	// maintenance sweep's due list.
 	//
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation — an open editor or an armed GC confirm dies with it.
 	import { Trash2 } from '@lucide/svelte';
+	import { Button } from '@riksarkivet/ui/button';
+	import { Checkbox } from '@riksarkivet/ui/checkbox';
+	import { Input } from '@riksarkivet/ui/input';
 	import type { Policy } from '#lib/policies.ts';
-	import { type GcPreview } from '../catalog';
-	import { fmtBytes } from '../history';
 	import { policyRequestFrom } from '../namespace';
-	import {
-		deleteTablePolicy,
-		previewMaintenance,
-		runMaintenance,
-		setTablePolicy,
-	} from '../remote/catalog.api';
+	import { deleteTablePolicy, setTablePolicy } from '../remote/catalog.api';
+	import GarbageCollection from './GarbageCollection.svelte';
 
 	let {
 		table,
@@ -29,6 +26,9 @@
 		policyUnavailable: boolean;
 		onchanged: () => Promise<void>;
 	} = $props();
+
+	/** A number field in the policy form: a fixed width, dense. */
+	const NUMBER = 'h-7 w-28 font-mono text-xs';
 
 	let busy = $state(false);
 	let policyError = $state<string | null>(null);
@@ -93,61 +93,6 @@
 			busy = false;
 		}
 	}
-
-	// #75 on-demand GC — preview (dry-run reclaimable versions) + run (destructive, two-click confirm).
-	let gcDays = $state<number | null>(null);
-	let gcKeep = $state<number | null>(null);
-	let gcBusy = $state(false);
-	let gcPreview = $state<GcPreview | null>(null);
-	let gcResult = $state<string | null>(null);
-	let gcError = $state<string | null>(null);
-	let gcConfirm = $state(false);
-	const gcHasBound = $derived(gcDays != null || gcKeep != null);
-
-	function gcFail(status: number, detail: string): void {
-		if (status === 401) gcError = 'Sign in to run garbage collection.';
-		else if (status === 403) gcError = 'Denied: GC needs the modifier rung (can_drop).';
-		else if (status === 422) gcError = 'Set a retention-days and/or keep-last bound first.';
-		else gcError = detail;
-	}
-
-	async function runGcPreview(): Promise<void> {
-		if (gcBusy || !gcHasBound) return;
-		gcBusy = true;
-		gcError = null;
-		gcResult = null;
-		gcConfirm = false;
-		try {
-			const res = await previewMaintenance({
-				table,
-				bounds: { retention_days: gcDays, retain_versions: gcKeep },
-			});
-			if (res.ok) gcPreview = res.data;
-			else gcFail(res.status, res.detail);
-		} finally {
-			gcBusy = false;
-		}
-	}
-
-	async function runGc(): Promise<void> {
-		if (gcBusy || !gcHasBound) return;
-		gcBusy = true;
-		gcError = null;
-		try {
-			const res = await runMaintenance({
-				table,
-				bounds: { retention_days: gcDays, retain_versions: gcKeep },
-			});
-			if (res.ok) {
-				gcResult = `Reclaimed ${res.data.old_versions_removed} version(s) · ${fmtBytes(res.data.bytes_removed)}.`;
-				gcPreview = null;
-				gcConfirm = false;
-				await onchanged(); // GC changed the version set — refresh
-			} else gcFail(res.status, res.detail);
-		} finally {
-			gcBusy = false;
-		}
-	}
 </script>
 
 <section>
@@ -155,8 +100,8 @@
 	{#if editingPolicy}
 		<div class="policy-edit">
 			<label
-				>retention days <input
-					class="mono"
+				>retention days <Input
+					class={NUMBER}
 					type="number"
 					min="1"
 					bind:value={draft.retention_days}
@@ -164,8 +109,8 @@
 				/></label
 			>
 			<label
-				>retain versions <input
-					class="mono"
+				>retain versions <Input
+					class={NUMBER}
 					type="number"
 					min="1"
 					bind:value={draft.retain_versions}
@@ -173,8 +118,8 @@
 				/></label
 			>
 			<label
-				>compact every (h) <input
-					class="mono"
+				>compact every (h) <Input
+					class={NUMBER}
 					type="number"
 					min="1"
 					bind:value={draft.interval}
@@ -182,20 +127,18 @@
 				/></label
 			>
 			<label
-				>target rows/fragment <input
-					class="mono"
+				>target rows/fragment <Input
+					class={NUMBER}
 					type="number"
 					min="1024"
 					bind:value={draft.target}
 					placeholder="Lance default"
 				/></label
 			>
-			<label class="check"
-				><input type="checkbox" bind:checked={draft.enabled} /> maintenance enabled</label
-			>
+			<label class="check"><Checkbox bind:checked={draft.enabled} /> maintenance enabled</label>
 			<div class="row">
-				<button class="btn" disabled={busy} onclick={savePolicy}>Save policy</button>
-				<button class="btn ghost" onclick={() => (editingPolicy = false)}>Cancel</button>
+				<Button size="sm" disabled={busy} onclick={savePolicy}>Save policy</Button>
+				<Button variant="ghost" size="sm" onclick={() => (editingPolicy = false)}>Cancel</Button>
 			</div>
 		</div>
 	{:else if policyUnavailable}
@@ -214,10 +157,10 @@
 			{#if policy.target_rows_per_fragment}<span class="chip mono">target {policy.target_rows_per_fragment}
 			rows/frag</span>{/if}
 			{#if !policy.compact_enabled}<span class="chip off mono">maintenance off</span>{/if}
-			<button class="btn ghost" onclick={startPolicyEdit}>Edit</button>
-			<button class="btn ghost danger" disabled={busy} onclick={removePolicy}>
+			<Button variant="ghost" size="sm" onclick={startPolicyEdit}>Edit</Button>
+			<Button variant="destructive" size="sm" disabled={busy} onclick={removePolicy}>
 				<Trash2 size={12} /> Remove
-			</button>
+			</Button>
 		</div>
 		<p class="mut">
 			Enforced by the maintenance sweep; tag-pinned versions (e.g. blessed) are never cleaned up.
@@ -225,70 +168,13 @@
 	{:else}
 		<p class="mut">
 			No policy — the sweep applies the global defaults.
-			<button class="btn ghost" onclick={startPolicyEdit}>Set policy</button>
+			<Button variant="ghost" size="sm" onclick={startPolicyEdit}>Set policy</Button>
 		</p>
 	{/if}
 	{#if policyError}<p class="error">{policyError}</p>{/if}
 
 	<!-- #75 on-demand GC: dry-run reclaimable versions, then reclaim (owner-gated, destructive). -->
-	<div class="gc">
-		<h3>Garbage collection</h3>
-		<div class="row">
-			<label
-				>older than (days) <input
-					class="mono"
-					type="number"
-					min="1"
-					bind:value={gcDays}
-					placeholder="any age"
-				/></label
-			>
-			<label
-				>keep last <input
-					class="mono"
-					type="number"
-					min="1"
-					bind:value={gcKeep}
-					placeholder="—"
-				/></label
-			>
-			<button class="btn ghost" disabled={gcBusy || !gcHasBound} onclick={runGcPreview}>
-				Preview
-			</button>
-		</div>
-		{#if gcPreview}
-			<p class="mut">
-				{gcPreview.eligible_versions.length} version{gcPreview.eligible_versions.length === 1
-					? ''
-					: 's'}
-				reclaimable
-				{#if gcPreview.eligible_versions.length}(v{gcPreview.eligible_versions.join(', v')}){/if}
-				· {gcPreview.total_versions} total, current v{gcPreview.current_version}.
-				{#if Object.keys(gcPreview.protected_tags).length}
-					Protected by tags: {Object.entries(gcPreview.protected_tags)
-						.map(([t, v]) => `${t}→v${v}`)
-						.join(', ')}.
-				{/if}
-			</p>
-			{#if gcPreview.eligible_versions.length}
-				{#if gcConfirm}
-					<div class="row">
-						<span class="mut"
-							>Permanently reclaim {gcPreview.eligible_versions.length} version(s)?</span
-						>
-						<button class="btn danger" disabled={gcBusy} onclick={runGc}>Confirm reclaim</button>
-						<button class="btn ghost" onclick={() => (gcConfirm = false)}>Cancel</button>
-					</div>
-				{:else}
-					<button class="btn" disabled={gcBusy} onclick={() => (gcConfirm = true)}>
-						<Trash2 size={12} /> Reclaim now
-					</button>
-				{/if}
-			{/if}
-		{/if}
-		{#if gcResult}<p class="mut">{gcResult}</p>{/if}
-		{#if gcError}<p class="error">{gcError}</p>{/if}
-	</div>
+	<GarbageCollection {table} {onchanged} />
 </section>
 
 <style>
@@ -345,54 +231,8 @@
 		align-items: center;
 		gap: 6px;
 	}
-	.policy-edit input[type='number'],
-	.gc input[type='number'] {
-		width: 110px;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		padding: 4px 8px;
-		font-size: 12px;
-	}
-	.gc {
-		margin-top: 14px;
-		padding-top: 12px;
-		border-top: 1px solid color-mix(in srgb, var(--border) 45%, transparent);
-	}
-	.gc h3 {
-		font-size: 13px;
-		margin: 0 0 8px;
-	}
-	.gc label {
-		display: inline-flex;
-		flex-direction: column;
-		gap: 3px;
-		font-size: 12px;
-		color: var(--muted-foreground);
-	}
 	.row {
 		display: flex;
 		gap: 8px;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 10px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.btn.ghost {
-		background: none;
-		color: var(--muted-foreground);
-	}
-	.btn.danger {
-		color: var(--destructive);
 	}
 </style>

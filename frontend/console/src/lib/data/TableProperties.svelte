@@ -7,7 +7,10 @@
 	//
 	// `description` is RESERVED: it is the table's own prose, rendered on the detail header, so it gets a
 	// dedicated multi-line field here and is filtered out of the raw key/value grid. One editor, one door.
+	import { Button } from '@riksarkivet/ui/button';
+	import { Input } from '@riksarkivet/ui/input';
 	import { Select } from '@riksarkivet/ui/select';
+	import { Textarea } from '@riksarkivet/ui/textarea';
 	import { untrack } from 'svelte';
 	import type { CatalogResult } from './catalog';
 	import { setFieldMetadata, setTableProperties } from './remote/catalog.api';
@@ -26,12 +29,23 @@
 	} = $props();
 
 	const DESCRIPTION = 'description';
+	/** A key or value field: dense, and sharing its row with its sibling. */
+	const FIELD = 'h-7 min-w-25 flex-[1_1_140px] font-mono text-xs';
 
-	let rows = $state<{ key: string; value: string }[]>([]);
-	let description = $state('');
+	// Seeded ONCE, from the metadata the component mounts with. A post-save reload changes `tableMeta` but
+	// not the table, and must not reseed: that would wipe the "Saved." confirmation and any in-progress
+	// edits. The parent mounts this under `{#key table}`, so a navigation remounts it and the fresh
+	// instance seeds from the new table's metadata.
+	const seed = untrack(() => ({ ...tableMeta }));
+	let rows = $state<{ key: string; value: string }[]>(
+		Object.entries(seed)
+			.filter(([key]) => key !== DESCRIPTION)
+			.map(([key, value]) => ({ key, value })),
+	);
+	let description = $state(seed[DESCRIPTION] ?? '');
 	/** The keys the editor was seeded with — a seeded key that is gone at save time is a DELETE, and the
 	 *  only way to say so on the wire is an explicit null. Without this snapshot removal is unexpressible. */
-	let seeded = $state<{ keys: string[]; description: string }>({ keys: [], description: '' });
+	const seeded = { keys: Object.keys(seed), description: seed[DESCRIPTION] ?? '' };
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let savedMsg = $state<string | null>(null);
@@ -40,26 +54,6 @@
 	let selectedCol = $state('');
 	let colKey = $state('');
 	let colValue = $state('');
-
-	// Seed the editable table-props rows from the current metadata, keyed ONLY on the table id (tableMeta is
-	// read untracked). A post-save reload changes tableMeta but not the table, so it must NOT re-run — that
-	// would wipe the "Saved." confirmation and any in-progress edits. Navigating to another table remounts
-	// this component (the parent blanks detail → Loading), so the fresh mount reseeds from the new metadata.
-	$effect(() => {
-		void table;
-		untrack(() => {
-			rows = Object.entries(tableMeta)
-				.filter(([key]) => key !== DESCRIPTION)
-				.map(([key, value]) => ({ key, value }));
-			description = tableMeta[DESCRIPTION] ?? '';
-			seeded = { keys: Object.keys(tableMeta), description };
-			error = null;
-			savedMsg = null;
-			selectedCol = '';
-			colKey = '';
-			colValue = '';
-		});
-	});
 
 	const selectedField = $derived(fields.find((f) => f.name === selectedCol) ?? null);
 	const colEntries = $derived(Object.entries(selectedField?.metadata ?? {}));
@@ -136,11 +130,13 @@
 		What this table is. Stored as the reserved <code class="mono">description</code> property and shown
 		under the table's name.
 	</p>
-	<textarea
+	<Textarea
+		class="resize-y text-xs leading-normal"
 		bind:value={description}
-		rows="3"
+		rows={3}
 		placeholder="What this table holds, where it comes from, what to watch out for…"
-		aria-label="Table description"></textarea>
+		aria-label="Table description"
+	/>
 
 	<h3>Table properties</h3>
 	<p class="mut">
@@ -149,32 +145,33 @@
 	<div class="rows">
 		{#each rows as row, i (i)}
 			<div class="kv">
-				<input
-					class="mono"
+				<Input
+					class={FIELD}
 					bind:value={row.key}
 					placeholder="key"
 					aria-label="Property key {i + 1}"
 				/>
-				<input
-					class="mono"
+				<Input
+					class={FIELD}
 					bind:value={row.value}
 					placeholder="value"
 					aria-label="Property value {i + 1}"
 				/>
-				<button
-					class="chip-x"
+				<Button
+					variant="ghost"
+					size="icon-xs"
 					title="remove"
 					aria-label="Remove property {i + 1}"
-					onclick={() => (rows = rows.filter((_, j) => j !== i))}>×</button
+					onclick={() => (rows = rows.filter((_, j) => j !== i))}>×</Button
 				>
 			</div>
 		{/each}
 	</div>
 	<div class="row">
-		<button class="btn ghost" onclick={() => (rows = [...rows, { key: '', value: '' }])}
-			>+ add row</button
+		<Button variant="ghost" size="sm" onclick={() => (rows = [...rows, { key: '', value: '' }])}
+			>+ add row</Button
 		>
-		<button class="btn" disabled={busy} onclick={saveTableProps}>Save properties</button>
+		<Button size="sm" disabled={busy} onclick={saveTableProps}>Save properties</Button>
 		{#if savedMsg}<span class="okmsg">{savedMsg}</span>{/if}
 	</div>
 
@@ -194,12 +191,13 @@
 				{#each colEntries as [k, v] (k)}
 					<span class="chip mono"
 						>{k}={v}
-						<button
-							class="chip-x"
+						<Button
+							variant="ghost"
+							size="icon-xs"
 							title="delete {k}"
 							aria-label="Delete column property {k}"
 							disabled={busy}
-							onclick={() => deleteColKey(k)}>×</button
+							onclick={() => deleteColKey(k)}>×</Button
 						></span
 					>
 				{/each}
@@ -208,14 +206,14 @@
 			<p class="mut">No metadata on this column yet.</p>
 		{/if}
 		<div class="kv">
-			<input class="mono" bind:value={colKey} placeholder="key" aria-label="Column property key" />
-			<input
-				class="mono"
+			<Input class={FIELD} bind:value={colKey} placeholder="key" aria-label="Column property key" />
+			<Input
+				class={FIELD}
 				bind:value={colValue}
 				placeholder="value"
 				aria-label="Column property value"
 			/>
-			<button class="btn" disabled={busy || !colKey.trim()} onclick={setColKey}>Set</button>
+			<Button size="sm" disabled={busy || !colKey.trim()} onclick={setColKey}>Set</Button>
 		</div>
 	{/if}
 
@@ -261,46 +259,6 @@
 		margin-top: 8px;
 		flex-wrap: wrap;
 	}
-	input {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 8px;
-		flex: 1 1 140px;
-		min-width: 100px;
-	}
-	/* Deliberately NOT the design system's Textarea: this section's fields are 12px with a small radius, and the
-	   component would land a 16px rounded-lg field among them. */
-	textarea {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font: inherit;
-		font-size: 12px;
-		line-height: 1.5;
-		padding: 6px 8px;
-		width: 100%;
-		resize: vertical;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 12px;
-		cursor: pointer;
-	}
-	.btn.ghost {
-		background: transparent;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
 	.chips {
 		display: flex;
 		flex-wrap: wrap;
@@ -316,17 +274,6 @@
 		border-radius: var(--radius-sm);
 		padding: 1px 4px 1px 8px;
 		font-size: 12px;
-	}
-	.chip-x {
-		background: transparent;
-		border: none;
-		color: var(--muted-foreground);
-		cursor: pointer;
-		font-size: 13px;
-		padding: 0 4px;
-	}
-	.chip-x:hover {
-		color: var(--destructive);
 	}
 	.okmsg {
 		color: var(--success);

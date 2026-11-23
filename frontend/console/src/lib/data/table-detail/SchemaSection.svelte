@@ -14,6 +14,8 @@
 	// construction rather than by a hand-written reset list.
 	import { GatedAction } from '#lib/access/gated-action/index.ts';
 	import { AlertDialog } from '@riksarkivet/ui/alert-dialog';
+	import { Button, buttonVariants } from '@riksarkivet/ui/button';
+	import { Input } from '@riksarkivet/ui/input';
 	import { Select } from '@riksarkivet/ui/select';
 	import { RETYPE_TYPES } from '../catalog';
 	import { addColumn, dropColumn, renameColumn, retypeColumn } from '../remote/catalog.api';
@@ -140,19 +142,20 @@
 						<td class="mono">{f.nullable ? 'yes' : 'no'}</td>
 						<td class="actions">
 							{#if renaming === f.name}
-								<input
-									class="mono rn"
+								<Input
+									class="inline-flex h-7 w-28 font-mono text-xs"
 									bind:value={renameTo}
 									placeholder="new name"
 									aria-label="rename {f.name} to"
 									onkeydown={(e) => e.key === 'Enter' && runRenameColumn()}
 								/>
-								<button
-									class="btn ghost"
+								<Button
+									variant="ghost"
+									size="xs"
 									disabled={colBusy || !renameTo.trim()}
-									onclick={runRenameColumn}>save</button
+									onclick={runRenameColumn}>save</Button
 								>
-								<button class="btn ghost" onclick={() => (renaming = null)}>×</button>
+								<Button variant="ghost" size="icon-xs" onclick={() => (renaming = null)}>×</Button>
 							{:else if retyping === f.name}
 								<!-- #74 tail — re-type via alter_columns; the target is a scalar type spelled as
 							     DescribeTable spells it. An impossible cast 400s and surfaces. -->
@@ -163,46 +166,51 @@
 										placeholder="new type"
 										options={RETYPE_TYPES.map((t) => ({ value: t, label: t }))}
 									/>
-									<button
-										class="btn ghost"
+									<Button
+										variant="ghost"
+										size="xs"
 										disabled={colBusy || !retypeTo}
-										onclick={runRetypeColumn}>save</button
+										onclick={runRetypeColumn}>save</Button
 									>
-									<button class="btn ghost" onclick={() => (retyping = null)}>×</button>
+									<Button variant="ghost" size="icon-xs" onclick={() => (retyping = null)}>×</Button
+									>
 								</div>
 							{:else}
-								<button
-									class="chip-x"
+								<Button
+									variant="ghost"
+									size="icon-xs"
 									title="rename column"
 									aria-label="rename {f.name}"
 									disabled={colBusy}
 									onclick={() => {
 										renaming = f.name;
 										renameTo = '';
-									}}>✎</button
+									}}>✎</Button
 								>
-								<button
-									class="chip-x"
+								<Button
+									variant="ghost"
+									size="icon-xs"
 									title="re-type column"
 									aria-label="re-type {f.name}"
 									disabled={colBusy}
 									onclick={() => {
 										retyping = f.name;
 										retypeTo = '';
-									}}>⇄</button
+									}}>⇄</Button
 								>
 								<!-- Never `allowed`, and never natively `disabled`: GatedAction needs the control to
 								     keep receiving hover and focus, or the reason it carries can never be read
 								     (see gated-action.svelte). It dims and blocks the click itself. -->
 								<GatedAction allowed={false} action="Backfill column" reason={BACKFILL_UNAVAILABLE}>
-									<button class="chip-x" aria-label="backfill {f.name}">⤵</button>
+									<Button variant="ghost" size="icon-xs" aria-label="backfill {f.name}">⤵</Button>
 								</GatedAction>
-								<button
-									class="chip-x"
+								<Button
+									variant="ghost"
+									size="icon-xs"
 									title="drop column"
 									aria-label="drop {f.name}"
 									disabled={colBusy}
-									onclick={() => askDropColumn(f.name)}>×</button
+									onclick={() => askDropColumn(f.name)}>×</Button
 								>
 							{/if}
 						</td>
@@ -219,25 +227,21 @@
 			runAddColumn();
 		}}
 	>
-		<input
-			class="mono"
+		<Input
+			class="h-7 w-44 font-mono text-xs"
 			bind:value={addColName}
 			placeholder="new column"
 			aria-label="New column name"
 		/>
-		<input
-			class="mono"
+		<Input
+			class="h-7 flex-1 font-mono text-xs"
 			bind:value={addColExpr}
 			placeholder="SQL expression (e.g. cast(null as int))"
 			aria-label="Column SQL expression"
 		/>
-		<button
-			class="btn"
-			type="submit"
-			disabled={colBusy || !addColName.trim() || !addColExpr.trim()}
-		>
+		<Button size="sm" type="submit" disabled={colBusy || !addColName.trim() || !addColExpr.trim()}>
 			Add column
-		</button>
+		</Button>
 	</form>
 	{#if colError}<p class="error">{colError}</p>{/if}
 </section>
@@ -253,7 +257,7 @@
 		<div class="dialog-actions">
 			<AlertDialog.Cancel disabled={colBusy}>Cancel</AlertDialog.Cancel>
 			<AlertDialog.Action
-				class="border-destructive/40 bg-destructive/15 text-destructive hover:bg-destructive/25"
+				class={buttonVariants({ variant: 'destructive' })}
 				disabled={colBusy}
 				onclick={runDropColumn}
 			>
@@ -294,33 +298,8 @@
 		text-align: right;
 		white-space: nowrap;
 	}
-	.rn {
-		width: 110px;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 2px 6px;
-	}
 	.addcol {
 		margin-top: 10px;
-	}
-	.chip-x {
-		margin-left: 5px;
-		background: none;
-		border: none;
-		padding: 0;
-		color: var(--muted-foreground);
-		font: inherit;
-		cursor: pointer;
-	}
-	.chip-x:hover {
-		color: var(--destructive);
-	}
-	.chip-x:disabled {
-		opacity: 0.4;
-		cursor: default;
 	}
 	.mut {
 		color: var(--muted-foreground);
@@ -329,23 +308,6 @@
 	.error {
 		color: var(--destructive);
 		font-size: 12px;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 10px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.btn.ghost {
-		background: none;
-		color: var(--muted-foreground);
 	}
 	.row {
 		display: flex;

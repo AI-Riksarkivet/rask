@@ -15,7 +15,8 @@
 		type PaginationState,
 	} from '@riksarkivet/ui/data-table';
 	import { RefreshCw, ShieldAlert } from '@lucide/svelte';
-	import { untrack } from 'svelte';
+	import { Button } from '@riksarkivet/ui/button';
+	import { Input } from '@riksarkivet/ui/input';
 	import { page } from '$app/state';
 	import { tableFromIPC } from 'apache-arrow';
 	import { lineageTick, liveRead } from '#lib/live/tick.svelte.ts';
@@ -71,27 +72,11 @@
 		loading = false;
 	}
 
-	$effect(() => {
-		// Reset + reload on table change (limit changes go through the explicit Load button).
-		void table;
-		fields = [];
-		rows = null;
-		lastStatus = 0;
-		parseError = null;
-		limit = DEFAULT_LIMIT;
-		// untracked: load() READS `limit`, and a tracked read would re-run this whole reset (and
-		// clobber the user's typed limit back to the default) on every limit keystroke.
-		untrack(() => load());
-	});
-
-	// #73: a preview read once per table would keep showing rows a compaction, a pipeline's write or
-	// anyone else's commit has replaced, silently, because a stale table looks exactly like a fresh
-	// one. It re-reads on the ONE shared `lineageFeed`, so the preview and every
-	// other lineage-backed surface on the page agree about when the estate changed.
-	//
-	// `load()` alone, deliberately NOT the reset `$effect` above: a cursor tick is not a table change,
-	// so re-running the reset would clobber a limit the user typed back to the default while they were
-	// reading. Same latest-wins guard applies — `load()` drops its own stale response.
+	// The first read, and a re-read on every advance of the ONE shared `lineageFeed` (#73): a preview read
+	// once would keep showing rows a compaction, a pipeline's write or anyone else's commit has replaced,
+	// silently, because a stale table looks exactly like a fresh one. A cursor tick is not a table change,
+	// so it re-reads at the limit the person typed. The parent keys this component by table, so a
+	// navigation remounts it with the default limit and no rows; `load()` still drops a stale response.
 	liveRead(lineageTick, () => load());
 
 	/** Human form of one Arrow cell value. BigInt (int64), Date (timestamps) and typed-array /
@@ -213,18 +198,18 @@
 		<div class="empty">
 			<RefreshCw size={16} />
 			<p>Catalog unreachable (HTTP {lastStatus}).</p>
-			<button class="btn" disabled={loading} onclick={load}>Retry</button>
+			<Button variant="outline" size="sm" disabled={loading} onclick={load}>Retry</Button>
 		</div>
 	{:else if parseError}
 		<div class="empty">
 			<p class="error">{parseError}</p>
-			<button class="btn" disabled={loading} onclick={load}>Retry</button>
+			<Button variant="outline" size="sm" disabled={loading} onclick={load}>Retry</Button>
 		</div>
 	{:else}
 		<div class="toolbar">
 			<label class="mut"
-				>rows <input
-					class="mono"
+				>rows <Input
+					class="h-7 w-20 font-mono text-xs"
 					type="number"
 					min="1"
 					max={MAX_LIMIT}
@@ -232,7 +217,9 @@
 					aria-label="Preview row limit"
 				/></label
 			>
-			<button class="btn" disabled={loading} onclick={load}>{loading ? '…' : 'Load'}</button>
+			<Button variant="outline" size="sm" disabled={loading} onclick={load}
+				>{loading ? '…' : 'Load'}</Button
+			>
 		</div>
 		<DataTable
 			table={grid}
@@ -261,28 +248,6 @@
 		display: inline-flex;
 		align-items: center;
 		gap: 6px;
-	}
-	.toolbar input {
-		width: 80px;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		padding: 3px 8px;
-		font-size: 12px;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 10px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
 	}
 	.head {
 		font-size: 12px;

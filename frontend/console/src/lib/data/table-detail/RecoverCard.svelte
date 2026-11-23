@@ -19,40 +19,33 @@
 
 	let { table, onrecovered }: { table: string; onrecovered: () => Promise<void> } = $props();
 
-	let recoverable = $state<TrashEntry | null>(null);
 	let recovering = $state(false);
 	let recoverError = $state<string | null>(null);
-	// Deliberately NOT a `'loading'` sentinel inside the `TrashEntry | null` union: that string is
-	// TRUTHY, so the recover branch would render for it and read fields a string does not have.
-	let probe = $state<'loading' | 'done' | 'failed'>('loading');
-	let probeError = $state<string | null>(null);
+	// A successful undrop leaves no record to offer while the parent re-reads the detail.
+	let recovered = $state(false);
 
 	// Only asked for on the 404 (the parent's mount condition), so a live table never pays a
-	// round-trip for a question that cannot apply to it. The parent keys the detail body by table,
-	// so this instance never survives a navigation — no latest-wins guard needed.
-	$effect(() => {
-		// BOTH arms are handled. `catalogJSON` never throws, but this is a remote query — the
-		// browser→page-server hop can still reject (page 500, network drop), and a bare `.then()`
-		// would leave the card stuck on "Checking…" for ever.
-		void fetchTableTasks(table).then(
-			(res) => {
-				if (res.ok) {
-					recoverable = res.data[0] ?? null;
-					probe = 'done';
-				} else if (res.status === 404) {
-					recoverable = null;
-					probe = 'done';
-				} else {
-					probeError = res.detail;
-					probe = 'failed';
-				}
-			},
-			(err: unknown) => {
-				probeError = String(err);
-				probe = 'failed';
-			},
-		);
-	});
+	// round-trip for a question that cannot apply to it. The parent keys this card by table, and the
+	// read is held per table, so one table's record never shows on another's card.
+	const tasks = $derived(fetchTableTasks(table));
+	// Deliberately NOT a `'loading'` sentinel inside the `TrashEntry | null` union: that string is
+	// TRUTHY, so the recover branch would render for it and read fields a string does not have. A read
+	// that rejected (a dropped connection, a page-level failure) is a read failure, never "Checking…"
+	// for ever.
+	const probe = $derived.by(
+		():
+			| { state: 'loading' }
+			| { state: 'done'; entry: TrashEntry | null }
+			| { state: 'failed'; detail: string } => {
+			if (tasks.error !== undefined) return { state: 'failed', detail: String(tasks.error) };
+			const res = tasks.current;
+			if (res === undefined) return { state: 'loading' };
+			if (res.ok) return { state: 'done', entry: res.data[0] ?? null };
+			if (res.status === 404) return { state: 'done', entry: null };
+			return { state: 'failed', detail: res.detail };
+		},
+	);
+	const recoverable = $derived(probe.state === 'done' && !recovered ? probe.entry : null);
 
 	async function recover(): Promise<void> {
 		if (recovering) return;
@@ -61,7 +54,7 @@
 		try {
 			const res = await undropTable({ table });
 			if (res.ok) {
-				recoverable = null;
+				recovered = true;
 				await onrecovered();
 				return;
 			}
@@ -74,9 +67,9 @@
 	}
 </script>
 
-{#if probe === 'loading'}
+{#if probe.state === 'loading'}
 	<div class="empty"><p>Checking whether this table is recoverable…</p></div>
-{:else if probe === 'failed'}
+{:else if probe.state === 'failed'}
 	<div class="empty stack">
 		<p class="problem">
 			Could not read this table's trash record — recovery may still be possible. This is a read
@@ -84,7 +77,7 @@
 		</p>
 		<!-- VERBATIM, never a synthesised "HTTP {status}": `upstreamJSON` maps an unreachable catalog to
 		     status 0, which would print the meaningless "HTTP 0". Same rule the undrop refusal follows. -->
-		<p class="mut">{probeError}</p>
+		<p class="mut">{probe.detail}</p>
 	</div>
 {:else if recoverable}
 	<div class="recover">

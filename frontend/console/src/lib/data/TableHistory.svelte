@@ -15,40 +15,19 @@
 	//
 	// The rows themselves come from the FORMAT: the versions the catalog reports are the only versions
 	// that exist.
-	import { Badge } from '@riksarkivet/ui/badge';
-	import {
-		createSvelteTable,
-		DataTable,
-		DataTableHeaderButton,
-		getCoreRowModel,
-		getPaginationRowModel,
-		getSortedRowModel,
-		renderComponent,
-		renderSnippet,
-		type ColumnDef,
-		type PaginationState,
-		type SortingState,
-	} from '@riksarkivet/ui/data-table';
+	//
+	// This file holds the read, the filters and the selection; the table view is `CommitLogTable`, the
+	// selected commit's fields and actions `CommitPanel`, and the branches and tags `TableRefs`.
+	import { Button } from '@riksarkivet/ui/button';
+	import { Checkbox } from '@riksarkivet/ui/checkbox';
+	import { Input } from '@riksarkivet/ui/input';
 	import { Select } from '@riksarkivet/ui/select';
-	import { ChevronDown, ChevronRight, RefreshCw } from '@lucide/svelte';
-	import { fetchTableHistory, type CatalogResult, type HistoryRow } from './catalog';
-	import {
-		createTableBranch,
-		createTableTag,
-		deleteTableBranch,
-		deleteTableTag,
-		moveTableTag,
-		restoreTableVersion,
-	} from './remote/catalog.api';
-	import {
-		fmtBytes,
-		fmtEpoch,
-		isSchemaChange,
-		opTone,
-		rawFields,
-		summarizeChange,
-		type ChangeBit,
-	} from './history';
+	import { RefreshCw } from '@lucide/svelte';
+	import CommitLogTable from './CommitLogTable.svelte';
+	import CommitPanel from './CommitPanel.svelte';
+	import { isSchemaChange, summarizeChange, type LogRow } from './history';
+	import { fetchTableLog } from './remote/catalog.api';
+	import TableRefs from './TableRefs.svelte';
 
 	type Manifest = {
 		version?: number;
@@ -84,50 +63,24 @@
 	];
 
 	let limit = $state('50');
-	let history = $state<HistoryRow[] | null>(null);
-	let historyStatus = $state(0);
-	let historyDetail = $state('');
-	let historyDrift = $state<string | null>(null);
-	let loading = $state(false);
-	// A monotonic request token, checked in BOTH the success and the failure path: the log is keyed by
-	// (table, limit) and either can change while a request is in flight. The stale state is cleared first so
-	// nothing downstream renders the previous table's commits under this table's name.
-	let historyToken = 0;
-
-	async function loadHistory(): Promise<void> {
-		const forTable = table;
-		const forLimit = Number(limit);
-		const mine = ++historyToken;
-		loading = true;
-		history = null;
-		historyStatus = 0;
-		historyDetail = '';
-		historyDrift = null;
-		try {
-			const res = await fetchTableHistory(forTable, forLimit);
-			if (mine !== historyToken) return;
-			if (res.ok) {
-				history = res.data.versions;
-				historyStatus = 200;
-			} else {
-				historyStatus = res.status;
-				historyDetail = res.detail;
-			}
-		} catch (err) {
-			// The parse boundary throws when the wire drifts from the contract. Say so — rendering from a
-			// half-understood payload is how a log starts lying.
-			if (mine !== historyToken) return;
-			historyDrift = `history response drifted from the contract: ${String(err)}`;
-		} finally {
-			if (mine === historyToken) loading = false;
-		}
+	// The log, held per (table, limit) through the read layer: a new limit is a new read, and only the
+	// read for what is on screen renders. A payload that drifts from the contract rejects; say so —
+	// rendering from a half-understood payload is how a log starts lying.
+	const log = $derived(fetchTableLog({ table, limit: Number(limit) }));
+	const loading = $derived(log.loading);
+	const answer = $derived(log.error === undefined ? log.current : undefined);
+	const history = $derived(answer?.ok ? answer.data.versions : null);
+	const historyStatus = $derived(answer === undefined ? 0 : answer.ok ? 200 : answer.status);
+	const historyDetail = $derived(answer !== undefined && !answer.ok ? answer.detail : '');
+	const historyDrift = $derived(
+		log.error === undefined
+			? null
+			: `history response drifted from the contract: ${String(log.error)}`,
+	);
+	/** Read the log again; a failure is held on the read (`log.error`) and rendered from there. */
+	function reloadLog(): Promise<void> {
+		return log.refresh().catch(() => undefined);
 	}
-
-	$effect(() => {
-		void table;
-		void limit;
-		void loadHistory();
-	});
 
 	const txnByVersion = $derived(new Map((history ?? []).map((row) => [row.version, row])));
 	const manifestByVersion = $derived(
@@ -143,19 +96,6 @@
 			return acc;
 		}, {}),
 	);
-
-	type LogRow = {
-		version: number;
-		txn: HistoryRow | null;
-		committed: number | null;
-		naive: string | null;
-		manifestSize: number | null;
-		eTag: string | null;
-		refs: string[];
-		operation: string | null;
-		change: ChangeBit[];
-		schemaChange: boolean;
-	};
 
 	// The log's rows are the versions the FORMAT reports, newest first: the history endpoint when it answers
 	// (it is the paginated source), else the detail aggregate's manifest list.
@@ -215,307 +155,34 @@
 		}),
 	);
 
-	// ── selection: the row's actions and its raw fields hang off the selected commit, the way the reference
-	// console anchors its actions menu — a dense log stays scannable and the detail has room. ──
+	// ── selection: the row's actions and its raw fields hang off the selected commit (`CommitPanel`), the
+	// way the reference console anchors its actions menu — a dense log stays scannable and the detail has
+	// room. ──
 	let selectedVersion = $state<number | null>(null);
 	const selected = $derived(filtered.find((r) => r.version === selectedVersion) ?? null);
 	function select(version: number): void {
 		selectedVersion = selectedVersion === version ? null : version;
-		restoreArmed = null;
-		restoreTyped = '';
-		restoreError = null;
-		tagError = null;
-		tagName = '';
 	}
-
-	// ── restore: our restore MINTS A FRESH VERSION pointing at the old data, so nothing is orphaned and no
-	// branch becomes unreachable (which is why this needs none of the reference console's dropped-snapshot
-	// warnings). It does mutate the table's tip, so it asks for the version to be typed, and it refuses when
-	// the tip moved under the page. ──
-	let restoreArmed = $state<number | null>(null);
-	let restoreTyped = $state('');
-	let restoreBusy = $state(false);
-	let restoreError = $state<string | null>(null);
 	let restoreNote = $state<string | null>(null);
 
-	const restoreTypedOk = $derived(
-		restoreArmed !== null &&
-			[String(restoreArmed), `v${restoreArmed}`].includes(restoreTyped.trim().toLowerCase()),
+	async function restored(): Promise<void> {
+		selectedVersion = null;
+		await reloadLog();
+		onchange();
+	}
+
+	const summary = $derived(
+		`${filtered.length} of ${rows.length} commit${rows.length === 1 ? '' : 's'} shown${
+			history !== null && history.length === Number(limit)
+				? ` · reading the newest ${limit} — raise the limit to read further back`
+				: ''
+		}`,
 	);
-
-	async function runRestore(version: number): Promise<void> {
-		if (restoreBusy) return;
-		restoreBusy = true;
-		restoreError = null;
-		restoreNote = null;
-		try {
-			// Expected-version precondition, client-side: `RestoreTableRequest` carries only the target, so a
-			// restore from a stale page would silently win over a concurrent commit. Re-read the tip first and
-			// refuse on a mismatch. Not atomic — the catalog needs an `expected_version` to close the race —
-			// and when the endpoint is unavailable the check cannot run at all, which the UI states.
-			const tip = await fetchTableHistory(table, 1);
-			if (tip.ok) {
-				const newest = tip.data.versions[0]?.version ?? null;
-				if (newest !== null && currentVersion !== null && newest !== currentVersion) {
-					restoreError = `The table moved to v${newest} while this page was open (it showed v${currentVersion}). Reload before restoring — otherwise this would land on top of someone else's commit.`;
-					return;
-				}
-			} else {
-				restoreNote =
-					'The concurrent-write check could not run (the catalog did not serve the commit log), so this restore was not verified against the current tip.';
-			}
-			const res = await restoreTableVersion({ table, version });
-			if (res.ok) {
-				restoreArmed = null;
-				restoreTyped = '';
-				selectedVersion = null;
-				await loadHistory();
-				onchange();
-			} else if (res.status === 401) {
-				restoreError = 'Sign in to restore a version.';
-			} else if (res.status === 403) {
-				restoreError = 'Denied: restoring a version needs the modifier rung (can_restore).';
-			} else {
-				restoreError = res.detail;
-			}
-		} finally {
-			restoreBusy = false;
-		}
-	}
-
-	// ── tag THIS version (the pin-this affordance, instead of picking a version out of a dropdown) ──
-	let tagName = $state('');
-	let tagBusy = $state(false);
-	let tagError = $state<string | null>(null);
-
-	async function runTag(version: number): Promise<void> {
-		const name = tagName.trim();
-		if (tagBusy || !name) return;
-		tagBusy = true;
-		tagError = null;
-		try {
-			const res = await createTableTag({ table, tag: name, version });
-			if (res.ok) {
-				tagName = '';
-				onchange();
-			} else if (res.status === 401) {
-				tagError = 'Sign in to tag a version.';
-			} else if (res.status === 403) {
-				tagError = 'Denied: tagging a version needs writer access (can_create_tag).';
-			} else {
-				tagError = res.detail;
-			}
-		} finally {
-			tagBusy = false;
-		}
-	}
-
-	// ── refs: tags decorate the versions they pin, branches are their own row. Both deletes are destructive
-	// and now ask first — the bare × that deleted a ref on one click was the least guarded control here. ──
-	let refBusy = $state(false);
-	let refError = $state<string | null>(null);
-	let refConfirm = $state<{ kind: 'tag' | 'branch'; name: string } | null>(null);
-	let movingTag = $state<string | null>(null);
-	let moveTo = $state('');
-	let newBranch = $state('');
-	let newBranchFrom = $state('');
-
-	async function refDo(fn: () => Promise<CatalogResult<unknown>>): Promise<void> {
-		if (refBusy) return;
-		refBusy = true;
-		refError = null;
-		try {
-			const res = await fn();
-			if (res.ok) onchange();
-			else if (res.status === 401) refError = 'Sign in to manage tags & branches.';
-			else if (res.status === 403) refError = 'Denied: managing refs needs writer/owner access.';
-			else refError = res.detail;
-		} finally {
-			refBusy = false;
-			refConfirm = null;
-		}
-	}
-
-	async function runMoveTag(): Promise<void> {
-		if (!movingTag || !moveTo) return;
-		const name = movingTag;
-		await refDo(() => moveTableTag({ table, tag: name, version: Number(moveTo) }));
-		movingTag = null;
-		moveTo = '';
-	}
-
-	async function runCreateBranch(): Promise<void> {
-		const name = newBranch.trim();
-		if (!name) return;
-		await refDo(() =>
-			createTableBranch({ table, name, fromVersion: newBranchFrom ? Number(newBranchFrom) : null }),
-		);
-		newBranch = '';
-		newBranchFrom = '';
-	}
 
 	const versionOptions = $derived(
 		rows.map((r) => ({ value: String(r.version), label: `v${r.version}` })),
 	);
-
-	// ── the DataTable (the design system's DataTable over tanstack: sorting + a real page size) ──
-	let sorting = $state<SortingState>([]);
-	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 25 });
-
-	const columns: ColumnDef<LogRow>[] = [
-		{
-			id: 'version',
-			accessorKey: 'version',
-			header: ({ column }) =>
-				renderComponent(DataTableHeaderButton, {
-					label: 'version',
-					sorted: column.getIsSorted(),
-					onclick: column.getToggleSortingHandler(),
-				}),
-			cell: ({ row }) => renderSnippet(versionCell, row.original),
-			meta: { headerClass: 'w-20' },
-		},
-		{
-			id: 'operation',
-			accessorFn: (r) => r.operation ?? '',
-			header: 'operation',
-			cell: ({ row }) => renderSnippet(operationCell, row.original),
-			meta: { headerClass: 'w-28' },
-		},
-		{
-			id: 'change',
-			header: 'what changed',
-			cell: ({ row }) => renderSnippet(changeCell, row.original),
-		},
-		{
-			id: 'when',
-			accessorFn: (r) => r.committed ?? 0,
-			header: ({ column }) =>
-				renderComponent(DataTableHeaderButton, {
-					label: 'when',
-					sorted: column.getIsSorted(),
-					onclick: column.getToggleSortingHandler(),
-				}),
-			cell: ({ row }) => renderSnippet(whenCell, row.original),
-			meta: { headerClass: 'w-36' },
-		},
-		{
-			id: 'actions',
-			header: '',
-			cell: ({ row }) => renderSnippet(actionsCell, row.original),
-			meta: { headerClass: 'w-16' },
-		},
-	];
-
-	const logTable = createSvelteTable({
-		get data() {
-			return filtered;
-		},
-		columns,
-		state: {
-			get sorting() {
-				return sorting;
-			},
-			get pagination() {
-				return pagination;
-			},
-		},
-		onSortingChange: (u) => (sorting = typeof u === 'function' ? u(sorting) : u),
-		onPaginationChange: (u) => (pagination = typeof u === 'function' ? u(pagination) : u),
-		getCoreRowModel: getCoreRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getPaginationRowModel: getPaginationRowModel(),
-	});
-
-	const TONE_CLASS: Record<string, string> = {
-		append: 'border-transparent bg-success text-success-foreground',
-		delete: 'border-transparent bg-destructive text-white',
-		rewrite: 'border-transparent bg-warning text-warning-foreground',
-		schema: 'border-primary/40 bg-primary/10 text-primary',
-		index: 'border-teal-500/40 bg-teal-500/15 text-teal-800 dark:text-teal-200',
-		restore: 'border-violet-500/40 bg-violet-500/15 text-violet-800 dark:text-violet-200',
-		unknown: 'border-border bg-muted text-muted-foreground',
-	};
 </script>
-
-{#snippet versionCell(row: LogRow)}
-	<span class="vcell">
-		<span class="mono v">v{row.version}</span>
-		{#if row.version === currentVersion}<span class="tip" title="the table's current version"
-				>tip</span
-			>{/if}
-		{#each row.refs as name (name)}
-			<span class="tagchip mono" title={`tag ${name} pins v${row.version}`}>{name}</span>
-		{/each}
-		{#if row.schemaChange}
-			<span class="schemadot" title="this commit changed the schema" aria-label="schema change"
-				>◆</span
-			>
-		{/if}
-	</span>
-{/snippet}
-
-{#snippet operationCell(row: LogRow)}
-	{#if row.operation}
-		<Badge variant="outline" class="px-1.5 text-[10px] {TONE_CLASS[opTone(row.operation)]}"
-			>{row.operation}</Badge
-		>
-	{:else}
-		<span
-			class="mut"
-			title={history === null
-				? 'the commit log is unavailable — this row is the manifest only'
-				: 'the transaction file for this version could not be read'}>—</span
-		>
-	{/if}
-{/snippet}
-
-{#snippet changeCell(row: LogRow)}
-	{#if row.change.length > 0}
-		<span class="bits" title={row.change.map((b) => b.text).join(' · ')}>
-			{#each row.change as bit, i (i)}
-				{#if i > 0}<span class="sep">·</span>{/if}
-				<span class:mono={bit.mono} title={bit.mono ? bit.text : undefined}>{bit.text}</span>
-			{/each}
-		</span>
-	{:else if row.operation === 'Restore'}
-		<span class="mut" title="the catalog does not report the restored version yet"
-			>target version not recorded</span
-		>
-	{:else}
-		<span class="mut">—</span>
-	{/if}
-{/snippet}
-
-{#snippet whenCell(row: LogRow)}
-	{#if row.committed != null}
-		<span class="mono when">{fmtEpoch(row.committed, 'ms')}</span>
-	{:else if row.naive}
-		<!-- The wire's own string, verbatim: it carries no offset, so this view will not pretend to know
-		     which page it is in by reformatting it. -->
-		<span
-			class="mono naive when"
-			title="the catalog reports this commit time without a timezone offset">{row.naive}</span
-		>
-	{:else}
-		<span class="mut">—</span>
-	{/if}
-{/snippet}
-
-{#snippet actionsCell(row: LogRow)}
-	<!-- A chevron, not the word "details": five columns of real content already fill the card, and the
-	     word cost more width than the whole actions column is worth. The accessible name still says what it
-	     opens, and the row itself is clickable. -->
-	{@const Chevron = selectedVersion === row.version ? ChevronDown : ChevronRight}
-	<button
-		class="btn tiny ghost chev"
-		aria-label="details for v{row.version}"
-		aria-expanded={selectedVersion === row.version}
-		onclick={() => select(row.version)}
-	>
-		<Chevron size={13} />
-	</button>
-{/snippet}
 
 <section class="hist">
 	<h2>Commit log</h2>
@@ -561,58 +228,49 @@
 		     failure ("unreadable") that did not happen. Same for the schema toggle. -->
 		{#if history !== null}
 			<div class="chips" role="group" aria-label="Filter by operation">
-				<button
-					class="fchip"
-					class:on={opFilter === ''}
+				<Button
+					variant="ghost"
+					size="xs"
 					aria-pressed={opFilter === ''}
-					onclick={() => (opFilter = '')}>all {rows.length}</button
+					onclick={() => (opFilter = '')}>all {rows.length}</Button
 				>
 				{#each opCounts as [op, n] (op)}
-					<button
-						class="fchip"
-						class:on={opFilter === op}
+					<Button
+						variant="ghost"
+						size="xs"
 						aria-pressed={opFilter === op}
-						onclick={() => (opFilter = opFilter === op ? '' : op)}>{op} {n}</button
+						onclick={() => (opFilter = opFilter === op ? '' : op)}>{op} {n}</Button
 					>
 				{/each}
 			</div>
 			<label class="toggle">
-				<input type="checkbox" bind:checked={schemaOnly} />
+				<Checkbox bind:checked={schemaOnly} />
 				schema changes only
 			</label>
 		{/if}
-		<input
-			class="mono search"
+		<Input
+			class="h-7 min-w-30 flex-[1_1_160px] font-mono text-xs"
 			bind:value={search}
 			placeholder="search predicate, tag…"
 			aria-label="Search the log"
 		/>
 		<Select bind:value={limit} ariaLabel="How many commits to read" options={LIMITS} />
-		<button class="btn tiny ghost" onclick={() => loadHistory()} disabled={loading}>
+		<Button variant="ghost" size="xs" onclick={reloadLog} disabled={loading}>
 			<RefreshCw size={11} />
 			{loading ? '…' : 'reload'}
-		</button>
+		</Button>
 	</div>
 
-	<div data-testid="commit-log">
-		<DataTable
-			table={logTable}
-			loading={loading && history === null && manifests.length === 0}
-			emptyMessage={rows.length === 0
-				? 'No versions — this table has no manifest the catalog can read.'
-				: 'No commits match this filter.'}
-			onrowclick={(row) => select(row.version)}
-			rowLabel={(row) => `Show version ${row.version}`}
-		>
-			{#snippet footer()}
-				<span class="mut"
-					>{filtered.length} of {rows.length} commit{rows.length === 1 ? '' : 's'} shown{history !== null && history.length === Number(limit)
-						? ` · reading the newest ${limit} — raise the limit to read further back`
-						: ''}</span
-				>
-			{/snippet}
-		</DataTable>
-	</div>
+	<CommitLogTable
+		rows={filtered}
+		empty={rows.length === 0}
+		loading={loading && history === null && manifests.length === 0}
+		historyRead={history !== null}
+		{currentVersion}
+		{selectedVersion}
+		onselect={select}
+		{summary}
+	/>
 	{#if restoreNote}
 		<!-- The advisory outlives the panel: a successful restore closes the selection, and "this write was
 		     NOT checked against the current tip" is exactly the sentence that must not vanish with it. -->
@@ -620,215 +278,20 @@
 	{/if}
 
 	{#if selected}
-		<!-- The selected commit: its raw transaction fields (uninterpreted) and the
-		     actions that act on THIS version. -->
-		<div class="panel" data-testid="commit-panel">
-			<div class="phead">
-				<span class="mono strong">v{selected.version}</span>
-				<span class="mut">{selected.operation ?? 'operation not recorded'}</span>
-				<button class="btn tiny ghost" onclick={() => select(selected.version)}>close</button>
-			</div>
-
-			<dl class="kv">
-				<dt>committed</dt>
-				<dd class="mono">
-					{selected.committed != null ? fmtEpoch(selected.committed, 'ms') : '—'}
-					{#if selected.naive}
-						<span class="mut">· wire value <code>{selected.naive}</code> (no offset)</span>
-					{/if}
-				</dd>
-				<dt>manifest</dt>
-				<dd class="mono">
-					{fmtBytes(selected.manifestSize)}{selected.eTag ? ` · etag ${selected.eTag}` : ''}
-				</dd>
-			</dl>
-
-			<h3>Raw transaction fields</h3>
-			{#if selected.txn === null}
-				<p class="mut">
-					Not available — the commit log endpoint did not answer, so this row is the manifest entry
-					only.
-				</p>
-			{:else if rawFields(selected.txn).length === 0}
-				<p class="mut">The transaction carried no detail fields beyond its operation.</p>
-			{:else}
-				<table class="raw">
-					<tbody>
-						{#each rawFields(selected.txn) as field (field.key)}
-							<tr><td class="mono k">{field.key}</td><td class="mono">{field.value}</td></tr>
-						{/each}
-					</tbody>
-				</table>
-			{/if}
-
-			<h3>Actions</h3>
-			<div class="acts">
-				<div class="act">
-					<input
-						class="mono"
-						bind:value={tagName}
-						placeholder="tag name (e.g. blessed)"
-						aria-label="Tag name"
-					/>
-					<button
-						class="btn tiny"
-						disabled={tagBusy || !tagName.trim()}
-						onclick={() => runTag(selected.version)}
-					>
-						{tagBusy ? '…' : `Tag v${selected.version}`}
-					</button>
-				</div>
-				<div class="act">
-					{#if restoreArmed === selected.version}
-						<span class="mut">type <code>v{selected.version}</code> to confirm</span>
-						<input
-							class="mono"
-							bind:value={restoreTyped}
-							aria-label="Type the version to confirm the restore"
-							placeholder="v{selected.version}"
-						/>
-						<button
-							class="btn tiny danger"
-							disabled={restoreBusy || !restoreTypedOk}
-							onclick={() => runRestore(selected.version)}
-						>
-							{restoreBusy ? '…' : 'Confirm restore'}
-						</button>
-						<button
-							class="btn tiny ghost"
-							onclick={() => {
-								restoreArmed = null;
-								restoreTyped = '';
-							}}>cancel</button
-						>
-					{:else}
-						<button
-							class="btn tiny ghost"
-							onclick={() => {
-								restoreArmed = selected.version;
-								restoreTyped = '';
-								restoreError = null;
-								restoreNote = null;
-							}}
-						>
-							Restore v{selected.version} (creates a new version)
-						</button>
-					{/if}
-				</div>
-			</div>
-			{#if tagError}<p class="error">{tagError}</p>{/if}
-			{#if restoreError}<p class="error">{restoreError}</p>{/if}
-		</div>
+		{#key selected.version}
+			<CommitPanel
+				{table}
+				row={selected}
+				{currentVersion}
+				onclose={() => (selectedVersion = null)}
+				onrestored={restored}
+				onnote={(note) => (restoreNote = note)}
+				{onchange}
+			/>
+		{/key}
 	{/if}
 
-	<h3>Branches</h3>
-	<div class="refs">
-		<span class="chip mono">main</span>
-		{#each branches as [name, b] (name)}
-			<span class="chip branch mono"
-				>{name}<span class="mut"> · {fmtBytes(b.manifestSize)}</span>
-				{#if refConfirm?.kind === 'branch' && refConfirm.name === name}
-					<button
-						class="chip-x danger"
-						aria-label="confirm delete branch {name}"
-						disabled={refBusy}
-						onclick={() => refDo(() => deleteTableBranch({ table, name }))}>delete?</button
-					>
-					<button class="chip-x" aria-label="cancel" onclick={() => (refConfirm = null)}>×</button>
-				{:else}
-					<button
-						class="chip-x"
-						title="delete branch"
-						aria-label="delete branch {name}"
-						disabled={refBusy}
-						onclick={() => (refConfirm = { kind: 'branch', name })}>×</button
-					>
-				{/if}
-			</span>
-		{/each}
-	</div>
-	<form
-		class="row"
-		onsubmit={(e) => {
-			e.preventDefault();
-			runCreateBranch();
-		}}
-	>
-		<input
-			class="mono"
-			bind:value={newBranch}
-			placeholder="new branch"
-			aria-label="New branch name"
-		/>
-		<Select
-			bind:value={newBranchFrom}
-			ariaLabel="Branch from version"
-			placeholder="from version (latest)"
-			options={versionOptions}
-		/>
-		<button class="btn" type="submit" disabled={refBusy || !newBranch.trim()}>Create branch</button>
-	</form>
-
-	<h3>Tags</h3>
-	<div class="refs">
-		{#if tags.length === 0}
-			<span class="mut">No tags: a tag pins one version of the table by a name you choose.</span>
-		{:else}
-			{#each tags as [name, t] (name)}
-				{#if movingTag === name}
-					<span class="chip tag mono">
-						{name} →
-						<span class="movesel">
-							<Select
-								bind:value={moveTo}
-								ariaLabel="move {name} to version"
-								placeholder="version"
-								options={versionOptions}
-							/>
-						</span>
-						<button class="chip-x" disabled={refBusy || !moveTo} onclick={runMoveTag}>save</button>
-						<button class="chip-x" aria-label="cancel move" onclick={() => (movingTag = null)}
-							>×</button
-						>
-					</span>
-				{:else}
-					<span class="chip tag mono"
-						>{name} → v{t.version}{#if t.branch}&nbsp;on {t.branch}{/if}
-						<button
-							class="chip-x"
-							title="move tag"
-							aria-label="move tag {name}"
-							disabled={refBusy}
-							onclick={() => {
-								movingTag = name;
-								moveTo = '';
-							}}>↪</button
-						>
-						{#if refConfirm?.kind === 'tag' && refConfirm.name === name}
-							<button
-								class="chip-x danger"
-								aria-label="confirm delete tag {name}"
-								disabled={refBusy}
-								onclick={() => refDo(() => deleteTableTag({ table, tag: name }))}>delete?</button
-							>
-							<button class="chip-x" aria-label="cancel" onclick={() => (refConfirm = null)}
-								>×</button
-							>
-						{:else}
-							<button
-								class="chip-x"
-								title="delete tag"
-								aria-label="delete tag {name}"
-								disabled={refBusy}
-								onclick={() => (refConfirm = { kind: 'tag', name })}>×</button
-							>
-						{/if}
-					</span>
-				{/if}
-			{/each}
-		{/if}
-	</div>
-	{#if refError}<p class="error">{refError}</p>{/if}
+	<TableRefs {table} {tags} {branches} {versionOptions} {onchange} />
 </section>
 
 <style>
@@ -841,13 +304,6 @@
 		letter-spacing: 0.06em;
 		color: var(--muted-foreground);
 		margin: 0 0 8px;
-	}
-	h3 {
-		font-size: 11px;
-		font-weight: 600;
-		margin: 16px 0 6px;
-		text-transform: uppercase;
-		letter-spacing: 0.04em;
 	}
 	.mut {
 		color: var(--muted-foreground);
@@ -881,19 +337,6 @@
 		flex-wrap: wrap;
 		gap: 4px;
 	}
-	.fchip {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		color: var(--muted-foreground);
-		cursor: pointer;
-		font-size: 11px;
-		padding: 2px 8px;
-	}
-	.fchip.on {
-		border-color: color-mix(in oklab, var(--foreground) 40%, transparent);
-		color: var(--foreground);
-	}
 	.toggle {
 		align-items: center;
 		color: var(--muted-foreground);
@@ -901,208 +344,12 @@
 		font-size: 12px;
 		gap: 4px;
 	}
-	.search {
-		flex: 1 1 160px;
-		min-width: 120px;
-	}
-	input {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 4px 8px;
-	}
-	input[type='checkbox'] {
-		padding: 0;
-	}
-	.btn {
-		align-items: center;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		cursor: pointer;
-		display: inline-flex;
-		font-size: 12px;
-		gap: 4px;
-		padding: 4px 12px;
-	}
-	.btn.tiny {
-		font-size: 11px;
-		padding: 2px 8px;
-	}
-	.btn.ghost {
-		background: transparent;
-	}
-	.chev {
-		padding: 2px 4px;
-	}
-	.btn.danger {
-		border-color: color-mix(in oklab, var(--destructive) 50%, transparent);
-		color: var(--destructive);
-	}
-	.btn:disabled {
-		cursor: default;
-		opacity: 0.5;
-	}
-	.vcell {
-		align-items: center;
-		display: inline-flex;
-		flex-wrap: wrap;
-		gap: 4px;
-	}
-	.v {
-		font-weight: 600;
-	}
-	.tip,
-	.tagchip {
-		border: 1px solid var(--border);
-		border-radius: 999px;
-		font-size: 10px;
-		padding: 0 5px;
-	}
-	.tip {
-		background: color-mix(in oklab, var(--success) 15%, transparent);
-		border-color: color-mix(in oklab, var(--success) 45%, transparent);
-	}
-	.tagchip {
-		background: color-mix(in oklab, var(--warning) 15%, transparent);
-		border-color: color-mix(in oklab, var(--warning) 45%, transparent);
-	}
-	.schemadot {
-		color: var(--warning);
-		font-size: 10px;
-	}
-	/* The log stays scannable only if no single cell can stretch the table: a long predicate and a long
-	   index name are unbroken strings. Each is capped and ellipsised, with the full text in the cell's
-	   title (and, uncut, in the commit panel below). */
-	.bits {
-		font-size: 12px;
-		display: inline-block;
-		max-width: 20ch;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-		vertical-align: bottom;
-	}
-	.sep {
-		color: var(--muted-foreground);
-		padding: 0 3px;
-	}
-	.naive {
-		border-bottom: 1px dotted var(--muted-foreground);
-	}
-	.when {
-		font-size: 11px;
-	}
-	.panel {
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		margin-top: 12px;
-		padding: 12px;
-	}
-	.phead {
-		align-items: center;
-		display: flex;
-		gap: 8px;
-		margin-bottom: 8px;
-	}
-	.strong {
-		font-weight: 600;
-	}
-	.kv {
-		display: grid;
-		gap: 2px 12px;
-		grid-template-columns: max-content 1fr;
-		margin: 0;
-	}
-	.kv dt {
-		color: var(--muted-foreground);
-		font-size: 11px;
-	}
-	.kv dd {
-		font-size: 12px;
-		margin: 0;
-		overflow-wrap: anywhere;
-	}
-	table.raw {
-		border-collapse: collapse;
-		font-size: 12px;
-		width: 100%;
-	}
-	table.raw td {
-		border-bottom: 1px solid var(--border);
-		padding: 3px 8px 3px 0;
-		overflow-wrap: anywhere;
-	}
-	table.raw td.k {
-		color: var(--muted-foreground);
-		width: 40%;
-	}
-	.acts {
-		display: flex;
-		flex-direction: column;
-		gap: 6px;
-	}
-	.act {
-		align-items: center;
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-	}
-	.refs {
-		align-items: center;
-		display: flex;
-		flex-wrap: wrap;
-		gap: 6px;
-		margin-bottom: 8px;
-	}
-	.row {
-		align-items: center;
-		display: flex;
-		flex-wrap: wrap;
-		gap: 8px;
-		margin-top: 8px;
-	}
 	.summary {
 		display: flex;
 		flex-wrap: wrap;
 		gap: 4px 16px;
 		margin: 0 0 12px;
 		font-size: 13px;
-	}
-	.chip {
-		align-items: center;
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		display: inline-flex;
-		font-size: 12px;
-		gap: 4px;
-		padding: 1px 4px 1px 8px;
-	}
-	.chip-x {
-		background: transparent;
-		border: none;
-		color: var(--muted-foreground);
-		cursor: pointer;
-		font-size: 12px;
-		padding: 0 4px;
-	}
-	.chip-x:hover {
-		color: var(--destructive);
-	}
-	.chip-x.danger {
-		color: var(--destructive);
-	}
-	.movesel {
-		display: inline-flex;
-	}
-	.error {
-		color: var(--destructive);
-		font-size: 12px;
-		margin-top: 8px;
 	}
 	.mono {
 		font-family: var(--font-mono, ui-monospace, monospace);

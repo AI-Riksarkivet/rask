@@ -7,6 +7,8 @@
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation — a predicate (or an armed delete confirm) typed on
 	// table A cannot fire against B.
+	import { Button } from '@riksarkivet/ui/button';
+	import { Input } from '@riksarkivet/ui/input';
 	import { deleteRows, updateRows } from '../remote/catalog.api';
 
 	let { table, onchanged }: { table: string; onchanged: () => Promise<void> } = $props();
@@ -92,34 +94,35 @@
 		applies the SET pairs to matching rows (empty predicate = all rows); delete removes them
 		(predicate required). Both are writer-gated.
 	</p>
-	<input
-		class="mono pred"
+	<Input
+		class="mb-1.5 h-7 font-mono text-xs"
 		bind:value={rowPredicate}
 		placeholder="predicate (e.g. id > 3)"
 		aria-label="Row predicate"
 	/>
 	{#each rowSets as s, i (i)}
 		<div class="row setpair">
-			<input
-				class="mono"
+			<Input
+				class="h-7 w-44 font-mono text-xs"
 				bind:value={s.column}
 				placeholder="column"
 				aria-label="SET column {i + 1}"
 			/>
-			<input
-				class="mono"
+			<Input
+				class="h-7 flex-1 font-mono text-xs"
 				bind:value={s.expression}
 				placeholder="SQL expression (e.g. price * 2)"
 				aria-label="SET expression {i + 1}"
 			/>
 		</div>
 	{/each}
-	<button
-		class="btn ghost"
+	<Button
+		variant="ghost"
+		size="sm"
 		onclick={() => (rowSets = [...rowSets, { column: '', expression: '' }])}
 	>
 		+ add SET pair
-	</button>
+	</Button>
 	{#if rowSetPartial}
 		<p class="mut" role="status">
 			A SET pair is only half-filled — complete (or clear) both its column and expression; partial
@@ -127,26 +130,32 @@
 		</p>
 	{/if}
 	<div class="ins-row">
-		<button
-			class="btn"
+		<Button
+			size="sm"
 			disabled={rowBusy || rowSetPairs.length === 0 || rowSetPartial}
 			onclick={runUpdateRows}
 		>
 			{rowBusy ? '…' : 'Update rows'}
-		</button>
+		</Button>
 		{#if rowDeleteConfirm}
-			<button class="btn danger" disabled={rowBusy || !rowPredicate.trim()} onclick={runDeleteRows}>
+			<Button
+				variant="destructive"
+				size="sm"
+				disabled={rowBusy || !rowPredicate.trim()}
+				onclick={runDeleteRows}
+			>
 				confirm delete
-			</button>
-			<button class="btn ghost" onclick={() => (rowDeleteConfirm = false)}>cancel</button>
+			</Button>
+			<Button variant="ghost" size="sm" onclick={() => (rowDeleteConfirm = false)}>cancel</Button>
 		{:else}
-			<button
-				class="btn danger"
+			<Button
+				variant="destructive"
+				size="sm"
 				disabled={rowBusy || !rowPredicate.trim()}
 				onclick={() => (rowDeleteConfirm = true)}
 			>
 				Delete rows
-			</button>
+			</Button>
 		{/if}
 		{#if rowMsg}<span class="ins-msg" class:okmsg={rowMsg.ok} class:error={!rowMsg.ok}
 				>{rowMsg.text}</span
@@ -173,10 +182,6 @@
 		color: var(--destructive);
 		font-size: 12px;
 	}
-	.pred {
-		width: 100%;
-		margin-bottom: 6px;
-	}
 	.setpair {
 		margin-bottom: 6px;
 	}
@@ -195,25 +200,5 @@
 	}
 	.okmsg {
 		color: var(--success);
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 10px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.btn.ghost {
-		background: none;
-		color: var(--muted-foreground);
-	}
-	.btn.danger {
-		color: var(--destructive);
 	}
 </style>

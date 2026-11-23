@@ -14,12 +14,14 @@ import {
 	TableLifecycleResponseSchema,
 	UpdateRowsResponseSchema,
 	type DeclareTableResult,
+	fetchTableHistory,
 	type DeleteRowsResult,
 	type GcBounds,
 	type GcPreview,
 	type GcRunResult,
 	type PartError,
 	type TableDetail,
+	type TableHistory,
 	type TableLifecycleResult,
 	type TablesList,
 	type UpdateRowsResult,
@@ -108,6 +110,14 @@ export type TrashEntry = v.InferOutput<typeof TrashEntrySchema>;
 
 export const fetchTableTasks = query(v.string(), async (table): Promise<ApiResult<TrashEntry[]>> =>
 	parsed(await catalogJSON(`/management/v1/table/${enc(table)}/tasks`), v.array(TrashEntrySchema)),
+);
+
+/** #113 the table's commit log, newest first, held per (table, limit): the Versions tab reads it, and
+ *  its reload and a restore refresh it. A payload that drifts from the contract rejects, and the
+ *  holder renders `.error`. The restore's one-off tip read calls `fetchTableHistory` directly. */
+export const fetchTableLog = query(
+	v.object({ table: v.string(), limit: v.number() }),
+	async ({ table, limit }): Promise<ApiResult<TableHistory>> => fetchTableHistory(table, limit),
 );
 
 /** The data contract the table holds (ADR 0212), read at `can_get_metadata`; `contract` is null for a

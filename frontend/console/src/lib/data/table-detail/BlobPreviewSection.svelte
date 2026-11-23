@@ -6,6 +6,8 @@
 	//
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation.
+	import { Button } from '@riksarkivet/ui/button';
+	import { Input } from '@riksarkivet/ui/input';
 	import { Select } from '@riksarkivet/ui/select';
 	import { requestBinary } from '#lib/http.ts';
 	import { CATALOG_API } from '#lib/upstreams.ts';
@@ -35,7 +37,6 @@
 			CATALOG_API,
 			`management/v1/table/${encodeURIComponent(table)}/blobs?column=${encodeURIComponent(blobCol)}&row=${blobRow}`,
 		);
-		if (blobSrc) URL.revokeObjectURL(blobSrc);
 		blobSrc = null;
 		if (!res.ok) {
 			blobError = `${res.status || 'offline'}: ${res.detail}`;
@@ -44,8 +45,12 @@
 		blobSrc = URL.createObjectURL(new Blob([res.data]));
 	}
 
-	$effect(() => () => {
-		if (blobSrc) URL.revokeObjectURL(blobSrc);
+	// An object URL holds its bytes until revoked: each one is released when the next replaces it, and
+	// the last when the section unmounts.
+	$effect(() => {
+		const src = blobSrc;
+		if (!src) return;
+		return () => URL.revokeObjectURL(src);
 	});
 </script>
 
@@ -54,16 +59,21 @@
 	{#if blobColumns.length === 0}
 		<p class="mut">No blob columns on this table.</p>
 	{:else}
-		<div class="refs tagform">
+		<div class="refs">
 			<Select
 				bind:value={blobCol}
 				ariaLabel="Blob column"
 				placeholder="column…"
 				options={blobColumns.map((c) => ({ value: c, label: c }))}
 			/>
-			<input class="mono" type="number" min="0" placeholder="row" bind:value={blobRow} />
-			<button class="btn" disabled={!blobCol || blobRow == null} onclick={previewBlob}
-				>Preview</button
+			<Input
+				class="h-7 w-38 font-mono text-xs"
+				type="number"
+				min="0"
+				placeholder="row"
+				bind:value={blobRow}
+			/>
+			<Button size="sm" disabled={!blobCol || blobRow == null} onclick={previewBlob}>Preview</Button
 			>
 		</div>
 		{#if blobError}
@@ -105,9 +115,6 @@
 		margin-bottom: 6px;
 		font-size: 12px;
 	}
-	.tagform input {
-		width: 150px;
-	}
 	.blob {
 		display: block;
 		max-width: 100%;
@@ -115,18 +122,5 @@
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		margin-top: 10px;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 10px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
 	}
 </style>

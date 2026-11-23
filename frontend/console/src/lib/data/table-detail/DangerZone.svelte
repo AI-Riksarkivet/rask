@@ -7,6 +7,8 @@
 	// instance never survives a navigation — an armed confirm dies with it. No `onchanged` prop:
 	// every success here leaves the page (the id no longer names this table).
 	import { AlertDialog } from '@riksarkivet/ui/alert-dialog';
+	import { Button, buttonVariants } from '@riksarkivet/ui/button';
+	import { Input } from '@riksarkivet/ui/input';
 	import { namespacePrefix } from '#lib/api/identifiers.ts';
 	import { Trash2 } from '@lucide/svelte';
 	import { goto } from '$app/navigation';
@@ -106,27 +108,35 @@
 			runRenameTable();
 		}}
 	>
-		<input
-			class="mono"
+		<Input
+			class="h-7 w-56 font-mono text-xs"
 			bind:value={renameTableTo}
 			placeholder="new table name"
 			aria-label="Rename table to"
 		/>
-		<button class="btn" type="submit" disabled={dangerBusy || !renameTableTo.trim()}>
-			Rename
-		</button>
+		<Button size="sm" type="submit" disabled={dangerBusy || !renameTableTo.trim()}>Rename</Button>
 	</form>
 	<p class="mut">
 		Rename relocates the table within its namespace and navigates to the new id (owner-gated:
 		can_drop on the source + can_create_table on the destination).
 	</p>
 	<div class="row">
-		<button class="btn danger" disabled={dangerBusy} onclick={() => openDanger('deregister')}>
+		<Button
+			variant="destructive"
+			size="sm"
+			disabled={dangerBusy}
+			onclick={() => openDanger('deregister')}
+		>
 			Deregister
-		</button>
-		<button class="btn danger" disabled={dangerBusy} onclick={() => openDanger('drop')}>
+		</Button>
+		<Button
+			variant="destructive"
+			size="sm"
+			disabled={dangerBusy}
+			onclick={() => openDanger('drop')}
+		>
 			<Trash2 size={12} /> Drop table
-		</button>
+		</Button>
 	</div>
 	<p class="mut">
 		Deregister detaches the table from the catalog (data stays on storage); drop deletes it, and its
@@ -154,7 +164,7 @@
 		<div class="dialog-actions">
 			<AlertDialog.Cancel disabled={dangerBusy}>Cancel</AlertDialog.Cancel>
 			<AlertDialog.Action
-				class="border-destructive/40 bg-destructive/15 text-destructive hover:bg-destructive/25"
+				class={buttonVariants({ variant: 'destructive' })}
 				disabled={dangerBusy}
 				onclick={confirmDanger}
 			>
@@ -186,22 +196,6 @@
 	.row {
 		display: flex;
 		gap: 8px;
-	}
-	.btn {
-		background: var(--muted);
-		border: 1px solid var(--border);
-		border-radius: var(--radius-sm);
-		color: var(--foreground);
-		font-size: 12px;
-		padding: 3px 10px;
-		cursor: pointer;
-	}
-	.btn:disabled {
-		opacity: 0.5;
-		cursor: default;
-	}
-	.btn.danger {
-		color: var(--destructive);
 	}
 	.dangerzone {
 		border-top: 1px solid color-mix(in srgb, var(--destructive) 30%, var(--border));

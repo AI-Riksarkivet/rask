@@ -162,3 +162,18 @@ export function fmtEpoch(value: number | null | undefined, unit: 'ms' | 's'): st
 	const ms = unit === 's' ? value * 1000 : value;
 	return `${new Date(ms).toISOString().replace('T', ' ').slice(0, 16)}Z`;
 }
+
+/** One row of a table's commit log: a version the format reports, joined to its transaction (when the
+ *  commit log answered) and its manifest (when the detail aggregate listed it). */
+export type LogRow = {
+	version: number;
+	txn: HistoryRow | null;
+	committed: number | null;
+	naive: string | null;
+	manifestSize: number | null;
+	eTag: string | null;
+	refs: string[];
+	operation: string | null;
+	change: ChangeBit[];
+	schemaChange: boolean;
+};

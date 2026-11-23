@@ -6,6 +6,7 @@
 	//
 	// Split out of TableDetail.svelte (#98). Mounted under the parent's `{#key table}`, so the
 	// instance never survives a navigation.
+	import { Button } from '@riksarkivet/ui/button';
 	import { dropTableIndex } from '../remote/catalog.api';
 
 	interface IndexRow {
@@ -53,15 +54,16 @@
 			{#each indexes as ix (ix.index_name)}
 				<span class="chip mono"
 					>{ix.index_name}<span class="mut">
-						· {(ix.columns ?? []).join(', ')}{ix.index_type
-							? ` · ${ix.index_type}`
-							: ''}</span>
-					<button
-						class="chip-x"
+						· {(ix.columns ?? []).join(', ')}{ix.index_type ? ` · ${ix.index_type}` : ''}</span
+					>
+					<Button
+						variant="ghost"
+						size="icon-xs"
+						class="ml-1"
 						title="drop index"
 						aria-label="drop index {ix.index_name}"
 						disabled={ixBusy}
-						onclick={() => runDropIndex(ix.index_name)}>×</button
+						onclick={() => runDropIndex(ix.index_name)}>×</Button
 					></span
 				>
 			{/each}
@@ -105,21 +107,5 @@
 		border: 1px solid var(--border);
 		border-radius: var(--radius-sm);
 		padding: 0 7px;
-	}
-	.chip-x {
-		margin-left: 5px;
-		background: none;
-		border: none;
-		padding: 0;
-		color: var(--muted-foreground);
-		font: inherit;
-		cursor: pointer;
-	}
-	.chip-x:hover {
-		color: var(--destructive);
-	}
-	.chip-x:disabled {
-		opacity: 0.4;
-		cursor: default;
 	}
 </style>

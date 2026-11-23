@@ -92,7 +92,7 @@ convenience list; the subpaths are canonical. `cn` and `formatZoned` (every mome
 Two behaviours the console relies on:
 
 - **A clickable `DataTable` row** (`onrowclick`) keeps its table semantics and opens from a visually hidden button in
-  its first cell, named `Open <that cell's value>` unless `rowLabel` names it (`TableHistory`: `Show version <n>`). A
+  its first cell, named `Open <that cell's value>` unless `rowLabel` names it (`CommitLogTable`: `Show version <n>`). A
   click elsewhere on the row still opens it; a click on a control inside the row is that control's.
 - **A `Select`** is named by its `ariaLabel` and the value it shows ("Sort by Created"); `getByLabel('<ariaLabel>')`
   still finds it.
