@@ -23,23 +23,18 @@ bucket `purge_bucket` and `force` are three SEPARATE opt-ins that never share a 
 from __future__ import annotations
 
 import logging
-import uuid
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing, suppress
 from datetime import UTC, datetime
 from functools import partial
-from typing import Annotated, Any, Final, Literal
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (
     ConcurrentModificationError,
-    DeregisterTableRequest,
-    DescribeTableRequest,
-    DescribeTableResponse,
     DropNamespaceRequest,
     InvalidInputError,
-    InvalidTableStateError,
     LanceNamespace,
     LanceNamespaceError,
     NamespaceAlreadyExistsError,
@@ -81,11 +76,9 @@ from catalog.schemas import (
     TrashListing,
     WarehouseResponse,
 )
-from catalog.services import clone_endings, namespace_subtrees, table_claims, trash_doors, warehouses
+from catalog.services import namespace_subtrees, storage_probe, trash_doors, warehouse_removal, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, RecordGone, Unregistered
-from catalog.services.clone_ending_records import CloneEnding
 from catalog.services.control_records import ProtectionChange, with_protection
-from catalog.services.tables import destroy
 from catalog.services.vend_probe import (
     CAS_CHECK,
     CAS_RESERVE,
@@ -93,10 +86,6 @@ from catalog.services.vend_probe import (
     FINAL_MANIFEST_CHECK,
     REF_CHECK,
     SCOPE_CHECK,
-    STAGED_MANIFEST,
-    STORE_ANSWERED,
-    WRITE_TIER_ISSUE,
-    ProbeCheck,
     ProbeReport,
     summarize_probe,
 )
@@ -105,13 +94,9 @@ from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids, fga_writes
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.problems.ns_errors import PartiallyAppliedError, status_for
-from lakehouse.records import base_registry, clone_sources, data_directories, location_claims, trash
-from lakehouse.records.location_claims import ClaimStore
 from lakehouse.records.trash import TrashRecord
 from lakehouse.records.warehouse_records import WarehouseRecord
-from lakehouse.storage.client import S3Client, s3_client
 from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError
-from lakehouse.storage.errors import StorageError, StoreUnansweredError, store_call
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.uri import split_s3_uri
 
@@ -123,12 +108,6 @@ log = logging.getLogger(__name__)
 #: `staged_manifest`, `cleanup`, `store_answered`) means the probe could not reach the store or its STS, which says
 #: nothing about the store.
 _CONFORMANCE_CHECKS: Final = frozenset({SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, ENCRYPTED_WRITE, FINAL_MANIFEST_CHECK, REF_CHECK})
-
-#: How much of a failure's text a probe check's detail carries.
-_PROBE_DETAIL_CHARS: Final = 160
-
-#: The checks of the probe's write-tier leg, in the order it makes them.
-_WRITE_TIER_CHECKS: Final = (WRITE_TIER_ISSUE, STAGED_MANIFEST, FINAL_MANIFEST_CHECK, REF_CHECK)
 
 management_router = APIRouter(prefix="/management/v1/warehouses", tags=["warehouse"])
 
@@ -363,7 +342,7 @@ async def _require_a_conforming_store(
     """
     bucket = split_s3_uri(root_uri)[0]
     creator = role_session_name(author.subject if author is not None else ANONYMOUS_SUBJECT)
-    probe = partial(_run_scope_probe, root_uri, vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=creator)
+    probe = partial(storage_probe.run_scope_probe, root_uri, vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=creator)
     report = summarize_probe(await run_in_threadpool(probe))
     failed = [c.name for c in report.checks if c.outcome == "fail"]
     if broken := [name for name in failed if name in _CONFORMANCE_CHECKS]:
@@ -757,46 +736,7 @@ async def _announce_protection(control: ControlEmitter, warehouse_id: str, actor
 # --------------------------------------------------------------------------- #
 
 
-async def _namespaces_in(ns: LanceNamespace, warehouse_id: str) -> list[str]:
-    """The namespaces directly under warehouse ``warehouse_id``'s own name, as sorted ids: its contents for a delete.
-
-    A warehouse whose row is gone holds none: a half-finished earlier delete dropped it last.
-    """
-    try:
-        _response, names = await namespace_subtrees.drain_namespaces(ns, [warehouse_id])
-    except NamespaceNotFoundError:
-        return []
-    return [fga_ids.canonical_object_id([warehouse_id, name]) for name in sorted(names)]
-
-
-class _NamespaceSubtree(BaseModel):
-    """A namespace directly in the warehouse and what the catalog lists under it, enumerated before the cascade changes anything."""
-
-    model_config = ConfigDict(frozen=True)
-
-    segments: list[str]
-    #: The namespace's uuid, ``None`` when the backend no longer has it.
-    uuid: str | None
-    descendants: list[objects.GovernedObject]
-
-    @property
-    def tables(self) -> list[list[str]]:
-        return [item.segments for item in self.descendants if item.kind == "table"]
-
-    @property
-    def namespaces(self) -> list[list[str]]:
-        """Every namespace in the subtree, deepest first and its own last, so each is empty when its own drop runs."""
-        nested = sorted((item.segments for item in self.descendants if item.kind == "namespace"), key=len, reverse=True)
-        return [*nested, self.segments]
-
-    @property
-    def guarded(self) -> list[objects.GovernedObject]:
-        """Every object in the subtree whose protection the cascade is held to: its descendants and the namespace itself."""
-        own = [objects.GovernedObject(kind="namespace", segments=self.segments, uuid=self.uuid)] if self.uuid is not None else []
-        return [*self.descendants, *own]
-
-
-async def _cascade_subtrees(ns: LanceNamespace, settings: CatalogStore, held: list[str], *, force: bool) -> list[_NamespaceSubtree]:
+async def _cascade_subtrees(ns: LanceNamespace, settings: CatalogStore, held: list[str], *, force: bool) -> list[warehouse_removal.NamespaceSubtree]:
     """Every namespace ``held`` directly in the warehouse with its subtree, enumerated and held to its protection before
     anything is removed.
 
@@ -810,212 +750,20 @@ async def _cascade_subtrees(ns: LanceNamespace, settings: CatalogStore, held: li
     refuses the listing ``NamespaceNotFound`` while it holds none (measured on pylance 13.0.0), so both read as an empty
     subtree.
     """
-    subtrees: list[_NamespaceSubtree] = []
+    subtrees: list[warehouse_removal.NamespaceSubtree] = []
     for name in held:
         segments = parse_identifier(name)
         try:
             namespace = await objects.standing(ns, settings, "namespace", segments=segments)
             listed = await run_in_threadpool(namespace_subtrees.collect_descendants, ns, segments)
         except NamespaceNotFoundError:
-            subtrees.append(_NamespaceSubtree(segments=segments, uuid=None, descendants=[]))
+            subtrees.append(warehouse_removal.NamespaceSubtree(segments=segments, uuid=None, descendants=[]))
             continue
         descendants = await objects.identify_descendants(ns, settings, listed)
-        subtrees.append(_NamespaceSubtree(segments=segments, uuid=namespace.uuid, descendants=descendants))
+        subtrees.append(warehouse_removal.NamespaceSubtree(segments=segments, uuid=namespace.uuid, descendants=descendants))
     doomed = [item for subtree in subtrees for item in subtree.guarded]
     await hierarchy.require_descendants_unprotected(settings, doomed, force=force)
     return subtrees
-
-
-async def _detach_table(ns: LanceNamespace, settings: CatalogStore, segments: list[str], *, purge: bool, table_uuid: str) -> bool:
-    """Detach one table the cascade listed from the catalog, its bytes left in place; ``False`` for one it did not detach.
-
-    DETACH, NOT DROP: this door takes bytes only on ``?purge_bucket=true``, and that holds for the tables in its
-    namespaces as much as for the bucket. A detached table's bytes stay where a later ``register_table`` can attach
-    them again; a purge takes them with the bucket, and then their base record goes with them ([[LH-279]]), or it
-    would sanction its bases for the next table registered at the location. The location's claim goes either way,
-    as at the deregister door ([[LH-204]]).
-
-    A purge deletes the table's data directories BEFORE the deregister ([[LH-286]]): they are on approved bases, which
-    the bucket purge does not reach, and the deregister is the step a re-issued call can no longer see past, so a delete
-    that fails leaves the table registered for the re-issue to detach again.
-
-    ``table_uuid`` is the uuid the cascade listed the table by. Its name is resolved again as its turn comes and its
-    claim fenced, as the deregister door fences its table's (:func:`table_claims.fence_listed`, [[LH-586]]): a rename
-    landing while the row goes answers 409 rather than carrying the table out of a cascade that then ends its grants,
-    and a table that left since the listing, by a drop of its own or by a rename, is neither detached nor ended here.
-    The fence is lifted when the detach fails with the row in place, and goes with the claim's release when the row went.
-
-    Raises:
-        ConcurrentModificationError: The table changed, or another request is acting on it; nothing of it changed here.
-    """
-    canonical = fga_ids.canonical_object_id(segments)
-    registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
-    claims = table_claims.claim_store(settings)
-    resolved = await run_in_threadpool(table_claims.resolve, ns, claims, segments)
-    fenced = await run_in_threadpool(partial(table_claims.fence_listed, ns, claims, resolved, listed_uuid=table_uuid, verb="deregister"))
-    if fenced is None:
-        return False
-    try:
-        # A clone's ending is filed before anything changes (ADR 0198 §1), so a filing that fails refuses with every byte
-        # and the row in place, and a tag release failing below is finished by maintenance's audit, where a re-issued
-        # cascade would no longer list the clone it belongs to.
-        ending = await run_in_threadpool(
-            partial(
-                clone_endings.file_ending,
-                registry,
-                claims,
-                fenced.location,
-                table=canonical,
-                forget_record=purge,
-                door="warehouse_cascade",
-                filing=fenced.token,
-            )
-        )
-        if purge:
-            await _delete_table_directories(registry, claims, fenced, table_uuid=table_uuid, ending=ending, settings=settings)
-        await run_in_threadpool(native.call, ns, "deregister_table", DeregisterTableRequest(id=segments))
-    except TableNotFoundError:
-        # Only the deregister answers this: the row went by a hand the fence does not bind, and this ending's finish
-        # releases what the clone held. The fence is lifted, as the deregister door lifts its own.
-        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
-        return False
-    except Exception:
-        # A failed native call leaves the ending: a describe cannot tell whether the row it followed is still the
-        # clone's, and the finish judges it on its own reads once the claim's lease has passed. The fence is lifted,
-        # for the re-issue that finishes the cascade.
-        await run_in_threadpool(table_claims.lift_fence, claims, fenced)
-        raise
-    # What the catalog promised a clone among the bytes ends before the location's claim does, as at the deregister
-    # door: a tag that cannot be deleted leaves the location held, and no clone registered there can hold its name.
-    if purge:
-        await run_in_threadpool(partial(base_registry.forget_base_record, registry, fenced.location, uuid=table_uuid))
-    else:
-        await run_in_threadpool(partial(base_registry.release_clone_sources, registry, fenced.location, uuid=table_uuid))
-    # Released under the uuid the cascade listed the table by, as well as under its fence: a purge's directory delete
-    # can take longer than a fence stands, and the same name registered at the location once the fence has lapsed holds
-    # the claim under a uuid of its own.
-    await run_in_threadpool(partial(location_claims.release, claims, fenced.location, canonical, uuid=table_uuid))
-    if ending is not None:
-        await run_in_threadpool(clone_endings.clear_ending, claims, ending)
-    return True
-
-
-async def _delete_table_directories(
-    registry: base_registry.BaseRegistry,
-    claims: ClaimStore,
-    fenced: table_claims.DoorFence,
-    *,
-    table_uuid: str,
-    ending: CloneEnding | None,
-    settings: CatalogStore,
-) -> None:
-    """Delete the data directories of the table ``fenced`` holds for a purge."""
-    try:
-        await run_in_threadpool(
-            partial(data_directories.delete_table_directories, registry, fenced.location, uuid=table_uuid, storage_options=settings.storage_options())
-        )
-    except Exception:
-        # A delete that fails releases the clone's ending before the failure is answered: this request has not touched
-        # the row, so the clone's holds are its own still.
-        if ending is not None:
-            await run_in_threadpool(clone_endings.clear_ending, claims, ending)
-        raise
-
-
-async def _require_no_outside_clones(
-    ns: LanceNamespace | None, settings: CatalogStore, *, subtrees: list[_NamespaceSubtree], trashed: list[TrashRecord]
-) -> None:
-    """Refuse a ``?purge_bucket=true`` that would destroy a table a registered clone outside the warehouse reads, before
-    anything changes (ADR 0198 §1): the purge empties the bucket, so a source's bytes go whatever its clones' tags say.
-
-    Raises:
-        InvalidTableStateError: A table in the warehouse, live or trashed, is read by a clone outside it (code 19, 409).
-        ServiceUnavailableError: A table's tags could not be listed.
-    """
-    so = settings.storage_options()
-    located = await _live_table_locations(ns, subtrees)
-    for entry in trashed:
-        if location := entry.location:
-            located[f"{entry.id}@{entry.uuid}"] = location
-    carried = {name: await run_in_threadpool(partial(destroy.clone_readers, location, so, table=name)) for name, location in located.items()}
-    try:
-        clone_sources.destroy_order({name: clone_sources.tag_of(location) for name, location in located.items()}, carried)
-    except clone_sources.ReadFromOutsideError as exc:
-        log.warning("warehouse_purge_refused_clone_sources", extra={"read": {name: sorted(tags) for name, tags in exc.read.items()}})
-        raise InvalidTableStateError(
-            f"the purge would destroy {len(exc.read)} table(s) read by registered clones outside this warehouse; drop or deregister those "
-            "clones first, or delete the warehouse without ?purge_bucket=true"
-        ) from exc
-
-
-async def _live_table_locations(ns: LanceNamespace | None, subtrees: list[_NamespaceSubtree]) -> dict[str, str]:
-    """Where each table ``subtrees`` lists stands, by its canonical id."""
-    located: dict[str, str] = {}
-    # None for a warehouse whose store is not opened, and a table gone since it was listed is left out.
-    if ns is None:
-        return located
-    for table in [table for subtree in subtrees for table in subtree.tables]:
-        with suppress(TableNotFoundError):
-            described: DescribeTableResponse = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=table))
-            if described.location:
-                located[fga_ids.canonical_object_id(table)] = described.location
-    return located
-
-
-async def _forget_trashed(settings: CatalogStore, entry: TrashRecord, *, purge: bool) -> None:
-    """End what one trashed object kept for an undrop besides its grants, as the trash's own ending does
-    (:func:`lakehouse.records.trash.end`): its records, a table's claim and base record, then its record.
-
-    A purge deletes a trashed table's data directories before its base record ([[LH-286]]): they are on approved bases,
-    which the bucket purge does not reach, and nothing names them once the record is gone. Without one the bytes stay,
-    as the bucket does, where a later register can attach them again. A record that keeps no uuid is filed under none,
-    so nothing of it can be ended.
-    """
-    if (uuid := entry.uuid) is None:
-        return
-    so = settings.storage_options()
-    if purge and (location := entry.location):
-        registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=so)
-        await run_in_threadpool(partial(data_directories.delete_table_directories, registry, location, uuid=uuid, storage_options=so))
-    await run_in_threadpool(partial(trash.end, settings.registry_root, so, entry, kind=entry.kind, uuid=uuid))
-
-
-def _require_bucket_purgeable(settings: Settings, records: list[WarehouseRecord], record: WarehouseRecord, *, warehouse_id: str) -> None:
-    """Refuse a ``?purge_bucket=true`` that would destroy bytes this warehouse does not solely own.
-
-    ``create_warehouse`` carries two bucket-claim guards, and NEITHER of them survives into the destroy
-    path on its own:
-
-    * A bucket may back TWO warehouses of the SAME project — the cross-claim guard subtracts the caller's
-      own project on purpose, so one project may keep several warehouses on one bucket. A purge
-      deletes every object AND the bucket, so deleting one of the pair would silently destroy the other's
-      data and leave its record pointing at a bucket that no longer exists.
-    * The reserved platform buckets (the catalog root and registry, the data bases) are refused at create — but a
-      record written before that guard existed, or by anything else with registry write access, still names
-      one, and purging it would take the whole estate's registry with it.
-
-    ``NamespaceNotEmptyError`` (409) is the refusal: the container still holds something that is not this
-    warehouse's to destroy. The reserved case is ``InvalidInputError`` (400), matching create's own wording
-    for the same bucket. Both run BEFORE any irreversible step, so a refusal costs nothing.
-    """
-    bucket = record.bucket
-    if bucket in settings.reserved_bucket_set:
-        raise InvalidInputError(
-            f"bucket {bucket!r} is reserved platform storage (the catalog root or registry, or a platform bucket) "
-            f"and must not be purged — delete the warehouse without ?purge_bucket=true"
-        )
-    rivals = [r for r in records if r.bucket == bucket and r.id != warehouse_id]
-    if not rivals:
-        return
-    # Name only SAME-project siblings. A cross-project claim is drift, and this caller cleared the bar for
-    # THIS warehouse's project only — enumerating another tenant's warehouse ids is the disclosure the
-    # create-side guard already declines to make.
-    named = sorted(r.id for r in rivals if r.project == record.project)
-    holder = f"warehouse(s) {', '.join(named)}" if len(named) == len(rivals) else "another project's warehouse"
-    raise NamespaceNotEmptyError(
-        f"bucket {bucket!r} still backs {holder}, whose data the purge would destroy. "
-        f"Delete this warehouse without ?purge_bucket=true, or delete the other warehouse(s) first."
-    )
 
 
 def _a_refusal(exc: BaseException) -> bool:
@@ -1060,7 +808,7 @@ async def delete_warehouse(
        policy, claim and base record, its trash record last. A record is the warehouse's when its name begins with the
        warehouse's id, so a re-issue after a failure here selects the same records. Then the cascade removes each
        namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before
-       the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the
+       the next: every table detached (:func:`warehouse_removal.detach_table`; the bytes stay unless step 7 purges them) and the
        namespaces dropped deepest first, and only then what each object held ended, its records before its grants
        (``object_grants.end_removed_subtree``), and the warehouse's own row in its catalog last.
        ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a
@@ -1074,7 +822,7 @@ async def delete_warehouse(
        so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a
        purge that would take bytes this warehouse does not solely own — a bucket a same-project sibling
        still claims, or reserved platform storage — refuses BEFORE the cascade
-       (:func:`_require_bucket_purgeable`). A purge then releases the bucket's claim
+       (:func:`warehouse_removal.require_bucket_purgeable`). A purge then releases the bucket's claim
        (``warehouses.release_bucket_claim``), so another project may register the emptied bucket; a delete keeping
        the bytes keeps the claim, so no other project adopts what the bucket still holds.
 
@@ -1187,7 +935,7 @@ class _WarehouseDelete(BaseModel):
     bucket: str
     purge_bucket: bool
     so: StorageOptions
-    subtrees: list[_NamespaceSubtree]
+    subtrees: list[warehouse_removal.NamespaceSubtree]
     trashed: list[TrashRecord]
 
 
@@ -1242,7 +990,7 @@ class _DeletePlan(BaseModel):
 
     # The connection is an opaque collaborator, not a value pydantic can judge.
     ns_conn: SkipValidation[LanceNamespace | None]
-    subtrees: list[_NamespaceSubtree]
+    subtrees: list[warehouse_removal.NamespaceSubtree]
     trashed: list[TrashRecord]
 
 
@@ -1256,7 +1004,7 @@ async def _plan_the_delete(record: WarehouseRecord, asked: _DeleteAsked, *, requ
     # A record naming another store cannot be opened ([[LH-205]]), so nothing is listed in it and only its record goes.
     in_estate_store = names_the_estate_store(record.endpoint, estate=settings.s3_endpoint)
     ns_conn = await namespace_for_root(request, settings, record.root_uri, endpoint=record.endpoint or None) if in_estate_store else None
-    held = await _namespaces_in(ns_conn, warehouse_id) if ns_conn is not None else []
+    held = await warehouse_removal.namespaces_in(ns_conn, warehouse_id) if ns_conn is not None else []
     if held and not asked.cascade:
         raise NamespaceNotEmptyError(
             f"warehouse '{warehouse_id}' still holds {len(held)} namespace(s): {', '.join(held)}. "
@@ -1269,7 +1017,7 @@ async def _plan_the_delete(record: WarehouseRecord, asked: _DeleteAsked, *, requ
         # cascade, so a refusal still costs nothing — the bottom-up rule applies to the bytes too. Read whole: a record
         # that cannot be read may be a sibling's claim on this bucket ([[LH-572]]).
         records = await run_in_threadpool(warehouses.every_warehouse, settings.registry_root, so)
-        _require_bucket_purgeable(settings, records, record, warehouse_id=warehouse_id)
+        warehouse_removal.require_bucket_purgeable(settings, records, record, warehouse_id=warehouse_id)
 
     # [[LH-205]] The cascade opens the warehouse's store and the purge empties a bucket through the
     # ESTATE's client, so for a record naming another store the one would sign toward that host with the
@@ -1285,7 +1033,7 @@ async def _plan_the_delete(record: WarehouseRecord, asked: _DeleteAsked, *, requ
     # The warehouse's own trash: the records whose names begin with its id.
     trashed = await run_in_threadpool(warehouses.trash_owned_by, settings.registry_root, so, warehouse_id)
     if asked.purge_bucket:
-        await _require_no_outside_clones(ns_conn, settings, subtrees=subtrees, trashed=trashed)
+        await warehouse_removal.require_no_outside_clones(ns_conn, settings, subtrees=subtrees, trashed=trashed)
     return _DeletePlan(ns_conn=ns_conn, subtrees=subtrees, trashed=trashed)
 
 
@@ -1377,11 +1125,13 @@ async def _end_trashed(entry: TrashRecord, delete: _WarehouseDelete, *, context:
         yield _Step(landed=_Landed(revoked=await object_grants.revoke_removed_object(context, obj)))
     else:
         log.warning("warehouse_cascade_trash_uuid_unread", extra={"warehouse": delete.warehouse_id, "kind": kind, "id": canonical})
-    await _forget_trashed(context.settings, entry, purge=delete.purge_bucket)
+    await warehouse_removal.forget_trashed(context.settings, entry, purge=delete.purge_bucket)
     yield _Step(landed=_Landed(trash_ended=[f"{kind}:{canonical}"]))
 
 
-async def _remove_subtree(subtree: _NamespaceSubtree, delete: _WarehouseDelete, ns_conn: LanceNamespace, *, context: AuthzContext) -> AsyncGenerator[_Step]:
+async def _remove_subtree(
+    subtree: warehouse_removal.NamespaceSubtree, delete: _WarehouseDelete, ns_conn: LanceNamespace, *, context: AuthzContext
+) -> AsyncGenerator[_Step]:
     """Remove one namespace of the warehouse with everything in it, yielding each step as it lands."""
     # What this cascade removes of the subtree: every namespace, and each table it detaches itself. A listed
     # table that left before its turn ([[LH-586]]) is announced by no one here and ended by no step below.
@@ -1390,7 +1140,7 @@ async def _remove_subtree(subtree: _NamespaceSubtree, delete: _WarehouseDelete, 
         if item.kind != "table":
             continue
         # What the announcement names the table by, read while it still stands (ADR 0173 §10).
-        if await _detach_table(ns_conn, context.settings, item.segments, purge=delete.purge_bucket, table_uuid=item.uuid):
+        if await warehouse_removal.detach_table(ns_conn, context.settings, item.segments, purge=delete.purge_bucket, table_uuid=item.uuid):
             removed.append(item)
             yield _Step(landed=_Landed(tables_removed=[fga_ids.canonical_object_id(item.segments)]), detached=tuple(item.segments))
     # The namespaces deepest first, then what each object held ended.
@@ -1492,243 +1242,8 @@ async def validate_warehouse_credentials(
     require_estate_store(record.endpoint, estate=context.settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
     subject = context.token.subject if context.token is not None else ANONYMOUS_SUBJECT
-    probe = partial(_run_scope_probe, record.root_uri, vendor=vendor, store_endpoint=context.settings.s3_endpoint, session_name=role_session_name(subject))
+    probe = partial(
+        storage_probe.run_scope_probe, record.root_uri, vendor=vendor, store_endpoint=context.settings.s3_endpoint, session_name=role_session_name(subject)
+    )
     checks = await run_in_threadpool(probe)
     return summarize_probe(checks)
-
-
-def _encryption_put_args(options: Mapping[str, str]) -> dict[str, Any]:
-    """The ``put_object`` arguments that encrypt as a writer holding vended ``options`` does (``vending.encryption``)."""
-    args: dict[str, Any] = {}
-    if algorithm := options.get("aws_server_side_encryption"):
-        args["ServerSideEncryption"] = algorithm
-    if key := options.get("aws_sse_kms_key_id"):
-        args["SSEKMSKeyId"] = key
-    if (bucket_key := options.get("aws_sse_bucket_key_enabled")) is not None:
-        args["BucketKeyEnabled"] = bucket_key == "true"
-    return args
-
-
-def _probe_the_write_tier(
-    step: Callable[..., bool],
-    vendor: CredentialVendor,
-    *,
-    bucket: str,
-    probe_prefix: str,
-    store_endpoint: str,
-    session_name: str,
-    checks: list[ProbeCheck],
-) -> list[str]:
-    """Ask the store, under a write-tier credential for ``probe_prefix``, to refuse what that tier is denied; the keys
-    the leg landed, for the probe's cleanup.
-
-    The final manifest is put at ``_versions/<n>.manifest-<uuid>.manifest``: a key the tier's staged-commit Allow
-    matches as well (``table_layout.WRITER_PUT_GLOBS``), so a store that refuses it is honouring the explicit Deny, and
-    one that evaluates Allows alone accepts it. The ref is put under ``_refs/tags/``, which no statement allows. Both
-    follow a staged manifest the store accepted, so a refusal is the Deny's and not a credential that cannot write.
-    """
-    staged = f"{probe_prefix}/_versions/1.manifest-{uuid.uuid4()}"
-    final, ref = f"{staged}.manifest", f"{probe_prefix}/_refs/tags/probe.json"
-    try:
-        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="write", session_name=session_name)
-        options = None if vended is None else vended.as_storage_options()
-    except Exception as exc:  # noqa: BLE001 — any vend failure is one reportable outcome, not a 500
-        checks.append(ProbeCheck(name=WRITE_TIER_ISSUE, outcome="fail", detail=f"{type(exc).__name__}: {exc}"))
-        options = None
-    else:
-        checks.append(ProbeCheck(name=WRITE_TIER_ISSUE, outcome="pass" if options is not None else "skip"))
-    if options is None:
-        checks.extend(ProbeCheck(name=n, outcome="skip", detail="no write-tier credential") for n in _WRITE_TIER_CHECKS[1:])
-        return []
-    writer = s3_client(store_endpoint or None, key_pair=options.signing_pair(), region=options.region)
-    if not step(STAGED_MANIFEST, lambda: writer.put_object(Bucket=bucket, Key=staged, Body=b"scope-probe")):
-        checks.extend(ProbeCheck(name=n, outcome="skip", detail="the write tier staged nothing") for n in _WRITE_TIER_CHECKS[2:])
-        return []
-    landed = [staged]
-    if not step(
-        FINAL_MANIFEST_CHECK,
-        lambda: writer.put_object(Bucket=bucket, Key=final, Body=b"scope-probe"),
-        accepted_is="the store accepted a FINAL MANIFEST from a write-tier credential, whose session policy denies it",
-    ):
-        landed.append(final)
-    if not step(
-        REF_CHECK,
-        lambda: writer.put_object(Bucket=bucket, Key=ref, Body=b"scope-probe"),
-        accepted_is="the store accepted a put under _refs/ from a write-tier credential, which no statement of its policy allows",
-    ):
-        landed.append(ref)
-    return landed
-
-
-def _run_scope_probe(root_uri: str, *, vendor: CredentialVendor, store_endpoint: str, session_name: str) -> list[ProbeCheck]:
-    """The IO half: vend, write in, read in, write OUT (must fail), ask the write tier's Deny, clean up.
-
-    The probe signs with the vended credential and reaches the store at ``store_endpoint``, the catalog's own
-    address: the vended endpoint is the one a client reaches from where it runs ([[LH-489]]), which the catalog's
-    pod need not resolve. The credential is named ``session_name`` at the store, for the admin who asked.
-
-    Every step records its own outcome and the ones it makes impossible are SKIPPED rather than
-    reported as failures — a probe that could not write has learned nothing about scope, and saying so
-    is the difference between "the store is over-permissive" and "the store was unreachable".
-    """
-    bucket, prefix = split_s3_uri(root_uri)
-    probe_prefix = f"{prefix.rstrip('/') + '/' if prefix else ''}_validate/{uuid.uuid4().hex}"
-    inside = f"{probe_prefix}/probe"
-    # Its own key, inside the same vended prefix: the conditional put must land on a key nothing else
-    # wrote, or a leftover from a previous run would make the FIRST put look like a racing writer.
-    cas = f"{probe_prefix}/cas"
-    sealed = f"{probe_prefix}/encrypted"
-    # The PARENT, never a sibling: a credential scoped to `<probe>/` must not reach the warehouse root,
-    # and the root is where a policy that was ignored would let it write.
-    outside = f"{prefix.rstrip('/') + '/' if prefix else ''}_validate_scope_probe_should_fail"
-
-    vend = _vend_the_probe(vendor, bucket=bucket, probe_prefix=probe_prefix, session_name=session_name)
-    options = vend.options
-    checks: list[ProbeCheck] = [vend.issued]
-
-    if options is None:
-        checks += [
-            ProbeCheck(name=n, outcome="skip", detail="no credential")
-            for n in ("write_inside", "read_inside", SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, *_WRITE_TIER_CHECKS, "cleanup")
-        ]
-        return checks
-
-    s3 = s3_client(store_endpoint or None, key_pair=options.signing_pair(), region=options.region)
-
-    def _step(name: str, fn: Callable[[], object], *, accepted_is: str = "") -> bool:
-        # Records the check, and answers whether it got the outcome it wanted.
-        check = _probe_step(name, fn, accepted_is=accepted_is)
-        checks.extend(_as_reported(check))
-        return check.outcome == "pass"
-
-    wrote = _step("write_inside", lambda: s3.put_object(Bucket=bucket, Key=inside, Body=b"scope-probe"))
-    if not wrote:
-        checks += [
-            ProbeCheck(name=n, outcome="skip", detail="nothing was written")
-            for n in ("read_inside", SCOPE_CHECK, CAS_RESERVE, CAS_CHECK, *_WRITE_TIER_CHECKS, "cleanup")
-        ]
-        return checks
-    _step("read_inside", lambda: s3.get_object(Bucket=bucket, Key=inside))
-    # As the credential tells its writer to encrypt, after a plain write the store took: a store whose role holds no grant
-    # on the vended KMS key fails here, a verdict on the store, not the first write to the warehouse's first table
-    # ([[LH-262]]). The read back asks the key's decrypt as a reader would.
-    _probe_encryption(_step, s3, bucket=bucket, sealed=sealed, options=options)
-    _step(
-        SCOPE_CHECK,
-        lambda: s3.put_object(Bucket=bucket, Key=outside, Body=b"scope-probe"),
-        accepted_is="the store accepted a write OUTSIDE the credential's prefix",
-    )
-    # PUT-IF-NOT-EXISTS, the primitive Lance's commit protocol rests on
-    # (`lance_docs/lance/format/table/transaction.md` § "Commit Protocol" -> "Storage Primitives"). Two conditional
-    # puts at one key: the first must be ACCEPTED and the second REFUSED. A store that accepts
-    # both has no "exactly one writer succeeds" guarantee, so two concurrent Lance writers would
-    # each believe they committed the same manifest version — with a 200 on both and no error
-    # anywhere. That is the failure this step exists to name, and it is why the SECOND put is the
-    # check rather than the first.
-    if (unmeasured := _probe_put_if_not_exists(_step, s3, bucket=bucket, cas=cas)) is not None:
-        checks.append(unmeasured)
-
-    # [[LH-511]] THE WRITE TIER'S DENY, asked of a write-tier credential for the same prefix. Managed versioning
-    # (ADR 0157) rests on the store refusing a writer the final manifest and every ref; a store that takes the
-    # session policy and ignores its Deny would let any writer finalize a version past `version/create`.
-    landed = _probe_the_write_tier(
-        _step, vendor, bucket=bucket, probe_prefix=probe_prefix, store_endpoint=store_endpoint, session_name=session_name, checks=checks
-    )
-
-    def _clean() -> None:
-        # Under the probe tier: the write tier deletes nothing, what it landed included.
-        for key in (inside, cas, sealed, *landed):
-            s3.delete_object(Bucket=bucket, Key=key)
-        # Only a write the store ACCEPTED, the scope check failed, left an object at the warehouse root, and only then
-        # is it deleted: a correctly scoped credential is refused the delete too, and reporting that refusal as a
-        # cleanup failure would raise a false alarm about the store that just passed. A write the store never answered
-        # is not chased either: nothing says it landed, and a store that took it is found, and the object removed, by
-        # the next run.
-        if any(check.name == SCOPE_CHECK and check.outcome == "fail" for check in checks):
-            s3.delete_object(Bucket=bucket, Key=outside)
-
-    _step("cleanup", _clean)
-    return checks
-
-
-class _ProbeVend(BaseModel):
-    """The probe tier's credential, ``None`` when nothing was vended, and the check its issue is."""
-
-    model_config = ConfigDict(frozen=True)
-
-    options: StorageOptions | None
-    issued: ProbeCheck
-
-
-def _vend_the_probe(vendor: CredentialVendor, *, bucket: str, probe_prefix: str, session_name: str) -> _ProbeVend:
-    """The probe tier's credential for ``probe_prefix``, ``None`` when nothing was vended, and the check its issue is."""
-    try:
-        vended = vendor.vend(table_location=f"s3://{bucket}/{probe_prefix}", tier="probe", session_name=session_name)
-        # The probe signs as the client a door hands the vend to, so it holds what that door would answer ([[LH-072]]).
-        options = None if vended is None else vended.as_storage_options()
-    except Exception as exc:  # noqa: BLE001 — any vend failure is one reportable outcome, not a 500
-        issued = ProbeCheck(name="issue", outcome="fail", detail=f"{type(exc).__name__}: {exc}")
-        options = None
-    else:
-        issued = (
-            ProbeCheck(name="issue", outcome="pass")
-            if options is not None
-            else ProbeCheck(name="issue", outcome="skip", detail="server_mediated: this warehouse vends no direct credentials")
-        )
-    return _ProbeVend(options=options, issued=issued)
-
-
-def _probe_step(name: str, fn: Callable[[], object], *, accepted_is: str = "") -> ProbeCheck:
-    """Run one check, ``fn``, which must go through, or which the store must refuse where ``accepted_is`` says why
-    accepting it is wrong. The check is ``skip`` where the store did not answer the step, and only there.
-
-    A VERDICT IS ONLY EVER THE STORE'S OWN ANSWER. A request it did not answer measured nothing: read as the refusal a
-    check wanted, an outage would pass a control nothing tested, and read as a failure it would fail a store that broke
-    no guarantee. The report says beside such a check that the probe did not finish (:func:`_as_reported`).
-    """
-    expect_refusal = bool(accepted_is)
-    try:
-        with store_call(f"the probe's {name}"):
-            fn()
-    except StoreUnansweredError as exc:
-        return ProbeCheck(name=name, outcome="skip", detail=str(exc)[:_PROBE_DETAIL_CHARS])
-    except StorageError as exc:
-        if expect_refusal:
-            return ProbeCheck(name=name, outcome="pass")
-        return ProbeCheck(name=name, outcome="fail", detail=f"{type(exc).__name__}: {exc}"[:_PROBE_DETAIL_CHARS])
-    return ProbeCheck(name=name, outcome="fail", detail=accepted_is) if expect_refusal else ProbeCheck(name=name, outcome="pass")
-
-
-def _as_reported(check: ProbeCheck) -> list[ProbeCheck]:
-    """``check`` as the report holds it: beside a step the store did not answer, a failed :data:`STORE_ANSWERED` carrying
-    what the step's own check says of it, so the report fails on a probe that did not finish and on no verdict."""
-    if check.outcome != "skip":
-        return [check]
-    return [check, ProbeCheck(name=STORE_ANSWERED, outcome="fail", detail=check.detail)]
-
-
-def _probe_encryption(step: Callable[..., bool], s3: S3Client, *, bucket: str, sealed: str, options: StorageOptions) -> None:
-    """Write and read ``sealed`` encrypted as the credential tells its writer to, when it tells it to at all."""
-    if encrypted := _encryption_put_args(options.options):
-
-        def _round_trip() -> None:
-            s3.put_object(Bucket=bucket, Key=sealed, Body=b"scope-probe", **encrypted)
-            s3.get_object(Bucket=bucket, Key=sealed)
-
-        step(ENCRYPTED_WRITE, _round_trip)
-
-
-def _probe_put_if_not_exists(step: Callable[..., bool], s3: S3Client, *, bucket: str, cas: str) -> ProbeCheck | None:
-    """Two conditional puts at ``cas``, the first accepted and the second refused; the check left unmeasured, if any."""
-    reserved = step(CAS_RESERVE, lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"first", IfNoneMatch="*"))
-    if not reserved:
-        # The first conditional put did not go through: the store refused the HEADER, or did not answer. Either is
-        # recorded by the step above, and measures nothing about a second writer, so the claim stays UNKNOWN
-        # rather than becoming a verdict the probe never reached.
-        return ProbeCheck(name=CAS_CHECK, outcome="skip", detail="the first conditional put did not go through")
-    step(
-        CAS_CHECK,
-        lambda: s3.put_object(Bucket=bucket, Key=cas, Body=b"second", IfNoneMatch="*"),
-        accepted_is="the store accepted a second conditional put at a key that exists",
-    )
-    return None

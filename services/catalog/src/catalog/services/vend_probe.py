@@ -12,7 +12,7 @@ of them over-reached. That is a question to ask when the store, the vending mode
 which is what makes it a door rather than a runbook step.
 
 THIS MODULE IS THE PURE HALF: the check vocabulary and how a set of results reduces to one verdict.
-The IO half lives at the endpoint, so the reduction is testable without an object store, and so the
+The calls on the store are `storage_probe`'s, so the reduction is testable without an object store, and the
 rule that `skip` is not `pass` is stated once rather than at each call site.
 """
 

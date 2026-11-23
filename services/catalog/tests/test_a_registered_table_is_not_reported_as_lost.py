@@ -37,7 +37,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from catalog.api.v1.endpoints import tables as tables_endpoint
+from catalog.services.tables import registering
 
 
 class _Namespace:
@@ -58,9 +58,9 @@ def _describe(location: str | None) -> Any:
 
 def test_the_absolute_location_replaces_the_echoed_relative_one(monkeypatch: Any) -> None:
     """THE GATE. A relative `source_uri` is a dataset the sweep can never find."""
-    monkeypatch.setattr(tables_endpoint.native, "call", lambda _ns, _op, _req: _describe("s3://wh/9f_ns$t"))
+    monkeypatch.setattr(registering.native, "call", lambda _ns, _op, _req: _describe("s3://wh/9f_ns$t"))
 
-    resolved = tables_endpoint.absolute_table_location(cast(Any, _Namespace("s3://wh/9f_ns$t")), ["ns", "t"], "t.lance")
+    resolved = registering.absolute_table_location(cast(Any, _Namespace("s3://wh/9f_ns$t")), ["ns", "t"], "t.lance")
 
     assert resolved == "s3://wh/9f_ns$t", "the marker must carry a URI that opens, not the caller's relative path"
 
@@ -75,13 +75,13 @@ def test_an_unresolvable_describe_keeps_the_registered_value(monkeypatch: Any) -
     def _boom(_ns: object, _op: str, _req: object) -> object:
         raise RuntimeError("catalog unreachable")
 
-    monkeypatch.setattr(tables_endpoint.native, "call", _boom)
+    monkeypatch.setattr(registering.native, "call", _boom)
 
-    assert tables_endpoint.absolute_table_location(cast(Any, _Namespace(None)), ["ns", "t"], "t.lance") == "t.lance"
+    assert registering.absolute_table_location(cast(Any, _Namespace(None)), ["ns", "t"], "t.lance") == "t.lance"
 
 
 def test_a_describe_without_a_location_keeps_the_registered_value(monkeypatch: Any) -> None:
     """An empty answer is not a better answer — `None` must not overwrite what the register returned."""
-    monkeypatch.setattr(tables_endpoint.native, "call", lambda _ns, _op, _req: _describe(None))
+    monkeypatch.setattr(registering.native, "call", lambda _ns, _op, _req: _describe(None))
 
-    assert tables_endpoint.absolute_table_location(cast(Any, _Namespace(None)), ["ns", "t"], "t.lance") == "t.lance"
+    assert registering.absolute_table_location(cast(Any, _Namespace(None)), ["ns", "t"], "t.lance") == "t.lance"

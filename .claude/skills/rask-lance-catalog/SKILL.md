@@ -1416,8 +1416,8 @@ governing their data. The project-scoped surface is the console's project page, 
   so does every catalog door that ends a table with its bytes (`lakehouse.records.data_directories`, one rule for
   which directories: a `data` entry on a plain base whose claim names the table, held or released by it): a destructive
   drop and namespace cascade (`tables.destroy.destroy_table`, after the root, inside its residue record), a purging
-  warehouse cascade (`_detach_table` before the deregister, so a failed delete leaves the table for the re-issue;
-  `_forget_trashed` before the record) and a create's undo. A cascade keeping its bucket keeps the directories. Pinned by
+  warehouse cascade (`warehouse_removal.detach_table` before the deregister, so a failed delete leaves the table for the re-issue;
+  `warehouse_removal.forget_trashed` before the record) and a create's undo. A cascade keeping its bucket keeps the directories. Pinned by
   `tests/integration/test_a_data_bases_bytes_are_reclaimed.py`.
 - **Maintenance never asks `stats.index_stats`** ([[LH-575]]). `index_health.due_indices` reads each index's segments off
   `describe_indices()` and each fragment's live rows off its manifest entry (physical rows less its deletion file's

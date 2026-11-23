@@ -2695,7 +2695,7 @@ export interface paths {
          *        policy, claim and base record, its trash record last. A record is the warehouse's when its name begins with the
          *        warehouse's id, so a re-issue after a failure here selects the same records. Then the cascade removes each
          *        namespace's subtree against the warehouse's OWN bucket-rooted connection, one namespace fully finished before
-         *        the next: every table detached (:func:`_detach_table`; the bytes stay unless step 7 purges them) and the
+         *        the next: every table detached (:func:`warehouse_removal.detach_table`; the bytes stay unless step 7 purges them) and the
          *        namespaces dropped deepest first, and only then what each object held ended, its records before its grants
          *        (``object_grants.end_removed_subtree``), and the warehouse's own row in its catalog last.
          *        ``namespaces_dropped`` names every namespace removed, nested ones included. The `dir` backend drops a
@@ -2709,7 +2709,7 @@ export interface paths {
          *        so the two never share a default; a record-less bucket is reported by the reconciler, not lost. And a
          *        purge that would take bytes this warehouse does not solely own — a bucket a same-project sibling
          *        still claims, or reserved platform storage — refuses BEFORE the cascade
-         *        (:func:`_require_bucket_purgeable`). A purge then releases the bucket's claim
+         *        (:func:`warehouse_removal.require_bucket_purgeable`). A purge then releases the bucket's claim
          *        (``warehouses.release_bucket_claim``), so another project may register the emptied bucket; a delete keeping
          *        the bytes keeps the claim, so no other project adopts what the bucket still holds.
          *

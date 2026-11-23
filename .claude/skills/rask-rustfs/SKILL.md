@@ -291,7 +291,7 @@ only ever the store's own answer: a request it does not answer leaves its check 
 beside it, so an outage neither passes a refusal the probe wanted nor fails a store that broke nothing. The warehouse
 create door runs the same probe, registers no warehouse on a store that fails it, and answers a retry (503) where the
 store did not answer
-(`services/catalog/src/catalog/api/v1/endpoints/warehouses.py`, `_run_scope_probe`, `_probe_the_write_tier`). Run it against a platform
+(`services/catalog/src/catalog/services/storage_probe.py`, `run_scope_probe`, `_probe_the_write_tier`). Run it against a platform
 store before rask relies on it; it is not a contention test, so the CAS harness still decides exclusivity.
 
 ## 8. What rask demands of a platform store

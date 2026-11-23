@@ -27,6 +27,7 @@ from pydantic import SecretStr
 from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import warehouses as endpoint
 from catalog.core.vending import ReclaimScope, TableRecords, VendedSession
+from catalog.services import storage_probe
 from catalog.services.vend_probe import CAS_CHECK, SCOPE_CHECK, STORE_ANSWERED, ProbeCheck
 from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.credential import S3KeyPair
@@ -148,7 +149,7 @@ def _creds() -> VendedSession:
 class _Installed:
     """The store the probe will build, plus the prefix a SCOPED one refuses to write outside of.
 
-    Held rather than returned because `_run_scope_probe` constructs the client itself — the prefix has
+    Held rather than returned because `run_scope_probe` constructs the client itself — the prefix has
     to be settable before the probe runs and the store readable after it.
     """
 
@@ -169,14 +170,14 @@ def store_factory(monkeypatch: pytest.MonkeyPatch) -> Callable[..., _Installed]:
                 installed.store = _Store(scoped_to=installed.prefix if scoped else None, conditional=conditional, unanswered=unanswered)
             return installed.store.signed_as(key_pair.access_key_id)
 
-        monkeypatch.setattr(endpoint, "s3_client", _client)
+        monkeypatch.setattr(storage_probe, "s3_client", _client)
         return installed
 
     return _install
 
 
 def _run(vendor: _Vendor) -> list[ProbeCheck]:
-    return endpoint._run_scope_probe(ROOT, vendor=vendor, store_endpoint="http://store:9000", session_name="admin")  # noqa: SLF001 — the unit under test
+    return storage_probe.run_scope_probe(ROOT, vendor=vendor, store_endpoint="http://store:9000", session_name="admin")
 
 
 def _named(checks: list[ProbeCheck]) -> dict[str, str]:
@@ -229,7 +230,7 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
         vendor = _Vendor(credentials=None)
         store_factory(scoped=True)
 
-        checks = endpoint._run_scope_probe(ROOT, vendor=vendor, store_endpoint="http://store:9000", session_name="admin")  # noqa: SLF001
+        checks = storage_probe.run_scope_probe(ROOT, vendor=vendor, store_endpoint="http://store:9000", session_name="admin")
 
         outcomes = _named(checks)
         assert outcomes["issue"] == "skip"
@@ -240,7 +241,7 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
         vendor = _Vendor(credentials=None, error=RuntimeError("STS unreachable"))
         store_factory(scoped=True)
 
-        checks = endpoint._run_scope_probe(ROOT, vendor=vendor, store_endpoint="http://store:9000", session_name="admin")  # noqa: SLF001
+        checks = storage_probe.run_scope_probe(ROOT, vendor=vendor, store_endpoint="http://store:9000", session_name="admin")
 
         assert _named(checks)["issue"] == "fail"
         assert "STS unreachable" in next(c.detail for c in checks if c.name == "issue")
@@ -392,7 +393,7 @@ class TestTheDoorGatesBeforeItWrites:
             }
         )
         probed: list[str] = []
-        monkeypatch.setattr(endpoint, "_run_scope_probe", lambda *a, **k: probed.append("ran") or [])
+        monkeypatch.setattr(storage_probe, "run_scope_probe", lambda *a, **k: probed.append("ran") or [])
 
         def _validate(record: WarehouseRecord | None) -> str:
             monkeypatch.setattr(endpoint.warehouses, "get_warehouse", lambda *a, **k: record)
@@ -431,7 +432,7 @@ class TestTheDoorGatesBeforeItWrites:
             seen.append(root_uri)
             return []
 
-        monkeypatch.setattr(endpoint, "_run_scope_probe", _probe)
+        monkeypatch.setattr(storage_probe, "run_scope_probe", _probe)
 
         report = await endpoint.validate_warehouse_credentials(
             context=AuthzContext(client=None, settings=self._settings(), token=_token()), warehouse_id="wh", vendor=_Vendor(credentials=None)

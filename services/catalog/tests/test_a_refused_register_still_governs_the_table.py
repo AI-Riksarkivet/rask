@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import pytest
 
-from catalog.api.v1.endpoints.tables import _registration_points_at
+from catalog.services.tables.registering import registration_points_at
 
 
 class TestTheLocationGuard:
@@ -35,7 +35,7 @@ class TestTheLocationGuard:
         ],
     )
     def test_a_matching_registration_converges(self, registered: str, claimed: str) -> None:
-        assert _registration_points_at(registered, claimed) is True
+        assert registration_points_at(registered, claimed) is True
 
     @pytest.mark.parametrize(
         "registered,claimed",
@@ -46,4 +46,4 @@ class TestTheLocationGuard:
         ],
     )
     def test_a_DIFFERENT_location_is_a_real_conflict_and_does_not_converge(self, registered: str, claimed: str) -> None:
-        assert _registration_points_at(registered, claimed) is False
+        assert registration_points_at(registered, claimed) is False

@@ -24,8 +24,8 @@ import pytest
 from pydantic import SecretStr
 from throwaway_rustfs import ThrowawayStore, admin, s3_client
 
-from catalog.api.v1.endpoints.warehouses import _run_scope_probe
 from catalog.core.vending import ReclaimScope, SessionTier, TableRecords, VendedSession, build_session_policy, split_s3_location
+from catalog.services.storage_probe import run_scope_probe
 from catalog.services.vend_probe import summarize_probe
 from lakehouse.storage.credential import S3KeyPair
 
@@ -90,7 +90,7 @@ def test_the_probe_finds_rustfs_refusing_a_writer_the_final_manifest_and_every_r
     store_admin.put("add-user", {"accessKey": parent}, json.dumps({"secretKey": secret, "status": "enabled"}).encode())
     store_admin.put("set-user-or-group-policy", {"policyName": policy, "userOrGroup": parent, "isGroup": "false"}, b"")
 
-    checks = _run_scope_probe(f"s3://{bucket}", vendor=_StsVendor(rustfs_store, parent, secret), store_endpoint=rustfs_store.endpoint, session_name="probe")
+    checks = run_scope_probe(f"s3://{bucket}", vendor=_StsVendor(rustfs_store, parent, secret), store_endpoint=rustfs_store.endpoint, session_name="probe")
 
     report = summarize_probe(checks)
     assert {check.name: (check.outcome, check.detail) for check in checks if check.outcome != "pass"} == {}
