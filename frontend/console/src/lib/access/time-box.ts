@@ -1,5 +1,5 @@
 import { formatZoned } from '@riksarkivet/ui/utils';
-import type { TupleCondition } from '../access';
+import type { components } from '#lib/api/generated/catalog.ts';
 
 // What a time-boxed grant's condition says about its window. The compiled model types each of a
 // condition's parameters (`GET /management/v1/access/model`), and the window is read by those types: the
@@ -29,17 +29,17 @@ const parameterOf = (params: Record<string, string>, type: string): string | und
  *  grant is permanent or its condition takes no duration. `until` is left out when the window's start
  *  is not a readable moment. */
 export function timeBoxLabel(
-	condition: TupleCondition | null | undefined,
+	condition: components['schemas']['TupleCondition'] | null | undefined,
 	conditions: ModelConditions,
 ): string | null {
 	if (!condition) return null;
 	const params = conditions[condition.name];
 	if (!params) return null;
 	const spanParam = parameterOf(params, 'duration');
-	const duration = spanParam === undefined ? undefined : condition.context[spanParam];
+	const duration = spanParam === undefined ? undefined : condition.context?.[spanParam];
 	if (typeof duration !== 'string') return null;
 	const startParam = parameterOf(params, 'timestamp');
-	const start = startParam === undefined ? undefined : condition.context[startParam];
+	const start = startParam === undefined ? undefined : condition.context?.[startParam];
 	const opened = typeof start === 'string' ? Date.parse(start) : Number.NaN;
 	const ms = durationMs(duration);
 	return Number.isNaN(opened) || ms === null

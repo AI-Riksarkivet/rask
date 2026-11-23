@@ -1,10 +1,13 @@
 import { command, query } from '#lib/reads.svelte.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 import * as v from 'valibot';
+import type { components } from '#lib/api/generated/catalog.ts';
+import { mirrors } from '#lib/api/mirrors.ts';
 import { authorizedFetch, type ApiResult } from '#lib/api/client.ts';
 import { parse } from '#lib/api/index.ts';
 import {
 	DeclareTableResponseSchema,
+	DeregisterTableResponseSchema,
 	TableDescribeSchema,
 	DeleteRowsResponseSchema,
 	RenameTableResponseSchema,
@@ -89,16 +92,18 @@ export const fetchTables = query(async (): Promise<ApiResult<TablesList>> =>
  *  trash listing answer it. Reader-gated at the catalog, so an owner can see the clock they are
  *  racing — a deadline nobody can read is not a safety feature. `expired` is the catalog's own reading
  *  of the deadline, the rule its undrop refuses by. */
-export const TrashEntrySchema = v.object({
-	kind: v.picklist(['table', 'namespace']),
-	id: v.string(),
-	uuid: v.string(),
-	expired: v.optional(v.boolean(), false),
-	location: v.string(),
-	dropped_by: v.string(),
-	dropped_at: v.string(),
-	expires_at: v.string(),
-});
+export const TrashEntrySchema = mirrors<components['schemas']['TrashEntry']>()(
+	v.object({
+		kind: v.picklist(['table', 'namespace']),
+		id: v.string(),
+		uuid: v.string(),
+		expired: v.optional(v.boolean(), false),
+		location: v.string(),
+		dropped_by: v.string(),
+		dropped_at: v.string(),
+		expires_at: v.string(),
+	}),
+);
 export type TrashEntry = v.InferOutput<typeof TrashEntrySchema>;
 
 export const fetchTableTasks = query(v.string(), async (table): Promise<ApiResult<TrashEntry[]>> =>
@@ -440,7 +445,7 @@ export const deregisterTable = command(
 	async ({ table }): Promise<ApiResult<TableLifecycleResult>> => {
 		const result = parsed(
 			await catalogJSON(`/v1/table/${enc(table)}/deregister`, { method: 'POST' }),
-			TableLifecycleResponseSchema,
+			DeregisterTableResponseSchema,
 		);
 		if (result.ok) void fetchTables().refresh();
 		return result;

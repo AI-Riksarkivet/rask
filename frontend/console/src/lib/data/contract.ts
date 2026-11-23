@@ -3,13 +3,14 @@
  * `contract/set` door, naming the columns the table's consumers rely on. The catalog holds every commit
  * to the table to it. The console reads it through `contract/describe` and shows it; it writes none.
  *
- * The response envelope is the catalog's generated contract, kept in lockstep with `satisfies`. The
+ * The response envelope mirrors the catalog's generated contract (`#lib/api/mirrors.ts`). The
  * document inside it is ODCS, which the generated type leaves open (`{[key: string]: unknown}`): the
  * schema below reads the fields the console shows and drops the rest, and the catalog validated the
  * whole document when it was set.
  */
 import * as v from 'valibot';
 import type { components } from '#lib/api/generated/catalog.ts';
+import { mirrors } from '#lib/api/mirrors.ts';
 
 type ContractWire = components['schemas']['ContractResponse'];
 
@@ -46,13 +47,16 @@ export const ContractDocumentSchema = v.object({
 });
 export type ContractDocument = v.InferOutput<typeof ContractDocumentSchema>;
 
-export const ContractResponseSchema = v.object({
-	table: v.string(),
-	uuid: v.string(),
-	contract: v.optional(v.nullable(ContractDocumentSchema)),
-	set_by: v.optional(v.nullable(v.string())),
-	set_at: v.optional(v.nullable(v.string())),
-} satisfies Record<keyof ContractWire, unknown>);
+export const ContractResponseSchema = mirrors<ContractWire, 'contract'>()(
+	v.object({
+		table: v.string(),
+		uuid: v.string(),
+		// The document is ODCS, which the model leaves open; the console reads the fields it shows.
+		contract: v.optional(v.nullable(ContractDocumentSchema)),
+		set_by: v.optional(v.nullable(v.string())),
+		set_at: v.optional(v.nullable(v.string())),
+	}),
+);
 export type ContractResponse = v.InferOutput<typeof ContractResponseSchema>;
 
 /** One column the contract names, flattened: a nested field is named by its dotted path. */

@@ -1,5 +1,7 @@
 import { parse } from './parse.js';
 import * as v from 'valibot';
+import type { components } from './generated/lineage.ts';
+import { mirrors } from './mirrors.ts';
 
 /**
  * The lineage cursor pulse: follow the lineage feed forward and yield when an event this caller may
@@ -15,11 +17,14 @@ export interface LineagePulse {
 
 // Parsed, not cast, at the wire boundary (the `#lib/api` parse-don't-validate rule) — a drift in the feed's
 // shape must fail here rather than silently read `undefined` as "nothing changed" forever. A `since` read
-// always answers the `since` to pass next (docs/COMMIT-EVENTS.md), so `next_cursor` is a number here.
-const FollowPageSchema = v.object({
-	events: v.array(v.object({ seq: v.number() })),
-	next_cursor: v.number(),
-});
+// always answers the `since` to pass next (docs/COMMIT-EVENTS.md), so `next_cursor` is a number here,
+// narrower than the model, which covers the reads without `since` too.
+const FollowPageSchema = mirrors<components['schemas']['Events'], 'next_cursor'>()(
+	v.object({
+		events: v.array(v.object({ seq: v.number() })),
+		next_cursor: v.number(),
+	}),
+);
 
 /** How often the feed is followed. */
 export const POLL_MS = 5000;

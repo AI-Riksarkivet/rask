@@ -243,6 +243,15 @@ every estate:
 `#lib/doors.ts::catalogJSON` is the catalog's door over it. The result is the shared `ApiResult` union: 0 unreachable, n
 answered-n with the upstream's `{detail}`, 502 contract drift (a payload that fails its valibot schema).
 
+**A schema that mirrors a generated model is declared through `mirrors`** (`#lib/api/mirrors.ts`):
+`mirrors<components['schemas']['WarehouseResponse']>()(v.object({…}))` returns the schema unchanged and fails the type
+check at that line when the schema outputs a field or a type the model does not declare, or refuses a value (absence
+included) the model allows, so a `make openapi` that changes a model fails `bun --cwd=frontend run check`. A mirror may
+leave out fields it does not read. A field the console types on purpose (an open string where the model has an enum, a
+defaulted field the door always sends) is named in the second type argument, `mirrors<Model, 'field'>()`, with a
+comment saying why; a named field that matches the model is an error too. A schema with no generated model (the
+console's config, stored state, a form's own draft, an ODCS document) is not declared through it.
+
 **A read gives up, a write is waited for** ([[LH-577]]). `upstreamJSON` gives a GET or HEAD the poll's 8 s
 (`FETCH_TIMEOUT_MS`) and a write none of its own; `requestBytes`, the Arrow row writes, waits `WRITE_TIMEOUT_MS` (120 s)
 and sends the write's `Idempotency-Key`. A write that got no answer (status 0) may have landed, so a page says it is

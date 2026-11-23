@@ -5,8 +5,13 @@ import { DropNamespaceResponseSchema, type DropNamespace } from '../catalog';
 import { fetchTables, TrashEntrySchema, type TrashEntry } from './catalog.api';
 import { fetchWarehouseNamespaces } from './warehouses.api';
 import { warehouseOf } from '#lib/api/identifiers.ts';
-import { PolicyDescribeSchema, PolicyResponseSchema, type Policy } from '#lib/policies.ts';
-import { PolicyDeleteResponseSchema, type NamespacePolicyDelete } from '../namespace';
+import {
+	PolicyDeleteSchema,
+	PolicyDescribeSchema,
+	PolicyResponseSchema,
+	type Policy,
+	type PolicyDelete,
+} from '#lib/policies.ts';
 
 import { catalogJSON, parsed } from '#lib/doors.ts';
 // Transport: the console's catalog door, `#lib/doors`.
@@ -18,7 +23,7 @@ import { catalogJSON, parsed } from '#lib/doors.ts';
 // so nullable fields arrive absent): a contract drift is an honest `{ok:false, status:502}` the caller
 // renders, never a cast.
 //
-// The wire contracts live in `../catalog` and `../namespace`, beside the types the components import.
+// The wire contracts live in `../catalog` and `#lib/policies.ts`, beside the types the components import.
 
 const enc = encodeURIComponent;
 
@@ -71,12 +76,12 @@ export const setNamespacePolicy = command(
 export const deleteNamespacePolicy = command(
 	({ namespace }) => `Remove the maintenance policy of namespace ${namespace}`,
 	v.object({ namespace: v.string() }),
-	async ({ namespace }): Promise<ApiResult<NamespacePolicyDelete>> => {
+	async ({ namespace }): Promise<ApiResult<PolicyDelete>> => {
 		const result = parsed(
 			await catalogJSON(`/management/v1/namespace/${enc(namespace)}/policy/delete`, {
 				method: 'POST',
 			}),
-			PolicyDeleteResponseSchema,
+			PolicyDeleteSchema,
 		);
 		if (result.ok) void fetchNamespacePolicy({ namespace }).refresh();
 		return result;

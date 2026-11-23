@@ -1,5 +1,7 @@
 import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
+import type { components } from '#lib/api/generated/catalog.ts';
+import { mirrors } from '#lib/api/mirrors.ts';
 import type { ApiResult } from '#lib/api/client.ts';
 import { catalogJSON, catalogListing, parsed } from '#lib/doors.ts';
 import { ControlEventSchema, type ControlEvent } from '#lib/admin/control.ts';
@@ -9,31 +11,37 @@ import type { ProjectSummary } from '../catalog';
 // Every call carries only the signed-in person's bearer, so the catalog's own project-admin gate is
 // enforced against a REAL user rather than a service credential. Transport: `#lib/doors`.
 
+type Wire = components['schemas'];
+
 const enc = encodeURIComponent;
 
 /** `DeleteProjectResponse` — what the retirement REALLY removed. `tuples_revoked` is reported rather
  *  than assumed (a `0` on an FGA-off stack is a fact, not a silent success), which is why the success
  *  toast is written from this body instead of from the request. */
-const DeleteProjectSchema = v.object({
-	project: v.string(),
-	tuples_revoked: v.number(),
-});
+const DeleteProjectSchema = mirrors<Wire['DeleteProjectResponse']>()(
+	v.object({
+		project: v.string(),
+		tuples_revoked: v.number(),
+	}),
+);
 
 /** `ProjectResponse` — the tenant's warehouses (a narrower record than the registry's) + its
  *  effective admins. */
-const ProjectSchema = v.object({
-	project: v.string(),
-	warehouses: v.array(
-		v.object({
-			id: v.string(),
-			bucket: v.string(),
-			status: v.string(),
-		}),
-	),
-	admins: v.array(v.string()),
-	/** `"git"` for a project git declares, whose lifecycle its doors refuse (XC-213); absent otherwise. */
-	managed_by: v.optional(v.picklist(['git', 'self'])),
-});
+const ProjectSchema = mirrors<Wire['ProjectResponse']>()(
+	v.object({
+		project: v.string(),
+		warehouses: v.array(
+			v.object({
+				id: v.string(),
+				bucket: v.string(),
+				status: v.string(),
+			}),
+		),
+		admins: v.array(v.string()),
+		/** `"git"` for a project git declares, whose lifecycle its doors refuse (XC-213); absent otherwise. */
+		managed_by: v.optional(v.picklist(['git', 'self'])),
+	}),
+);
 
 /** One tenant: its warehouses + effective admins — what `/projects/[project]` renders. Gated by the
  *  catalog (401/403/404 are all honest states the page branches on). */
@@ -45,14 +53,19 @@ export const fetchProject = query(v.string(), async (project): Promise<ApiResult
  *  observer, and to anyone else the projects they are a member of, each with its warehouses. ONE
  *  read for every surface that asks (the project filter, the gallery's estate listing). */
 const VisibleProjectsSchema = v.array(
-	v.object({ project: v.string(), warehouses: v.array(v.object({ id: v.string() })) }),
+	mirrors<Wire['ProjectResponse']>()(
+		v.object({ project: v.string(), warehouses: v.array(v.object({ id: v.string() })) }),
+	),
 );
 export type VisibleProject = v.InferOutput<typeof VisibleProjectsSchema>[number];
 export const fetchVisibleProjects = query(async (): Promise<ApiResult<VisibleProject[]>> =>
 	parsed(await catalogJSON('/management/v1/projects'), VisibleProjectsSchema),
 );
 
-const EventsPageSchema = v.object({ events: v.array(ControlEventSchema) });
+/** `events` is the console's own: each event is `ControlEventSchema`, which mirrors its model itself. */
+const EventsPageSchema = mirrors<Wire['EventsResponse'], 'events'>()(
+	v.object({ events: v.array(ControlEventSchema) }),
+);
 
 /** The 10 most recent control events touching ONE project (#71) — its own record plus its
  *  warehouses. Scope is honest about its reach: namespace/table events cannot be mapped to a
@@ -133,7 +146,9 @@ export const deleteProject = command(
 
 /** The tables under one namespace — the namespace→table rung (#104). The spec's list_tables via
  *  the catalog's GET route, every page of it; the view caps what it draws and SAYS so. */
-const NamespaceTablesSchema = v.object({ tables: v.array(v.string()) });
+const NamespaceTablesSchema = mirrors<Wire['ListTablesResponse']>()(
+	v.object({ tables: v.array(v.string()) }),
+);
 export const namespaceTables = query(
 	v.string(),
 	async (namespaceId): Promise<ApiResult<{ tables: string[] }>> =>

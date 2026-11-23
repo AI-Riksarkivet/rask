@@ -6,6 +6,7 @@ import { catalogJSON, parsed } from '#lib/doors.ts';
 import { CATALOG_API } from '#lib/upstreams.ts';
 import {
 	AccessModelSchema,
+	AccessTupleSchema,
 	CheckVerdictSchema,
 	ExpandResultSchema,
 	ListObjectsResultSchema,
@@ -13,9 +14,9 @@ import {
 	SimulateResultSchema,
 	namedObject,
 	TupleConditionSchema,
-	TupleSchema,
 	TuplesPageSchema,
 	type AccessModel,
+	type AccessTuple,
 	type CheckVerdict,
 	type ExpandResult,
 	type ListObjectsResult,
@@ -106,13 +107,13 @@ export const writeTuple = command(
 		return `Grant ${tuple.relation} on ${namedObject(tuple.object, tuple.name)} to ${tuple.user}${box ? `, time-boxed ${box}` : ''}`;
 	},
 	TupleInputSchema,
-	async (tuple): Promise<ApiResult<Tuple>> => {
+	async (tuple): Promise<ApiResult<AccessTuple>> => {
 		const result = parsed(
 			await catalogJSON('/management/v1/access/tuples', {
 				method: 'POST',
 				body: JSON.stringify(wire(tuple)),
 			}),
-			TupleSchema,
+			AccessTupleSchema,
 		);
 		if (result.ok) void fetchStore().refresh();
 		return result;
@@ -124,13 +125,13 @@ export const deleteTuple = command(
 	(tuple) =>
 		`Revoke ${tuple.relation} on ${namedObject(tuple.object, tuple.name)} from ${tuple.user}`,
 	TupleInputSchema,
-	async (tuple): Promise<ApiResult<Tuple>> => {
+	async (tuple): Promise<ApiResult<AccessTuple>> => {
 		const result = parsed(
 			await catalogJSON('/management/v1/access/tuples', {
 				method: 'DELETE',
 				body: JSON.stringify(wire(tuple)),
 			}),
-			TupleSchema,
+			AccessTupleSchema,
 		);
 		if (result.ok) void fetchStore().refresh();
 		return result;

@@ -1,38 +1,48 @@
 import * as v from 'valibot';
 
 import type { components } from '#lib/api/generated/catalog.ts';
+import { mirrors } from '#lib/api/mirrors.ts';
 
 // The control-plane change-event wire contract (services/catalog endpoints/events.py) — parsed (not cast)
 // at the wire boundary so a drift from the backend throws here rather than lying downstream (the `#lib/api`
-// parse-don't-validate rule). The shapes are pinned to the generated docs/catalog-openapi.json types
-// (`bun run gen:types:catalog`) — never hand-mirrored: `satisfies` keeps each schema's keys in lockstep
-// with the spec, so a renamed/removed/added wire field stops compiling here. `action`/`object_type`
+// parse-don't-validate rule). Each schema mirrors its generated docs/catalog-openapi.json model
+// (`#lib/api/mirrors.ts`), so a renamed or removed wire field stops compiling here. `action`/`object_type`
 // deliberately stay open strings at runtime — a NEW backend action must render in the feed, not wedge it.
+// `event_id`, `occurred_at` and `extra` are required here although the model marks them optional: the
+// catalog fills each with a default, so every event it serializes carries them, and the feed keys and
+// orders by them.
 
 type EventWire = components['schemas']['CatalogControlEvent'];
 type PageWire = components['schemas']['EventsResponse'];
 
-export const ControlEventSchema = v.object({
-	event_id: v.string(),
-	occurred_at: v.string(), // ISO-8601 UTC
-	action: v.string(),
-	object_type: v.string(),
-	object_id: v.string(),
-	actor: v.nullable(v.string()),
-	extra: v.record(v.string(), v.unknown()),
-	namespace_uuid: v.optional(v.nullable(v.string())),
-	object_name: v.optional(v.nullable(v.string())),
-	object_uuid: v.optional(v.nullable(v.string())),
-} satisfies Record<keyof EventWire, unknown>);
+export const ControlEventSchema = mirrors<
+	EventWire,
+	'event_id' | 'occurred_at' | 'action' | 'object_type' | 'extra'
+>()(
+	v.object({
+		event_id: v.string(),
+		occurred_at: v.string(), // ISO-8601 UTC
+		action: v.string(),
+		object_type: v.string(),
+		object_id: v.string(),
+		actor: v.optional(v.nullable(v.string()), null),
+		extra: v.record(v.string(), v.unknown()),
+		namespace_uuid: v.optional(v.nullable(v.string())),
+		object_name: v.optional(v.nullable(v.string())),
+		object_uuid: v.optional(v.nullable(v.string())),
+	}),
+);
 export type ControlEvent = v.InferOutput<typeof ControlEventSchema>;
 
 /** The page ENVELOPE, parsed strictly; its events are parsed one by one (`readEvent`), so one event
  *  that drifted from the contract is shown as unreadable and does not stop the cursor. */
-export const EventsEnvelopeSchema = v.object({
-	events: v.array(v.unknown()),
-	cursor: v.number(),
-	reset: v.boolean(),
-} satisfies Record<keyof PageWire, unknown>);
+export const EventsEnvelopeSchema = mirrors<PageWire, 'events'>()(
+	v.object({
+		events: v.array(v.unknown()),
+		cursor: v.number(),
+		reset: v.boolean(),
+	}),
+);
 
 /** One entry of the feed's window: an event, or one the console could not read and says so. */
 export type FeedEntry =

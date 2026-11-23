@@ -6,6 +6,7 @@
 // cast that renders a lie.
 import * as v from 'valibot';
 import type { components } from '#lib/api/generated/catalog.ts';
+import { mirrors } from '#lib/api/mirrors.ts';
 
 /** `PolicyRequest` — the catalog's full set body, from the generated client. */
 export type PolicyRequest = components['schemas']['PolicyRequest'];
@@ -37,49 +38,58 @@ const PolicyKindSchema = v.picklist(['table', 'namespace', 'project']);
  *  that answer for the table, namespace and project pages. The nullable fields are ABSENT rather than
  *  null on the wire (the routes serialize with `response_model_exclude_none`), so every one is
  *  `optional` AND `nullable`. */
-export const PolicyResponseSchema = v.object({
-	kind: PolicyKindSchema,
-	id: v.string(),
-	/** The table's or namespace's uuid; a project record carries none. */
-	uuid: v.optional(v.string()),
-	set: v.literal(true),
-	buckets: v.optional(v.nullable(v.array(v.string()))),
-	retention_days: v.optional(v.nullable(v.number())),
-	retain_versions: v.optional(v.nullable(v.number())),
-	compact_enabled: v.optional(v.boolean(), true),
-	compact_interval_hours: v.optional(v.nullable(v.number())),
-	target_rows_per_fragment: v.optional(v.nullable(v.number())),
-	cleanup_enabled: v.optional(v.boolean(), true),
-	optimize_indices_enabled: v.optional(v.boolean(), true),
-	scan_batch_size: v.optional(v.nullable(v.number())),
-});
+export const PolicyResponseSchema = mirrors<components['schemas']['PolicyResponse']>()(
+	v.object({
+		kind: PolicyKindSchema,
+		id: v.string(),
+		/** The table's or namespace's uuid; a project record carries none. */
+		uuid: v.optional(v.nullable(v.string())),
+		set: v.literal(true),
+		buckets: v.optional(v.nullable(v.array(v.string()))),
+		retention_days: v.optional(v.nullable(v.number())),
+		retain_versions: v.optional(v.nullable(v.number())),
+		compact_enabled: v.optional(v.boolean(), true),
+		compact_interval_hours: v.optional(v.nullable(v.number())),
+		target_rows_per_fragment: v.optional(v.nullable(v.number())),
+		cleanup_enabled: v.optional(v.boolean(), true),
+		optimize_indices_enabled: v.optional(v.boolean(), true),
+		scan_batch_size: v.optional(v.nullable(v.number())),
+	}),
+);
 
 /** What a policy describe answers for an object that holds no policy: the object stands, and `set` is
  *  false. */
-const PolicyUnsetSchema = v.object({
-	kind: PolicyKindSchema,
-	id: v.string(),
-	uuid: v.optional(v.string()),
-	set: v.literal(false),
-});
+const PolicyUnsetSchema = mirrors<components['schemas']['PolicyUnset']>()(
+	v.object({
+		kind: PolicyKindSchema,
+		id: v.string(),
+		uuid: v.optional(v.nullable(v.string())),
+		set: v.literal(false),
+	}),
+);
 
 /** A policy describe's answer: the policy, or that none is set. */
 export const PolicyDescribeSchema = v.variant('set', [PolicyResponseSchema, PolicyUnsetSchema]);
 
 /** The project-scoped LIST, with the SCOPE it was computed from: the project's warehouses and their
  *  buckets. A namespace or table record is in scope when its name begins with one of the warehouses. */
-export const ProjectPoliciesSchema = v.object({
-	project: v.string(),
-	buckets: v.array(v.string()),
-	warehouses: v.array(v.string()),
-	policies: v.array(PolicyResponseSchema),
-});
+export const ProjectPoliciesSchema = mirrors<components['schemas']['ProjectPoliciesResponse']>()(
+	v.object({
+		project: v.string(),
+		buckets: v.array(v.string()),
+		warehouses: v.array(v.string()),
+		policies: v.array(PolicyResponseSchema),
+	}),
+);
 
-export const PolicyDeleteSchema = v.object({
-	status: v.string(),
-	kind: v.string(),
-	id: v.string(),
-});
+/** A policy delete's acknowledgement, on every rung. */
+export const PolicyDeleteSchema = mirrors<components['schemas']['PolicyDeleteResponse']>()(
+	v.object({
+		status: v.string(),
+		kind: v.string(),
+		id: v.string(),
+	}),
+);
 
 /** `PolicyResponse` as a page holds it — inferred from the parser, so the type is what actually
  *  survived validation rather than what the wire claimed. */
@@ -87,7 +97,7 @@ export type Policy = v.InferOutput<typeof PolicyResponseSchema>;
 /** `ProjectPoliciesResponse` — every record governing data inside one project, plus the SCOPE it was
  *  computed from. */
 export type ProjectPolicies = v.InferOutput<typeof ProjectPoliciesSchema>;
-export type ProjectPolicyDelete = v.InferOutput<typeof PolicyDeleteSchema>;
+export type PolicyDelete = v.InferOutput<typeof PolicyDeleteSchema>;
 
 /** The maintenance toggles the project policy form edits, before they become a `PolicyRequest`. */
 export interface PolicyDraft {

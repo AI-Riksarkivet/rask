@@ -9,22 +9,28 @@
 // and components.
 import * as v from 'valibot';
 import { upstreamJSON } from './client.ts';
+import type { components } from './generated/catalog.ts';
+import { mirrors } from './mirrors.ts';
 
 /** One project membership row from `/management/v1/me` — the tenant and the caller's role in it. */
-export const MeProjectSchema = v.object({
-	project: v.string(),
-	role: v.picklist(['admin', 'member']),
-});
+export const MeProjectSchema = mirrors<components['schemas']['MeProject']>()(
+	v.object({
+		project: v.string(),
+		role: v.picklist(['admin', 'member']),
+	}),
+);
 
 /** The frozen `/management/v1/me` response. Parsed ONCE at the fetch boundary (parse-don't-validate). */
-export const MeSchema = v.object({
-	sub: v.string(),
-	name: v.nullable(v.string()),
-	email: v.nullable(v.string()),
-	estate_admin: v.boolean(),
-	can_create_project: v.boolean(),
-	projects: v.array(MeProjectSchema),
-});
+export const MeSchema = mirrors<components['schemas']['MeResponse']>()(
+	v.object({
+		sub: v.string(),
+		name: v.nullable(v.string()),
+		email: v.nullable(v.string()),
+		estate_admin: v.boolean(),
+		can_create_project: v.boolean(),
+		projects: v.array(MeProjectSchema),
+	}),
+);
 
 export type MeProject = v.InferOutput<typeof MeProjectSchema>;
 export type Me = v.InferOutput<typeof MeSchema>;

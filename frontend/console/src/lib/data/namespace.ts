@@ -10,6 +10,7 @@
 // `remote/namespace.api.ts` (lifecycle + policy); this module keeps the contracts they parse against.
 import * as v from 'valibot';
 import type { components } from '#lib/api/generated/catalog.ts';
+import { mirrors } from '#lib/api/mirrors.ts';
 
 export type AccessList = components['schemas']['AccessListResponse'];
 export type AccessCheck = components['schemas']['AccessCheckResponse'];
@@ -43,70 +44,73 @@ export const ACCESS_SEGMENT: Record<GrantKind, string> = {
 	project: 'projects',
 };
 
-// The access wire contracts (#51/#68/#72/#81). Mirrors of the generated response models, as schemas —
-// the data functions parse against these, so the browser can never render an unparsed shape.
+// The access wire contracts (#51/#68/#72/#81). Mirrors of the generated response models, as schemas
+// held to them by `mirrors` — the data functions parse against these, so the browser can never render
+// an unparsed shape.
 /** #51 the review: every relation the model defines on the type, with who holds it. */
-export const AccessListSchema = v.object({
-	object: v.string(),
-	// `truncated` per relation PLUS a roll-up (diff2 F10 item 8). The server gained both when the
-	// silent `listUsersMaxResults` ceiling was closed; this schema did not, so the browser dropped the
-	// flag and rendered a partial review as a complete one — which is the whole defect that finding is
-	// about, surviving on the half nobody checked. Defaulted rather than required so a pre-fix catalog
-	// still parses.
-	truncated: v.optional(v.boolean(), false),
-	grants: v.array(
-		v.object({
-			relation: v.string(),
-			users: v.array(v.string()),
-			truncated: v.optional(v.boolean(), false),
-		}),
-	),
-});
+export const AccessListSchema = mirrors<components['schemas']['AccessListResponse']>()(
+	v.object({
+		object: v.string(),
+		// `truncated` per relation PLUS a roll-up: a review cut at the `listUsersMaxResults` ceiling must
+		// render as partial, never as complete. Optional on the wire, so defaulted.
+		truncated: v.optional(v.boolean(), false),
+		grants: v.array(
+			v.object({
+				relation: v.string(),
+				users: v.array(v.string()),
+				truncated: v.optional(v.boolean(), false),
+			}),
+		),
+	}),
+);
 /** #68 the check verdict — `user` echoes the RESOLVED subject (bare id → `user:<id>`). */
-export const AccessCheckSchema = v.object({
-	allowed: v.boolean(),
-	object: v.string(),
-	relation: v.string(),
-	user: v.string(),
-});
+export const AccessCheckSchema = mirrors<components['schemas']['AccessCheckResponse']>()(
+	v.object({
+		allowed: v.boolean(),
+		object: v.string(),
+		relation: v.string(),
+		user: v.string(),
+	}),
+);
 /** The SELF-view: every `can_*` the model defines on the object, answered for the CALLER alone.
  *  Distinct from the review above and deliberately so — that one enumerates principals and clears the
  *  owner bar, this one describes only the person asking and is gated at the reader rung, so the page
  *  can decide what to RENDER before the user clicks something they were never allowed to do.
  *  `permissions` is an open record because its keys are the model's `can_*` set: pinning them here
  *  would be a fourth copy of the model that drifts the day a relation is added. */
-export const MyPermissionsSchema = v.object({
-	object: v.string(),
-	subject: v.string(),
-	permissions: v.record(v.string(), v.boolean()),
-});
+export const MyPermissionsSchema = mirrors<components['schemas']['MyPermissionsResponse']>()(
+	v.object({
+		object: v.string(),
+		subject: v.string(),
+		permissions: v.record(v.string(), v.boolean()),
+	}),
+);
 /** Whether granting on this container is CENTRALIZED — read at the reader rung on purpose, because
  *  this flag is the reason a page's grant controls are absent and the person who needs that
  *  explanation is exactly the one who may not change it. */
-export const ManagedAccessSchema = v.object({
-	object: v.string(),
-	managed_access: v.boolean(),
-});
+export const ManagedAccessSchema = mirrors<components['schemas']['ManagedAccessResponse']>()(
+	v.object({
+		object: v.string(),
+		managed_access: v.boolean(),
+	}),
+);
 /** #72 the grant/revoke acknowledgement — `granted` states which way it went. */
-export const AccessGrantSchema = v.object({
-	granted: v.boolean(),
-	object: v.string(),
-	relation: v.string(),
-	user: v.string(),
-});
+export const AccessGrantSchema = mirrors<components['schemas']['AccessGrantResponse']>()(
+	v.object({
+		granted: v.boolean(),
+		object: v.string(),
+		relation: v.string(),
+		user: v.string(),
+	}),
+);
 /** #81 one hop of the authorization graph: the focus object, its grantees, its container edge. */
-export const AccessGraphSchema = v.object({
-	object: v.string(),
-	nodes: v.array(v.object({ id: v.string(), label: v.string(), type: v.string() })),
-	edges: v.array(v.object({ relation: v.string(), source: v.string(), target: v.string() })),
-});
-
-export const PolicyDeleteResponseSchema = v.object({
-	status: v.string(),
-	kind: v.string(),
-	id: v.string(),
-});
-export type NamespacePolicyDelete = v.InferOutput<typeof PolicyDeleteResponseSchema>;
+export const AccessGraphSchema = mirrors<components['schemas']['AccessGraphResponse']>()(
+	v.object({
+		object: v.string(),
+		nodes: v.array(v.object({ id: v.string(), label: v.string(), type: v.string() })),
+		edges: v.array(v.object({ relation: v.string(), source: v.string(), target: v.string() })),
+	}),
+);
 
 /** The maintenance toggles a policy form edits, before it becomes a `PolicyRequest`. */
 export interface PolicyDraft {

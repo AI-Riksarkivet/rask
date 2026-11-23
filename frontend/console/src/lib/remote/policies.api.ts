@@ -7,7 +7,7 @@ import {
 	ProjectPoliciesSchema,
 	type Policy,
 	type ProjectPolicies,
-	type ProjectPolicyDelete,
+	type PolicyDelete,
 } from '#lib/policies.ts';
 import { catalogJSON, parsed } from '#lib/doors.ts';
 
@@ -77,7 +77,7 @@ export const setProjectPolicy = command(
 export const deleteProjectPolicy = command(
 	(project) => `Remove the maintenance policy of project ${project}`,
 	v.string(),
-	async (project): Promise<ApiResult<ProjectPolicyDelete>> => {
+	async (project): Promise<ApiResult<PolicyDelete>> => {
 		const result = parsed(
 			await catalogJSON(`/management/v1/project/${enc(project)}/policy/delete`, { method: 'POST' }),
 			PolicyDeleteSchema,

@@ -3,13 +3,14 @@
  * namespace of that project, as a bare marker, a free text or one of the definition's allowed values.
  * A label authorizes nothing: it is something to read, filter and find objects by.
  *
- * The shapes are the catalog's generated contract; `satisfies` keeps each schema's keys in lockstep
- * with it, so a field the catalog adds or renames stops compiling here. Which warehouse belongs to no
+ * The shapes are the catalog's generated contract; each schema mirrors its model
+ * (`#lib/api/mirrors.ts`), so a field the catalog renames or retypes stops compiling here. Which warehouse belongs to no
  * project is the catalog's setting, not the console's: an object there is answered 400 by its label
  * doors, and the console reads that answer rather than a copy of the name.
  */
 import * as v from 'valibot';
 import type { components } from '#lib/api/generated/catalog.ts';
+import { mirrors } from '#lib/api/mirrors.ts';
 
 type DefinitionWire = components['schemas']['LabelDefinition'];
 type DefineWire = components['schemas']['LabelDefinitionRequest'];
@@ -31,48 +32,56 @@ export const KIND_NAMES: Record<LabelKind, string> = {
 	enumerated: 'one of a list',
 };
 
-export const LabelDefinitionSchema = v.object({
-	uuid: v.string(),
-	project: v.string(),
-	name: v.string(),
-	description: v.optional(v.nullable(v.string())),
-	scope: v.array(v.picklist(LABEL_SCOPES)),
-	kind: v.picklist(LABEL_KINDS),
-	allowed_values: v.optional(v.nullable(v.array(v.string()))),
-	defined_by: v.optional(v.nullable(v.string())),
-	defined_at: v.string(),
-} satisfies Record<keyof DefinitionWire, unknown>);
+export const LabelDefinitionSchema = mirrors<DefinitionWire>()(
+	v.object({
+		uuid: v.string(),
+		project: v.string(),
+		name: v.string(),
+		description: v.optional(v.nullable(v.string())),
+		scope: v.array(v.picklist(LABEL_SCOPES)),
+		kind: v.picklist(LABEL_KINDS),
+		allowed_values: v.optional(v.nullable(v.array(v.string()))),
+		defined_by: v.optional(v.nullable(v.string())),
+		defined_at: v.string(),
+	}),
+);
 export type LabelDefinition = v.InferOutput<typeof LabelDefinitionSchema>;
 
 /** The body of a define: a new label, or the definition its name holds, evolved. */
-export const DefineLabelSchema = v.object({
-	name: v.string(),
-	description: v.optional(v.nullable(v.string())),
-	scope: v.array(v.picklist(LABEL_SCOPES)),
-	kind: v.picklist(LABEL_KINDS),
-	allowed_values: v.optional(v.nullable(v.array(v.string()))),
-} satisfies Record<keyof DefineWire, unknown>);
+export const DefineLabelSchema = mirrors<DefineWire>()(
+	v.object({
+		name: v.string(),
+		description: v.optional(v.nullable(v.string())),
+		scope: v.array(v.picklist(LABEL_SCOPES)),
+		kind: v.picklist(LABEL_KINDS),
+		allowed_values: v.optional(v.nullable(v.array(v.string()))),
+	}),
+);
 export type DefineLabel = v.InferOutput<typeof DefineLabelSchema>;
 
 /** The labels one object carries, each with its value (null for a marker), and on a describe the
  *  definitions its project holds for its kind (`available`): what may be attached to it, read at
  *  `can_get_metadata` on the object, so an owner who is no member of the project reads it too. */
-export const ObjectLabelsSchema = v.object({
-	kind: v.picklist(LABEL_SCOPES),
-	id: v.string(),
-	uuid: v.string(),
-	labels: v.record(v.string(), v.nullable(v.string())),
-	available: v.optional(v.nullable(v.array(LabelDefinitionSchema))),
-} satisfies Record<keyof ObjectLabelsWire, unknown>);
+export const ObjectLabelsSchema = mirrors<ObjectLabelsWire>()(
+	v.object({
+		kind: v.picklist(LABEL_SCOPES),
+		id: v.string(),
+		uuid: v.string(),
+		labels: v.record(v.string(), v.nullable(v.string())),
+		available: v.optional(v.nullable(v.array(LabelDefinitionSchema))),
+	}),
+);
 export type ObjectLabels = v.InferOutput<typeof ObjectLabelsSchema>;
 export type Labels = ObjectLabels['labels'];
 
 /** A project's labelled objects the caller may see, every page joined (`catalogListing`). */
-export const LabelledObjectsSchema = v.object({
-	project: v.string(),
-	objects: v.array(ObjectLabelsSchema),
-	page_token: v.optional(v.nullable(v.string())),
-} satisfies Record<keyof LabelledWire, unknown>);
+export const LabelledObjectsSchema = mirrors<LabelledWire>()(
+	v.object({
+		project: v.string(),
+		objects: v.array(ObjectLabelsSchema),
+		page_token: v.optional(v.nullable(v.string())),
+	}),
+);
 export type LabelledObjects = v.InferOutput<typeof LabelledObjectsSchema>;
 
 /** One label as a chip reads: `name`, or `name=value`. */

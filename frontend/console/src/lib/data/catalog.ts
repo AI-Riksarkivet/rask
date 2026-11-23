@@ -10,6 +10,7 @@
 import { parse } from '#lib/api/index.ts';
 import * as v from 'valibot';
 import type { components } from '#lib/api/generated/catalog.ts';
+import { mirrors } from '#lib/api/mirrors.ts';
 import {
 	type ApiResult,
 	requestBinary as requestBin,
@@ -22,16 +23,21 @@ import { CATALOG_API } from '#lib/upstreams.ts';
 
 /** The describe fields the table page reads (`DescribeTableResponse`), parsed at the boundary: a body
  *  that drifts from them is the data layer's 502, never a cast. Loose, so the rest of the answer rides
- *  along untouched. */
+ *  along untouched. `schema` is the console's own: its fields are carried unparsed to the schema view. */
 const stringMap = v.optional(v.nullable(v.record(v.string(), v.string())));
-export const TableDescribeSchema = v.looseObject({
-	version: v.optional(v.nullable(v.number())),
-	location: v.optional(v.nullable(v.string())),
-	is_only_declared: v.optional(v.nullable(v.boolean())),
-	properties: stringMap,
-	metadata: stringMap,
-	schema: v.optional(v.nullable(v.looseObject({ fields: v.optional(v.array(v.unknown())) }))),
-} satisfies Partial<Record<keyof components['schemas']['DescribeTableResponse'], unknown>>);
+export const TableDescribeSchema = mirrors<
+	components['schemas']['DescribeTableResponse'],
+	'schema'
+>()(
+	v.looseObject({
+		version: v.optional(v.nullable(v.number())),
+		location: v.optional(v.nullable(v.string())),
+		is_only_declared: v.optional(v.nullable(v.boolean())),
+		properties: stringMap,
+		metadata: stringMap,
+		schema: v.optional(v.nullable(v.looseObject({ fields: v.optional(v.array(v.unknown())) }))),
+	}),
+);
 export type TableDescribe = v.InferOutput<typeof TableDescribeSchema>;
 export type TableStats = components['schemas']['GetTableStatsResponse'];
 export type TableVersions = components['schemas']['ListTableVersionsResponse'];
@@ -207,48 +213,65 @@ export const RETYPE_TYPES = [
 // The warehouse TRANSPORT (list / describe / create / activate / bind) lives in
 // `remote/warehouses.api.ts`. This module keeps the table surface plus the shared wire contracts.
 
-// The lance-namespace table-lifecycle wire contracts (#85). All-optional where the spec says so — the
-// catalog serializes with response_model_exclude_none, so null fields arrive absent. Parsed (not cast)
-// at the boundary per the `#lib/api` parse-don't-validate rule: a schema drift is surfaced instead of
+// The lance-namespace table-lifecycle wire contracts (#85). All-optional and nullable where the spec says
+// so; the catalog serializes with response_model_exclude_none, so a null field arrives absent. Parsed (not
+// cast) at the boundary per the `#lib/api` parse-don't-validate rule: a schema drift is surfaced instead of
 // lying downstream. The parse runs in `remote/catalog.api.ts`, so these are exported — the contract
 // stays here, beside the types it defines.
-export const TableLifecycleResponseSchema = v.object({
-	context: v.optional(v.record(v.string(), v.string())),
-	transaction_id: v.optional(v.string()),
-	id: v.optional(v.array(v.string())),
-	location: v.optional(v.string()),
-	properties: v.optional(v.record(v.string(), v.string())),
-});
+const optionalMap = v.optional(v.nullable(v.record(v.string(), v.string())));
+const optionalText = v.optional(v.nullable(v.string()));
+
+/** A drop's answer; a deregister's is the same shape. */
+export const TableLifecycleResponseSchema = mirrors<components['schemas']['DropTableResponse']>()(
+	v.object({
+		context: optionalMap,
+		transaction_id: optionalText,
+		id: v.optional(v.nullable(v.array(v.string()))),
+		location: optionalText,
+		properties: optionalMap,
+	}),
+);
+export const DeregisterTableResponseSchema = mirrors<
+	components['schemas']['DeregisterTableResponse']
+>()(TableLifecycleResponseSchema);
 export type TableLifecycleResult = v.InferOutput<typeof TableLifecycleResponseSchema>;
 
-export const RenameTableResponseSchema = v.object({
-	context: v.optional(v.record(v.string(), v.string())),
-	transaction_id: v.optional(v.string()),
-});
+export const RenameTableResponseSchema = mirrors<components['schemas']['RenameTableResponse']>()(
+	v.object({
+		context: optionalMap,
+		transaction_id: optionalText,
+	}),
+);
 
-export const DeclareTableResponseSchema = v.object({
-	context: v.optional(v.record(v.string(), v.string())),
-	transaction_id: v.optional(v.string()),
-	location: v.optional(v.string()),
-	storage_options: v.optional(v.record(v.string(), v.string())),
-	properties: v.optional(v.record(v.string(), v.string())),
-	managed_versioning: v.optional(v.boolean()),
-});
+export const DeclareTableResponseSchema = mirrors<components['schemas']['DeclareTableResponse']>()(
+	v.object({
+		context: optionalMap,
+		transaction_id: optionalText,
+		location: optionalText,
+		storage_options: optionalMap,
+		properties: optionalMap,
+		managed_versioning: v.optional(v.nullable(v.boolean())),
+	}),
+);
 export type DeclareTableResult = v.InferOutput<typeof DeclareTableResponseSchema>;
 
 // UpdateTableResponse: updated_rows + version are REQUIRED on the wire (lance-namespace spec) — the
 // affected-row count the UI surfaces. DeleteFromTableResponse carries NO row count, only the new version.
-export const UpdateRowsResponseSchema = v.object({
-	transaction_id: v.optional(v.string()),
-	updated_rows: v.number(),
-	version: v.number(),
-});
+export const UpdateRowsResponseSchema = mirrors<components['schemas']['UpdateTableResponse']>()(
+	v.object({
+		transaction_id: optionalText,
+		updated_rows: v.number(),
+		version: v.number(),
+	}),
+);
 export type UpdateRowsResult = v.InferOutput<typeof UpdateRowsResponseSchema>;
 
-export const DeleteRowsResponseSchema = v.object({
-	transaction_id: v.optional(v.string()),
-	version: v.optional(v.number()),
-});
+export const DeleteRowsResponseSchema = mirrors<components['schemas']['DeleteFromTableResponse']>()(
+	v.object({
+		transaction_id: optionalText,
+		version: v.optional(v.nullable(v.number())),
+	}),
+);
 export type DeleteRowsResult = v.InferOutput<typeof DeleteRowsResponseSchema>;
 
 // The table lifecycle commands — drop / deregister / rename / declare, and the row update and
@@ -258,13 +281,17 @@ export type DeleteRowsResult = v.InferOutput<typeof DeleteRowsResponseSchema>;
 // the pinned native backend stubs (501 for every table). What the UI says in its
 // place is `table-detail/unavailable.ts`.
 
-// The lance-namespace DropNamespaceResponse wire contract (all fields optional — the catalog serializes
-// with response_model_exclude_none). Parsed (not cast) at the boundary per the `#lib/api`
-// parse-don't-validate rule: a schema drift throws to the caller instead of lying downstream.
-export const DropNamespaceResponseSchema = v.object({
-	context: v.optional(v.record(v.string(), v.string())),
-	properties: v.optional(v.record(v.string(), v.string())),
-	transaction_id: v.optional(v.array(v.string())),
-});
+// The lance-namespace DropNamespaceResponse wire contract (every field optional and nullable — the
+// catalog serializes with response_model_exclude_none). Parsed (not cast) at the boundary per the
+// `#lib/api` parse-don't-validate rule: a schema drift throws to the caller instead of lying downstream.
+export const DropNamespaceResponseSchema = mirrors<
+	components['schemas']['DropNamespaceResponse']
+>()(
+	v.object({
+		context: optionalMap,
+		properties: optionalMap,
+		transaction_id: v.optional(v.nullable(v.array(v.string()))),
+	}),
+);
 export type DropNamespace = v.InferOutput<typeof DropNamespaceResponseSchema>;
 // The drop itself is a command in `remote/namespace.api.ts`.

@@ -1,5 +1,7 @@
 import { command, query } from '#lib/reads.svelte.ts';
 import * as v from 'valibot';
+import type { components } from '#lib/api/generated/catalog.ts';
+import { mirrors } from '#lib/api/mirrors.ts';
 import type { ApiResult } from '#lib/api/client.ts';
 import type { CreateWarehouse, Warehouse } from '../catalog';
 
@@ -14,27 +16,31 @@ import { TrashEntrySchema, type TrashEntry } from './catalog.api';
 // No local "signed out → 401" short-circuit: the catalog answers 401 itself for a bearer-less call,
 // and the components branch on the STATUS.
 
+type Wire = components['schemas'];
+
 const enc = encodeURIComponent;
 
 /** `WarehouseResponse`, parsed at the door. */
-const WarehouseSchema = v.object({
-	id: v.string(),
-	project: v.string(),
-	bucket: v.string(),
-	root_uri: v.string(),
-	created_at: v.optional(v.nullable(v.string())),
-	status: v.optional(v.nullable(v.string())),
-	/** `"git"` for a warehouse git declares, whose lifecycle its doors refuse (XC-213); absent otherwise. */
-	managed_by: v.optional(v.picklist(['git', 'self'])),
-	delete_profile: v.optional(
-		v.nullable(
-			v.object({
-				mode: v.picklist(['hard', 'soft', 'estate']),
-				grace_days: v.optional(v.nullable(v.number())),
-			}),
+const WarehouseSchema = mirrors<Wire['WarehouseResponse']>()(
+	v.object({
+		id: v.string(),
+		project: v.string(),
+		bucket: v.string(),
+		root_uri: v.string(),
+		created_at: v.optional(v.nullable(v.string())),
+		status: v.optional(v.nullable(v.string())),
+		/** `"git"` for a warehouse git declares, whose lifecycle its doors refuse (XC-213); absent otherwise. */
+		managed_by: v.optional(v.picklist(['git', 'self'])),
+		delete_profile: v.optional(
+			v.nullable(
+				v.object({
+					mode: v.picklist(['hard', 'soft', 'estate']),
+					grace_days: v.optional(v.nullable(v.number())),
+				}),
+			),
 		),
-	),
-});
+	}),
+);
 
 /** `DeleteWarehouseResponse` — what the delete ACTUALLY did, store by store.
  *
@@ -44,14 +50,16 @@ const WarehouseSchema = v.object({
  *  named even when it was KEPT, so the operator knows what survived; `bucket_purged` is the catalog's
  *  own statement about the bytes, which is the one field a request-shaped message gets wrong. The
  *  confirm dialog's toast is built from this and nothing else. */
-const DeleteWarehouseSchema = v.object({
-	id: v.string(),
-	bucket: v.string(),
-	namespaces_dropped: v.array(v.string()),
-	tuples_revoked: v.number(),
-	bucket_purged: v.boolean(),
-	objects_purged: v.number(),
-});
+const DeleteWarehouseSchema = mirrors<Wire['DeleteWarehouseResponse']>()(
+	v.object({
+		id: v.string(),
+		bucket: v.string(),
+		namespaces_dropped: v.array(v.string()),
+		tuples_revoked: v.number(),
+		bucket_purged: v.boolean(),
+		objects_purged: v.number(),
+	}),
+);
 
 /** Warehouse admin reads: whatever the catalog shows this caller (any signed-in user). */
 export const fetchWarehouses = query(async (): Promise<ApiResult<Warehouse[]>> =>
@@ -64,7 +72,9 @@ export const fetchWarehouse = query(v.string(), async (id): Promise<ApiResult<Wa
 );
 
 /** The spec's ListNamespaces answer: the child NAMES under the listed id, not their ids. */
-const ChildNamesSchema = v.object({ namespaces: v.array(v.string()) });
+const ChildNamesSchema = mirrors<Wire['ListNamespacesResponse']>()(
+	v.object({ namespaces: v.array(v.string()) }),
+);
 
 /** The warehouses the caller may see, as the catalog's ROOT listing answers them (`GET
  *  /v1/namespace/$/list`, every page): each registered warehouse the caller holds `can_get_metadata`
@@ -104,7 +114,7 @@ export const fetchWarehouseTrash = query(
 	async (id): Promise<ApiResult<{ objects: TrashEntry[] }>> =>
 		parsed(
 			await catalogListing(`/management/v1/warehouses/${enc(id)}/trash`, 'objects'),
-			v.object({ objects: v.array(TrashEntrySchema) }),
+			mirrors<Wire['TrashListing']>()(v.object({ objects: v.array(TrashEntrySchema) })),
 		),
 );
 
