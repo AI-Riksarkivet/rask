@@ -273,6 +273,10 @@ class Drills:
             answer = self.tenant.admin.http.get(f"{CATALOG}/management/v1/events", params={"since": 0}, timeout=30)
         except requests.ConnectionError:
             return False
+        if answer.status_code == 503:
+            # The catalog reads its feed off the bus on a connection of its own, which comes back a reconnect after the
+            # bus does (nats-py tries every 2 s): until then the door answers 503, which is "not yet", not a refusal.
+            return False
         events = scenario.ok(answer)["events"]
         return any(
             event.get("action") == "grant_added"
