@@ -54,6 +54,14 @@ _turns = _meter.create_counter(
     unit="{turn}",
     description="Turns each fixed timer's loop took in this process, by timer and by how the turn ended.",
 )
+#: Second-scale boundaries up to an hour: a tick that reads every table grows with the estate, and the SDK's default
+#: boundaries are spaced for milliseconds, so every tick above 10 s would land in one bucket.
+_work_duration = _meter.create_histogram(
+    "timer.work.duration",
+    unit="s",
+    description="Seconds one run of a fixed timer's work took in the replica that claimed its window, by timer and by how the run ended.",
+    explicit_bucket_boundaries_advisory=[0.05, 0.25, 1.0, 5.0, 15.0, 60.0, 150.0, 300.0, 600.0, 1800.0, 3600.0],
+)
 _last_claimed = _meter.create_gauge(
     "timer.last_claimed",
     unit="s",
@@ -198,6 +206,7 @@ class Timer:
             if not asked.ran_here:
                 self._elsewhere()
             return self._ended(Outcome.ELSEWHERE, asked.window, asked.until_next)
+        started = monotonic()
         try:
             await self._work()
         except Exception:
@@ -205,6 +214,7 @@ class Timer:
             outcome = Outcome.FAILED
         else:
             outcome = Outcome.RAN
+        _work_duration.record(monotonic() - started, {"timer": self.name, "outcome": outcome.value})
         return self._ended(outcome, asked.window, asked.until_next - (monotonic() - began))
 
     def _ended(self, outcome: Outcome, window: datetime | None, wait: float) -> Turn:

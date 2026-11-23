@@ -18,7 +18,7 @@ from typing import Any, NoReturn
 import pytest
 from botocore.exceptions import ClientError
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
+from opentelemetry.sdk.metrics.export import HistogramDataPoint, InMemoryMetricReader, NumberDataPoint
 
 from lakehouse import timers
 from lakehouse.storage import conditional_records
@@ -183,6 +183,31 @@ async def test_work_that_fails_keeps_the_timer_and_runs_again_next_window(tmp_pa
 
     assert (failed.outcome, again.outcome) == (Outcome.FAILED, Outcome.FAILED)
     assert ran == ["pod-1", "pod-1"]
+
+
+@pytest.mark.asyncio
+async def test_each_run_of_a_timers_work_is_timed_by_timer_and_by_how_it_ended(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A turn that ran no work (another replica's window) records no time: the histogram's count is the work's runs."""
+    reader = InMemoryMetricReader()
+    histogram = MeterProvider(metric_readers=[reader]).get_meter("lance.timers").create_histogram("timer.work.duration", unit="s")
+    monkeypatch.setattr(timers, "_work_duration", histogram)
+    ran: list[str] = []
+
+    outcomes = [
+        (await _replica(tmp_path, ran, name="relay", holder="pod-1").turn()).outcome,
+        (await _replica(tmp_path, ran, name="relay", holder="pod-2").turn()).outcome,
+        (await _replica(tmp_path, ran, name="reclaim", holder="pod-1", fails=True).turn()).outcome,
+    ]
+
+    assert outcomes == [Outcome.RAN, Outcome.ELSEWHERE, Outcome.FAILED]
+    data = reader.get_metrics_data()
+    assert data is not None
+    timed = {
+        (str((point.attributes or {})["timer"]), str((point.attributes or {})["outcome"])): (point.count, point.sum >= 0)
+        for point in data.resource_metrics[0].scope_metrics[0].metrics[0].data.data_points
+        if isinstance(point, HistogramDataPoint)
+    }
+    assert timed == {("relay", "ran"): (1, True), ("reclaim", "failed"): (1, True)}
 
 
 @pytest.mark.asyncio

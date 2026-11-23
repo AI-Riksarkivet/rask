@@ -332,7 +332,10 @@ read-only window holds every timer on purpose and does not page.
 Read the record as the store's operator (`_timers/<timer>.json` in the control bucket): `window` is when the last
 claimed window began and `by` the pod that claimed it. The same reading is in the telemetry store without touching the
 bucket: `time() - max by (timer) (timer_last_claimed_seconds)` is the age of each timer's newest window, and
-`sum by (timer, outcome) (increase(timer_turns_total[15m]))` says how each replica's turns ended.
+`sum by (timer, outcome) (increase(timer_turns_total[15m]))` says how each replica's turns ended. How long a tick
+takes is `timer_work_duration_seconds` (a histogram by timer and outcome, recorded by the replica that ran the window):
+`histogram_quantile(0.95, sum by (timer, le) (increase(timer_work_duration_seconds_bucket[6h])))` against
+`timer_period_seconds` says how much of its period a tick uses as the estate grows.
 
 **Act.** A store outage clears on its own: the first window after it is claimed and run, and every tick is
 level-triggered, so nothing is lost but time. A record that does not read as a claim is deleted by an operator at the
