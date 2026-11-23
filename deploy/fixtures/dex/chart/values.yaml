@@ -36,12 +36,24 @@ machineClients:
 console:
   clientId: rask-console
   redirectURIs: [http://localhost:8080/auth/callback, http://localhost:5173/auth/callback]
+  # Where the console's sign-out may land: its own origin's root, on each origin it is served from.
+  postLogoutRedirectURIs: [http://localhost:8080/, http://localhost:5173/]
   allowedOrigins: [http://localhost:5173]
+# The login session Dex keeps for a person who signed in ([[XC-223]]), as a platform's issuer keeps one: Dex answers
+# `prompt=none` from it (a code with no form, or `login_required` with none), reads `prompt=login`, and serves an
+# end-session endpoint that ends it and refuses a redirect its client did not register. A session is not shared between
+# clients (Dex's default). It needs Dex's `DEX_SESSIONS_ENABLED` feature flag, which the fixture sets (v2.46.1
+# `pkg/featureflags/set.go`, `cmd/dex/config.go`). The cookie is not encrypted here: its key would be a secret in a
+# values file, and the store is in memory, so a restart ends every session anyway. Dex's own defaults, stated.
+sessions:
+  absoluteLifetime: 24h
+  validIfNotUsedFor: 1h
 # A client release's own sign-in clients, each an entry keyed by its client id ([[XC-221]]): `<id>: {secret,
 # redirectURIs}`, or `<id>: {public: true, redirectURIs}` for a browser app that holds no secret and signs in with PKCE
 # (S256, which this Dex enforces). A map, so the values files of several repositories merge: a list would replace every
 # other file's clients. An entry's own `allowedOrigins` join the origins Dex answers CORS for, so a browser app served
-# from an origin of its own names it beside its client. A person signs in to that
+# from an origin of its own names it beside its client, and its `postLogoutRedirectURIs` are where its sign-out may
+# land. A person signs in to that
 # client through it, and the audience client trusts it, so the person's token is issued for the lakehouse. A public
 # client's residual is this fixture's: Dex serves the password grant to every client (`oauth2.grantTypes` is global, and
 # a client has no grant list of its own), so anyone holding a public client's id may trade a password at /token for a

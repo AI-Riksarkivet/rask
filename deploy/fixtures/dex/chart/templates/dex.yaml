@@ -25,6 +25,9 @@ data:
       {{- with $origins | uniq }}
       allowedOrigins: {{ toJson . }}
       {{- end }}
+    sessions:
+      absoluteLifetime: {{ required "sessions.absoluteLifetime is how long a login session lasts at most" .Values.sessions.absoluteLifetime | quote }}
+      validIfNotUsedFor: {{ required "sessions.validIfNotUsedFor is how long an unused login session stays valid" .Values.sessions.validIfNotUsedFor | quote }}
     oauth2:
       skipApprovalScreen: true
       passwordConnector: local
@@ -71,6 +74,7 @@ data:
         name: Console
         public: true
         redirectURIs: {{ required "console.redirectURIs names the console's callbacks: Dex accepts any loopback, out-of-band or device redirect for a public client with none" .Values.console.redirectURIs | toJson }}
+        postLogoutRedirectURIs: {{ required "console.postLogoutRedirectURIs names where the console's sign-out may land: Dex refuses a redirect its client did not register" .Values.console.postLogoutRedirectURIs | toJson }}
       {{- $ids := list .Values.clientId .Values.audience .Values.console.clientId }}
       {{- range .Values.machineClients }}
       {{- if has .id $ids }}{{ fail (printf "Dex client id %q is declared twice" .id) }}{{ end }}
@@ -89,6 +93,9 @@ data:
         secret: {{ required (printf "clients %q names no secret (a browser app without one is `public: true`)" $id) $client.secret | quote }}
         {{- end }}
         redirectURIs: {{ $client.redirectURIs | default list | toJson }}
+        {{- with $client.postLogoutRedirectURIs }}
+        postLogoutRedirectURIs: {{ toJson . }}
+        {{- end }}
       {{- end }}
 ---
 apiVersion: v1
@@ -127,6 +134,8 @@ spec:
         - name: dex
           image: {{ .Values.image }}
           args: ["dex", "serve", "/etc/dex/config.yaml"]
+          env:
+            - { name: DEX_SESSIONS_ENABLED, value: "true" }
           ports:
             - { name: http, containerPort: {{ .Values.port }} }
           securityContext:

@@ -86,3 +86,9 @@ def test_the_console_config_names_the_issuer_a_public_client_and_the_scopes_the_
     assert (config["scopes"], naming_env) == (["openid", *federated, f"audience:server:client_id:{audience}"], person_env)
     assert (declared[config["clientId"]].get("public"), "secret" in declared[config["clientId"]]) == (True, False)
     assert dex_config["web"].get("allowedOrigins") == ["http://localhost:5173"]
+    # The fixture keeps a login session ([[XC-223]]), as a platform's issuer does: Dex then answers `prompt=none` from
+    # it and advertises an end-session endpoint, which refuses a redirect its client did not register. The console
+    # signs out to its own origin's root (`auth.svelte.ts`), so each origin it is served from is registered.
+    [dex_env] = [env_of(container) for workload, name, container in containers(dex) if name == "dex"]
+    assert (dex_env.get("DEX_SESSIONS_ENABLED"), dex_config["sessions"]) == ("true", {"absoluteLifetime": "24h", "validIfNotUsedFor": "1h"})
+    assert declared[config["clientId"]]["postLogoutRedirectURIs"] == ["http://localhost:8080/", "http://localhost:5173/"]

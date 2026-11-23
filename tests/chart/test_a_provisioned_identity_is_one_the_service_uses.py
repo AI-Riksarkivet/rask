@@ -120,7 +120,18 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it
     one, other = tmp_path / "one.yaml", tmp_path / "other.yaml"
     one.write_text(yaml.safe_dump({"clients": {"a-client": {"secret": client["secret"], "redirectURIs": client["redirectURIs"]}}}))
     other.write_text(
-        yaml.safe_dump({"clients": {"a-browser-app": {"public": True, "redirectURIs": browser["redirectURIs"], "allowedOrigins": ["http://localhost:9999"]}}})
+        yaml.safe_dump(
+            {
+                "clients": {
+                    "a-browser-app": {
+                        "public": True,
+                        "redirectURIs": browser["redirectURIs"],
+                        "allowedOrigins": ["http://localhost:9999"],
+                        "postLogoutRedirectURIs": ["http://localhost:9999/"],
+                    }
+                }
+            }
+        )
     )
     fixture = render_fixture("dex", "-f", str(one), "-f", str(other))
     [config] = [yaml.safe_load(doc["data"]["config.yaml"]) for doc in fixture if doc.get("kind") == "ConfigMap"]
@@ -137,7 +148,8 @@ def test_the_lakehouse_doors_check_the_audience_the_idp_issues_to_the_clients_it
     assert sorted(doors) == sorted(_LAKEHOUSE_DOORS)
     assert (clients[audience].get("public", False), sorted(clients[audience].get("trustedPeers", []))) == (False, others)
     assert clients["a-client"] == {"name": "a-client", **client}
-    assert clients["a-browser-app"] == {"name": "a-browser-app", **browser}
+    # A client that names where its sign-out may land has it registered; one that names none registers none.
+    assert clients["a-browser-app"] == {"name": "a-browser-app", **browser, "postLogoutRedirectURIs": ["http://localhost:9999/"]}
     assert config["web"]["allowedOrigins"] == ["http://localhost:5173", "http://localhost:9999"]
     assert (sorted(clients["rask-web"]), config["oauth2"]["pkce"]) == (["id", "name", "secret"], {"enforce": True, "codeChallengeMethodsSupported": ["S256"]})
 
