@@ -269,13 +269,15 @@ class MaintenanceQueue(BaseSettings):
 class MaintenanceSettings(SignatureDoorSettings, MaintenanceStore, MaintenanceCatalogDoor, MaintenanceQueue, BaseSettings):
     """Config for the maintenance service + its S3 access to the lakehouse buckets."""
 
-    # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
+    # `validate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
     # every alias below silently gained an un-namespaced twin (a field named `address` would
     # answer to whatever $ADDRESS another program in the pod exports). `env_prefix` redirects that fallback onto the
     # namespace the aliases already declare; an explicit alias bypasses it, so the
     # deliberately-bare ones (RASK_SIGNING_IDENTITY) still land.
     # See tests/unit/test_settings_env_namespace.py.
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="MAINTENANCE_", alias_generator=env_alias("MAINTENANCE"), extra="ignore")
+    model_config = SettingsConfigDict(
+        validate_by_name=True, validate_by_alias=True, env_prefix="MAINTENANCE_", alias_generator=env_alias("MAINTENANCE"), extra="ignore"
+    )
 
     # #102: the shared Lance session's cache caps. Defaults sized for the pod tier (512Mi limit —
     # Lance's own defaults are 1 GiB metadata + 6 GiB index PER OPEN, which is the defect).

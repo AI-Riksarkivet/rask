@@ -60,7 +60,7 @@ JWKS_PATH: Final = "/openid/v1/jwks"
 class IssuerMirrorSettings(BaseSettings):
     """Where the issuer is, how the mirror authenticates to it, and the URL verifiers reach the mirror by."""
 
-    model_config = SettingsConfigDict(frozen=True, populate_by_name=True)
+    model_config = SettingsConfigDict(frozen=True, validate_by_name=True, validate_by_alias=True)
 
     issuer: str = Field(alias="RASK_ISSUER_MIRROR_ISSUER")
     public_url: str = Field(alias="RASK_ISSUER_MIRROR_PUBLIC_URL")

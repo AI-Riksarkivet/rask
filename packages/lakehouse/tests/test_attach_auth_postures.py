@@ -36,7 +36,7 @@ from lakehouse.process.supervision import Supervisor
 class _ServiceSettings(GovernedAuthSettings, BaseSettings):
     """A service's settings as each service composes them: the estate's auth mixins on a settings base."""
 
-    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+    model_config = SettingsConfigDict(validate_by_name=True, validate_by_alias=True, extra="ignore")
 
 
 #: A person issuer reached in-cluster at its own discovery URL, and the OpenFGA the store is looked up on.

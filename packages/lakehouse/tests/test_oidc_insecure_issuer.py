@@ -41,7 +41,7 @@ class _Governed(BaseSettings, GovernedAuthSettings):
     than of whichever service happened to be imported.
     """
 
-    model_config = SettingsConfigDict(populate_by_name=True, extra="ignore")
+    model_config = SettingsConfigDict(validate_by_name=True, validate_by_alias=True, extra="ignore")
 
 
 def _settings(**over: object) -> _Governed:

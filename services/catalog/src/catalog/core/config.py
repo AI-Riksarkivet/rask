@@ -69,7 +69,7 @@ class LanceSessionCaps(BaseSettings):
     estate keeps finding, and the aliases stay the single spelling operators already set.
     """
 
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", extra="ignore")
+    model_config = SettingsConfigDict(validate_by_name=True, validate_by_alias=True, env_prefix="LANCE_", extra="ignore")
 
     #: The bounded Lance caches this process is willing to hold (#102 / [[LH-096]]). Lance's own defaults
     #: are 1 GiB metadata + 6 GiB index, which dwarf the 512 Mi limit every lakehouse pod runs under —
@@ -134,7 +134,7 @@ class CatalogReadBounds(BaseSettings):
     must follow `resources.limits.memory` and the store's latency, which a literal cannot.
     """
 
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", extra="ignore")
+    model_config = SettingsConfigDict(validate_by_name=True, validate_by_alias=True, env_prefix="LANCE_", extra="ignore")
 
     #: Object-store call bounds, in TWO PLANES (`lakehouse.storage.objectfs.StoreTimeouts` holds the
     #: measurements). object_store's request timeout covers the WHOLE request, body included, so one
@@ -511,13 +511,13 @@ class Settings(
     `SignatureDoorSettings` (`RASK_SIGNATURE_DOORS`, `RASK_CONTROL_SIGNER_ROLES`): the control lane in
     `api/control_lane.py` verifies each event against them before it acts ([[CTL-32]])."""
 
-    # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
+    # `validate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
     # every alias below silently gained an un-namespaced twin (a field named `address` would
     # answer to whatever $ADDRESS another program in the pod exports). `env_prefix` redirects that fallback onto the
     # namespace the aliases already declare; an explicit alias bypasses it, so the
     # deliberately-bare ones (RASK_SIGNING_IDENTITY) still land.
     # See tests/unit/test_settings_env_namespace.py.
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LANCE_", alias_generator=env_alias("LANCE"), extra="ignore")
+    model_config = SettingsConfigDict(validate_by_name=True, validate_by_alias=True, env_prefix="LANCE_", alias_generator=env_alias("LANCE"), extra="ignore")
 
     #: The bus this process is named and the user it connects to it as (`lakehouse.events.bus`), read with the rest of the
     #: settings, so the connection the lifespan opens is the one the emission checks below were made about.

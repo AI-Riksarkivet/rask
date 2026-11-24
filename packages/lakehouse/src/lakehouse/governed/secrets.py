@@ -167,7 +167,7 @@ class SecretStoreSettings(BaseSettings):
     renders and what a test sets. A session keeps the settings it was opened with.
     """
 
-    # NO `populate_by_name`: it would teach the env source the bare field name as a second variable for each field
+    # NO `validate_by_name`: it would teach the env source the bare field name as a second variable for each field
     # (`tests/unit/test_settings_env_namespace.py`), and nothing builds this by field name.
     model_config = SettingsConfigDict(extra="ignore")
 

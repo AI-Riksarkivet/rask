@@ -41,7 +41,7 @@ class Signing(BaseSettings):
     instead of silently skipping the check.
     """
 
-    model_config = SettingsConfigDict(frozen=True, extra="ignore", populate_by_name=True)
+    model_config = SettingsConfigDict(frozen=True, extra="ignore", validate_by_name=True, validate_by_alias=True)
 
     signers: frozenset[str] = Field(default=frozenset(), alias="LINEAGE_SIGNERS")
     delegators: frozenset[str] = Field(default=frozenset(), alias="LINEAGE_DELEGATORS")
@@ -157,13 +157,15 @@ class LineageRelay(BaseSettings):
 class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, LineageForward, LineageDelivery, LineageRelay, BaseSettings):
     """Config for the lineage service, the catalog that keeps its tables, and its auth gate."""
 
-    # `populate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
+    # `validate_by_name` also teaches the env source the bare FIELD NAME as a second lookup, so
     # every alias below silently gained an un-namespaced twin (a field named `address` would
     # answer to whatever $ADDRESS another program in the pod exports). `env_prefix` redirects that fallback onto the
     # namespace the aliases already declare; an explicit alias bypasses it, so the
     # deliberately-bare ones (RASK_CATALOG_IDENTITY_TOKEN_FILE) still land.
     # See tests/unit/test_settings_env_namespace.py.
-    model_config = SettingsConfigDict(populate_by_name=True, env_prefix="LINEAGE_", alias_generator=env_alias("LINEAGE"), extra="ignore")
+    model_config = SettingsConfigDict(
+        validate_by_name=True, validate_by_alias=True, env_prefix="LINEAGE_", alias_generator=env_alias("LINEAGE"), extra="ignore"
+    )
 
     # --- The catalog that keeps the feed and the edge list (ADR 0158) ---------------------------------
     #: The catalog's base URL. The feed, the edge list and the outbox refusals are Lance tables it governs, and
