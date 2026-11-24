@@ -14,6 +14,7 @@ supervisor ends the process. Driven against the real apps with their lifespans r
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import uuid
@@ -214,6 +215,19 @@ def _held_tries(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, tri
     return partial(portal.call, run)
 
 
+def _the_apps_own_run_has_ended(real_ns_client: TestClient) -> None:
+    """Wait for the estate-namespaces run the app's lifespan started as a background task of that name."""
+    portal = real_ns_client.portal
+    assert portal is not None
+
+    async def ended() -> None:
+        async with asyncio.timeout(30):
+            while any(task.get_name() == "estate-namespaces" and not task.done() for task in asyncio.all_tasks()):
+                await asyncio.sleep(0.01)
+
+    portal.call(ended)
+
+
 def _provenance_uuid(settings: Settings) -> str:
     properties = connect("dir", {"root": settings.root}).describe_namespace(DescribeNamespaceRequest(id=["lance_catalog", "provenance"])).properties or {}
     return properties["rask.uuid"]
@@ -322,6 +336,9 @@ def test_the_estate_namespaces_task_counts_a_failed_try_by_whether_a_dependency_
             raise raised
         keep(ns, warehouse_id)
 
+    # The app runs this task once at its own start, in the background: only once that run has ended is every call
+    # counted below this test's.
+    _the_apps_own_run_has_ended(real_ns_client)
     monkeypatch.setattr(warehouses, "ensure_catalog_row", failing_once)
     tries = _Tries()
     task = _held_tries(real_ns_client, monkeypatch, tries)
