@@ -592,6 +592,34 @@ test('deleting a branch asks first, then posts (#74/#113)', async ({ page }) => 
 		.toEqual({ name: 'dev' });
 });
 
+test('a deleted branch the catalog keeps is listed with its deadline and restored (ADR 0229)', async ({
+	page,
+}) => {
+	await seed(page, {
+		[`POST /management/v1/table/${TABLE}/branches/deleted/list`]: {
+			branches: [
+				{
+					name: 'team/work',
+					parent_branch: null,
+					parent_version: 2,
+					deleted_at: '2026-11-24T12:00:00Z',
+					expires_at: '2026-11-25T12:00:00Z',
+				},
+			],
+		},
+		[`POST /management/v1/table/${TABLE}/branches/restore`]: { restored: ['team/work'] },
+	});
+	await page.goto('/catalog/tables/db1%24t');
+	await openHistory(page);
+	const kept = page.getByRole('list', { name: 'Deleted branches' }).getByRole('listitem');
+	await expect(kept).toContainText('team/work');
+	await expect(kept).toContainText('kept until 2026-11-25 12:00:00 UTC');
+	await kept.getByRole('button', { name: 'restore branch team/work' }).click();
+	await expect
+		.poll(() => bodyOf(page, `/management/v1/table/${TABLE}/branches/restore`))
+		.toEqual({ name: 'team/work' });
+});
+
 test('surfaces the Lance file format badge (#78)', async ({ page }) => {
 	await page.goto('/catalog/tables/db1%24t');
 	const stats = page.locator('section', { hasText: 'Stats' }).first();

@@ -1786,6 +1786,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/table/{id}/branches/deleted/list": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * List Deleted Table Branches
+         * @description List the table's branches a recoverable delete keeps, each with when it is deleted for good ([[LH-603]]).
+         *
+         *     A metadata read (``can_get_metadata``), as the branch listing is. One past its deadline is left out, as a restore of it
+         *     is refused. It names who deleted none of them: that is in the
+         *     audit trail. A table no uuid identifies keeps none.
+         */
+        post: operations["list_deleted_table_branches_management_v1_table__id__branches_deleted_list_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/table/{id}/branches/restore": {
         parameters: {
             query?: never;
@@ -6743,6 +6767,28 @@ export interface components {
             tuples_revoked: number;
         };
         /**
+         * DeletedTableBranch
+         * @description One branch a recoverable delete keeps.
+         */
+        DeletedTableBranch: {
+            /**
+             * Deleted At
+             * Format: date-time
+             */
+            deleted_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Name */
+            name: string;
+            /** Parent Branch */
+            parent_branch: string | null;
+            /** Parent Version */
+            parent_version: number;
+        };
+        /**
          * DeregisterTableRequest
          * @description The table content remains available in the storage.
          */
@@ -8028,6 +8074,14 @@ export interface components {
             page_token?: string | null;
             /** Project */
             project: string;
+        };
+        /**
+         * ListDeletedTableBranchesResponse
+         * @description The table's deleted branches that can still be restored, by name.
+         */
+        ListDeletedTableBranchesResponse: {
+            /** Branches */
+            branches: components["schemas"]["DeletedTableBranch"][];
         };
         /**
          * ListNamespacesResponse
@@ -13609,6 +13663,49 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    list_deleted_table_branches_management_v1_table__id__branches_deleted_list_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListDeletedTableBranchesResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

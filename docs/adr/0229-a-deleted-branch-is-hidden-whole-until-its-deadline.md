@@ -64,6 +64,8 @@ snapshots stay until expiry, so the head is recoverable there until then.
   be deleted: that delete answers 409 naming the hidden branch and its deadline.
 - A control-root backup holds the records and not the tables' bytes. A record restored for a branch that has since been
   created again is a hide that never finished, and its branch stands.
-- No door lists a table's hidden branches, and the console has no restore control: a restore names the branch.
+- `POST /management/v1/table/{id}/branches/deleted/list` (a metadata read) lists the branches a restore can bring
+  back, each with the version it was cut from and its deadline, and the console's refs panel lists them with a restore
+  control (LH-603). It names who deleted none of them: that is in the audit trail.
 - The timer is covered by the alerts every timer has (`LakehouseTimerStopped`, `LakehouseTimerFailing`); a branch one
   pass cannot delete is logged (`hidden_branch_not_purged`), counted on `catalog.branch_trash.failed` and tried again.

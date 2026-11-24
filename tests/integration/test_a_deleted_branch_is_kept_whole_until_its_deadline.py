@@ -205,6 +205,30 @@ def test_a_deleted_branch_past_its_deadline_is_not_restored_before_it_is_deleted
         assert (restored.status_code, restored.json()["code"]) == (409, 19)
 
 
+@pytest.mark.parametrize(
+    ("asked_at", "listed"),
+    [
+        pytest.param(datetime(2026, 11, 25, 11, 59, tzinfo=UTC), [_BRANCH], id="inside its deadline"),
+        pytest.param(datetime(2026, 11, 25, 12, tzinfo=UTC), [], id="at its deadline, where a restore is refused"),
+    ],
+)
+def test_a_tables_deleted_branches_are_listed_until_their_deadline(
+    asked_at: datetime, listed: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from catalog.api.dependencies import get_clock
+    from catalog.main import app
+
+    with _a_table_with_a_branch_holding_a_commit(tmp_path, monkeypatch) as catalog:
+        monkeypatch.setitem(app.dependency_overrides, get_clock, lambda: lambda: datetime(2026, 11, 24, 12, tzinfo=UTC))
+        assert catalog.post(_DELETE, json={"name": _BRANCH}).status_code == 200
+        monkeypatch.setitem(app.dependency_overrides, get_clock, lambda: lambda: asked_at)
+
+        answered = catalog.post(f"/management/v1/table/{_TABLE}/branches/deleted/list", json={})
+
+        kept = {"name": _BRANCH, "parent_branch": None, "parent_version": 1, "deleted_at": "2026-11-24T12:00:00Z", "expires_at": "2026-11-25T12:00:00Z"}
+        assert (answered.status_code, answered.json()) == (200, {"branches": [kept for _ in listed]})
+
+
 @pytest.mark.parametrize("door", ["tags/create", "tags/update", "tags/delete"])
 def test_the_tag_holding_a_deleted_branchs_cut_point_is_the_catalogs_own(door: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with _a_table_with_a_branch_holding_a_commit(tmp_path, monkeypatch) as catalog:

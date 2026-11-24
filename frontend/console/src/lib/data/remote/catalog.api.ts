@@ -341,6 +341,42 @@ export const deleteTableBranch = command(
 		post(`/v1/table/${enc(table)}/branches/delete`, { name }),
 );
 
+const DeletedBranchesSchema = mirrors<components['schemas']['ListDeletedTableBranchesResponse']>()(
+	v.object({
+		branches: v.array(
+			v.object({
+				name: v.string(),
+				parent_branch: v.nullable(v.string()),
+				parent_version: v.number(),
+				deleted_at: v.string(),
+				expires_at: v.string(),
+			}),
+		),
+	}),
+);
+export type DeletedBranch = v.InferOutput<typeof DeletedBranchesSchema>['branches'][number];
+
+/** The table's deleted branches the catalog still keeps (ADR 0229), each with when it is deleted for
+ *  good; read at `can_get_metadata`. Empty where the table's warehouse keeps no drops. */
+export const fetchDeletedBranches = query(
+	v.string(),
+	async (table): Promise<ApiResult<DeletedBranch[]>> => {
+		const answer = parsed(
+			await post(`/management/v1/table/${enc(table)}/branches/deleted/list`, {}),
+			DeletedBranchesSchema,
+		);
+		return answer.ok ? { ok: true, data: answer.data.branches } : answer;
+	},
+);
+
+/** Bring a deleted branch back with every commit made on it (owner-gated, `can_drop`). */
+export const restoreTableBranch = command(
+	({ table, name }) => `Restore branch ${name} of table ${table}`,
+	v.object({ table: v.string(), name: v.string() }),
+	async ({ table, name }): Promise<ApiResult<unknown>> =>
+		post(`/management/v1/table/${enc(table)}/branches/restore`, { name }),
+);
+
 /** #64 restore the table to a prior version. Restore mints a FRESH version pointing at the restored
  *  data (history is never rewritten); owner-gated (can_restore). */
 export const restoreTableVersion = command(

@@ -5450,6 +5450,49 @@
         "title": "DeleteWarehouseResponse",
         "type": "object"
       },
+      "DeletedTableBranch": {
+        "description": "One branch a recoverable delete keeps.",
+        "properties": {
+          "deleted_at": {
+            "format": "date-time",
+            "title": "Deleted At",
+            "type": "string"
+          },
+          "expires_at": {
+            "format": "date-time",
+            "title": "Expires At",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parent_branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Branch"
+          },
+          "parent_version": {
+            "title": "Parent Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "parent_branch",
+          "parent_version",
+          "deleted_at",
+          "expires_at"
+        ],
+        "title": "DeletedTableBranch",
+        "type": "object"
+      },
       "DeregisterTableRequest": {
         "description": "The table content remains available in the storage. ",
         "properties": {
@@ -8392,6 +8435,23 @@
           "objects"
         ],
         "title": "LabelledObjectsResponse",
+        "type": "object"
+      },
+      "ListDeletedTableBranchesResponse": {
+        "description": "The table's deleted branches that can still be restored, by name.",
+        "properties": {
+          "branches": {
+            "items": {
+              "$ref": "#/components/schemas/DeletedTableBranch"
+            },
+            "title": "Branches",
+            "type": "array"
+          }
+        },
+        "required": [
+          "branches"
+        ],
+        "title": "ListDeletedTableBranchesResponse",
         "type": "object"
       },
       "ListNamespacesResponse": {
@@ -19540,6 +19600,82 @@
         "summary": "Read Table Blob",
         "tags": [
           "data-management"
+        ]
+      }
+    },
+    "/management/v1/table/{id}/branches/deleted/list": {
+      "post": {
+        "description": "List the table's branches a recoverable delete keeps, each with when it is deleted for good ([[LH-603]]).\n\nA metadata read (``can_get_metadata``), as the branch listing is. One past its deadline is left out, as a restore of it\nis refused. It names who deleted none of them: that is in the\naudit trail. A table no uuid identifies keeps none.",
+        "operationId": "list_deleted_table_branches_management_v1_table__id__branches_deleted_list_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListDeletedTableBranchesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "List Deleted Table Branches",
+        "tags": [
+          "branch"
         ]
       }
     },

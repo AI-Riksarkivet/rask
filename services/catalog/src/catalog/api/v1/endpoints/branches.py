@@ -266,3 +266,46 @@ async def restore_table_branch(
             extra={"branch": branch.name, "restored": True, **({versions.BRANCH_IDENTIFIER_KEY: branch.identifier} if branch.identifier is not None else {})},
         )
     return RestoreTableBranchResponse(restored=[branch.name for branch in restored])
+
+
+class DeletedTableBranch(BaseModel):
+    """One branch a recoverable delete keeps."""
+
+    name: str
+    #: The branch it was cut from, ``None`` for main, and the version on it.
+    parent_branch: str | None
+    parent_version: int
+    deleted_at: datetime
+    #: When it is deleted for good; a restore is served until then.
+    expires_at: datetime
+
+
+class ListDeletedTableBranchesResponse(BaseModel):
+    """The table's deleted branches that can still be restored, by name."""
+
+    branches: list[DeletedTableBranch]
+
+
+@management_router.post("/{id}/branches/deleted/list")
+async def list_deleted_table_branches(*, id: str, table: DoorTableDep, so: StorageOptionsDep, clock: ClockDep) -> ListDeletedTableBranchesResponse:
+    """List the table's branches a recoverable delete keeps, each with when it is deleted for good ([[LH-603]]).
+
+    A metadata read (``can_get_metadata``), as the branch listing is. One past its deadline is left out, as a restore of it
+    is refused. It names who deleted none of them: that is in the
+    audit trail. A table no uuid identifies keeps none.
+    """
+    if table.resolved.uuid is None:
+        return ListDeletedTableBranchesResponse(branches=[])
+    kept = await run_in_threadpool(partial(refs.deleted_branches, table, so, now=clock()))
+    return ListDeletedTableBranchesResponse(
+        branches=[
+            DeletedTableBranch(
+                name=hidden.name,
+                parent_branch=hidden.parent_branch,
+                parent_version=hidden.parent_version,
+                deleted_at=datetime.fromisoformat(hidden.dropped_at),
+                expires_at=datetime.fromisoformat(hidden.expires_at),
+            )
+            for hidden in kept
+        ]
+    )

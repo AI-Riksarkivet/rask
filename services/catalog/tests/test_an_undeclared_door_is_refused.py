@@ -273,7 +273,8 @@ def judged(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 #: must reach the write judge (ADR 0160): a door is a write until this list says otherwise.
 _READ_DOORS: frozenset[tuple[str, str]] = frozenset(
     {
-        *((suffix, "") for suffix in ("access/my-permissions", "analyze_plan", "blobs", "branches/list", "changes", "count_rows", "credentials")),
+        *((suffix, "") for suffix in ("access/my-permissions", "analyze_plan", "blobs", "branches/deleted/list", "branches/list", "changes")),
+        *((suffix, "") for suffix in ("count_rows", "credentials")),
         *(
             (suffix, "")
             for suffix in ("describe", "exists", "explain_plan", "history", "index/list", "index/{index_name}/stats", "labels/describe", "policy/describe")

@@ -1,18 +1,22 @@
 <script lang="ts">
 	// A table's refs as Lance has them, under its commit log (#113): its branches (create from a version,
-	// delete) and its tags (move to another version, delete). Both deletes are destructive and ask first.
+	// delete) and its tags (move to another version, delete). Both deletes ask first. Under the branches
+	// it lists the deleted ones the catalog still keeps (ADR 0229), each with a restore.
 	// Its drafts, armed confirms and the one write in flight are its own; a landed write asks the page to
 	// read its aggregate again, which is where the tags and branches come from.
 	import { Button } from '@riksarkivet/ui/button';
 	import { Input } from '@riksarkivet/ui/input';
 	import { Select } from '@riksarkivet/ui/select';
 	import type { CatalogResult } from './catalog';
+	import { formatZoned } from '@riksarkivet/ui/utils';
 	import { fmtBytes } from './history';
 	import {
 		createTableBranch,
 		deleteTableBranch,
 		deleteTableTag,
+		fetchDeletedBranches,
 		moveTableTag,
+		restoreTableBranch,
 	} from './remote/catalog.api';
 
 	let {
@@ -38,16 +42,24 @@
 	let newBranch = $state('');
 	let newBranchFrom = $state('');
 
+	// A read that fails shows no list: the branches above are the page's, and this one is extra.
+	const deletedRead = $derived(fetchDeletedBranches(table));
+	const deleted = $derived(deletedRead.current?.ok ? deletedRead.current.data : []);
+
 	async function refDo(fn: () => Promise<CatalogResult<unknown>>): Promise<void> {
 		if (refBusy) return;
 		refBusy = true;
 		refError = null;
+		// The read of the table the write was for: the page may show another by the time it is answered.
+		const kept = deletedRead;
 		try {
 			const res = await fn();
 			if (res.ok) onchange();
 			else if (res.status === 401) refError = 'Sign in to manage tags & branches.';
 			else if (res.status === 403) refError = 'Denied: managing refs needs writer/owner access.';
 			else refError = res.detail;
+			// A refused restore (already restored, or past its deadline) changes what is kept too.
+			if (res.ok || res.status === 404 || res.status === 409) void kept.refresh();
 		} finally {
 			refBusy = false;
 			refConfirm = null;
@@ -106,6 +118,24 @@
 		</span>
 	{/each}
 </div>
+{#if deleted.length > 0}
+	<ul class="deleted" aria-label="Deleted branches">
+		{#each deleted as kept (kept.name)}
+			<li>
+				<span class="mono">{kept.name}</span>
+				<span class="mut">deleted, kept until {formatZoned(kept.expires_at)}</span>
+				<Button
+					variant="ghost"
+					size="xs"
+					aria-label="restore branch {kept.name}"
+					disabled={refBusy}
+					onclick={() => refDo(() => restoreTableBranch({ table, name: kept.name }))}
+					>restore</Button
+				>
+			</li>
+		{/each}
+	</ul>
+{/if}
 <form
 	class="row"
 	onsubmit={(e) => {
@@ -207,6 +237,17 @@
 		margin: 16px 0 6px;
 		text-transform: uppercase;
 		letter-spacing: 0.04em;
+	}
+	.deleted {
+		list-style: none;
+		margin: 0 0 8px;
+		padding: 0;
+		font-size: 12px;
+	}
+	.deleted li {
+		display: flex;
+		align-items: center;
+		gap: 8px;
 	}
 	.mut {
 		color: var(--muted-foreground);

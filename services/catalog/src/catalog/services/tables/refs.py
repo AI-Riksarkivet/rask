@@ -32,6 +32,7 @@ from lance_namespace import (
 )
 from pydantic import BaseModel, ConfigDict
 
+from catalog.core import branch_refs
 from catalog.core.lance_refusals import ref_errors
 from catalog.core.pagination import paginate
 from catalog.core.version_retention import MAIN_BRANCH, recorded_branch
@@ -39,6 +40,7 @@ from catalog.services import table_claims
 from catalog.services.tables import hidden_branches
 from catalog.services.tables.versions import BRANCH_IDENTIFIER_KEY, identifier_of
 from lakehouse.lancekit import branch_layout
+from lakehouse.records.branch_trash import HiddenBranch
 from lakehouse.records.history_fences import HistoryWork
 from lakehouse.storage.options import StorageOptions
 
@@ -522,6 +524,13 @@ def restore_branch(table: table_claims.DoorTable, so: StorageOptions, name: str,
             hidden_branches.restore(table, so, kept[inner])
             restored.append(RemovedBranch(name=inner, identifier=kept[inner].identifier))
     return restored
+
+
+def deleted_branches(table: table_claims.DoorTable, so: StorageOptions, *, now: datetime) -> list[HiddenBranch]:
+    """The table's branches a recoverable delete keeps and :func:`restore_branch` brings back at ``now``, by name: those
+    hidden and inside their deadline, which leaves out a delete that never finished and a branch being deleted for
+    good or waiting for it ([[LH-603]])."""
+    return [hidden for hidden in table.hidden_branches() if not hidden.purging and not hidden.past_deadline(now) and branch_refs.is_hidden(hidden, so)]
 
 
 def _forked_from(name: str, forks: Sequence[str]) -> InvalidTableStateError:
