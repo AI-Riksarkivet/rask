@@ -64,7 +64,7 @@ spec:
             - { name: LANCE_REQUEST_DEADLINE_SECONDS, value: {{ .Values.catalog.requestDeadlineSeconds | quote }} }
             - { name: LANCE_PROBES_PORT, value: {{ .Values.services.catalog.probesPort | quote }} }
             {{- $writes := hasKey .Values.catalog "maxConcurrentWrites" | ternary .Values.catalog.maxConcurrentWrites 16 | int }}
-            {{- /* 4 = lakehouse.records.commit_turns.THREAD_WAITERS: the threads that may wait for a commit turn. */}}
+            {{- /* 4 = lakehouse.records.commit_turns.THREAD_WAITERS, the threads that may wait for a commit turn; tests/chart holds the two equal. */}}
             {{- if or (lt $writes 1) (ge (add $writes 4) (.Values.services.catalog.requestThreads | int)) }}
             {{- fail "catalog.maxConcurrentWrites must be at least 1, and it plus the 4 threads that may wait for a commit turn must stay below services.catalog.requestThreads: each admitted write holds a request thread while it commits, so writers would hold every thread and reads wait" }}
             {{- end }}
