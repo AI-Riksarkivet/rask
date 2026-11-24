@@ -72,8 +72,9 @@ Since 2026-11-14 (XC-199 step D4) a body that is no event envelope reaches linea
 So: **a service going down delays the pipeline; it does not lose or corrupt data.** A transient dependency failure is
 asked for again by the lane that met it, on the numbers that lane names (`lakehouse.events.bus_delivery.judged`):
 
-- **Lineage** handles a delivery up to `services.lineage.delivery.attempts` (5) times, `retrySeconds` (120) apart, so it
-  rides out an outage of 8 minutes. A handling that raises, or runs past the consumer's ack wait (`ackWaitSeconds`,
+- **Lineage** handles a delivery up to `services.lineage.delivery.attempts` (16) times, `retrySeconds` (120) apart, so it
+  rides out an outage of 30 minutes: longer than the secret-store outage a signer rides (one login lease of 15 minutes
+  and a 300 s re-read of its key, ADR 0203), which the render holds it to (LH-605). A handling that raises, or runs past the consumer's ack wait (`ackWaitSeconds`,
   300) less the 10 s kept for its settle, counts as asked for again. On its last attempt the delivery is parked (gap 2).
 - **The maintenance worker** hands an announcement it cannot settle back with a delay drawn at random up to a bound
   that doubles with each delivery, and ends it on its `maintenance.queue.maxDeliver`-th (10): the table's recheck

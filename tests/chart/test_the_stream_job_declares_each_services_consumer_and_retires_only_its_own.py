@@ -54,7 +54,7 @@ def test_the_job_declares_the_consumers_the_services_bind_to_and_its_retire_phas
 
 
 _EVERY_NUMBER_MOVED = (
-    *("--set", "services.lineage.delivery.attempts=7"),
+    *("--set", "services.lineage.delivery.attempts=30"),
     *("--set", "services.lineage.delivery.retrySeconds=60"),
     *("--set", "services.lineage.delivery.ackWaitSeconds=120"),
     *("--set", "services.lineage.deliveriesInFlight=32"),
@@ -64,8 +64,8 @@ _EVERY_NUMBER_MOVED = (
 @pytest.mark.parametrize(
     ("flags", "attempts", "retry_seconds", "ack_wait_seconds", "in_flight"),
     [
-        pytest.param((), 5, 120, 300, 64, id="the-shipped-numbers"),
-        pytest.param(_EVERY_NUMBER_MOVED, 7, 60, 120, 32, id="every-number-moved"),
+        pytest.param((), 16, 120, 300, 64, id="the-shipped-numbers"),
+        pytest.param(_EVERY_NUMBER_MOVED, 30, 60, 120, 32, id="every-number-moved"),
     ],
 )
 def test_lineages_consumer_is_declared_with_the_numbers_lineages_lane_is_given(

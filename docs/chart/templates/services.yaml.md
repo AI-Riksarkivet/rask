@@ -261,7 +261,9 @@ ack wait lineage cuts a handling 10 s short of is the consumer's own. `LINEAGE_D
 it cannot record is asked for again after the retry delay, and on its last attempt is parked in the provenance
 namespace's `refusals` table, from which the estate admin's replay door (`POST /admin/dlq/parked/{run_id}/replay`)
 records it. The consumer's own `max_deliver` is unlimited, so this rule is the only one that ends a delivery; nothing
-is published to a dead-letter topic. 5 attempts 120 s apart (the defaults) ride out an outage of 8 minutes. Each is
+is published to a dead-letter topic. 16 attempts 120 s apart (the defaults) ride out an outage of 30 minutes, and the
+render refuses numbers that ride out less than `openbao.identity.tokenTtl` plus 360 s, the secret-store outage a signer
+rides (LH-605). Each is
 `required`, so a release upgraded with `--reuse-values` from one without them fails the render.
 
 ## `- { name: LINEAGE_RELAY_PERIOD_SECONDS, value: {{ required "services.lineage.relay.periodSeconds is unset — up...`

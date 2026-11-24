@@ -120,11 +120,16 @@ services:
     deliveriesInFlight: 64 # @schema type: integer; minimum: 1
     # A delivery lineage cannot record (the catalog, OpenFGA or the secret store did not answer) is asked for again
     # after `retrySeconds`, and on its last attempt is parked: kept in the provenance namespace's refusals table for the
-    # estate admin's replay door, counted and logged, and ended on the bus. 5 attempts 120 s apart ride out an outage
-    # of 8 minutes. The bus holds no dead-letter topic for a pull consumer, so the park is lineage's own.
+    # estate admin's replay door, counted and logged, and ended on the bus. 16 attempts 120 s apart ride out an outage
+    # of 30 minutes. That covers the outage of the secret store the estate rides (ADR 0203): a signer keeps its key
+    # for one login lease (`openbao.identity.tokenTtl`, 15m) and one re-read of it (300 s). Lineage reads a producer's
+    # public keys again after 60 s (`lakehouse.events.published_keys`), so about a minute into such an outage it can
+    # verify no event, and every delivery waits. The render refuses numbers that fall short of that outage (LH-605;
+    # measured 2026-11-24 at 5 attempts: two events were parked 9 minutes into a seal the estate rides for 21). The
+    # bus holds no dead-letter topic for a pull consumer, so the park is lineage's own.
     delivery:
       # -- Deliveries an event is handled on before lineage parks it (LINEAGE_DELIVERY_ATTEMPTS).
-      attempts: 5 # @schema type: integer; minimum: 1
+      attempts: 16 # @schema type: integer; minimum: 1
       # -- Seconds a delivery lineage asks for again waits before the bus delivers it again (LINEAGE_DELIVERY_RETRY_SECONDS).
       retrySeconds: 120 # @schema type: integer; minimum: 0
       # -- The consumer's ack wait, in seconds: how long a delivery a dead replica held waits before another gets it. Lineage cuts a handling 10 s short of it, so the bus never delivers an event beneath a handling still running (LINEAGE_DELIVERY_ACK_WAIT_SECONDS).

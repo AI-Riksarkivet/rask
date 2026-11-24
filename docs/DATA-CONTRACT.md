@@ -137,7 +137,7 @@ makes the data contract *checkable*:
 - **NATS JetStream** guarantees at-least-once delivery on durable streams. `LINEAGE`, `CATALOG_CONTROL` and `DLQ` keep
   Limits retention for `nats.streamMaxAgeSeconds` (604,800 s, 168 h). Lineage pulls the durable consumer
   `lineage-ingest`, which the stream Job declares with a 300 s ack wait (`services.lineage.delivery.ackWaitSeconds`);
-  a delivery lineage cannot record is delivered again up to 5 times, 120 s apart, then parked in the provenance
+  a delivery lineage cannot record is delivered again up to 16 times, 120 s apart, then parked in the provenance
   namespace's `refusals` table (`lakehouse.events.bus_delivery`, `lineage.api.ingest_lane`). Nothing of the lakehouse's is
   published on `DLQ`: it holds what a subscriber outside the release parks on `dlq.<its own name>`. Maintenance's streams are work queues it reads with
   nats-py (ADR 0198): `MAINTENANCE_TASKS` holds one task per table for at most 24 h, delivered up to

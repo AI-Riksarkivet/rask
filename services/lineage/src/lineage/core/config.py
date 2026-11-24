@@ -102,7 +102,7 @@ class LineageDelivery(BaseSettings):
     #: the chart declares from the same value, so the bus hands out no more than the replicas handle.
     deliveries_in_flight: int = Field(default=64, ge=1, alias="LINEAGE_DELIVERIES_IN_FLIGHT")
     #: How many deliveries an event is handled on before it is parked, and how long one that is asked for again waits.
-    delivery_attempts: int = Field(default=5, ge=1, alias="LINEAGE_DELIVERY_ATTEMPTS")
+    delivery_attempts: int = Field(default=16, ge=1, alias="LINEAGE_DELIVERY_ATTEMPTS")
     delivery_retry_seconds: float = Field(default=120.0, ge=0, alias="LINEAGE_DELIVERY_RETRY_SECONDS")
     #: The consumer's ack wait, as the chart declares it: a handling is cut short of it, so the bus never delivers an
     #: event again beneath a handling still running.

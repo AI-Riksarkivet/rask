@@ -256,7 +256,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.lineage.appId | string | `"lineage"` | Lineage's app id: its secret-store role (`<release>-<id>`), its bus user and its OTel service. |
 | services.lineage.deliveriesInFlight | int | `64` | How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `max_ack_pending`, and each replica's bound). |
 | services.lineage.delivery.ackWaitSeconds | int | `300` | The consumer's ack wait, in seconds: how long a delivery a dead replica held waits before another gets it. Lineage cuts a handling 10 s short of it, so the bus never delivers an event beneath a handling still running (LINEAGE_DELIVERY_ACK_WAIT_SECONDS). |
-| services.lineage.delivery.attempts | int | `5` | Deliveries an event is handled on before lineage parks it (LINEAGE_DELIVERY_ATTEMPTS). |
+| services.lineage.delivery.attempts | int | `16` | Deliveries an event is handled on before lineage parks it (LINEAGE_DELIVERY_ATTEMPTS). |
 | services.lineage.delivery.retrySeconds | int | `120` | Seconds a delivery lineage asks for again waits before the bus delivers it again (LINEAGE_DELIVERY_RETRY_SECONDS). |
 | services.lineage.eventsRetentionDays | int | `7` | Days of arrival time the durable /events feed keeps, pruned on the relay tick; bounds how long a consumer's outage it survives. 0 is unbounded. |
 | services.lineage.forward.authSecret.key | string | `"api-key"` | Field of that secret the API key is under. |

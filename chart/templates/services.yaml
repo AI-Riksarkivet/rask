@@ -259,6 +259,12 @@ spec:
             {{- end }}
             - { name: RASK_LINEAGE_TOPIC, value: {{ .Values.pubsub.topic | quote }} }
             {{- $delivery := required "services.lineage.delivery is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.services.lineage.delivery }}
+            {{- /* LH-605: a signer rides a secret-store outage for one login lease and one re-read of its key (ADR 0203, 300 s,
+                   and 60 s of slack), and lineage, which reads a producer's public keys again after 60 s, verifies no delivery meanwhile and parks
+                   each on its last attempt. */}}
+            {{- $ridden := mul (sub (int $delivery.attempts) 1) (int $delivery.retrySeconds) }}
+            {{- $outage := add (include "lance.storeTokenSeconds" (list "tokenTtl" .Values.openbao.identity.tokenTtl) | int) 360 }}
+            {{- if lt $ridden $outage }}{{- fail (printf "services.lineage.delivery rides out %d s ((attempts - 1) x retrySeconds), less than the %d s the estate rides a secret-store outage (openbao.identity.tokenTtl %s, a 300 s key re-read and 60 s): lineage verifies no delivery while the store is away, and would park each one that arrived early in it. Raise attempts or retrySeconds" $ridden $outage (.Values.openbao.identity.tokenTtl | toString)) }}{{- end }}
             - { name: LINEAGE_DELIVERIES_IN_FLIGHT, value: {{ required "services.lineage.deliveriesInFlight is required" .Values.services.lineage.deliveriesInFlight | quote }} }
             - { name: LINEAGE_DELIVERY_ATTEMPTS, value: {{ required "services.lineage.delivery.attempts is required" $delivery.attempts | quote }} }
             - { name: LINEAGE_DELIVERY_RETRY_SECONDS, value: {{ required "services.lineage.delivery.retrySeconds is required" $delivery.retrySeconds | quote }} }

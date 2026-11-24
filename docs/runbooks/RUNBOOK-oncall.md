@@ -119,7 +119,7 @@ provenance tables through the catalog, retried until the catalog answers) runs *
 `lance_catalog$provenance` namespace, read and written through the catalog's doors as lineage's own principal. A background
 read of the feed table through the catalog, every 5 s within 5 s (`lakehouse.process.health`, ADR 0203), gates
 `/readyz`, which answers from that read's verdict. While it fails, every delivery is asked for again, so the bus keeps the events
-for lineage's 5 attempts, 120 s apart, and a delivery still failing on its last is parked where the estate admin can
+for lineage's 16 attempts, 120 s apart, and a delivery still failing on its last is parked where the estate admin can
 replay it ([DLQ parking](#dlq-parking--a-delivery-gave-up)). The bus, the secret store, OpenFGA and, where the outbox the relay drains is kept on it, the object
 store are reported in `components` the same way and never gate.
 
@@ -145,7 +145,8 @@ handled after its lane's last attempt.
 
 **Cause.** A pull consumer has no dead letter, so each lane ends a delivery by its own rule:
 
-- Lineage handles a delivery up to 5 times, 120 s apart (`services.lineage.delivery`), and parks it on its last
+- Lineage handles a delivery up to 16 times, 120 s apart (`services.lineage.delivery`, 30 minutes: longer than the
+  secret-store outage a signer rides, LH-605), and parks it on its last
   attempt, or at once when it refuses a named person who lacks a grant. The park keeps the delivery in the provenance
   namespace's `refusals` table under `dead_letter:<CloudEvent id>` (its feed row's key when its envelope carries no id)
   and ends it on the bus; one whose row the feed
