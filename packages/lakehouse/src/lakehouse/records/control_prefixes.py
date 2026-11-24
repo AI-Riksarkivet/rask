@@ -23,6 +23,7 @@ __all__ = [
     "ANNOUNCEMENT_INTENTS",
     "BACKUPS",
     "BASES",
+    "BRANCH_TRASH",
     "BUCKET_CLAIMS",
     "CLONE_ENDINGS",
     "COMMIT_AUTHORS",
@@ -63,6 +64,8 @@ __all__ = [
 
 # The records: one object each, the estate's governance and bookkeeping.
 TRASH: Final = "_trash"
+#: The branches a recoverable delete hid, one record a branch under its table's uuid ([[LH-429]]).
+BRANCH_TRASH: Final = "_branch_trash"
 PROJECTS: Final = "_projects"
 WAREHOUSES: Final = "_warehouses"
 #: Which project owns each bucket, one write-once claim a bucket, under the warehouse registry's own prefix.
@@ -117,6 +120,7 @@ BACKUPS: Final = "_backups"
 RECORD_PREFIXES: Final[frozenset[str]] = frozenset(
     {
         TRASH,
+        BRANCH_TRASH,
         PROJECTS,
         WAREHOUSES,
         POLICIES,

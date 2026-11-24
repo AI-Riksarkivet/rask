@@ -27,15 +27,17 @@ from lance_namespace import (
     ConcurrentModificationError,
     CreateTableVersionRequest,
     DescribeTableRequest,
+    InternalError,
     InvalidTableStateError,
     LanceNamespace,
     NamespaceNotFoundError,
     ServiceUnavailableError,
+    TableBranchNotFoundError,
     TableNotFoundError,
 )
 from pydantic import BaseModel
 
-from catalog.core import native
+from catalog.core import branch_refs, native
 from catalog.core.config import CatalogStore
 from catalog.core.namespace import open_resolved_dataset, open_resolved_dataset_unchecked
 from catalog.core.version_retention import recorded_branch
@@ -43,7 +45,7 @@ from catalog.services import contracts
 from catalog.services.object_uuids import UnidentifiedObjectError
 from lakehouse.governed import fga_ids
 from lakehouse.lancekit.base_refs import decoded_path
-from lakehouse.records import commit_records, commit_turns, file_identities, history_fences, location_claims, trash
+from lakehouse.records import branch_trash, commit_records, commit_turns, file_identities, history_fences, location_claims, trash
 from lakehouse.records.location_claims import ClaimRead, ClaimStore, LocationClaim
 from lakehouse.storage.options import StorageOptions
 
@@ -368,7 +370,52 @@ class DoorTable:
         # Asked after the open: a claim unchanged since the resolution means no other table took the location in
         # between, so the handle holds the manifest of the table the router authorized. Asked when the open fails too,
         # since a table destroyed since its resolution fails the open first, and the change is what the caller needs.
+        # Lance opens a branch's directory by name whether or not its reference file stands (measured on pylance 14.0.3),
+        # so a branch a recoverable delete hid is refused here as the missing branch it lists as.
+        if branch is not None and self.is_hidden(branch, so):
+            raise TableBranchNotFoundError(f"branch {branch!r} not found")
         return _checked(lambda: opener(self.location, so, self.segments, version=version, branch=branch), self.require_held)
+
+    def hidden_branch(self, name: str) -> branch_trash.HiddenBranch | None:
+        """What a recoverable delete recorded of the branch ``name`` ([[LH-429]]), or ``None`` when it kept nothing; a
+        table no uuid identifies holds no record.
+
+        Raises:
+            ServiceUnavailableError: The store refused, or could not be reached for, the read.
+            InternalError: A record is filed for the name and does not read as one.
+        """
+        if self._resolved.uuid is None:
+            return None
+        try:
+            return branch_trash.get(self._claims.control_root, self._claims.storage_options, self._resolved.uuid, name=name)
+        except branch_trash.UnreadableHiddenBranchError as exc:
+            raise InternalError(f"what was kept of the deleted branch {name!r} cannot be read: {exc}") from exc
+        except OSError as exc:
+            raise ServiceUnavailableError(f"the object store did not answer whether branch {name!r} is hidden") from exc
+
+    def is_hidden(self, name: str, so: StorageOptions) -> bool:
+        """Whether the branch ``name`` is hidden now (:func:`catalog.core.branch_refs.is_hidden`)."""
+        hidden = self.hidden_branch(name)
+        return hidden is not None and branch_refs.is_hidden(hidden, so)
+
+    def hidden_branches(self) -> list[branch_trash.HiddenBranch]:
+        """Everything a recoverable delete recorded of the table's branches.
+
+        Raises:
+            InternalError: A record of the table does not read as one.
+        """
+        try:
+            return branch_trash.of_table(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid())
+        except branch_trash.UnreadableHiddenBranchError as exc:
+            raise InternalError(f"what was kept of this table's deleted branches cannot be read: {exc}") from exc
+
+    def file_hidden_branch(self, hidden: branch_trash.HiddenBranch) -> None:
+        """Record that ``hidden`` is hidden, before its reference file goes."""
+        branch_trash.file(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), hidden=hidden)
+
+    def end_hidden_branch(self, name: str) -> None:
+        """Forget that the branch ``name`` was hidden, once it is restored or deleted for good."""
+        branch_trash.end(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), name=name)
 
     @contextmanager
     def history_held(self, work: history_fences.HistoryWork) -> Generator[None]:

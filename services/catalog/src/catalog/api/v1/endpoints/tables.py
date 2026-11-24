@@ -99,7 +99,7 @@ from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import protections, table_bases, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, Evidence, NameResolves, TrashedUnder, Unregistered
 from catalog.services.table_claims import DoorTable, ResolvedTable
-from catalog.services.tables import creation, reads, refs, registering, rename, retirement, schema, writes
+from catalog.services.tables import creation, hidden_branches, reads, refs, registering, rename, retirement, schema, writes
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent, ControlAction
 from lakehouse.events.lineage_events import DatasetUuids
@@ -954,6 +954,12 @@ async def deregister_table(
     detached_event = _table_event(context.token, gone, action="table_deregistered", table_uuid=table_uuid, name=canonical, extra={}, named_by=known)
     async with announcer.announcing(door="deregister_table", target=fga_ids.table_object(table_uuid), announcements=[detached, detached_event]) as filing:
         response = await retirement.detach(ns, context.settings, table, segments=segments)
+        # The detach leaves the table's bytes, and the records end next, so a branch a recoverable delete hid is deleted
+        # for good here ([[LH-429]]): left behind, its directory and the catalog's tag would stand with nothing to end
+        # them. A purge that fails keeps its records, which the deadline's timer works from.
+        await run_in_threadpool(
+            hidden_branches.purge_all, table_claims.claim_store(context.settings), context.settings.storage_options(plane="data"), table_uuid
+        )
         # The table leaves governance, so what was kept for it under its uuid goes.
         await run_in_threadpool(object_records.end_object_records, context.settings.registry_root, context.settings.storage_options(), "table", uuid=table_uuid)
         # Record the detach as lineage — asymmetric with drop (which deletes data), deregister only detaches, so without

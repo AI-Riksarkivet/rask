@@ -221,6 +221,8 @@ ignore_imports =
     lakehouse.records.clone_sources -> lakehouse.lancekit.transactions
     lakehouse.records.clone_sources -> lakehouse.storage.objectfs
     lakehouse.records.clone_sources -> lakehouse.storage.options
+    lakehouse.records.branch_trash -> lakehouse.storage.options
+    lakehouse.records.branch_trash -> lakehouse.storage.stored_objects
     lakehouse.records.clone_sources -> lakehouse.storage.stored_objects
     lakehouse.records.commit_records -> lakehouse.storage.conditional_records
     lakehouse.records.commit_records -> lakehouse.storage.options

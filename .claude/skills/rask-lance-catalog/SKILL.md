@@ -1560,6 +1560,22 @@ governing their data. The project-scoped surface is the console's project page, 
   forked from one; every reclaim (expiry's `nested_branch` gate,
   `maintenance/run`, `version/delete`) refuses a branch with another inside it; and a table's pass lists its
   branches from its refs (`table_pass._datasets_of`, `branches.list()`), never by walking `tree/`.
+- **A deleted branch is hidden whole until its deadline** ([[LH-429]], ADR 0229). Where the table's warehouse keeps
+  drops for a while (its delete profile, else `LANCE_TRASH_GRACE_DAYS`), `branches/delete` files a record
+  (`lakehouse.records.branch_trash`, `_branch_trash/<table uuid>/`) holding the reference file's text, tags the version
+  the branch was cut from (`rask.trash.<digest>`, refused at the tag doors as `rask.clone.*` is), and only then deletes
+  the reference file (`tables.hidden_branches.hide`; the file's name is `branch_layout.ref_file_name`). Lance's own
+  delete removes `tree/<branch>/`, and a branch recreated where it was cut holds none of its commits; without the tag
+  the parent's cleanup deletes files the hidden branch reads (both measured on pylance 14.0.3; the format says nothing
+  of a directory without its reference file). A branch is hidden once its record stands and the file is gone
+  (`core.branch_refs.is_hidden`): it is refused as missing wherever a door opens a branch (`DoorTable._opened`, 404 code
+  22), and a create under its name, around it or inside it answers 409. A branch it was cut from is not deleted
+  meanwhile (409 naming it). `POST /management/v1/table/{id}/branches/restore` (`can_drop`) puts it back with each
+  hidden branch inside it, refused past the deadline. The `catalog-branch-trash` timer (`catalog.api.branch_trash`)
+  deletes each one past its deadline with Lance's own branch delete. Recording an erasure deletes every hidden branch
+  of the table at once (`hidden_branches.purge_all`), and until its release has run a branch delete on that table
+  destroys and no restore is served (`endpoints/branches._erasure_in_flight`); a deregister purges them too. Pinned by
+  `tests/integration/test_a_deleted_branch_is_kept_whole_until_its_deadline.py`.
 - **A tag names a version within ONE branch's history, so no reader takes its version alone** ([[LH-284]]). A tag
   file records `branch` beside `version` (`lance_docs/lance/format/table/branch_tag.md` § Tag File Format), branch
   histories are numbered independently, and pylance's `tags.get_version` answers the version alone (measured on pylance

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from lakehouse.records import commit_records, commit_turns, control_prefixes, file_identities, history_fences, maintenance_policies, protection
+from lakehouse.records import branch_trash, commit_records, commit_turns, control_prefixes, file_identities, history_fences, maintenance_policies, protection
 from lakehouse.records.record_store import delete_record, record_key
 from lakehouse.storage.options import StorageOptions
 
@@ -51,8 +51,9 @@ def end_object_records(control_root: str, storage_options: StorageOptions, kind:
     """Delete every record the object ``uuid`` names holds, and return the prefixes of the records that existed.
 
     A table also holds one record per stock commit whose author the catalog recorded (:mod:`commit_records`), one per
-    commit that added a file (:mod:`file_identities`) and maintenance's stamps (:func:`maintenance_policies.end_table_state`),
-    each under a directory of its uuid, which go with the rest.
+    commit that added a file (:mod:`file_identities`), maintenance's stamps (:func:`maintenance_policies.end_table_state`)
+    and one per branch a recoverable delete hid (:mod:`branch_trash`), each under a directory of its uuid, which go with
+    the rest.
     """
     ended: list[str] = []
     for prefix in OBJECT_RECORD_PREFIXES:
@@ -64,4 +65,6 @@ def end_object_records(control_root: str, storage_options: StorageOptions, kind:
         ended.append(file_identities.PREFIX)
     if kind == "table" and maintenance_policies.end_table_state(control_root, storage_options, uuid):
         ended.append(maintenance_policies.STATE_PREFIX)
+    if kind == "table" and branch_trash.end_table(control_root, storage_options, uuid):
+        ended.append(branch_trash.PREFIX)
     return ended

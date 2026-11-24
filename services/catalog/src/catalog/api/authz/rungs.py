@@ -137,6 +137,8 @@ OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
         # is what `tags/delete` and `version/delete` clear. A `can_delete_branch` would be a rung the
         # model must define and every existing owner grant would then lack.
         "branches/delete": "can_drop",
+        # Bringing a hidden branch back ([[LH-429]]) is the same authority as deleting it, as a table's undrop is its drop's.
+        "branches/restore": "can_drop",
         "tags/create": "can_create_tag",
         "tags/update": "can_update_tag",
         # DELETE completes the tag lifecycle, and it clears the owner bar because a tag pins its version against

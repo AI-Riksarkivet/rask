@@ -44,7 +44,7 @@ from catalog.core.version_retention import recorded_branch
 from catalog.services.erasure import Pin
 from lakehouse.records import control_prefixes
 from lakehouse.records.history_fences import HistoryFencedError, HistoryWork, TableHistory
-from lakehouse.records.record_store import delete_record, list_records
+from lakehouse.records.record_store import delete_record, list_every_record, list_records
 from lakehouse.storage.conditional_records import RecordChangedError, RecordMissingError, create_json, mutate_json, read_json
 from lakehouse.storage.options import StorageOptions
 
@@ -167,6 +167,16 @@ def scheduled(control_root: str, storage_options: StorageOptions, release_id: st
     """The release scheduled under ``release_id``, or None when none is (never scheduled, or already run)."""
     found = read_json(control_root, storage_options, record_key(release_id))
     return None if found is None else ReleaseRecord.model_validate(found[0])
+
+
+def stands_on(control_root: str, storage_options: StorageOptions, table_uuid: str) -> bool:
+    """Whether a release of the table ``table_uuid`` is scheduled and has not finished. A record that cannot be read
+    counts as standing, since which table it names is unknown."""
+    try:
+        releases = list_every_record(control_root, storage_options, RELEASE_PREFIX, event="erasure_release")
+    except ValueError:
+        return True
+    return any(raw.get("table_uuid", table_uuid) == table_uuid for raw in releases)
 
 
 def completion_bound(due_at: datetime, cleanup_window_days: int) -> str:

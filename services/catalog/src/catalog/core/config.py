@@ -384,6 +384,9 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: between a commit and its staging is never made and the entries doors file are never removed: the chart requires
     #: a period.
     commit_reconcile_period_seconds: float = Field(default=0, ge=0, alias="LANCE_COMMIT_RECONCILE_PERIOD_SECONDS")
+    #: Seconds between two ticks of the timer that deletes for good each hidden branch past its deadline
+    #: (`catalog/api/branch_trash.py`, [[LH-429]]). 0 = no timer, so a branch a recoverable delete hid keeps its bytes.
+    branch_trash_period_seconds: float = Field(default=0, ge=0, alias="LANCE_BRANCH_TRASH_PERIOD_SECONDS")
     #: Seconds between two walks of every claimed table for a committed version the feed lacks ([[XC-204]]): what counts a
     #: version committed past every door, which files no entry for the timer above to read. 0 = no timer.
     commit_walk_period_seconds: float = Field(default=0, ge=0, alias="LANCE_COMMIT_WALK_PERIOD_SECONDS")

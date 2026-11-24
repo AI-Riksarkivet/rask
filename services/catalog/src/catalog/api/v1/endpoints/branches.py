@@ -8,6 +8,9 @@ operations.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from datetime import datetime, timedelta
+from functools import partial
 from typing import Any
 
 from fastapi import APIRouter
@@ -17,16 +20,20 @@ from lance_namespace import (
     CreateTableBranchResponse,
     DeleteTableBranchRequest,
     DeleteTableBranchResponse,
+    InvalidTableStateError,
     ListTableBranchesRequest,
     ListTableBranchesResponse,
 )
+from pydantic import BaseModel, ConfigDict
 
-from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, StorageOptionsDep
+from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import ListLimit
 from catalog.api.security import Caller, CurrentToken
+from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
+from catalog.services import erasure_obligations, erasure_release, warehouses
 from catalog.services.table_claims import DoorTable
-from catalog.services.tables import refs, versions
+from catalog.services.tables import hidden_branches, refs, versions
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga_ids
 from lakehouse.process.supervision import is_fault
@@ -36,6 +43,7 @@ from lakehouse.storage.options import StorageOptions
 log = logging.getLogger(__name__)
 
 spec_router = APIRouter(prefix="/v1/table", tags=["branch"])
+management_router = APIRouter(prefix="/management/v1/table", tags=["branch"])
 
 
 @spec_router.post("/{id}/branches/list", response_model_exclude_none=True)
@@ -135,9 +143,16 @@ async def delete_table_branch(
     table: DoorTableDep,
     so: StorageOptionsDep,
     control: ControlEmitterDep,
+    settings: SettingsDep,
+    clock: ClockDep,
     token: CurrentToken = None,
 ) -> DeleteTableBranchResponse:
     """Delete a branch from the table — wraps the pylance ``delete_branch`` data-plane op.
+
+    Where the table's warehouse keeps what is dropped for a while (its delete profile, else ``LANCE_TRASH_GRACE_DAYS``),
+    the branch is HIDDEN for that long instead of destroyed ([[LH-429]]): no listing names it and no door opens it, and
+    ``POST /management/v1/table/{id}/branches/restore`` brings it back with every commit made on it. It is announced as
+    deleted either way, since it is gone from every reader's view.
 
     The disappearance is the half worth announcing: a console holding a branch list has no other way
     to learn the branch is gone, and a reader that polls discovers it by a failing read. So EVERY branch the
@@ -150,13 +165,43 @@ async def delete_table_branch(
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
+    hiding = await _hiding(settings, table, segments, by=token.subject if token is not None else "anonymous", now=clock())
     try:
-        removed = await run_in_threadpool(refs.delete_branch, table, so, body)
-    except refs.BranchDeleteStoppedError as stopped:
+        removed = await run_in_threadpool(partial(refs.delete_branch, table, so, body, hiding=hiding))
+    except (refs.BranchDeleteStoppedError, refs.BranchHideStoppedError) as stopped:
         await _announce_removed(control, table, segments, token=token, removed=stopped.removed)
         raise
     await _announce_removed(control, table, segments, token=token, removed=removed)
     return DeleteTableBranchResponse()
+
+
+def _erasure_in_flight(settings: Settings, table_uuid: str) -> bool:
+    """Whether an erasure of the table is recorded and not finished: an obligation no verification has settled, or a
+    release of its pins still scheduled. BLOCKING IO."""
+    root, options = settings.registry_root, settings.storage_options()
+    return bool(erasure_obligations.open_on(root, options, table_uuid)) or erasure_release.stands_on(root, options, table_uuid)
+
+
+async def _hiding(settings: Settings, table: DoorTable, segments: list[str], *, by: str, now: datetime) -> Callable[[], hidden_branches.Hiding | None] | None:
+    """How a recoverable delete of the table's branches decides, or ``None`` where every delete destroys: the table's
+    warehouse keeps nothing, or no uuid identifies the table. The decision is asked inside the delete's hold: a deadline
+    to hide until, or ``None`` while an erasure of the table is in flight, whose job and verification judge only the refs
+    that stand."""
+    table_uuid = table.resolved.uuid
+    if table_uuid is None:
+        return None
+    days = await run_in_threadpool(
+        partial(warehouses.grace_days_under, settings.registry_root, settings.storage_options(), segments, estate=settings.trash_grace_days)
+    )
+    if days <= 0:
+        return None
+
+    def decide() -> hidden_branches.Hiding | None:
+        if _erasure_in_flight(settings, table_uuid):
+            return None
+        return hidden_branches.Hiding(dropped_by=by, dropped_at=now, expires_at=now + timedelta(days=days))
+
+    return decide
 
 
 async def _announce_removed(control: ControlEmitter, table: DoorTable, segments: list[str], *, token: Caller | None, removed: list[refs.RemovedBranch]) -> None:
@@ -172,3 +217,52 @@ async def _announce_removed(control: ControlEmitter, table: DoorTable, segments:
             actor=f"user:{token.subject}" if token is not None else None,
             extra={"branch": branch.name, **({versions.BRANCH_IDENTIFIER_KEY: branch.identifier} if branch.identifier is not None else {})},
         )
+
+
+class RestoreTableBranchRequest(BaseModel):
+    """Which deleted branch to bring back."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+
+
+class RestoreTableBranchResponse(BaseModel):
+    """The branches brought back: the one named, and each deleted branch whose directory lies inside its own."""
+
+    restored: list[str]
+
+
+@management_router.post("/{id}/branches/restore")
+async def restore_table_branch(
+    *,
+    id: str,
+    body: RestoreTableBranchRequest,
+    table: DoorTableDep,
+    so: StorageOptionsDep,
+    control: ControlEmitterDep,
+    settings: SettingsDep,
+    clock: ClockDep,
+    token: CurrentToken = None,
+) -> RestoreTableBranchResponse:
+    """Bring back a branch a recoverable delete hid, with every commit made on it ([[LH-429]]).
+
+    Asks what the delete asks (``can_drop``). Refused 404 (code 22) when no deleted branch of that name is kept, and 409
+    once its deadline has passed or while an erasure of the table is in flight. Each branch brought back is announced as created, naming the incarnation it still is.
+    """
+    segments = parse_identifier(id)
+    if await run_in_threadpool(_erasure_in_flight, settings, table.resolved.require_uuid()):
+        # Its bytes may hold what the erasure removes, and the erasure deletes every hidden branch for good.
+        raise InvalidTableStateError("an erasure of this table is in flight: no deleted branch of it is restored")
+    restored = await run_in_threadpool(partial(refs.restore_branch, table, so, body.name, now=clock()))
+    for branch in restored:
+        await emit_control(
+            control,
+            action="table_branch_created",
+            object_type="table",
+            object_id=fga_ids.table_object(table.resolved.require_uuid()),
+            object_name=fga_ids.canonical_object_id(segments),
+            actor=f"user:{token.subject}" if token is not None else None,
+            extra={"branch": branch.name, "restored": True, **({versions.BRANCH_IDENTIFIER_KEY: branch.identifier} if branch.identifier is not None else {})},
+        )
+    return RestoreTableBranchResponse(restored=[branch.name for branch in restored])

@@ -47,7 +47,7 @@ from catalog.schemas import ErasureRequest, ErasureVerifyRequest
 from catalog.services import erasure, erasure_derived, erasure_obligations, erasure_release, table_claims
 from catalog.services.erasure import ErasureReport, PinRelease, SurfaceResult
 from catalog.services.erasure_obligations import ErasureObligation, ErasureObligations, ErasureObligationView, ErasureVerification
-from catalog.services.tables import versions
+from catalog.services.tables import hidden_branches, versions
 from lakehouse import derived_tables
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga_ids, fga_reads
@@ -164,7 +164,23 @@ async def erase_subject(
             ref=ref,
             version=head,
         )
+    try:
+        await _purge_hidden_branches(settings, so, table_uuid, subject=token.subject if token is not None else None)
+    except Exception as exc:  # noqa: BLE001 — the obligation stands and its trail is written; the verification purges again and settles only once it has
+        log.warning("erasure_hidden_branches_not_purged", extra={"obligation": obligation.obligation_id, "table_uuid": table_uuid, "error": str(exc)[:300]})
     return obligation.view(now, table=canonical, hidden=())
+
+
+async def _purge_hidden_branches(settings: Settings, so: StorageOptions, table_uuid: str, *, subject: str | None) -> None:
+    """Delete for good every branch of the table a recoverable delete keeps hidden ([[LH-429]]): its bytes may hold the
+    subject, no ref names them for the job or the verification to judge, and a restore would bring them back.
+
+    Raises:
+        InternalError: A record of the table does not read as one, so what it keeps is unknown.
+    """
+    purged = await run_in_threadpool(hidden_branches.purge_all, table_claims.claim_store(settings), so, table_uuid)
+    for branch in purged:
+        audit(AuditAction.ERASURE_HIDDEN_BRANCH_PURGED, AuditOutcome.SUCCESS, subject=subject, resource=fga_ids.table_object(table_uuid), branch=branch)
 
 
 @table_router.post("/{id}/erasure/{obligation_id}/verify")
@@ -216,6 +232,8 @@ async def verify_erasure(
     table_uuid = table.resolved.require_uuid()
     dataset = await run_in_threadpool(table.open, so)
     erasure_obligations.require_verifiable(obligation, table_uuid=table_uuid, location=str(dataset.uri), predicate=body.predicate)
+    # Only for a verification admitted above: one hidden since the record raced the record's own purge.
+    await _purge_hidden_branches(context.settings, so, table_uuid, subject=context.token.subject if context.token is not None else None)
     report = await run_in_threadpool(
         erasure.verify,
         dataset,

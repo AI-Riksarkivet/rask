@@ -1786,6 +1786,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/table/{id}/branches/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Restore Table Branch
+         * @description Bring back a branch a recoverable delete hid, with every commit made on it ([[LH-429]]).
+         *
+         *     Asks what the delete asks (``can_drop``). Refused 404 (code 22) when no deleted branch of that name is kept, and 409
+         *     once its deadline has passed or while an erasure of the table is in flight. Each branch brought back is announced as created, naming the incarnation it still is.
+         */
+        post: operations["restore_table_branch_management_v1_table__id__branches_restore_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/table/{id}/changes": {
         parameters: {
             query?: never;
@@ -3302,6 +3325,11 @@ export interface paths {
         /**
          * Delete Table Branch
          * @description Delete a branch from the table — wraps the pylance ``delete_branch`` data-plane op.
+         *
+         *     Where the table's warehouse keeps what is dropped for a while (its delete profile, else ``LANCE_TRASH_GRACE_DAYS``),
+         *     the branch is HIDDEN for that long instead of destroyed ([[LH-429]]): no listing names it and no door opens it, and
+         *     ``POST /management/v1/table/{id}/branches/restore`` brings it back with every commit made on it. It is announced as
+         *     deleted either way, since it is gone from every reader's view.
          *
          *     The disappearance is the half worth announcing: a console holding a branch list has no other way
          *     to learn the branch is gone, and a reader that polls discovers it by a failing read. So EVERY branch the
@@ -9226,6 +9254,22 @@ export interface components {
             transaction_id?: string | null;
         };
         /**
+         * RestoreTableBranchRequest
+         * @description Which deleted branch to bring back.
+         */
+        RestoreTableBranchRequest: {
+            /** Name */
+            name: string;
+        };
+        /**
+         * RestoreTableBranchResponse
+         * @description The branches brought back: the one named, and each deleted branch whose directory lies inside its own.
+         */
+        RestoreTableBranchResponse: {
+            /** Restored */
+            restored: string[];
+        };
+        /**
          * RestoreTableRequest
          * @description RestoreTableRequest
          */
@@ -13565,6 +13609,53 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+            /** @description Error */
+            default: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/problem+json": components["schemas"]["ProblemDetails"];
+                };
+            };
+        };
+    };
+    restore_table_branch_management_v1_table__id__branches_restore_post: {
+        parameters: {
+            query?: {
+                /** @description Identifier separator. Must match the server's, which is returned in the refusal when it does not. */
+                delimiter?: string | null;
+            };
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RestoreTableBranchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RestoreTableBranchResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

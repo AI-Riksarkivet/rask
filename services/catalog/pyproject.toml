@@ -75,6 +75,7 @@ containers = ["catalog.services.tables"]
 layers = [
     "writes | schema | rename | retirement | registering",
     "commits | creation | destroy | reads | refs",
+    "hidden_branches",
     "versions",
 ]
 exhaustive = true

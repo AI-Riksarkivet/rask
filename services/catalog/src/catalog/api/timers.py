@@ -14,7 +14,7 @@ from functools import partial
 from fastapi import FastAPI
 from pydantic import BaseModel, ConfigDict
 
-from catalog.api import commit_reconcile, control_relay, declaration_converge, erasure_release, manifest_reclaim
+from catalog.api import branch_trash, commit_reconcile, control_relay, declaration_converge, erasure_release, manifest_reclaim
 from catalog.api.ticks import Tick
 from catalog.core.config import Settings
 from lakehouse.events import outbox_metrics
@@ -53,6 +53,7 @@ def catalog_timers(settings: Settings) -> dict[str, CatalogTimer]:
         "catalog-erasure-release": CatalogTimer(period=settings.erasure_release_period_seconds, tick=erasure_release.tick),
         "catalog-commit-reconcile": CatalogTimer(period=settings.commit_reconcile_period_seconds, tick=commit_reconcile.tick),
         "catalog-commit-walk": CatalogTimer(period=settings.commit_walk_period_seconds, tick=commit_reconcile.walk),
+        "catalog-branch-trash": CatalogTimer(period=settings.branch_trash_period_seconds, tick=branch_trash.tick),
         "catalog-manifest-reclaim": CatalogTimer(period=settings.manifest_reclaim_period_seconds, tick=manifest_reclaim.tick),
         "catalog-declaration-converge": CatalogTimer(period=settings.declaration_converge_period_seconds, tick=declaration_converge.tick),
     }

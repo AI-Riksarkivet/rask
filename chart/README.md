@@ -64,6 +64,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | backups.volumeSnapshot.kubectlImage | string | `"alpine/k8s:1.31.3"` | Image the snapshot job runs; it needs both a shell and kubectl. |
 | backups.volumeSnapshot.schedule | string | `"0 3 * * *"` | Cron schedule of the volume snapshot (default daily 03:00). |
 | backups.volumeSnapshot.snapshotClassName | string | `""` | VolumeSnapshotClass the snapshot names; empty uses the cluster default. |
+| catalog.branchTrash.periodSeconds | int | `3600` | Seconds between two ticks of the timer that deletes for good each hidden branch past its deadline (`LANCE_BRANCH_TRASH_PERIOD_SECONDS`). |
 | catalog.commitReconcile.graceSeconds | int | `600` | Seconds a committed version waits before the reconciler looks for its announcement (LANCE_COMMIT_RECONCILE_GRACE_SECONDS): longer than the inline publish and the outbox relay take to deliver it. |
 | catalog.commitReconcile.horizonSeconds | int | `86400` | Seconds back the reconciler looks for a version's announcement (LANCE_COMMIT_RECONCILE_HORIZON_SECONDS); kept inside services.lineage.eventsRetentionDays. |
 | catalog.commitReconcile.periodSeconds | int | `600` | Seconds between two ticks of the timer on which the catalog announces every committed version lineage's feed lacks, on each table a door filed a commit for (`LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`). |

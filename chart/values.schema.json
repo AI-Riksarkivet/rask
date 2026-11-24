@@ -187,6 +187,17 @@
         "catalog": {
             "type": "object",
             "properties": {
+                "branchTrash": {
+                    "type": "object",
+                    "properties": {
+                        "periodSeconds": {
+                            "description": "Seconds between two ticks of the timer that deletes for good each hidden branch past its deadline (`LANCE_BRANCH_TRASH_PERIOD_SECONDS`).",
+                            "type": "integer",
+                            "minimum": 1
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "commitReconcile": {
                     "type": "object",
                     "properties": {

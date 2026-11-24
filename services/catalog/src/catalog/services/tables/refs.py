@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from datetime import datetime
 from typing import Any, Final
 
 import lance
@@ -22,6 +23,7 @@ from lance_namespace import (
     ListTableBranchesResponse,
     ListTableTagsRequest,
     ListTableTagsResponse,
+    ServiceUnavailableError,
     TableBranchAlreadyExistsError,
     TableBranchNotFoundError,
     TableTagNotFoundError,
@@ -34,6 +36,7 @@ from catalog.core.lance_refusals import ref_errors
 from catalog.core.pagination import paginate
 from catalog.core.version_retention import MAIN_BRANCH, recorded_branch
 from catalog.services import table_claims
+from catalog.services.tables import hidden_branches
 from catalog.services.tables.versions import BRANCH_IDENTIFIER_KEY, identifier_of
 from lakehouse.lancekit import branch_layout
 from lakehouse.records.history_fences import HistoryWork
@@ -344,7 +347,14 @@ def create_branch(table: table_claims.DoorTable, so: StorageOptions, req: Create
         branches = dataset.branches.list()
         if req.name in branches:
             raise TableBranchAlreadyExistsError(f"branch {req.name!r} already exists")
-        refuse_a_branch_name_that_nests_with_another(req.name, branches)
+        # A hidden branch's directory still holds its commits, which a branch created over it would read as its own and
+        # one created inside or around it would nest with, as a listed one's would.
+        kept = {hidden.name: hidden for hidden in table.hidden_branches()} if table.resolved.uuid is not None else {}
+        if req.name in kept:
+            raise InvalidTableStateError(
+                f"a deleted branch {req.name!r} is kept until {kept[req.name].expires_at}: restore it at branches/restore, or create the name after that"
+            )
+        refuse_a_branch_name_that_nests_with_another(req.name, [*branches, *kept])
         # THE SOURCE IS ESTABLISHED BY READING TOO, and here the message leaves no choice: pylance renders
         # a missing source BRANCH and a missing source VERSION with the same object-store text, so a
         # classifier reading it alone answers 11 for a branch that does not exist — the wrong code, and a
@@ -380,7 +390,18 @@ class BranchDeleteStoppedError(InvalidTableStateError):
         self.removed = list(removed)
 
 
-def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: DeleteTableBranchRequest) -> list[RemovedBranch]:
+class BranchHideStoppedError(ServiceUnavailableError):
+    """A recoverable branch delete stopped part-way: the store refused a step for one of the branches it was hiding."""
+
+    def __init__(self, message: str, removed: Sequence[RemovedBranch]) -> None:
+        super().__init__(message)
+        #: What it hid before it stopped, which is hidden whatever the request answers.
+        self.removed = list(removed)
+
+
+def delete_branch(
+    table: table_claims.DoorTable, so: StorageOptions, req: DeleteTableBranchRequest, *, hiding: Callable[[], hidden_branches.Hiding | None] | None = None
+) -> list[RemovedBranch]:
     """Delete a branch from the table, and every branch whose directory lies inside its own ([[LH-203]]); every branch
     it removed, the nested ones first, each with its identifier (so the door announces each, [[LH-413]]).
 
@@ -393,7 +414,25 @@ def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: Delete
     A branch that lies inside ANOTHER branch's files is refused instead (409): Lance removes the
     branch's directory recursively, so deleting ``a/_versions`` deletes ``tree/a/_versions``, which is
     ``a``'s whole history, and ``a`` stops opening. Deleting ``a`` removes both.
+
+    WITH ``hiding``, where the table's warehouse may keep what is dropped for a while ([[LH-429]]), the delete runs inside
+    the table's branch hold, which excludes a branch create, a restore, another such delete and every reclaim, and asks
+    ``hiding`` there. Where it answers a deadline nothing is destroyed: each of those branches is hidden under the same
+    refusals (:func:`hidden_branches.hide`) and :func:`restore_branch` brings them back whole. Where it answers ``None``
+    (an erasure of the table is in flight) they are destroyed.
+
+    Raises:
+        ConcurrentModificationError: With ``hiding``, other work holds the table's history.
     """
+    if hiding is None:
+        return _delete_branch(table, so, req, hiding=None)
+    with table.history_held(HistoryWork.BRANCH):
+        return _delete_branch(table, so, req, hiding=hiding())
+
+
+def _delete_branch(
+    table: table_claims.DoorTable, so: StorageOptions, req: DeleteTableBranchRequest, *, hiding: hidden_branches.Hiding | None
+) -> list[RemovedBranch]:
     dataset = table.open_unchecked(so)
     listed = dataset.branches.list()
     branches = list(listed)
@@ -416,11 +455,19 @@ def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: Delete
     # A TAG NAMING A VERSION ON ONE OF THEM pins it the same way ("Ref conflict error: Branch b is referenced by
     # tags [("t", 1)]", measured on pylance 13.0.0), so it is asked before the first delete too.
     pins = sorted(tag for tag, meta in dataset.tags.list().items() if (meta or {}).get("branch") in doomed)
+    if kept := [hidden for hidden in (table.hidden_branches() if pins else []) if hidden.tag in pins]:
+        # The catalog's own tag, which no caller can move: it holds the version a deleted branch was cut from.
+        raise InvalidTableStateError(
+            f"branch {req.name!r} cannot be deleted: the deleted branch {kept[0].name!r} was cut from it or from a branch inside it and is kept "
+            f"until {kept[0].expires_at}. Restore {kept[0].name!r} at branches/restore, or delete {req.name!r} after that. Nothing was deleted"
+        )
     if pins:
         raise InvalidTableStateError(
             f"branch {req.name!r} cannot be deleted: tag {', '.join(repr(t) for t in pins)} names a version on it or on a branch inside it, and a "
             "tag pins its branch. Delete or move the tag first. Nothing was deleted"
         )
+    if hiding is not None:
+        return _hide_each(table, so, asked=req.name, doomed={name: listed[name] for name in doomed}, hiding=hiding)
     removed: list[RemovedBranch] = []
     for name in doomed:
         try:
@@ -435,6 +482,46 @@ def delete_branch(table: table_claims.DoorTable, so: StorageOptions, req: Delete
             ) from exc
         removed.append(RemovedBranch(name=name, identifier=identifier_of(listed[name])))
     return removed
+
+
+def _hide_each(table: table_claims.DoorTable, so: StorageOptions, *, asked: str, doomed: dict[str, Any], hiding: hidden_branches.Hiding) -> list[RemovedBranch]:
+    """Hide each of ``doomed`` (name to its listing, the innermost first) for the delete of ``asked``; what it hid."""
+    removed: list[RemovedBranch] = []
+    for name, listed in doomed.items():
+        try:
+            hidden_branches.hide(table, so, name=name, listed=listed, hiding=hiding)
+        except (OSError, ValueError, ServiceUnavailableError) as exc:
+            # Lance refuses a tag with a ValueError; the store, with an OSError.
+            raise BranchHideStoppedError(
+                f"deleting branch {asked!r} stopped at {name!r}, which still stands: {exc}. Hidden before stopping: "
+                f"{[branch.name for branch in removed]}. Delete it again",
+                removed,
+            ) from exc
+        removed.append(RemovedBranch(name=name, identifier=identifier_of(listed)))
+    return removed
+
+
+def restore_branch(table: table_claims.DoorTable, so: StorageOptions, name: str, *, now: datetime) -> list[RemovedBranch]:
+    """Bring back the hidden branch ``name`` with every commit made on it, and each hidden branch whose directory lies
+    inside its own ([[LH-429]]); each branch restored, the outermost first.
+
+    Raises:
+        TableBranchNotFoundError: No recoverable delete keeps a branch of that name.
+        InvalidTableStateError: Its deadline has passed, so it is being deleted for good.
+        ConcurrentModificationError: A reclaim or another branch create holds the table's history.
+    """
+    restored: list[RemovedBranch] = []
+    with table.history_held(HistoryWork.BRANCH):
+        # Read inside the hold, which excludes the delete for good: what is found here is still whole.
+        kept = {hidden.name: hidden for hidden in table.hidden_branches()}
+        if name not in kept:
+            raise TableBranchNotFoundError(f"no deleted branch {name!r} is kept for this table")
+        if kept[name].past_deadline(now) or kept[name].purging:
+            raise InvalidTableStateError(f"branch {name!r} was kept until {kept[name].expires_at} and is being deleted for good")
+        for inner in [name, *sorted(branch_layout.branches_inside(name, list(kept)), key=len)]:
+            hidden_branches.restore(table, so, kept[inner])
+            restored.append(RemovedBranch(name=inner, identifier=kept[inner].identifier))
+    return restored
 
 
 def _forked_from(name: str, forks: Sequence[str]) -> InvalidTableStateError:

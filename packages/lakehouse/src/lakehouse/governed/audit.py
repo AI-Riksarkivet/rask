@@ -100,6 +100,7 @@ class AuditAction(StrEnum):
     ROLE_UNASSIGN = "role_unassign"
     ERASURE_OBLIGATION_RECORDED = "erasure_obligation_recorded"
     ERASURE_REF_OBLIGED = "erasure_ref_obliged"
+    ERASURE_HIDDEN_BRANCH_PURGED = "erasure_hidden_branch_purged"
     ERASURE_OBLIGATION_VERIFIED = "erasure_obligation_verified"
     EXPIRE_VERSIONS = "expire_versions"
     DLQ_REPLAY = "dlq_replay"

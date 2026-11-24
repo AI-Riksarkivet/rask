@@ -11224,6 +11224,38 @@
         "title": "RenameTableResponse",
         "type": "object"
       },
+      "RestoreTableBranchRequest": {
+        "additionalProperties": false,
+        "description": "Which deleted branch to bring back.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "RestoreTableBranchRequest",
+        "type": "object"
+      },
+      "RestoreTableBranchResponse": {
+        "description": "The branches brought back: the one named, and each deleted branch whose directory lies inside its own.",
+        "properties": {
+          "restored": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Restored",
+            "type": "array"
+          }
+        },
+        "required": [
+          "restored"
+        ],
+        "title": "RestoreTableBranchResponse",
+        "type": "object"
+      },
       "RestoreTableRequest": {
         "description": "RestoreTableRequest",
         "properties": {
@@ -19511,6 +19543,92 @@
         ]
       }
     },
+    "/management/v1/table/{id}/branches/restore": {
+      "post": {
+        "description": "Bring back a branch a recoverable delete hid, with every commit made on it ([[LH-429]]).\n\nAsks what the delete asks (``can_drop``). Refused 404 (code 22) when no deleted branch of that name is kept, and 409\nonce its deadline has passed or while an erasure of the table is in flight. Each branch brought back is announced as created, naming the incarnation it still is.",
+        "operationId": "restore_table_branch_management_v1_table__id__branches_restore_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "title": "Id",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+            "in": "query",
+            "name": "delimiter",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Identifier separator. Must match the server's, which is returned in the refusal when it does not.",
+              "title": "Delimiter"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreTableBranchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RestoreTableBranchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "default": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProblemDetails"
+                }
+              }
+            },
+            "description": "Error"
+          }
+        },
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "summary": "Restore Table Branch",
+        "tags": [
+          "branch"
+        ]
+      }
+    },
     "/management/v1/table/{id}/changes": {
       "post": {
         "description": "Rows that changed in ``(begin_version, end_version]`` \u2014 Arrow-IPC, like ``query``.\n\nAnswers the change data feed `lance_docs/lance/format/table/row_id_lineage.md:426-454` documents, from one snapshot at\nthe window's end, and refuses a window the version columns cannot describe; the rules and the\nconsumer contract live in `catalog.services.changes`, the read in `tables.reads.read_changes`.\n\nA CHANGE FEED IS A READ, which settles both policy questions: it is gated like one and audited like\none (\u00a7 J1), because following every row a table ever received is the most disclosing read\navailable, not a metadata lookup.\n\nIt names no person a notifier addresses: a version advance changes an OBJECT, not\nwhat any particular person may do, so it is an untargeted control event like the other 31 and\nreaches a feed rather than a person.\n\nTHE GATE IS NOT AUTOMATIC \u2014 `read_actions.DATA_READ_ACTIONS` must name `changes`, or the router\nrefuses the route for every caller. Any rung above the reader's refuses the feed's whole audience\nand records a write in the audit trail: measured 2026-09-08 at the writer rung, `can_write_data\nALLOW` beside the `read_data` record for the same call. Pinned by\n`services/catalog/tests/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ`.",
@@ -25718,7 +25836,7 @@
     },
     "/v1/table/{id}/branches/delete": {
       "post": {
-        "description": "Delete a branch from the table \u2014 wraps the pylance ``delete_branch`` data-plane op.\n\nThe disappearance is the half worth announcing: a console holding a branch list has no other way\nto learn the branch is gone, and a reader that polls discovers it by a failing read. So EVERY branch the\ndelete removes is announced, each with the incarnation it was ([[LH-413]]): the branches nested inside the\nnamed one go with it, and a delete that stops part-way still announces those it removed before stopping.\n\nAuthorization alone governs it (``can_drop``): a branch holds the files it references against cleanup, so\ndeleting one makes them reclaimable, which is history reclaim, and deletion protection guards dropping the\ntable, not its history (ADR 0150).",
+        "description": "Delete a branch from the table \u2014 wraps the pylance ``delete_branch`` data-plane op.\n\nWhere the table's warehouse keeps what is dropped for a while (its delete profile, else ``LANCE_TRASH_GRACE_DAYS``),\nthe branch is HIDDEN for that long instead of destroyed ([[LH-429]]): no listing names it and no door opens it, and\n``POST /management/v1/table/{id}/branches/restore`` brings it back with every commit made on it. It is announced as\ndeleted either way, since it is gone from every reader's view.\n\nThe disappearance is the half worth announcing: a console holding a branch list has no other way\nto learn the branch is gone, and a reader that polls discovers it by a failing read. So EVERY branch the\ndelete removes is announced, each with the incarnation it was ([[LH-413]]): the branches nested inside the\nnamed one go with it, and a delete that stops part-way still announces those it removed before stopping.\n\nAuthorization alone governs it (``can_drop``): a branch holds the files it references against cleanup, so\ndeleting one makes them reclaimable, which is history reclaim, and deletion protection guards dropping the\ntable, not its history (ADR 0150).",
         "operationId": "delete_table_branch_v1_table__id__branches_delete_post",
         "parameters": [
           {

@@ -204,6 +204,11 @@ def list_obligations(control_root: str, storage_options: StorageOptions) -> list
     return obligations
 
 
+def open_on(control_root: str, storage_options: StorageOptions, table_uuid: str) -> list[str]:
+    """The ids of the obligations recorded on the table ``table_uuid`` that no verification has settled."""
+    return [o.obligation_id for o in list_obligations(control_root, storage_options) if o.table_uuid == table_uuid and o.released_at is None]
+
+
 def require_followable(control_root: str, storage_options: StorageOptions, obligation_id: str) -> None:
     """Refuse an obligation following ``obligation_id`` unless that names an obligation the catalog recorded.
 

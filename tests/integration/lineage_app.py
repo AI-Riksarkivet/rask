@@ -19,6 +19,7 @@ import threading
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping
 from contextlib import asynccontextmanager, contextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
@@ -174,15 +175,16 @@ def serve(app: FastAPI) -> Generator[str]:
         thread.join(timeout=30)
 
 
-def catalog_tick[R](catalog_url: str, tick: Callable[[Tick], Awaitable[R]], *, timeout: float = 120) -> R:
+def catalog_tick[R](catalog_url: str, tick: Callable[[Tick], Awaitable[R]], *, timeout: float = 120, clock: Callable[[], datetime] | None = None) -> R:
     """One ``tick`` of the catalog :func:`live_catalog` serves at ``catalog_url``, run on that server's own event loop with
-    the catalog's settings, as the catalog's timer runs it; answers what the tick reports."""
+    the catalog's settings, as the catalog's timer runs it; answers what the tick reports. ``clock`` is the wall clock
+    the tick judges a deadline by, the real one unless given."""
     from catalog.api.ticks import Tick
     from catalog.core.config import get_settings
     from catalog.main import app
 
     async def run() -> R:
-        return await tick(Tick(app, get_settings()))
+        return await tick(Tick(app, get_settings(), clock=clock) if clock is not None else Tick(app, get_settings()))
 
     return asyncio.run_coroutine_threadsafe(run(), _SERVED_ON[catalog_url]).result(timeout=timeout)
 

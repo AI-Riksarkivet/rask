@@ -64,6 +64,7 @@ for _router in (
     indices.spec_router,
     tags.spec_router,
     branches.spec_router,
+    branches.management_router,
     versions.spec_router,
     versions.management_router,
     transactions.spec_router,

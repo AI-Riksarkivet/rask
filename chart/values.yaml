@@ -662,6 +662,12 @@ catalog:
     # How late a due release may run; late costs only time, so this is loose.
     # -- Seconds between two ticks of the timer that runs due erasure pin releases (`LANCE_ERASURE_RELEASE_PERIOD_SECONDS`); lateness only costs time.
     releasePeriodSeconds: 300 # @schema type: integer; minimum: 1
+  # LH-429: where a warehouse keeps what is dropped for a while, a branch delete hides the branch and keeps its bytes;
+  # this timer deletes each hidden branch for good once its deadline has passed, and releases the tag the catalog held on
+  # the version it was cut from.
+  branchTrash:
+    # -- Seconds between two ticks of the timer that deletes for good each hidden branch past its deadline (`LANCE_BRANCH_TRASH_PERIOD_SECONDS`).
+    periodSeconds: 3600 # @schema type: integer; minimum: 1
   # LH-497: the commit is the outbox. A write's announcement is made after its commit, and a crash between the commit
   # and the staging of its event loses it; this timer reads the version log of each table a door filed a commit for,
   # after its mark, and announces every committed version lineage's feed lacks, under the run id derived from the commit,

@@ -25,7 +25,7 @@ from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services.tables import refs, versions
 from lakehouse.events.control_emit import emit_control
 from lakehouse.governed import fga_ids
-from lakehouse.records import clone_sources
+from lakehouse.records import branch_trash, clone_sources
 
 
 spec_router = APIRouter(prefix="/v1/table", tags=["tag"])
@@ -37,12 +37,17 @@ def _refuse_a_catalog_tag(tag: str) -> None:
     caller's, `published` and `stable` included: marking a version ready is a pipeline's own tag (ADR 0212).
 
     Raises:
-        InvalidInputError: ``tag`` is under `rask.clone.`.
+        InvalidInputError: ``tag`` is under `rask.clone.` or `rask.trash.`.
     """
     if tag.startswith(clone_sources.TAG_PREFIX):
         raise InvalidInputError(
             f"tag {tag!r} is the catalog's own: a tag under {clone_sources.TAG_PREFIX!r} keeps the version a registered clone reads, "
             "and is released when that clone ends"
+        )
+    if tag.startswith(branch_trash.TAG_PREFIX):
+        raise InvalidInputError(
+            f"tag {tag!r} is the catalog's own: a tag under {branch_trash.TAG_PREFIX!r} keeps the version a deleted branch was cut "
+            "from while that branch can still be restored"
         )
 
 
