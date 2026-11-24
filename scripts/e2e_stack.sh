@@ -504,6 +504,18 @@ mint_service_token
 PYTEST=(env PYTHONPATH=services uv run pytest -v -rs -p no:cacheprovider --require-live)
 failed=()
 
+# WHICH SESSIONS RUN. `all` (the default, what `make e2e-ci` runs on a developer box) is every session on this one stack.
+# CI starts the lane twice, side by side, each on a stack of its own: `lane` for every module the lane can serve and
+# `phase1` for the acceptance with its drills and its soak. One stack apiece costs a second bring-up (about 10 minutes
+# of runner time) and takes the two sessions' 20 minutes each off the wall clock (measured 2026-11-24, run 45401316507:
+# 20m55s and 19m26s in sequence).
+SESSIONS="${E2E_SESSIONS:-all}"
+case "$SESSIONS" in
+  all|lane|phase1) ;;
+  *) echo "!! E2E_SESSIONS is '$SESSIONS': all, lane or phase1"; exit 2 ;;
+esac
+runs() { [ "$SESSIONS" = all ] || [ "$SESSIONS" = "$1" ]; }
+
 # EVERY MODULE THE LANE CAN SERVE, a session of their own (ADR 0167). Chosen by the markers a module does NOT carry, so
 # a new module runs on push the day it lands, and one that needs what this stack does not stand up fails the session
 # under `--require-live` rather than running nowhere. Each marker left out runs elsewhere or is outside the lakehouse:
@@ -511,25 +523,29 @@ failed=()
 #   nats_auth      its own lane (`dagger call nats-auth`): a broker in operator mode, which this stack's bus is not
 #   rustfs_provisioning  its own lane (`dagger call rustfs-provisioning`): it provisions IAM on a throwaway store
 #   edge           the Gateway's routes, which this stack does not render (stack_values.sh)
-"${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not rustfs_provisioning and not edge" \
-  || failed+=("the lane's suites")
+if runs lane; then
+  "${PYTEST[@]}" tests/e2e-py -m "not phase1 and not nats_auth and not rustfs_provisioning and not edge" \
+    || failed+=("the lane's suites")
+fi
 
 # PHASE 1'S ACCEPTANCE (XC-090), BY ITS MARKER, so a module joins the lane by carrying `phase1`: one drive of the
 # bring-your-own scenario, its own claims, and every criterion read off it. Criterion 5's drills each take a dependency
 # of this release down (XC-095), so the session runs them after every other test it selected (`conftest.py`), and each
 # restores what it took down in a `finally`. `E2E_CHAOS=0` leaves them out while iterating. The session keeps its drive
 # for the soak.
-CHAOS=(--chaos)
-[ "${E2E_CHAOS:-1}" = "1" ] || CHAOS=()
-KEPT="$(mktemp -d)/kept-drive.json"
-mint_service_token
-if "${PYTEST[@]}" tests/e2e-py -m phase1 "${CHAOS[@]}" --keep-drive "$KEPT"; then
-  # THE SOAK, AT ONCE. The deployed estate reads its kept drive again a day later (`make e2e-soak`); here the same
-  # reading runs straight after the acceptance, so keeping and resuming a drive is exercised on every push. It removes
-  # the kept tenant once it passes.
-  LANCE_E2E_SOAK_SECONDS=0 "${PYTEST[@]}" tests/e2e-py -m soak --soak "$KEPT" || failed+=("the soak")
-else
-  failed+=("Phase 1's acceptance")
+if runs phase1; then
+  CHAOS=(--chaos)
+  [ "${E2E_CHAOS:-1}" = "1" ] || CHAOS=()
+  KEPT="$(mktemp -d)/kept-drive.json"
+  mint_service_token
+  if "${PYTEST[@]}" tests/e2e-py -m phase1 "${CHAOS[@]}" --keep-drive "$KEPT"; then
+    # THE SOAK, AT ONCE. The deployed estate reads its kept drive again a day later (`make e2e-soak`); here the same
+    # reading runs straight after the acceptance, so keeping and resuming a drive is exercised on every push. It removes
+    # the kept tenant once it passes.
+    LANCE_E2E_SOAK_SECONDS=0 "${PYTEST[@]}" tests/e2e-py -m soak --soak "$KEPT" || failed+=("the soak")
+  else
+    failed+=("Phase 1's acceptance")
+  fi
 fi
 
 if [ "${#failed[@]}" -gt 0 ]; then
@@ -538,4 +554,4 @@ if [ "${#failed[@]}" -gt 0 ]; then
   exit 1
 fi
 echo
-echo "✓ e2e stack suite green on the lakehouse alone, Phase 1's acceptance and its soak with it"
+echo "✓ e2e stack green on the lakehouse alone (sessions: $SESSIONS)"

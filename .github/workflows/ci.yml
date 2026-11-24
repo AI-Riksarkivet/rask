@@ -314,15 +314,26 @@ jobs:
   # #3-A/#3-B/#4 flags and maintenance on) and runs every tests/e2e-py module it can serve, then Phase 1's
   # acceptance and its soak, failing on any skip (ADR 0167).
   #
-  # `make e2e-ci` == this job, byte-for-byte — both shell out to scripts/e2e_stack.sh, so "green in CI"
-  # and "green on my machine" cannot diverge.
+  # `make e2e-ci` and this job both shell out to scripts/e2e_stack.sh, so "green in CI" and "green on my machine"
+  # cannot diverge: a developer box runs every session on one stack, and CI the same sessions on two.
   # Fork-gated like the other live jobs (no infra guarantees / untrusted docker builds on forked PRs).
-  e2e-stack:
+  #
+  # TWO STACKS SIDE BY SIDE, one per session group (`E2E_SESSIONS`, scripts/e2e_stack.sh): `lane` runs every module the
+  # lane can serve, `phase1` the acceptance with its drills and its soak. In one job they ran in sequence, 20m55s and
+  # 19m26s after a 10-minute bring-up (run 45401316507); apart, the job's wall clock is one bring-up and the longer
+  # session. `e2e-stack` below is the one check that reports both.
+  e2e-stack-sessions:
+    name: e2e-stack (${{ matrix.sessions }})
     runs-on: ubuntu-latest
     needs: ms-test
-    # 70: the bring-up and the suites measured about 10 minutes (run 39032366683), and criterion 5's seven drills each
-    # wait out an outage, a restore and a settle window, the secret store's alone up to the signer's 300 s re-read.
-    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        sessions: [lane, phase1]
+    # 50: the bring-up measured about 10 minutes and each session group about 21 (run 45401316507); criterion 5's seven
+    # drills each wait out an outage, a restore and a settle window, the secret store's alone up to the signer's 300 s
+    # re-read.
+    timeout-minutes: 50
     if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
@@ -358,8 +369,17 @@ jobs:
           key: e2e-images-${{ hashFiles('.docker/*.dockerfile', 'scripts/dagger-image.sh') }}
           restore-keys: e2e-images-
 
-      - name: Live e2e — governed kind stack, every module it can serve, Phase 1's acceptance and soak
-        run: make e2e-ci
+      - name: Live e2e — governed kind stack, the ${{ matrix.sessions }} sessions
+        run: E2E_SESSIONS=${{ matrix.sessions }} make e2e-ci
+
+  # The one check a branch rule names: green only when both session groups were.
+  e2e-stack:
+    runs-on: ubuntu-latest
+    needs: e2e-stack-sessions
+    if: always() && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository)
+    steps:
+      - name: Both session groups passed
+        run: test "${{ needs.e2e-stack-sessions.result }}" = "success"
 
   # THE LAKEHOUSE LANES RUN IN CI: a lane that runs nowhere reports nothing when it rots. Measured
   # 2026-09-24, outside CI, `rustfs-lifecycle` and `governance-chain` had broken 17 and 18 days before, on
