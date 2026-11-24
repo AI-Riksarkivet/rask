@@ -118,11 +118,15 @@ spec:
             - { name: LANCE_MANIFEST_RETAIN_SECONDS, value: {{ required "catalog.manifestReclaim.retainSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.retainSeconds | quote }} }
             - { name: LANCE_ERASURE_RELEASE_PERIOD_SECONDS, value: {{ required "catalog.erasure.releasePeriodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.erasure.releasePeriodSeconds | quote }} }
             - { name: LANCE_COMMIT_RECONCILE_PERIOD_SECONDS, value: {{ required "catalog.commitReconcile.periodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.commitReconcile.periodSeconds | quote }} }
+            - { name: LANCE_COMMIT_WALK_PERIOD_SECONDS, value: {{ required "catalog.commitReconcile.walkPeriodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.commitReconcile.walkPeriodSeconds | quote }} }
             - { name: LANCE_DECLARATION_FILE, value: "/etc/rask/declaration/declaration.json" }
             - { name: LANCE_DECLARATION_CONVERGE_PERIOD_SECONDS, value: {{ required "catalog.declarationConverge.periodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.declarationConverge.periodSeconds | quote }} }
             - { name: LANCE_MANIFEST_RECLAIM_PERIOD_SECONDS, value: {{ required "catalog.manifestReclaim.periodSeconds is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.manifestReclaim.periodSeconds | quote }} }
             - { name: LANCE_COMMIT_RECONCILE_GRACE_SECONDS, value: {{ required "catalog.commitReconcile.graceSeconds is required" .Values.catalog.commitReconcile.graceSeconds | quote }} }
             {{- $horizon := required "catalog.commitReconcile.horizonSeconds is required" .Values.catalog.commitReconcile.horizonSeconds | int }}
+            {{- if ge (.Values.catalog.commitReconcile.walkPeriodSeconds | int) $horizon }}
+            {{- fail "catalog.commitReconcile.walkPeriodSeconds must be shorter than catalog.commitReconcile.horizonSeconds: a version committed past every door is counted only by the walk, which does not look for one older than the horizon" }}
+            {{- end }}
             {{- if ge $horizon (mul (.Values.services.lineage.eventsRetentionDays | int) 86400) }}
             {{- fail "catalog.commitReconcile.horizonSeconds must be shorter than services.lineage.eventsRetentionDays: a version older than the feed's retention may have had its row pruned, and the reconciler would announce it again" }}
             {{- end }}

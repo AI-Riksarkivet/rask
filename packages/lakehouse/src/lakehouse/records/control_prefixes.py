@@ -27,6 +27,7 @@ __all__ = [
     "CLONE_ENDINGS",
     "COMMIT_AUTHORS",
     "COMMIT_MARKS",
+    "COMMIT_PENDING",
     "COMMIT_TURNS",
     "CONTRACTS",
     "CONTROL_OUTBOX",
@@ -98,6 +99,8 @@ ANNOUNCEMENT_INTENTS: Final = "_announcement_intents"
 
 # The leases and caches: each record holds for a time judged on the store's clock, then lapses.
 COMMIT_TURNS: Final = "_commit_turns"
+#: The commits a door was about to make, one entry a request, which the commit reconciler reads its tables from ([[XC-204]]).
+COMMIT_PENDING: Final = "_commit_pending"
 HISTORY_FENCES: Final = "_history_fences"
 IDEMPOTENCY: Final = "_idempotency"
 #: The window each fixed timer last claimed, one record a timer (``lakehouse.timers``).
@@ -143,8 +146,9 @@ QUEUE_PREFIXES: Final[frozenset[str]] = frozenset({LINEAGE_OUTBOX, CONTROL_OUTBO
 """The outboxes and the announcements filed for them: a restore would publish events the estate already acted on, so a
 queue's recovery is to be empty."""
 
-LEASE_PREFIXES: Final[frozenset[str]] = frozenset({COMMIT_TURNS, HISTORY_FENCES, IDEMPOTENCY, TIMERS})
-"""The records that lapse: a restored one would hold a turn, a fence, an answer or a timer's window whose time has passed."""
+LEASE_PREFIXES: Final[frozenset[str]] = frozenset({COMMIT_TURNS, COMMIT_PENDING, HISTORY_FENCES, IDEMPOTENCY, TIMERS})
+"""The records that lapse: a restored one would hold a turn, a pending commit, a fence, an answer or a timer's window whose
+time has passed."""
 
 CONTROL_PREFIXES: Final[frozenset[str]] = RECORD_PREFIXES | QUEUE_PREFIXES | LEASE_PREFIXES | {NAMESPACE_INDEX, STAGING, BACKUPS}
 """Every segment that holds the estate's own state, which no table's location crosses."""

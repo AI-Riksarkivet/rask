@@ -1,5 +1,47 @@
 # 0177. The commit is the outbox: every version names its author, and a lost announcement is made from the version log (2026-10-25)
 
+**Amended 2026-11-24** (owner, XC-204 #802: "get the design correct and fix it in this row"): the reconciler no longer
+lists every held claim each tick.
+
+- **A door files an entry before a commit it announces can land** (`_commit_pending/<table uuid>/<entry>.json`,
+  `lakehouse.records.commit_records`): each attempt of a commit the catalog finalizes files one once it is judged, a
+  stock commit before its finalize, and a create or an unkeyed insert before the one call in which Lance writes and
+  commits. A door that cannot file its entry answers 503 and commits nothing.
+- **The `catalog-commit-reconcile` tick lists the entries and reads the tables they name**, so an idle table costs it
+  nothing. Measured 2026-11-24, the real catalog over a counting S3 store at 205 tables: an idle tick is 5 store
+  requests (it was 16 a table), a tick after one insert reads one table, and a tick right after every table was written
+  is 21 a table.
+- **An entry is removed once it is older than a door's lease (15 minutes) and the grace together**, by a tick that read
+  every ref of its table, or once no claim records the table. A table a tick could not read (its store did not answer,
+  its warehouse is deactivated, it is in the trash) keeps its entries. So a table is read on each tick of about
+  twenty-five minutes after a write, two or three ticks, and the tick's cost follows the tables written in that time:
+  at 0.2 s a table it reaches half its period near 1,500 tables written within twenty-five minutes, where it used to
+  reach it near 1,500 tables held.
+- **The walk of every claim is kept on a timer of its own**, `catalog-commit-walk`
+  (`catalog.commitReconcile.walkPeriodSeconds`, an hour, which the render keeps inside the horizon). It files a table it
+  could not read, so the tick retries that table every period.
+
+What this costs, stated plainly:
+
+- **A version committed past every door on a table no door wrote to lately is counted by the walk alone**, so
+  `CatalogCommitsUnauthored` pages within the walk's period and the grace (about an hour and ten minutes) where it paged
+  within one tick and the grace (about twenty minutes). No credential the catalog vends can put a final manifest (ADR
+  0204), so the writer is the store's root credential or the catalog's own identity.
+- **A commit whose single write call outlasts the lease** (a create or an unkeyed insert uploading for more than
+  fifteen minutes) can land after its entry was removed; its lost announcement is then found by the walk.
+- **While this change rolls out**, a replica of the previous revision commits without filing; an announcement it loses
+  is found by the first walk.
+
+Why: the tick cost about 16 store requests and 0.2 s a table whatever had changed, so it reached half its period near
+1,500 tables (ADR 0185, measured 2026-11-23). The shape is the one ADR 0198 gave maintenance: work is found where the
+catalog already sees it, and the sweep is the backstop. Lance's own commit through an external manifest store is only
+an analogy: there too a record is written before the commit and the manifests in the object store stay authoritative
+(`lance_docs/lance/format/table/transaction.md` § External Manifest Store), but that record reserves one version and
+coordinates its writers, which an entry here does not. Lakekeeper (read at 4e05f79, 2026-11-23) writes a drop's cleanup
+task in the drop's own Postgres transaction and picks tasks with `FOR UPDATE SKIP LOCKED`, so its tasks need no sweep;
+its change events are sent after the commit through an in-process channel with no outbox, so it does not promise the
+announcement this record exists to keep.
+
 **Status:** accepted. Source: LH-497 (#641), admitted by the owner on 2026-10-20 with LH-498 (#643) folded into it; the
 design was settled with the owner on 2026-10-25 before implementation, and two rulings were made during it the same day
 (the issue's comments record each).
@@ -57,5 +99,5 @@ Measured on pylance 13.0.0:
   namespace pays pylance's outcome check, measured at 0.1 to 0.2 s, before the capture surfaces.
 - A racing column operation no longer answers 409: it plans again on the version that won, as a keyed merge does.
 - A branch write may carry a run: the finalize names the branch it planned on.
-- A version committed past every catalog door, by a credential that can write a final manifest, is found and paged on,
-  and announced by nobody.
+- A version committed past every catalog door, by a credential that can write a final manifest, is found and paged on
+  within the walk's period (amendment above), and announced by nobody.

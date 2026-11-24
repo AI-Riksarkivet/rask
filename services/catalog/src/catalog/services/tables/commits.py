@@ -262,6 +262,7 @@ def _attempt_once[T](
     recorded = finalizing = False
     try:
         _judge_attempt(commit, attempt)
+        _file_the_attempt(commit)
         wrote = committed_files.added(
             dataset,
             attempt.detached,
@@ -291,6 +292,15 @@ def _attempt_once[T](
     finally:
         discard_detached_manifest(attempt.location, commit.so, attempt.detached.version)
     return _AttemptOutcome[T](landed=(attempt.version, measured), turn=turn)
+
+
+def _file_the_attempt(commit: _StampedCommit) -> None:
+    """File that an attempt the door announces is about to land (:meth:`table_claims.DoorTable.file_pending_commit`,
+    [[XC-204]]). Each attempt files its own entry, once it is judged and before anything records it: an attempt planned
+    again after a lost race can land long after the first one's entry was filed, and one the store refuses the entry of is
+    discarded whole, as a judge's refusal is."""
+    if commit.table.announces(commit.properties.get(OPERATION_PROPERTY, "")):
+        commit.table.file_pending_commit()
 
 
 def _discard_an_attempt_refused_before_its_finalize(

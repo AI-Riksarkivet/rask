@@ -14,6 +14,11 @@ the name inherits neither (ADR 0173 §8):
   is never recorded again. A record written before its commit's finalize also names the manifest the catalog judged and
   finalizes (:func:`manifest_digest`): a writer past every door can read the uuid off the commit's staged transaction and
   land that version first with other content, which then matches no record.
+- **The commits a door was about to make** (``_commit_pending/<table uuid>/<entry>.json``, [[XC-204]]). A door files one
+  entry before a commit it announces can land, naming the location its table is claimed at, so the reconciler reads the
+  tables that took a commit since it last looked and no other: an idle table costs a pass nothing. An entry is removed by
+  the pass that read its table once it is older than the door's lease and the reconciler's grace together, when the door
+  has stopped and any version it landed is old enough to have been looked for.
 - **The reconciler's mark** (``_commit_marks/table-<digest>.json``): for each ref of the table, the highest version up
   to which no version is left to announce, so a pass reads only the versions after it. A registered table's first mark
   is its register's, at each ref's head: the versions a register attaches were committed past every door ([[LH-550]]).
@@ -24,7 +29,9 @@ Every function is BLOCKING IO; callers threadpool it.
 from __future__ import annotations
 
 import hashlib
+import logging
 import uuid
+from datetime import timedelta
 from typing import Final
 
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -38,25 +45,33 @@ from lakehouse.storage.options import StorageOptions
 __all__ = [
     "AUTHORS_PREFIX",
     "MARKS_PREFIX",
+    "PENDING_PREFIX",
     "AuthorRecordedError",
     "CommitAuthor",
     "CommitMarks",
     "InvalidTransactionUuidError",
+    "PendingTable",
     "UnreadableAuthorRecordError",
     "end_authors",
+    "file_pending",
     "forget_author",
     "is_canonical_uuid",
     "manifest_digest",
+    "pending_tables",
     "read_marks",
     "record_author",
     "recorded",
     "ref_key",
+    "settle_pending",
     "write_marks",
 ]
 
 
 AUTHORS_PREFIX: Final = control_prefixes.COMMIT_AUTHORS
 MARKS_PREFIX: Final = control_prefixes.COMMIT_MARKS
+PENDING_PREFIX: Final = control_prefixes.COMMIT_PENDING
+
+log = logging.getLogger(__name__)
 
 
 class CommitAuthor(BaseModel):
@@ -222,3 +237,72 @@ def write_marks(control_root: str, storage_options: StorageOptions, table_uuid: 
     """Replace the table's marks. Two passes racing may write a lower mark over a higher one, which costs a re-read of
     versions already announced and never skips one: every mark a pass writes is one it verified."""
     put_record(control_root, storage_options, record_key(MARKS_PREFIX, "table", table_uuid), record=marks.model_dump())
+
+
+class PendingTable(BaseModel):
+    """One table a door was about to commit to, as the entries filed for it read."""
+
+    model_config = ConfigDict(frozen=True)
+
+    table_uuid: str
+    #: Where the table was claimed when a door filed an entry; ``None`` when no entry of the table reads as one, which
+    #: says nothing of where the table is: its entries stand.
+    location: str | None
+    #: The store paths of the table's entries old enough to remove (:func:`settle_pending`).
+    lapsed: list[str]
+
+
+def file_pending(control_root: str, storage_options: StorageOptions, table_uuid: str, *, location: str) -> None:
+    """File that a door is about to commit to the table ``table_uuid``, claimed at ``location``.
+
+    Raises:
+        OSError: The store refused the entry, so the door must not commit: a commit no entry names is one the reconciler
+            does not look for.
+    """
+    put_record(control_root, storage_options, f"{PENDING_PREFIX}/{table_uuid}/{uuid.uuid4().hex}.json", record={"location": location})
+
+
+def pending_tables(control_root: str, storage_options: StorageOptions, *, lapse: timedelta) -> list[PendingTable]:
+    """Every table an entry is filed for, each with its entries older than ``lapse`` on the store's own clock.
+
+    One listing of the prefix, a thousand entries a request, and one read a table.
+
+    Raises:
+        OSError: The store refused the listing.
+    """
+    root = control_root.rstrip("/")
+    listing = stored_objects.list_under_at(f"{root}/{PENDING_PREFIX}", storage_options)
+    entries: dict[str, list[stored_objects.StoredObject]] = {}
+    for stored in listing.objects:
+        entries.setdefault(stored.path.rsplit("/", 2)[-2], []).append(stored)
+    return [
+        PendingTable(
+            table_uuid=table_uuid,
+            location=_pending_location(control_root, storage_options, table_uuid, filed=filed),
+            lapsed=[stored.path for stored in filed if listing.at - stored.modified >= lapse],
+        )
+        for table_uuid, filed in entries.items()
+    ]
+
+
+def _pending_location(control_root: str, storage_options: StorageOptions, table_uuid: str, *, filed: list[stored_objects.StoredObject]) -> str | None:
+    """The location the first entry of ``filed`` that reads as one names; ``None``, logged, when none does."""
+    for stored in filed:
+        key = f"{PENDING_PREFIX}/{table_uuid}/{stored.path.rsplit('/', 1)[-1]}"
+        try:
+            record = read_record(control_root, storage_options, key)
+        except UnreadableRecordError:
+            continue
+        if record is not None and isinstance(record.get("location"), str):
+            return record["location"]
+    log.error("commit_pending_unreadable", extra={"table_uuid": table_uuid, "entries": len(filed)})
+    return None
+
+
+def settle_pending(control_root: str, storage_options: StorageOptions, paths: list[str]) -> None:
+    """Remove the entries at the store ``paths`` (:attr:`PendingTable.lapsed`).
+
+    Raises:
+        OSError: The store refused a delete.
+    """
+    stored_objects.delete_objects(control_root, storage_options, paths)

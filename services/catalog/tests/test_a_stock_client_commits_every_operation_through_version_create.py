@@ -357,6 +357,9 @@ def test_append_delete_merge_insert_update_and_restore_each_commit_through_versi
         assert record is not None, version
         signed.append((record.author, record.manifest == commits.committed_manifest_digest(restored.uri, StorageOptions(), version)))
     assert signed == [("dex~alice", True)] * 6
+    # And filed each commit before finalizing it, so the reconciler's next tick reads this table ([[XC-204]]).
+    filed = commit_records.pending_tables(settings.registry_root, settings.storage_options(), lapse=timedelta(0))
+    assert [(pending.table_uuid, len(pending.lapsed)) for pending in filed] == [(table_uuid, 6)]
 
 
 def test_a_stock_client_renames_a_labelled_column_and_its_label_goes_with_it(served: Served) -> None:

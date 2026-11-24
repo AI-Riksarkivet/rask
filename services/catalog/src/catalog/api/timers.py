@@ -52,6 +52,7 @@ def catalog_timers(settings: Settings) -> dict[str, CatalogTimer]:
         ),
         "catalog-erasure-release": CatalogTimer(period=settings.erasure_release_period_seconds, tick=erasure_release.tick),
         "catalog-commit-reconcile": CatalogTimer(period=settings.commit_reconcile_period_seconds, tick=commit_reconcile.tick),
+        "catalog-commit-walk": CatalogTimer(period=settings.commit_walk_period_seconds, tick=commit_reconcile.walk),
         "catalog-manifest-reclaim": CatalogTimer(period=settings.manifest_reclaim_period_seconds, tick=manifest_reclaim.tick),
         "catalog-declaration-converge": CatalogTimer(period=settings.declaration_converge_period_seconds, tick=declaration_converge.tick),
     }

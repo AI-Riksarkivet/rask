@@ -409,12 +409,23 @@ groups:
       # A timer whose work raises on every window it claims: the window is claimed, so `LakehouseTimerStopped` stays
       # quiet, and what the tick does (a relay's drain, the reconcile, the converge) does not happen. A relay tick that
       # cannot list its outbox raises and reports no backlog, so this is also what says an outbox is unmeasured. Failed
-      # turns and none that ran, over a window that holds three turns of the slowest timer (ten minutes a turn): one
-      # failed turn between turns that ran pages nothing. Every outcome's series exists at 0 from the loop's start.
+      # turns and none that ran, over a window that holds three turns of the timer: one failed turn between turns that
+      # ran pages nothing. A range is fixed in a rule, so the timers are judged in two classes by the period each
+      # reports: half an hour for one of ten minutes a turn or less, three hours for a slower one (the commit walk, an
+      # hour a turn). Every outcome's series exists at 0 from the loop's start.
       - alert: LakehouseTimerFailing
         expr: >-
-          (sum by (timer) (increase(timer_turns_total{outcome="failed"}[30m])) > 0)
-          unless on (timer) (sum by (timer) (increase(timer_turns_total{outcome="ran"}[30m])) > 0)
+          (
+            (sum by (timer) (increase(timer_turns_total{outcome="failed"}[30m])) > 0)
+            unless on (timer) (sum by (timer) (increase(timer_turns_total{outcome="ran"}[30m])) > 0)
+            unless on (timer) (max by (timer) (timer_period_seconds) > 600)
+          )
+          or
+          (
+            (sum by (timer) (increase(timer_turns_total{outcome="failed"}[3h])) > 0)
+            unless on (timer) (sum by (timer) (increase(timer_turns_total{outcome="ran"}[3h])) > 0)
+            and on (timer) (max by (timer) (timer_period_seconds) > 600)
+          )
         for: 20m
         labels:
           severity: warning
@@ -423,13 +434,14 @@ groups:
           summary: "The timer {{ $labels.timer }} has failed on every window it ran for 20m"
           description: >-
             The work of the timer {{ $labels.timer }} has raised on each window a replica claimed, with none that
-            returned, for 20 minutes and the half hour before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error.
+            returned, for 20 minutes and three of its turns before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped
 
-      # A tick's work is sequential and grows with the estate (the commit reconcile reads every claimed table, about 16
-      # store requests each, measured 2026-11-23, XC-204), and it runs in a replica that also serves requests. One whose
-      # mean run over an hour takes more than half its period is on its way to overrunning the window: the next window
-      # then starts late and the tick's bound (a lost announcement found within one period) no longer holds. The mean is
+      # A tick's work is sequential and grows with the estate (the commit reconcile reads each table written in the last
+      # twenty-five minutes and the commit walk every claimed table, 16 to 21 store requests each, measured 2026-11-24,
+      # XC-204), and it runs in a replica that also serves requests. One whose mean run over an hour takes more than half
+      # its period is on its way to overrunning the window: the next window then starts late and the tick's bound (a lost
+      # announcement found within one period) no longer holds. The mean is
       # over the runs that returned or raised; a timer that ran nothing in the hour has no mean and pages nothing here.
       - alert: LakehouseTimerSlow
         expr: >-

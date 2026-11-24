@@ -66,7 +66,8 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | backups.volumeSnapshot.snapshotClassName | string | `""` | VolumeSnapshotClass the snapshot names; empty uses the cluster default. |
 | catalog.commitReconcile.graceSeconds | int | `600` | Seconds a committed version waits before the reconciler looks for its announcement (LANCE_COMMIT_RECONCILE_GRACE_SECONDS): longer than the inline publish and the outbox relay take to deliver it. |
 | catalog.commitReconcile.horizonSeconds | int | `86400` | Seconds back the reconciler looks for a version's announcement (LANCE_COMMIT_RECONCILE_HORIZON_SECONDS); kept inside services.lineage.eventsRetentionDays. |
-| catalog.commitReconcile.periodSeconds | int | `600` | Seconds between two ticks of the timer on which the catalog announces every committed version lineage's feed lacks (`LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`). |
+| catalog.commitReconcile.periodSeconds | int | `600` | Seconds between two ticks of the timer on which the catalog announces every committed version lineage's feed lacks, on each table a door filed a commit for (`LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`). |
+| catalog.commitReconcile.walkPeriodSeconds | int | `3600` | Seconds between two walks of every claimed table for a committed version lineage's feed lacks (`LANCE_COMMIT_WALK_PERIOD_SECONDS`). |
 | catalog.controlEmit | bool | `true` | Publish catalog control events (catalog.control.v1) on the catalog's own bus connection, where every replica follows them; declares the CATALOG_CONTROL stream. Best-effort. |
 | catalog.controlOutbox.enabled | bool | `true` | Stage control events in a durable S3 outbox and run the relay timer that drains it. Requires `controlEmit`. |
 | catalog.controlOutbox.periodSeconds | int | `60` | Seconds between two ticks of the control outbox relay (`LANCE_CONTROL_RELAY_PERIOD_SECONDS`); bounds how long a control event stays undelivered after a bus outage. |

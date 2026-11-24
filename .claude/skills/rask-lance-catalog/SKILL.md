@@ -524,7 +524,10 @@ the rule:
   commit's own time, so every announcement of one commit is one run on lineage's feed. Keyed because lineage binds a
   run id to its first author for ever (LIN-5) and any writer may post any run id: a predictable id would let one
   table's writer suppress another's announcements. The `catalog-commit-reconcile` timer's tick
-  (`catalog.api.commit_reconcile`) lists every held location claim whose name still describes to it, reads each ref's
+  (`catalog.api.commit_reconcile`) lists the entries doors filed before their commits (`_commit_pending/`, one a request,
+  removed once older than a door's lease and the grace; a door that cannot file one answers 503), takes the location
+  claim of each table they name whose name still describes to it (the `catalog-commit-walk` timer takes every held
+  claim instead, which is what counts a version committed past every door), reads each ref's
   versions after its mark (`_commit_marks/`) older than `LANCE_COMMIT_RECONCILE_GRACE_SECONDS`, looks each up on
   `lance_catalog$provenance$events` by the table's uuid, ref and version (so a renamed table is not announced again), and announces
   every one the feed lacks from the version log alone, signed for the author the catalog recorded authorizing the commit,

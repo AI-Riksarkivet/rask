@@ -199,7 +199,12 @@
                             "type": "integer"
                         },
                         "periodSeconds": {
-                            "description": "Seconds between two ticks of the timer on which the catalog announces every committed version lineage's feed lacks (`LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`).",
+                            "description": "Seconds between two ticks of the timer on which the catalog announces every committed version lineage's feed lacks, on each table a door filed a commit for (`LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`).",
+                            "type": "integer",
+                            "minimum": 1
+                        },
+                        "walkPeriodSeconds": {
+                            "description": "Seconds between two walks of every claimed table for a committed version lineage's feed lacks (`LANCE_COMMIT_WALK_PERIOD_SECONDS`).",
                             "type": "integer",
                             "minimum": 1
                         }

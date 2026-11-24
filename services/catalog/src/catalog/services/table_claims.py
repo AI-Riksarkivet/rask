@@ -422,6 +422,16 @@ class DoorTable:
         author record (ADR 0187)."""
         return self._announces(operation)
 
+    def file_pending_commit(self) -> None:
+        """File that this door is about to commit to the table (:func:`file_pending_commit`), before a commit it announces
+        can land.
+
+        Raises:
+            UnidentifiedObjectError: The table's location carries no claim recording a uuid.
+            ServiceUnavailableError: The store refused, or could not be reached for, the entry.
+        """
+        file_pending_commit(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), location=self.location)
+
     def record_author(self, transaction_uuid: str, *, version: int, ref: str, author: str, manifest: str | None) -> bool:
         """Record ``author``, the caller this door authenticated, as the maker of the commit of ``transaction_uuid`` at
         ``version`` of the ref ``ref`` (:func:`commit_records.ref_key`), its manifest ``manifest`` (``None`` when the record
@@ -456,6 +466,20 @@ class DoorTable:
         commit_records.forget_author(
             self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), transaction_uuid=transaction_uuid, version=version
         )
+
+
+def file_pending_commit(control_root: str, storage_options: StorageOptions, table_uuid: str, *, location: str) -> None:
+    """File that a door is about to commit to the table ``table_uuid``, claimed at ``location``
+    (:func:`commit_records.file_pending`, [[XC-204]]): the reconciler's tick looks for a lost announcement only on a table
+    an entry names, so a commit is not made without one.
+
+    Raises:
+        ServiceUnavailableError: The store refused, or could not be reached for, the entry.
+    """
+    try:
+        commit_records.file_pending(control_root, storage_options, table_uuid, location=location)
+    except OSError as exc:
+        raise ServiceUnavailableError("the object store did not answer filing the commit about to be made; retry it") from exc
 
 
 class TableChangedError(ConcurrentModificationError):

@@ -542,11 +542,18 @@ def create_table(
 
 
 def _before_commit(hook: Callable[[str], None] | None, location: str, registry: base_registry.BaseRegistry | None) -> None:
-    """Hand ``hook`` the uuid the claim at ``location`` records; nothing for a caller outside governance, whose table holds
-    no claim."""
-    if hook is None or registry is None:
+    """File that a commit is about to be made at ``location`` (:func:`table_claims.file_pending_commit`, [[XC-204]]) and hand
+    ``hook`` the uuid its claim records; nothing for a caller outside governance, whose table holds no claim.
+
+    Raises:
+        ServiceUnavailableError: The store refused the entry, so the write is not made.
+    """
+    if registry is None:
         return
-    hook(_claimed_uuid(registry, location))
+    table_uuid = _claimed_uuid(registry, location)
+    table_claims.file_pending_commit(registry.control_root, registry.storage_options, table_uuid, location=location)
+    if hook is not None:
+        hook(table_uuid)
 
 
 def _claimed_uuid(registry: base_registry.BaseRegistry, location: str) -> str:

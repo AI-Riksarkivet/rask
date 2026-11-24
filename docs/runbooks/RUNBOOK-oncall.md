@@ -253,7 +253,9 @@ versions.
 
 **Cause.** The commit is the outbox (LH-497). The catalog records the caller it authorized every commit for, a catalog
 door's commit names its operation, and the catalog's reconcile timer (`catalog-commit-reconcile`) announces every version older than
-`catalog.commitReconcile.graceSeconds` that lineage's feed holds no row for. A re-announced version is a write whose own
+`catalog.commitReconcile.graceSeconds` that lineage's feed holds no row for, on each table a door filed a commit for
+(`_commit_pending/` on the control root); the walk (`catalog-commit-walk`, every `catalog.commitReconcile.walkPeriodSeconds`)
+does the same over every claimed table, and is the one that finds a version committed past every door. A re-announced version is a write whose own
 announcement was lost between its commit and its staging: a catalog restart mid-write, or a lineage emit failing before
 the outbox staged it (`CatalogLineageEmitFailing` beside it). An unauthored one is a version the catalog recorded no
 author for at that version, whatever `rask.author` or transaction uuid it carries: a manifest finalized past every catalog
@@ -275,7 +277,10 @@ A blocked reconciler (`CatalogCommitReconcileBlocked`, `commit_reconcile_ref_unr
 retained version or its commit time; it keeps that ref's mark until the read succeeds, so it skips nothing. A
 `commit_reconcile_table_unreadable` ERROR log names a table it claims but could not describe, and a
 `commit_reconcile_feed_unreadable` one says lineage's feed could not be described, so that tick announced nothing; both
-are retried on the next tick, and a table gone from the catalog is not one of them.
+are retried on the next tick (a table only the walk read is filed for it), and a table gone from the catalog is not one
+of them. A `commit_pending_unreadable` ERROR log names a table whose filed entries (`_commit_pending/<table uuid>/` on the
+control root) do not read: they are kept, and the walk reads the table. A write door answering 503 "did not answer
+filing the commit about to be made" means the store refused such an entry, and the door committed nothing.
 
 **Act.** A re-announcement needs nothing further once its cause is understood. An unauthored version is unjudged:
 treat it as an incident on the credential that wrote it, and restore the table to the last authored version if its
@@ -311,7 +316,7 @@ there, and one made by hand before git declared it is taken over as it stands.
 ## A timer has stopped
 
 **Symptom.** `LakehouseTimerStopped` (warning) names a timer (`catalog-control-relay`, `catalog-erasure-release`,
-`catalog-commit-reconcile`, `catalog-manifest-reclaim`, `catalog-declaration-converge` or
+`catalog-commit-reconcile`, `catalog-commit-walk`, `catalog-manifest-reclaim`, `catalog-declaration-converge` or
 `lineage-relay`): the newest window any replica saw claimed began more than three of the timer's periods ago, or every turn
 the timer took in fifteen minutes found its claim unreadable.
 

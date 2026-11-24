@@ -12,6 +12,12 @@ about two per retained index version. On the development estate a table costs ab
 reconcile reaches half its 600 s period near 1,500 tables: `LakehouseTimerSlow` pages when any timer's runs average more
 than half its period over an hour, and that page is when a worker role, a longer period or more CPU is decided again.
 
+**Amended 2026-11-24** ([ADR 0177](0177-the-commit-is-the-outbox.md), XC-204): the commit reconcile no longer walks every
+table each tick. It reads the tables a door filed a commit for in about the last twenty-five minutes, so its ceiling is
+tables written in that time, not tables held: half its period near 1,500 such tables. The hourly walk
+(`catalog-commit-walk`) reads every claimed table and reaches half its period near 9,000 tables at the same 0.2 s a
+table.
+
 **Status:** accepted. Source: LH-251 (#165): nothing reclaimed `__manifest`, every namespace operation kept a version,
 and a dropped id stayed readable in its history.
 

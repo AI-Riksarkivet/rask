@@ -335,6 +335,8 @@ def insert_into_table(
             # itself, so it waits out another commit's turn here rather than at a finalize ([[LH-259]]); the wait refuses a
             # table no uuid identifies, which takes no write ([[LH-534]]), and its files are recorded under the uuid once it lands.
             table.wait_for_turn(recorded_branch(req.branch))
+            if table.announces(transaction_properties.get(OPERATION_PROPERTY, "")):
+                table.file_pending_commit()
             dataset.insert(rows, mode=mode.value, transaction_properties=transaction_properties)
             version = int(dataset.version)
             transaction = committed_files.record_landed(table.record_committed_files, dataset, table_location=table.location, branch=req.branch, so=so)

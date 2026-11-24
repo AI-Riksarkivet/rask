@@ -652,13 +652,20 @@ catalog:
     # -- Seconds between two ticks of the timer that runs due erasure pin releases (`LANCE_ERASURE_RELEASE_PERIOD_SECONDS`); lateness only costs time.
     releasePeriodSeconds: 300 # @schema type: integer; minimum: 1
   # LH-497: the commit is the outbox. A write's announcement is made after its commit, and a crash between the commit
-  # and the staging of its event loses it; this timer reads each table's version log after its mark and announces every
-  # committed version lineage's feed lacks, under the run id derived from the commit, and pages on each find.
+  # and the staging of its event loses it; this timer reads the version log of each table a door filed a commit for,
+  # after its mark, and announces every committed version lineage's feed lacks, under the run id derived from the commit,
+  # and pages on each find.
   commitReconcile:
-    # A tick reads every table's versions after its mark, so it runs less often than the relays; it must run well
-    # inside maintenance.olderThanDays, since a version cleanup reclaimed is one it can no longer read.
-    # -- Seconds between two ticks of the timer on which the catalog announces every committed version lineage's feed lacks (`LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`).
+    # A tick reads the tables that took a commit since it last looked, so its cost follows the estate's writes and not
+    # its table count (XC-204); it must run well inside maintenance.olderThanDays, since a version cleanup reclaimed is
+    # one it can no longer read.
+    # -- Seconds between two ticks of the timer on which the catalog announces every committed version lineage's feed lacks, on each table a door filed a commit for (`LANCE_COMMIT_RECONCILE_PERIOD_SECONDS`).
     periodSeconds: 600 # @schema type: integer; minimum: 1
+    # A walk reads every claimed table's versions after its mark, about 16 store requests a table. It is what counts a
+    # version committed past every door, which files no entry for the timer above, so this period bounds how long such a
+    # version goes unpaged; the render refuses one at or past horizonSeconds, past which a version is no longer looked for.
+    # -- Seconds between two walks of every claimed table for a committed version lineage's feed lacks (`LANCE_COMMIT_WALK_PERIOD_SECONDS`).
+    walkPeriodSeconds: 3600 # @schema type: integer; minimum: 1
     # -- Seconds a committed version waits before the reconciler looks for its announcement (LANCE_COMMIT_RECONCILE_GRACE_SECONDS): longer than the inline publish and the outbox relay take to deliver it.
     graceSeconds: 600
     # The feed prunes rows past services.lineage.eventsRetentionDays, so a version older than that may be on no row while

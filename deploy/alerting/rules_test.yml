@@ -1893,6 +1893,45 @@ tests:
 
   # A timer whose work raises on every window it claims: it is not stopped, and its work does not happen. One that turns
   # every ten minutes pages as one that turns every minute does, and one failed turn between turns that ran pages nothing.
+  # A timer of an hour a turn is judged over three hours: one failed walk between walks that ran pages nothing, and a
+  # walk that fails on every turn pages.
+  - interval: 1m
+    input_series:
+      - series: 'timer_period_seconds{timer="catalog-commit-walk"}'
+        values: "3600x400"
+      - series: 'timer_turns_total{timer="catalog-commit-walk",outcome="failed"}'
+        values: "0x69 1x330"
+      - series: 'timer_turns_total{timer="catalog-commit-walk",outcome="ran"}'
+        values: "0x9 1x119 2x270"
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: LakehouseTimerFailing
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: LakehouseTimerFailing
+        exp_alerts: []
+  - interval: 1m
+    input_series:
+      - series: 'timer_period_seconds{timer="catalog-commit-walk"}'
+        values: "3600x400"
+      - series: 'timer_turns_total{timer="catalog-commit-walk",outcome="failed"}'
+        values: "0x59 1x59 2x59 3x59 4x160"
+      - series: 'timer_turns_total{timer="catalog-commit-walk",outcome="ran"}'
+        values: "5x400"
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: LakehouseTimerFailing
+        exp_alerts: []
+      - eval_time: 90m
+        alertname: LakehouseTimerFailing
+        exp_alerts:
+          - exp_labels:
+              severity: "warning"
+              service: "lakehouse"
+              timer: "catalog-commit-walk"
+            exp_annotations:
+              summary: "The timer catalog-commit-walk has failed on every window it ran for 20m"
+              description: "The work of the timer catalog-commit-walk has raised on each window a replica claimed, with none that returned, for 20 minutes and three of its turns before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
   - interval: 1m
     input_series:
       - series: 'timer_turns_total{timer="lineage-relay",outcome="failed"}'
@@ -1922,7 +1961,7 @@ tests:
               timer: "lineage-relay"
             exp_annotations:
               summary: "The timer lineage-relay has failed on every window it ran for 20m"
-              description: "The work of the timer lineage-relay has raised on each window a replica claimed, with none that returned, for 20 minutes and the half hour before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
+              description: "The work of the timer lineage-relay has raised on each window a replica claimed, with none that returned, for 20 minutes and three of its turns before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
       - eval_time: 45m
         alertname: LakehouseTimerFailing
         exp_alerts:
@@ -1932,14 +1971,14 @@ tests:
               timer: "catalog-manifest-reclaim"
             exp_annotations:
               summary: "The timer catalog-manifest-reclaim has failed on every window it ran for 20m"
-              description: "The work of the timer catalog-manifest-reclaim has raised on each window a replica claimed, with none that returned, for 20 minutes and the half hour before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
+              description: "The work of the timer catalog-manifest-reclaim has raised on each window a replica claimed, with none that returned, for 20 minutes and three of its turns before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
           - exp_labels:
               severity: "warning"
               service: "lakehouse"
               timer: "lineage-relay"
             exp_annotations:
               summary: "The timer lineage-relay has failed on every window it ran for 20m"
-              description: "The work of the timer lineage-relay has raised on each window a replica claimed, with none that returned, for 20 minutes and the half hour before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
+              description: "The work of the timer lineage-relay has raised on each window a replica claimed, with none that returned, for 20 minutes and three of its turns before, so what it does on a tick has not happened since. Read the service's `timer_work_failed` log for the error. Runbook: docs/runbooks/RUNBOOK-oncall.md#a-timer-has-stopped"
       - eval_time: 25m
         alertname: LakehouseTimerStopped
         exp_alerts: []

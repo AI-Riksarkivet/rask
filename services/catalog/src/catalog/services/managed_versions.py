@@ -1030,6 +1030,8 @@ def finalize(
     path = f"{table_objects.object_store_path(staged.location.rstrip('/'))}/_versions/{manifest_names.detached_name(staged.finalize_id)}"
     judged = request.model_copy(update={"manifest_path": path})
     try:
+        if table.announces(lineage_operation(staged)):
+            table.file_pending_commit()
         response = CreateTableVersionResponse.model_validate(table.finalize_staged_version(judged, writer=writer, kept=kept))
     except BaseException:
         refuse(staged, so)

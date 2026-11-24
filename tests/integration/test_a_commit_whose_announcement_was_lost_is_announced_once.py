@@ -34,10 +34,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import struct
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager
 from dataclasses import replace
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 
@@ -396,3 +398,231 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
         {"lance.catalog.operation": "insert"},
         {"lance.catalog.operation": "insert"},
     ]
+
+
+@contextmanager
+def _governed_estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any) -> Generator[tuple[httpx.Client, str]]:
+    """A catalog alice is signed in to and the lineage that keeps its feed, the bus between them joined: the catalog's
+    client and its url. The reconciler looks for a version at once (no grace)."""
+    alice = {"Authorization": f"Bearer {dex_issuer.mint('alice', connector='local', audience='lance-catalog')}"}
+    joined_bus(monkeypatch)
+    env = {
+        "LANCE_COMMIT_RECONCILE_GRACE_SECONDS": "0",
+        "RASK_OIDC_ENABLED": "true",
+        "RASK_OIDC_ISSUER": dex_issuer.issuer,
+        "RASK_OIDC_AUDIENCE": "lance-catalog",
+        "RASK_OIDC_ALLOW_INSECURE": "true",
+        "RASK_OIDC_IDP_ID": "dex",
+        "RASK_OIDC_CONNECTORS": json.dumps({"local": "dex"}),
+        "RASK_SA_ISSUER": sa_issuer.issuer,
+        "RASK_SA_FETCH_TOKEN_FILE": str(sa_issuer.fetch_token_file),
+        "RASK_SA_CA_FILE": str(sa_issuer.ca_file),
+        "RASK_SA_AUDIENCE": "rask-catalog",
+    }
+    with live_catalog(tmp_path / "catalog", monkeypatch, **env) as catalog_url, httpx.Client(base_url=catalog_url, headers=alice, timeout=60) as catalog:
+        lineage_token = tmp_path / "lineage-catalog-token"
+        lineage_token.write_text(sa_issuer.mint("rask-sa-lineage", audience="rask-catalog"))
+        monkeypatch.setenv("RASK_CATALOG_IDENTITY_TOKEN_FILE", str(lineage_token))
+        monkeypatch.setenv("RASK_OIDC_ENABLED", "false")
+        with live_lineage(catalog_url, monkeypatch):
+            yield catalog, catalog_url
+
+
+def _pending_entries() -> list[Path]:
+    """Every entry a door filed for a commit it was about to make, on the catalog's control root."""
+    from catalog.core.config import get_settings
+    from lakehouse.records import commit_records
+
+    return sorted((Path(get_settings().registry_root.removeprefix("file://")) / commit_records.PENDING_PREFIX).rglob("*.json"))
+
+
+def _lapse_every_pending_entry() -> None:
+    """Stamp every filed entry older than a door's lease, as the store's clock would read it once the door has stopped."""
+    from lakehouse.records import location_claims
+
+    lapsed = (datetime.now(UTC) - location_claims.LEASE - timedelta(minutes=1)).timestamp()
+    for entry in _pending_entries():
+        os.utime(entry, (lapsed, lapsed))
+
+
+def _filed_for() -> set[str]:
+    """The uuid of every table an entry is filed for."""
+    return {entry.parent.name for entry in _pending_entries()}
+
+
+def _uuid_of(catalog: httpx.Client, table: str) -> str:
+    return catalog.post(f"/v1/table/lance_catalog$db${table}/describe", json={}).json()["properties"]["rask.uuid"]
+
+
+@contextmanager
+def _a_store_that_does_not_describe(monkeypatch: pytest.MonkeyPatch, table: str) -> Generator[None]:
+    """While the block runs, the describe of ``lance_catalog$db$<table>`` fails as a store that does not answer."""
+    real_describe = DirectoryNamespace.describe_table
+
+    def describe(ns: DirectoryNamespace, request: DescribeTableRequest) -> DescribeTableResponse:
+        if list(request.id or []) == ["lance_catalog", "db", table]:
+            raise InternalError('IO { source: Generic { store: "S3", source: RetryError { inner: Status { status: 503 } } } }')
+        return real_describe(ns, request)
+
+    monkeypatch.setattr(DirectoryNamespace, "describe_table", describe)
+    try:
+        yield
+    finally:
+        monkeypatch.setattr(DirectoryNamespace, "describe_table", real_describe)
+
+
+def test_a_table_no_door_committed_to_since_its_entries_lapsed_is_not_read_by_the_tick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any
+) -> None:
+    from catalog.api import commit_reconcile
+
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+        assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
+        filed = _filed_for()
+        _lapse_every_pending_entry()
+        read = catalog_tick(catalog_url, commit_reconcile.tick)
+
+        idle = catalog_tick(catalog_url, commit_reconcile.tick)
+
+        assert (_uuid_of(catalog, "t") in filed, read.tables, idle.tables, _pending_entries()) == (True, len(filed), 0, [])
+
+
+def test_a_table_the_tick_could_not_read_keeps_its_entries_and_the_tables_it_read_lose_theirs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any
+) -> None:
+    from catalog.api import commit_reconcile
+
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+        assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        for table in ("t", "u"):
+            assert catalog.post(f"/v1/table/lance_catalog$db${table}/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
+        unread = _uuid_of(catalog, "u")
+        _lapse_every_pending_entry()
+
+        with _a_store_that_does_not_describe(monkeypatch, "u"):
+            ticked = catalog_tick(catalog_url, commit_reconcile.tick)
+
+        assert (ticked.unreadable, _filed_for()) == (1, {unread})
+
+
+def test_a_table_the_walk_could_not_read_is_filed_for_the_next_tick(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any) -> None:
+    from catalog.api import commit_reconcile
+
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+        assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
+        unread = _uuid_of(catalog, "t")
+        _lapse_every_pending_entry()
+        catalog_tick(catalog_url, commit_reconcile.tick)
+
+        with _a_store_that_does_not_describe(monkeypatch, "t"):
+            walked = catalog_tick(catalog_url, commit_reconcile.walk)
+
+        assert (walked.unreadable, _filed_for()) == (1, {unread})
+
+
+def test_the_entries_of_a_table_no_claim_records_any_more_are_removed_unread(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any
+) -> None:
+    from catalog.api import commit_reconcile
+    from catalog.core.config import get_settings
+    from lakehouse.lancekit.base_refs import decoded_path
+    from lakehouse.records import location_claims
+
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+        assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
+        # The claim on the table's location is gone, as it is once a dropped table is purged.
+        location = catalog.post("/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}).json()["location"]
+        (Path(get_settings().registry_root.removeprefix("file://")) / location_claims.claim_key(decoded_path(location))).unlink()
+        _lapse_every_pending_entry()
+
+        catalog_tick(catalog_url, commit_reconcile.tick)
+
+        assert _pending_entries() == []
+
+
+def test_a_version_committed_past_every_door_is_counted_by_the_walk_and_never_read_by_the_tick(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any
+) -> None:
+    from catalog.api import commit_reconcile
+
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+        assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
+        _lapse_every_pending_entry()
+        catalog_tick(catalog_url, commit_reconcile.tick)
+        location = catalog.post("/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}).json()["location"]
+        lance.dataset(location).insert(pa.table({"id": pa.array([9], pa.int64())}))
+        ticked = catalog_tick(catalog_url, commit_reconcile.tick)
+
+        walked = catalog_tick(catalog_url, commit_reconcile.walk)
+
+        assert (ticked.tables, ticked.unauthored, walked.unauthored) == (0, 0, 1)
+
+
+@pytest.mark.parametrize(
+    ("door", "request_of"),
+    [
+        pytest.param("insert", {"content": _rows(3, 5), "headers": _ARROW}, id="a-commit-lance-makes-in-one-call"),
+        pytest.param("delete", {"json": {"predicate": "id = 0"}}, id="a-commit-the-catalog-finalizes"),
+    ],
+)
+def test_a_doors_commit_files_its_table_for_the_next_tick(
+    door: str, request_of: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any
+) -> None:
+    from catalog.api import commit_reconcile
+
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+        assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
+        _lapse_every_pending_entry()
+        catalog_tick(catalog_url, commit_reconcile.tick)
+        uuid_of_t = _uuid_of(catalog, "t")
+
+        written = catalog.post(f"/v1/table/lance_catalog$db$t/{door}", **request_of)
+
+        assert (written.status_code, _filed_for()) == (200, {uuid_of_t})
+
+
+def _files_beside_the_entries(root: Path) -> set[str]:
+    """Every file under the catalog's root but the entries themselves, the namespace index a refused create's rollback
+    rewrites, and the location claims, where any create whose first write fails leaves the record of the location it
+    minted."""
+    apart = {"_commit_pending", "__manifest", "_locations"}
+    return {str(path.relative_to(root)) for path in root.rglob("*") if path.is_file() and not apart & set(path.parts)}
+
+
+@pytest.mark.parametrize(
+    ("table", "door", "request_of"),
+    [
+        pytest.param("t", "delete", {"json": {"predicate": "id = 0"}}, id="a-commit-the-catalog-finalizes"),
+        pytest.param("t", "insert", {"content": _rows(3, 5), "headers": _ARROW}, id="a-commit-lance-makes-in-one-call"),
+        pytest.param("new", "create", {"content": _rows(0, 3), "headers": _ARROW}, id="a-create"),
+    ],
+)
+def test_a_door_that_cannot_file_its_commit_makes_none_and_leaves_nothing(
+    table: str, door: str, request_of: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any
+) -> None:
+    from catalog.api import commit_reconcile
+    from catalog.core.config import get_settings
+    from lakehouse.records import commit_records
+
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+        assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
+        _lapse_every_pending_entry()
+        catalog_tick(catalog_url, commit_reconcile.tick)
+        root = Path(get_settings().registry_root.removeprefix("file://"))
+        # A store that refuses the entry: a file where the entries' directory goes.
+        pending = root / commit_records.PENDING_PREFIX
+        for leftover in sorted(pending.rglob("*"), reverse=True):
+            leftover.rmdir()
+        pending.rmdir()
+        pending.write_text("")
+        before = _files_beside_the_entries(root)
+
+        answered = catalog.post(f"/v1/table/lance_catalog$db${table}/{door}", **request_of)
+
+        assert (answered.status_code, _files_beside_the_entries(root) - before) == (503, set()), answered.text

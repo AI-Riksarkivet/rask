@@ -159,7 +159,9 @@ named the table by its id.
 - A crash between the Lance commit and the stage loses that announcement, not the write: the catalog recorded the
   caller it authorized the commit for and the commit names its operation, and the catalog's reconcile timer (`catalog.commitReconcile`, every 10 minutes by default) announces
   every committed version older than `catalog.commitReconcile.graceSeconds` that the feed holds no row for, from the
-  table's version log (LH-497). A write's run id is derived from its commit (the table's uuid, ref, ref incarnation and
+  table's version log (LH-497). It reads the tables a door committed to lately; a walk of every table
+  (`catalog.commitReconcile.walkPeriodSeconds`, hourly by default) does the same and is what counts a version written
+  past every door. A write's run id is derived from its commit (the table's uuid, ref, ref incarnation and
   version, keyed by a secret only the catalog holds), so the write's own announcement and a re-announcement are one
   run and land one row, whichever arrives first. A versioned dataset change carries its commit's time as `eventTime`
   for the same reason. A re-announcement names the same commit, at the same version and for the same author, as the

@@ -18,7 +18,15 @@ found only since, is listed on the obligation and counted on ``catalog.erasure.l
 that could not read what it judges counts ``catalog.erasure.late_derived_unwatched``, which pages too. It needs no commit
 feed, so it runs whether or not lineage has created one.
 
-It runs on the catalog's own timer (`catalog.api.timers`), once a window whatever the replica count. A tick that
+THE TICK READS THE TABLES A DOOR FILED A COMMIT FOR, and no other ([[XC-204]]). Every door files an entry before a commit
+it announces can land (`lakehouse.records.commit_records.file_pending`), so a table no entry names took no commit since
+the tick last looked and costs it nothing: one listing of the entries, then the tables they name. An entry is removed
+once it is older than a door's lease and the grace together, by a tick that read its table, or once no claim records
+the table. A version committed past
+every door files no entry, so a second timer walks every claimed table (:func:`walk`), at a period of its own: it is
+what counts a version no door made, and what finds a lost announcement should an entry ever be lost.
+
+Both run on the catalog's own timers (`catalog.api.timers`), once a window whatever the replica count. A tick that
 overlaps another all the same (one that outlasts its window) announces a found version twice, which the derived run id
 lands once on the feed; a mark one writes lower than another's costs a re-read, never a skipped version.
 """
@@ -26,7 +34,7 @@ lands once on the feed; a mark one writes lower than another's costs a re-read, 
 from __future__ import annotations
 
 import logging
-from datetime import UTC
+from datetime import UTC, timedelta
 from functools import partial
 
 from fastapi import Request
@@ -49,7 +57,8 @@ from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.process.correlation import continuing
-from lakehouse.records import location_claims
+from lakehouse.records import commit_records, location_claims
+from lakehouse.records.location_claims import ClaimStore, LocationClaim
 from lakehouse.storage.options import StorageOptions
 
 
@@ -122,11 +131,11 @@ class _LiveTables(BaseModel):
 
     tables: list[_LiveTable] = Field(default_factory=list)
     #: Claims whose table the store did not describe: their versions are not read this tick, so nothing is announced for them.
-    unreadable: int = 0
+    unreadable: list[LocationClaim] = Field(default_factory=list)
 
 
-async def _live_tables(request: Request, settings: Settings) -> _LiveTables:
-    """Every table the catalog holds a location claim for, whose name still describes to the claimed location.
+async def _live_tables(request: Request, settings: Settings, claims: list[LocationClaim]) -> _LiveTables:
+    """The tables ``claims`` name, each whose name still describes to the claimed location.
 
     The claims, not a walk of the names: every table the catalog makes or registers takes one (ADR 0173 §6), across
     every warehouse, and it records the table's uuid. A claim kept for a trashed table, or one whose holder no longer
@@ -134,7 +143,6 @@ async def _live_tables(request: Request, settings: Settings) -> _LiveTables:
     no answer about the name, so it is logged with its cause and counted, as an unreadable ref is.
     """
     store = table_claims.claim_store(settings)
-    claims = await run_in_threadpool(location_claims.held_claims, store)
     live = _LiveTables()
     for claim in claims:
         if claim.uuid is None or not claim.segments or await run_in_threadpool(table_claims.kept_in_trash, store, claim):
@@ -151,7 +159,7 @@ async def _live_tables(request: Request, settings: Settings) -> _LiveTables:
         except Exception as exc:  # noqa: BLE001 — a table this tick cannot reach is reached by the next; the others go on
             log.error("commit_reconcile_table_unreadable", extra={"table": claim.table, "error": str(exc)[:300]})
             _unreadable.add(1)
-            live.unreadable += 1
+            live.unreadable.append(claim)
             continue
         location = str(described.location or "")
         if decoded_path(location) != claim.location:
@@ -165,6 +173,29 @@ async def _live_tables(request: Request, settings: Settings) -> _LiveTables:
             )
         )
     return live
+
+
+class _Filed(BaseModel):
+    """One table entries are filed for, beside what the claim on the location they name says of it now."""
+
+    model_config = ConfigDict(frozen=True)
+
+    pending: commit_records.PendingTable
+    #: The claim that still records the table at that location; ``None`` when no entry reads, or no claim records it.
+    claim: LocationClaim | None
+    #: Whether the location is read and no claim there records the table: it is dropped for good or was never made, so
+    #: no pass will read it and its entries only wait to lapse.
+    gone: bool
+
+
+def _filed(store: ClaimStore, pending: commit_records.PendingTable) -> _Filed:
+    """``pending`` beside the claim on the location its entries name."""
+    if pending.location is None:
+        return _Filed(pending=pending, claim=None, gone=False)
+    read = location_claims.read(store, pending.location)
+    if read is None or read.claim.uuid != pending.table_uuid:
+        return _Filed(pending=pending, claim=None, gone=True)
+    return _Filed(pending=pending, claim=read.claim, gone=False)
 
 
 def _feed_location(settings: CatalogLineageSettings, ns: LanceNamespace) -> str | None:
@@ -219,10 +250,52 @@ async def _announce(
 
 
 async def tick(ctx: Tick) -> CommitReconcileTick:
-    """Announce every committed version past the grace that lineage's feed lacks."""
+    """Announce every committed version past the grace that lineage's feed lacks, on each table a door filed a commit for.
+
+    A table's lapsed entries are removed only by a pass that read every ref of it, or once no claim records the table: one
+    this pass did not read (its store did not answer, its warehouse is deactivated, it is in the trash, a rename is in
+    flight) keeps them, so the tick after it is readable again looks for what it holds.
+    """
+    store = table_claims.claim_store(ctx.settings)
+    lapse = location_claims.LEASE + timedelta(seconds=ctx.settings.commit_reconcile_grace_seconds)
+    pending = await run_in_threadpool(partial(commit_records.pending_tables, store.control_root, store.storage_options, lapse=lapse))
+    filed = [await run_in_threadpool(_filed, store, table) for table in pending]
+    done = await _reconcile(ctx, [table.claim for table in filed if table.claim is not None])
+    lapsed = [path for table in filed if table.gone or table.pending.table_uuid in done.read for path in table.pending.lapsed]
+    await run_in_threadpool(commit_records.settle_pending, store.control_root, store.storage_options, lapsed)
+    return done.tick
+
+
+async def walk(ctx: Tick) -> CommitReconcileTick:
+    """Announce every committed version past the grace that lineage's feed lacks, on every table the catalog claims, and
+    count each version no door made.
+
+    A table the walk could not read is filed (:func:`commit_records.file_pending`), so the tick reads it again within its
+    own period and a table that stays unreadable keeps counting, rather than waiting a walk's period for each try.
+    """
+    store = table_claims.claim_store(ctx.settings)
+    done = await _reconcile(ctx, await run_in_threadpool(location_claims.held_claims, store))
+    for claim in done.unread:
+        if claim.uuid is not None:
+            await run_in_threadpool(partial(commit_records.file_pending, store.control_root, store.storage_options, claim.uuid, location=claim.location))
+    return done.tick
+
+
+class _Done(BaseModel):
+    """What one pass did: the uuids of the tables it read every ref of, and the claims of those it could not read."""
+
+    model_config = ConfigDict(frozen=True)
+
+    tick: CommitReconcileTick
+    read: frozenset[str] = frozenset()
+    unread: list[LocationClaim] = Field(default_factory=list)
+
+
+async def _reconcile(ctx: Tick, claims: list[LocationClaim]) -> _Done:
+    """Announce every committed version past the grace that lineage's feed lacks, on the tables ``claims`` names."""
     request, settings, so, clock = ctx.request, ctx.settings, ctx.storage_options, ctx.clock
     if not commit_ids_of(request).ready:
-        return CommitReconcileTick(skipped=True)
+        return _Done(tick=CommitReconcileTick(skipped=True))
     emitter = app_wire(request, "lineage_emitter", LineageEmitter)
     estate = await estate_namespace(request, settings)
     late_derived = await _watch_released(settings, estate, so)
@@ -231,22 +304,32 @@ async def tick(ctx: Tick) -> CommitReconcileTick:
     except Exception as exc:  # noqa: BLE001 — a feed this tick cannot read is read by the next; nothing is announced without it
         log.error("commit_reconcile_feed_unreadable", extra={"error": str(exc)[:300]})
         _unreadable.add(1)
-        return CommitReconcileTick(skipped=True, unreadable=1, late_derived=late_derived)
+        return _Done(tick=CommitReconcileTick(skipped=True, unreadable=1, late_derived=late_derived))
     if feed is None:
-        return CommitReconcileTick(skipped=True, late_derived=late_derived)
-    live = await _live_tables(request, settings)
+        return _Done(tick=CommitReconcileTick(skipped=True, late_derived=late_derived))
+    live = await _live_tables(request, settings, claims)
     tables = live.tables
     now = clock().astimezone(UTC)
     tick_pass = _Pass(emitter=emitter, request=request, settings=settings, so=so, on_feed=commit_reconcile.feed_reading(settings, so, feed=feed, now=now))
-    total = _Reconciled(unreadable=live.unreadable)
+    total = _Reconciled(unreadable=len(live.unreadable))
+    by_uuid = {claim.uuid: claim for claim in claims}
+    read: set[str] = set()
+    unread = list(live.unreadable)
     for table in tables:
-        total = total.plus(await _reconcile_table(table, tick_pass=tick_pass))
+        reconciled = await _reconcile_table(table, tick_pass=tick_pass)
+        table_uuid = str(table.uuids.table_uuid)
+        if reconciled.unreadable:
+            unread.append(by_uuid[table_uuid])
+        else:
+            read.add(table_uuid)
+        total = total.plus(reconciled)
     reannounced, unauthored, unreadable = total.reannounced, total.unauthored, total.unreadable
     log.info(
         "commit_reconcile_tick",
         extra={"tables": len(tables), "reannounced": reannounced, "unauthored": unauthored, "unreadable": unreadable, "late_derived": late_derived},
     )
-    return CommitReconcileTick(tables=len(tables), reannounced=reannounced, unauthored=unauthored, unreadable=unreadable, late_derived=late_derived)
+    done = CommitReconcileTick(tables=len(tables), reannounced=reannounced, unauthored=unauthored, unreadable=unreadable, late_derived=late_derived)
+    return _Done(tick=done, read=frozenset(read), unread=unread)
 
 
 class _Pass(BaseModel):

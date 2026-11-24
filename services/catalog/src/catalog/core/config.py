@@ -378,10 +378,14 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: Seconds between two ticks of the timer that releases what is due (`catalog/api/erasure_release.py`). 0 = no
     #: timer, so a deployment schedules releases that nothing performs: the chart sets it.
     erasure_release_period_seconds: float = Field(default=0, ge=0, alias="LANCE_ERASURE_RELEASE_PERIOD_SECONDS")
-    #: Seconds between two ticks of the timer that announces every committed version lineage's feed lacks
-    #: (`catalog/api/commit_reconcile.py`, [[LH-497]]). 0 = no timer, so an announcement lost between a commit and its
-    #: staging is never made.
+    #: Seconds between two ticks of the timer that announces every committed version lineage's feed lacks, on each table a
+    #: door filed a commit for (`catalog/api/commit_reconcile.py`, [[LH-497]]). 0 = no timer, so an announcement lost
+    #: between a commit and its staging is never made and the entries doors file are never removed: the chart requires
+    #: a period.
     commit_reconcile_period_seconds: float = Field(default=0, ge=0, alias="LANCE_COMMIT_RECONCILE_PERIOD_SECONDS")
+    #: Seconds between two walks of every claimed table for a committed version the feed lacks ([[XC-204]]): what counts a
+    #: version committed past every door, which files no entry for the timer above to read. 0 = no timer.
+    commit_walk_period_seconds: float = Field(default=0, ge=0, alias="LANCE_COMMIT_WALK_PERIOD_SECONDS")
     #: How old a version is before the reconciler looks for its announcement: the inline publish and the outbox relay
     #: deliver a commit's own announcement within it, so a younger one is still in flight, not lost.
     commit_reconcile_grace_seconds: int = Field(default=600, ge=0, alias="LANCE_COMMIT_RECONCILE_GRACE_SECONDS")
