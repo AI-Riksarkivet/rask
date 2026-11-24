@@ -134,11 +134,11 @@ def _trace_every_request(app: FastAPI) -> None:
 
 
 def _served(
-    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]], ready_check: ReadyCheck, probes_port: int | None
+    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]], ready_check: ReadyCheck, *, probes_port: int | None, request_threads: int | None
 ) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
-    """``lifespan``, entered once the serving loop's thread pool is reported (`lakehouse.service_app.thread_pool`), with the drain
-    armed while it serves, and the probes served beside it on ``probes_port`` when one is given
-    (`lakehouse.process.probe_server`).
+    """``lifespan``, entered once the serving loop's thread pool is bounded at ``request_threads`` and reported
+    (`lakehouse.service_app.thread_pool`), with the drain armed while it serves, and the probes served beside it on
+    ``probes_port`` when one is given (`lakehouse.process.probe_server`).
 
     ARMED AT SIGTERM, for every service the factory builds (`lakehouse.process.draining.arm_drain_on_sigterm`). A lifespan's own
     ``finally`` runs only after uvicorn has stopped accepting connections and drained, so a probe reading a flag set
@@ -150,7 +150,7 @@ def _served(
 
     @asynccontextmanager
     async def serving(app: FastAPI) -> AsyncGenerator[None]:
-        thread_pool.watch()
+        thread_pool.watch(request_threads)
         async with lifespan(app), _probes_beside(app, ready_check, probes_port):
             disarm = arm_drain_on_sigterm(app)
             try:
@@ -197,6 +197,7 @@ def build_service_app(
     request_deadline_seconds: float,
     live_check: LiveCheck | None = None,
     probes_port: int | None = None,
+    request_threads: int | None = None,
     routers: Sequence[APIRouter] = (),
     inner_middleware: Sequence[HttpMiddleware] = (),
     outer_middleware: Sequence[Middleware] = (),
@@ -213,6 +214,9 @@ def build_service_app(
 
     ``live_check`` is for a process whose probes are not served by the loop its work runs on (a worker serving them
     from a thread): what `/livez` then answers, where otherwise it proves only that the serving loop turns.
+
+    ``request_threads`` bounds the threads the service's blocking calls run on at once (`lakehouse.service_app.thread_pool`);
+    unset, anyio's own bound of 40 holds.
 
     ``probes_port`` is the port the kubelet probes, served from a thread of its own while the service serves, so a
     probe does not wait behind a burst of requests on the serving loop (`lakehouse.process.probe_server`); ``/livez`` there
@@ -240,7 +244,7 @@ def build_service_app(
     app = _UncachedApp(
         title=title,
         version=version,
-        lifespan=_served(lifespan, ready_check, probes_port),
+        lifespan=_served(lifespan, ready_check, probes_port=probes_port, request_threads=request_threads),
         docs_url=None,
         redoc_url=None,
         openapi_url="/openapi.json" if docs_enabled else None,

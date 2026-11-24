@@ -39,7 +39,11 @@ async def _ready(_request: Request) -> Readiness:
     return Readiness(status=ReadinessStatus.ready)
 
 
-def test_a_blocking_door_is_counted_as_a_busy_thread_while_it_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("request_threads", "limit"),
+    [pytest.param(None, 40.0, id="the-pools-own-bound"), pytest.param(3, 3.0, id="the-bound-the-service-is-given")],
+)
+def test_a_blocking_door_is_counted_as_a_busy_thread_while_it_runs(request_threads: int | None, limit: float, monkeypatch: pytest.MonkeyPatch) -> None:
     reader = InMemoryMetricReader()
     monkeypatch.setattr(thread_pool, "_meter", MeterProvider(metric_readers=[reader]).get_meter("lance.app"))
     monkeypatch.setattr(thread_pool, "_registered", False)
@@ -58,6 +62,7 @@ def test_a_blocking_door_is_counted_as_a_busy_thread_while_it_runs(monkeypatch: 
         ready_check=_ready,
         max_body_bytes=1024,
         request_deadline_seconds=30,
+        request_threads=request_threads,
     )
 
     @app.get("/blocking")
@@ -69,5 +74,5 @@ def test_a_blocking_door_is_counted_as_a_busy_thread_while_it_runs(monkeypatch: 
         during = client.get("/blocking").json()
         after = _exported(reader)
 
-    assert during == {"threadpool.busy": 1.0, "threadpool.limit": 40.0, "threadpool.waiting": 0.0}
-    assert after == {"threadpool.busy": 0.0, "threadpool.limit": 40.0, "threadpool.waiting": 0.0}
+    assert during == {"threadpool.busy": 1.0, "threadpool.limit": limit, "threadpool.waiting": 0.0}
+    assert after == {"threadpool.busy": 0.0, "threadpool.limit": limit, "threadpool.waiting": 0.0}

@@ -36,10 +36,13 @@ def _waiting(_options: metrics.CallbackOptions) -> list[metrics.Observation]:
     return [metrics.Observation(_limiter.statistics().tasks_waiting)] if _limiter is not None else []
 
 
-def watch() -> None:
-    """Report the calling event loop's default thread pool from now on. Called inside the loop, when the app starts."""
+def watch(limit: int | None = None) -> None:
+    """Report the calling event loop's default thread pool from now on, bounded at ``limit`` threads when one is given
+    (anyio's own bound, 40, otherwise). Called inside the loop, when the app starts."""
     global _limiter, _registered
     _limiter = to_thread.current_default_thread_limiter()
+    if limit is not None:
+        _limiter.total_tokens = limit
     if _registered:
         return
     _registered = True

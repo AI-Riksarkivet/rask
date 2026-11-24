@@ -1455,6 +1455,12 @@
                         "replicas": {
                             "description": "Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count.",
                             "type": "integer"
+                        },
+                        "requestThreads": {
+                            "description": "The most threads the catalog's blocking calls (store reads, Lance commits) run on at once (LANCE_REQUEST_THREADS).",
+                            "type": "integer",
+                            "maximum": 256,
+                            "minimum": 1
                         }
                     },
                     "additionalProperties": false

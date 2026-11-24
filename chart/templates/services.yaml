@@ -63,6 +63,7 @@ spec:
             - { name: LANCE_MAX_BODY_BYTES, value: {{ .Values.catalog.maxBodyBytes | int64 | quote }} }
             - { name: LANCE_REQUEST_DEADLINE_SECONDS, value: {{ .Values.catalog.requestDeadlineSeconds | quote }} }
             - { name: LANCE_PROBES_PORT, value: {{ .Values.services.catalog.probesPort | quote }} }
+            - { name: LANCE_REQUEST_THREADS, value: {{ .Values.services.catalog.requestThreads | quote }} }
             - { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ hasKey .Values.catalog "maxConcurrentWrites" | ternary .Values.catalog.maxConcurrentWrites 16 | int | quote }} }
             - { name: LANCE_TRASH_GRACE_DAYS, value: {{ hasKey .Values.catalog "trashGraceDays" | ternary .Values.catalog.trashGraceDays 7 | quote }} }
 

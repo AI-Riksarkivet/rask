@@ -634,6 +634,10 @@ class Settings(
     #: The port the catalog answers `/livez` and `/readyz` on from a thread of their own (`lakehouse.process.probe_server`),
     #: so a probe does not wait behind a burst of requests; unset, they are answered on the serving port alone.
     probes_port: int | None = Field(default=None, ge=1, le=65535, alias="LANCE_PROBES_PORT")
+    #: The most threads the catalog's blocking calls (a store read, a Lance commit, a sync door) run on at once
+    #: (`lakehouse.service_app.thread_pool`). Every thread shares the interpreter with the serving loop, so a larger pool
+    #: runs no more Python at once and makes the loop wait longer for its turn; unset, anyio's own bound of 40 holds.
+    request_threads: int | None = Field(default=None, ge=1, le=256, alias="LANCE_REQUEST_THREADS")
 
     #: How long an `Idempotency-Key`'s record outlives its last write before maintenance's daily scan asks for it to go
     #: (`catalog.services.idempotency_records.reclaim`, [[LH-576]]): a retry inside it is answered from the record, one after it runs as

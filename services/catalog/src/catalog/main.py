@@ -472,6 +472,7 @@ app = build_service_app(
     routers=[api_router],
     ready_check=signing_ready_check(commit_ids_ready_check(_catalog_ready)),
     probes_port=_settings.probes_port,
+    request_threads=_settings.request_threads,
     # A body over the cap is refused 413 before it is buffered (Arrow-IPC OOM guard, `lakehouse.service_app.body_limit`).
     max_body_bytes=_settings.max_body_bytes,
     request_deadline_seconds=_settings.request_deadline_seconds,
