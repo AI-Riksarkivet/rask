@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict
 
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import ListLimit
+from catalog.api.rask_params import RaskFlag
 from catalog.api.security import Caller, CurrentToken
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
@@ -146,6 +147,7 @@ async def delete_table_branch(
     settings: SettingsDep,
     clock: ClockDep,
     token: CurrentToken = None,
+    purge: RaskFlag = False,
 ) -> DeleteTableBranchResponse:
     """Delete a branch from the table — wraps the pylance ``delete_branch`` data-plane op.
 
@@ -153,6 +155,8 @@ async def delete_table_branch(
     the branch is HIDDEN for that long instead of destroyed ([[LH-429]]): no listing names it and no door opens it, and
     ``POST /management/v1/table/{id}/branches/restore`` brings it back with every commit made on it. It is announced as
     deleted either way, since it is gone from every reader's view.
+
+    ``purge=true`` destroys the branch at once whatever the warehouse keeps ([[LH-604]]), as on a table's drop.
 
     The disappearance is the half worth announcing: a console holding a branch list has no other way
     to learn the branch is gone, and a reader that polls discovers it by a failing read. So EVERY branch the
@@ -165,7 +169,8 @@ async def delete_table_branch(
     """
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
-    hiding = await _hiding(settings, table, segments, by=token.subject if token is not None else "anonymous", now=clock())
+    # `purge=true` is the caller saying "gone now", as on a table's drop: nothing is kept ([[LH-604]]).
+    hiding = None if purge else await _hiding(settings, table, segments, by=token.subject if token is not None else "anonymous", now=clock())
     try:
         removed = await run_in_threadpool(partial(refs.delete_branch, table, so, body, hiding=hiding))
     except (refs.BranchDeleteStoppedError, refs.BranchHideStoppedError) as stopped:
@@ -184,11 +189,11 @@ def _erasure_in_flight(settings: Settings, table_uuid: str) -> bool:
 
 async def _hiding(settings: Settings, table: DoorTable, segments: list[str], *, by: str, now: datetime) -> Callable[[], hidden_branches.Hiding | None] | None:
     """How a recoverable delete of the table's branches decides, or ``None`` where every delete destroys: the table's
-    warehouse keeps nothing, or no uuid identifies the table. The decision is asked inside the delete's hold: a deadline
-    to hide until, or ``None`` while an erasure of the table is in flight, whose job and verification judge only the refs
-    that stand."""
+    warehouse keeps nothing, hiding is switched off (``LANCE_BRANCH_TRASH_ENABLED``), or no uuid identifies the table.
+    The decision is asked inside the delete's hold: a deadline to hide until, or ``None`` while an erasure of the table
+    is in flight, whose job and verification judge only the refs that stand."""
     table_uuid = table.resolved.uuid
-    if table_uuid is None:
+    if table_uuid is None or not settings.branch_trash_enabled:
         return None
     days = await run_in_threadpool(
         partial(warehouses.grace_days_under, settings.registry_root, settings.storage_options(), segments, estate=settings.trash_grace_days)

@@ -1574,7 +1574,9 @@ governing their data. The project-scoped surface is the console's project page, 
   hidden branch inside it, refused past the deadline. `POST /management/v1/table/{id}/branches/deleted/list` (a metadata
   read, by its last segment) lists those a restore can bring back, with the cut point and the deadline and no person's id
   ([[LH-603]]). The `catalog-branch-trash` timer (`catalog.api.branch_trash`)
-  deletes each one past its deadline with Lance's own branch delete. Recording an erasure deletes every hidden branch
+  deletes each one past its deadline with Lance's own branch delete. `?purge=true` on the delete destroys at once, and
+  `catalog.branchTrash.enabled=false` (`LANCE_BRANCH_TRASH_ENABLED`) makes every branch delete final without touching the
+  table trash ([[LH-604]]). Recording an erasure deletes every hidden branch
   of the table at once (`hidden_branches.purge_all`), and until its release has run a branch delete on that table
   destroys and no restore is served (`endpoints/branches._erasure_in_flight`); a deregister purges them too. Pinned by
   `tests/integration/test_a_deleted_branch_is_kept_whole_until_its_deadline.py`.

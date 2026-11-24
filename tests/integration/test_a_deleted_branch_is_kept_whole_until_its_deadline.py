@@ -124,11 +124,22 @@ def test_a_branch_a_deleted_one_was_cut_from_is_not_deleted_while_that_one_is_ke
         assert (refused.status_code, refused.json()["code"], "the deleted branch 'fork' was cut from it" in refused.json()["detail"]) == (409, 19, True)
 
 
-def test_a_warehouse_keeping_nothing_destroys_a_deleted_branch_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    with _a_table_with_a_branch_holding_a_commit(tmp_path, monkeypatch, grace_days="0") as catalog:
+@pytest.mark.parametrize(
+    ("grace_days", "hiding", "purge"),
+    [
+        pytest.param("0", "true", None, id="the warehouse keeps nothing"),
+        pytest.param("1", "false", None, id="hiding branches is switched off"),
+        pytest.param("1", "true", "true", id="the caller asks for it gone now"),
+    ],
+)
+def test_a_branch_delete_that_keeps_nothing_destroys_the_branch_at_once(
+    grace_days: str, hiding: str, purge: str | None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("LANCE_BRANCH_TRASH_ENABLED", hiding)
+    with _a_table_with_a_branch_holding_a_commit(tmp_path, monkeypatch, grace_days=grace_days) as catalog:
         kept = _root(catalog) / "tree" / _BRANCH
 
-        deleted = catalog.post(_DELETE, json={"name": _BRANCH})
+        deleted = catalog.post(_DELETE, params={} if purge is None else {"purge": purge}, json={"name": _BRANCH})
 
         assert (deleted.status_code, kept.exists(), catalog.post(_RESTORE, json={"name": _BRANCH}).status_code) == (200, False, 404)
 

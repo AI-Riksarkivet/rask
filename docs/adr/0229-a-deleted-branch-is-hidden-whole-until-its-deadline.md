@@ -54,11 +54,20 @@ snapshots stay until expiry, so the head is recoverable there until then.
 6. **A deregister deletes the table's hidden branches for good** once the table is detached and before its records
    end, since it leaves the bytes and nothing would end the directory or the tag afterwards.
 
+7. **Two guards around the hiding (LH-604).** `?purge=true` on `branches/delete` destroys the branch at once, as on a
+   table's drop, for a caller who means gone now. `catalog.branchTrash.enabled` (default true) is the hiding's own
+   switch: off, every branch delete destroys, and branches already hidden are still listed, restored and deleted at
+   their deadline. It exists because the hiding stands on measured Lance behaviour, so it can be turned off without
+   touching the table and namespace trash.
+
 ## Consequences
 
 - A deleted branch comes back with every commit made on it, inside the grace period.
 - A hidden branch's bytes stay readable to a credential vended for the table until the deadline, as a table's old
-  versions do; the catalog's own doors refuse the name.
+  versions do; the catalog's own doors refuse the name. A stock pylance client lists branches from the store, not through
+  the catalog (measured on 14.0.3), which is why the reference file goes: a mark kept only in the catalog would leave a
+  deleted branch in every such listing until its deadline. No reader or writer changes a reference itself: a read-tier or
+  write-tier credential is refused every write under `_refs/` (the maintain tier reaches them).
 - While a branch is hidden the catalog's tag keeps the version it was cut from. That version's files outlive the
   parent's cleanup, `version/delete` refuses it as it refuses any tagged version, and the branch it was cut from cannot
   be deleted: that delete answers 409 naming the hidden branch and its deadline.

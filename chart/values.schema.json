@@ -190,6 +190,10 @@
                 "branchTrash": {
                     "type": "object",
                     "properties": {
+                        "enabled": {
+                            "description": "Whether a branch delete hides the branch where its warehouse keeps drops (`LANCE_BRANCH_TRASH_ENABLED`, ADR 0229). The hiding stands on Lance behaviour its format does not describe, measured on the pinned pylance: `false` makes every branch delete final, and branches already hidden are still listed, restored and deleted at their deadline.",
+                            "type": "boolean"
+                        },
                         "periodSeconds": {
                             "description": "Seconds between two ticks of the timer that deletes for good each hidden branch past its deadline (`LANCE_BRANCH_TRASH_PERIOD_SECONDS`).",
                             "type": "integer",

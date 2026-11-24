@@ -64,6 +64,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | backups.volumeSnapshot.kubectlImage | string | `"alpine/k8s:1.31.3"` | Image the snapshot job runs; it needs both a shell and kubectl. |
 | backups.volumeSnapshot.schedule | string | `"0 3 * * *"` | Cron schedule of the volume snapshot (default daily 03:00). |
 | backups.volumeSnapshot.snapshotClassName | string | `""` | VolumeSnapshotClass the snapshot names; empty uses the cluster default. |
+| catalog.branchTrash.enabled | bool | `true` | Whether a branch delete hides the branch where its warehouse keeps drops (`LANCE_BRANCH_TRASH_ENABLED`, ADR 0229). The hiding stands on Lance behaviour its format does not describe, measured on the pinned pylance: `false` makes every branch delete final, and branches already hidden are still listed, restored and deleted at their deadline. |
 | catalog.branchTrash.periodSeconds | int | `3600` | Seconds between two ticks of the timer that deletes for good each hidden branch past its deadline (`LANCE_BRANCH_TRASH_PERIOD_SECONDS`). |
 | catalog.commitReconcile.graceSeconds | int | `600` | Seconds a committed version waits before the reconciler looks for its announcement (LANCE_COMMIT_RECONCILE_GRACE_SECONDS): longer than the inline publish and the outbox relay take to deliver it. |
 | catalog.commitReconcile.horizonSeconds | int | `86400` | Seconds back the reconciler looks for a version's announcement (LANCE_COMMIT_RECONCILE_HORIZON_SECONDS); kept inside services.lineage.eventsRetentionDays. |

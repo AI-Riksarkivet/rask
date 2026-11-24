@@ -666,6 +666,8 @@ catalog:
   # this timer deletes each hidden branch for good once its deadline has passed, and releases the tag the catalog held on
   # the version it was cut from.
   branchTrash:
+    # -- Whether a branch delete hides the branch where its warehouse keeps drops (`LANCE_BRANCH_TRASH_ENABLED`, ADR 0229). The hiding stands on Lance behaviour its format does not describe, measured on the pinned pylance: `false` makes every branch delete final, and branches already hidden are still listed, restored and deleted at their deadline.
+    enabled: true # @schema type: boolean
     # -- Seconds between two ticks of the timer that deletes for good each hidden branch past its deadline (`LANCE_BRANCH_TRASH_PERIOD_SECONDS`).
     periodSeconds: 3600 # @schema type: integer; minimum: 1
   # LH-497: the commit is the outbox. A write's announcement is made after its commit, and a crash between the commit

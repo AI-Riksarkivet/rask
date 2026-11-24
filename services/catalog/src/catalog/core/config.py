@@ -384,6 +384,10 @@ class CatalogMaintenanceSettings(BaseSettings):
     #: between a commit and its staging is never made and the entries doors file are never removed: the chart requires
     #: a period.
     commit_reconcile_period_seconds: float = Field(default=0, ge=0, alias="LANCE_COMMIT_RECONCILE_PERIOD_SECONDS")
+    #: Whether a branch delete hides the branch where its table's warehouse keeps drops ([[LH-429]], ADR 0229). The hiding
+    #: stands on Lance behaviour its format does not describe, so it has a switch of its own ([[LH-604]]): off, every
+    #: branch delete destroys, and a branch already hidden is still listed, restored and deleted at its deadline.
+    branch_trash_enabled: bool = Field(default=True, alias="LANCE_BRANCH_TRASH_ENABLED")
     #: Seconds between two ticks of the timer that deletes for good each hidden branch past its deadline
     #: (`catalog/api/branch_trash.py`, [[LH-429]]). 0 = no timer, so a branch a recoverable delete hid keeps its bytes.
     branch_trash_period_seconds: float = Field(default=0, ge=0, alias="LANCE_BRANCH_TRASH_PERIOD_SECONDS")

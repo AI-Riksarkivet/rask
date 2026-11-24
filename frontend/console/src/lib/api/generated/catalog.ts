@@ -3355,6 +3355,8 @@ export interface paths {
          *     ``POST /management/v1/table/{id}/branches/restore`` brings it back with every commit made on it. It is announced as
          *     deleted either way, since it is gone from every reader's view.
          *
+         *     ``purge=true`` destroys the branch at once whatever the warehouse keeps ([[LH-604]]), as on a table's drop.
+         *
          *     The disappearance is the half worth announcing: a console holding a branch list has no other way
          *     to learn the branch is gone, and a reader that polls discovers it by a failing read. So EVERY branch the
          *     delete removes is announced, each with the incarnation it was ([[LH-413]]): the branches nested inside the
