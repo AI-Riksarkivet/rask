@@ -260,7 +260,7 @@ async def tick(ctx: Tick) -> CommitReconcileTick:
     lapse = location_claims.LEASE + timedelta(seconds=ctx.settings.commit_reconcile_grace_seconds)
     pending = await run_in_threadpool(partial(commit_records.pending_tables, store.control_root, store.storage_options, lapse=lapse))
     filed = [await run_in_threadpool(_filed, store, table) for table in pending]
-    done = await _reconcile(ctx, [table.claim for table in filed if table.claim is not None])
+    done = await _reconcile(ctx, [table.claim for table in filed if table.claim is not None], event="commit_reconcile_tick")
     lapsed = [path for table in filed if table.gone or table.pending.table_uuid in done.read for path in table.pending.lapsed]
     await run_in_threadpool(commit_records.settle_pending, store.control_root, store.storage_options, lapsed)
     return done.tick
@@ -274,7 +274,7 @@ async def walk(ctx: Tick) -> CommitReconcileTick:
     own period and a table that stays unreadable keeps counting, rather than waiting a walk's period for each try.
     """
     store = table_claims.claim_store(ctx.settings)
-    done = await _reconcile(ctx, await run_in_threadpool(location_claims.held_claims, store))
+    done = await _reconcile(ctx, await run_in_threadpool(location_claims.held_claims, store), event="commit_walk")
     for claim in done.unread:
         if claim.uuid is not None:
             await run_in_threadpool(partial(commit_records.file_pending, store.control_root, store.storage_options, claim.uuid, location=claim.location))
@@ -291,8 +291,9 @@ class _Done(BaseModel):
     unread: list[LocationClaim] = Field(default_factory=list)
 
 
-async def _reconcile(ctx: Tick, claims: list[LocationClaim]) -> _Done:
-    """Announce every committed version past the grace that lineage's feed lacks, on the tables ``claims`` names."""
+async def _reconcile(ctx: Tick, claims: list[LocationClaim], *, event: str) -> _Done:
+    """Announce every committed version past the grace that lineage's feed lacks, on the tables ``claims`` names, and log
+    what the pass did as ``event``."""
     request, settings, so, clock = ctx.request, ctx.settings, ctx.storage_options, ctx.clock
     if not commit_ids_of(request).ready:
         return _Done(tick=CommitReconcileTick(skipped=True))
@@ -325,7 +326,7 @@ async def _reconcile(ctx: Tick, claims: list[LocationClaim]) -> _Done:
         total = total.plus(reconciled)
     reannounced, unauthored, unreadable = total.reannounced, total.unauthored, total.unreadable
     log.info(
-        "commit_reconcile_tick",
+        event,
         extra={"tables": len(tables), "reannounced": reannounced, "unauthored": unauthored, "unreadable": unreadable, "late_derived": late_derived},
     )
     done = CommitReconcileTick(tables=len(tables), reannounced=reannounced, unauthored=unauthored, unreadable=unreadable, late_derived=late_derived)

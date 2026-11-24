@@ -35,7 +35,7 @@ def page_limit(limit: int | None) -> int:
     return min(limit, MAX_LIST_LIMIT)
 
 
-def list_limit(
+async def list_limit(
     limit: Annotated[
         int | None,
         Query(

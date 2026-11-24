@@ -447,8 +447,13 @@ TrashedUuidQuery = Annotated[
 ]
 
 
-def get_resolver(request: Request, settings: SettingsDep) -> Resolver:
-    """This request's :class:`Resolver`: FastAPI solves one dependency once per request, so every reader shares it."""
+async def get_resolver(request: Request, settings: SettingsDep) -> Resolver:
+    """This request's :class:`Resolver`: FastAPI solves one dependency once per request, so every reader shares it.
+
+    A coroutine, as every dependency here that only reads what the process already holds is: FastAPI runs a plain
+    function in the thread pool, where it queues behind the store calls of every other request ([[XC-204]], measured
+    2026-11-24: eleven thread-pool calls for one describe, six of them such dependencies).
+    """
     return Resolver(request, settings)
 
 
@@ -513,7 +518,7 @@ async def get_data_namespace(request: Request, settings: SettingsDep, ns: Namesp
 DataNamespaceDep = Annotated[LanceNamespace, Depends(get_data_namespace)]
 
 
-def get_fga_client(request: Request) -> OpenFgaClient | None:
+async def get_fga_client(request: Request) -> OpenFgaClient | None:
     """The wired OpenFGA client from catalog.state, or ``None`` when FGA isn't provisioned.
 
     One place that knows where the client lives (``app.state.fga``), injected like
@@ -565,7 +570,7 @@ def originator_hint(raw: str | None) -> str | None:
     return value if is_person_subject(value) else None
 
 
-def get_lineage_emitter(
+async def get_lineage_emitter(
     request: Request,
     x_lance_originator: Annotated[str | None, Header()] = None,
 ) -> LineageEmitter:
@@ -581,7 +586,7 @@ def get_lineage_emitter(
 LineageEmitterDep = Annotated[LineageEmitter, Depends(get_lineage_emitter)]
 
 
-def get_run(request: Request) -> RunContext | None:
+async def get_run(request: Request) -> RunContext | None:
     """The run the request's spec Context names (:mod:`catalog.core.run_context`), or ``None``.
 
     Read from the request rather than declared as ``Header`` parameters, so the Context headers stay out of the
@@ -651,7 +656,7 @@ class ObjectUuids:
         return None if ns is None else await run_in_threadpool(object_uuids.namespace_uuid, ns, segments)
 
 
-def get_object_uuids(request: Request, settings: SettingsDep) -> ObjectUuids:
+async def get_object_uuids(request: Request, settings: SettingsDep) -> ObjectUuids:
     """This request's :class:`ObjectUuids`."""
     return ObjectUuids(request, settings)
 
@@ -697,7 +702,7 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-def get_clock() -> Callable[[], datetime]:
+async def get_clock() -> Callable[[], datetime]:
     """The wall clock a door reads a deadline from: the erasure door sets a release's due time by it. A tick is no
     request and takes its own (``catalog.api.ticks.Tick``'s ``clock``), so a test moves a door with an override of this
     and a tick with that argument."""
@@ -707,7 +712,7 @@ def get_clock() -> Callable[[], datetime]:
 ClockDep = Annotated[Callable[[], datetime], Depends(get_clock)]
 
 
-def get_vendor(request: Request) -> CredentialVendor:
+async def get_vendor(request: Request) -> CredentialVendor:
     """The credential vendor built in the app lifespan, the Mode B one (no direct credentials) where vending is off."""
     return app_wire(request, "vendor", CredentialVendor)
 

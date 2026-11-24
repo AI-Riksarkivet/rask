@@ -342,12 +342,12 @@ async def tick(ctx: Tick) -> ConvergeTick:
         log.error("declaration_unreadable", extra={"path": settings.declaration_file}, exc_info=True)
         _failed.add(1, {"lance.catalog.object": "declaration"})
         return ConvergeTick(failed=["declaration"])
-    client = get_fga_client(request)
+    client = await get_fga_client(request)
     # A door's announcer, for a change no caller made: the tick's scope carries no originator and no bearer.
     announcer = get_announcer(
         request, settings=settings, client=client, resolver=Resolver(request, settings), control=ctx.control, uuids=ObjectUuids(request, settings)
     )
-    converged = await _Converger(request, settings, client=client, control=ctx.control, announcer=announcer, vendor=get_vendor(request)).run(declared)
+    converged = await _Converger(request, settings, client=client, control=ctx.control, announcer=announcer, vendor=await get_vendor(request)).run(declared)
     if converged.converged or converged.released or converged.grants_written or converged.grants_revoked or converged.failed:
         log.info("declaration_converged", extra=converged.model_dump())
     return converged
