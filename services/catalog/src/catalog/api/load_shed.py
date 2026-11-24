@@ -45,7 +45,7 @@ from lakehouse.service_app.read_refusal import ReadRefusal
 _BULK_WRITE = re.compile(r"/v1/table/[^/]+/(?:create|insert|merge_insert)")
 
 
-def _is_bulk_write(scope: Scope) -> bool:
+def is_bulk_write(scope: Scope) -> bool:
     """A POST to a bulk table write's route, the large buffer to shed, whatever its Content-Type."""
     return scope.get("method") == "POST" and _BULK_WRITE.fullmatch(route_path(scope)) is not None
 
@@ -77,7 +77,7 @@ class WriteConcurrencyLimitMiddleware:
         _writes_in_flight.add(0)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if self._max <= 0 or scope["type"] != "http" or not _is_bulk_write(scope):
+        if self._max <= 0 or scope["type"] != "http" or not is_bulk_write(scope):
             await self._app(scope, receive, send)
             return
         # Shed in the read, as the body cap refuses, so the 429 survives whoever reads the body (`lakehouse.service_app.read_refusal`).

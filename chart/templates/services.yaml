@@ -61,6 +61,7 @@ spec:
             - { name: LANCE_PUBLIC_PATH_PREFIX, value: {{ include "rask.catalogPublicPrefix" . | quote }} }
             - { name: LANCE_EXTERNAL_BLOB_BASES, value: {{ include "lance.externalBlobBases" . | quote }} }
             - { name: LANCE_MAX_BODY_BYTES, value: {{ .Values.catalog.maxBodyBytes | int64 | quote }} }
+            - { name: LANCE_MAX_JSON_BODY_BYTES, value: {{ required "catalog.maxJsonBodyBytes is unset — upgrade with --reset-then-reuse-values, not --reuse-values" .Values.catalog.maxJsonBodyBytes | int64 | quote }} }
             - { name: LANCE_REQUEST_DEADLINE_SECONDS, value: {{ .Values.catalog.requestDeadlineSeconds | quote }} }
             - { name: LANCE_PROBES_PORT, value: {{ .Values.services.catalog.probesPort | quote }} }
             {{- $writes := hasKey .Values.catalog "maxConcurrentWrites" | ternary .Values.catalog.maxConcurrentWrites 16 | int }}

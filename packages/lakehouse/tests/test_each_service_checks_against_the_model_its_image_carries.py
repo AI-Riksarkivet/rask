@@ -20,6 +20,7 @@ import json
 import logging
 import threading
 import urllib.parse
+from pathlib import Path
 from typing import Any, Self
 
 import aiohttp
@@ -397,3 +398,18 @@ def test_the_hooks_history_past_the_page_bound_is_refused(monkeypatch: pytest.Mo
 
     with pytest.raises(ModelHistoryTooLongError):
         write_model.history("http://fga:8080", "store-ESTATE", OLDER, token_file=None)
+
+
+def test_the_model_an_image_carries_is_read_from_disk_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A door asks the model per object ([[LH-606]]), so a second ask answers without the file."""
+    carried = tmp_path / "model.json"
+    carried.write_text(json.dumps({"schema_version": "1.1", "type_definitions": [{"type": "user"}]}))
+    monkeypatch.setattr(fga_model, "_MODEL_PATH", carried)
+    fga_model.load_model.cache_clear()
+    try:
+        first = fga_model.load_model()
+        carried.unlink()
+
+        assert fga_model.load_model() == first == {"schema_version": "1.1", "type_definitions": [{"type": "user"}]}
+    finally:
+        fga_model.load_model.cache_clear()

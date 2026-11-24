@@ -84,7 +84,8 @@ another date is given:
 4. **The app factory installs every request layer, once** (`build_lance_service_app`, CTL-006): `max_body_bytes` and
    `request_deadline_seconds` are required keywords, and the order, outermost first, is the request id, the panic
    catcher, the deadline, the service's outer layers (the catalog's write shed and path reading), the body cap, then the
-   service's inner layers. The caps: the catalog 256 MiB (`catalog.maxBodyBytes`), lineage 8 MiB, maintenance 4 MiB, each
+   service's inner layers. The caps: the catalog 256 MiB on its three bulk Arrow writes (`catalog.maxBodyBytes`) and 8 MiB on every other route
+   (`catalog.maxJsonBodyBytes`, LH-606), lineage 8 MiB, maintenance 4 MiB, each
    a chart value. The body cap and the write shed answer a refusal inside the read that decides it and drop whatever the
    app sends after (`lakehouse.read_refusal`): FastAPI turns an Exception raised while it reads a declared body into its
    own 400, and a function middleware turns a raised BaseException into its own RuntimeError, so no exception type alone

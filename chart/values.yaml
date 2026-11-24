@@ -577,8 +577,12 @@ catalog:
   # the direct storage/vending path) OOMs the worker. The body-limit middleware rejects oversized bodies
   # with 413 before buffering. 256 MiB — generous for tabular batches + small inline blobs, bounded well
   # under a worker's memory. Big media must use the direct-write/vending path (claim-check), not this API.
-  # -- Maximum request-body bytes on any catalog route (LANCE_MAX_BODY_BYTES); larger bodies get 413 before buffering. Default 256 MiB.
+  # -- Maximum request-body bytes on the three Arrow-IPC writes, create, insert and merge_insert (LANCE_MAX_BODY_BYTES); larger bodies get 413 before buffering. Default 256 MiB.
   maxBodyBytes: 268435456 # 256 * 1024 * 1024
+  # A JSON body is read and parsed on the serving loop at whatever size it is admitted, so every route but those three
+  # is held to this smaller cap (LH-606).
+  # -- Maximum request-body bytes on every other catalog route (LANCE_MAX_JSON_BODY_BYTES); larger bodies get 413 before buffering. Default 8 MiB, and never more than `maxBodyBytes`: where that is set lower, it is the cap on every route.
+  maxJsonBodyBytes: 8388608 # @schema type: integer; minimum: 1
   # Cap on concurrent in-flight Arrow-IPC writes (create/insert/merge_insert) — each buffers up to
   # maxBodyBytes, so peak buffer memory = maxConcurrentWrites × maxBodyBytes. Over the cap → 429 +
   # Retry-After, shed before a body byte is buffered. Each admitted write also holds a request thread while it

@@ -28,7 +28,7 @@ from catalog.api.control_lane import TOPIC as CONTROL_TOPIC
 from catalog.api.control_lane import ControlLane, create_signature_refused_series
 from catalog.api.control_relay import attach_published_keys
 from catalog.api.dependencies import app_wire, declared_base_judge
-from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
+from catalog.api.load_shed import WriteConcurrencyLimitMiddleware, is_bulk_write
 from catalog.api.maintenance_mode import maintenance_middleware
 from catalog.api.path_reading import PathReadingMiddleware
 from catalog.api.security import authenticate, judge
@@ -58,6 +58,7 @@ from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
+from lakehouse.service_app.body_limit import BulkBodies
 from lakehouse.service_app.factory import build_service_app
 from lakehouse.storage.conditional_records import RecordChangedError
 from lakehouse.storage.objectfs import store_dependency
@@ -473,8 +474,10 @@ app = build_service_app(
     ready_check=signing_ready_check(commit_ids_ready_check(_catalog_ready)),
     probes_port=_settings.probes_port,
     request_threads=_settings.request_threads,
-    # A body over the cap is refused 413 before it is buffered (Arrow-IPC OOM guard, `lakehouse.service_app.body_limit`).
-    max_body_bytes=_settings.max_body_bytes,
+    # A body over its route's cap is refused 413 before it is buffered (`lakehouse.service_app.body_limit`): the bulk
+    # Arrow writes at the Arrow-IPC OOM guard's ceiling, every other route at the JSON cap.
+    max_body_bytes=_settings.json_body_cap,
+    bulk_bodies=BulkBodies(max_bytes=_settings.max_body_bytes, matches=is_bulk_write),
     request_deadline_seconds=_settings.request_deadline_seconds,
     inner_middleware=[maintenance_middleware, signing_gate_middleware],
     outer_middleware=[Middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes), Middleware(PathReadingMiddleware)],

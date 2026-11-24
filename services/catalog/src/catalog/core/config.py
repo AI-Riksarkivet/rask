@@ -628,6 +628,10 @@ class Settings(
     # with 413 BEFORE buffering, steering large payloads to the direct-write path (claim-check). Default
     # 256 MiB — generous for tabular batches + small inline blobs, bounded well under a worker's memory.
     max_body_bytes: int = Field(default=256 * 1024 * 1024, ge=1, alias="LANCE_MAX_BODY_BYTES")
+    #: The cap on every other route's body ([[LH-606]]): a JSON body is read and parsed on the serving loop at whatever
+    #: size it is admitted, so only the bulk Arrow writes take ``max_body_bytes``. 8 MiB is lineage's cap on an event.
+    #: Held to ``max_body_bytes`` where that is the smaller (:attr:`json_body_cap`).
+    max_json_body_bytes: int = Field(default=8 * 1024 * 1024, ge=1, alias="LANCE_MAX_JSON_BODY_BYTES")
 
     # Load-shedding: cap CONCURRENT in-flight Arrow-IPC writes. Each buffers up to max_body_bytes, so N
     # concurrent = N × 256MiB — an OOM the memory tier only partly bounds. Over the cap → 429 (THROTTLING),
@@ -654,6 +658,12 @@ class Settings(
     #: a new request. At least an hour, far above a claim's lease and the request deadline, so no record a door may still
     #: be acting on goes.
     idempotency_lifetime_seconds: int = Field(default=86_400, ge=3_600, alias="LANCE_IDEMPOTENCY_LIFETIME_SECONDS")
+
+    @property
+    def json_body_cap(self) -> int:
+        """The cap every route but the bulk writes is held to: ``max_json_body_bytes``, and never more than the bulk
+        ceiling, so an estate that lowers ``max_body_bytes`` beneath it lowers both."""
+        return min(self.max_json_body_bytes, self.max_body_bytes)
 
     @model_validator(mode="after")
     def _writers_leave_threads_for_readers(self) -> Self:

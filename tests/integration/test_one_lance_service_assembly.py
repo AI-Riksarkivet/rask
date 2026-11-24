@@ -11,7 +11,6 @@ serving no correlation layer at all, and nothing compared them.
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Generator
 from contextlib import contextmanager
 
@@ -98,11 +97,26 @@ def test_every_lance_app_runs_each_request_in_a_trace(name: str, module_path: st
     assert (trace_id == _CALLERS_TRACE) if sent else (trace_id is not None and len(trace_id) == 32), trace_id
 
 
-@pytest.mark.parametrize(("name", "module_path"), [row for row in LANCE_APPS if row[0] != "lineage"], ids=["catalog", "maintenance"])
-def test_every_lance_app_refuses_a_body_over_its_cap_before_reading_it(name: str, module_path: str) -> None:
-    """The app factory takes the body cap as a required keyword and installs it (CTL-006), so a body declared over it is
-    refused 413 from its Content-Length, before a byte of it is read. Lineage's is driven over a socket, where its
-    callers reach it: `services/lineage/tests/test_a_post_to_the_intake_is_refused_before_its_body_is_read.py`."""
+_CATALOG, _MAINTENANCE = (row[1] for row in LANCE_APPS if row[0] != "lineage")
+#: One byte over the catalog's cap on a JSON body (`LANCE_MAX_JSON_BODY_BYTES`, 8 MiB), far under its bulk ceiling.
+_OVER_THE_JSON_CAP = 8 * 1024 * 1024 + 1
+
+
+@pytest.mark.parametrize(
+    ("module_path", "path", "declared", "refused"),
+    [
+        pytest.param(_CATALOG, "/v1/table/t/insert", 2**40, True, id="catalog: a bulk write over its ceiling"),
+        pytest.param(_CATALOG, "/v1/namespace/ns/create", _OVER_THE_JSON_CAP, True, id="catalog: a JSON door over the JSON cap"),
+        pytest.param(_CATALOG, "/v1/table/t/insert", _OVER_THE_JSON_CAP, False, id="catalog: a bulk write of that size"),
+        pytest.param(_MAINTENANCE, "/v1/table/t/insert", 2**40, True, id="maintenance"),
+    ],
+)
+def test_every_lance_app_refuses_a_body_over_its_routes_cap_before_reading_it(module_path: str, path: str, declared: int, refused: bool) -> None:
+    """The app factory takes the body cap as a required keyword and installs it (CTL-006), so a body declared over its
+    route's cap is refused 413 from its Content-Length, before a byte of it is read. Only the catalog's bulk Arrow writes
+    take the larger ceiling ([[LH-606]]): a JSON body is read and parsed on the serving loop at whatever size it is
+    admitted. Lineage's is driven over a socket, where its callers reach it:
+    `services/lineage/tests/test_a_post_to_the_intake_is_refused_before_its_body_is_read.py`."""
     answered: list[Message] = []
     reads = 0
 
@@ -120,19 +134,19 @@ def test_every_lance_app_refuses_a_body_over_its_cap_before_reading_it(name: str
         "http_version": "1.1",
         "method": "POST",
         "scheme": "http",
-        "path": "/v1/table/t/insert",
-        "raw_path": b"/v1/table/t/insert",
+        "path": path,
+        "raw_path": path.encode(),
         "query_string": b"",
         "root_path": "",
-        "headers": [(b"host", b"test"), (b"content-length", str(2**40).encode())],
+        "headers": [(b"host", b"test"), (b"content-length", str(declared).encode())],
         "client": ("127.0.0.1", 1),
         "server": ("test", 80),
     }
 
     asyncio.run(_app(module_path)(scope, receive, send))
 
-    start, body = answered[0], json.loads(answered[1]["body"])
-    assert (start["status"], body["code"], reads) == (413, 13, 0), answered
+    start = next(message for message in answered if message["type"] == "http.response.start")
+    assert ((start["status"], reads) == (413, 0)) is refused, answered
 
 
 @pytest.mark.parametrize(("name", "module_path"), LANCE_APPS, ids=[row[0] for row in LANCE_APPS])

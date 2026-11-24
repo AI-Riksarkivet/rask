@@ -33,7 +33,8 @@ and what it owns is the part of the boot that is identical in all three:
      answered 503 while its door runs on to its end. Outside the caller's ``outer_middleware``, so a door
      running on past its deadline still holds the write seat the catalog's shed counted it in.
    * ``outer_middleware``, the caller's own, in its order (the catalog's path reading and write shed).
-   * ``BodySizeLimitMiddleware`` at ``max_body_bytes``, a body over it refused 413 before it is buffered.
+   * ``BodySizeLimitMiddleware`` at ``max_body_bytes`` (a bulk route at ``bulk_bodies``' ceiling), a body over it
+     refused 413 before it is buffered.
    * ``inner_middleware``, the caller's ``http`` functions that must run INSIDE every other layer: the
      catalog's read-only gate and signing gate answer inside the request's trace this way.
 5. ``/livez`` + ``/readyz`` at the ROOT — a kubelet does not know a service's prefix.
@@ -65,7 +66,7 @@ from lakehouse.process.log_handler import setup_logging
 from lakehouse.process.probe_server import serving_beside
 from lakehouse.process.probes import LiveCheck, ReadyCheck, make_probes_router
 from lakehouse.service_app import thread_pool
-from lakehouse.service_app.body_limit import BodySizeLimitMiddleware
+from lakehouse.service_app.body_limit import BodySizeLimitMiddleware, BulkBodies
 from lakehouse.service_app.deadline import RequestDeadlineMiddleware
 from lakehouse.service_app.no_store import NoStoreMiddleware
 from lakehouse.service_app.panic_catcher import PanicCatcherMiddleware
@@ -195,6 +196,7 @@ def build_service_app(
     ready_check: ReadyCheck,
     max_body_bytes: int,
     request_deadline_seconds: float,
+    bulk_bodies: BulkBodies | None = None,
     live_check: LiveCheck | None = None,
     probes_port: int | None = None,
     request_threads: int | None = None,
@@ -225,6 +227,8 @@ def build_service_app(
 
     ``max_body_bytes`` and ``request_deadline_seconds`` are REQUIRED for the reason ``docs_enabled`` is: every
     lakehouse service sets its own body cap and deadline, so a new one answers both rather than inheriting none.
+    ``bulk_bodies`` names the routes whose bodies are bulk and the larger ceiling they take; every other route is held
+    to ``max_body_bytes``.
 
     ``inner_middleware`` are ``http`` middleware functions that must run INSIDE every other layer, and
     ``outer_middleware`` the caller's pure-ASGI layers, which run inside the deadline and outside the body cap
@@ -256,7 +260,7 @@ def build_service_app(
     # Each layer added is OUTER to those added before it: innermost first.
     for middleware in inner_middleware:
         app.middleware("http")(middleware)
-    app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_body_bytes)
+    app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_body_bytes, bulk=bulk_bodies)
     for layer in outer_middleware:
         app.add_middleware(layer.cls, *layer.args, **layer.kwargs)
     app.add_middleware(RequestDeadlineMiddleware, seconds=request_deadline_seconds, log=log)

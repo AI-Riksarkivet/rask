@@ -67,8 +67,10 @@ def hierarchy_edge_tuples(*, child_object: str, parent_object: str) -> list[Clie
     return tuples
 
 
+@functools.cache
 def load_model() -> dict[str, Any]:
-    """Load the authorization model JSON shipped with the app."""
+    """The authorization model JSON shipped with the app, read once per process: a door asks it per object
+    ([[LH-606]]). Every caller shares the one value and reads it only."""
     return json.loads(_MODEL_PATH.read_text())
 
 
