@@ -96,7 +96,9 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 # the writing-python references' "catch specific exceptions; log or re-raise". A boundary that must outlive every failure
 # (a supervision loop, a per-item batch, a post-commit announcement) keeps the broad catch and logs with `exc_info`, or
 # says why it cannot in a reasoned `# noqa: BLE001`. The tests trees are exempt: a test double raises what it is told to.
-extend-select = ["TID251", "FAST001", "T20", "PLR0917", "PLR0915", "PLR1702", "BLE001"]
+# ASYNC keeps blocking calls (`open`, `time.sleep`, a subprocess, sync HTTP) out of `async def`, and FAST002/FAST003 keep
+# every dependency `Annotated` and every path parameter in its route's signature.
+extend-select = ["TID251", "FAST001", "FAST002", "FAST003", "ASYNC", "T20", "PLR0917", "PLR0915", "PLR1702", "BLE001"]
 # PLR1702 is a preview rule on ruff 0.16.0. `explicit-preview-rules` admits a preview rule only where it is named by its
 # exact code, so preview selects PLR1702 and nothing else: measured 2026-11-21 over `ruff check .` with and without the
 # pair, the findings of every other rule were identical by code, file and position.
@@ -113,7 +115,8 @@ max-nested-blocks = 3
 # client timeout (S113), and use tmp paths (S108) — that is what a fixture IS. rask already exempted
 # S101/ANN2xx here; the lance-ns suites needed the rest of the same family. TID251 is exempt in the
 # tests and scripts trees because both sit outside the platform seams the banned-api rules guard.
-"**/tests/**" = ["PLR0917", "PLR0915", "PLR1702", "BLE001", "TID251", "T20", "S101", "S105", "S106", "S107", "S108", "S113", "ANN201", "ANN202", "ANN401", "S608", "S607", "S603", "RUF001"]
+# ASYNC is exempt in the tests: a test polls and sleeps against a deadline, and reads a tmp file, inside its own loop.
+"**/tests/**" = ["ASYNC", "FAST003", "PLR0917", "PLR0915", "PLR1702", "BLE001", "TID251", "T20", "S101", "S105", "S106", "S107", "S108", "S113", "ANN201", "ANN202", "ANN401", "S608", "S607", "S603", "RUF001"]
 # The media pipeline shells out to ffmpeg/ffprobe with LIST-form argv (never shell=True), which is
 # the safe form S603 cannot distinguish from an unsafe one. Scoped to the two trees that decode
 # media rather than silenced globally.
@@ -170,7 +173,7 @@ max-nested-blocks = 3
 # `obs.py` measured identically and went the same way 2026-09-10.
 "scripts/gen_openapi.py" = ["A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501"]
 "tests/**" = ["PLR0917", "PLR0915", "PLR1702", "TID251", "A002", "ANN401", "ANN201", "ANN202", "ANN002", "RUF001", "RUF002", "RUF003", "RUF005", "RUF012", "RUF043", "RUF100", "C901", "PERF401", "SIM108", "S110", "S112", "S310", "S324", "S608", "E501", "S101", "S105", "S106", "S107", "S108", "S113", "S603", "S607"]
-"scripts/**" = ["TID251", "T20"]  # a script's output is what it prints
+"scripts/**" = ["TID251", "T20", "ASYNC240"]  # a script's output is what it prints, and it reads its own files where it stands
 "conftest.py" = ["PLR0917", "PLR0915", "PLR1702"]  # the root suite's fixtures: test code, exempt as the tests trees are
 ".docker/*.py" = ["T20"]  # the image build's gates report on stdout
 ".claude/hooks/*.py" = ["T20"]  # a hook answers its caller on stdout

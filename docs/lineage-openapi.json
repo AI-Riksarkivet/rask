@@ -363,6 +363,33 @@
         "title": "FeedProjection",
         "type": "object"
       },
+      "IngestAck": {
+        "description": "The door's acknowledgement of one recorded event.",
+        "properties": {
+          "run": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run"
+          },
+          "status": {
+            "const": "ingested",
+            "default": "ingested",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "IngestAck",
+        "type": "object"
+      },
       "Liveness": {
         "description": "The body of ``/livez``.",
         "properties": {
@@ -951,18 +978,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "title": "Response Ingest Event Api V1 Lineage Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/IngestAck"
                 }
               }
             },

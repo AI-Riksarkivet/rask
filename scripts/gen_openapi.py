@@ -8,9 +8,8 @@ what we actually serve, and CI fails if it drifts from the routes (``make openap
 runs this then ``git diff --exit-code``). Run: ``uv run scripts/gen_openapi.py``.
 
 Only enough env to CONSTRUCT ``Settings`` at import is set — the app lifespans (real S3/OIDC/FGA) never run
-for schema generation, so the placeholders below are inert. The demo router is force-enabled at dump time so
-the committed spec is a SUPERSET of any live config (the premise ``tests/unit/test_openapi_contract.py``
-asserts against), and the frontend types generated from it (``bun run gen:types``) keep the demo shapes.
+for schema generation, so the placeholders below are inert. The frontend types are generated from the committed spec
+(``bun run gen:types``).
 """
 
 from __future__ import annotations

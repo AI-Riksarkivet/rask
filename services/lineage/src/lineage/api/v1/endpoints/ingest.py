@@ -21,12 +21,12 @@ publishes no lineage event of its own for that write.
 from __future__ import annotations
 
 import time
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Body, Request
 from fastapi.exceptions import RequestValidationError
 from lance_namespace import PermissionDeniedError
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import enforce_author, enforce_output_authz
@@ -102,6 +102,14 @@ _EVENT_BODY = {
 }
 
 
+class IngestAck(BaseModel):
+    """The door's acknowledgement of one recorded event."""
+
+    status: Literal["ingested"] = "ingested"
+    #: The run the event names; ``None`` for a dataset event, which names none.
+    run: str | None
+
+
 @router.post("/lineage", status_code=201, openapi_extra=_EVENT_BODY)
 async def ingest_event(
     *,
@@ -112,7 +120,7 @@ async def ingest_event(
     token: CurrentToken,
     names: NamesDep,
     bearer: BearerDep,
-) -> dict[str, str | None]:
+) -> IngestAck:
     """Ingest one OpenLineage event — a ``RunEvent``, or a ``DatasetEvent`` for a change no job performed.
 
     PARSED HERE RATHER THAN BY THE SIGNATURE, so this door and the bus door share ONE discriminator
@@ -188,4 +196,4 @@ async def ingest_event(
     record_outcome(Outcome.INGESTED, door=Door.HTTP)
     # `run` is null for a static change rather than an invented id: there was no run, and the
     # OpenLineage HTTP transport reads the status, not this field.
-    return {"status": "ingested", "run": event.run_id}
+    return IngestAck(run=event.run_id)

@@ -16,7 +16,7 @@ from lakehouse.events.signing import SIGNATURE_FACET
 from lakehouse.governed.decider import MAX_OBJECTS_PER_QUESTION
 
 
-_MODEL = ConfigDict(extra="allow", populate_by_name=True)
+_MODEL = ConfigDict(extra="allow", validate_by_name=True, validate_by_alias=True)
 
 #: The most datasets one event may name as inputs, and as outputs ([[LIN-6]]). A successful run records an edge per
 #: (input, output) pair, so the two bounds are what one event can cost the edge list; 64 is the catalog's own bound on

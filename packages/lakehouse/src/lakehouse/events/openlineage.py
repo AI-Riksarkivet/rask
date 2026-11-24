@@ -332,7 +332,7 @@ TERMINAL_STATES: Final = frozenset({"COMPLETE", "ABORT", "FAIL"})
 class _WireModel(BaseModel):
     """Base: alias-tolerant (wire keys OR pythonic names), ignores unknown wire keys."""
 
-    model_config = ConfigDict(populate_by_name=True, extra="ignore")
+    model_config = ConfigDict(validate_by_name=True, validate_by_alias=True, extra="ignore")
 
 
 class RunRef(_WireModel):

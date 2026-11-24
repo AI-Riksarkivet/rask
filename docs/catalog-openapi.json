@@ -26289,7 +26289,7 @@
     },
     "/v1/table/{id}/count_rows": {
       "post": {
-        "description": "Count the table's rows on the ref the request names \u2014 ``count_table_rows``; returns plain text.\n\nRouted through `tables.reads` rather than straight to `native.call` so that `branch` is honoured. It\nwas not: the parameter reached the upstream implementation, which answered from main regardless,\nso a branch-scoped count returned a plausible number for the wrong dataset with a 200.",
+        "description": "Count the table's rows on the ref the request names \u2014 ``count_table_rows``; answers a bare JSON integer.\n\nRouted through `tables.reads` rather than straight to `native.call` so that `branch` is honoured. It\nwas not: the parameter reached the upstream implementation, which answered from main regardless,\nso a branch-scoped count returned a plausible number for the wrong dataset with a 200.",
         "operationId": "count_table_rows_v1_table__id__count_rows_post",
         "parameters": [
           {
@@ -26341,7 +26341,10 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "title": "Response Count Table Rows V1 Table  Id  Count Rows Post",
+                  "type": "integer"
+                }
               }
             },
             "description": "Successful Response"

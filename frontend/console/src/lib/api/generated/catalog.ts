@@ -3404,7 +3404,7 @@ export interface paths {
         put?: never;
         /**
          * Count Table Rows
-         * @description Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
+         * @description Count the table's rows on the ref the request names — ``count_table_rows``; answers a bare JSON integer.
          *
          *     Routed through `tables.reads` rather than straight to `native.call` so that `branch` is honoured. It
          *     was not: the parameter reached the upstream implementation, which answered from main regardless,
@@ -17568,7 +17568,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": number;
                 };
             };
             /** @description Bad Request */

@@ -458,6 +458,20 @@ export interface components {
             oldest_seq?: number | null;
         };
         /**
+         * IngestAck
+         * @description The door's acknowledgement of one recorded event.
+         */
+        IngestAck: {
+            /** Run */
+            run: string | null;
+            /**
+             * Status
+             * @default ingested
+             * @constant
+             */
+            status?: "ingested";
+        };
+        /**
          * Liveness
          * @description The body of ``/livez``.
          */
@@ -809,9 +823,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: string | null;
-                    };
+                    "application/json": components["schemas"]["IngestAck"];
                 };
             };
             /** @description Validation Error */

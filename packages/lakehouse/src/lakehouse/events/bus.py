@@ -491,7 +491,8 @@ class Bus:
         """Wait for a connection that is asking for its session again, up to ``_RENEWED_WITHIN_SECONDS`` from the
         asking: it is back in a round trip. A connection that is away for any other reason is not waited for."""
         clock = asyncio.get_running_loop()
-        while (client := self._client) is not None and client.is_reconnecting and clock.time() < self._renewed_by:
+        # nats-py raises no event for a reconnect it is still making, so its flag is read against the deadline.
+        while (client := self._client) is not None and client.is_reconnecting and clock.time() < self._renewed_by:  # noqa: ASYNC110
             await asyncio.sleep(0.02)
 
     async def _up(self) -> Client | None:
@@ -500,7 +501,7 @@ class Bus:
         await self._renewed()
         return self._connected()
 
-    async def send(self, topic: str, body: bytes, *, message_id: str, timeout: float) -> None:
+    async def send(self, topic: str, body: bytes, *, message_id: str, timeout: float) -> None:  # noqa: ASYNC109 — the wait is nats-py's own, handed this bound
         """Publish ``body`` on ``topic`` under ``message_id`` and wait up to ``timeout`` seconds for the stream's acknowledgement.
 
         Raises:

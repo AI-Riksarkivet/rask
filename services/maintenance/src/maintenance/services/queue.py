@@ -744,7 +744,8 @@ class TaskQueue:
         """
         clock = asyncio.get_running_loop()
         until = clock.time() + _RECONNECTED_WITHIN_SECONDS
-        while self._client.is_reconnecting and clock.time() < until:
+        # nats-py raises no event for a reconnect it is still making, so its flag is read against the deadline.
+        while self._client.is_reconnecting and clock.time() < until:  # noqa: ASYNC110
             await asyncio.sleep(0.02)
         if not self._client.is_connected:
             raise QueueUnavailableError("the connection to the bus is not up")

@@ -140,4 +140,4 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
     )
 
     assert recorded == [(Outcome.INGESTED, Door.HTTP)]
-    assert answer["status"] == "ingested"
+    assert answer.status == "ingested"

@@ -374,7 +374,7 @@ async def merge_insert_into_table(
     when_not_matched_insert_all: bool | None = None,
     when_not_matched_by_source_delete: bool | None = None,
     when_not_matched_by_source_delete_filt: str | None = None,
-    timeout: str | None = None,
+    timeout: str | None = None,  # noqa: ASYNC109 — the spec's own query parameter of MergeInsertIntoTable, a string the backend reads
     use_index: bool | None = None,
     branch: Annotated[str | None, Query(description="The ref to merge into. Omit for main.")] = None,
 ) -> MergeInsertIntoTableResponse:
@@ -785,8 +785,8 @@ def count_table_rows(
     so: StorageOptionsDep,
     body: CountTableRowsRequest | None = None,
     token: CurrentToken = None,
-) -> Response:
-    """Count the table's rows on the ref the request names — ``count_table_rows``; returns plain text.
+) -> int:
+    """Count the table's rows on the ref the request names — ``count_table_rows``; answers a bare JSON integer.
 
     Routed through `tables.reads` rather than straight to `native.call` so that `branch` is honoured. It
     was not: the parameter reached the upstream implementation, which answered from main regardless,
@@ -795,14 +795,12 @@ def count_table_rows(
     req = body or CountTableRowsRequest()
     req.id = reconcile_body_id(parse_identifier(id), req.id)
     # A JSON INTEGER, per `components.responses.CountTableRowsResponse`: "Row count serialized
-    # transparently as a bare number for the REST namespace." It answered `text/plain` and survived
-    # only by accident — a bare number happens to parse as JSON — while its two siblings below, whose
-    # payload is a STRING, did not.
+    # transparently as a bare number for the REST namespace."
     counted = reads.count_rows(table, so, req, data_ns=data_ns)
     # A COUNT IS A READ. It answers a question about the rows without returning them, and a subject that
     # can count is a subject that can probe — so it belongs in the same log as a query (§ J1).
     audit_read(subject=_reader(token), resource=id, version=counted.version)
-    return JSONResponse(content=counted.count)
+    return counted.count
 
 
 @spec_router.post("/{id}/explain_plan")

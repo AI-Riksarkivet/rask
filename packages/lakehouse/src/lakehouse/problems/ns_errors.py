@@ -194,13 +194,13 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
         if status == status_for(ErrorCode.UNSUPPORTED):
             # A capability answer, not a fault: an info line, never a traceback. Keyed on the mapped
             # status rather than a literal so it follows the map.
-            log.info("unsupported_operation", extra={"method": request.method, "path": request.url.path, "status": status})
+            log.info("unsupported_operation", extra={"method": request.method, "path": request.scope["path"], "status": status})
         elif status >= 500:
-            log.exception("domain_error", extra={"method": request.method, "path": request.url.path, "status": status})
+            log.exception("domain_error", extra={"method": request.method, "path": request.scope["path"], "status": status})
         return error_response(exc)
 
     def _store_unavailable(request: Request, exc: Exception) -> JSONResponse:
-        log.warning("object_store_unavailable", extra={"method": request.method, "path": request.url.path, "error": str(exc)[:300]})
+        log.warning("object_store_unavailable", extra={"method": request.method, "path": request.scope["path"], "error": str(exc)[:300]})
         return problem_response(ErrorCode.SERVICE_UNAVAILABLE, status=503, title="ServiceUnavailable", detail="Service Unavailable")
 
     @app.exception_handler(RequestValidationError)
@@ -258,7 +258,7 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
         if reads_as_store_outage(exc):
             return _store_unavailable(request, exc)
         # Internals (native/Arrow/S3 error text, paths) leak via logs only — never the body.
-        log.exception("unhandled_error", extra={"method": request.method, "path": request.url.path})
+        log.exception("unhandled_error", extra={"method": request.method, "path": request.scope["path"]})
         return problem_response(ErrorCode.INTERNAL, status=500, title="InternalError", detail=_REDACTED)
 
     _declare_problem_responses(app)
@@ -318,8 +318,12 @@ def _declare_problem_responses(app: FastAPI) -> None:
     problem body for the statuses it does not list. A status an operation declares itself (a probe's 503) is kept.
     """
     generate = app.openapi
+    declared: list[dict[str, Any]] = []
 
     def openapi() -> dict[str, Any]:
+        # The generator caches its schema and this adds to it in place, so the walk runs once a process.
+        if declared:
+            return declared[0]
         schema = generate()
         for path, item in schema.get("paths", {}).items():
             for method, operation in item.items():
@@ -329,6 +333,7 @@ def _declare_problem_responses(app: FastAPI) -> None:
         for name in _FRAMEWORK_VALIDATION_SCHEMAS:
             components.pop(name, None)
         components[_PROBLEM_RESPONSE_SCHEMA_NAME] = _PROBLEM_SCHEMA
+        declared.append(schema)
         return schema
 
     # FastAPI's own documented override point is this attribute (its `openapi()` is looked up on the
