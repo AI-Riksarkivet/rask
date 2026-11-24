@@ -73,8 +73,14 @@ func (m *Rask) ChartTests(
 // measured runtime (~2 min on a developer box) — it is a hang detector, not a speed budget.
 //
 // Not in `addopts`, so a developer's run under a debugger is not cut off at the ceiling.
+//
+// `-n 4`: a hosted runner has four cores, and one process took the offline suite 23 minutes there
+// (run 45401316507, 2026-11-24) against about 2.5 on a developer box at `-n 16`, which the e2e legs
+// then waited out. A number, not `auto`, so a run inside this container is the same on every host.
+// Under `-n` the thread method ends only the worker whose test hung: that test is reported failed
+// with every thread's stack, and the run goes on.
 func pytestArgv() []string {
-	return []string{"uv", "run", "--no-sync", "pytest", "-q", "--timeout=300", "--timeout-method=thread"}
+	return []string{"uv", "run", "--no-sync", "pytest", "-q", "-n", "4", "--timeout=300", "--timeout-method=thread"}
 }
 
 // pytestLane is the container the pytest lanes run in: the synced workspace, the pinned helm with
