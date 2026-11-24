@@ -81,7 +81,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | catalog.manifestReclaim.periodSeconds | int | `600` | Seconds between two ticks of the timer that removes each root's `__manifest` versions past retainSeconds (`LANCE_MANIFEST_RECLAIM_PERIOD_SECONDS`); lateness only keeps history longer. |
 | catalog.manifestReclaim.retainSeconds | int | `3600` | Seconds a `__manifest` version is kept before the reclaim removes it (LANCE_MANIFEST_RETAIN_SECONDS); a dropped id stays readable in the history this long, and the catalog rebuilds each namespace connection after a quarter of it. |
 | catalog.maxBodyBytes | int | `268435456` | Maximum request-body bytes on any catalog route (LANCE_MAX_BODY_BYTES); larger bodies get 413 before buffering. Default 256 MiB. |
-| catalog.maxConcurrentWrites | int | `8` | Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`. |
+| catalog.maxConcurrentWrites | int | `16` | Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`. |
 | catalog.multibase.dataBases | list | `[]` | Allowlist of bucket URIs one table's fragments may be spread across (`?data_base=` on create). Empty = multi-base off, single-location creates. |
 | catalog.requestDeadlineSeconds | int | `300` | Seconds a catalog request may run before its caller is answered 503 (code 17) while it runs on to its end (LANCE_REQUEST_DEADLINE_SECONDS). |
 | catalog.trashGraceDays | float | `7` | Days, a fraction allowed, a dropped table or namespace stays undroppable, where its warehouse names no delete profile (LANCE_TRASH_GRACE_DAYS). 0 destroys immediately. |
@@ -250,7 +250,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | services.catalog.port | int | `2333` | Container and Service port of the Lance catalog. |
 | services.catalog.probesPort | int | `2334` | Container port the catalog answers the kubelet's `/livez` and `/readyz` on, from a thread of its own, so a probe does not wait behind requests (LANCE_PROBES_PORT). On no Service. |
 | services.catalog.replicas | int | `1` | Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count. |
-| services.catalog.requestThreads | int | `16` | The most threads the catalog's blocking calls (store reads, Lance commits) run on at once (LANCE_REQUEST_THREADS). |
+| services.catalog.requestThreads | int | `24` | The most threads the catalog's blocking calls (store reads, Lance commits) run on at once (LANCE_REQUEST_THREADS). |
 | services.lineage.appId | string | `"lineage"` | Lineage's app id: its secret-store role (`<release>-<id>`), its bus user and its OTel service. |
 | services.lineage.deliveriesInFlight | int | `64` | How many of lineage's bus deliveries may be unacknowledged at once (its durable consumer's `max_ack_pending`, and each replica's bound). |
 | services.lineage.delivery.ackWaitSeconds | int | `300` | The consumer's ack wait, in seconds: how long a delivery a dead replica held waits before another gets it. Lineage cuts a handling 10 s short of it, so the bus never delivers an event beneath a handling still running (LINEAGE_DELIVERY_ACK_WAIT_SECONDS). |

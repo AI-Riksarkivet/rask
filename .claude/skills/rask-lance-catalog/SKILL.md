@@ -484,7 +484,7 @@ the rule:
   Lance's own commit-retry budget, which pylance's backoff needs on the estate: 6.2-11.7 s between attempts, measured),
   and a turn handed to a stock writer holds the catalog's own writers, not that writer's peers. `/insert` and
   `version/create` wait in the event loop (`DoorTable.wait_for_turn_in_loop`), holding no request thread; a wait only a
-  thread can make takes one of 8 seats per process (`commit_turns.THREAD_WAITERS`, half the request pool's 16 threads), past which its commit is refused 409
+  thread can make takes one of 4 seats per process (`commit_turns.THREAD_WAITERS`; with `catalog.maxConcurrentWrites` it stays below the request pool's 24 threads), past which its commit is refused 409
   code 14 (`TurnWaitRefusedError`). A table's waiters in one process share one read of its turn record, each answer
   for 0.1 s after the store gave it, keyed by the store and the signing access key id (`commit_turns._SharedReads`; read
   per waiter, 53 waiters pegged the catalog's CPU on the estate); only waiting takes that view, and who holds a turn is

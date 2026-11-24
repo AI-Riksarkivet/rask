@@ -21,11 +21,19 @@ table.
 **Measured 2026-11-24** on the development estate (XC-204 #802), sixteen stock writers appending through
 `version/create`, each catalog pod limited to one CPU: 1.29, 2.54 and 5.20 commits a second at one, two and four catalog
 replicas, the median commit 13.0, 6.3 and 2.6 s, none failed. The catalog scales by replicas, so a tick's cost is the
-only reason a worker role would be built, and the amendment above removed the larger one. The request thread pool
-(`services.catalog.requestThreads`) stays at 40: at 16 a burst of 1,500 reads over 300 connections took the same time
-(50 s against 51 s) with the serving loop's own answers four times sooner (a probe on the serving port at 0.09 s median
-against 0.33 s), and sixteen writers committed at the same rate (1.26 against 1.29 a second); but a commit turn's waiters
-(20 threads at most) and the write shed (16 writes) are sized against 40, so a smaller pool is decided with them.
+only reason a worker role would be built, and the amendment above removed the larger one.
+
+**The request thread pool is 24 threads** (owner, 2026-11-24, XC-204: "24 threads, cap 16"; it was anyio's own 40, set
+nowhere). A pool is safe only if its writers cannot hold it whole: an admitted bulk write holds a thread while it
+commits (`catalog.maxConcurrentWrites`, 16) and a door's commit waiting for its ref's turn sleeps in another
+(`commit_turns.THREAD_WAITERS`, 4, was 20), and the two together stay below the pool, which the catalog's settings and
+the chart's render both refuse otherwise. Measured that day on the development estate, one CPU a pod:
+
+| pool, write cap | 1,500 reads over 300 connections | serving loop's own answer, median | 32 writers on one table | a read of another table beside them, median and p95 |
+|---|---|---|---|---|
+| 40, 16 (20 waiters) | 50 to 52 s | 0.28 to 0.39 s | 3.36 writes a second | 2.1 s, 6.6 s |
+| 24, 16 | 50.5 s | 0.13 s | 3.31 | 2.1 s, 7.2 s |
+| 16, 8 | 50.5 s | 0.07 to 0.08 s | 2.30 | 1.7 s, 4.3 s |
 
 **Status:** accepted. Source: LH-251 (#165): nothing reclaimed `__manifest`, every namespace operation kept a version,
 and a dropped id stayed readable in its history.

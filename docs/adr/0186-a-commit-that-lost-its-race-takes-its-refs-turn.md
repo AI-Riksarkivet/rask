@@ -50,7 +50,7 @@ its target failed its commit as of unknown outcome, after one call.
   describe of another table wait 26.8 s, and 20 left it answering in 0.02 s. So the `/insert` and `version/create`, both
   `async` doors, wait in the event loop before they enter the pool (`DoorTable.wait_for_turn_in_loop`), as Lakekeeper's
   commit back-off waits on a tokio timer (`crates/lakekeeper/src/server/tables.rs:1438`); and a wait that only a thread can
-  make, a door's finalize inside its commit loop or the Overwrite create, takes one of `THREAD_WAITERS` seats (4 since 2026-11-24, when the pool was bounded at 16, XC-204; 20 before) per
+  make, a door's finalize inside its commit loop or the Overwrite create, takes one of `THREAD_WAITERS` seats (4 since 2026-11-24, when the pool was bounded at 24, XC-204; 20 before) per
   process, past which its commit is refused at once with the retryable code 14 (`TurnWaitRefusedError`), as a bulkhead
   rejects when full (resilience4j's `SemaphoreBulkhead`, Polly's `ConcurrencyLimiter`) and as Lakekeeper answers a lock it
   will not wait for with a retriable conflict rather than a 503 (`crates/lakekeeper-storage-postgres/src/grant.rs:126-136`).
