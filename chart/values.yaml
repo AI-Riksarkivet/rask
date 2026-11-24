@@ -1037,7 +1037,9 @@ autoscaling:
   # limit. CPU saturates before requests queue, so it does not lag for this service, and no requests-in-flight scaler
   # (KEDA, a metrics adapter) is added for it. MEASURED IN THE SAME RUN: replicas added little (5.1 requests a second at
   # one replica, at most 9.6 at four, through the edge), one replica staying at its limit while the others sat at 0.2
-  # to 0.4 CPU, so an autoscaler of either kind buys little until that is understood.
+  # to 0.4 CPU. MEASURED 2026-11-24 (XC-204, helm rev 106, after the Service lost its affinity in LH-601): sixteen stock
+  # writers through `version/create` landed 1.29, 2.54 and 5.20 commits a second at one, two and four catalog replicas,
+  # every pod near its limit at one and two, so replicas now add throughput in proportion and this autoscaler scales it.
   # -- Renders CPU-based HPAs for catalog and lineage, whose Deployments then render no `replicas` (the HPA owns the count). Needs metrics-server; off by default.
   enabled: false # opt-in; needs metrics-server. Targets catalog + lineage.
   # -- HPA minimum replicas for catalog and lineage.
