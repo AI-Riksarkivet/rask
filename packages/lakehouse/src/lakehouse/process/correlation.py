@@ -19,12 +19,16 @@ import logging
 import re
 from collections.abc import Generator
 from contextlib import contextmanager
-from typing import Final, TypeIs
+from typing import TYPE_CHECKING, Final, TypeIs
 
 from opentelemetry import context as otel_context
 from opentelemetry import trace
 from opentelemetry.context import Context
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+
+
+if TYPE_CHECKING:
+    from fastapi.telemetry import TelemetryConfig
 
 
 #: A ``traceparent`` as W3C Trace Context level 1 writes it, version ``00``: a 32-hex trace id and a 16-hex parent id,
@@ -118,7 +122,15 @@ class CorrelationFilter(logging.Filter):
         return True
 
 
+#: FastAPI's own telemetry, off (``FastAPI(telemetry=...)``). A request of a lakehouse app is traced by the app factory's
+#: instrumentation alone. FastAPI stands its own tracing down where it finds that instrumentation in the stack, and
+#: traces by itself where it does not (fastapi 0.165.0, ``telemetry/_asgi.py``): an app the instrumentation skipped, the
+#: probes app, a small app built beside the factory. Off, a request the instrumentation did not trace has no trace, so
+#: its absence shows (`tests/integration/test_one_lance_service_assembly.py`) instead of another span standing in.
+FRAMEWORK_TELEMETRY_OFF: Final[TelemetryConfig] = {"tracing": False, "metrics": False, "logs": False}
+
 __all__ = [
+    "FRAMEWORK_TELEMETRY_OFF",
     "NO_TRACE",
     "CorrelationFilter",
     "continuing",

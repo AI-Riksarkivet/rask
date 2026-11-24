@@ -31,6 +31,7 @@ from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
 from lakehouse.problems.ns_errors import install_problem_handlers
+from lakehouse.process.correlation import FRAMEWORK_TELEMETRY_OFF
 
 
 AUDIENCE = "lance-catalog"
@@ -59,7 +60,7 @@ def _client(verifier: IdpVerifier | None, issuer: str) -> TestClient:
             "RASK_OIDC_CONNECTORS": CONNECTORS,
         }
     )
-    app = FastAPI()
+    app = FastAPI(telemetry=FRAMEWORK_TELEMETRY_OFF)
     install_problem_handlers(app, logging.getLogger(__name__))
     app.state.oidc = verifier
     app.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings

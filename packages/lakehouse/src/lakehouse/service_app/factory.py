@@ -61,6 +61,7 @@ from starlette.types import Receive, Scope, Send
 
 from lakehouse.governed.audit import configure_audit
 from lakehouse.problems.ns_errors import install_problem_handlers
+from lakehouse.process.correlation import FRAMEWORK_TELEMETRY_OFF
 from lakehouse.process.draining import arm_drain_on_sigterm
 from lakehouse.process.log_handler import setup_logging
 from lakehouse.process.probe_server import serving_beside
@@ -248,6 +249,7 @@ def build_service_app(
     app = _UncachedApp(
         title=title,
         version=version,
+        telemetry=FRAMEWORK_TELEMETRY_OFF,
         lifespan=_served(lifespan, ready_check, probes_port=probes_port, request_threads=request_threads),
         docs_url=None,
         redoc_url=None,

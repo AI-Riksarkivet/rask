@@ -21,6 +21,7 @@ from fastapi import Body, FastAPI, Request, Response
 from fastapi.testclient import TestClient
 from lance_namespace import ErrorCode
 
+from lakehouse.process.correlation import FRAMEWORK_TELEMETRY_OFF
 from lakehouse.service_app.body_limit import BodySizeLimitMiddleware, BulkBodies
 
 
@@ -28,7 +29,7 @@ CAP = 1000
 
 
 def _capped_app() -> FastAPI:
-    app = FastAPI()
+    app = FastAPI(telemetry=FRAMEWORK_TELEMETRY_OFF)
 
     @app.middleware("http")
     async def _inner(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
@@ -87,7 +88,7 @@ BULK_CAP = 5000
 
 
 def _app_with_a_bulk_route() -> FastAPI:
-    app = FastAPI()
+    app = FastAPI(telemetry=FRAMEWORK_TELEMETRY_OFF)
 
     @app.post("/bulk")
     async def _bulk(request: Request) -> dict[str, int]:

@@ -24,6 +24,7 @@ from typing import Final
 import uvicorn
 from fastapi import FastAPI
 
+from lakehouse.process.correlation import FRAMEWORK_TELEMETRY_OFF
 from lakehouse.process.own_threads import on_own_threads
 from lakehouse.process.probes import ReadyCheck, make_probes_router
 
@@ -124,7 +125,7 @@ async def serving_beside(app: FastAPI, ready_check: ReadyCheck, port: int) -> As
         RuntimeError: The server did not start within :data:`START_SECONDS`.
     """
     beat = LoopBeat()
-    probes = FastAPI(title=f"{app.title} probes", docs_url=None, redoc_url=None, openapi_url=None)
+    probes = FastAPI(title=f"{app.title} probes", docs_url=None, redoc_url=None, openapi_url=None, telemetry=FRAMEWORK_TELEMETRY_OFF)
     probes.state = app.state
     probes.include_router(make_probes_router(ready_check, beat.alive))
     server = ProbeServer(probes, port, name="probes")

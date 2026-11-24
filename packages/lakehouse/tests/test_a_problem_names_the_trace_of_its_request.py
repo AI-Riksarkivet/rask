@@ -18,6 +18,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 
 from lakehouse.problems.ns_errors import install_problem_handlers
+from lakehouse.process.correlation import FRAMEWORK_TELEMETRY_OFF
 
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -25,7 +26,7 @@ TRACEPARENT = {"traceparent": f"00-{TRACE_ID}-00f067aa0ba902b7-01"}
 
 
 def _app(*, traced: bool) -> FastAPI:
-    app = FastAPI()
+    app = FastAPI(telemetry=FRAMEWORK_TELEMETRY_OFF)
     install_problem_handlers(app, logging.getLogger("test"))
 
     @app.get("/missing")

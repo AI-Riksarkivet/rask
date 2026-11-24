@@ -16,12 +16,13 @@ from fastapi.testclient import TestClient
 
 from lakehouse.problems.envelope import PROBLEM_JSON
 from lakehouse.problems.ns_errors import PartiallyAppliedError, install_problem_handlers
+from lakehouse.process.correlation import FRAMEWORK_TELEMETRY_OFF
 
 
 def test_a_lance_error_extension_cannot_name_a_reserved_member() -> None:
     """A partly applied operation's extension members reach the wire, and none of them may redefine a member the spec
     or RFC 9457 reserves, `instance` included while no span is active to put one there."""
-    app = FastAPI()
+    app = FastAPI(telemetry=FRAMEWORK_TELEMETRY_OFF)
     install_problem_handlers(app, logging.getLogger("test"))
 
     @app.get("/partial")

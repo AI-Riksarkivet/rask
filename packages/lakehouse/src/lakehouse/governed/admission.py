@@ -1,6 +1,6 @@
 """A request's caller is judged from its headers before FastAPI reads its body (ADR 0203).
 
-FastAPI reads and parses a route's body before it solves any of the route's dependencies (fastapi 0.140.13,
+FastAPI reads and parses a route's body before it solves any of the route's dependencies (fastapi 0.165.0,
 ``routing.get_request_handler``), so a door whose bearer only a dependency checks buffers the whole body of a caller
 with no token before refusing it: lineage's intake parses a JSON body up to its cap, and an Arrow upload with no token
 holds one of the catalog's write seats for as long as it trickles in. :func:`judge_before_the_body` makes every route
@@ -73,9 +73,10 @@ def judge_before_the_body(app: FastAPI, *, gate: Callable[..., object], judge: J
     request before FastAPI reads the body; how many routes judge first. Called once every such route is mounted.
 
     Every route is walked as it is served, an included router's with the dependencies its inclusion adds
-    (``iter_route_contexts``): ``app.router.routes`` holds an included router as one opaque entry (fastapi 0.140.13). The
+    (``iter_route_contexts``): ``app.router.routes`` holds an included router as one opaque entry (fastapi 0.165.0). The
     wrap is the route's ``handle``, which the router calls for a route of its own and for an included one alike; an
-    included route builds its handler afresh on each request and never runs ``route.app``. A route already judging first
+    included route's handler is built once for each place its router is included, and never runs ``route.app``. A route
+    already judging first
     is left as it is: routers are module objects, so a module that builds its app again (a reload) mounts the same
     routes, and a second wrap would judge each request twice.
     """

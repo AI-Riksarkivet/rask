@@ -40,6 +40,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
 from lakehouse.problems.ns_errors import install_problem_handlers
+from lakehouse.process.correlation import FRAMEWORK_TELEMETRY_OFF
 from lakehouse.process.draining import arm_drain_on_sigterm
 from lakehouse.process.health import Verdict
 from lakehouse.process.lifecycle import mark_draining, mark_started
@@ -133,7 +134,7 @@ def create_app(settings: IssuerMirrorSettings | None = None) -> FastAPI:
             return Readiness(status=ReadinessStatus.unhealthy, components={"issuer": Verdict.unavailable})
         return Readiness(status=ReadinessStatus.ready, components={"issuer": Verdict.healthy})
 
-    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None, telemetry=FRAMEWORK_TELEMETRY_OFF)
     install_problem_handlers(app, log)
     app.include_router(make_probes_router(ready))
 
