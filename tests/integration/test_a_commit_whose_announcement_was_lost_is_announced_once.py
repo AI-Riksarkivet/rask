@@ -152,6 +152,8 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
     bus.away = True
     env = {
         "LANCE_COMMIT_RECONCILE_GRACE_SECONDS": "0",
+        # The reconciler runs, so doors file their commits; its own timer claims one window at the start and no other.
+        "LANCE_COMMIT_RECONCILE_PERIOD_SECONDS": "86400",
         "RASK_OIDC_ENABLED": "true",
         "RASK_OIDC_ISSUER": dex_issuer.issuer,
         "RASK_OIDC_AUDIENCE": "lance-catalog",
@@ -401,13 +403,17 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
 
 
 @contextmanager
-def _governed_estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any) -> Generator[tuple[httpx.Client, str]]:
+def _governed_estate(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any, *, reconcile_period: str = "86400"
+) -> Generator[tuple[httpx.Client, str]]:
     """A catalog alice is signed in to and the lineage that keeps its feed, the bus between them joined: the catalog's
     client and its url. The reconciler looks for a version at once (no grace)."""
     alice = {"Authorization": f"Bearer {dex_issuer.mint('alice', connector='local', audience='lance-catalog')}"}
     joined_bus(monkeypatch)
     env = {
         "LANCE_COMMIT_RECONCILE_GRACE_SECONDS": "0",
+        # The reconciler runs, so doors file their commits; its own timer claims one window at the start and no other.
+        "LANCE_COMMIT_RECONCILE_PERIOD_SECONDS": reconcile_period,
         "RASK_OIDC_ENABLED": "true",
         "RASK_OIDC_ISSUER": dex_issuer.issuer,
         "RASK_OIDC_AUDIENCE": "lance-catalog",
@@ -626,3 +632,13 @@ def test_a_door_that_cannot_file_its_commit_makes_none_and_leaves_nothing(
         answered = catalog.post(f"/v1/table/lance_catalog$db${table}/{door}", **request_of)
 
         assert (answered.status_code, _files_beside_the_entries(root) - before) == (503, set()), answered.text
+
+
+def test_a_catalog_that_runs_no_reconciler_files_no_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any) -> None:
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer, reconcile_period="0") as (catalog, _):
+        assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
+
+        deleted = catalog.post("/v1/table/lance_catalog$db$t/delete", json={"predicate": "id = 0"})
+
+        assert (deleted.status_code, _pending_entries()) == (200, [])

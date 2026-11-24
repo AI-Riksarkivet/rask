@@ -95,6 +95,8 @@ def _local_root(tmp_path: Path) -> dict[str, str]:
         "LANCE_CONTROL_ROOT": str(tmp_path / "control"),
         "LANCE_S3_ACCESS_KEY_ID": "unused",
         "LANCE_S3_SECRET_ACCESS_KEY": "unused",
+        # The reconciler runs, so `version/create` files each commit; its timer claims one window at the start and no other.
+        "LANCE_COMMIT_RECONCILE_PERIOD_SECONDS": "86400",
     }
 
 

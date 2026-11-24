@@ -53,6 +53,7 @@ def compacted(tmp_path: Path) -> DoorTable:
         ClaimStore(control_root=str(tmp_path / "control")),
         ResolvedTable(segments=["db", "t"], location=uri),
         announces=lambda _operation: True,
+        file_commit=None,
     )
 
 

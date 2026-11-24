@@ -56,7 +56,7 @@ from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from catalog.api.authz import door_gates, hierarchy, object_grants, write_doors
 from catalog.api.authz.context import AuthzContext
-from catalog.api.dependencies import Resolver, governed_storage
+from catalog.api.dependencies import Resolver, door_commit_filer, governed_storage
 from catalog.api.security import Caller
 from catalog.core import encoding, native, provenance_guard, run_context
 from catalog.core.config import Settings
@@ -231,7 +231,11 @@ async def create_governed_table(
         await door_gates.require_can_drop_table(context, table=overwritten)
         # The table asked about is the one overwritten ([[LH-530]]).
         overwriting = table_claims.DoorTable(
-            ns, table_claims.claim_store(context.settings), overwritten, announces=provenance_namespace.announcer(segments, context.settings)
+            ns,
+            table_claims.claim_store(context.settings),
+            overwritten,
+            announces=provenance_namespace.announcer(segments, context.settings),
+            file_commit=door_commit_filer(context.settings),
         )
     operation = OVERWRITE_TABLE if overwrote_existing else CREATE_TABLE
     # The grants of a table this request brings into being are written before the backend records it ([[LH-588]]).
@@ -264,6 +268,7 @@ async def create_governed_table(
         before_commit=table_inputs.recorder(
             context.settings.registry_root, context.settings.storage_options(), name=table_id, declared=await write_doors.declared_inputs(resolver, run)
         ),
+        file_commit=door_commit_filer(context.settings),
         before_register=grants,
         after_register=partial(grants.parent_as_authorized, ns),
     )

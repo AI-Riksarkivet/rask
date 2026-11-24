@@ -276,7 +276,8 @@ async def walk(ctx: Tick) -> CommitReconcileTick:
     store = table_claims.claim_store(ctx.settings)
     done = await _reconcile(ctx, await run_in_threadpool(location_claims.held_claims, store), event="commit_walk")
     for claim in done.unread:
-        if claim.uuid is not None:
+        # Only where the tick runs to read the entry and remove it.
+        if claim.uuid is not None and ctx.settings.commit_reconcile_period_seconds:
             await run_in_threadpool(partial(commit_records.file_pending, store.control_root, store.storage_options, claim.uuid, location=claim.location))
     return done.tick
 

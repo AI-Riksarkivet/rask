@@ -18,7 +18,8 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Any
+from functools import partial
+from typing import Any, Protocol
 from uuid import uuid4
 
 import lance
@@ -132,11 +133,14 @@ class DoorTable:
     moved (:meth:`read_natively`), and right before a write (:meth:`write_natively`).
     """
 
-    def __init__(self, ns: LanceNamespace, claims: ClaimStore, resolved: ResolvedTable, *, announces: Callable[[str], bool]) -> None:
+    def __init__(
+        self, ns: LanceNamespace, claims: ClaimStore, resolved: ResolvedTable, *, announces: Callable[[str], bool], file_commit: CommitFiler | None
+    ) -> None:
         self._ns = ns
         self._claims = claims
         self._resolved = resolved
         self._announces = announces
+        self._file_commit = file_commit
 
     @property
     def segments(self) -> list[str]:
@@ -423,14 +427,15 @@ class DoorTable:
         return self._announces(operation)
 
     def file_pending_commit(self) -> None:
-        """File that this door is about to commit to the table (:func:`file_pending_commit`), before a commit it announces
-        can land.
+        """File that this door is about to commit to the table, before a commit it announces can land, through the filer
+        the door was built with (:func:`commit_filer`); nothing where it was built with none, as where no reconciler runs.
 
         Raises:
             UnidentifiedObjectError: The table's location carries no claim recording a uuid.
             ServiceUnavailableError: The store refused, or could not be reached for, the entry.
         """
-        file_pending_commit(self._claims.control_root, self._claims.storage_options, self._resolved.require_uuid(), location=self.location)
+        if self._file_commit is not None:
+            self._file_commit(self._resolved.require_uuid(), location=self.location)
 
     def record_author(self, transaction_uuid: str, *, version: int, ref: str, author: str, manifest: str | None) -> bool:
         """Record ``author``, the caller this door authenticated, as the maker of the commit of ``transaction_uuid`` at
@@ -468,16 +473,26 @@ class DoorTable:
         )
 
 
-def file_pending_commit(control_root: str, storage_options: StorageOptions, table_uuid: str, *, location: str) -> None:
-    """File that a door is about to commit to the table ``table_uuid``, claimed at ``location``
-    (:func:`commit_records.file_pending`, [[XC-204]]): the reconciler's tick looks for a lost announcement only on a table
-    an entry names, so a commit is not made without one.
+class CommitFiler(Protocol):
+    """What files that a door is about to commit to the table ``table_uuid``, claimed at ``location``."""
 
-    Raises:
-        ServiceUnavailableError: The store refused, or could not be reached for, the entry.
+    def __call__(self, table_uuid: str, *, location: str) -> None: ...
+
+
+def commit_filer(store: ClaimStore) -> CommitFiler:
+    """What a door files a commit it is about to make with, on ``store``'s control root
+    (:func:`commit_records.file_pending`, [[XC-204]]): the reconciler's tick looks for a lost announcement only on a table
+    an entry names, so a commit is not made without one. A catalog that runs no reconciler builds its doors with no
+    filer, since nothing would read the entries or remove them.
+
+    The filer raises ``ServiceUnavailableError`` when the store refuses, or cannot be reached for, the entry.
     """
+    return partial(_file_commit, store)
+
+
+def _file_commit(store: ClaimStore, table_uuid: str, *, location: str) -> None:
     try:
-        commit_records.file_pending(control_root, storage_options, table_uuid, location=location)
+        commit_records.file_pending(store.control_root, store.storage_options, table_uuid, location=location)
     except OSError as exc:
         raise ServiceUnavailableError("the object store did not answer filing the commit about to be made; retry it") from exc
 

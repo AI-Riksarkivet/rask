@@ -90,11 +90,12 @@ PREFIX: Final = control_prefixes.COMMIT_TURNS
 HOLD: Final = timedelta(seconds=30)
 
 #: How many threads of one process may sleep waiting for a turn at once. A sleeping waiter holds one of the request threads
-#: the process serves its sync doors with (anyio's default limiter has 40, ``anyio/_backends/_asyncio.py:3097`` at 4.14.2),
-#: so a wait past these is refused rather than queued, as a bulkhead refuses when full (resilience4j's
-#: ``SemaphoreBulkhead``, Polly's ``ConcurrencyLimiter``): measured 2026-10-31, 20 waiting threads left a describe of
-#: another table answering in 0.02 s, and 50 made it wait 26.8 s.
-THREAD_WAITERS: Final = 20
+#: the process serves its sync doors with, so a wait past these is refused rather than queued, as a bulkhead refuses when
+#: full (resilience4j's ``SemaphoreBulkhead``, Polly's ``ConcurrencyLimiter``). A quarter of the sixteen threads the
+#: catalog's pool is bounded at: these and the writes the catalog admits at once together stay below the pool
+#: (``catalog.core.config.Settings``), so readers always have threads of their own. Measured 2026-10-31 on a pool of 40,
+#: 20 waiting threads left a describe of another table answering in 0.02 s, and 50 made it wait 26.8 s.
+THREAD_WAITERS: Final = 4
 _THREAD_WAITER_SEATS: Final = threading.BoundedSemaphore(THREAD_WAITERS)
 
 #: How long a waiting finalize sleeps between two reads of the record (:func:`backoff`): 20 ms at first, so a turn of one

@@ -74,8 +74,14 @@ services:
     port: 2333
     # -- Container port the catalog answers the kubelet's `/livez` and `/readyz` on, from a thread of its own, so a probe does not wait behind requests (LANCE_PROBES_PORT). On no Service.
     probesPort: 2334 # @schema type: integer; minimum: 1; maximum: 65535
+    # Every thread shares the interpreter with the serving loop, so more threads run no more Python at once and make the
+    # loop wait longer for its turn. Measured on the development estate 2026-11-24 (XC-204), one CPU a pod: at 16 a burst
+    # of 1,500 reads over 300 connections took the same time as at 40, with the loop's own answers three to four times
+    # sooner. An admitted write holds a thread while it commits and four more may wait for a commit turn, so
+    # catalog.maxConcurrentWrites plus four stays below this (the render and the catalog both refuse otherwise) and a
+    # read always finds a thread.
     # -- The most threads the catalog's blocking calls (store reads, Lance commits) run on at once (LANCE_REQUEST_THREADS).
-    requestThreads: 40 # @schema type: integer; minimum: 1; maximum: 256
+    requestThreads: 16 # @schema type: integer; minimum: 6; maximum: 256
     # -- The catalog's app id: its secret-store role (`<release>-<id>`), its bus user and its OTel service.
     appId: catalog
     # -- Replica count of the catalog. Not rendered while autoscaling.enabled: the HPA owns the count.
@@ -569,10 +575,12 @@ catalog:
   maxBodyBytes: 268435456 # 256 * 1024 * 1024
   # Cap on concurrent in-flight Arrow-IPC writes (create/insert/merge_insert) — each buffers up to
   # maxBodyBytes, so peak buffer memory = maxConcurrentWrites × maxBodyBytes. Over the cap → 429 +
-  # Retry-After, shed before a body byte is buffered. 16 matches the code default; prod lowers it to fit
-  # the catalog memory tier — values-prod.yaml states the sizing formula. 0 disables shedding.
-  # -- Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`. 0 disables shedding.
-  maxConcurrentWrites: 16
+  # Retry-After, shed before a body byte is buffered. Each admitted write also holds a request thread while it
+  # commits, so the cap and the four threads that may wait for a commit turn together stay below
+  # services.catalog.requestThreads (the render refuses otherwise, and refuses 0, which admits every write); prod
+  # lowers it further to fit the catalog memory tier — values-prod.yaml states the sizing formula.
+  # -- Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`.
+  maxConcurrentWrites: 8 # @schema type: integer; minimum: 1
   # A door past its deadline is answered and NOT cancelled: it undoes half-done work in its own `except` blocks, which a
   # cancellation skips, so it runs on to its commit or its undo, logged (ADR 0203). 300 s is five times the longest door
   # the estate's traces hold (a warehouse cascade, 50.9 s, 2026-10-29..11-12).

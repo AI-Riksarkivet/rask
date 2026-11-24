@@ -318,8 +318,9 @@
                     "type": "integer"
                 },
                 "maxConcurrentWrites": {
-                    "description": "Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`. 0 disables shedding.",
-                    "type": "integer"
+                    "description": "Cap on concurrent in-flight Arrow-IPC writes; over it the catalog answers 429 + Retry-After. Peak buffer memory is this times `maxBodyBytes`.",
+                    "type": "integer",
+                    "minimum": 1
                 },
                 "multibase": {
                     "type": "object",
@@ -1460,7 +1461,7 @@
                             "description": "The most threads the catalog's blocking calls (store reads, Lance commits) run on at once (LANCE_REQUEST_THREADS).",
                             "type": "integer",
                             "maximum": 256,
-                            "minimum": 1
+                            "minimum": 6
                         }
                     },
                     "additionalProperties": false

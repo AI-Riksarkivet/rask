@@ -173,6 +173,7 @@ def test_create_delegates_to_the_creation_facade(client: TestClient, fake_ns: Ma
         recorded_author=None,
         overwriting=None,
         before_commit=None,
+        file_commit=None,
         before_register=None,
         after_register=None,
     ) -> CreateTableResponse:

@@ -385,6 +385,7 @@ def create_table(
     recorded_author: str | None = None,
     overwriting: table_claims.DoorTable | None = None,
     before_commit: Callable[[str], None] | None = None,
+    file_commit: table_claims.CommitFiler | None = None,
     before_register: Callable[[str, str], None] | None = None,
     after_register: Callable[[], None] | None = None,
 ) -> CreateTableResponse:
@@ -472,7 +473,7 @@ def create_table(
             if overwriting is not None:
                 # An Overwrite is a new version of the same table, so it keeps what the table's contract names (ADR 0212).
                 contracts.require_kept(overwriting.contract(), current.schema, kept.schema, door="create")
-            _before_commit(before_commit, existing, registry)
+            _before_commit(before_commit, existing, registry, file_commit=file_commit)
             dataset = _write_blob(
                 kept,
                 existing,
@@ -512,6 +513,7 @@ def create_table(
             transaction_properties=transaction_properties,
             recorded_author=recorded_author,
             before_commit=before_commit,
+            file_commit=file_commit,
         )
 
     location = declare_table(
@@ -538,20 +540,25 @@ def create_table(
         transaction_properties=transaction_properties,
         recorded_author=recorded_author,
         before_commit=before_commit,
+        file_commit=file_commit,
     )
 
 
-def _before_commit(hook: Callable[[str], None] | None, location: str, registry: base_registry.BaseRegistry | None) -> None:
-    """File that a commit is about to be made at ``location`` (:func:`table_claims.file_pending_commit`, [[XC-204]]) and hand
-    ``hook`` the uuid its claim records; nothing for a caller outside governance, whose table holds no claim.
+def _before_commit(
+    hook: Callable[[str], None] | None, location: str, registry: base_registry.BaseRegistry | None, *, file_commit: table_claims.CommitFiler | None
+) -> None:
+    """File, through ``file_commit`` when the create was given one, that a commit is about to be made at ``location``
+    (:func:`table_claims.commit_filer`, [[XC-204]]), and hand ``hook`` the uuid its claim records; nothing for a caller
+    outside governance, whose table holds no claim.
 
     Raises:
         ServiceUnavailableError: The store refused the entry, so the write is not made.
     """
-    if registry is None:
+    if registry is None or (hook is None and file_commit is None):
         return
     table_uuid = _claimed_uuid(registry, location)
-    table_claims.file_pending_commit(registry.control_root, registry.storage_options, table_uuid, location=location)
+    if file_commit is not None:
+        file_commit(table_uuid, location=location)
     if hook is not None:
         hook(table_uuid)
 
@@ -639,6 +646,7 @@ def _write_blob_into(
     transaction_properties: dict[str, str] | None = None,
     recorded_author: str | None = None,
     before_commit: Callable[[str], None] | None = None,
+    file_commit: table_claims.CommitFiler | None = None,
 ) -> CreateTableResponse:
     """Write the blob table's first data version into an already-declared ``location``, rolling the declare
     back with ``drop_table`` on failure so the name stays retryable rather than stuck declared-but-unreadable.
@@ -677,7 +685,7 @@ def _write_blob_into(
         # winning, as `update_schema_metadata` merges.
         if properties:
             table = table.replace_schema_metadata({**(table.schema.metadata or {}), **{key.encode(): value.encode() for key, value in properties.items()}})
-        _before_commit(before_commit, location, registry)
+        _before_commit(before_commit, location, registry, file_commit=file_commit)
         dataset = _write_blob(
             table,
             location,

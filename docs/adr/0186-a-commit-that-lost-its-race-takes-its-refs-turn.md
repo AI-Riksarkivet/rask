@@ -50,7 +50,7 @@ its target failed its commit as of unknown outcome, after one call.
   describe of another table wait 26.8 s, and 20 left it answering in 0.02 s. So the `/insert` and `version/create`, both
   `async` doors, wait in the event loop before they enter the pool (`DoorTable.wait_for_turn_in_loop`), as Lakekeeper's
   commit back-off waits on a tokio timer (`crates/lakekeeper/src/server/tables.rs:1438`); and a wait that only a thread can
-  make, a door's finalize inside its commit loop or the Overwrite create, takes one of `THREAD_WAITERS` (20) seats per
+  make, a door's finalize inside its commit loop or the Overwrite create, takes one of `THREAD_WAITERS` seats (4 since 2026-11-24, when the pool was bounded at 16, XC-204; 20 before) per
   process, past which its commit is refused at once with the retryable code 14 (`TurnWaitRefusedError`), as a bulkhead
   rejects when full (resilience4j's `SemaphoreBulkhead`, Polly's `ConcurrencyLimiter`) and as Lakekeeper answers a lock it
   will not wait for with a retriable conflict rather than a 503 (`crates/lakekeeper-storage-postgres/src/grant.rs:126-136`).
@@ -126,7 +126,7 @@ its target failed its commit as of unknown outcome, after one call.
   is renewed: up to 0.1 s after the store answered, plus that read's own latency, which ran 1-2 s on the overloaded
   estate. Every waiter polling in that window passes its wait, and each meets the holder's next attempt, which plans
   again under the turn it keeps. A door's take that finds such a turn in the store clears its view and waits on the
-  record itself. The chart runs one catalog replica by default. Past the 20 seats a thread waits in, a door's commit on a
+  record itself. The chart runs one catalog replica by default. Past the seats a thread waits in, a door's commit on a
   contended ref is refused 409 code 14 for its caller to retry, so a fan-out of door commits on one table can see refusals
   it would not with no turn.
 - One commit knowingly does not wait: the config-only commit a door's own attempt makes to disarm Lance's commit-path

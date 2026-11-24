@@ -23,6 +23,7 @@ from lakehouse.events.signature_doors import SignatureDoorSettings
 from lakehouse.governed.principal import PrincipalKey
 from lakehouse.governed.settings import GovernedAuthSettings
 from lakehouse.naming import CATALOG_DELIMITER
+from lakehouse.records import commit_turns
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import SSE_KMS_ALGORITHMS, StoreTimeouts, lance_storage_options
 from lakehouse.storage.options import StorageOptions, on_s3
@@ -637,6 +638,8 @@ class Settings(
     #: The most threads the catalog's blocking calls (a store read, a Lance commit, a sync door) run on at once
     #: (`lakehouse.service_app.thread_pool`). Every thread shares the interpreter with the serving loop, so a larger pool
     #: runs no more Python at once and makes the loop wait longer for its turn; unset, anyio's own bound of 40 holds.
+    #: The writes admitted at once and the threads that may wait for a commit turn together stay below it
+    #: (:meth:`_writers_leave_threads_for_readers`).
     request_threads: int | None = Field(default=None, ge=1, le=256, alias="LANCE_REQUEST_THREADS")
 
     #: How long an `Idempotency-Key`'s record outlives its last write before maintenance's daily scan asks for it to go
@@ -644,6 +647,24 @@ class Settings(
     #: a new request. At least an hour, far above a claim's lease and the request deadline, so no record a door may still
     #: be acting on goes.
     idempotency_lifetime_seconds: int = Field(default=86_400, ge=3_600, alias="LANCE_IDEMPOTENCY_LIFETIME_SECONDS")
+
+    @model_validator(mode="after")
+    def _writers_leave_threads_for_readers(self) -> Self:
+        """Refuse a thread pool the catalog's writers could hold whole. An admitted bulk write holds one request thread
+        while it commits (`max_concurrent_writes`), and a door's commit waiting for its ref's turn sleeps in another
+        (`lakehouse.records.commit_turns.THREAD_WAITERS`), so both together stay below the pool and a read always finds a
+        thread; with the shed off (0) the writes are unbounded, which no pool this catalog bounds itself can hold."""
+        if self.request_threads is None:
+            return self
+        if not self.max_concurrent_writes:
+            raise ValueError("LANCE_MAX_CONCURRENT_WRITES=0 admits every write at once, so LANCE_REQUEST_THREADS cannot keep a thread for reads; set a cap")
+        writers = self.max_concurrent_writes + commit_turns.THREAD_WAITERS
+        if writers >= self.request_threads:
+            raise ValueError(
+                f"LANCE_MAX_CONCURRENT_WRITES ({self.max_concurrent_writes}) and the {commit_turns.THREAD_WAITERS} threads that may wait for a commit "
+                f"turn must stay below LANCE_REQUEST_THREADS ({self.request_threads}), or writers hold every thread and reads wait"
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_provenance_namespace(self) -> Self:

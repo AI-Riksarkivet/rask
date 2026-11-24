@@ -63,8 +63,13 @@ spec:
             - { name: LANCE_MAX_BODY_BYTES, value: {{ .Values.catalog.maxBodyBytes | int64 | quote }} }
             - { name: LANCE_REQUEST_DEADLINE_SECONDS, value: {{ .Values.catalog.requestDeadlineSeconds | quote }} }
             - { name: LANCE_PROBES_PORT, value: {{ .Values.services.catalog.probesPort | quote }} }
+            {{- $writes := hasKey .Values.catalog "maxConcurrentWrites" | ternary .Values.catalog.maxConcurrentWrites 8 | int }}
+            {{- /* 4 = lakehouse.records.commit_turns.THREAD_WAITERS: the threads that may wait for a commit turn. */}}
+            {{- if or (lt $writes 1) (ge (add $writes 4) (.Values.services.catalog.requestThreads | int)) }}
+            {{- fail "catalog.maxConcurrentWrites must be at least 1, and it plus the 4 threads that may wait for a commit turn must stay below services.catalog.requestThreads: each admitted write holds a request thread while it commits, so writers would hold every thread and reads wait" }}
+            {{- end }}
             - { name: LANCE_REQUEST_THREADS, value: {{ .Values.services.catalog.requestThreads | quote }} }
-            - { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ hasKey .Values.catalog "maxConcurrentWrites" | ternary .Values.catalog.maxConcurrentWrites 16 | int | quote }} }
+            - { name: LANCE_MAX_CONCURRENT_WRITES, value: {{ $writes | quote }} }
             - { name: LANCE_TRASH_GRACE_DAYS, value: {{ hasKey .Values.catalog "trashGraceDays" | ternary .Values.catalog.trashGraceDays 7 | quote }} }
 
             - { name: LANCE_RESERVED_BUCKETS, value: {{ include "lance.platformBuckets" . | quote }} }

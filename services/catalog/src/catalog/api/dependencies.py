@@ -480,7 +480,19 @@ def get_door_table(ns: NamespaceDep, settings: SettingsDep, resolved: ResolvedTa
 def _door_table(ns: LanceNamespace, settings: Settings, resolved: ResolvedTable) -> DoorTable:
     """A door's table, answering whether a write of an operation on it is announced as the emitter judges it
     (`catalog.services.provenance_namespace`), which decides whether its author is recorded (ADR 0187)."""
-    return DoorTable(ns, table_claims.claim_store(settings), resolved, announces=provenance_namespace.announcer(resolved.segments, settings))
+    return DoorTable(
+        ns,
+        table_claims.claim_store(settings),
+        resolved,
+        announces=provenance_namespace.announcer(resolved.segments, settings),
+        file_commit=door_commit_filer(settings),
+    )
+
+
+def door_commit_filer(settings: Settings) -> table_claims.CommitFiler | None:
+    """What a door files a commit it is about to make with (`catalog.services.table_claims.commit_filer`); ``None`` where
+    the commit reconciler's timer is off, since nothing would read an entry or remove it."""
+    return table_claims.commit_filer(table_claims.claim_store(settings)) if settings.commit_reconcile_period_seconds else None
 
 
 DoorTableDep = Annotated[DoorTable, Depends(get_door_table)]
