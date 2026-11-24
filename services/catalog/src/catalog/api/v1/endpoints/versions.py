@@ -73,6 +73,35 @@ spec_router = APIRouter(prefix="/v1/table", tags=["version"])
 management_router = APIRouter(prefix="/management/v1/table", tags=["version-management"])
 
 
+class HistoryRow(BaseModel):
+    """One version of the table's commit log.
+
+    OPEN ON PURPOSE: beside the fields named here a row carries whichever detail fields its operation has in Lance's
+    transaction (`tables.versions._TXN_DETAIL_FIELDS`), a list as its count, so an operation a later Lance adds is
+    listed with what it carries rather than dropped by a closed shape.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    version: int
+    #: When the version was committed, as the manifest says it.
+    timestamp: str
+    #: Lance's own name for the operation (``Append``, ``Delete``, ``Overwrite``, ...); absent where the version's
+    #: transaction could not be read.
+    operation: str | None = None
+    #: A delete's or an update's predicate as its caller wrote it, for a caller who may read the table's rows.
+    predicate: str | None = None
+    #: Whether the version set the table's columns.
+    schema_set: bool | None = None
+
+
+class TableHistory(BaseModel):
+    """The table's commit log, newest first."""
+
+    table: str
+    versions: list[HistoryRow]
+
+
 @management_router.get("/{id}/history", response_model_exclude_none=True)
 async def table_history(
     *,
@@ -91,7 +120,7 @@ async def table_history(
     # five-version table still does five reads. Deeper history should get the keyset cursor the sibling
     # routes use (`page_token` = last version, `version < page_token`) rather than a raised ceiling.
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
-) -> dict[str, object]:
+) -> TableHistory:
     """The table's commit log — one row per version, newest first: **what** changed and **when**.
 
     Answers the question a catalog history view asks, from the format itself rather than from a
@@ -127,7 +156,7 @@ async def table_history(
         if not reads:
             for row in rows:
                 row.pop("predicate", None)
-    return {"table": id, "versions": rows}
+    return TableHistory.model_validate({"table": id, "versions": rows})
 
 
 def _batches_are_not_judged(operation: str) -> UnsupportedOperationError:

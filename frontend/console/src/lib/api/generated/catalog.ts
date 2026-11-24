@@ -7830,6 +7830,28 @@ export interface components {
             type: string;
         };
         /**
+         * HistoryRow
+         * @description One version of the table's commit log.
+         *
+         *     OPEN ON PURPOSE: beside the fields named here a row carries whichever detail fields its operation has in Lance's
+         *     transaction (`tables.versions._TXN_DETAIL_FIELDS`), a list as its count, so an operation a later Lance adds is
+         *     listed with what it carries rather than dropped by a closed shape.
+         */
+        HistoryRow: {
+            /** Operation */
+            operation?: string | null;
+            /** Predicate */
+            predicate?: string | null;
+            /** Schema Set */
+            schema_set?: boolean | null;
+            /** Timestamp */
+            timestamp: string;
+            /** Version */
+            version: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * IdempotencyKeysReclaimResponse
          * @description What one reclaim of expired `Idempotency-Key` records did ([[LH-576]]).
          */
@@ -9595,6 +9617,16 @@ export interface components {
             data_storage_version: string;
             /** Stable Row Ids */
             stable_row_ids: boolean;
+        };
+        /**
+         * TableHistory
+         * @description The table's commit log, newest first.
+         */
+        TableHistory: {
+            /** Table */
+            table: string;
+            /** Versions */
+            versions: components["schemas"]["HistoryRow"][];
         };
         /**
          * TableVersion
@@ -14123,9 +14155,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["TableHistory"];
                 };
             };
             /** @description Validation Error */

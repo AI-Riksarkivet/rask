@@ -7838,6 +7838,59 @@
         "title": "GraphNode",
         "type": "object"
       },
+      "HistoryRow": {
+        "additionalProperties": true,
+        "description": "One version of the table's commit log.\n\nOPEN ON PURPOSE: beside the fields named here a row carries whichever detail fields its operation has in Lance's\ntransaction (`tables.versions._TXN_DETAIL_FIELDS`), a list as its count, so an operation a later Lance adds is\nlisted with what it carries rather than dropped by a closed shape.",
+        "properties": {
+          "operation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation"
+          },
+          "predicate": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Predicate"
+          },
+          "schema_set": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schema Set"
+          },
+          "timestamp": {
+            "title": "Timestamp",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version",
+          "timestamp"
+        ],
+        "title": "HistoryRow",
+        "type": "object"
+      },
       "IdempotencyKeysReclaimResponse": {
         "description": "What one reclaim of expired `Idempotency-Key` records did ([[LH-576]]).",
         "properties": {
@@ -11895,6 +11948,28 @@
           "stable_row_ids"
         ],
         "title": "TableFileFormat",
+        "type": "object"
+      },
+      "TableHistory": {
+        "description": "The table's commit log, newest first.",
+        "properties": {
+          "table": {
+            "title": "Table",
+            "type": "string"
+          },
+          "versions": {
+            "items": {
+              "$ref": "#/components/schemas/HistoryRow"
+            },
+            "title": "Versions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "table",
+          "versions"
+        ],
+        "title": "TableHistory",
         "type": "object"
       },
       "TableVersion": {
@@ -20446,9 +20521,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Table History Management V1 Table  Id  History Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/TableHistory"
                 }
               }
             },
