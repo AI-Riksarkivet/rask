@@ -18,6 +18,15 @@ tables written in that time, not tables held: half its period near 1,500 such ta
 (`catalog-commit-walk`) reads every claimed table and reaches half its period near 9,000 tables at the same 0.2 s a
 table.
 
+**Measured 2026-11-24** on the development estate (XC-204 #802), sixteen stock writers appending through
+`version/create`, each catalog pod limited to one CPU: 1.29, 2.54 and 5.20 commits a second at one, two and four catalog
+replicas, the median commit 13.0, 6.3 and 2.6 s, none failed. The catalog scales by replicas, so a tick's cost is the
+only reason a worker role would be built, and the amendment above removed the larger one. The request thread pool
+(`services.catalog.requestThreads`) stays at 40: at 16 a burst of 1,500 reads over 300 connections took the same time
+(50 s against 51 s) with the serving loop's own answers four times sooner (a probe on the serving port at 0.09 s median
+against 0.33 s), and sixteen writers committed at the same rate (1.26 against 1.29 a second); but a commit turn's waiters
+(20 threads at most) and the write shed (16 writes) are sized against 40, so a smaller pool is decided with them.
+
 **Status:** accepted. Source: LH-251 (#165): nothing reclaimed `__manifest`, every namespace operation kept a version,
 and a dropped id stayed readable in its history.
 
