@@ -11,13 +11,14 @@ serving no correlation layer at all, and nothing compared them.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Generator
+import logging
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from lance_namespace import UnauthenticatedError
+from lance_namespace import ErrorCode, ServiceUnavailableError, UnauthenticatedError
 from starlette.types import Message, Scope
 
 from lakehouse.process.correlation import current_trace_id
@@ -149,19 +150,50 @@ def test_every_lance_app_refuses_a_body_over_its_routes_cap_before_reading_it(mo
     assert ((start["status"], reads) == (413, 0)) is refused, answered
 
 
+#: An object store that did not answer, as Lance reports one through pyarrow (`lakehouse.problems.outage`).
+_STORE_DID_NOT_ANSWER = "LanceError(IO): Generic S3 error: error sending request for url (http://store:9000/b/t.lance/_versions/1.manifest)"
+
+
+def _a_guards_refusal() -> Exception:
+    """A guard's refusal for a store that did not answer, raised from the store's error (`lakehouse.problems.outage.store_refusal`)."""
+    refusal = ServiceUnavailableError("the object store did not answer reading the record, so nothing was changed")
+    refusal.__cause__ = OSError(_STORE_DID_NOT_ANSWER)
+    return refusal
+
+
 @pytest.mark.parametrize(("name", "module_path"), LANCE_APPS, ids=[row[0] for row in LANCE_APPS])
-def test_every_lance_app_translates_a_lance_error(name: str, module_path: str) -> None:
-    """The handler pair, in the order that makes it work — one place rather than copied blocks."""
+@pytest.mark.parametrize(
+    ("failure", "status", "code", "logged"),
+    [
+        pytest.param(lambda: UnauthenticatedError("expired token"), 401, int(ErrorCode.UNAUTHENTICATED), [], id="a-lance-error"),
+        # A store outage is answered where it is caught and never raised on: an answer re-raised to the server is logged
+        # by it a second time, as an unhandled exception at ERROR.
+        pytest.param(lambda: OSError(_STORE_DID_NOT_ANSWER), 503, int(ErrorCode.SERVICE_UNAVAILABLE), ["object_store_unavailable"], id="a-store-outage"),
+        # A door that names the outage itself, as a guard does, raising its refusal from the store's own error: the same
+        # retryable 503, recorded once as the outage it is, never as a crash with its traceback.
+        pytest.param(_a_guards_refusal, 503, int(ErrorCode.SERVICE_UNAVAILABLE), ["object_store_unavailable"], id="a-door-naming-the-outage"),
+    ],
+)
+def test_every_lance_app_answers_a_failure_once(
+    name: str, module_path: str, failure: Callable[[], Exception], status: int, code: int, logged: list[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The handlers and the layers around them answer each failure with its problem body and one record at most, raising
+    nothing to the server: the test client raises whatever the app raises past its answer."""
     app = _app(module_path)
     with _probe_route(app):
 
-        @app.get("/_probe_unauthenticated")
+        @app.get("/_probe_failure")
         async def _raise() -> None:
-            raise UnauthenticatedError("expired token")
+            raise failure()
 
-        response = TestClient(app, raise_server_exceptions=False).get("/_probe_unauthenticated")
-    assert response.status_code == 401, response.text
+        with caplog.at_level(logging.WARNING):
+            response = TestClient(app).get("/_probe_failure")
+    assert (response.status_code, response.json()["code"]) == (status, code), response.text
     assert response.headers["content-type"].startswith("application/problem+json"), response.headers
+    # The real apps are driven without their lifespans, which reach the estate's store, bus and OpenFGA; their answers
+    # to a failure take nothing a lifespan builds. Read are the service's own records, under the logger its handlers write
+    # to: a catalog request run without its lifespan also records the wires only that lifespan sets.
+    assert [record.getMessage() for record in caplog.records if record.name == module_path and record.levelno >= logging.WARNING] == logged
 
 
 def test_the_catalog_maintenance_gate_answers_inside_the_requests_trace() -> None:

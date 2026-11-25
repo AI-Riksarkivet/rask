@@ -29,6 +29,10 @@ and what it owns is the part of the boot that is identical in all three:
      exception's 500 is answered by that error layer, outside every layer ``add_middleware`` installs.
    * ``PanicCatcherMiddleware``: a native library's panic answers 500 with the problem body and the process
      serves on.
+   * ``StoreOutageMiddleware``: a request the object store did not answer is answered 503 with one WARN record and
+     raised no further, where the server's error layer would log it again as a crash
+     (`lakehouse.service_app.outage_answer`). Outside the deadline: a door whose store fails after its caller was
+     answered at the deadline has nobody left to answer, and its end stays the deadline's to record as a failure.
    * ``RequestDeadlineMiddleware``: a request with no answer begun within ``request_deadline_seconds`` is
      answered 503 while its door runs on to its end. Outside the caller's ``outer_middleware``, so a door
      running on past its deadline still holds the write seat the catalog's shed counted it in.
@@ -70,6 +74,7 @@ from lakehouse.service_app import thread_pool
 from lakehouse.service_app.body_limit import BodySizeLimitMiddleware, BulkBodies
 from lakehouse.service_app.deadline import RequestDeadlineMiddleware
 from lakehouse.service_app.no_store import NoStoreMiddleware
+from lakehouse.service_app.outage_answer import StoreOutageMiddleware
 from lakehouse.service_app.panic_catcher import PanicCatcherMiddleware
 
 
@@ -266,6 +271,7 @@ def build_service_app(
     for layer in outer_middleware:
         app.add_middleware(layer.cls, *layer.args, **layer.kwargs)
     app.add_middleware(RequestDeadlineMiddleware, seconds=request_deadline_seconds, log=log)
+    app.add_middleware(StoreOutageMiddleware, log=log)
     app.add_middleware(PanicCatcherMiddleware, log=log)
     _trace_every_request(app)
     for router in routers:

@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
@@ -58,7 +59,18 @@ def _app(*, deadline_seconds: float) -> FastAPI:
     )
 
 
-def test_a_door_past_its_deadline_is_answered_503_and_runs_on_to_its_end() -> None:
+@pytest.mark.parametrize(
+    ("fails_with", "its_end"),
+    [
+        pytest.param(None, "request_past_its_deadline_finished", id="the-door-returns"),
+        # Its caller was answered at the deadline, so nobody is left to answer a store that fails the door after it: the
+        # door's end is its failure, recorded once, never an outage answered to no one and a door recorded as finished.
+        pytest.param(lambda: OSError(_STORE_DID_NOT_ANSWER), "request_past_its_deadline_failed", id="its-store-fails"),
+    ],
+)
+def test_a_door_past_its_deadline_is_answered_503_and_runs_on_to_its_end(
+    fails_with: Callable[[], Exception] | None, its_end: str, caplog: pytest.LogCaptureFixture
+) -> None:
     app = _app(deadline_seconds=0.1)
     ended = threading.Event()
 
@@ -66,15 +78,32 @@ def test_a_door_past_its_deadline_is_answered_503_and_runs_on_to_its_end() -> No
     async def _slow() -> dict[str, str]:
         await asyncio.sleep(_DOOR_SECONDS)
         ended.set()
+        if fails_with is not None:
+            raise fails_with()
         return {"answer": "late"}
 
-    with TestClient(app) as client:
+    with caplog.at_level(logging.INFO, logger="t"), TestClient(app) as client:
         answered = client.post("/slow")
         ended_before_the_answer = ended.is_set()
         ran_to_its_end = ended.wait(_DOOR_SECONDS * 5)
+        recorded_by = time.monotonic() + _DOOR_SECONDS * 5
+        while its_end not in _recorded(caplog) and time.monotonic() < recorded_by:
+            time.sleep(0.02)
 
     assert (answered.status_code, answered.headers["content-type"], answered.json()["code"]) == (503, "application/problem+json", 17), answered.text
     assert (ended_before_the_answer, ran_to_its_end) == (False, True), "the door was not left to run on to its end once its caller was answered"
+    assert _recorded(caplog) == ["request_deadline_passed", its_end]
+
+
+#: An object store that did not answer, as Lance reports one through pyarrow (`lakehouse.problems.outage`).
+_STORE_DID_NOT_ANSWER = "LanceError(IO): Generic S3 error: error sending request for url (http://store:9000/b/t.lance/_versions/1.manifest)"
+
+#: What the app records about a door past its deadline and how it ended.
+_DEADLINE_RECORDS = frozenset({"request_deadline_passed", "request_past_its_deadline_finished", "request_past_its_deadline_failed", "object_store_unavailable"})
+
+
+def _recorded(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [record.getMessage() for record in caplog.records if record.name == "t" and record.getMessage() in _DEADLINE_RECORDS]
 
 
 def test_a_door_in_which_a_native_library_panics_is_answered_500_with_the_problem_body() -> None:

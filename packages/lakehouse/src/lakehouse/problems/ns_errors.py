@@ -24,6 +24,7 @@ from lakehouse.problems.spec_routes import SPEC_ERROR_STATUSES, UNSUPPORTED_STAT
 if TYPE_CHECKING:
     from fastapi import FastAPI
     from starlette.responses import JSONResponse
+    from starlette.types import Scope
 
 #: The body and its media type are `lakehouse.problems.envelope`'s, which holds the Lance-free half of the answer and is
 #: imported from there by every site that builds a response.
@@ -34,6 +35,7 @@ __all__ = [
     "error_response",
     "install_problem_handlers",
     "status_for",
+    "store_unavailable",
 ]
 
 #: The ``detail`` every 5xx answers, whatever raised it: the message names paths, URLs and driver text, so it reaches the
@@ -170,6 +172,14 @@ _STATUS_CODE_FALLBACK: dict[int, ErrorCode] = {
 }
 
 
+def store_unavailable(exc: BaseException, scope: Scope, *, log: logging.Logger) -> JSONResponse:
+    """The spec's answer to a request the object store did not answer (``exc``): 503 with code 17, which a retry may
+    clear, after one WARN record under ``log`` that names the request (``scope``). The store's own text reaches the log
+    only."""
+    log.warning("object_store_unavailable", extra={"method": scope.get("method"), "path": scope.get("path"), "error": str(exc)[:300]})
+    return problem_response(ErrorCode.SERVICE_UNAVAILABLE, status=503, title="ServiceUnavailable", detail="Service Unavailable")
+
+
 def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
     """Register the four problem+json exception handlers every service app shares: domain errors, validation, the
     framework's own HTTP errors, and crashes.
@@ -186,7 +196,7 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
         # The native backend reports an object store that did not answer as a typed InternalError (500);
         # it is the same outage `handle_unexpected_error` answers 503 for, in the backend's own dialect.
         if int(exc.code) == ErrorCode.INTERNAL and reads_as_store_outage(exc):
-            return _store_unavailable(request, exc)
+            return store_unavailable(exc, request.scope, log=log)
         status = status_for(int(exc.code))
         # Same split as the redaction: Unsupported is the backend answering "I don't do that", so it gets
         # a plain info line. A traceback at ERROR is for faults — spending one on a capability answer is
@@ -195,13 +205,14 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
             # A capability answer, not a fault: an info line, never a traceback. Keyed on the mapped
             # status rather than a literal so it follows the map.
             log.info("unsupported_operation", extra={"method": request.method, "path": request.scope["path"], "status": status})
+        elif status == status_for(ErrorCode.SERVICE_UNAVAILABLE) and reads_as_store_outage(exc):
+            # A store that did not answer, which the door named itself (a guard raises its refusal from the store's own
+            # error): one WARN, as every other way that outage arrives is recorded. A 503 for anything else, such as this
+            # deployment's view of its IdP, keeps its traceback at ERROR below, the cause an operator acts on.
+            log.warning("object_store_unavailable", extra={"method": request.method, "path": request.scope["path"], "error": str(exc)[:300]})
         elif status >= 500:
             log.exception("domain_error", extra={"method": request.method, "path": request.scope["path"], "status": status})
         return error_response(exc)
-
-    def _store_unavailable(request: Request, exc: Exception) -> JSONResponse:
-        log.warning("object_store_unavailable", extra={"method": request.method, "path": request.scope["path"], "error": str(exc)[:300]})
-        return problem_response(ErrorCode.SERVICE_UNAVAILABLE, status=503, title="ServiceUnavailable", detail="Service Unavailable")
 
     @app.exception_handler(RequestValidationError)
     async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
@@ -251,12 +262,12 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
 
     @app.exception_handler(Exception)
     async def handle_unexpected_error(request: Request, exc: Exception) -> JSONResponse:
-        # AN OBJECT STORE THAT DID NOT ANSWER IS AN OUTAGE, and every Lance call reaches this handler
-        # through the same bare `ValueError`/`OSError`. Classified here, at the one seam every untyped
-        # failure passes, rather than at each of the call sites that open, scan or commit: a 503 tells
-        # the caller to retry and the operator to look at the store, where a 500 says this service broke.
+        # AN OBJECT STORE THAT DID NOT ANSWER IS AN OUTAGE, whichever bare `ValueError`/`OSError` a Lance call raised it
+        # as. The app factory's layer (`lakehouse.service_app.outage_answer`) answers it before it reaches this handler,
+        # which runs where the server logs it again; one reaches here only once its answer has begun, or raised outside
+        # that layer, and is still recorded as the outage it is, never as a fault of this service.
         if reads_as_store_outage(exc):
-            return _store_unavailable(request, exc)
+            return store_unavailable(exc, request.scope, log=log)
         # Internals (native/Arrow/S3 error text, paths) leak via logs only — never the body.
         log.exception("unhandled_error", extra={"method": request.method, "path": request.scope["path"]})
         return problem_response(ErrorCode.INTERNAL, status=500, title="InternalError", detail=_REDACTED)

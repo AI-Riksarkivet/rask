@@ -96,9 +96,10 @@ ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 # the writing-python references' "catch specific exceptions; log or re-raise". A boundary that must outlive every failure
 # (a supervision loop, a per-item batch, a post-commit announcement) keeps the broad catch and logs with `exc_info`, or
 # says why it cannot in a reasoned `# noqa: BLE001`. The tests trees are exempt: a test double raises what it is told to.
-# ASYNC keeps blocking calls (`open`, `time.sleep`, a subprocess, sync HTTP) out of `async def`, and FAST002/FAST003 keep
-# every dependency `Annotated` and every path parameter in its route's signature.
-extend-select = ["TID251", "FAST001", "FAST002", "FAST003", "ASYNC", "T20", "PLR0917", "PLR0915", "PLR1702", "BLE001"]
+# ASYNC keeps blocking calls (`open`, `time.sleep`, a subprocess, sync HTTP) out of `async def`. FAST is the whole family,
+# so a rule ruff adds to it applies here: FAST002 keeps every dependency `Annotated`, FAST003 every path parameter in its
+# route's signature.
+extend-select = ["TID251", "FAST", "ASYNC", "T20", "PLR0917", "PLR0915", "PLR1702", "BLE001"]
 # PLR1702 is a preview rule on ruff 0.16.0. `explicit-preview-rules` admits a preview rule only where it is named by its
 # exact code, so preview selects PLR1702 and nothing else: measured 2026-11-21 over `ruff check .` with and without the
 # pair, the findings of every other rule were identical by code, file and position.
