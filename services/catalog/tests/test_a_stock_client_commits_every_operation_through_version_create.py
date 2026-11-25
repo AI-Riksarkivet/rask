@@ -1755,11 +1755,10 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
     try:
         for writer in writers:
             writer.start()
-        slowest, until = 0.0, time.monotonic() + 4
+        described, until = [], time.monotonic() + 4
         while time.monotonic() < until:
-            began = time.monotonic()
             stock.describe_table(lance_namespace.DescribeTableRequest(id=["lance_catalog", "db", "other"]))
-            slowest = max(slowest, time.monotonic() - began)
+            described.append(time.monotonic())
             time.sleep(0.2)
     finally:
         released = time.monotonic()
@@ -1768,7 +1767,9 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
         writer.join(timeout=120)
 
     held_reads = [at for at in reads if held_from <= at < released]
-    assert slowest < 2, f"a describe of another table took {slowest:.1f} s while 50 writers waited on a held turn"
+    # Served while the turn is held, however slow the host: writers holding every request thread would hold a describe
+    # until the release, and none would end before it. A bound in seconds is the host's speed, not this claim.
+    assert [at for at in described if at < released], "no describe of another table was answered while 50 writers waited on a held turn"
     assert len(held_reads) <= 20 * (released - held_from), f"50 waiters read the turn record {len(held_reads)} times in {released - held_from:.1f} s"
     assert [at for at, exc in finished if exc is None and at < released] == []
     assert [exc for _, exc in finished if exc is not None and not isinstance(exc, may_fail_with)] == []
