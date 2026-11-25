@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 
 # Argo CD, pinned by exact release. Its core install is the controllers without the API server, its UI or Dex: the
 # Application is the whole interface this lane drives.
-ARGOCD_VERSION=v3.5.7
+ARGOCD_VERSION="${ARGOCD_VERSION:?the Argo CD release, pinned in .dagger/gitops.go (argoCDVersion), which the Dagger lane passes}"
 ARGOCD_MANIFEST="https://raw.githubusercontent.com/argoproj/argo-cd/$ARGOCD_VERSION/manifests/core-install.yaml"
 
 RELEASE=rask

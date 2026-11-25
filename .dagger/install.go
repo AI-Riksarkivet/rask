@@ -30,11 +30,16 @@ fi
 exec "$@"
 `
 
-// k3sRegistries sends every Docker Hub pull through the session's registry first. rask's images render as a bare
-// `<component>:<tag>` (image.localImages), which containerd reads as docker.io/library/<component>, so pushing them
-// under library/ makes them pullable with the render unchanged; anything the registry lacks falls through to Docker Hub.
+// k3sRegistries sends every Docker Hub pull, and every pull from ECR Public, through the session's registry first. rask's
+// images render as a bare `<component>:<tag>` (image.localImages), which containerd reads as
+// docker.io/library/<component>, so pushing them under library/ makes them pullable with the render unchanged; the
+// GitOps lane copies the images Argo CD names from ECR Public under docker/library/ (mirrorArgoCDImages). Anything the
+// registry lacks falls through to its own registry.
 const k3sRegistries = `mirrors:
   docker.io:
+    endpoint:
+      - "http://rask-registry:5000"
+  public.ecr.aws:
     endpoint:
       - "http://rask-registry:5000"
 `
