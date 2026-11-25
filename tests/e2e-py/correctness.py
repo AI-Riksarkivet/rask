@@ -54,6 +54,7 @@ from pydantic import BaseModel, ConfigDict
 
 from lakehouse.events import outbox
 from lakehouse.events.lineage_events import event_identity
+from lakehouse.lancekit.filters import lance_filter
 from lakehouse.naming import uuid_of
 from lakehouse.process.correlation import is_traceparent
 from lakehouse.storage.options import StorageOptions
@@ -182,11 +183,6 @@ def edges_named(history: History) -> list[Edge]:
     ]
 
 
-def _sql_list(names: Iterable[str]) -> str:
-    """``names`` as a SQL list of string literals for a Lance filter."""
-    return ", ".join("'" + name.replace("'", "''") + "'" for name in names)
-
-
 def uuids_of(reader: Identity, tables: Iterable[str]) -> dict[str, str]:
     """Each of ``tables`` mapped to the uuid the catalog's DescribeTable answers ``reader`` for it, its `rask.uuid`
     property (ADR 0173 §11)."""
@@ -210,12 +206,14 @@ def recorded_edges(owner: Identity, tables: Iterable[str], *, expected: Iterable
     """
     bus.wait_until_acked(INGEST_STREAM, (INGEST_CONSUMER,), bus.last_seq(INGEST_STREAM), within=within)
     names = {table_uuid: table for table, table_uuid in uuids_of(owner, tables).items()}
-    keyed = _sql_list(names)
+    keyed = list(names)
     wanted = Counter(expected)
     deadline = time.monotonic() + within
     while True:
         edge_list = lance.dataset(namespace_client=owner.namespace(), table_id=[*PROVENANCE_NAMESPACE.split("$"), "edges"])
-        rows = edge_list.to_table(columns=[*Edge.model_fields, "in_name", "out_name"], filter=f"in_table IN ({keyed}) OR out_table IN ({keyed})").to_pylist()
+        rows = edge_list.to_table(
+            columns=[*Edge.model_fields, "in_name", "out_name"], filter=lance_filter(t"in_table IN ({keyed}) OR out_table IN ({keyed})")
+        ).to_pylist()
         recorded = [Edge.model_validate({**row, "in_table": row["in_name"], "out_table": row["out_name"]}) for row in rows]
         if wanted <= Counter(recorded) or time.monotonic() > deadline:
             return recorded

@@ -23,13 +23,19 @@ from typing import Any, Final, override
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.events.bus import Bus, BusSettings, Follow, StreamPage
+from lakehouse.events.bus import MAX_PAYLOAD_BYTES, Bus, BusSettings, Follow, StreamPage
 from lakehouse.events.bus_delivery import Delivery, Handle, Lane, Park, Settlement, judged
 from lakehouse.process.supervision import Supervisor
 
 
 #: How long a delivery waits for the service's lifespan to have started the consumer it is for.
 _STARTED_WITHIN_SECONDS: Final = 5.0
+
+#: A body nested as deep as the lakehouse's own payload cap allows (`MAX_PAYLOAD_BYTES`, just under JetStream's default
+#: ``max_payload``), so about as deep as any delivery can be. On CPython 3.15.2, aarch64, it is past the JSON parser's
+#: own depth (`json.loads` reads 65,197 levels, measured 2026-11-25), so a reader meets the parser's `RecursionError`;
+#: under a parser that read it whole, the reader's own depth bound would refuse it instead.
+DEEPEST_BODY: Final = b"[" * (MAX_PAYLOAD_BYTES // 2) + b"]" * (MAX_PAYLOAD_BYTES // 2)
 
 
 class Sent(BaseModel):

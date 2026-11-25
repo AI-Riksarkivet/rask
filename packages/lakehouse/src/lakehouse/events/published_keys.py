@@ -41,12 +41,12 @@ KEY_REFRESH_INTERVAL_SECONDS: Final = 30.0
 
 #: How many key ids ONE identity remembers having met unknown, each with when it was first met. The ids are the events'
 #: own text, so the memory is bounded, and per identity so that a flood against one identity cannot push another's out.
-#: An id is met twice, at its delivery and at its redelivery 120 s later, where it is decided, so the memory
-#: has to hold the ids of two redelivery intervals. 8192 ids (162 bytes each, measured on CPython 3.13: 1.3 MB per
-#: identity) hold a flood of about 34 DIFFERENT ids a second: measured through the real reader with a constant 120 s
-#: redelivery schedule emulated, none are parked at 30 a second and 88% at 36. Honest traffic adds one id per rotation, while the
-#: cached list predates the new key. An id pushed out is met afresh, which costs its event one more retry cycle and
-#: never a refusal on a list that predates the key.
+#: An id is met twice, at its delivery and at its redelivery 120 s later, where it is decided, so the memory has to hold
+#: the ids of two redelivery intervals. 8192 ids (154 bytes each, 1.27 MB per identity, measured with tracemalloc on
+#: CPython 3.15.2 and 3.13.15 alike, 2026-11-25) hold a flood of about 34 DIFFERENT ids a second: measured through the
+#: real reader with a constant 120 s redelivery schedule emulated, none are parked at 30 a second and 88% at 36. Honest
+#: traffic adds one id per rotation, while the cached list predates the new key. An id pushed out is met afresh, which
+#: costs its event one more retry cycle and never a refusal on a list that predates the key.
 MAX_UNKNOWN_KEY_IDS: Final = 8192
 
 

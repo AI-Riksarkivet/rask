@@ -41,6 +41,7 @@ from lakehouse.events.bus_delivery import Delivery, Lane, Verdict
 from lakehouse.events.cloud_events import CloudEvent
 from lakehouse.process.correlation import continuing
 from lakehouse.process.supervision import EndProcess, Supervisor
+from tests.bus_double import DEEPEST_BODY
 from tests.traces import trace_id_of
 
 
@@ -273,7 +274,7 @@ async def test_a_publish_the_bus_refuses_is_not_delivered_and_keeps_its_cause(co
     [
         pytest.param(RawStreamMsg(seq=41, data=json.dumps(_envelope(run="r1", attempt=1.0).as_wire()).encode()), id="its-number-spelt-as-a-float"),
         pytest.param(RawStreamMsg(seq=41, data=b'["an", "array"]'), id="json-that-is-no-envelope"),
-        pytest.param(RawStreamMsg(seq=41, data=b"[" * 2**19 + b"]" * 2**19), id="bytes-nested-deeper-than-a-parser-reads"),
+        pytest.param(RawStreamMsg(seq=41, data=DEEPEST_BODY), id="bytes-nested-deeper-than-a-parser-reads"),
         pytest.param(NotFoundError(), id="nothing-stored-at-that-sequence"),
     ],
 )

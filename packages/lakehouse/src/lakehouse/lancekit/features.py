@@ -267,7 +267,7 @@ SUPPORTED = FLAG_DELETION_FILES | FLAG_STABLE_ROW_IDS | FLAG_USE_V2_FORMAT_DEPRE
 #: function for the three readings and the measurements behind each.
 SUPPORTED_FOR_GC = SUPPORTED | FLAG_BASE_PATHS
 
-_FLAG_NAMES = frozendict(
+_FLAG_NAMES: Final = frozendict(
     {
         FLAG_DELETION_FILES: "deletion files",
         FLAG_STABLE_ROW_IDS: "stable row ids",

@@ -72,7 +72,7 @@ __all__ = [
 _RESOURCES: tuple[str, ...] = ("namespace", "table", "materialized_view", "transaction", "classification")
 
 
-FGA_TYPE: frozendict[str, str] = frozendict(
+FGA_TYPE: Final[frozendict[str, str]] = frozendict(
     {
         "namespace": "namespace",
         "table": "table",
@@ -97,7 +97,7 @@ _READ_AT_A_SET_DOOR: Final = frozendict({("table", "protection"): "can_get_prote
 
 
 # Full route suffixes that create a NEW child -> authorize the parent (create-on-parent).
-CREATE_ON_PARENT_SUFFIXES: frozendict[str, frozenset[str]] = frozendict(
+CREATE_ON_PARENT_SUFFIXES: Final[frozendict[str, frozenset[str]]] = frozendict(
     {
         "table": frozenset({"create", "declare", "register"}),
         "namespace": frozenset({"create"}),
@@ -122,7 +122,7 @@ CREATE_ON_PARENT_SUFFIXES: frozendict[str, frozenset[str]] = frozendict(
 # so blessing one destroys nothing, and welding that to ownership is what forced every pipeline identity
 # to hold ``owner`` on every tenant. Their ``*/list`` / ``*/version`` siblings are reads, resolved on the
 # trailing segment below; ``tags/delete`` is mapped explicitly just below.
-OWNER_SUFFIX_RELATION: frozendict[str, frozendict[str, str]] = frozendict(
+OWNER_SUFFIX_RELATION: Final[frozendict[str, frozendict[str, str]]] = frozendict(
     {
         "table": frozendict(
             {
@@ -356,7 +356,7 @@ BATCH_PATHS = frozenset({"/v1/table/version/batch-create", "/v1/table/batch-comm
 # (CommitTableOperation) has no drop op. Both batch doors answer 406 and run nothing ([[LH-206]]);
 # the guard answers first, as it does at every door, so a caller without the rung reads 403.
 # Maps op key -> can_* relation.
-BATCH_OWNER_OPS: frozendict[str, str] = frozendict({"deregister_table": "can_deregister"})
+BATCH_OWNER_OPS: Final[frozendict[str, str]] = frozendict({"deregister_table": "can_deregister"})
 
 
 #: The mount prefixes this guard understands. `/management/v1` is the rask-only surface ([[LH-021]]),

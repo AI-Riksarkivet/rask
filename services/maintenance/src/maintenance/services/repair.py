@@ -50,7 +50,7 @@ grant rather than by a reclaimer.
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
@@ -92,7 +92,7 @@ _REVOCABLE: tuple[str, ...] = ("ghost_projects", "ghost_warehouses", "ghost_tabl
 #: `ghost_tables` is subtracted from the trash index as well as the catalog's listing ([[LH-516]]): a table in the
 #: trash keeps its grants for its owner's undrop and only its trash record names it, so a record the scan skipped
 #: makes that table read as a ghost.
-_SUBTRACTED_FROM: frozendict[str, tuple[str, ...]] = frozendict(
+_SUBTRACTED_FROM: Final[frozendict[str, tuple[str, ...]]] = frozendict(
     {
         "ghost_projects": ("registry:projects",),
         "ghost_warehouses": ("registry:warehouses",),
@@ -103,7 +103,7 @@ _SUBTRACTED_FROM: frozendict[str, tuple[str, ...]] = frozendict(
 
 #: Why each non-revocable category is refused. Phrased as what the finding IS, because the reason a
 #: pass must not delete it is a property of the object rather than of this module's scope.
-_REFUSED: frozendict[str, str] = frozendict(
+_REFUSED: Final[frozendict[str, str]] = frozendict(
     {
         "absent_datasets": "a catalog RECORD whose location holds no bytes — the fix is a catalog write and it is a decision: the bytes may be restorable, and the record is the only thing that still says where they belonged",
         "unregistered_datasets": "a REAL dataset on storage that no catalog record names — the resolution is REGISTRATION, never deletion; deleting it would destroy live rows to close a bookkeeping gap",

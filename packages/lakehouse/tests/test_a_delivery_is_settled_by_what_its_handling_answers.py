@@ -16,6 +16,7 @@ import logging
 import pytest
 
 from lakehouse.events.bus_delivery import MAX_ENVELOPE_DEPTH, Delivery, Handle, Lane, Outcome, Settlement, Verdict, judged
+from tests.bus_double import DEEPEST_BODY
 
 
 #: A lane that handles a message on three deliveries, two minutes apart.
@@ -214,11 +215,6 @@ async def test_a_handling_cancelled_as_the_process_stops_is_settled_by_nobody() 
     assert park.kept == []
 
 
-#: The deepest body a publisher can put on the bus: arrays filling JetStream's default ``max_payload`` (1 MiB), which no
-#: CPython's default stack parses (`json.loads` reads 65,197 levels on 3.15.2, aarch64).
-_AS_DEEP_AS_THE_BUS_CARRIES = b"[" * 2**19 + b"]" * 2**19
-
-
 def _nested(levels: int) -> bytes:
     """An object nested ``levels`` deep, the outermost one included."""
     return b'{"in":' * (levels - 1) + b"{}" + b"}" * (levels - 1)
@@ -229,7 +225,7 @@ def _nested(levels: int) -> bytes:
     [
         pytest.param(b"not json", id="no-json"),
         pytest.param(b'["a", "list"]', id="json-that-is-no-object"),
-        pytest.param(_AS_DEEP_AS_THE_BUS_CARRIES, id="nested-deeper-than-the-parser-reads"),
+        pytest.param(DEEPEST_BODY, id="nested-deeper-than-the-parser-reads"),
         pytest.param(_nested(MAX_ENVELOPE_DEPTH + 1), id="nested-one-level-deeper-than-an-envelope-is-read"),
     ],
 )

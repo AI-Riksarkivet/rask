@@ -66,7 +66,7 @@ import logging
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from functools import partial
-from typing import Any
+from typing import Any, Final
 
 import pyarrow.fs as pafs
 from fastapi.concurrency import run_in_threadpool
@@ -341,6 +341,9 @@ def manifest_rows_named(root: str, storage_options: StorageOptions, object_ids: 
     Measured on pylance 13.0.0 (2026-11-09): the ``dir`` namespace keeps its ``__manifest`` as one fragment whatever it
     holds (one at 10, 50 and 150 tables) and builds no index on it, so the read costs the same few requests on any estate,
     and the filter keeps the rows decoded to those asked for.
+
+    Raises:
+        ValueError: ``object_ids`` is empty, which names no row to read.
     """
     ids = list(object_ids)
     return _manifest_rows(root, storage_options, where=lance_filter(t"object_id IN ({ids})"))
@@ -637,7 +640,7 @@ def _remove_emptied_directories(location: str, storage_options: StorageOptions, 
 #: emits), and the governance feed a person reads shows the action and the actor, so a reclamation announced as a drop
 #: would read as a person's deletion with a service identity in the actor column. The action alone says it was the
 #: trash's expiry; ``extra`` carries the deadline and the size.
-_PURGE_ACTION: frozendict[str, ControlAction] = frozendict({"table": "table_purged", "namespace": "namespace_purged"})
+_PURGE_ACTION: Final[frozendict[str, ControlAction]] = frozendict({"table": "table_purged", "namespace": "namespace_purged"})
 
 
 async def _refuse(out: TrashPurgeReport, record: TrashRecord, *, reason: str, settings: MaintenanceCatalogDoor) -> None:

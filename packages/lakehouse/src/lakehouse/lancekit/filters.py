@@ -40,10 +40,11 @@ def lance_filter(template: Template) -> str:
 
 
 def in_lists(column: str, values: Iterable[str]) -> Iterator[str]:
-    """``<column> IN (...)`` filters over ``values`` in sorted order, at most :data:`_IN_LIST_SIZE` values each."""
+    """``<column> IN (...)`` filters over ``values`` in sorted order, at most :data:`_IN_LIST_SIZE` values each, each
+    rendered by `lance_filter` with the list as its one value; ``column`` is the caller's text, never a value."""
     keys = sorted(values)
     for start in range(0, len(keys), _IN_LIST_SIZE):
-        yield f"{column} IN ({', '.join(_sql_literal(key) for key in keys[start : start + _IN_LIST_SIZE])})"
+        yield lance_filter(Template(f"{column} IN (", Interpolation(keys[start : start + _IN_LIST_SIZE], "keys"), ")"))
 
 
 def _literal(part: Interpolation) -> str:

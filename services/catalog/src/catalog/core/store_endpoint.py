@@ -20,6 +20,7 @@ carrying userinfo, a query, a fragment or an unparseable port is another store.
 from __future__ import annotations
 
 import logging
+from typing import Final
 from urllib.parse import urlsplit
 
 from lance_namespace import UnsupportedOperationError
@@ -29,7 +30,7 @@ log = logging.getLogger(__name__)
 
 #: The port a scheme implies when the endpoint names none, so ``http://store`` and ``http://store:80``
 #: compare equal. A scheme outside this map with no explicit port has no comparable form.
-_DEFAULT_PORTS = frozendict({"http": 80, "https": 443})
+_DEFAULT_PORTS: Final = frozendict({"http": 80, "https": 443})
 
 
 def _comparable(endpoint: str) -> tuple[str, str, int, str] | None:

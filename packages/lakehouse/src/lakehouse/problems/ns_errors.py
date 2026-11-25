@@ -42,7 +42,7 @@ __all__ = [
 #: log only.
 _REDACTED: Final = "Internal Server Error"
 
-_STATUS: frozendict[ErrorCode, int] = frozendict(
+_STATUS: Final[frozendict[ErrorCode, int]] = frozendict(
     {
         # 406, NOT 501, and the spec is explicit about it: `UnsupportedOperationErrorResponse` is status
         # 406 ("Not Acceptable / Unsupported Operation") on every op that lists it, and Lance's own
@@ -163,7 +163,7 @@ def _extensions(exc: LanceNamespaceError) -> Mapping[str, object] | None:
 #: domain meaning (404 on an unknown route, 405, 409 from app code) falls through to `Unsupported`,
 #: which is the truthful answer for "this backend does not do that". Guessing `TableNotFound` for a
 #: routing 404 would tell a client a table is missing when the OPERATION is.
-_STATUS_CODE_FALLBACK: frozendict[int, ErrorCode] = frozendict(
+_STATUS_CODE_FALLBACK: Final[frozendict[int, ErrorCode]] = frozendict(
     {
         400: ErrorCode.INVALID_INPUT,
         401: ErrorCode.UNAUTHENTICATED,

@@ -21,6 +21,7 @@ import logging
 from collections import Counter
 from collections.abc import Callable, Sequence
 from functools import partial
+from typing import Final
 
 import lance
 import pyarrow as pa
@@ -765,7 +766,7 @@ def _refuse_rows_not_carried(version: _Judged, *, replaced: set[int], written: s
 
 #: What one operation may change beyond the rules every commit meets: a ``ReserveFragments`` and a ``CreateIndex``
 #: carry no data, and a ``Rewrite`` carries exactly the rows it replaces. Judged once the version's files are sound.
-_OPERATION_RULES: frozendict[str, Callable[[_Judged], None]] = frozendict(
+_OPERATION_RULES: Final[frozendict[str, Callable[[_Judged], None]]] = frozendict(
     {
         "ReserveFragments": _refuse_a_reservation_beyond_the_table,
         "CreateIndex": _refuse_changed_data,
@@ -966,7 +967,7 @@ def judge(
 
 #: The lineage operation each staged Lance operation is announced as. pylance stages merge_insert as an ``Update`` and
 #: add_columns as a ``Merge`` (measured on 13.0.0), so each maps to the door that writes the same transaction.
-LINEAGE_OPERATION: frozendict[str, str] = frozendict(
+LINEAGE_OPERATION: Final[frozendict[str, str]] = frozendict(
     {
         "Append": lineage_emit.INSERT,
         "Delete": lineage_emit.DELETE,

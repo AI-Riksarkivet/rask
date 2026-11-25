@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import pyarrow as pa
 from lance_namespace import InvalidInputError
@@ -130,7 +130,7 @@ def _is_ratio_above_zero(value: str) -> bool:
 #: Each knob `lance_docs/lance/format/file/encoding.md` § Compression Configuration defines, but ``structural-encoding``. The schemes are the
 #: ones Lance's encoder resolves (measured: ``ZSTD``, ``gzip``, ``brotli`` and ``snappy`` are each "Unknown
 #: compression scheme"; a dictionary's values take lz4, zstd or none).
-_KNOBS: frozendict[str, Knob] = frozendict(
+_KNOBS: Final[frozendict[str, Knob]] = frozendict(
     {
         "compression": _choice(("none", "fsst", "lz4", "zstd"), _is_leaf),
         "compression-level": Knob(accepts=_is_integer, expected="an integer", acts_on=_is_leaf, level_of="compression"),

@@ -319,7 +319,7 @@ _TXN_DETAIL_FIELDS = (
 #: copying it through under its own name would overwrite ``row["version"]`` — the log's primary key and the
 #: join key for the lineage actor — turning "v12 restored from v7" into a row claiming to *be* v7. The most
 #: valuable missing field and a silent corruption share one name, so it is renamed on the way out.
-_TXN_FIELD_RENAMES = frozendict({"version": "restored_from"})
+_TXN_FIELD_RENAMES: Final = frozendict({"version": "restored_from"})
 
 
 def table_history(table: table_claims.DoorTable, so: StorageOptions, limit: int = 50) -> list[dict[str, Any]]:

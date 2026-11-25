@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, Path, Query
 from fastapi.concurrency import run_in_threadpool
@@ -164,7 +164,9 @@ def _validated_object(obj: str) -> str:
 
 #: The types whose objects OpenFGA holds by the uuid the catalog minted and the catalog's doors address by name, each with
 #: the spec's error for a name no object holds (`lance_docs/ns_catalog/namespace/operations/errors.md`: codes 4 and 1).
-_NOT_FOUND: frozendict[str, type[TableNotFoundError | NamespaceNotFoundError]] = frozendict({"table": TableNotFoundError, "namespace": NamespaceNotFoundError})
+_NOT_FOUND: Final[frozendict[str, type[TableNotFoundError | NamespaceNotFoundError]]] = frozendict(
+    {"table": TableNotFoundError, "namespace": NamespaceNotFoundError}
+)
 
 
 async def _held_object(resolver: Resolver, obj: str) -> str:
