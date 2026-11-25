@@ -99,7 +99,7 @@ async def seed_project_admin(
         return False
     await fga_writes.write_tuples(  # noqa: TID251
         client,
-        [fga_writes.ClientTuple(user=fga_ids.user_object(admin), relation="admin", object=f"project:{project}")],
+        [fga_writes.ClientTuple(user=fga_ids.user_object(admin), relation="admin", object=fga_ids.project_object(project))],
         actor=actor,
         origin="project_create",
     )

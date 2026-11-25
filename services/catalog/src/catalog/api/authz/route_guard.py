@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.authz.decisions import record_undeclared, refused_read_as_absent, require_audited, require_rung, require_trashed, require_wired
 from catalog.api.authz.grant_authority import authorize_grant, authorize_revoke
-from catalog.api.authz.objects import addressed_object, resolve_rung, rung_label, rung_on
+from catalog.api.authz.objects import resolve_rung, rung_label, rung_on
 from catalog.api.authz.request_reads import batch_ids, json_body_or_400
 from catalog.api.authz.rungs import (
     BATCH_OWNER_OPS,
@@ -227,7 +227,7 @@ async def _decide_on_id(request: Request, client: OpenFgaClient, resolver: Resol
     # A transaction is authorized on the table its id names, not on an object of its own.
     if resource == "transaction":
         if suffix not in TRANSACTION_SUFFIXES:
-            record_undeclared(path, "transaction", suffix, user=token.subject, obj=addressed_object("transaction", segments))
+            record_undeclared(path, "transaction", suffix, user=token.subject, obj=fga_ids.addressed_object("transaction", segments))
             raise undeclared_door("transaction", suffix)
         await authorize_transaction(client, resolver, segments, suffix=suffix, token=token)
         return
@@ -277,7 +277,7 @@ async def _decide_on_object(request: Request, client: OpenFgaClient, resolver: R
     # and OpenFGA answers an undefined relation with a 400 that fails closed to 503 — an outage wearing a
     # permission error's clothes.
     if fga_type == "classification":
-        obj = addressed_object(fga_type, segments)
+        obj = fga_ids.addressed_object(fga_type, segments)
         if suffix != "access/my-permissions":
             record_undeclared(path, fga_type, suffix, user=token.subject, obj=obj)
             raise undeclared_door(fga_type, suffix)
@@ -286,7 +286,7 @@ async def _decide_on_object(request: Request, client: OpenFgaClient, resolver: R
     try:
         relation = action_relation(fga_type, suffix, method=request.method)
     except InternalError:
-        record_undeclared(path, fga_type, suffix, user=token.subject, obj=addressed_object(fga_type, segments))
+        record_undeclared(path, fga_type, suffix, user=token.subject, obj=fga_ids.addressed_object(fga_type, segments))
         raise
     rung = rung_on(relation, fga_type, segments, suffix=suffix)
     try:

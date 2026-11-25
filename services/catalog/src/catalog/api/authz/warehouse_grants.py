@@ -40,7 +40,7 @@ async def seed_warehouse(
     first warehouse."""
     if context.token is None or (client := wired(context.settings, context.client)) is None:
         return
-    obj = f"warehouse:{warehouse_id}"
+    obj = fga_ids.warehouse_object(warehouse_id)
     # The project edge and the sweep's grant, granted here and not per namespace, at the WAREHOUSE because
     # `namespace` and `table` both define `... or ... from parent`: one tuple reaches every namespace and every
     # table under it. Written in the SAME call as the creator's grant so there is no window in which the
@@ -75,9 +75,9 @@ def cascade_tuples(settings: CatalogAuthzSettings, *, warehouse_id: str, project
     — re-running the create path over an existing estate to repair it would make whoever ran the
     repair an owner of every tenant.
     """
-    obj = f"warehouse:{warehouse_id}"
+    obj = fga_ids.warehouse_object(warehouse_id)
     return [
-        fga_writes.ClientTuple(user=f"project:{project}", relation="project", object=obj),
+        fga_writes.ClientTuple(user=fga_ids.project_object(project), relation="project", object=obj),
         # `maintenance` ALONE: the platform's maintenance identity, a maintainer that may also be vended the
         # maintain tier. Maintenance rewrites how a dataset is stored and must not be able to drop it or change
         # what it says, which is exactly the separation `can_maintain` was minted to express.
@@ -122,6 +122,6 @@ async def converge_warehouse_grants(
     await fga_writes.write_tuples(client, tuples, actor=actor, origin="warehouse_grant_backfill")  # noqa: TID251
     own = own_users(settings)
     revoked = await fga_writes.revoke_undeclared(  # noqa: TID251 — the converge's revoking site
-        client, tuples, obj=f"warehouse:{warehouse_id}", relation="maintenance", own=own, actor=actor, origin="warehouse_grant_backfill"
+        client, tuples, obj=fga_ids.warehouse_object(warehouse_id), relation="maintenance", own=own, actor=actor, origin="warehouse_grant_backfill"
     )
     return len(tuples) + len(revoked)

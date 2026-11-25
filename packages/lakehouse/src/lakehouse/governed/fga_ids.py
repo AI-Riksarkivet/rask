@@ -135,6 +135,27 @@ def object_of(kind: str, uuid: str) -> str:
     return namespace_object(uuid) if kind == "namespace" else table_object(uuid)
 
 
+def project_object(project_id: str) -> str:
+    """The FGA object a project's grants are held by: ``project:<id>``, the id its registry record is kept under."""
+    return f"project:{project_id}"
+
+
+def warehouse_object(warehouse_id: str) -> str:
+    """The FGA object a warehouse's grants are held by: ``warehouse:<id>``, the id its registry record is kept under."""
+    return f"warehouse:{warehouse_id}"
+
+
+def addressed_object(fga_type: str, id_segments: list[str] | str) -> str:
+    """``<type>:<canonical-id>`` for an object addressed by its id.
+
+    The FGA object of a type no name is minted a uuid for (a transaction's opaque id, a classification label, a
+    materialized view), and the NAME of a table or namespace in an audit record or a refusal: a judgement made on an
+    address before, or without, an object. A table's or namespace's grants are held by its uuid (:func:`table_object`,
+    :func:`namespace_object`), never by this.
+    """
+    return f"{fga_type}:{canonical_object_id(id_segments)}"
+
+
 def names_someone(user: str) -> bool:
     """Whether a tuple's ``user`` names someone a notifier can address: a person or a group of them.
 
@@ -147,6 +168,7 @@ def names_someone(user: str) -> bool:
 
 __all__ = [
     "USER_WILDCARD",
+    "addressed_object",
     "canonical_object_id",
     "grantee_object",
     "is_object_id",
@@ -154,7 +176,9 @@ __all__ = [
     "namespace_object",
     "object_of",
     "parent_namespace_id",
+    "project_object",
     "subject_of",
     "table_object",
     "user_object",
+    "warehouse_object",
 ]

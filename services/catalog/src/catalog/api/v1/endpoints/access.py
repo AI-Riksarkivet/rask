@@ -216,7 +216,7 @@ async def require_warehouse_review(id: str, context: AuthzContextDep) -> None:
     """Gate a warehouse's access listing on ``can_read_assignments``, the model's rung for seeing who holds what
     (``manage_grants``, which a project's admin holds through ``can_administer from project``) ([[LH-555]]). A route
     dependency, since the router leaves every warehouse route to its handler."""
-    await door_gates.require_relation(context, relation="can_read_assignments", obj=f"warehouse:{id}")
+    await door_gates.require_relation(context, relation="can_read_assignments", obj=fga_ids.warehouse_object(id))
 
 
 async def require_warehouse_grant(id: str, *, request: Request, context: AuthzContextDep, resolver: ResolverDep) -> None:
@@ -233,7 +233,7 @@ async def require_warehouse_revoke(id: str, *, request: Request, context: AuthzC
 async def require_project_review(id: str, context: AuthzContextDep) -> None:
     """Gate a project's access listing on ``can_read_assignments``, which its security admin holds ([[LH-563]]). A route
     dependency, since the router leaves every project route to its handler."""
-    await door_gates.require_relation(context, relation="can_read_assignments", obj=f"project:{id}")
+    await door_gates.require_relation(context, relation="can_read_assignments", obj=fga_ids.project_object(id))
 
 
 async def require_project_grant(id: str, *, request: Request, context: AuthzContextDep, resolver: ResolverDep) -> None:
@@ -418,7 +418,7 @@ async def my_warehouse_permissions(
     two siblings on this router use: "what may I do here" discloses nothing about any other principal,
     and gating it at the owner bar would mean only the people who already know the answer could ask.
     """
-    await door_gates.require_relation(context, relation="can_get_metadata", obj=f"warehouse:{id}")
+    await door_gates.require_relation(context, relation="can_get_metadata", obj=fga_ids.warehouse_object(id))
     return await _my_permissions(context, resolver=resolver, fga_type="warehouse", id=id)
 
 
@@ -450,7 +450,7 @@ async def my_project_permissions(
     `can_get_metadata: member` to the model for symmetry — is a MODEL change with `.fga.yaml` updates
     and a migration story behind it, which is not something a UI-gating endpoint should drag in.
     """
-    await door_gates.require_relation(context, relation="member", obj=f"project:{id}")
+    await door_gates.require_relation(context, relation="member", obj=fga_ids.project_object(id))
     return await _my_permissions(context, resolver=resolver, fga_type="project", id=id)
 
 
@@ -819,7 +819,7 @@ async def get_warehouse_managed_access(
     """The same for a warehouse. Gated EXPLICITLY — `warehouse` is not in ``_RESOURCES``, so
     ``authorize`` returns early and a route added here without this call is ungated."""
     segments = parse_identifier(id)
-    obj = f"warehouse:{fga_ids.canonical_object_id(segments)}"
+    obj = fga_ids.warehouse_object(fga_ids.canonical_object_id(segments))
     await door_gates.require_relation(context, relation="can_get_metadata", obj=obj)
     return await _read_managed_access(context.client, context.settings, resolver, fga_type="warehouse", id=id)
 
@@ -902,7 +902,7 @@ async def set_warehouse_managed_access(
     be authenticated and ungated.
     """
     segments = parse_identifier(id)
-    obj = f"warehouse:{fga_ids.canonical_object_id(segments)}"
+    obj = fga_ids.warehouse_object(fga_ids.canonical_object_id(segments))
     await door_gates.require_relation(context, relation="can_set_managed_access", obj=obj)
     return await _set_managed_access(context, announcer=announcer, resolver=resolver, fga_type="warehouse", id=id, enabled=body.enabled)
 

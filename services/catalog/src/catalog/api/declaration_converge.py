@@ -43,7 +43,7 @@ from catalog.services import projects as project_registry
 from catalog.services.control_records import GIT, ProtectionChange
 from catalog.services.declaration import Declaration, DeclaredProject, DeclaredWarehouse, GrantTuple
 from lakehouse.events.control_emit import ControlEmitter
-from lakehouse.governed import fga_model, fga_reads, fga_writes
+from lakehouse.governed import fga_ids, fga_model, fga_reads, fga_writes
 from lakehouse.records.warehouse_records import DeleteMode, WarehouseRecord
 
 
@@ -91,9 +91,9 @@ class _Converger:
     async def run(self, declared: Declaration) -> ConvergeTick:
         """Converge the estate onto ``declared``: projects, then the warehouses in them, then what git released, then grants."""
         for project in declared.projects:
-            await self._attempt(f"project:{project.id}", partial(self._project, project))
+            await self._attempt(fga_ids.project_object(project.id), partial(self._project, project))
         for warehouse in declared.warehouses:
-            await self._attempt(f"warehouse:{warehouse.id}", partial(self._warehouse, warehouse))
+            await self._attempt(fga_ids.warehouse_object(warehouse.id), partial(self._warehouse, warehouse))
         await self._attempt("release", partial(self._release, declared))
         await self._attempt("grants", partial(self._grants, declared))
         return self.tick
@@ -125,7 +125,7 @@ class _Converger:
             await run_in_threadpool(project_registry.set_project_manager, self._root, self._so, declared.id, manager=GIT)
             changed = True
         if changed:
-            self.tick.converged.append(f"project:{declared.id}")
+            self.tick.converged.append(fga_ids.project_object(declared.id))
 
     async def _warehouse(self, declared: DeclaredWarehouse) -> None:
         record = await run_in_threadpool(warehouses.get_warehouse, self._root, self._so, declared.id)
@@ -171,7 +171,7 @@ class _Converger:
             )
             changed = True
         if changed:
-            self.tick.converged.append(f"warehouse:{declared.id}")
+            self.tick.converged.append(fga_ids.warehouse_object(declared.id))
 
     async def _release(self, declared: Declaration) -> None:
         """Hand back to its own doors each project and warehouse git stopped declaring; its data and grants stay."""
@@ -179,12 +179,12 @@ class _Converger:
         for record in await run_in_threadpool(project_registry.list_projects, self._root, self._so):
             if record.managed_by == GIT and record.id not in projects:
                 await run_in_threadpool(project_registry.set_project_manager, self._root, self._so, record.id, manager=None)
-                self.tick.released.append(f"project:{record.id}")
+                self.tick.released.append(fga_ids.project_object(record.id))
         declared_warehouses = {warehouse.id for warehouse in declared.warehouses}
         for record in await run_in_threadpool(warehouses.list_warehouses, self._root, self._so):
             if record.managed_by == GIT and record.id not in declared_warehouses:
                 await run_in_threadpool(warehouses.set_warehouse_manager, self._root, self._so, record.id, manager=None)
-                self.tick.released.append(f"warehouse:{record.id}")
+                self.tick.released.append(fga_ids.warehouse_object(record.id))
 
     async def _grants(self, declared: Declaration) -> None:
         """Write each declared tuple the store lacks, and revoke each one written from a declaration git no longer makes.
@@ -210,10 +210,12 @@ class _Converger:
             if not await self._attempt(f"grant:{grant.object}#{grant.relation}", partial(self._grant, self._client, grant)):
                 ungranted.add(grant.object)
         standing, unread = await run_in_threadpool(project_registry.read_projects, self._root, self._so)
-        released = {f"project:{record.id}" for record in standing if not record.is_being_deleted} - {f"project:{project.id}" for project in declared.projects}
+        released = {fga_ids.project_object(record.id) for record in standing if not record.is_being_deleted} - {
+            fga_ids.project_object(project.id) for project in declared.projects
+        }
         # A project whose record cannot be read may be a released one, whose admins are handed over, or one that is
         # gone, whose admins are revoked: its admins are left as they are and the tick says so. Every other revoke runs.
-        unjudged = {f"project:{PurePosixPath(path).stem}" for path in unread}
+        unjudged = {fga_ids.project_object(PurePosixPath(path).stem) for path in unread}
         for grant in sorted(recorded - wanted, key=_order):
             if grant.object in ungranted:
                 continue

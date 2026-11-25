@@ -321,11 +321,15 @@ def test_append_delete_merge_insert_update_and_restore_each_commit_through_versi
     assert restored.version == 6
     committed = [(getattr(r, "audit.version"), getattr(r, "audit.operation")) for r in caplog.records if getattr(r, "audit.action", None) == "commit_version"]
     assert committed == [(1, "Overwrite"), (2, "Append"), (3, "Delete"), (4, "Update"), (5, "Update"), (6, "Restore")]
+    # Each names the table by the object its grants are held by, the trail's one spelling of a table, and by its name.
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})[UUID_PROPERTY])
+    named = {(getattr(r, "audit.resource"), getattr(r, "audit.table", None)) for r in caplog.records if getattr(r, "audit.action", None) == "commit_version"}
+    assert named == {(f"table:{table_uuid}", "lance_catalog$db$t")}
     # The catalog recorded its verified caller as each version's author, the one naming itself included (ADR 0187).
     from catalog.core.config import get_settings
 
     # Each names the manifest it judged, which is the one that landed: the backend finalizes those bytes unchanged.
-    settings, table_uuid = get_settings(), str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})[UUID_PROPERTY])
+    settings = get_settings()
     signed = []
     for version in range(1, 7):
         transaction = restored.read_transaction(version)

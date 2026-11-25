@@ -24,8 +24,7 @@ from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.trash_reclaim import require_can_reclaim_trash
 from catalog.schemas import CloneEndingEntry, CloneEndingFinishResponse, CloneEndingsResponse
 from catalog.services import clone_endings
-from lakehouse.governed import fga_ids
-from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.audit import AuditAction, AuditOutcome, about_table, audit
 from lakehouse.governed.door_caller import caller_subject
 
 
@@ -69,8 +68,7 @@ async def finish_clone_ending(
         AuditAction.CLONE_ENDING_FINISH,
         AuditOutcome.SUCCESS,
         subject=subject,
-        resource=fga_ids.table_object(outcome.uuid) if outcome.uuid is not None else f"table:{outcome.table}",
-        table=outcome.table,
+        **about_table(outcome.table, outcome.uuid),
         ending=f"{digest}/{filing}",
         sources_released=",".join(outcome.released),
         kept=outcome.kept,

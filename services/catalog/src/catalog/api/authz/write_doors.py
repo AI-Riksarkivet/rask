@@ -20,7 +20,7 @@ from openfga_sdk import OpenFgaClient
 
 from catalog.api.authz.context import AuthzContext
 from catalog.api.authz.decisions import authorization, check_recording_outage, require_rung, require_wired
-from catalog.api.authz.objects import addressed_object, rung_label, rung_on
+from catalog.api.authz.objects import rung_label, rung_on
 from catalog.api.authz.request_reads import json_body_or_none, rename_landing
 from catalog.api.authz.rungs import (
     CLASSIFY_RELATION,
@@ -105,7 +105,7 @@ async def write_door(request: Request) -> write_judge.Write | None:
     if not segments or suffix in GRANT_SUFFIXES:
         return None
     fga_type = FGA_TYPE[resource]
-    obj = addressed_object(fga_type, segments)
+    obj = fga_ids.addressed_object(fga_type, segments)
     run = run_context.from_headers(request.headers) if suffix in write_judge.STAMPING_DOORS else None
     if suffix in CREATE_ON_PARENT_SUFFIXES.get(resource, frozenset()):
         return write_judge.Write(op=suffix, obj=obj, rung=create_parent_rung(resource, segments), table=tuple(segments), run=run)
@@ -285,7 +285,7 @@ async def judge_staged_run(
     # `write_judge.judge`: every decision under the run rule leaves a record, whichever door took the write.
     judged = {
         "subject": caller_subject(context.token),
-        "resource": f"table:{fga_ids.canonical_object_id(list(segments))}",
+        "resource": fga_ids.addressed_object("table", list(segments)),
         "op": "version_create",
         "requires_run": str(required).lower(),
     }
@@ -352,7 +352,7 @@ async def spec_vend_tier(context: AuthzContext, *, ns: LanceNamespace, segments:
     async def namespace(_warehouse_id: str) -> LanceNamespace:
         return ns
 
-    write = write_judge.Write(op=door, obj=addressed_object("table", list(segments)), rung=None, table=tuple(segments))
+    write = write_judge.Write(op=door, obj=fga_ids.addressed_object("table", list(segments)), rung=None, table=tuple(segments))
     await write_judge.judge(write, caller=caller_subject(context.token), check=None, inputs=_names_no_run, namespace=namespace)
     return "write"
 

@@ -974,7 +974,7 @@ async def _deregister_unidentified(
         control,
         action="table_deregistered",
         object_type="table",
-        object_id=f"table:{canonical}",
+        object_id=fga_ids.addressed_object("table", canonical),
         object_name=canonical,
         actor=actor_of(token),
         extra={},

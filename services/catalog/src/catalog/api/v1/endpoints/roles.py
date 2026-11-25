@@ -65,7 +65,7 @@ management_router = APIRouter(prefix="/management/v1/projects", tags=["roles"])
 async def _project_gate(*, context: AuthzContext, project_id: str, relation: str) -> OpenFgaClient:
     """The client, once the caller holds ``relation`` on an existing ``project_id``; else the missing project's 404."""
     try:
-        await door_gates.require_relation(context, relation=relation, obj=f"project:{project_id}")
+        await door_gates.require_relation(context, relation=relation, obj=fga_ids.project_object(project_id))
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
     if await run_in_threadpool(project_registry.get_project, context.settings.registry_root, context.settings.storage_options(), project_id) is None:
@@ -119,7 +119,7 @@ async def create_role(
     actor = caller_subject(context.token)
     record = RoleRecord(id=uuid.uuid4(), project=project_id, name=body.name, description=body.description, created_at=datetime.now(UTC), created_by=actor)
     obj = roles.role_object(record.id)
-    edge = fga_writes.ClientTuple(user=f"project:{project_id}", relation="project", object=obj)
+    edge = fga_writes.ClientTuple(user=fga_ids.project_object(project_id), relation="project", object=obj)
     await fga_writes.write_tuples(wired, [edge], actor=actor, origin="create")  # noqa: TID251
     try:
         await run_in_threadpool(roles.create_role_record, context.settings.registry_root, context.settings.storage_options(), record)

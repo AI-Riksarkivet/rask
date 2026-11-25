@@ -268,7 +268,7 @@ async def _readable_project(id: str, context: AuthzContextDep) -> str:
     """``id``, for a caller its project list shows the project to: a member, or the estate admin. Anyone else, and a
     project the registry does not hold, is answered the missing project's 404 ([[LH-587]])."""
     project = _project(id)
-    doors = [("can_list_all_projects", context.settings.fga_root_object), ("member", f"project:{project}")]
+    doors = [("can_list_all_projects", context.settings.fga_root_object), ("member", fga_ids.project_object(project))]
     try:
         await door_gates.require_any_relation(context, doors=doors)
     except PermissionDeniedError as exc:
@@ -279,7 +279,7 @@ async def _readable_project(id: str, context: AuthzContextDep) -> str:
 async def _administered_project(id: str, context: AuthzContextDep) -> str:
     """``id``, for its project's admin; a project the registry does not hold is not found, after the gate."""
     project = _project(id)
-    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(context, relation="can_administer", obj=fga_ids.project_object(project))
     return await _registered(context.settings, project)
 
 

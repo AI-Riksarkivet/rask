@@ -238,7 +238,7 @@ async def establish_warehouse(
         control,
         action="warehouse_created",
         object_type="warehouse",
-        object_id=f"warehouse:{warehouse_id}",
+        object_id=fga_ids.warehouse_object(warehouse_id),
         actor=actor,
         extra={"bucket": bucket, "project": project},
     )
@@ -278,7 +278,7 @@ async def _claim_the_bucket(
     # a stack that authenticates nobody included. Judged on the read the guard above made, so the create reads its
     # record once.
     if author is not DECLARATION:
-        refuse_what_git_declares(existing.managed_by if existing is not None else None, obj=f"warehouse:{warehouse_id}", token=owner)
+        refuse_what_git_declares(existing.managed_by if existing is not None else None, obj=fga_ids.warehouse_object(warehouse_id), token=owner)
     # [[LH-205]] A re-POST that names no endpoint carries the live one forward, and `provision_bucket`
     # always reaches the ESTATE's store. For a record naming another store that would create its
     # bucket in the wrong store and keep the record pointing at the foreign one, so the re-POST is
@@ -460,15 +460,15 @@ async def list_warehouses(context: AuthzContextDep) -> list[WarehouseResponse]:
     if (authz := decisions.authorization(context)) is not None:
         # The listing's own candidates, batch-checked ([[LH-223]]): never what the caller reaches across the estate,
         # which OpenFGA stops counting at its ceiling.
-        allowed = await authz.batch_check("can_get_metadata", [f"warehouse:{r.id}" for r in records])
-        records = [r for r in records if allowed.get(f"warehouse:{r.id}")]
+        allowed = await authz.batch_check("can_get_metadata", [fga_ids.warehouse_object(r.id) for r in records])
+        records = [r for r in records if allowed.get(fga_ids.warehouse_object(r.id))]
     return [WarehouseResponse.model_validate(r.stored()) for r in records]
 
 
 @management_router.get("/{warehouse_id}", response_model_exclude_none=True)
 async def get_warehouse(*, warehouse_id: str, context: AuthzContextDep) -> WarehouseResponse:
     """One warehouse record — reader-gated on ``warehouse:<id>`` (fail-closed on an OpenFGA outage)."""
-    await door_gates.require_relation(context, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
+    await door_gates.require_relation(context, relation="can_get_metadata", obj=fga_ids.warehouse_object(warehouse_id))
     record = await run_in_threadpool(warehouses.get_warehouse, context.settings.registry_root, context.settings.storage_options(), warehouse_id)
     if record is None:
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}")
@@ -498,7 +498,7 @@ async def list_warehouse_trash(
     warehouse's drops on a shared bucket are never listed. They sort by name and then uuid, the key the opaque page token
     resumes after (``trash_doors.listing_key``, `lance_docs/ns_catalog/spec.yaml` PageToken).
     """
-    await door_gates.require_relation(context, relation="can_get_metadata", obj=f"warehouse:{warehouse_id}")
+    await door_gates.require_relation(context, relation="can_get_metadata", obj=fga_ids.warehouse_object(warehouse_id))
     so = context.settings.storage_options()
     record = await run_in_threadpool(warehouses.get_warehouse, context.settings.registry_root, so, warehouse_id)
     if record is None:
@@ -546,7 +546,7 @@ async def _set_warehouse_status(
         # Collapse denied → not-found so existence is not disclosed to a non-admin (audit #4). A legitimate
         # admin of the warehouse's own project still passes; anyone else sees exactly a missing-warehouse 404.
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
-    refuse_what_git_declares(record.managed_by, obj=f"warehouse:{warehouse_id}", token=context.token)
+    refuse_what_git_declares(record.managed_by, obj=fga_ids.warehouse_object(warehouse_id), token=context.token)
     updated = await change_warehouse_status(context.settings, control, warehouse_id, status=status, actor=actor_of(context.token))
     return WarehouseResponse.model_validate(updated.stored())
 
@@ -570,7 +570,7 @@ async def change_warehouse_status(
         control,
         action="warehouse_deactivated" if status == "deactivated" else "warehouse_activated",
         object_type="warehouse",
-        object_id=f"warehouse:{warehouse_id}",
+        object_id=fga_ids.warehouse_object(warehouse_id),
         actor=actor,
         extra={},
     )
@@ -605,7 +605,7 @@ async def activate_warehouse(
 async def _require_project_admin(context: AuthzContext, *, project: str) -> None:
     """Refuse a caller without ``can_administer`` on ``project``: the authority over its warehouses' destruction, and so
     over the lock on it."""
-    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(context, relation="can_administer", obj=fga_ids.project_object(project))
 
 
 async def administered_warehouse(warehouse_id: str, context: AuthzContextDep) -> WarehouseRecord:
@@ -649,7 +649,7 @@ def warehouse_its_doors_manage(warehouse_id: str, record: AdministeredWarehouseD
     Raises:
         PermissionDeniedError: Git declares the warehouse.
     """
-    refuse_what_git_declares(record.managed_by, obj=f"warehouse:{warehouse_id}", token=token)
+    refuse_what_git_declares(record.managed_by, obj=fga_ids.warehouse_object(warehouse_id), token=token)
     return record
 
 
@@ -721,7 +721,7 @@ async def _announce_protection(control: ControlEmitter, warehouse_id: str, actor
         control,
         action="warehouse_protected" if protected else "warehouse_unprotected",
         object_type="warehouse",
-        object_id=f"warehouse:{warehouse_id}",
+        object_id=fga_ids.warehouse_object(warehouse_id),
         actor=actor,
         extra={},
     )
@@ -827,7 +827,7 @@ async def delete_warehouse(
     """
     # Asked before the record is read: a replay under the caller's key answers the first delete and reads nothing, so a
     # warehouse registered under the id since is never the one a resent delete removes.
-    converge = await keyed.begin(target=f"warehouse:{warehouse_id}", takeover="unknown")
+    converge = await keyed.begin(target=fga_ids.warehouse_object(warehouse_id), takeover="unknown")
     if converge.replay is not None:
         return DeleteWarehouseResponse.model_validate(converge.replay.body)
     record = warehouse_its_doors_manage(warehouse_id, await administered_warehouse(warehouse_id, context), context.token)
@@ -840,7 +840,7 @@ async def delete_warehouse(
     )
     announced = await _what_the_delete_announces(delete, announcer=announcer, token=context.token, uuids=uuids)
     async with announcer.announcing(
-        door="delete_warehouse", target=f"warehouse:{warehouse_id}", announcements=[*announced.detached.values(), announced.deleted]
+        door="delete_warehouse", target=fga_ids.warehouse_object(warehouse_id), announcements=[*announced.detached.values(), announced.deleted]
     ) as filing:
         steps = _cascade_the_delete(delete, ns_conn, context=context)
         landed = await _run_the_cascade(steps, delete, announced=announced, filing=filing)
@@ -1057,7 +1057,7 @@ async def _what_the_delete_announces(delete: _WarehouseDelete, *, announcer: Ann
     planned = CatalogControlEvent(
         action="warehouse_deleted",
         object_type="warehouse",
-        object_id=f"warehouse:{delete.warehouse_id}",
+        object_id=fga_ids.warehouse_object(delete.warehouse_id),
         actor=actor_of(token),
         extra={
             "project": delete.project,
@@ -1087,11 +1087,11 @@ async def _cascade_the_delete(delete: _WarehouseDelete, ns_conn: LanceNamespace 
     # A namespace an earlier attempt removed is named by nothing but this warehouse's `child` edge, so its subtree
     # is ended from there before the warehouse's own grants go.
     ended = {fga_ids.namespace_object(subtree.uuid) for subtree in delete.subtrees if subtree.uuid is not None}
-    for orphan in await object_grants.orphaned_children(context.client, context.settings, f"warehouse:{delete.warehouse_id}", ended=ended):
+    for orphan in await object_grants.orphaned_children(context.client, context.settings, fga_ids.warehouse_object(delete.warehouse_id), ended=ended):
         async for count in object_grants.end_removed_subtree(context, root_uuid=orphan, removed=[]):
             yield _Step(landed=_Landed(revoked=count))
 
-    yield _Step(landed=_Landed(revoked=await object_grants.revoke_removed_object(context, f"warehouse:{delete.warehouse_id}")))
+    yield _Step(landed=_Landed(revoked=await object_grants.revoke_removed_object(context, fga_ids.warehouse_object(delete.warehouse_id))))
     # The record goes LAST: it is what the door is addressed by, so while the purge or the claim's release can still
     # fail, it keeps the warehouse for the re-issue that finishes them.
     if delete.purge_bucket:

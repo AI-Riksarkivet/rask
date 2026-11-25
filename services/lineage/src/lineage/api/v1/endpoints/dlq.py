@@ -86,7 +86,7 @@ def _audited(event: RunEvent | DatasetEvent, key: str) -> str:
     """What a replay acted on, for the audit record: the run, or the table a static change names (it has no run)."""
     if isinstance(event, DatasetEvent):
         uuid = dataset_uuids(event.dataset.model_dump(by_alias=True)).table_uuid
-        return fga_ids.table_object(uuid) if uuid else f"table:{event.dataset.name}"
+        return fga_ids.table_object(uuid) if uuid else fga_ids.addressed_object("table", event.dataset.name)
     return f"run:{event.run_id or key}"
 
 

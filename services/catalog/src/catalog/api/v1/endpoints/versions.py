@@ -51,7 +51,7 @@ from catalog.services import maintenance, managed_versions, table_inputs
 from catalog.services.table_claims import DoorTable
 from catalog.services.tables import versions
 from lakehouse.governed import fga_ids
-from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.audit import AuditAction, AuditOutcome, about_table, audit
 from lakehouse.governed.door_caller import caller_subject
 from lakehouse.lancekit import branch_layout
 from lakehouse.records import commit_records
@@ -273,7 +273,7 @@ async def create_table_version(
         AuditAction.COMMIT_VERSION,
         AuditOutcome.SUCCESS,
         subject=caller_subject(context.token),
-        resource=f"table:{canonical}",
+        **about_table(canonical, table.resolved.uuid),
         version=staged.version,
         operation=staged.operation,
         branch=staged.branch,

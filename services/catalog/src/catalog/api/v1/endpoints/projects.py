@@ -140,7 +140,7 @@ async def _admins_for(client: OpenFgaClient | None, settings: FgaSettings, proje
         return []
     try:
         async with asyncio.timeout(_ADMINS_TIMEOUT_SECONDS):
-            return await fga_reads.list_users(client, relation="can_administer", obj=f"project:{project}", retry=fga_resilience.ONE_ATTEMPT)
+            return await fga_reads.list_users(client, relation="can_administer", obj=fga_ids.project_object(project), retry=fga_resilience.ONE_ATTEMPT)
     except ServiceUnavailableError, TimeoutError:
         log.warning("project_admins_unavailable", extra={"project": project})
         return []
@@ -270,7 +270,7 @@ async def establish_project(
     # Two spellings of one author: the subject the audit trail and the tuples' writer name, and the actor its control
     # events name. A query of the trail by subject finds this create only under the first.
     writer, announced = (author.subject, author.actor) if author is not None else (None, None)
-    obj = f"project:{project_id}"
+    obj = fga_ids.project_object(project_id)
     created = Announcement(
         evidence=RecordHeld(key=project_registry.record_key(project_id)),
         message=ControlMessage(event=CatalogControlEvent(action="project_created", object_type="project", object_id=obj, actor=announced)),
@@ -325,7 +325,7 @@ async def _visible_projects(context: AuthzContextDep, *, candidates: list[str]) 
     root = context.settings.fga_root_object
     try:
         observer = await fga_reads.check(authz.client, user=authz.subject, relation="can_list_all_projects", obj=root)
-        allowed = None if observer else await authz.batch_check("member", [f"project:{p}" for p in candidates])
+        allowed = None if observer else await authz.batch_check("member", [fga_ids.project_object(p) for p in candidates])
     except ServiceUnavailableError:
         audit(AuditAction.LIST_PROJECTS, AuditOutcome.FAILURE, subject=authz.subject, resource=root, reason="authz_unavailable")
         raise
@@ -339,7 +339,7 @@ async def _visible_projects(context: AuthzContextDep, *, candidates: list[str]) 
         resource=root,
         reason="list_projects",
     )
-    return None if allowed is None else {p for p in candidates if allowed.get(f"project:{p}")}
+    return None if allowed is None else {p for p in candidates if allowed.get(fga_ids.project_object(p))}
 
 
 @management_router.get("")
@@ -368,7 +368,7 @@ async def get_project(*, project_id: str, context: AuthzContextDep) -> ProjectRe
     """
     if not _ID_RE.match(project_id):
         raise InvalidInputError(f"invalid project id {project_id!r}: must match {_ID_RE.pattern}")
-    doors = [("can_list_all_projects", context.settings.fga_root_object), ("member", f"project:{project_id}")]
+    doors = [("can_list_all_projects", context.settings.fga_root_object), ("member", fga_ids.project_object(project_id))]
     try:
         await door_gates.require_any_relation(context, doors=doors)
     except PermissionDeniedError as exc:
@@ -407,7 +407,7 @@ async def administered_project(project_id: str, context: AuthzContextDep) -> Pro
     if record is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     try:
-        await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project_id}")
+        await door_gates.require_relation(context, relation="can_administer", obj=fga_ids.project_object(project_id))
     except PermissionDeniedError as exc:
         raise TableNotFoundError(f"project not found: {project_id}") from exc
     return record
@@ -440,9 +440,9 @@ async def project_to_delete(project_id: str, context: AuthzContextDep) -> Projec
         raise TableNotFoundError(f"project not found: {project_id}")
     starter = record.deleting_by
     if starter is not None and starter == caller_subject(context.token):
-        audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=project_registry.DELETING_BY, subject=starter, resource=f"project:{project_id}")
+        audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=project_registry.DELETING_BY, subject=starter, resource=fga_ids.project_object(project_id))
         return record
-    doors = [("can_administer", f"project:{project_id}")]
+    doors = [("can_administer", fga_ids.project_object(project_id))]
     if starter is not None:
         doors.append(("can_finish_project_delete", context.settings.fga_root_object))
     try:
@@ -458,7 +458,7 @@ def project_its_doors_protect(project_id: str, record: Annotated[ProjectRecord, 
     Raises:
         PermissionDeniedError: Git declares the project, so its declaration owns the protection.
     """
-    refuse_what_git_declares(record.managed_by, obj=f"project:{project_id}", token=token)
+    refuse_what_git_declares(record.managed_by, obj=fga_ids.project_object(project_id), token=token)
 
 
 def project_its_doors_delete(project_id: str, record: Annotated[ProjectRecord, Depends(project_to_delete)], token: CurrentToken) -> ProjectRecord:
@@ -467,7 +467,7 @@ def project_its_doors_delete(project_id: str, record: Annotated[ProjectRecord, D
     Raises:
         PermissionDeniedError: Git declares the project, so removing it from the declaration comes first.
     """
-    refuse_what_git_declares(record.managed_by, obj=f"project:{project_id}", token=token)
+    refuse_what_git_declares(record.managed_by, obj=fga_ids.project_object(project_id), token=token)
     return record
 
 
@@ -524,7 +524,7 @@ async def protect_project(settings: CatalogStore, control: ControlEmitter, proje
         control,
         action="project_protected" if change.protected else "project_unprotected",
         object_type="project",
-        object_id=f"project:{project_id}",
+        object_id=fga_ids.project_object(project_id),
         actor=actor,
     )
 
@@ -618,7 +618,7 @@ async def delete_project(
     """
     # Asked before the record is read: a replay under the caller's key answers the first delete and reads nothing, so a
     # project registered under the id since is never the one a resent delete removes.
-    converge = await keyed.begin(target=f"project:{project_id}", takeover="unknown")
+    converge = await keyed.begin(target=fga_ids.project_object(project_id), takeover="unknown")
     if converge.replay is not None:
         return DeleteProjectResponse.model_validate(converge.replay.body)
     record = project_its_doors_delete(project_id, await project_to_delete(project_id, context), context.token)
@@ -632,7 +632,7 @@ async def delete_project(
     # caller, `anonymous` in both (`lakehouse.naming.ANONYMOUS`), never a service that did not act.
     writer = caller_subject(context.token)
     announced = actor_of(context.token)
-    obj = f"project:{project_id}"
+    obj = fga_ids.project_object(project_id)
     retiring = _Retiring(project_id=project_id, settings=context.settings, so=so, authz=authz, writer=writer, announced=announced)
     # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).
     grants = announcing.grant_changes(

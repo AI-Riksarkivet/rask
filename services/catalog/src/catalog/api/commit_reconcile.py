@@ -52,7 +52,7 @@ from catalog.services import commit_reconcile, erasure_derived, table_claims
 from catalog.services.tables import versions
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids
-from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.audit import AuditAction, AuditOutcome, about_table, audit
 from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.process.correlation import continuing
 from lakehouse.records import commit_records, location_claims
@@ -240,7 +240,7 @@ async def _announce(
         AuditAction.COMMIT_VERSION_ANNOUNCED,
         AuditOutcome.SUCCESS,
         subject=commit.author,
-        resource=f"table:{fga_ids.canonical_object_id(table.segments)}",
+        **about_table(fga_ids.canonical_object_id(table.segments), table.uuids.table_uuid),
         version=commit.version,
         operation=commit.operation,
         branch=commit.branch,

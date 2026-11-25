@@ -62,7 +62,7 @@ from catalog.services.table_claims import DoorTable
 from catalog.services.tables import reads, writes
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.governed import fga_ids
-from lakehouse.governed.audit import audit_read
+from lakehouse.governed.audit import about_table, audit_read
 from lakehouse.governed.door_caller import caller_subject
 from lakehouse.storage.options import StorageOptions
 
@@ -644,7 +644,15 @@ async def read_table_blob(
     # record says which bytes left without a second read to resolve the row's `_rowid`.
     # Before the 416 branch on purpose: an unsatisfiable RANGE still told the caller the object's size
     # and ETag, which is a probe worth having in the log.
-    audit_read(subject=_reader(token), resource=id, version=blob.version, columns=[column], row=row, offset=blob.start, length=blob.length)
+    audit_read(
+        subject=_reader(token),
+        **about_table(fga_ids.canonical_object_id(table.segments), table.resolved.uuid),
+        version=blob.version,
+        columns=[column],
+        row=row,
+        offset=blob.start,
+        length=blob.length,
+    )
     if blob.null:
         # A null holds no value, which an empty payload's 200 would misreport as present and empty; a 204 carries no
         # Content-Length (RFC 9110 §8.6) and no range applies to it.
@@ -727,7 +735,12 @@ def query_table(
     # forgot it happened.
     # `columns` is the spec's `QueryTableRequestColumns` (names or aliases), normalised to the field paths read: the
     # audit record is flat by contract, and a wrapper object would land differently in every sink.
-    audit_read(subject=_reader(token), resource=id, version=body.version, columns=_column_names(body.columns))
+    audit_read(
+        subject=_reader(token),
+        **about_table(fga_ids.canonical_object_id(table.segments), table.resolved.uuid),
+        version=body.version,
+        columns=_column_names(body.columns),
+    )
     return Response(content=response.data, media_type=ARROW_FILE)
 
 
@@ -759,7 +772,13 @@ def table_changes(*, id: str, body: TableChangesRequest, table: DoorTableDep, so
     end, data = reads.read_changes(
         table, so, begin_version=body.begin_version, end_version=body.end_version, kind=body.kind, columns=body.columns, branch=body.branch
     )
-    audit_read(subject=_reader(token), resource=id, version=end, columns=body.columns, change_kind=body.kind)
+    audit_read(
+        subject=_reader(token),
+        **about_table(fga_ids.canonical_object_id(table.segments), table.resolved.uuid),
+        version=end,
+        columns=body.columns,
+        change_kind=body.kind,
+    )
     # STREAMED, like the blob door above and for the same reason: a feed's size is a property of the
     # DATA and this door has no bound to offer — the version window is the only cursor, and one
     # version can carry the whole table. The audit is emitted BEFORE the first byte on purpose: the
@@ -798,7 +817,7 @@ def count_table_rows(
     counted = reads.count_rows(table, so, req, data_ns=data_ns)
     # A COUNT IS A READ. It answers a question about the rows without returning them, and a subject that
     # can count is a subject that can probe — so it belongs in the same log as a query (§ J1).
-    audit_read(subject=_reader(token), resource=id, version=counted.version)
+    audit_read(subject=_reader(token), **about_table(fga_ids.canonical_object_id(table.segments), table.resolved.uuid), version=counted.version)
     return counted.count
 
 
@@ -829,7 +848,12 @@ def explain_table_query_plan(
     # AN EXPLAIN IS A READ OF THE SHAPE, not of the rows: it discloses the columns, the filters and
     # the plan the engine would run — exactly what a subject probing a table it may not query would
     # ask for. § J1 counts it as a read for that reason.
-    audit_read(subject=_reader(token), resource=id, version=judged, columns=_column_names(body.query.columns if body.query else None))
+    audit_read(
+        subject=_reader(token),
+        **about_table(fga_ids.canonical_object_id(table.segments), table.resolved.uuid),
+        version=judged,
+        columns=_column_names(body.query.columns if body.query else None),
+    )
     return JSONResponse(content=plan)
 
 
@@ -861,5 +885,10 @@ def analyze_table_query_plan(
     plan = result if isinstance(result, str) else json.dumps(dump(result))
     # AN ANALYZE IS A READ OF THE ROWS: it runs the query and reports how many rows the filter matched, which is a
     # yes/no about the values, so it is recorded like the query it ran.
-    audit_read(subject=_reader(token), resource=id, version=body.version, columns=_column_names(body.columns))
+    audit_read(
+        subject=_reader(token),
+        **about_table(fga_ids.canonical_object_id(table.segments), table.resolved.uuid),
+        version=body.version,
+        columns=_column_names(body.columns),
+    )
     return JSONResponse(content=plan)

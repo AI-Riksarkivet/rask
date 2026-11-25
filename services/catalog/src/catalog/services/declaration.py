@@ -157,7 +157,7 @@ class Declaration(_Declared):
             estate_warehouse: The estate's own warehouse's object (``RASK_FGA_DEFAULT_WAREHOUSE_OBJECT``).
         """
         admins = {
-            GrantTuple(user=fga_ids.user_object(admin), relation="admin", object=f"project:{project.id}")
+            GrantTuple(user=fga_ids.user_object(admin), relation="admin", object=fga_ids.project_object(project.id))
             for project in self.projects
             for admin in project.admins
         }

@@ -88,7 +88,7 @@ async def list_members(*, project_id: ProjectId, context: AuthzContextDep) -> Me
     DIRECT grants only. A person who holds a rung through a role is not listed: the role is, and it is revoked
     here; who is in it is the role's assignees door.
     """
-    obj = f"project:{project_id}"
+    obj = fga_ids.project_object(project_id)
     await door_gates.require_relation(context, relation="can_read_assignments", obj=obj)
     if (client := decisions.wired(context.settings, context.client)) is None:
         # Authz off (local dev): there are no tuples, and an empty list is the honest answer. Inventing
@@ -123,7 +123,7 @@ async def grant_member(
         InvalidInputError: The subject is a role another project owns.
         ConcurrentModificationError: The project's administration changed under both of an ``admin`` grant's reads.
     """
-    obj = f"project:{project_id}"
+    obj = fga_ids.project_object(project_id)
     await door_gates.require_relation(context, relation=f"can_grant_{payload.relation}", obj=obj)
     wired = _client_or_conflict(context.client, context.settings)
     user = _user_string(payload.user)
@@ -169,7 +169,7 @@ async def revoke_member(
     Revoking a rung that is not there is a no-op, not a 404: the caller asked for a state and that
     state already holds.
     """
-    obj = f"project:{project_id}"
+    obj = fga_ids.project_object(project_id)
     await door_gates.require_relation(context, relation=f"can_grant_{payload.relation}", obj=obj)
     wired = _client_or_conflict(context.client, context.settings)
     user = _user_string(payload.user)

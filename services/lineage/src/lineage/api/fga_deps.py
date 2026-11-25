@@ -284,7 +284,12 @@ async def require_metadata_access(name: str, *, request: Request, settings: Sett
         return
     uuid = (await names.table(name, bearer=bearer)).table_uuid
     await _require_relation(
-        "can_get_metadata", fga_ids.table_object(uuid) if uuid else None, label=f"table:{name}", request=request, settings=settings, token=token
+        "can_get_metadata",
+        fga_ids.table_object(uuid) if uuid else None,
+        label=fga_ids.addressed_object("table", name),
+        request=request,
+        settings=settings,
+        token=token,
     )
 
 

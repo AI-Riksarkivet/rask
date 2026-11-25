@@ -28,7 +28,6 @@ from lakehouse.records.trash import TrashKind
 
 __all__ = [
     "GovernedObject",
-    "addressed_object",
     "identify_descendants",
     "identify_namespace",
     "listed_object",
@@ -48,16 +47,6 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 
-def addressed_object(fga_type: str, id_segments: list[str] | str) -> str:
-    """``<type>:<canonical-id>`` for an object addressed by its id.
-
-    The FGA object of a type no name is minted a uuid for (a transaction's opaque id, a classification label, a
-    materialized view), and the NAME of a table or namespace in an audit record or a refusal. A table's or namespace's
-    grants are held by its uuid (:func:`_named`), never by this.
-    """
-    return f"{fga_type}:{fga_ids.canonical_object_id(id_segments)}"
-
-
 def _named(fga_type: str, segments: Sequence[str], *, in_trash: bool = False) -> write_judge.Named | None:
     """``fga_type`` ``segments`` as a name its grants' object is resolved from, or ``None`` for a type no uuid keys."""
     if fga_type == "table":
@@ -73,7 +62,7 @@ def rung_on(relation: str, fga_type: str, segments: Sequence[str], *, suffix: st
     A trash door's name also resolves to the object the trash holds under it (:data:`TRASH_DOORS`).
     """
     named = _named(fga_type, segments, in_trash=suffix in TRASH_DOORS)
-    return write_judge.Rung(relation=relation, on=named if named is not None else addressed_object(fga_type, list(segments)))
+    return write_judge.Rung(relation=relation, on=named if named is not None else fga_ids.addressed_object(fga_type, list(segments)))
 
 
 def rung_label(rung: write_judge.Rung) -> str:
@@ -83,7 +72,7 @@ def rung_label(rung: write_judge.Rung) -> str:
     """
     if isinstance(rung.on, str):
         return rung.on
-    return addressed_object(rung.on.kind, list(rung.on.segments))
+    return fga_ids.addressed_object(rung.on.kind, list(rung.on.segments))
 
 
 async def resolve_rung(resolver: Resolver, rung: write_judge.Rung) -> str | None:

@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
+from lakehouse.governed import fga_ids
 from lakehouse.records.project_records import ProjectRecord
 from lakehouse.records.warehouse_records import WarehouseRecord
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, rebuild_tenancy
@@ -110,7 +111,12 @@ def _warehouse_tenancy(record: WarehouseRecord) -> RebuiltTuple:
     `lakehouse.governed.fga_model.hierarchy_edge_tuples`, whose closed set of callers is about
     `parent`/`child` pairs.
     """
-    return RebuiltTuple(user=f"project:{record.project}", relation="project", object=f"warehouse:{record.id}", justified_by=f"_warehouses/{record.id}.json")
+    return RebuiltTuple(
+        user=fga_ids.project_object(record.project),
+        relation="project",
+        object=fga_ids.warehouse_object(record.id),
+        justified_by=f"_warehouses/{record.id}.json",
+    )
 
 
 def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[RebuiltTuple], dict[str, str]]:
@@ -128,7 +134,7 @@ def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[Rebuil
 
     for record in sources.project_records or []:
         if record.id in stranded:
-            unjustified[f"project:{record.id}"] = _needs_an_admin(record)
+            unjustified[fga_ids.project_object(record.id)] = _needs_an_admin(record)
 
     # THE STRUCTURAL HALF, and the only half that writes. Scoped to warehouses under a project the
     # report found stranded, because that is where the pointer is provably gone: a whole-estate
@@ -164,5 +170,5 @@ async def rebuild_tuples(settings: MaintenanceSettings, *, report: ReconcileRepo
         out.error = str(exc)
         return out
     out.written = [edge for edge in planned if f"{edge.user} {edge.relation} {edge.object}" in answered.written]
-    out.unjustified |= {f"warehouse:{warehouse}": why for warehouse, why in answered.unjustified.items()}
+    out.unjustified |= {fga_ids.warehouse_object(warehouse): why for warehouse, why in answered.unjustified.items()}
     return out

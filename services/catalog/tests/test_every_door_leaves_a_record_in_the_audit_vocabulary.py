@@ -23,6 +23,7 @@ from catalog.api.dependencies import get_vendor
 from catalog.core.vending import TableRecords, Tier, VendedSession
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_FORMAT, AUDIT_LOGGER, AuditAction, AuditOutcome, configure_audit
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.credential import S3KeyPair
 from tests.traces import trace_named, traceparent_named
 
@@ -35,8 +36,9 @@ _ROWS = encode_arrow_stream(
     )
 )
 _QUERY = {"k": 10, "vector": {"single_vector": []}, "columns": {"column_names": ["id"]}}
-_TABLE = "/v1/table/lance_catalog$db$t"
-_MANAGED = "/management/v1/table/lance_catalog$db$t"
+_NAME = "lance_catalog$db$t"
+_TABLE = f"/v1/table/{_NAME}"
+_MANAGED = f"/management/v1/table/{_NAME}"
 
 
 class _Expected(BaseModel):
@@ -241,6 +243,16 @@ def test_every_door_leaves_a_record_in_the_vocabulary_and_every_read_names_what_
         if not any(r["audit.action"] == expected.action and expected.fields.items() <= r.items() for r in by_request[door.request_id])
     ]
     assert missing == [], "doors that left no record, or one without what it must name"
+    # A record of an act on the table names it by the object its grants are held by, the one spelling a compliance query
+    # joins on, and a read names the table by its name besides; the write judge rules on the create's address before the
+    # table has an object, so its record names the address.
+    trail = _trail(caplog)
+    uuid = catalog.client.post(f"{_TABLE}/describe", headers=catalog.bearer("alice"), json={}).json()["properties"][UUID_PROPERTY]
+    acted_on = {
+        r["audit.resource"] for r in trail if r["audit.action"] != AuditAction.WRITE_JUDGE and (uuid in r["audit.resource"] or _NAME in r["audit.resource"])
+    }
+    assert acted_on == {f"table:{uuid}"}, "records naming the table other than by its object"
+    assert {r.get("audit.table") for r in trail if r["audit.action"] == AuditAction.READ_DATA} == {_NAME}, "reads that do not name the table they read"
 
 
 @pytest.mark.parametrize(

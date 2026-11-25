@@ -327,7 +327,7 @@ async def _create_or_replace_empty_namespace(
         pass
     canonical = fga_ids.canonical_object_id(segments)
     replaced = await objects.identify_namespace(resolver, ns, segments)
-    await door_gates.require_relation(context, relation="can_delete", obj=replaced.fga_object(), label=f"namespace:{canonical}")
+    await door_gates.require_relation(context, relation="can_delete", obj=replaced.fga_object(), label=fga_ids.addressed_object("namespace", canonical))
     await hierarchy.require_namespace_unprotected(context.settings, replaced, force=False)
     _, tables = await namespace_subtrees.drain_tables(ns, segments)
     _, children = await namespace_subtrees.drain_namespaces(ns, segments)

@@ -9,7 +9,6 @@ from lance_namespace import InvalidInputError
 
 from catalog.api.authz.context import AuthzContext
 from catalog.api.authz.decisions import authorization, refusal_of_absent, require_any, require_rung
-from catalog.api.authz.objects import addressed_object
 from catalog.api.authz.rungs import ACCEPT_MOVED_TABLE_RELATION, STAGED_OPERATION_RELATION, create_parent_rung, moves_namespace
 from catalog.api.dependencies import Resolver
 from catalog.core import write_judge
@@ -52,7 +51,7 @@ async def require_can_drop_table(
     replace another user's table. With FGA off it allows (:func:`authorization`)."""
     if (authz := authorization(context)) is None:
         return
-    await authz.require("can_drop", fga_ids.table_object(table.require_uuid()), label=addressed_object("table", table.segments))
+    await authz.require("can_drop", fga_ids.table_object(table.require_uuid()), label=fga_ids.addressed_object("table", table.segments))
 
 
 async def require_staged_operation(
@@ -83,7 +82,7 @@ async def require_staged_operation(
     if authz is None:
         return
     table_uuid = await run_in_threadpool(table_claims.uuid_at, table_claims.claim_store(context.settings), location, segments)
-    await authz.require(relation, fga_ids.table_object(table_uuid), label=f"table:{canonical}")
+    await authz.require(relation, fga_ids.table_object(table_uuid), label=fga_ids.addressed_object("table", canonical))
 
 
 async def require_rename_destination(
@@ -238,7 +237,7 @@ async def require_run_rule_authority(context: AuthzContext, *, project: str | No
     if (authz := authorization(context)) is None:
         return
     if project is not None:
-        await authz.require("can_administer", f"project:{project}")
+        await authz.require("can_administer", fga_ids.project_object(project))
     else:
         await authz.require("can_declare_unowned_run_rule", context.settings.fga_root_object)
 
@@ -263,4 +262,4 @@ async def require_can_create_warehouse(
     by the time we are here, the project exists and has admins, and one door is enough."""
     if (authz := authorization(context)) is None:
         return
-    await authz.require("can_create_warehouse", f"project:{project}")
+    await authz.require("can_create_warehouse", fga_ids.project_object(project))

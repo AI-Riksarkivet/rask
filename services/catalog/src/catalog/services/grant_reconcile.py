@@ -87,4 +87,4 @@ def tenancy_edge(record: WarehouseRecord | None, warehouse_id: str) -> fga_write
     """
     if record is None:
         return f"no warehouse record names {warehouse_id!r}"
-    return fga_writes.ClientTuple(user=f"project:{record.project}", relation="project", object=f"warehouse:{warehouse_id}")
+    return fga_writes.ClientTuple(user=fga_ids.project_object(record.project), relation="project", object=fga_ids.warehouse_object(warehouse_id))

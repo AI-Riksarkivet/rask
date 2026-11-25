@@ -23,6 +23,7 @@ from typing import Any, Final
 
 from opentelemetry import metrics
 
+from lakehouse.governed import fga_ids
 from lakehouse.process.correlation import NO_TRACE, current_trace_id
 
 
@@ -125,6 +126,13 @@ def configure_audit(*, enabled: bool) -> None:
 ALL_COLUMNS: Final = "all"
 
 
+def about_table(name: str, uuid: str | None) -> dict[str, str]:
+    """The fields a record of an act on a table names it by: ``resource``, the object its grants are held by
+    (``table:<uuid>``, the spelling every act on the table is joined by), and ``table``, its name. A table the catalog has
+    no uuid for is named by its name's label, as a judgement of an address is."""
+    return {"resource": fga_ids.table_object(uuid) if uuid else fga_ids.addressed_object("table", name), "table": name}
+
+
 def audit_read(
     *,
     subject: str,
@@ -171,7 +179,10 @@ def audit(
     """Emit one structured audit event (dropped when audit is disabled — see :func:`configure_audit`).
 
     ``action`` is a member of a closed vocabulary (:class:`AuditAction` for the lakehouse); ``outcome`` one of
-    :class:`AuditOutcome`; ``subject`` the verified principal; ``resource`` the object acted on. Every record carries
+    :class:`AuditOutcome`; ``subject`` the verified principal; ``resource`` the object acted on, as the object its grants
+    are held by (`fga_ids`; a table with its name beside it, :func:`about_table`), or, for a judgement made on an address
+    before or without an object (a write judged by its name, a refusal of a name that holds nothing), the address's label
+    (`fga_ids.addressed_object`). One spelling per object is what lets a query join every act on it. Every record carries
     ``audit.format`` (:data:`AUDIT_FORMAT`) and the id of the trace it was made under (``audit.trace_id``, ``-`` outside
     one, ADR 0209), so the records one request made are one filter, and the same id finds its log lines and its trace.
     Extra ``fields`` (relation, tier, reason) ride the same record under an ``audit.`` prefix so a compliance query sees a
@@ -200,6 +211,7 @@ __all__ = [
     "AUDIT_LOGGER",
     "AuditAction",
     "AuditOutcome",
+    "about_table",
     "audit",
     "audit_read",
     "configure_audit",

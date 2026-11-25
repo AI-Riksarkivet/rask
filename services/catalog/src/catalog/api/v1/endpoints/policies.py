@@ -287,7 +287,7 @@ async def set_project_policy(
     is refused with 409 — even if a rival claim somehow got past ``create_warehouse``'s guards, it must
     not become a policy governing (and destroying version history in) the other tenant's data."""
     project = _validated_project(id)
-    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(context, relation="can_administer", obj=fga_ids.project_object(project))
     so = context.settings.storage_options()
     # Read whole ([[LH-572]]): a record that cannot be read is a bucket of this project the policy would leave on the
     # defaults, or another project's claim on one it would govern.
@@ -314,7 +314,7 @@ async def set_project_policy(
         control,
         action="policy_set",
         object_type="policy",
-        object_id=f"project:{project}",
+        object_id=fga_ids.project_object(project),
         actor=actor_of(context.token),
         extra={"kind": "project", "buckets": buckets},
     )
@@ -326,7 +326,7 @@ async def describe_project_policy(*, id: str, context: AuthzContextDep) -> Polic
     """The project's maintenance policy — admin-gated like set/delete (``project`` defines no
     reader-tier relation) — or ``set: false`` when none is set; a project the registry does not know is not found."""
     project = _validated_project(id)
-    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(context, relation="can_administer", obj=fga_ids.project_object(project))
     # Read after the gate, so a caller who may not administer the project is refused alike whether it exists or not.
     if await run_in_threadpool(project_registry.get_project, context.settings.registry_root, context.settings.storage_options(), project) is None:
         raise TableNotFoundError(f"project not found: {project}")
@@ -337,7 +337,7 @@ async def describe_project_policy(*, id: str, context: AuthzContextDep) -> Polic
 async def delete_project_policy(*, id: str, context: AuthzContextDep, control: ControlEmitterDep) -> PolicyDeleteResponse:
     """Remove the project's maintenance policy (idempotent) — admin-gated."""
     project = _validated_project(id)
-    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(context, relation="can_administer", obj=fga_ids.project_object(project))
     return await _delete(context.settings, control, context.token, kind="project", key=project, canonical=project)
 
 
@@ -391,7 +391,7 @@ async def list_project_policies(*, id: str, context: AuthzContextDep) -> Project
     by the registry primitives themselves.
     """
     project = _validated_project(id)
-    await door_gates.require_relation(context, relation="can_administer", obj=f"project:{project}")
+    await door_gates.require_relation(context, relation="can_administer", obj=fga_ids.project_object(project))
     so = context.settings.storage_options()
     registered = await run_in_threadpool(warehouses.list_warehouses, context.settings.registry_root, so)
     mine = [r for r in registered if r.project == project]

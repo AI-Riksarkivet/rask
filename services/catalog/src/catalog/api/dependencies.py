@@ -307,7 +307,7 @@ def warehouse_object(settings: FgaSettings, warehouse_id: str) -> str | None:
     """The FGA object the warehouse a name's first segment names is governed as, or ``None`` for a segment no warehouse id can be."""
     if warehouse_id == settings.estate_warehouse:
         return settings.fga_default_warehouse_object
-    return f"warehouse:{warehouse_id}" if names_a_registered_warehouse(warehouse_id) else None
+    return fga_ids.warehouse_object(warehouse_id) if names_a_registered_warehouse(warehouse_id) else None
 
 
 class Resolver:

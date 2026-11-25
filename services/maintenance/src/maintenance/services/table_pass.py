@@ -33,7 +33,7 @@ from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 from pydantic import BaseModel, ConfigDict, Field
 
-from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.audit import AuditAction, AuditOutcome, about_table, audit
 from lakehouse.lancekit import auto_cleanup, base_refs
 from lakehouse.lancekit.base_refs import decoded_path, key_uri, store_of
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER
@@ -675,8 +675,9 @@ def _did_material_work(result: DatasetResult) -> bool:
 def audit_material_work(result: DatasetResult, *, subject: str) -> None:
     """Record a reclamation on the `lance.audit` compliance stream, keyed on the object it reclaimed.
 
-    The RESOURCE is the FGA object (`table:<id>`), not the URI: a compliance query joins on the object the rest of the
-    trail names. A dataset with no id is recorded under its URI, since the reclamation still happened.
+    The table is named as the rest of the trail names it (`audit.about_table`), by its object and its name, not by the
+    URI: a compliance query joins on the object. A dataset no table id names is recorded under its URI, since the
+    reclamation still happened.
     """
     if not _did_material_work(result):
         return
@@ -684,7 +685,7 @@ def audit_material_work(result: DatasetResult, *, subject: str) -> None:
         AuditAction.EXPIRE_VERSIONS,
         AuditOutcome.SUCCESS,
         subject=subject,
-        resource=f"table:{result.table_id}" if result.table_id else result.uri,
+        **(about_table(result.table_id, result.uuids.table_uuid) if result.table_id else {"resource": result.uri}),
         dataset=result.uri,
         old_versions_removed=result.old_versions_removed,
         bytes_removed=result.bytes_removed,
