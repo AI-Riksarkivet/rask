@@ -36,13 +36,13 @@ from catalog.services.tables.writes import read_arrow_body
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.derived_tables import EDGES
 from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.storage.options import StorageOptions
+from tests.control_emitter_double import ControlEmitterDouble
 
 
 _SUBJECT = "alice"
@@ -86,18 +86,8 @@ def _subjects(root: Path) -> LanceNamespace:
     return ns
 
 
-class _ControlLane:
-    """The control lane as the events emitted on it."""
-
-    def __init__(self) -> None:
-        self.events: list[CatalogControlEvent] = []
-
-    async def emit(self, event: CatalogControlEvent) -> None:
-        self.events.append(event)
-
-
 @contextmanager
-def _catalog(ns: LanceNamespace, control: Path, clock: _Clock, *, lane: _ControlLane | None = None) -> Generator[TestClient]:
+def _catalog(ns: LanceNamespace, control: Path, clock: _Clock, *, lane: ControlEmitterDouble | None = None) -> Generator[TestClient]:
     """The erasure doors, the owner ``dex~olivia`` signed in, authorization off; ``lane`` takes the control events."""
     settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(control))
     application = FastAPI()
@@ -237,7 +227,7 @@ def test_each_tag_the_verification_drops_is_announced_on_the_control_lane(tmp_pa
     lance.dataset(location).tags.create("trained", 2)
     lance.dataset(location).create_branch("work", 2)
     lance.dataset(location).tags.create("trained-on-work", ("work", 2))
-    lane = _ControlLane()
+    lane = ControlEmitterDouble()
     with _catalog(ns, tmp_path / "control", _Clock(), lane=lane) as client:
         obligation = _record(client)["obligation_id"]
         erasure_job(location, _PREDICATE).run()

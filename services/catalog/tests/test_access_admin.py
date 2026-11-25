@@ -40,6 +40,7 @@ from lakehouse.governed import fga_model, fga_provision, fga_reads, fga_writes
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
+from tests.control_emitter_double import ControlEmitterDouble
 
 
 #: A table, another table and a namespace as OpenFGA holds them, by the uuid the catalog minted ([[LH-524]]).
@@ -181,18 +182,10 @@ def test_write_outage_audits_failure_and_raises(rec: _AuditRecorder, monkeypatch
 # never be announced).
 
 
-class _RecordingEmitter:
-    def __init__(self) -> None:
-        self.events: list[Any] = []
-
-    async def emit(self, event: Any) -> None:
-        self.events.append(event)
-
-
 def _mutate_recording_emission(
-    monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, fail: bool = False, emitter: _RecordingEmitter | None = None
-) -> _RecordingEmitter:
-    emitter = emitter if emitter is not None else _RecordingEmitter()
+    monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, fail: bool = False, emitter: ControlEmitterDouble | None = None
+) -> ControlEmitterDouble:
+    emitter = emitter if emitter is not None else ControlEmitterDouble()
 
     async def _fake_mutation(_client: Any, tuples: list[Any], **_kw: Any) -> None:
         del tuples

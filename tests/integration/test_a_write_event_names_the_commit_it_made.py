@@ -38,12 +38,12 @@ from lance_namespace import connect
 
 from catalog.core.lineage_emit import make_emitter
 from catalog.services.tables import versions
-from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.storage.options import StorageOptions
 from lineage.models import parse_event
 from lineage.services.provenance import edges_of
 from tests.app_state import app_of
 from tests.bus_double import BusDouble
+from tests.control_emitter_double import ControlEmitterDouble
 from tests.door_tables import door_table
 
 
@@ -92,18 +92,6 @@ def location(real_ns_client: TestClient) -> str:
     created = real_ns_client.post(f"/v1/table/{TABLE}/create?mode=overwrite", content=_ipc(_rows(1, 2, 3)), headers=ARROW)
     assert created.status_code == 200, created.text
     return str(real_ns_client.post(f"/v1/table/{TABLE}/describe", json={}).json()["table_uri"])
-
-
-class _Control:
-    """Records the control events the catalog announces, with `ControlEmitter`'s whole signature."""
-
-    def __init__(self) -> None:
-        self.events: list[tuple[str, dict[str, Any]]] = []
-        self.named: list[tuple[str, str | None, str | None]] = []
-
-    async def emit(self, event: CatalogControlEvent) -> None:
-        self.events.append((str(event.action), dict(event.extra)))
-        self.named.append((str(event.action), event.object_uuid, event.namespace_uuid))
 
 
 def _dataset(event: dict[str, Any]) -> dict[str, Any]:
@@ -250,7 +238,7 @@ def test_a_recreated_branch_emits_a_different_identifier_for_the_same_version(
     pinned on it, and ``list_branches``, so a consumer holding a write event can match it to them.
     """
     client = real_ns_client
-    control = _Control()
+    control = ControlEmitterDouble()
     monkeypatch.setattr(app_of(client).state, "control_emitter", control, raising=False)
 
     def _write_once() -> dict[str, Any]:
@@ -268,7 +256,7 @@ def test_a_recreated_branch_emits_a_different_identifier_for_the_same_version(
     assert (first["ref"], first["version"]) == (second["ref"], second["version"]) == (BRANCH, 2), (first, second)
     assert first.get("branchIdentifier") and second.get("branchIdentifier"), (first, second)
     assert first["branchIdentifier"] != second["branchIdentifier"], "two incarnations of dev@2 carry one identifier"
-    announced = [(action, extra.get("branch_identifier")) for action, extra in control.events]
+    announced = [(e.action, e.extra.get("branch_identifier")) for e in control.events]
     assert announced == [
         ("table_branch_created", first["branchIdentifier"]),
         ("table_branch_deleted", first["branchIdentifier"]),
@@ -303,7 +291,7 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(real_ns_cl
     from lineage.api.v1.endpoints.events import targeting_view
 
     client = real_ns_client
-    control = _Control()
+    control = ControlEmitterDouble()
     monkeypatch.setattr(app_of(client).state, "control_emitter", control, raising=False)
     assert client.post("/v1/namespace/lance_catalog$lh522/create", json={}).status_code == 200
     assert client.post("/v1/table/lance_catalog$lh522$t/create", content=_ipc(_rows(1)), headers=ARROW).status_code == 200
@@ -337,13 +325,15 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(real_ns_cl
     ), renamed
     projected = [_named(_dataset(targeting_view(event))) for event in bus.events]
     assert projected == [uuids] * len(bus.events), projected
-    assert [named for named in control.named if named[0].startswith("table_")] == [
+    assert [named for named in [(e.action, e.object_uuid, e.namespace_uuid) for e in control.events] if named[0].startswith("table_")] == [
         ("table_created", table_uuid, namespace_uuid),
         ("table_renamed", table_uuid, namespace_uuid),
         ("table_dropped", table_uuid, namespace_uuid),
-    ], control.named
+    ], [(e.action, e.object_uuid, e.namespace_uuid) for e in control.events]
     # A namespace directly in a warehouse names no namespace above it: the warehouse is governed under its own type.
-    assert [named for named in control.named if named[0] == "namespace_created"] == [("namespace_created", namespace_uuid, None)], control.named
+    assert [named for named in [(e.action, e.object_uuid, e.namespace_uuid) for e in control.events] if named[0] == "namespace_created"] == [
+        ("namespace_created", namespace_uuid, None)
+    ], [(e.action, e.object_uuid, e.namespace_uuid) for e in control.events]
     assert stamped == table_uuid.encode(), stamped
 
 
@@ -379,7 +369,7 @@ def test_a_branch_delete_announces_every_branch_it_removes_as_the_incarnation_it
     """[[LH-413]] Deleting ``a`` removes ``a/b`` with it ([[LH-203]]), so a console holding the branch list hears both, and
     hears what went even when a pin made since the check stops the delete part-way."""
     client = real_ns_client
-    control = _Control()
+    control = ControlEmitterDouble()
     monkeypatch.setattr(app_of(client).state, "control_emitter", control, raising=False)
     # Planted through pylance: the create door refuses a name nesting with another, so only a table made before that
     # refusal carries the pair.
@@ -399,7 +389,7 @@ def test_a_branch_delete_announces_every_branch_it_removes_as_the_incarnation_it
     answer = client.post(f"/v1/table/{TABLE}/branches/delete", json={"name": "a"})
 
     assert answer.status_code == status, answer.text
-    assert [(action, extra["branch"], extra.get("branch_identifier")) for action, extra in control.events] == [
+    assert [(e.action, e.extra["branch"], e.extra.get("branch_identifier")) for e in control.events] == [
         ("table_branch_deleted", name, incarnations[name]) for name in removed
     ], control.events
 

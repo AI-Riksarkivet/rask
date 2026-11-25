@@ -17,10 +17,10 @@ from fastapi.testclient import TestClient
 from catalog.api.dependencies import get_control_emitter, get_namespace
 from catalog.core.config import get_settings
 from catalog.services import object_uuids, table_claims, warehouses
-from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids
 from tests import seeding
 from tests.app_state import app_of
+from tests.control_emitter_double import ControlEmitterDouble
 from tests.governed_catalog import GovernedCatalog
 
 
@@ -71,16 +71,6 @@ def estate(governed_catalog: GovernedCatalog, tmp_path: Path, monkeypatch: pytes
     return catalog
 
 
-class _Announced:
-    """The control emitter, as a list of the events the doors published."""
-
-    def __init__(self) -> None:
-        self.events: list[CatalogControlEvent] = []
-
-    async def emit(self, event: CatalogControlEvent) -> None:
-        self.events.append(event)
-
-
 def _rows() -> bytes:
     table = pa.table({"id": pa.array([1, 2], pa.int64())})
     sink = pa.BufferOutputStream()
@@ -127,7 +117,7 @@ def test_only_the_projects_admin_defines_a_label_and_a_definition_only_grows(est
     assert _code(_define(client, DOMAIN)) == (403, 15)
 
     estate.act_as("alice")
-    announced = _Announced()
+    announced = ControlEmitterDouble()
     app_of(client).dependency_overrides[get_control_emitter] = lambda: announced
     defined = _define(client, DOMAIN)
     assert defined.status_code == 200, defined.text

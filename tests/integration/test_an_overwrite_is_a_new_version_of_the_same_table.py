@@ -25,9 +25,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.lineage_emit import BusEmitter
-from lakehouse.events.control_events import CatalogControlEvent
 from tests.app_state import app_of
 from tests.bus_double import BusDouble
+from tests.control_emitter_double import ControlEmitterDouble
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -60,16 +60,6 @@ def bus(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> BusDoubl
     )
     monkeypatch.setattr(app_of(real_ns_client).state, "lineage_emitter", emitter, raising=False)
     return bus
-
-
-class _Control:
-    """Records the action of every control event the catalog announces."""
-
-    def __init__(self) -> None:
-        self.actions: list[str] = []
-
-    async def emit(self, event: CatalogControlEvent) -> None:
-        self.actions.append(event.action)
 
 
 @pytest.fixture
@@ -110,7 +100,7 @@ def test_an_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
     real_ns_client: TestClient, protected: str, bus: BusDouble, monkeypatch: pytest.MonkeyPatch, door: str
 ) -> None:
     minted = _uuid(real_ns_client)
-    control = _Control()
+    control = ControlEmitterDouble()
     monkeypatch.setattr(app_of(real_ns_client).state, "control_emitter", control, raising=False)
 
     answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS[door]}", content=_ipc(_rows(9)), headers=ARROW)
@@ -127,15 +117,17 @@ def test_an_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
     assert event["outputs"][0]["name"] == TABLE
     assert facets.get("lifecycleStateChange", {}).get("lifecycleStateChange") == "OVERWRITE", facets.get("lifecycleStateChange")
     assert facets["version"]["datasetVersion"] == str(version), "the WROTE edge does not name the version the overwrite made"
-    assert control.actions == [], f"{door}: an overwrite of an existing table was announced on the control lane: {control.actions}"
+    assert [e.action for e in control.events] == [], (
+        f"{door}: an overwrite of an existing table was announced on the control lane: {[e.action for e in control.events]}"
+    )
 
 
 def test_an_overwrite_create_of_an_absent_table_is_announced_as_a_created_table(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert real_ns_client.post("/v1/namespace/lance_catalog$lh242/create", json={}).status_code == 200
-    control = _Control()
+    control = ControlEmitterDouble()
     monkeypatch.setattr(app_of(real_ns_client).state, "control_emitter", control, raising=False)
 
     answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS['create']}", content=_ipc(_rows(1)), headers=ARROW)
 
     assert answer.status_code == 200, answer.text
-    assert control.actions == ["table_created"], control.actions
+    assert [e.action for e in control.events] == ["table_created"], [e.action for e in control.events]

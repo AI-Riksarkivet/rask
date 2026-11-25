@@ -44,9 +44,9 @@ from lance_namespace import (
     connect,
 )
 from pydantic import SecretStr
+from tests.control_emitter_double import ControlEmitterDouble
 from tests.integration.maintenance_vend_doors import CATALOG_URL, end_door, trash_doors
 
-from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.records import base_registry, location_claims, trash
 from lakehouse.records.base_registry import BaseOrigin, BaseRole, RecordedBase
 from lakehouse.storage.options import StorageOptions
@@ -191,16 +191,6 @@ class _Estate:
         return held[0] if held else None
 
 
-class _RecordingControl:
-    """A control emitter that keeps every event instead of publishing it."""
-
-    def __init__(self) -> None:
-        self.events: list[CatalogControlEvent] = []
-
-    async def emit(self, event: CatalogControlEvent) -> None:
-        self.events.append(event)
-
-
 def _fingerprint(root: Path) -> dict[str, str]:
     """Every file under ``root`` by relative path → a hash of its bytes."""
     return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(root.rglob("*")) if p.is_file()}
@@ -211,7 +201,7 @@ def _run(
     *,
     settings: MaintenanceSettings | None = None,
     report: ReconcileReport | None = None,
-    control: _RecordingControl | None = None,
+    control: ControlEmitterDouble | None = None,
     data_roots: set[str] | None = None,
 ) -> mod.TrashPurgeReport:
     return asyncio.run(
@@ -640,7 +630,7 @@ def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
     orphaned, _ = estate.drop_recoverably("gone", "t", uuid=_T_UUID, namespace_uuid=_GONE_UUID)
     estate.ns.drop_namespace(DropNamespaceRequest(id=["gone"]))
     estate.put_record("archive", uuid=_ARCHIVE_UUID, location="", kind="namespace", properties={"rask.uuid": _ARCHIVE_UUID})
-    control = _RecordingControl()
+    control = ControlEmitterDouble()
 
     out = _run(estate, control=control)
 

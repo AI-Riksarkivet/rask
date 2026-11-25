@@ -42,7 +42,6 @@ from catalog.services import erasure_release, table_claims
 from catalog.services.erasure import Pin
 from catalog.services.tables.creation import create_table
 from catalog.services.tables.writes import read_arrow_body
-from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -51,6 +50,7 @@ from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.records.history_fences import HistoryWork, TableHistory
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
+from tests.control_emitter_double import ControlEmitterDouble
 
 
 _PREDICATE = "pii = 'alice'"
@@ -99,14 +99,6 @@ def _pinned_subtree(root: Path) -> LanceNamespace:
     return ns
 
 
-class _Recorder:
-    def __init__(self) -> None:
-        self.events: list[CatalogControlEvent] = []
-
-    async def emit(self, event: CatalogControlEvent) -> None:
-        self.events.append(event)
-
-
 class _Clock:
     def __init__(self) -> None:
         self.now = datetime.now(UTC)
@@ -119,7 +111,7 @@ type Release = Callable[[], release_tick.ErasureReleaseTick]
 
 
 @contextmanager
-def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _Recorder, clock: _Clock) -> Generator[tuple[TestClient, Release]]:
+def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: ControlEmitterDouble, clock: _Clock) -> Generator[tuple[TestClient, Release]]:
     """The erasure doors on one app, and the release's tick over that app, judged by ``clock`` and announced on ``emitter``."""
     settings = Settings(
         s3_access_key_id="k",
@@ -174,7 +166,7 @@ def _verify(client: TestClient, obligation_id: str) -> dict[str, Any]:
 
 def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadline(tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
     ns = _tagged_over_a_plain_delete(tmp_path / "data")
-    emitter, clock = _Recorder(), _Clock()
+    emitter, clock = ControlEmitterDouble(), _Clock()
 
     with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as (client, run_release):
         obligation = _record(client)
@@ -217,7 +209,7 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
     record for the next one, whose people were told then. A pin the record does not name would stay pinned with the
     obligation released, so that verification leaves it open and names the pin."""
     ns = _tagged_over_a_plain_delete(tmp_path / "data")
-    emitter, clock = _Recorder(), _Clock()
+    emitter, clock = ControlEmitterDouble(), _Clock()
     with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as (client, _run_release):
         obligation = _record(client)
         erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
@@ -258,7 +250,7 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
     from ``work`` before the next tick: Lance would refuse ``work``'s delete while it stands, so it goes with
     the subtree and comes back from ``work``."""
     ns = _pinned_subtree(tmp_path / "data")
-    emitter, clock = _Recorder(), _Clock()
+    emitter, clock = ControlEmitterDouble(), _Clock()
     pins = [Pin(ref="tag:t1", holds="deeper@3"), Pin(ref="branch:deeper", holds="work@3"), Pin(ref="branch:work", holds="main@2")]
     release = erasure_release.new_release(
         pins,
@@ -297,7 +289,7 @@ def test_a_release_waits_while_a_reclaim_holds_the_tables_history(tmp_path: Path
     recreated while a reclaim runs could be cut from a version it deletes ([[LH-308]]). The tick changes no ref and
     leaves the release for a later one."""
     ns = _pinned_subtree(tmp_path / "data")
-    emitter, clock = _Recorder(), _Clock()
+    emitter, clock = ControlEmitterDouble(), _Clock()
     pins = [Pin(ref="tag:t1", holds="deeper@3"), Pin(ref="branch:deeper", holds="work@3"), Pin(ref="branch:work", holds="main@2")]
     table_uuid = _table_uuid(ns, tmp_path)
     release = erasure_release.new_release(

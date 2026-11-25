@@ -52,7 +52,6 @@ from catalog.core.lineage_emit import NO_FIELDS, EmitFields
 from catalog.services import table_claims
 from catalog.services.tables import commits
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_reads, fga_writes
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -64,6 +63,7 @@ from lakehouse.records.record_store import put_record, record_key
 from lakehouse.storage import conditional_records
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.options import StorageOptions
+from tests.control_emitter_double import ControlEmitterDouble
 from tests.integration import store_requests
 
 
@@ -2080,16 +2080,6 @@ def _with_v(column: dict[str, Any], version: str) -> dict[str, Any]:
     return {**_CONTRACT, "version": version, "schema": [{**table, "properties": [table["properties"][0], column]}]}
 
 
-class _Announced:
-    """The control emitter, as a list of the actions the doors announced."""
-
-    def __init__(self) -> None:
-        self.actions: list[tuple[str, dict[str, Any]]] = []
-
-    async def emit(self, event: CatalogControlEvent) -> None:
-        self.actions.append((event.action, event.extra))
-
-
 def _answered(served: Served, path: str, body: object | None = None, *, arrow: bytes | None = None) -> tuple[int, int | None]:
     """The status and spec code of a POST to ``path``, of ``body`` as JSON or of ``arrow`` as an Arrow stream."""
     if arrow is not None:
@@ -2106,7 +2096,7 @@ def test_a_tables_contract_is_held_on_every_commit_a_stock_client_or_a_door_make
     from catalog.api.dependencies import get_control_emitter
     from catalog.main import app
 
-    announced = _Announced()
+    announced = ControlEmitterDouble()
     app.dependency_overrides[get_control_emitter] = lambda: announced
     stock = _created(served)
     table = "/v1/table/lance_catalog$db$t"
@@ -2148,7 +2138,7 @@ def test_a_tables_contract_is_held_on_every_commit_a_stock_client_or_a_door_make
     assert _answered(served, f"{_CONTRACT_DOOR}/delete") == (200, None)
     assert httpx.post(f"{served.url}{_CONTRACT_DOOR}/describe", headers=_TOKEN).json()["contract"] is None
     assert _answered(served, f"{table}/drop_columns", {"columns": ["w"]}) == (200, None)
-    assert [(action, extra.get("version")) for action, extra in announced.actions if "contract" in action] == [
+    assert [(e.action, e.extra.get("version")) for e in announced.events if "contract" in e.action] == [
         ("table_contract_set", "1.0.0"),
         ("table_contract_set", "2.0.0"),
         ("table_contract_deleted", "2.0.0"),

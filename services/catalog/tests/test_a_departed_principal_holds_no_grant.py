@@ -24,8 +24,8 @@ import pytest
 
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
-from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids, fga_reads
+from tests.control_emitter_double import ControlEmitterDouble
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`spec.yaml`).
@@ -34,26 +34,16 @@ PRINCIPALS = "/management/v1/access/principals"
 ALICE = "dex~alice"
 
 
-class _Recorder:
-    """The control emitter, as a list of the events the door published."""
-
-    def __init__(self) -> None:
-        self.events: list[CatalogControlEvent] = []
-
-    async def emit(self, event: CatalogControlEvent) -> None:
-        self.events.append(event)
-
-
 def _ok(response: httpx.Response) -> httpx.Response:
     assert response.status_code == 200, response.text
     return response
 
 
 @pytest.fixture
-def estate(governed_catalog: Any) -> tuple[Any, _Recorder]:  # noqa: ANN401 — the conftest's GovernedCatalog
+def estate(governed_catalog: Any) -> tuple[Any, ControlEmitterDouble]:  # noqa: ANN401 — the conftest's GovernedCatalog
     """root owns the estate and creates ``acme``; alice holds tuples through three doors, and bob is acme's second admin."""
     catalog = governed_catalog
-    recorder = _Recorder()
+    recorder = ControlEmitterDouble()
     catalog.client.app.dependency_overrides[get_control_emitter] = lambda: recorder
     catalog.store.write((catalog.person("root"), "admin", "estate:rask"))
     _ok(catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("root")))
@@ -69,7 +59,7 @@ def _naming(catalog: Any, principal: str) -> set[tuple[str, str, str]]:  # noqa:
     return {t for t in catalog.store.tuples() if t[0] == fga_ids.user_object(principal)}
 
 
-def test_the_door_revokes_every_grant_naming_the_principal_and_records_it_deleted(estate: tuple[Any, _Recorder]) -> None:
+def test_the_door_revokes_every_grant_naming_the_principal_and_records_it_deleted(estate: tuple[Any, ControlEmitterDouble]) -> None:
     catalog, recorder = estate
     before = catalog.store.tuples()
     assert _naming(catalog, ALICE) == {
@@ -101,7 +91,7 @@ def test_the_door_revokes_every_grant_naming_the_principal_and_records_it_delete
     ],
 )
 def test_a_deletion_that_would_strand_an_administration_or_undo_git_is_refused_whole(  # noqa: PLR0913 - parametrized
-    estate: tuple[Any, _Recorder], monkeypatch: pytest.MonkeyPatch, caller: str, principal: str, arrange: str, answer: tuple[int, int]
+    estate: tuple[Any, ControlEmitterDouble], monkeypatch: pytest.MonkeyPatch, caller: str, principal: str, arrange: str, answer: tuple[int, int]
 ) -> None:
     catalog, recorder = estate
     if arrange == "sole-admin-of-beta":

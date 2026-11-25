@@ -27,7 +27,6 @@ import pytest
 
 from catalog.core.config import get_settings as catalog_settings
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.governed.fga_ids import user_object
 from lakehouse.records import trash
@@ -35,6 +34,7 @@ from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.trash_task import TrashUnreadableError, run_trash_task
 from tests import seeding
+from tests.control_emitter_double import ControlEmitterDouble
 from tests.governed_catalog import StoreTuples
 from tests.integration.catalog_and_maintenance import TwoServices, audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
@@ -46,20 +46,10 @@ PROJECT = "acme"
 _ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 
 
-class _Captured:
-    """The catalog's control emitter, keeping what it was handed."""
-
-    def __init__(self) -> None:
-        self.events: list[CatalogControlEvent] = []
-
-    async def emit(self, event: CatalogControlEvent) -> None:
-        self.events.append(event)
-
-
 class _Estate:
     """Project ``acme``, driven by its admin through the catalog, and the maintenance service beside it."""
 
-    def __init__(self, both: TwoServices, control: _Captured) -> None:
+    def __init__(self, both: TwoServices, control: ControlEmitterDouble) -> None:
         self.catalog = both.catalog
         self.maintenance = both.maintenance
         assert isinstance(both.store, StoreTuples), "the estate decides on a real OpenFGA store"
@@ -112,7 +102,7 @@ class _Estate:
 def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch, openfga_store: Any, dex_issuer: Any) -> Iterator[_Estate]:  # noqa: ANN401 — the root conftest's fixtures
     """The catalog with the estate's seven-day grace period, as alice, and maintenance reading the same control root with
     the purge off, as the default chart ships it."""
-    captured = _Captured()
+    captured = ControlEmitterDouble()
     env = {"LANCE_TRASH_GRACE_DAYS": "7", "MAINTENANCE_TRASH_PURGE_ENABLED": "false", "MAINTENANCE_CATALOG_URL": CATALOG_URL}
     with catalog_and_maintenance(moto_url, monkeypatch, env=env, catalog_control=captured, openfga_store=openfga_store, dex_issuer=dex_issuer) as both:
         answer = both.catalog.post("/management/v1/projects", json={"id": PROJECT})

@@ -22,13 +22,13 @@ from announcement_filings import age_filings
 
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
-from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.records import control_prefixes, maintenance_policies
 from lakehouse.storage import conditional_records
 from lakehouse.storage.objectfs import fs_and_base
 from tests import seeding
+from tests.control_emitter_double import ControlEmitterDouble
 
 
 PROJECT = "acme"
@@ -70,16 +70,6 @@ def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's Gov
         (catalog.person(MEMBER), "member", f"project:{PROJECT}"),
     )
     return catalog
-
-
-class _Announced:
-    """The control emitter, as a list of the events the doors published."""
-
-    def __init__(self) -> None:
-        self.events: list[CatalogControlEvent] = []
-
-    async def emit(self, event: CatalogControlEvent) -> None:
-        self.events.append(event)
 
 
 def _protection_of(estate: Any) -> tuple[bool, str | None]:  # noqa: ANN401 — the conftest's GovernedCatalog
@@ -204,7 +194,7 @@ def test_a_delete_that_failed_after_its_revoke_is_finished_by_its_retry(
     failed = estate.client.delete(f"/management/v1/projects/{PROJECT}", headers=estate.bearer(CO_ADMIN))
     assert (failed.status_code, failed.json().get("code")) == (500, 18), failed.text
     fs.delete_file(unreadable)
-    announced = _Announced()
+    announced = ControlEmitterDouble()
     estate.client.app.dependency_overrides[get_control_emitter] = lambda: announced
 
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
