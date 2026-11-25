@@ -106,7 +106,7 @@ def _with_version_field(message: bytes, version: int) -> bytes:
             out += message[start:at]
     if not written:
         out += manifest_wire.encode_varint(VERSION_FIELD << 3) + manifest_wire.encode_varint(version)
-    return bytes(out)
+    return out.take_bytes()
 
 
 def with_manifest_version(manifest: bytes, version: int) -> bytes:

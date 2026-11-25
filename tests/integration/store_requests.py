@@ -99,7 +99,7 @@ class _Relaying(http.server.BaseHTTPRequestHandler):
             self.rfile.readline()
         while self.rfile.readline() not in (b"\r\n", b"\n", b""):
             pass
-        return bytes(body)
+        return body.take_bytes()
 
     def _relay(self, upstream: tuple[str, int], path: str, *, body: bytes, headers: dict[str, str], answered: Callable[[], None] | None = None) -> None:
         """Send this request to ``upstream`` at ``path`` and answer with the store's answer, calling ``answered`` once the store

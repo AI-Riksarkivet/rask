@@ -153,7 +153,7 @@ def _catalog_only(upstream: str, admits: Callable[[str], bool]) -> ThreadingHTTP
                     out += self.rfile.read(size)
                     self.rfile.readline()
                 self.rfile.readline()
-                return bytes(out)
+                return out.take_bytes()
             return self.rfile.read(int(self.headers.get("Content-Length") or 0))
 
         def _forward(self) -> None:

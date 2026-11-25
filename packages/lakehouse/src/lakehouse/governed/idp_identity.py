@@ -150,7 +150,7 @@ def _dex_client_subject(client_id: str) -> str:
         length.append(low | (0x80 if size else 0))
         if not size:
             break
-    return base64.urlsafe_b64encode(b"\x0a" + bytes(length) + raw).rstrip(b"=").decode("ascii")
+    return base64.urlsafe_b64encode(b"\x0a" + length.take_bytes() + raw).rstrip(b"=").decode("ascii")
 
 
 def _marked_client(claims: IDToken, marker: ClientMarker) -> str | None:

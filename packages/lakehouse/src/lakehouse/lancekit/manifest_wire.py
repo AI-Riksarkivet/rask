@@ -67,7 +67,8 @@ def encode_varint(value: int) -> bytes:
     while True:
         low, value = value & 0x7F, value >> 7
         if not value:
-            return bytes([*out, low])
+            out.append(low)
+            return out.take_bytes()
         out.append(low | 0x80)
 
 

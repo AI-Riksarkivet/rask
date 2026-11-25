@@ -390,7 +390,7 @@ def dex_subject(user_id: str, connector: str) -> str:
             low, value = value & 0x7F, value >> 7
             out.append(low | (0x80 if value else 0))
             if not value:
-                return bytes(out)
+                return out.take_bytes()
 
     def field(number: int, text: str) -> bytes:
         raw = text.encode()

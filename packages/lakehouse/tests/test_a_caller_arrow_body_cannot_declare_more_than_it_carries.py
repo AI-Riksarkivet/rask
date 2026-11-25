@@ -86,7 +86,7 @@ def _a_footer_naming_one_batch_again(times: int, rows: int) -> bytes:
     _, *big = max(record_blocks, key=lambda block: block[3])
     for at, *_ in record_blocks:
         struct.pack_into("<qi4xq", body, at, *big)
-    return bytes(body)
+    return body.take_bytes()
 
 
 DECLARING_MORE = [

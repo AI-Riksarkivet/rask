@@ -437,7 +437,7 @@ def _with_message_fields(manifest: bytes, edit: Callable[[int, int | bytes | Non
         edited = edit(number, value)
         written += message[start:at] if edited is None else edited
     offset, major, minor, magic = struct.unpack("<QHH4s", manifest[-16:])
-    return manifest[:offset] + struct.pack("<I", len(written)) + bytes(written) + struct.pack("<QHH4s", offset, major, minor, magic)
+    return manifest[:offset] + struct.pack("<I", len(written)) + written.take_bytes() + struct.pack("<QHH4s", offset, major, minor, magic)
 
 
 @pytest.mark.parametrize(
