@@ -18,6 +18,8 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
 from lakehouse.events.bus import BusUnavailableError
 from lakehouse.events.lineage_events import DatasetUuids
@@ -36,6 +38,7 @@ from maintenance.core.lineage_emit import (
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.table_pass import emit_pass_lineage
 from tests.bus_double import BusDouble
+from tests.undelivered_counts import counting, undelivered_counts
 from tests.unit.no_store_session import no_store_session
 
 
@@ -206,10 +209,18 @@ def test_the_emitter_publishes_on_its_configured_topic() -> None:
     ],
 )
 def test_the_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_holds_it(
-    tmp_path: Path, caplog: pytest.LogCaptureFixture, outbox_at: str, storage_options: Callable[[], StorageOptions] | None, staged: bool
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    outbox_at: str,
+    storage_options: Callable[[], StorageOptions] | None,
+    staged: bool,
 ) -> None:
     """A bus outage never fails a maintenance pass, and the line it logs says whether the relay can still
-    deliver the event ([[LH-573]])."""
+    deliver the event ([[LH-573]]). The failure is counted the same way, on a series the emitter created at 0 when it
+    was built, so the first one is an increase an alert reads."""
+    reader = InMemoryMetricReader()
+    counting(monkeypatch, MeterProvider(metric_readers=[reader]))
     (tmp_path / "occupied").write_text("a file where the outbox's directory would be")
     emitter = BusMaintenanceEmitter(
         BusDouble(failing=BusUnavailableError("this process is not connected to the bus")),
@@ -221,9 +232,14 @@ def test_the_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_holds
         storage_options=storage_options,
     )
 
+    at_start = undelivered_counts(reader, service="maintenance", lane="lineage")
+
     asyncio.run(emitter.emit_maintenance(table_id="ns$a"))
 
     assert [getattr(record, "staged", None) for record in caplog.records if record.getMessage() == "maintenance_publish_failed"] == [staged]
+    nothing = {("publish", "true"): 0, ("publish", "false"): 0, ("unsigned", "false"): 0}
+    after = undelivered_counts(reader, service="maintenance", lane="lineage")
+    assert (at_start, after) == (nothing, nothing | {("publish", "true" if staged else "false"): 1})
 
 
 def test_fail_run_id_is_deterministic_per_dataset_and_complete_stays_random() -> None:

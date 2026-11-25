@@ -241,16 +241,16 @@ groups:
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
       # A CATALOG WRITE WHOSE PROVENANCE DID NOT GET RECORDED, which nothing else in this file can see.
-      # The outbox rules above describe events that REACHED the outbox; this counts the emits that never
-      # did. `lineage_emit.py` increments it under two labels that mean different things: on
-      # `bus` the publish goes through the staged outbox, so a failure after staging still leaves a durable
-      # copy and one at staging does not, which the counter cannot tell apart; on `derive` the event's run
-      # id could not be derived. So this pages on any sustained increase and the label says which to read.
+      # The outbox rules above describe events that REACHED the outbox; this counts the emits that did not reach the bus,
+      # by `reason` and by whether the outbox holds the event (`staged`), the shape every lane counts in
+      # (`lakehouse.events.undelivered`). A write's announcement no outbox holds reaches lineage only when the commit
+      # reconcile announces that version from the table's log (the LH-497 rules below), so this pages on any sustained
+      # increase and the labels say which to read.
       #
       # `_total` because the OTLP->Prometheus exporter suffixes counters — the identical defect this file
       # records twice already, where a rule naming the bare form matches nothing and can never fire.
-      # Every transport's series exists at 0 from the emitter's start (`catalog.core.lineage_emit.make_emitter`), so
-      # the first failure is an increase the rate reads.
+      # Every series exists at 0 from the emitter's start (`lakehouse.events.undelivered.Undelivered`), so the first
+      # failure is an increase the rate reads.
       - alert: CatalogLineageEmitFailing
         expr: sum(rate(catalog_lineage_emit_failed_total[5m])) > 0
         for: 5m
@@ -262,14 +262,15 @@ groups:
           description: >-
             A catalog mutation committed to Lance and its lineage emit failed terminally, so lineage's feed
             does not record that the write happened and a pipeline following `/events` never hears of it.
-            Read the `lance.catalog.transport` label — `bus` means the publish failed and the event may
-            still be staged in the outbox, `derive` means its run id could not be derived while the catalog's key was away.
+            Read `lance.catalog.reason` — `publish` means the bus refused or did not answer, `unsigned` that the catalog
+            had no signing key or the event no canonical form, `derive` that its run id could not be derived while the
+            catalog's key was away — and `lance.catalog.staged`, `true` when the outbox holds the event for lineage's relay.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
       # THE MAINTENANCE TWIN OF THE RULE ABOVE: a pass's lineage event describes a committed reclamation, so one that did
       # not reach the bus leaves the feed under-reporting work that happened, and its log line alone reaches no alert.
-      # Every reason's series exists at 0 from the emitter's start (`maintenance.core.metrics.create_lineage_emit_series`),
-      # so the first failure is an increase the rate reads; the `for:` is the catalog twin's, for the same reason.
+      # Every series exists at 0 from the emitter's start (`lakehouse.events.undelivered.Undelivered`), so the first
+      # failure is an increase the rate reads; the `for:` is the catalog twin's, for the same reason.
       - alert: MaintenanceLineageEmitFailing
         expr: sum(rate(maintenance_lineage_emit_failed_total[5m])) > 0
         for: 5m
@@ -280,10 +281,10 @@ groups:
           summary: "Maintenance passes are reclaiming without recording their provenance"
           description: >-
             A maintenance pass committed its reclamation and its lineage event did not reach the bus, so lineage's feed
-            does not record that the pass happened. Read the `reason` label — `unsigned` means the worker had no signing
-            key or no canonical form for the event, `publish` means the publish failed and the event may still be staged
-            in the outbox — and the worker's `maintenance_event_withheld_unsigned` or `maintenance_publish_failed` log
-            lines for the table.
+            does not record that the pass happened. Read `lance.maintenance.reason` — `unsigned` means the worker had no
+            signing key or no canonical form for the event, `publish` that the bus refused or did not answer — and
+            `lance.maintenance.staged`, `true` when the outbox holds the event for lineage's relay, `false` when it is lost,
+            and the worker's `maintenance_event_withheld_unsigned` or `maintenance_publish_failed` log lines for the table.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
       # LH-497: the commit is the outbox. A find is a write whose own announcement was lost between its commit and its

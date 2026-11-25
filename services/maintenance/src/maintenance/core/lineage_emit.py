@@ -45,9 +45,9 @@ from lakehouse.events.openlineage import (
     symlinks_facet,
 )
 from lakehouse.events.signing import CanonError, SigningKey, attach_signature
+from lakehouse.events.undelivered import Undelivered
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from lakehouse.storage.options import StorageOptions
-from maintenance.core.metrics import create_lineage_emit_series, record_lineage_emit_failed
 
 
 log = logging.getLogger(__name__)
@@ -251,7 +251,15 @@ class BusMaintenanceEmitter:
             )
         self._bus = bus
         outbox_metrics.create_series("lineage")
-        create_lineage_emit_series()
+        #: The twin of the catalog's `catalog.lineage_emit.failed`: a pass's event describes a committed reclamation, so
+        #: one that is lost leaves the feed under-reporting work that happened, and a log line alone reaches no alert.
+        self._undelivered = Undelivered(
+            "maintenance",
+            "lineage",
+            description="Lineage events of a maintenance pass that did not reach the bus, by `reason`: `unsigned` (no "
+            "signing key, or no canonical form) or `publish` (the bus refused or did not answer), and by `staged`: whether "
+            "the lineage outbox holds the event for lineage's relay; one no outbox holds is lost.",
+        )
         #: This service's OWN signing key ([[LH-064]]). None is a service with no store to sign from, which emits
         #: unsigned as it always did. A holder without a key emits nothing at all, never an unsigned event.
         self._signing = signing
@@ -338,13 +346,14 @@ class BusMaintenanceEmitter:
                 lane="lineage",
             )
         except (SigningKeyUnavailableError, CanonError) as exc:
-            record_lineage_emit_failed(reason="unsigned")
+            self._undelivered.withheld("unsigned")
             log.warning("maintenance_event_withheld_unsigned", extra={"table": table_id, "error": str(exc)})
         except Exception as exc:
             # Best-effort after a committed pass: any failure is a lost announcement, counted and logged with its
             # traceback, and never a failed pass.
-            record_lineage_emit_failed(reason="publish")
-            log.warning("maintenance_publish_failed", extra={"table": table_id, "error": str(exc), "staged": outbox.left_staged(exc)}, exc_info=exc)
+            staged = outbox.left_staged(exc)
+            self._undelivered.unpublished(staged=staged)
+            log.warning("maintenance_publish_failed", extra={"table": table_id, "error": str(exc), "staged": staged}, exc_info=exc)
 
 
 def make_emitter(

@@ -13,9 +13,8 @@ from typing import Any
 
 import pytest
 from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
+from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 
-from catalog.core import lineage_emit
 from catalog.core.commit_ids import commit_run_id
 from catalog.core.config import Settings
 from catalog.core.lineage_emit import (
@@ -40,6 +39,7 @@ from lakehouse.storage.options import StorageOptions
 from lineage.models import RunEvent
 from tests.bus_double import BusDouble
 from tests.lineage_emitter_double import LineageEmitterDouble
+from tests.undelivered_counts import counting, undelivered_counts
 from tests.unit.no_store_session import no_store_session
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
@@ -330,19 +330,6 @@ def test_the_catalog_emits_on_the_bus_or_not_at_all() -> None:
     assert isinstance(_make(bus=None), NoopEmitter)  # no connection to the bus: no-op
 
 
-def _emit_failures(reader: InMemoryMetricReader) -> dict[str, int]:
-    """`catalog.lineage_emit.failed` as ``reader`` exports it, by transport."""
-    data = reader.get_metrics_data()
-    return {
-        str((point.attributes or {})["lance.catalog.transport"]): int(point.value)
-        for resource in (data.resource_metrics if data is not None else ())
-        for scope in resource.scope_metrics
-        for metric in scope.metrics
-        for point in metric.data.data_points
-        if isinstance(point, NumberDataPoint)
-    }
-
-
 @pytest.mark.parametrize(
     ("outbox_at", "storage_options", "staged"),
     [
@@ -363,9 +350,7 @@ def test_the_bus_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_h
     can still deliver the event ([[LH-573]]). The failure is counted on a series the emitter created at 0 when it was
     built, so the first one is an increase the alert reads."""
     reader = InMemoryMetricReader()
-    monkeypatch.setattr(
-        lineage_emit, "_emit_failed", MeterProvider(metric_readers=[reader]).get_meter("lance.catalog").create_counter("catalog.lineage_emit.failed")
-    )
+    counting(monkeypatch, MeterProvider(metric_readers=[reader]))
     (tmp_path / "occupied").write_text("a file where the outbox's directory would be")
     emitter = BusEmitter(
         BusDouble(failing=BusUnavailableError("this process is not connected to the bus")),
@@ -377,12 +362,14 @@ def test_the_bus_emitter_swallows_a_failed_publish_and_says_whether_the_outbox_h
         storage_options=storage_options,
     )
 
-    at_start = _emit_failures(reader)
+    at_start = undelivered_counts(reader, service="catalog", lane="lineage")
 
     asyncio.run(emitter.emit_write(table_id="a$b", namespace="a", author=None, version=2, operation=INSERT))
 
     assert [getattr(record, "staged", None) for record in caplog.records if record.getMessage() == "lineage_publish_failed"] == [staged]
-    assert (at_start, _emit_failures(reader)) == ({"derive": 0, "bus": 0}, {"derive": 0, "bus": 1})
+    nothing = {("publish", "true"): 0, ("publish", "false"): 0, ("unsigned", "false"): 0, ("derive", "false"): 0}
+    after = undelivered_counts(reader, service="catalog", lane="lineage")
+    assert (at_start, after) == (nothing, nothing | {("publish", "true" if staged else "false"): 1})
 
 
 # --- #19: lineage on every write (not just create) ---

@@ -14,26 +14,13 @@ import pytest
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 
-from lakehouse.events import control_emit, outbox_metrics
+from lakehouse.events import outbox_metrics
 from lakehouse.events.control_emit import BusControlEmitter
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.storage.options import StorageOptions
 from tests.bus_double import BusDouble
+from tests.undelivered_counts import counting, undelivered_counts
 from tests.unit.no_store_session import no_store_session
-
-
-def _undelivered(reader: InMemoryMetricReader) -> dict[tuple[str, str], int]:
-    """`catalog.control_emit.failed` as ``reader`` exports it, by reason and by whether the outbox holds the event."""
-    data = reader.get_metrics_data()
-    return {
-        (str((point.attributes or {})["lance.catalog.reason"]), str((point.attributes or {})["lance.catalog.staged"])): int(point.value)
-        for resource in (data.resource_metrics if data is not None else ())
-        for scope in resource.scope_metrics
-        for metric in scope.metrics
-        if metric.name == "catalog.control_emit.failed"
-        for point in metric.data.data_points
-        if isinstance(point, NumberDataPoint)
-    }
 
 
 def _staged_and_unpublished(reader: InMemoryMetricReader) -> dict[str, int]:
@@ -90,7 +77,7 @@ async def test_a_failed_publish_says_whether_the_outbox_holds_it(
     not hold is lost, and an alert reads that count's increase."""
     reader = InMemoryMetricReader()
     provider = MeterProvider(metric_readers=[reader])
-    monkeypatch.setattr(control_emit.metrics, "get_meter", lambda name, *_args, **_kwargs: provider.get_meter(name))
+    counting(monkeypatch, provider)
     monkeypatch.setattr(outbox_metrics, "_publish_failed", provider.get_meter("lance.outbox").create_counter("outbox.publish.failed"))
     (tmp_path / "occupied").write_text("a file where the outbox's directory would be")
     bus = BusDouble(failing=TimeoutError("the bus did not answer"))
@@ -99,12 +86,12 @@ async def test_a_failed_publish_says_whether_the_outbox_holds_it(
         bus, topic="catalog.control.v1", timeout_seconds=1.0, service="catalog", sign=None, outbox_uri=uri, storage_options=storage_options
     )
 
-    at_start = _undelivered(reader)
+    at_start = undelivered_counts(reader, service="catalog", lane="control")
 
     await emitter.emit(_event())
 
     assert [getattr(record, "staged", None) for record in caplog.records if record.getMessage() == "control_publish_failed"] == [staged]
     nothing = {("publish", "true"): 0, ("publish", "false"): 0, ("unsigned", "false"): 0}
-    assert (at_start, _undelivered(reader)) == (nothing, nothing | {("publish", "true" if staged else "false"): 1})
+    assert (at_start, undelivered_counts(reader, service="catalog", lane="control")) == (nothing, nothing | {("publish", "true" if staged else "false"): 1})
     # A publish that failed after its stage is the control outbox's to count, under its own lane.
     assert _staged_and_unpublished(reader) == {"control": 1 if staged else 0}

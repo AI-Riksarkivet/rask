@@ -201,31 +201,6 @@ def record_signature_would_refuse(*, door: SignatureDoor, reason: str) -> None:
     _signature_would_refuse.add(1, {"door": door, "reason": reason})
 
 
-#: Why a pass's lineage event did not reach the bus: this service cannot sign it, or the publish failed.
-type LineageEmitFailure = Literal["unsigned", "publish"]
-
-#: The twin of the catalog's `catalog.lineage_emit.failed`: a pass's event describes a committed reclamation, so one
-#: that is lost leaves the feed under-reporting work that happened, and a log line alone reaches no alert.
-_lineage_emit_failed = _meter.create_counter(
-    "maintenance.lineage_emit.failed",
-    unit="{event}",
-    description="Best-effort lineage events of a maintenance pass that did not reach the bus, by reason: `unsigned` (no "
-    "signing key, or no canonical form) or `publish` (the publish failed; the outbox may still hold the event).",
-)
-
-
-def create_lineage_emit_series() -> None:
-    """Create every reason's series of `maintenance.lineage_emit.failed` at 0: one born at its first failure has no 0
-    before it, so a reading of the counter's increase would miss that failure."""
-    for reason in get_args(LineageEmitFailure.__value__):
-        _lineage_emit_failed.add(0, {"reason": reason})
-
-
-def record_lineage_emit_failed(*, reason: LineageEmitFailure) -> None:
-    """Count one lineage event of a pass that did not reach the bus."""
-    _lineage_emit_failed.add(1, {"reason": reason})
-
-
 def record_dataset_swept() -> None:
     _datasets_swept.add(1)
 

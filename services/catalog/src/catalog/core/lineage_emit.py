@@ -29,7 +29,6 @@ from datetime import UTC, datetime
 from typing import Any, Final, Protocol, runtime_checkable
 
 import lance
-from opentelemetry import metrics
 from pydantic import BaseModel, ConfigDict, InstanceOf, SkipValidation
 
 from catalog.core.commit_ids import CommitIds, UnkeyedCommitIds, commit_run_id, lifecycle_run_id
@@ -61,6 +60,7 @@ from lakehouse.events.openlineage import (
     table_type_facet,
 )
 from lakehouse.events.signing import CanonError, SigningKey, attach_signature, author_of
+from lakehouse.events.undelivered import Undelivered
 from lakehouse.governed import fga_ids
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError
 from lakehouse.governed.subjects import is_person_subject
@@ -70,22 +70,14 @@ from lakehouse.storage.options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-_meter = metrics.get_meter("lance.catalog")
-_emit_failed = _meter.create_counter(
-    "catalog.lineage_emit.failed",
-    unit="{event}",
-    description="Best-effort catalog lineage emits that failed terminally, by transport. On `bus` the publish goes "
-    "through the staged outbox, so a failure AFTER staging leaves a durable copy the relay can still drain and a "
-    "failure at staging does not; `derive` is an event whose run id could not be derived, the catalog's key being away. The counter cannot tell a staged "
-    "failure from an unstaged one, which is why any increase is worth a look.",
+#: What `catalog.lineage_emit.failed` says it counts, which an operator reads to judge what a rising count lost.
+_UNDELIVERED_DESCRIPTION = (
+    "Catalog lineage emits that did not reach the bus, by `reason`: `publish` (the bus refused or did not answer), "
+    "`unsigned` (the catalog had no signing key, or the event no canonical form) or `derive` (its run id could not be "
+    "derived while the catalog's key was away), and by `staged`: whether the lineage outbox holds the event for lineage's "
+    "relay. A write's announcement no outbox holds reaches lineage only when the commit reconcile announces that version "
+    "from the table's log; one the outbox holds waits for the relay."
 )
-
-
-def _create_emit_failed_series() -> None:
-    """Create every transport's series of the failed-emit counter at 0 when an emitter is built: one born at its first
-    failure has no 0 before it, so the alert reading the counter's rate would miss that failure."""
-    for transport in ("derive", "bus"):
-        _emit_failed.add(0, {"lance.catalog.transport": transport})
 
 
 #: Operation markers carried in the OpenLineage ``rask_lance`` run facet. Lineage's ingest authorizer reads them to
@@ -715,6 +707,8 @@ class _BaseLineageEmitter:
     #: catalog keeps for provenance (`catalog.services.provenance_namespace`), whose rows ARE the announcements lineage
     #: recorded, so announcing their own commits would record them again, without end. Set by `make_emitter`.
     _unannounced: Callable[[str, str], bool] | None = None
+    #: What this emitter counts of the events it did not get onto the bus.
+    _undelivered: Undelivered
 
     async def project_for(self, warehouse_id: str) -> str | None:
         """Resolve the tenant, swallowing failure. BEST-EFFORT LIKE THE EMIT ITSELF: this runs on a
@@ -768,7 +762,7 @@ class _BaseLineageEmitter:
         except SigningKeyUnavailableError as exc:
             # The gate (`catalog.api.signing_gate`) refuses the write before its commit while the key is missing, so only a
             # key lost between the gate and here reaches this; the reconciler announces the commit once the key is back.
-            _emit_failed.add(1, {"lance.catalog.transport": "derive"})
+            self._undelivered.withheld("derive")
             log.warning("lineage_emit_withheld_underived", extra={"operation": operation, "table": table_id, "error": str(exc)})
             return
         event = build_write_event(
@@ -852,7 +846,7 @@ class BusEmitter(_BaseLineageEmitter):
         self._timeout_seconds = timeout_seconds
         self._outbox_uri = outbox_uri
         outbox_metrics.create_series("lineage")
-        _create_emit_failed_series()
+        self._undelivered = Undelivered("catalog", "lineage", description=_UNDELIVERED_DESCRIPTION, withheld=("unsigned", "derive"))
         #: Read at every stage, never held: the key pair in it rotates while the catalog runs ([[XC-082]]).
         self._storage_options = storage_options
         #: THIS CATALOG'S OWN SIGNING KEY ([[LH-064]]). None is a catalog with no store to sign from, which emits
@@ -910,15 +904,12 @@ class BusEmitter(_BaseLineageEmitter):
                 lane="lineage",
             )
         except (SigningKeyUnavailableError, CanonError) as exc:
-            _emit_failed.add(1, {"lance.catalog.transport": "bus"})
+            self._undelivered.withheld("unsigned")
             log.warning("lineage_emit_withheld_unsigned", extra={"operation": operation, "table": table_id, "error": str(exc)})
         except Exception as exc:
-            _emit_failed.add(1, {"lance.catalog.transport": "bus"})
-            log.warning(
-                "lineage_publish_failed",
-                extra={"operation": operation, "table": table_id, "error": str(exc), "staged": outbox.left_staged(exc)},
-                exc_info=exc,
-            )
+            staged = outbox.left_staged(exc)
+            self._undelivered.unpublished(staged=staged)
+            log.warning("lineage_publish_failed", extra={"operation": operation, "table": table_id, "error": str(exc), "staged": staged}, exc_info=exc)
 
 
 def make_emitter(

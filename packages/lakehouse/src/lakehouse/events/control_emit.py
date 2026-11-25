@@ -42,9 +42,8 @@ Two ways this fails SILENTLY in-cluster, named because "best-effort" hides them:
 
 import logging
 from collections.abc import Callable
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
-from opentelemetry import metrics
 from pydantic import ValidationError
 
 from lakehouse.events import outbox, outbox_metrics
@@ -56,6 +55,7 @@ from lakehouse.events.control_events import (
     ControlAction,
     ControlObjectType,
 )
+from lakehouse.events.undelivered import Undelivered
 from lakehouse.storage.options import StorageOptions
 
 
@@ -66,9 +66,6 @@ log = logging.getLogger(__name__)
 #: `SigningKeyUnavailableError` while that key is unresolved. A callable because the key is the emitting service's own:
 #: the service binds it, and one with no signing identity passes no signer at all.
 type ControlSign = Callable[[dict[str, Any]], dict[str, Any]]
-
-#: Why an emit did not reach the bus: the publish failed, or the event could not be signed.
-type _Undelivered = Literal["publish", "unsigned"]
 
 
 # Runtime-checkable because a pydantic field typed by it is validated with `isinstance` (`arbitrary_types_allowed`), and
@@ -117,7 +114,6 @@ class BusControlEmitter:
         self._bus = bus
         self._topic = topic
         self._timeout_seconds = timeout_seconds
-        self._service = service
         #: This service's signer, or None for a service with no signing identity, which publishes unsigned.
         self._sign = sign
         #: The control lane's OWN outbox prefix — never the lineage one. Each prefix is drained by a
@@ -128,9 +124,9 @@ class BusControlEmitter:
         self._storage_options = storage_options
         # What this description SAYS is load-bearing: an operator reads it to decide whether a rising
         # count lost anything, and the answer depends on the consumer and on whether an outbox stages.
-        self._emit_failed = metrics.get_meter(f"lance.{service}").create_counter(
-            f"{service}.control_emit.failed",
-            unit="{event}",
+        self._undelivered = Undelivered(
+            service,
+            "control",
             description=(
                 f"{service} control-plane emits that did not reach the bus, by `reason`: `publish` (the bus "
                 "refused or timed out) or `unsigned` (this service's signing key is unresolved, or it cannot sign "
@@ -142,10 +138,6 @@ class BusControlEmitter:
                 "action is the log line's to say."
             ),
         )
-        # Every series at 0 from the emitter's start: one born at its first failure has no 0 before it, so an alert
-        # reading the counter's increase would miss that failure.
-        for reason, staged in (("publish", True), ("publish", False), ("unsigned", False)):
-            self._emit_failed.add(0, self._undelivered(reason, staged=staged))
         outbox_metrics.create_series("control")
 
     async def emit(self, event: CatalogControlEvent) -> None:
@@ -170,7 +162,8 @@ class BusControlEmitter:
             try:
                 wire = self._sign(wire)
             except Exception as exc:  # noqa: BLE001 — post-commit, swallows all; _record_undelivered logs exc_info
-                self._record_undelivered(event, exc, reason="unsigned", staged=False)
+                self._undelivered.withheld("unsigned")
+                _record_undelivered(event, exc, said="control_emit_withheld_unsigned", staged=False)
                 return
         try:
             await outbox.publish_with_outbox(
@@ -183,27 +176,26 @@ class BusControlEmitter:
                 lane="control",
             )
         except Exception as exc:  # noqa: BLE001 — post-commit, swallows all; _record_undelivered logs exc_info
-            self._record_undelivered(event, exc, reason="publish", staged=outbox.left_staged(exc))
+            staged = outbox.left_staged(exc)
+            self._undelivered.unpublished(staged=staged)
+            _record_undelivered(event, exc, said="control_publish_failed", staged=staged)
 
-    def _undelivered(self, reason: _Undelivered, *, staged: bool) -> dict[str, str]:
-        """The attributes an undelivered emit is counted under: why, and whether the outbox holds it."""
-        return {f"lance.{self._service}.reason": reason, f"lance.{self._service}.staged": "true" if staged else "false"}
 
-    def _record_undelivered(self, event: CatalogControlEvent, error: Exception, *, reason: _Undelivered, staged: bool) -> None:
-        self._emit_failed.add(1, self._undelivered(reason, staged=staged))
-        log.warning(
-            "control_publish_failed" if reason == "publish" else "control_emit_withheld_unsigned",
-            extra={
-                "action": event.action,
-                "event_id": event.event_id,
-                "object_id": event.object_id,
-                "error": str(error),
-                # Whether this is recoverable at all, said in the line itself — an operator
-                # reading it should not have to go and check how the service was configured.
-                "staged": staged,
-            },
-            exc_info=error,
-        )
+def _record_undelivered(event: CatalogControlEvent, error: Exception, *, said: str, staged: bool) -> None:
+    """Log an event that did not reach the bus, with whether the outbox holds it."""
+    log.warning(
+        said,
+        extra={
+            "action": event.action,
+            "event_id": event.event_id,
+            "object_id": event.object_id,
+            "error": str(error),
+            # Whether this is recoverable at all, said in the line itself — an operator
+            # reading it should not have to go and check how the service was configured.
+            "staged": staged,
+        },
+        exc_info=error,
+    )
 
 
 def make_control_emitter(
