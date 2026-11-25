@@ -56,7 +56,7 @@ SettingsDep = Annotated[Settings, Depends(request_settings)]
 
 
 #: What ``getattr`` answers for a wire the lifespan never set, told apart from the ``None`` a lifespan sets for "off".
-_UNSET: Final = object()
+_UNSET: Final = sentinel("_UNSET")
 
 
 @overload
