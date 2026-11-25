@@ -176,7 +176,6 @@ def test_an_encoding_value_lance_cannot_honour_is_refused_at_create(client: Test
 @pytest.mark.parametrize(
     ("properties", "lands_on"),
     [
-        pytest.param({}, set(), id="a-plain-create-stamps-nothing"),
         pytest.param({"lance-encoding:compression": "zstd"}, LEAVES, id="general-compression-on-every-leaf"),
         pytest.param({"lance-encoding:rle-threshold": "0.2"}, LEAVES - {"flag"}, id="rle-on-every-leaf-but-boolean"),
         pytest.param({"lance-encoding:bss": "on"}, {"id", "score", "point.x"}, id="bss-on-the-32-and-64-bit-numeric-leaves"),

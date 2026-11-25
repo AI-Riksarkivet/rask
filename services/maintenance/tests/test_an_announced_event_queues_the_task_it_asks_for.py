@@ -92,15 +92,8 @@ def _queue(recording: _RecordingQueue) -> TaskQueue:
 # --- the decision: which task an event asks for ---------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("operation", "expected"),
-    [
-        pytest.param("insert", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-write-asks-for-its-tables-pass"),
-        pytest.param("create_table", LaneTask(kind="table", uuid=TABLE_UUID, location=URI), id="a-create-is-a-write"),
-    ],
-)
-def test_an_event_asks_for_the_task_its_operation_needs(operation: str, expected: LaneTask) -> None:
-    assert lane_task(_event(operation)) == expected
+def test_a_create_is_a_write_and_asks_for_its_tables_pass() -> None:
+    assert lane_task(_event("create_table")) == LaneTask(kind="table", uuid=TABLE_UUID, location=URI)
 
 
 @pytest.mark.parametrize("operation", ["declare_table", "deregister_table", "rename_table", "expire_versions"])

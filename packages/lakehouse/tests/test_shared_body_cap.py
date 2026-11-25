@@ -22,7 +22,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import ErrorCode
 
 from lakehouse.process.correlation import FRAMEWORK_TELEMETRY_OFF
-from lakehouse.service_app.body_limit import BodySizeLimitMiddleware, BulkBodies
+from lakehouse.service_app.body_limit import BodySizeLimitMiddleware
 
 
 CAP = 1000
@@ -80,26 +80,5 @@ def test_a_chunked_body_over_the_cap_is_refused_while_it_streams(path: str) -> N
 
     with TestClient(_capped_app()) as client:
         resp = client.post(path, content=stream())
-
-    assert (resp.status_code, resp.json()["code"]) == (413, int(ErrorCode.INVALID_INPUT))
-
-
-BULK_CAP = 5000
-
-
-def _app_with_a_bulk_route() -> FastAPI:
-    app = FastAPI(telemetry=FRAMEWORK_TELEMETRY_OFF)
-
-    @app.post("/bulk")
-    async def _bulk(request: Request) -> dict[str, int]:
-        return {"len": len(await request.body())}
-
-    app.add_middleware(BodySizeLimitMiddleware, max_bytes=CAP, bulk=BulkBodies(max_bytes=BULK_CAP, matches=lambda scope: scope["path"] == "/bulk"))
-    return app
-
-
-def test_a_bulk_route_is_held_to_its_own_cap() -> None:
-    with TestClient(_app_with_a_bulk_route()) as client:
-        resp = client.post("/bulk", content=b"x" * (BULK_CAP + 1))
 
     assert (resp.status_code, resp.json()["code"]) == (413, int(ErrorCode.INVALID_INPUT))

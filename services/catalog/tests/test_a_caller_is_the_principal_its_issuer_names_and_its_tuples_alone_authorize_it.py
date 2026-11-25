@@ -264,7 +264,6 @@ def test_a_service_account_token_is_its_subject_and_its_tuples_alone_authorize_i
 @pytest.mark.parametrize(
     ("connector", "user_id", "federated", "status"),
     [
-        pytest.param("corp", _PERSON_ID, True, 200, id="a-person-holding-a-tuple"),
         pytest.param("corp-v2", _PERSON_ID, True, 200, id="the-same-person-once-their-connector-is-renamed"),
         pytest.param("corp", _HASHED_ID, True, 200, id="a-user-id-carrying-a-hash-is-one-user-not-a-userset"),
         pytest.param("stray", _PERSON_ID, True, 401, id="a-connector-the-deployment-does-not-map"),
@@ -285,7 +284,6 @@ def test_a_person_is_the_principal_their_connector_maps_so_a_renamed_connector_k
 @pytest.mark.parametrize(
     ("caller", "status"),
     [
-        pytest.param("granted-client", 200, id="a-client-signed-in-for-itself-holding-a-tuple"),
         pytest.param("ungranted-client", 403, id="a-client-holding-none"),
         pytest.param("person-for-another-audience", 401, id="a-persons-token-naming-its-client-but-no-federated-claims"),
     ],

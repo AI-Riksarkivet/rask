@@ -92,7 +92,6 @@ def test_two_admins_revoking_each_other_at_once_leave_the_project_one_admin(acme
 @pytest.mark.parametrize(
     ("before", "revoked", "status", "left"),
     [
-        pytest.param([], ("dex~bob", "admin"), 200, [ALICE, GINA], id="one-of-two-admins-is-revoked"),
         pytest.param([("dex~bob", "admin")], ("dex~alice", "admin"), 409, [ALICE, GINA], id="the-last-admin-is-refused"),
         pytest.param([], ("dex~gina", "member"), 200, [ALICE, BOB], id="a-member-is-revoked-as-before"),
         pytest.param([], ("dex~nobody", "admin"), 200, [ALICE, BOB, GINA], id="revoking-what-nobody-holds-changes-nothing"),

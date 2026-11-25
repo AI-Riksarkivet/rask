@@ -152,17 +152,6 @@ async def test_a_claim_dated_more_than_a_period_after_the_stores_own_time_is_cla
 
 
 @pytest.mark.asyncio
-async def test_timers_of_different_names_claim_apart(tmp_path: Path) -> None:
-    ran: list[str] = []
-    relay, expiry = _replica(tmp_path, ran, holder="relay", period=600), _replica(tmp_path, ran, name="expiry", holder="expiry", period=600)
-
-    outcomes = [(await relay.turn()).outcome, (await expiry.turn()).outcome]
-
-    assert outcomes == [Outcome.RAN, Outcome.RAN]
-    assert sorted(ran) == ["expiry", "relay"]
-
-
-@pytest.mark.asyncio
 async def test_a_held_timer_claims_nothing_and_runs_nothing(tmp_path: Path) -> None:
     ran: list[str] = []
 

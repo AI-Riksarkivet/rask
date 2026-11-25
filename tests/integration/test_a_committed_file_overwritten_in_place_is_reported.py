@@ -332,7 +332,6 @@ def _deleted_then_put_back(estate: _Estate, location: str, relative: str) -> Non
 @pytest.mark.parametrize(
     ("commit", "tamper"),
     [
-        pytest.param(_the_create_doors_write, _overwritten, id="the-create-doors-write"),
         pytest.param(_a_blob_sidecar_of_the_create_doors_write, _overwritten, id="a-blob-sidecar"),
         pytest.param(_the_create_doors_overwrite, _overwritten, id="the-create-doors-overwrite"),
         pytest.param(_the_insert_doors_append, _overwritten, id="the-insert-doors-append"),

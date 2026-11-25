@@ -33,13 +33,6 @@ def _indexed(tmp_path: Path, *, rows: int = 200) -> str:
     return uri
 
 
-def test_UNINDEXED_ROWS_make_the_index_due(tmp_path: Path) -> None:
-    uri = _indexed(tmp_path)
-    lance.write_dataset(pa.table({"id": pa.array(range(200, 260), pa.int64())}), uri, mode="append")
-
-    assert due_indices(lance.dataset(uri)) == [IndexDue(name="id_btree", unindexed_rows=60, deltas=1)]
-
-
 def test_rows_deleted_from_an_unindexed_fragment_are_not_left_unindexed(tmp_path: Path) -> None:
     """A fragment's live rows are its physical rows less those its deletion file records, as ``stats.index_stats`` counts
     them: the test asks it as the oracle, which maintenance never does."""

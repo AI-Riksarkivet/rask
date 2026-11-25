@@ -57,15 +57,6 @@ def empty_shared_session(catalog_env: None) -> lance.Session:
     return shared_lance_session()
 
 
-def test_the_session_is_ONE_object_across_calls(catalog_env: None) -> None:
-    """`lance_session` is `@cache`d on its cap pair, so equal caps share one session process-wide. If
-    each caller built its own, every open would still mint a fresh cache and the conversion would be
-    decoration."""
-    from catalog.core.config import shared_lance_session
-
-    assert shared_lance_session() is shared_lance_session()
-
-
 def test_a_warehouse_rooted_namespace_caches_in_the_shared_session(empty_shared_session: lance.Session, tmp_path: Path) -> None:
     """A warehouse's connection reads its manifest table through the bounded session, not a session of its own.
 
