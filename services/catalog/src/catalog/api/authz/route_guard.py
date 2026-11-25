@@ -117,7 +117,7 @@ async def authorize_batch(request: Request, client: OpenFgaClient, resolver: Res
         if kind == "declare_table":  # creating a table -> can_create_table on its parent
             if (parent := create_parent_rung("table", segments)) is not None:
                 rungs.add(parent)
-        elif kind in BATCH_OWNER_OPS:  # destructive -> owner tier (no writer back-door)
+        elif kind is not None and kind in BATCH_OWNER_OPS:  # destructive -> owner tier (no writer back-door)
             rungs.add(rung_on(BATCH_OWNER_OPS[kind], "table", segments))
         else:  # an entry, or version/commit/append on an existing table -> can_write_data on it
             rungs.add(rung_on("can_write_data", "table", segments))

@@ -132,7 +132,7 @@ _FOLLOW_UP_RETRY: Final = 60.0
 #: (R3 on three nodes, as on the dev estate) answers 10071 too, and 10164 while another put for the subject is still being
 #: agreed, as when a burst of a table's store events puts its follow-ups at once: 40 of 40 racing puts.
 _HELD_ALREADY: Final = frozenset({10071, 10164})
-_EXPECT_NOTHING: Final = {"Nats-Expected-Last-Subject-Sequence": "0"}
+_EXPECT_NOTHING: Final = frozendict({"Nats-Expected-Last-Subject-Sequence": "0"})
 #: How long a JetStream API request is waited for.
 _API_TIMEOUT: Final = 10.0
 #: A pass running this many times its bound is taken to be hung: the replica ends itself, and Kubernetes restarts it.

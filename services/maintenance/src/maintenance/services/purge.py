@@ -636,7 +636,7 @@ def _remove_emptied_directories(location: str, storage_options: StorageOptions, 
 #: emits), and the governance feed a person reads shows the action and the actor, so a reclamation announced as a drop
 #: would read as a person's deletion with a service identity in the actor column. The action alone says it was the
 #: trash's expiry; ``extra`` carries the deadline and the size.
-_PURGE_ACTION: dict[str, ControlAction] = {"table": "table_purged", "namespace": "namespace_purged"}
+_PURGE_ACTION: frozendict[str, ControlAction] = frozendict({"table": "table_purged", "namespace": "namespace_purged"})
 
 
 async def _refuse(out: TrashPurgeReport, record: TrashRecord, *, reason: str, settings: MaintenanceCatalogDoor) -> None:

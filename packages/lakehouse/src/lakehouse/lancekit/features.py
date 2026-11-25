@@ -267,31 +267,33 @@ SUPPORTED = FLAG_DELETION_FILES | FLAG_STABLE_ROW_IDS | FLAG_USE_V2_FORMAT_DEPRE
 #: function for the three readings and the measurements behind each.
 SUPPORTED_FOR_GC = SUPPORTED | FLAG_BASE_PATHS
 
-_FLAG_NAMES = {
-    FLAG_DELETION_FILES: "deletion files",
-    FLAG_STABLE_ROW_IDS: "stable row ids",
-    FLAG_USE_V2_FORMAT_DEPRECATED: "v2 format (deprecated)",
-    FLAG_TABLE_CONFIG: "table config",
-    FLAG_BASE_PATHS: "base_paths (shallow clone / multi-base)",
-    FLAG_DISABLE_TRANSACTION_FILE: "disable_transaction_file (writer-required only)",
-    FLAG_UNSTABLE_DATA_OVERLAY_FILES: "data overlays",
-    FLAG_COVERED_INDEX_METADATA: "covered index metadata (sticky)",
-    FLAG_MIXED_DATA_FILE_VERSIONS: "mixed data file versions",
-    FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS: "fragment reuse with stable row ids",
-    FLAG_FRAGMENT_REUSE_INDEX: "fragment reuse index",
-    FLAG_SPILLED_ROW_LINEAGE: "spilled row lineage (unstable)",
-    FLAG_FRAGMENT_TREE: "fragment tree (reserved)",
-    FLAG_INDEPENDENT_COVERING_FIELDS: "independent covering fields",
-    FLAG_MANAGED_BLOBS: "managed blobs",
-    FLAG_NON_REUSABLE_FIELD_IDS: "non-reusable field ids (writer-required only)",
-    FLAG_ZONE_WRITE_SEEDS: "zone write seeds",
-    FLAG_OBJECT_METADATA: "object metadata (writer-required only)",
-    FLAG_ROW_ADDR_INDICES: "row address indices (writer-required only)",
-    FLAG_INLINE_DELETIONS: "inline deletions",
-    FLAG_LOCAL_FRAGMENT_ALIASES: "local fragment aliases (reserved)",
-    FLAG_DELETION_FILE_PATHS: "deletion file paths",
-    FLAG_BTREE_KEY_LAYOUT: "btree key layout (reserved, writer-required only)",
-}
+_FLAG_NAMES = frozendict(
+    {
+        FLAG_DELETION_FILES: "deletion files",
+        FLAG_STABLE_ROW_IDS: "stable row ids",
+        FLAG_USE_V2_FORMAT_DEPRECATED: "v2 format (deprecated)",
+        FLAG_TABLE_CONFIG: "table config",
+        FLAG_BASE_PATHS: "base_paths (shallow clone / multi-base)",
+        FLAG_DISABLE_TRANSACTION_FILE: "disable_transaction_file (writer-required only)",
+        FLAG_UNSTABLE_DATA_OVERLAY_FILES: "data overlays",
+        FLAG_COVERED_INDEX_METADATA: "covered index metadata (sticky)",
+        FLAG_MIXED_DATA_FILE_VERSIONS: "mixed data file versions",
+        FLAG_FRAG_REUSE_WITH_STABLE_ROW_IDS: "fragment reuse with stable row ids",
+        FLAG_FRAGMENT_REUSE_INDEX: "fragment reuse index",
+        FLAG_SPILLED_ROW_LINEAGE: "spilled row lineage (unstable)",
+        FLAG_FRAGMENT_TREE: "fragment tree (reserved)",
+        FLAG_INDEPENDENT_COVERING_FIELDS: "independent covering fields",
+        FLAG_MANAGED_BLOBS: "managed blobs",
+        FLAG_NON_REUSABLE_FIELD_IDS: "non-reusable field ids (writer-required only)",
+        FLAG_ZONE_WRITE_SEEDS: "zone write seeds",
+        FLAG_OBJECT_METADATA: "object metadata (writer-required only)",
+        FLAG_ROW_ADDR_INDICES: "row address indices (writer-required only)",
+        FLAG_INLINE_DELETIONS: "inline deletions",
+        FLAG_LOCAL_FRAGMENT_ALIASES: "local fragment aliases (reserved)",
+        FLAG_DELETION_FILE_PATHS: "deletion file paths",
+        FLAG_BTREE_KEY_LAYOUT: "btree key layout (reserved, writer-required only)",
+    }
+)
 
 #: Manifest protobuf field numbers. Pinned by ``test_maintenance_features.py`` against the documented
 #: flag values, so a manifest reshuffle in a future pylance fails THERE — loudly — instead of here,

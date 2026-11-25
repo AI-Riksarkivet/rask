@@ -136,21 +136,23 @@ LIFECYCLE_FACET_SCHEMA_URL = "https://openlineage.io/spec/facets/1-0-1/Lifecycle
 #: reader the table was replaced. Their row-level story is the output statistics and version facets
 #: that already ride the same event. `overwrite_table` is the one write that DID replace the table's
 #: contents (a create or an insert in Overwrite mode over an existing table, [[LH-242]]), so it says so.
-_LIFECYCLE_BY_OPERATION: Final[dict[str, str]] = {
-    "create_table": "CREATE",
-    "declare_table": "CREATE",
-    "register_table": "CREATE",
-    "drop_table": "DROP",
-    "deregister_table": "DROP",
-    "add_columns": "ALTER",
-    "alter_columns": "ALTER",
-    "drop_columns": "ALTER",
-    "create_index": "ALTER",
-    "drop_index": "ALTER",
-    "update_schema_metadata": "ALTER",
-    "rename_table": "RENAME",
-    "overwrite_table": "OVERWRITE",
-}
+_LIFECYCLE_BY_OPERATION: Final[frozendict[str, str]] = frozendict(
+    {
+        "create_table": "CREATE",
+        "declare_table": "CREATE",
+        "register_table": "CREATE",
+        "drop_table": "DROP",
+        "deregister_table": "DROP",
+        "add_columns": "ALTER",
+        "alter_columns": "ALTER",
+        "drop_columns": "ALTER",
+        "create_index": "ALTER",
+        "drop_index": "ALTER",
+        "update_schema_metadata": "ALTER",
+        "rename_table": "RENAME",
+        "overwrite_table": "OVERWRITE",
+    }
+)
 
 
 def lifecycle_state(operation: str) -> str | None:

@@ -762,18 +762,20 @@ class _Verdict(StrEnum):
 
 
 #: What a head's verdict says the job still owes there, after the head's name.
-_OWED: Final[dict[_Verdict, str]] = {
-    _Verdict.ANSWERS: "still answers the predicate: the job deletes the subject's rows on this ref, by row id",
-    _Verdict.UNREADABLE: "could not be read, so whether it holds the subject is unknown: verify again",
-    _Verdict.HIDDEN: (
-        "holds the subject's rows behind a deletion vector, their bytes still in its data files: the job compacts the fragments "
-        "holding them with deletions materialised"
-    ),
-    _Verdict.INDEXED: (
-        "keeps index segments nothing proves free of the subject, and a segment committed since the obligation was recorded is never "
-        "proof: the job drops every user index, and rebuilds them once the obligation is released"
-    ),
-}
+_OWED: Final[frozendict[_Verdict, str]] = frozendict(
+    {
+        _Verdict.ANSWERS: "still answers the predicate: the job deletes the subject's rows on this ref, by row id",
+        _Verdict.UNREADABLE: "could not be read, so whether it holds the subject is unknown: verify again",
+        _Verdict.HIDDEN: (
+            "holds the subject's rows behind a deletion vector, their bytes still in its data files: the job compacts the fragments "
+            "holding them with deletions materialised"
+        ),
+        _Verdict.INDEXED: (
+            "keeps index segments nothing proves free of the subject, and a segment committed since the obligation was recorded is never "
+            "proof: the job drops every user index, and rebuilds them once the obligation is released"
+        ),
+    }
+)
 
 #: A head surface not judged because the step before it is still owed.
 _UNJUDGED: Final = "not judged: an earlier step on this ref is still owed"
@@ -1433,7 +1435,7 @@ def _mem_wal_objects(root: str, storage_options: StorageOptions) -> dict[str, in
 #: predicate's column rebuilt after the subject's row was deleted, a scan that may use the index counts 0 rows behind
 #: the deletion vector and one that may not counts 1, because the rebuilt index holds no key for a deleted row. A job
 #: that deletes and rebuilds but never compacts would otherwise verify clean with the subject's bytes on storage.
-_READ_THE_DATA: Final = {"use_scalar_index": False}
+_READ_THE_DATA: Final = frozendict({"use_scalar_index": False})
 
 
 def _held(source: Any, predicate: str) -> int:

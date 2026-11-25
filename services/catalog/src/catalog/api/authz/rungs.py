@@ -72,12 +72,14 @@ __all__ = [
 _RESOURCES: tuple[str, ...] = ("namespace", "table", "materialized_view", "transaction", "classification")
 
 
-FGA_TYPE: dict[str, str] = {
-    "namespace": "namespace",
-    "table": "table",
-    "materialized_view": "materialized_view",
-    "classification": "classification",
-}
+FGA_TYPE: frozendict[str, str] = frozendict(
+    {
+        "namespace": "namespace",
+        "table": "table",
+        "materialized_view": "materialized_view",
+        "classification": "classification",
+    }
+)
 
 
 # The read actions and why each is one: `catalog.api.read_actions`, which the read-only window judges by too.
@@ -91,15 +93,17 @@ READ_RELATIONS: Final = frozenset({"can_get_metadata", "can_read_data", "can_rea
 #: A read served at the path of the door that sets what it reads, told from it by its method: the relation a ``GET``
 #: there asks. The trail records the relation and never the route, so a read asked on the set door's relation would be
 #: recorded as a set ([[LH-585]]).
-_READ_AT_A_SET_DOOR: Final = {("table", "protection"): "can_get_protection", ("namespace", "protection"): "can_get_protection"}
+_READ_AT_A_SET_DOOR: Final = frozendict({("table", "protection"): "can_get_protection", ("namespace", "protection"): "can_get_protection"})
 
 
 # Full route suffixes that create a NEW child -> authorize the parent (create-on-parent).
-CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
-    "table": frozenset({"create", "declare", "register"}),
-    "namespace": frozenset({"create"}),
-    "materialized_view": frozenset({"create"}),
-}
+CREATE_ON_PARENT_SUFFIXES: frozendict[str, frozenset[str]] = frozendict(
+    {
+        "table": frozenset({"create", "declare", "register"}),
+        "namespace": frozenset({"create"}),
+        "materialized_view": frozenset({"create"}),
+    }
+)
 
 
 # Full route suffixes that are lifecycle/destructive/ref-plane on the object itself: the modifier's rung, which an
@@ -118,147 +122,153 @@ CREATE_ON_PARENT_SUFFIXES: dict[str, frozenset[str]] = {
 # so blessing one destroys nothing, and welding that to ownership is what forced every pipeline identity
 # to hold ``owner`` on every tenant. Their ``*/list`` / ``*/version`` siblings are reads, resolved on the
 # trailing segment below; ``tags/delete`` is mapped explicitly just below.
-OWNER_SUFFIX_RELATION: dict[str, dict[str, str]] = {
-    "table": {
-        "drop": "can_drop",
-        "deregister": "can_deregister",
-        "rename": "can_drop",
-        "restore": "can_restore",
-        "branches/create": "can_create_branch",
-        # DELETING a branch ends its own version sequence and makes the files only it references reclaimable: history
-        # reclaim, which protection does not guard (ADR 0150), so this rung is the door's whole gate. Absent from this
-        # map it fell through to the
-        # writer default, so measured on the deployed catalog 2026-09-11 a non-owner cleared
-        # `branches/delete` (422, past the gate) while the same caller was refused `tags/delete` and
-        # `deregister` (403): the estate permitted the greater destruction and refused the lesser,
-        # because a tag is a POINTER and its delete was already mapped here.
-        #
-        # `can_drop`, not a new relation: the rung already means "may destroy this table's contents" and
-        # is what `tags/delete` and `version/delete` clear. A `can_delete_branch` would be a rung the
-        # model must define and every existing owner grant would then lack.
-        "branches/delete": "can_drop",
-        # Bringing a hidden branch back ([[LH-429]]) is the same authority as deleting it, as a table's undrop is its drop's.
-        "branches/restore": "can_drop",
-        "tags/create": "can_create_tag",
-        "tags/update": "can_update_tag",
-        # DELETE completes the tag lifecycle, and it clears the owner bar because a tag pins its version against
-        # cleanup: at the writer rung a plain data writer could remove the pin a reader's `stable` is.
-        #
-        # `can_drop` rather than a new relation: the bar it has to clear is the one already carried by
-        # `maintenance/run`, which reclaims version history and EXEMPTS tagged versions. The door that
-        # respects the tag cannot be the expensive one while the door that removes it is cheap.
-        "tags/delete": "can_drop",
-        # Same rung, same reason, one step more direct: this destroys VERSIONS rather than a pin — the
-        # reclamation `maintenance/run` performs, on versions the caller names. The door refuses a
-        # tagged, forked-from or current version itself; the rung decides who may shorten the history at
-        # all. `version/list` and the read-side siblings still fall through to the reader tier.
-        #
-        # This rung carries more weight here than it would in an Iceberg catalog, and deliberately:
-        # Lance keeps the CAS in the object store, so the serving pointer is a tag INSIDE the dataset
-        # rather than a row a catalog transaction owns. Authorization is the only thing guarding it.
-        "version/delete": "can_drop",
-        # #50 maintenance policies: a retention policy authorizes destroying this table's version
-        # history over time — the drop rung, not a plain write. `policy/describe` falls through to
-        # the reader tier via its trailing segment.
-        "policy/set": "can_drop",
-        "policy/delete": "can_drop",
-        # #51 access review: enumerating who holds access reveals principals, so it asks `can_review_access`, the
-        # owner's and the grant manager's ([[LH-570]]): a reader must not map the ACL they are inside of, and a
-        # modifier, who runs the table's lifecycle and grants nothing, must not either.
-        "access/list": "can_review_access",
-        # #68 access simulation (the "who can do what" playground check): probing an arbitrary
-        # (user, relation) is the same authz-graph disclosure as enumerating it, so it asks the same rung.
-        "access/check": "can_review_access",
-        # The SELF-view is the one access route that must NOT clear the owner bar. `access/list` and
-        # `access/check` disclose principals; "what may I do here" discloses only the caller to
-        # themselves. Owner-gating it would mean only the people who already know the answer could
-        # ask — which is precisely why no surface over these primitives ever shipped. Reader tier:
-        # you may ask about anything you can see. Mapped EXPLICITLY: `my-permissions` is no read word, so
-        # the trailing-segment rule below cannot classify it.
-        "access/my-permissions": "can_get_metadata",
-        # NOTE: `access/grant` and `access/revoke` are NOT here. They gated on the owner bar until the
-        # grant axis landed, which meant handing out access required owning the data. They are now
-        # authorized per-rung from the BODY (`can_grant_<relation>`, or `can_revoke_grant`), read
-        # before `action_relation` is consulted — a mapping here would be dead code that
-        # reads like the live rule.
-        # #81 authorization graph: one hop of the relationship graph discloses principals + the cascade,
-        # the same disclosure as access/list, and the same rung.
-        "access/graph": "can_review_access",
-        # #75 on-demand maintenance: previewing and reclaiming version history are the drop rung, like the
-        # retention policy that schedules them.
-        "maintenance/preview": "can_drop",
-        "maintenance/run": "can_drop",
-        # [[LH-575]] the two commits maintenance's passes make, which are the catalog's, since its vend puts nothing of a
-        # table: a disarm removes Lance's commit-path cleanup keys and a floor raise commits a stamp, neither changing a row
-        # or which versions a cleanup may reach. The maintainer rung the sweep holds, which every owner keeps.
-        "maintenance/disarm": "can_maintain",
-        "maintenance/floor": "can_maintain",
-        # [[LH-073]] erasure destroys the table's PAST — every ref's rows, the tags pinning the versions
-        # that held them, and the history itself. That is a stronger claim than a drop, and `can_drop`
-        # is the highest rung there is, so it gates here. The writer rung would let a plain data writer
-        # reclaim an owner's history under a compliance-shaped verb.
-        "erasure": "can_drop",
-        # [[LH-493]] verifying an erasure obligation reclaims the history the requester's `retain_days` already ordered
-        # reclaimed and releases the obligation. It is the bring-your-own job's step, so it sits at the maintainer rung
-        # the job holds beside `writer` (ADR 0163); the owner holds it too. The caller's word decides nothing: the
-        # catalog reads storage itself and holds the predicate to the obligation's digest.
-        "erasure/{obligation_id}/verify": "can_maintain",
-        # #73 deletion protection: arming/disarming the safety on an object is a statement about its
-        # DESTRUCTION, so it clears the same owner bar as the drop it guards — a writer must not be
-        # able to disarm protection they could never act on.
-        #
-        # ITS OWN RELATION at that same tier ([[LH-055]]), not `can_drop`: `#41` audits every decision by
-        # the RELATION, and the route suffix is not in the record, so sharing the name made "dropped this
-        # table" and "armed the safety on it" write identical audit lines. `can_set_protection: owner` is
-        # a computed userset, so every owner already holds it and no grant had to change.
-        "protection": "can_set_protection",
-        # Labels (ADR 0211) classify the table for the people who find and govern it, so attaching one is the owner's
-        # act, as arming its protection is; its own relation so the trail tells the two apart. Reading them is
-        # `labels/describe`, a metadata read by its trailing word.
-        "labels/set": "can_label",
-        "labels/remove": "can_label",
-        # #75 undrop RESTORES the object into its namespace — the same authority as removing it.
-        "undrop": "can_drop",
-        # A table's data contract (ADR 0212) decides what its commits may do to its schema, so setting or deleting one
-        # is the owner's act; its own relation so the trail tells it from a drop. Reading it is a metadata read.
-        "contract/set": "can_set_contract",
-        "contract/delete": "can_set_contract",
-    },
-    "namespace": {
-        "drop": "can_delete",
-        # #96 undrop RESTORES the subtree into the estate — the same authority as removing it (the
-        # table door's #75 rule at the namespace rung).
-        "undrop": "can_delete",
-        # The namespace twin of the table door's rung — same tier as the `can_delete` it guards, its own
-        # name for the same audit reason.
-        "protection": "can_set_protection",
-        # The table block's label doors, one level up.
-        "labels/set": "can_label",
-        "labels/remove": "can_label",
-        "policy/set": "can_delete",
-        "policy/delete": "can_delete",
-        "access/list": "can_review_access",
-        "access/check": "can_review_access",
-        # Same as the table block: grant/revoke are authorized on the rung their body names.
-        # #C4 managed access. SUFFIX PER OPERATION (`policy/describe` vs `policy/set`, the convention
-        # already here) — and not stylistic: this map is keyed on the PATH ALONE, so one `managed-access`
-        # suffix serving both a read and a write can only carry ONE tier, and the write's tier is the
-        # wrong one for the read.
-        #
-        # The write is a grant-management act, not a property edit — `can_set_managed_access` derives
-        # from `manage_grants`. At the writer rung (`can_update_properties`) any writer could switch off
-        # the control that stops owners widening access.
-        "managed-access/set": "can_set_managed_access",
-        # The read sits at the READER bar deliberately: this flag is the REASON someone's grant controls
-        # are missing, so the person who most needs the answer is exactly the one who may not change it.
-        # Gating the read at the write's bar turns a stated policy back into an unexplained absence.
-        "managed-access/describe": "can_get_metadata",
-        # The self-view sits at the READER bar here too — see the table block for why. Spelled out per type:
-        # each type's map is its own, and a suffix it does not declare is refused.
-        "access/my-permissions": "can_get_metadata",
-        "access/graph": "can_review_access",
-    },
-}
+OWNER_SUFFIX_RELATION: frozendict[str, frozendict[str, str]] = frozendict(
+    {
+        "table": frozendict(
+            {
+                "drop": "can_drop",
+                "deregister": "can_deregister",
+                "rename": "can_drop",
+                "restore": "can_restore",
+                "branches/create": "can_create_branch",
+                # DELETING a branch ends its own version sequence and makes the files only it references reclaimable: history
+                # reclaim, which protection does not guard (ADR 0150), so this rung is the door's whole gate. Absent from this
+                # map it fell through to the
+                # writer default, so measured on the deployed catalog 2026-09-11 a non-owner cleared
+                # `branches/delete` (422, past the gate) while the same caller was refused `tags/delete` and
+                # `deregister` (403): the estate permitted the greater destruction and refused the lesser,
+                # because a tag is a POINTER and its delete was already mapped here.
+                #
+                # `can_drop`, not a new relation: the rung already means "may destroy this table's contents" and
+                # is what `tags/delete` and `version/delete` clear. A `can_delete_branch` would be a rung the
+                # model must define and every existing owner grant would then lack.
+                "branches/delete": "can_drop",
+                # Bringing a hidden branch back ([[LH-429]]) is the same authority as deleting it, as a table's undrop is its drop's.
+                "branches/restore": "can_drop",
+                "tags/create": "can_create_tag",
+                "tags/update": "can_update_tag",
+                # DELETE completes the tag lifecycle, and it clears the owner bar because a tag pins its version against
+                # cleanup: at the writer rung a plain data writer could remove the pin a reader's `stable` is.
+                #
+                # `can_drop` rather than a new relation: the bar it has to clear is the one already carried by
+                # `maintenance/run`, which reclaims version history and EXEMPTS tagged versions. The door that
+                # respects the tag cannot be the expensive one while the door that removes it is cheap.
+                "tags/delete": "can_drop",
+                # Same rung, same reason, one step more direct: this destroys VERSIONS rather than a pin — the
+                # reclamation `maintenance/run` performs, on versions the caller names. The door refuses a
+                # tagged, forked-from or current version itself; the rung decides who may shorten the history at
+                # all. `version/list` and the read-side siblings still fall through to the reader tier.
+                #
+                # This rung carries more weight here than it would in an Iceberg catalog, and deliberately:
+                # Lance keeps the CAS in the object store, so the serving pointer is a tag INSIDE the dataset
+                # rather than a row a catalog transaction owns. Authorization is the only thing guarding it.
+                "version/delete": "can_drop",
+                # #50 maintenance policies: a retention policy authorizes destroying this table's version
+                # history over time — the drop rung, not a plain write. `policy/describe` falls through to
+                # the reader tier via its trailing segment.
+                "policy/set": "can_drop",
+                "policy/delete": "can_drop",
+                # #51 access review: enumerating who holds access reveals principals, so it asks `can_review_access`, the
+                # owner's and the grant manager's ([[LH-570]]): a reader must not map the ACL they are inside of, and a
+                # modifier, who runs the table's lifecycle and grants nothing, must not either.
+                "access/list": "can_review_access",
+                # #68 access simulation (the "who can do what" playground check): probing an arbitrary
+                # (user, relation) is the same authz-graph disclosure as enumerating it, so it asks the same rung.
+                "access/check": "can_review_access",
+                # The SELF-view is the one access route that must NOT clear the owner bar. `access/list` and
+                # `access/check` disclose principals; "what may I do here" discloses only the caller to
+                # themselves. Owner-gating it would mean only the people who already know the answer could
+                # ask — which is precisely why no surface over these primitives ever shipped. Reader tier:
+                # you may ask about anything you can see. Mapped EXPLICITLY: `my-permissions` is no read word, so
+                # the trailing-segment rule below cannot classify it.
+                "access/my-permissions": "can_get_metadata",
+                # NOTE: `access/grant` and `access/revoke` are NOT here. They gated on the owner bar until the
+                # grant axis landed, which meant handing out access required owning the data. They are now
+                # authorized per-rung from the BODY (`can_grant_<relation>`, or `can_revoke_grant`), read
+                # before `action_relation` is consulted — a mapping here would be dead code that
+                # reads like the live rule.
+                # #81 authorization graph: one hop of the relationship graph discloses principals + the cascade,
+                # the same disclosure as access/list, and the same rung.
+                "access/graph": "can_review_access",
+                # #75 on-demand maintenance: previewing and reclaiming version history are the drop rung, like the
+                # retention policy that schedules them.
+                "maintenance/preview": "can_drop",
+                "maintenance/run": "can_drop",
+                # [[LH-575]] the two commits maintenance's passes make, which are the catalog's, since its vend puts nothing of a
+                # table: a disarm removes Lance's commit-path cleanup keys and a floor raise commits a stamp, neither changing a row
+                # or which versions a cleanup may reach. The maintainer rung the sweep holds, which every owner keeps.
+                "maintenance/disarm": "can_maintain",
+                "maintenance/floor": "can_maintain",
+                # [[LH-073]] erasure destroys the table's PAST — every ref's rows, the tags pinning the versions
+                # that held them, and the history itself. That is a stronger claim than a drop, and `can_drop`
+                # is the highest rung there is, so it gates here. The writer rung would let a plain data writer
+                # reclaim an owner's history under a compliance-shaped verb.
+                "erasure": "can_drop",
+                # [[LH-493]] verifying an erasure obligation reclaims the history the requester's `retain_days` already ordered
+                # reclaimed and releases the obligation. It is the bring-your-own job's step, so it sits at the maintainer rung
+                # the job holds beside `writer` (ADR 0163); the owner holds it too. The caller's word decides nothing: the
+                # catalog reads storage itself and holds the predicate to the obligation's digest.
+                "erasure/{obligation_id}/verify": "can_maintain",
+                # #73 deletion protection: arming/disarming the safety on an object is a statement about its
+                # DESTRUCTION, so it clears the same owner bar as the drop it guards — a writer must not be
+                # able to disarm protection they could never act on.
+                #
+                # ITS OWN RELATION at that same tier ([[LH-055]]), not `can_drop`: `#41` audits every decision by
+                # the RELATION, and the route suffix is not in the record, so sharing the name made "dropped this
+                # table" and "armed the safety on it" write identical audit lines. `can_set_protection: owner` is
+                # a computed userset, so every owner already holds it and no grant had to change.
+                "protection": "can_set_protection",
+                # Labels (ADR 0211) classify the table for the people who find and govern it, so attaching one is the owner's
+                # act, as arming its protection is; its own relation so the trail tells the two apart. Reading them is
+                # `labels/describe`, a metadata read by its trailing word.
+                "labels/set": "can_label",
+                "labels/remove": "can_label",
+                # #75 undrop RESTORES the object into its namespace — the same authority as removing it.
+                "undrop": "can_drop",
+                # A table's data contract (ADR 0212) decides what its commits may do to its schema, so setting or deleting one
+                # is the owner's act; its own relation so the trail tells it from a drop. Reading it is a metadata read.
+                "contract/set": "can_set_contract",
+                "contract/delete": "can_set_contract",
+            }
+        ),
+        "namespace": frozendict(
+            {
+                "drop": "can_delete",
+                # #96 undrop RESTORES the subtree into the estate — the same authority as removing it (the
+                # table door's #75 rule at the namespace rung).
+                "undrop": "can_delete",
+                # The namespace twin of the table door's rung — same tier as the `can_delete` it guards, its own
+                # name for the same audit reason.
+                "protection": "can_set_protection",
+                # The table block's label doors, one level up.
+                "labels/set": "can_label",
+                "labels/remove": "can_label",
+                "policy/set": "can_delete",
+                "policy/delete": "can_delete",
+                "access/list": "can_review_access",
+                "access/check": "can_review_access",
+                # Same as the table block: grant/revoke are authorized on the rung their body names.
+                # #C4 managed access. SUFFIX PER OPERATION (`policy/describe` vs `policy/set`, the convention
+                # already here) — and not stylistic: this map is keyed on the PATH ALONE, so one `managed-access`
+                # suffix serving both a read and a write can only carry ONE tier, and the write's tier is the
+                # wrong one for the read.
+                #
+                # The write is a grant-management act, not a property edit — `can_set_managed_access` derives
+                # from `manage_grants`. At the writer rung (`can_update_properties`) any writer could switch off
+                # the control that stops owners widening access.
+                "managed-access/set": "can_set_managed_access",
+                # The read sits at the READER bar deliberately: this flag is the REASON someone's grant controls
+                # are missing, so the person who most needs the answer is exactly the one who may not change it.
+                # Gating the read at the write's bar turns a stated policy back into an unexplained absence.
+                "managed-access/describe": "can_get_metadata",
+                # The self-view sits at the READER bar here too — see the table block for why. Spelled out per type:
+                # each type's map is its own, and a suffix it does not declare is refused.
+                "access/my-permissions": "can_get_metadata",
+                "access/graph": "can_review_access",
+            }
+        ),
+    }
+)
 
 
 #: What a rename into ANOTHER namespace asks: on the table, in the owner rung's place, and on the namespace it enters,
@@ -298,33 +308,37 @@ def rename_relation(source: Sequence[str], destination: Sequence[str]) -> str:
 #: `namespace` declares no writer door. Every namespace route is a read, an owner-tier verb or a
 #: create-on-parent, so a namespace mutation nobody declared is refused rather than resolved to
 #: `can_update_properties`.
-WRITER_SUFFIX_RELATION: Final[dict[str, dict[str, str]]] = {
-    "table": {
-        **dict.fromkeys(
-            (
-                "insert",
-                "merge_insert",
-                "update",
-                "delete",
-                "add_columns",
-                "alter_columns",
-                "drop_columns",
-                "backfill_column",
-                "update_field_metadata",
-                "schema_metadata/update",
-                "create_index",
-                "create_scalar_index",
-                "index/{index_name}/drop",
-            ),
-            "can_write_data",
+WRITER_SUFFIX_RELATION: Final[frozendict[str, frozendict[str, str]]] = frozendict(
+    {
+        "table": frozendict(
+            {
+                **dict.fromkeys(
+                    (
+                        "insert",
+                        "merge_insert",
+                        "update",
+                        "delete",
+                        "add_columns",
+                        "alter_columns",
+                        "drop_columns",
+                        "backfill_column",
+                        "update_field_metadata",
+                        "schema_metadata/update",
+                        "create_index",
+                        "create_scalar_index",
+                        "index/{index_name}/drop",
+                    ),
+                    "can_write_data",
+                ),
+                # A writer's or a maintainer's: the staged operation then asks its own rung (`require_staged_operation`), so a
+                # compaction job commits as a maintainer and holds no writer rung.
+                "version/create": "can_create_version",
+            }
         ),
-        # A writer's or a maintainer's: the staged operation then asks its own rung (`require_staged_operation`), so a
-        # compaction job commits as a maintainer and holds no writer rung.
-        "version/create": "can_create_version",
-    },
-    # The async rematerialize. `create` is create-on-parent and never reaches the resolver.
-    "materialized_view": {"refresh": "can_refresh"},
-}
+        # The async rematerialize. `create` is create-on-parent and never reaches the resolver.
+        "materialized_view": frozendict({"refresh": "can_refresh"}),
+    }
+)
 
 
 # Grant/revoke are authorized from the BODY, per rung — they appear in neither
@@ -342,7 +356,7 @@ BATCH_PATHS = frozenset({"/v1/table/version/batch-create", "/v1/table/batch-comm
 # (CommitTableOperation) has no drop op. Both batch doors answer 406 and run nothing ([[LH-206]]);
 # the guard answers first, as it does at every door, so a caller without the rung reads 403.
 # Maps op key -> can_* relation.
-BATCH_OWNER_OPS: dict[str, str] = {"deregister_table": "can_deregister"}
+BATCH_OWNER_OPS: frozendict[str, str] = frozendict({"deregister_table": "can_deregister"})
 
 
 #: The mount prefixes this guard understands. `/management/v1` is the rask-only surface ([[LH-021]]),
@@ -450,7 +464,7 @@ def action_relation(fga_type: str, suffix: str, *, method: str) -> str:
 
 
 #: The rung a create asks on its parent, named after the child it creates; a table's for every other resource.
-_CREATE_RELATIONS: Final = {"namespace": "can_create_namespace", "materialized_view": "can_create_materialized_view"}
+_CREATE_RELATIONS: Final = frozendict({"namespace": "can_create_namespace", "materialized_view": "can_create_materialized_view"})
 
 
 def create_parent_rung(resource: str, id_segments: list[str]) -> write_judge.Rung | None:
@@ -480,7 +494,7 @@ TRANSACTION_SUFFIXES: Final = frozenset({"describe", "alter"})
 #: vended this. The whole-prefix credential, scoped to one table for 900 s, is the owner's ruling of
 #: 2026-09-08: the alternative measured before it was 207 of 285 rewrites a tick signed by the deployment's
 #: ROOT key, because a refused vend falls back to the ambient credential.
-VEND_TIER_RUNGS: Final[dict[str, str]] = {"write": "can_write_data", "maintain": "can_vend_maintain"}
+VEND_TIER_RUNGS: Final[frozendict[str, str]] = frozendict({"write": "can_write_data", "maintain": "can_vend_maintain"})
 
 
 #: The resources whose non-read doors write a table's data or its history, and so reach the write judge.
@@ -530,10 +544,12 @@ TENANT_HELD = frozenset({"namespace", "table", "materialized_view", "warehouse",
 #: maintainer rung, and an Overwrite of a table that already has a version replaces its tip's schema and rows, the
 #: owner rung (``require_can_drop_table``). A table's first version is the writer rung whatever it is staged as
 #: (:func:`require_staged_operation`).
-STAGED_OPERATION_RELATION: Final[dict[str, str]] = {
-    **dict.fromkeys(("Append", "Delete", "Update", "Merge", "Project", "CreateIndex", "DataReplacement", "DataOverlay", "UpdateConfig"), "can_write_data"),
-    "Restore": "can_restore",
-    "Rewrite": "can_maintain",
-    "ReserveFragments": "can_maintain",
-    "Overwrite": "can_drop",
-}
+STAGED_OPERATION_RELATION: Final[frozendict[str, str]] = frozendict(
+    {
+        **dict.fromkeys(("Append", "Delete", "Update", "Merge", "Project", "CreateIndex", "DataReplacement", "DataOverlay", "UpdateConfig"), "can_write_data"),
+        "Restore": "can_restore",
+        "Rewrite": "can_maintain",
+        "ReserveFragments": "can_maintain",
+        "Overwrite": "can_drop",
+    }
+)

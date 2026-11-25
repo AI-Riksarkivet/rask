@@ -272,10 +272,12 @@ def _rows_added(fragments: Sequence[FragmentMetadata] | None) -> int:
 #: there is left out rather than guessed. An append's operation holds the fragments it added. An update is committed in
 #: Lance's ``rewrite_rows`` mode, whose ``new_fragments`` hold the updated rows (measured on pylance 14.0.3, 2026-11-20:
 #: three of four rows updated, ``new_fragments`` held 3 rows).
-_UNANSWERED: Final[dict[type[BaseModel], Callable[[Transaction], dict[str, int]]]] = {
-    InsertIntoTableResponse: lambda transaction: {"num_inserted_rows": _rows_added(getattr(transaction.operation, "fragments", None))},
-    UpdateTableResponse: lambda transaction: {"updated_rows": _rows_added(getattr(transaction.operation, "new_fragments", None))},
-}
+_UNANSWERED: Final[frozendict[type[BaseModel], Callable[[Transaction], dict[str, int]]]] = frozendict(
+    {
+        InsertIntoTableResponse: lambda transaction: {"num_inserted_rows": _rows_added(getattr(transaction.operation, "fragments", None))},
+        UpdateTableResponse: lambda transaction: {"updated_rows": _rows_added(getattr(transaction.operation, "new_fragments", None))},
+    }
+)
 
 
 def insert_into_table(

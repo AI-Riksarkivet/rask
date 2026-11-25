@@ -77,10 +77,12 @@ def _object(kind: LabelScope, uuid: str) -> str:
 
 
 #: The control actions an attachment and a removal announce, by the kind of object labelled.
-_LABELLED: Final[dict[LabelScope, tuple[ControlAction, ControlAction]]] = {
-    "table": ("table_labelled", "table_unlabelled"),
-    "namespace": ("namespace_labelled", "namespace_unlabelled"),
-}
+_LABELLED: Final[frozendict[LabelScope, tuple[ControlAction, ControlAction]]] = frozendict(
+    {
+        "table": ("table_labelled", "table_unlabelled"),
+        "namespace": ("namespace_labelled", "namespace_unlabelled"),
+    }
+)
 
 
 async def _project_of(settings: CatalogStore, segments: Sequence[str]) -> str:

@@ -354,7 +354,7 @@ class _ColumnRule(BaseModel):
 
 
 _LEAVES_ONLY: Final = _ColumnRule(at_2_0=False)
-_COLUMN_RULES: Final = {(2, 0): _ColumnRule(at_2_0=True)}
+_COLUMN_RULES: Final = frozendict({(2, 0): _ColumnRule(at_2_0=True)})
 
 
 def _column_ids(field: _LanceField, declared: pa.Field, *, rule: _ColumnRule) -> list[int]:

@@ -765,11 +765,13 @@ def _refuse_rows_not_carried(version: _Judged, *, replaced: set[int], written: s
 
 #: What one operation may change beyond the rules every commit meets: a ``ReserveFragments`` and a ``CreateIndex``
 #: carry no data, and a ``Rewrite`` carries exactly the rows it replaces. Judged once the version's files are sound.
-_OPERATION_RULES: dict[str, Callable[[_Judged], None]] = {
-    "ReserveFragments": _refuse_a_reservation_beyond_the_table,
-    "CreateIndex": _refuse_changed_data,
-    "Rewrite": _refuse_a_rewrite_that_changes_rows,
-}
+_OPERATION_RULES: frozendict[str, Callable[[_Judged], None]] = frozendict(
+    {
+        "ReserveFragments": _refuse_a_reservation_beyond_the_table,
+        "CreateIndex": _refuse_changed_data,
+        "Rewrite": _refuse_a_rewrite_that_changes_rows,
+    }
+)
 
 
 def _refuse_beyond_the_operation(version: _Judged) -> None:
@@ -964,21 +966,23 @@ def judge(
 
 #: The lineage operation each staged Lance operation is announced as. pylance stages merge_insert as an ``Update`` and
 #: add_columns as a ``Merge`` (measured on 13.0.0), so each maps to the door that writes the same transaction.
-LINEAGE_OPERATION: dict[str, str] = {
-    "Append": lineage_emit.INSERT,
-    "Delete": lineage_emit.DELETE,
-    "Update": lineage_emit.UPDATE,
-    "DataReplacement": lineage_emit.UPDATE,
-    "DataOverlay": lineage_emit.UPDATE,
-    "Merge": lineage_emit.ADD_COLUMNS,
-    "Project": lineage_emit.DROP_COLUMNS,
-    "CreateIndex": lineage_emit.CREATE_INDEX,
-    "UpdateConfig": lineage_emit.UPDATE_SCHEMA_METADATA,
-    "Restore": lineage_emit.RESTORE_TABLE,
-    "Rewrite": lineage_emit.COMPACT_TABLE,
-    "ReserveFragments": lineage_emit.COMPACT_TABLE,
-    "Overwrite": lineage_emit.OVERWRITE_TABLE,
-}
+LINEAGE_OPERATION: frozendict[str, str] = frozendict(
+    {
+        "Append": lineage_emit.INSERT,
+        "Delete": lineage_emit.DELETE,
+        "Update": lineage_emit.UPDATE,
+        "DataReplacement": lineage_emit.UPDATE,
+        "DataOverlay": lineage_emit.UPDATE,
+        "Merge": lineage_emit.ADD_COLUMNS,
+        "Project": lineage_emit.DROP_COLUMNS,
+        "CreateIndex": lineage_emit.CREATE_INDEX,
+        "UpdateConfig": lineage_emit.UPDATE_SCHEMA_METADATA,
+        "Restore": lineage_emit.RESTORE_TABLE,
+        "Rewrite": lineage_emit.COMPACT_TABLE,
+        "ReserveFragments": lineage_emit.COMPACT_TABLE,
+        "Overwrite": lineage_emit.OVERWRITE_TABLE,
+    }
+)
 
 
 def staged_field_labels(staged: StagedVersion, so: StorageOptions) -> dict[str, dict[str, str]]:

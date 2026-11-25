@@ -42,46 +42,48 @@ __all__ = [
 #: log only.
 _REDACTED: Final = "Internal Server Error"
 
-_STATUS: dict[ErrorCode, int] = {
-    # 406, NOT 501, and the spec is explicit about it: `UnsupportedOperationErrorResponse` is status
-    # 406 ("Not Acceptable / Unsupported Operation") on every op that lists it, and Lance's own
-    # reference server maps `ErrorCode::Unsupported` to NOT_ACCEPTABLE. Owner decision Q3, 2026-09-02.
-    #
-    # A generated client parses either, because it dispatches on `code` — but a spec-verbatim server
-    # answers 406, and the status matters to everything that is NOT that client: a 501 is retried by
-    # nothing and alerted on by most things, while 406 says plainly that the request asked for
-    # something this backend does not serve. It also stops an unsupported op being counted as a
-    # server fault in the RED metrics.
-    ErrorCode.UNSUPPORTED: 406,
-    ErrorCode.NAMESPACE_NOT_FOUND: 404,
-    ErrorCode.NAMESPACE_ALREADY_EXISTS: 409,
-    ErrorCode.NAMESPACE_NOT_EMPTY: 409,
-    ErrorCode.TABLE_NOT_FOUND: 404,
-    ErrorCode.TABLE_ALREADY_EXISTS: 409,
-    ErrorCode.TABLE_INDEX_NOT_FOUND: 404,
-    ErrorCode.TABLE_INDEX_ALREADY_EXISTS: 409,
-    ErrorCode.TABLE_TAG_NOT_FOUND: 404,
-    ErrorCode.TABLE_TAG_ALREADY_EXISTS: 409,
-    ErrorCode.TRANSACTION_NOT_FOUND: 404,
-    ErrorCode.TABLE_VERSION_NOT_FOUND: 404,
-    ErrorCode.TABLE_COLUMN_NOT_FOUND: 404,
-    ErrorCode.INVALID_INPUT: 400,
-    ErrorCode.CONCURRENT_MODIFICATION: 409,
-    ErrorCode.PERMISSION_DENIED: 403,
-    ErrorCode.UNAUTHENTICATED: 401,
-    ErrorCode.SERVICE_UNAVAILABLE: 503,
-    ErrorCode.INTERNAL: 500,
-    ErrorCode.INVALID_TABLE_STATE: 409,
-    ErrorCode.TABLE_SCHEMA_VALIDATION_ERROR: 400,
-    ErrorCode.THROTTLING: 429,
-    # Codes 22/23 landed with the branch ops and were MISSING here, so a missing branch answered
-    # 500 ("Internal Server Error") instead of 404 — on endpoints rask actually ships
-    # (`catalog/api/v1/endpoints/branches.py`). Found by the 2026-08-04 skills audit, which caught
-    # the skill claiming "22 codes, all mapped" while the SDK's ErrorCode has 24. The completeness
-    # test now pins the whole enum, so the NEXT spec-added code fails a test instead of a client.
-    ErrorCode.TABLE_BRANCH_NOT_FOUND: 404,
-    ErrorCode.TABLE_BRANCH_ALREADY_EXISTS: 409,
-}
+_STATUS: frozendict[ErrorCode, int] = frozendict(
+    {
+        # 406, NOT 501, and the spec is explicit about it: `UnsupportedOperationErrorResponse` is status
+        # 406 ("Not Acceptable / Unsupported Operation") on every op that lists it, and Lance's own
+        # reference server maps `ErrorCode::Unsupported` to NOT_ACCEPTABLE. Owner decision Q3, 2026-09-02.
+        #
+        # A generated client parses either, because it dispatches on `code` — but a spec-verbatim server
+        # answers 406, and the status matters to everything that is NOT that client: a 501 is retried by
+        # nothing and alerted on by most things, while 406 says plainly that the request asked for
+        # something this backend does not serve. It also stops an unsupported op being counted as a
+        # server fault in the RED metrics.
+        ErrorCode.UNSUPPORTED: 406,
+        ErrorCode.NAMESPACE_NOT_FOUND: 404,
+        ErrorCode.NAMESPACE_ALREADY_EXISTS: 409,
+        ErrorCode.NAMESPACE_NOT_EMPTY: 409,
+        ErrorCode.TABLE_NOT_FOUND: 404,
+        ErrorCode.TABLE_ALREADY_EXISTS: 409,
+        ErrorCode.TABLE_INDEX_NOT_FOUND: 404,
+        ErrorCode.TABLE_INDEX_ALREADY_EXISTS: 409,
+        ErrorCode.TABLE_TAG_NOT_FOUND: 404,
+        ErrorCode.TABLE_TAG_ALREADY_EXISTS: 409,
+        ErrorCode.TRANSACTION_NOT_FOUND: 404,
+        ErrorCode.TABLE_VERSION_NOT_FOUND: 404,
+        ErrorCode.TABLE_COLUMN_NOT_FOUND: 404,
+        ErrorCode.INVALID_INPUT: 400,
+        ErrorCode.CONCURRENT_MODIFICATION: 409,
+        ErrorCode.PERMISSION_DENIED: 403,
+        ErrorCode.UNAUTHENTICATED: 401,
+        ErrorCode.SERVICE_UNAVAILABLE: 503,
+        ErrorCode.INTERNAL: 500,
+        ErrorCode.INVALID_TABLE_STATE: 409,
+        ErrorCode.TABLE_SCHEMA_VALIDATION_ERROR: 400,
+        ErrorCode.THROTTLING: 429,
+        # Codes 22/23 landed with the branch ops and were MISSING here, so a missing branch answered
+        # 500 ("Internal Server Error") instead of 404 — on endpoints rask actually ships
+        # (`catalog/api/v1/endpoints/branches.py`). Found by the 2026-08-04 skills audit, which caught
+        # the skill claiming "22 codes, all mapped" while the SDK's ErrorCode has 24. The completeness
+        # test now pins the whole enum, so the NEXT spec-added code fails a test instead of a client.
+        ErrorCode.TABLE_BRANCH_NOT_FOUND: 404,
+        ErrorCode.TABLE_BRANCH_ALREADY_EXISTS: 409,
+    }
+)
 
 # The native dir backend raises plain (untyped) errors when an op is a genuine stub. We deliberately do
 # NOT include marshalling hints like "is not an instance" here: that phrase is raised by a pydantic-vs-dict
@@ -161,15 +163,17 @@ def _extensions(exc: LanceNamespaceError) -> Mapping[str, object] | None:
 #: domain meaning (404 on an unknown route, 405, 409 from app code) falls through to `Unsupported`,
 #: which is the truthful answer for "this backend does not do that". Guessing `TableNotFound` for a
 #: routing 404 would tell a client a table is missing when the OPERATION is.
-_STATUS_CODE_FALLBACK: dict[int, ErrorCode] = {
-    400: ErrorCode.INVALID_INPUT,
-    401: ErrorCode.UNAUTHENTICATED,
-    403: ErrorCode.PERMISSION_DENIED,
-    429: ErrorCode.THROTTLING,
-    500: ErrorCode.INTERNAL,
-    501: ErrorCode.UNSUPPORTED,
-    503: ErrorCode.SERVICE_UNAVAILABLE,
-}
+_STATUS_CODE_FALLBACK: frozendict[int, ErrorCode] = frozendict(
+    {
+        400: ErrorCode.INVALID_INPUT,
+        401: ErrorCode.UNAUTHENTICATED,
+        403: ErrorCode.PERMISSION_DENIED,
+        429: ErrorCode.THROTTLING,
+        500: ErrorCode.INTERNAL,
+        501: ErrorCode.UNSUPPORTED,
+        503: ErrorCode.SERVICE_UNAVAILABLE,
+    }
+)
 
 
 def store_unavailable(exc: BaseException, scope: Scope, *, log: logging.Logger) -> JSONResponse:

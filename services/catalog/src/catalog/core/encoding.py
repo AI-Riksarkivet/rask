@@ -130,18 +130,22 @@ def _is_ratio_above_zero(value: str) -> bool:
 #: Each knob `lance_docs/lance/format/file/encoding.md` § Compression Configuration defines, but ``structural-encoding``. The schemes are the
 #: ones Lance's encoder resolves (measured: ``ZSTD``, ``gzip``, ``brotli`` and ``snappy`` are each "Unknown
 #: compression scheme"; a dictionary's values take lz4, zstd or none).
-_KNOBS: dict[str, Knob] = {
-    "compression": _choice(("none", "fsst", "lz4", "zstd"), _is_leaf),
-    "compression-level": Knob(accepts=_is_integer, expected="an integer", acts_on=_is_leaf, level_of="compression"),
-    "general": _choice(("off", "on"), _is_leaf),
-    "rle-threshold": Knob(accepts=_is_ratio_from_zero, expected="a decimal from 0 to 1", acts_on=_is_dictionary_leaf),
-    "dict-divisor": Knob(accepts=_is_divisor, expected="an integer greater than 1", acts_on=_is_dictionary_leaf),
-    "dict-size-ratio": Knob(accepts=_is_ratio_above_zero, expected="a decimal above 0 and at most 1", acts_on=_is_dictionary_leaf),
-    "dict-values-compression": _choice(("none", "lz4", "zstd"), _is_dictionary_leaf),
-    "dict-values-compression-level": Knob(accepts=_is_integer, expected="an integer", acts_on=_is_dictionary_leaf, level_of="dict-values-compression"),
-    "bss": _choice(("off", "on", "auto"), _is_split_leaf),
-    "packed": Knob(accepts=lambda value: value.lower() in _PACKED_VALUES, expected=f"one of {sorted(_PACKED_VALUES)} in any case", acts_on=pa.types.is_struct),
-}
+_KNOBS: frozendict[str, Knob] = frozendict(
+    {
+        "compression": _choice(("none", "fsst", "lz4", "zstd"), _is_leaf),
+        "compression-level": Knob(accepts=_is_integer, expected="an integer", acts_on=_is_leaf, level_of="compression"),
+        "general": _choice(("off", "on"), _is_leaf),
+        "rle-threshold": Knob(accepts=_is_ratio_from_zero, expected="a decimal from 0 to 1", acts_on=_is_dictionary_leaf),
+        "dict-divisor": Knob(accepts=_is_divisor, expected="an integer greater than 1", acts_on=_is_dictionary_leaf),
+        "dict-size-ratio": Knob(accepts=_is_ratio_above_zero, expected="a decimal above 0 and at most 1", acts_on=_is_dictionary_leaf),
+        "dict-values-compression": _choice(("none", "lz4", "zstd"), _is_dictionary_leaf),
+        "dict-values-compression-level": Knob(accepts=_is_integer, expected="an integer", acts_on=_is_dictionary_leaf, level_of="dict-values-compression"),
+        "bss": _choice(("off", "on", "auto"), _is_split_leaf),
+        "packed": Knob(
+            accepts=lambda value: value.lower() in _PACKED_VALUES, expected=f"one of {sorted(_PACKED_VALUES)} in any case", acts_on=pa.types.is_struct
+        ),
+    }
+)
 
 
 def packs(field: pa.Field) -> bool:

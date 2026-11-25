@@ -31,7 +31,7 @@ _LENGTH_DELIMITED: Final = 2
 
 #: The fixed-width wire types and their widths. Group starts and ends (3 and 4) were removed from proto3 and 6 and 7 were
 #: never assigned, so a message holding one is not read past it.
-_FIXED_WIDTHS: Final = {1: 8, 5: 4}
+_FIXED_WIDTHS: Final = frozendict({1: 8, 5: 4})
 
 #: A varint carries at most 64 bits, in ten bytes of seven.
 _MAX_VARINT_SHIFT: Final = 63

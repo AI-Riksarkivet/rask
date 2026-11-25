@@ -68,7 +68,7 @@ DEPRECATED_TRANSACTION_SECTION_FIELD: Final = 21
 #: The ``Transaction.operation`` oneof's field numbers pylance models no class for, by operation name. Measured on
 #: pylance 13.0.0 transaction files: ``Append`` 100, ``Overwrite`` 102, ``CreateIndex`` 103, ``Rewrite`` 104 and
 #: ``ReserveFragments`` 107; ``read_transaction`` answers the last with ``LanceOperation.BaseOperation``.
-UNMODELLED_OPERATIONS: Final = {107: "ReserveFragments"}
+UNMODELLED_OPERATIONS: Final = frozendict({107: "ReserveFragments"})
 
 #: The oneof's field numbers lie in this range; the transaction's own fields (``read_version``, ``uuid``, ``tag``,
 #: ``transaction_properties``) are below it.

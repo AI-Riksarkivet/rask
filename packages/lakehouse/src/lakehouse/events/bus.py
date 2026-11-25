@@ -146,8 +146,8 @@ _DISCONNECTED: Final = "disconnected"
 #: bus in step.
 _PAUSE_SECONDS: tuple[float, float] = (2.0, 15.0)
 
-_MESSAGING: Final = {"messaging.system": "nats", "messaging.operation.name": "publish"}
-_PROCESSING: Final = {"messaging.system": "nats", "messaging.operation.name": "process"}
+_MESSAGING: Final = frozendict({"messaging.system": "nats", "messaging.operation.name": "publish"})
+_PROCESSING: Final = frozendict({"messaging.system": "nats", "messaging.operation.name": "process"})
 #: The most of an envelope's id a span carries: the id is its publisher's own text.
 _MAX_ID_CHARS: Final = 200
 

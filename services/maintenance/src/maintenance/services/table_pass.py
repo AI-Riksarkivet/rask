@@ -233,14 +233,16 @@ def _on_vend_undecided(result: DatasetResult, exc: Exception, _table_id: str | N
 #: not failures: nothing broke, a grant is missing, a stamp is wrong, or this deployment vends no direct credential.
 #: Only an undecided door is a failure, retried at the next pass. Every one of them stops the dataset: a rewrite is
 #: signed by its table's vend or not at all ([[LH-219]]).
-_VEND_ANSWERS: dict[type[Exception], tuple[str, Callable[[DatasetResult, Exception, str | None], None]]] = {
-    credentials.GovernedElsewhere: ("maintenance_governed_elsewhere", _on_governed_elsewhere),
-    credentials.MaintenanceUnauthenticated: ("maintenance_unauthenticated", _on_unauthenticated),
-    credentials.VendingNotDirect: ("maintenance_vending_not_direct", _on_vending_not_direct),
-    credentials.MaintenanceDenied: ("maintenance_vend_denied", _on_vend_denied),
-    credentials.TableNotGoverned: ("maintenance_table_not_governed", _on_table_not_governed),
-    credentials.VendUndecided: ("maintenance_vend_undecided", _on_vend_undecided),
-}
+_VEND_ANSWERS: frozendict[type[Exception], tuple[str, Callable[[DatasetResult, Exception, str | None], None]]] = frozendict(
+    {
+        credentials.GovernedElsewhere: ("maintenance_governed_elsewhere", _on_governed_elsewhere),
+        credentials.MaintenanceUnauthenticated: ("maintenance_unauthenticated", _on_unauthenticated),
+        credentials.VendingNotDirect: ("maintenance_vending_not_direct", _on_vending_not_direct),
+        credentials.MaintenanceDenied: ("maintenance_vend_denied", _on_vend_denied),
+        credentials.TableNotGoverned: ("maintenance_table_not_governed", _on_table_not_governed),
+        credentials.VendUndecided: ("maintenance_vend_undecided", _on_vend_undecided),
+    }
+)
 
 
 #: Every answer of the vend door that stops a write, caught as one.

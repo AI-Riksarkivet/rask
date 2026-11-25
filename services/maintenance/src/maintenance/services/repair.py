@@ -92,24 +92,28 @@ _REVOCABLE: tuple[str, ...] = ("ghost_projects", "ghost_warehouses", "ghost_tabl
 #: `ghost_tables` is subtracted from the trash index as well as the catalog's listing ([[LH-516]]): a table in the
 #: trash keeps its grants for its owner's undrop and only its trash record names it, so a record the scan skipped
 #: makes that table read as a ghost.
-_SUBTRACTED_FROM: dict[str, tuple[str, ...]] = {
-    "ghost_projects": ("registry:projects",),
-    "ghost_warehouses": ("registry:warehouses",),
-    "ghost_tables": ("catalog:tables", "registry:trash"),
-}
+_SUBTRACTED_FROM: frozendict[str, tuple[str, ...]] = frozendict(
+    {
+        "ghost_projects": ("registry:projects",),
+        "ghost_warehouses": ("registry:warehouses",),
+        "ghost_tables": ("catalog:tables", "registry:trash"),
+    }
+)
 
 
 #: Why each non-revocable category is refused. Phrased as what the finding IS, because the reason a
 #: pass must not delete it is a property of the object rather than of this module's scope.
-_REFUSED: dict[str, str] = {
-    "absent_datasets": "a catalog RECORD whose location holds no bytes — the fix is a catalog write and it is a decision: the bytes may be restorable, and the record is the only thing that still says where they belonged",
-    "unregistered_datasets": "a REAL dataset on storage that no catalog record names — the resolution is REGISTRATION, never deletion; deleting it would destroy live rows to close a bookkeeping gap",
-    "ungoverned_tables": "a REAL table carrying no tuples — deleting it would destroy live data to close an authorization gap; it needs a grant, not a revoke",
-    "unreachable_namespaces": "a real top-level namespace row on a root that does not serve its warehouse — the data under it is live and the resolution is a decision about where it belongs",
-    "unreferenced_projects": "a real project record holding no tuples — it needs an admin grant, which is a decision a person makes (see `rebuild.py`)",
-    "orphan_buckets": "storage nothing claims — deleting bytes needs a listing, a floor and an age this pass does not gather",
-    "orphaned_trash": "a trash record naming an unmaintained root — it is the only remaining POINTER to those bytes, so dropping it strands them silently",
-}
+_REFUSED: frozendict[str, str] = frozendict(
+    {
+        "absent_datasets": "a catalog RECORD whose location holds no bytes — the fix is a catalog write and it is a decision: the bytes may be restorable, and the record is the only thing that still says where they belonged",
+        "unregistered_datasets": "a REAL dataset on storage that no catalog record names — the resolution is REGISTRATION, never deletion; deleting it would destroy live rows to close a bookkeeping gap",
+        "ungoverned_tables": "a REAL table carrying no tuples — deleting it would destroy live data to close an authorization gap; it needs a grant, not a revoke",
+        "unreachable_namespaces": "a real top-level namespace row on a root that does not serve its warehouse — the data under it is live and the resolution is a decision about where it belongs",
+        "unreferenced_projects": "a real project record holding no tuples — it needs an admin grant, which is a decision a person makes (see `rebuild.py`)",
+        "orphan_buckets": "storage nothing claims — deleting bytes needs a listing, a floor and an age this pass does not gather",
+        "orphaned_trash": "a trash record naming an unmaintained root — it is the only remaining POINTER to those bytes, so dropping it strands them silently",
+    }
+)
 
 
 class RevokedObject(BaseModel):

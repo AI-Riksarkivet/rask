@@ -29,7 +29,7 @@ log = logging.getLogger(__name__)
 
 #: The port a scheme implies when the endpoint names none, so ``http://store`` and ``http://store:80``
 #: compare equal. A scheme outside this map with no explicit port has no comparable form.
-_DEFAULT_PORTS = {"http": 80, "https": 443}
+_DEFAULT_PORTS = frozendict({"http": 80, "https": 443})
 
 
 def _comparable(endpoint: str) -> tuple[str, str, int, str] | None:

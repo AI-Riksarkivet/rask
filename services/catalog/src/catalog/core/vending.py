@@ -324,12 +324,14 @@ _MAINTAIN_ACTIONS = ("s3:GetObject", "s3:DeleteObject")
 _PROBE_ACTIONS = ("s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload")
 #: What each tier's session may do with the objects of the table's own prefix, a branch's credential aside, which reads
 #: them and writes only its branch's own directories. A writer's puts are its own statements, on what a commit stages.
-_TABLE_OBJECT_ACTIONS: Final[dict[SessionTier, tuple[str, ...]]] = {
-    "read": _READ_ACTIONS,
-    "write": _READ_ACTIONS,
-    "maintain": _MAINTAIN_ACTIONS,
-    "probe": _PROBE_ACTIONS,
-}
+_TABLE_OBJECT_ACTIONS: Final[frozendict[SessionTier, tuple[str, ...]]] = frozendict(
+    {
+        "read": _READ_ACTIONS,
+        "write": _READ_ACTIONS,
+        "maintain": _MAINTAIN_ACTIONS,
+        "probe": _PROBE_ACTIONS,
+    }
+)
 #: What S3 asks of the KMS key an object is encrypted with: ``kms:Decrypt`` to GET one, ``kms:GenerateDataKey`` to PUT one,
 #: and both for a multipart upload (AWS, "Using server-side encryption with AWS KMS keys") ([[LH-262]]).
 _KMS_READ_ACTIONS = ("kms:Decrypt",)

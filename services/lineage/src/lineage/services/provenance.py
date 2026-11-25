@@ -79,7 +79,7 @@ log = logging.getLogger(__name__)
 tracer = trace.get_tracer(__name__)
 
 #: The field metadata Lance reads a table's unenforced primary key from (`lance_docs/lance/format/table/index.md`, "Unenforced Primary Key").
-_PRIMARY_KEY: Final = {"lance-schema:unenforced-primary-key": "true"}
+_PRIMARY_KEY: Final = frozendict({"lance-schema:unenforced-primary-key": "true"})
 
 FEED: Final = "events"
 REFUSALS: Final = "refusals"
