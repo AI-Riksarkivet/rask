@@ -40,12 +40,12 @@ version of what it reads."""
 
 def filtered(read: Callable[[str], Iterable[Mapping[str, Any]]]) -> EdgeRows:
     """The edges a Lance reader answers, ``read`` taking the filter that selects their inputs, in bounded ``IN`` lists."""
-    return lambda inputs: [row for where in in_lists("in_table", inputs) for row in read(where)]
+    return lambda inputs: [*read(where) for where in in_lists("in_table", inputs)]
 
 
 def joined(*sources: EdgeRows) -> EdgeRows:
     """The edges every one of ``sources`` answers, as one edge list."""
-    return lambda inputs: [row for rows in sources for row in rows(inputs)]
+    return lambda inputs: [*rows(inputs) for rows in sources]
 
 
 class DerivedWalk(BaseModel):

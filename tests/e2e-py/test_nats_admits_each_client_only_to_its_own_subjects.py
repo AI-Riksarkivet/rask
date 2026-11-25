@@ -1132,8 +1132,8 @@ async def _two_replicas_share_the_consumer_within_its_cap(publisher: Bus, replic
     handed = {event.id: [h.replica for h in lane.of(event.id)] for event in events}
     if any(len(replica) != 1 for replica in handed.values()):
         findings.append(f"ingest lane, shared: an event was handed more than once: {handed}")
-    if {replica for replicas_of in handed.values() for replica in replicas_of} != set(replicas.pulling):
-        findings.append(f"ingest lane, shared: the events were handed to {sorted({r for rs in handed.values() for r in rs})}, not both replicas")
+    if {*replicas_of for replicas_of in handed.values()} != set(replicas.pulling):
+        findings.append(f"ingest lane, shared: the events were handed to {sorted({*rs for rs in handed.values()})}, not both replicas")
     return findings + (
         []
         if lane.most_held == _DELIVERIES_IN_FLIGHT

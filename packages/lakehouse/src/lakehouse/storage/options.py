@@ -42,7 +42,7 @@ _CREDENTIAL_ALIASES: tuple[tuple[str, str], ...] = (
 #: Every key a credential may be spelled under. None is ever an option beside the key pair: object_store reads either
 #: spelling, so options carrying ``access_key_id`` beside a key pair would name two identities, and which one signs is
 #: not defined.
-_CREDENTIAL_KEYS: frozenset[str] = frozenset(alias for aliases in _CREDENTIAL_ALIASES for alias in aliases)
+_CREDENTIAL_KEYS: frozenset[str] = frozenset({*aliases for aliases in _CREDENTIAL_ALIASES})
 
 #: Where the store is, the region it signs for and its addressing, each under every spelling object_store reads, the
 #: canonical one first. The canonical spelling is the name Lance reads an ``AWS_*`` variable into, and it reads one only
@@ -56,7 +56,7 @@ _OPTION_ALIASES: Final[tuple[tuple[str, ...], ...]] = (
     ("aws_region", "region"),
     ("aws_virtual_hosted_style_request", "virtual_hosted_style_request"),
 )
-_ALIASED_KEYS: Final = frozenset(key for aliases in _OPTION_ALIASES for key in aliases)
+_ALIASED_KEYS: Final = frozenset({*aliases for aliases in _OPTION_ALIASES})
 ENDPOINT: Final = _OPTION_ALIASES[0][0]
 REGION: Final = _OPTION_ALIASES[1][0]
 VIRTUAL_HOSTED: Final = _OPTION_ALIASES[2][0]

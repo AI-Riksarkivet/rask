@@ -397,6 +397,6 @@ def _deleted_row_ids(spans: list[_WindowSpan]) -> Iterator[bytes]:
     with caller_sql("invalid deleted-row window"):
         for span in spans:
             readers.append(span.handle.delta(begin_version=span.low, end_version=span.high).get_deleted_row_ids())
-        batches = (batch for reader in readers for batch in reader)
+        batches = (*reader for reader in readers)
         first = next(batches, None)
     return _arrow_file_chunks(readers[0].schema if readers else _DELETED_SCHEMA, first, batches)

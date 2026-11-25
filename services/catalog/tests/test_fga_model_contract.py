@@ -116,8 +116,8 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     #    maps declare — owner- and writer-tier full suffixes and reader-tier trailing actions. A suffix a type does not declare is refused and sends OpenFGA nothing, so it adds no
     #    pair. (`transaction` never routes through here.)
     suffixes = (
-        {s for m in rungs.OWNER_SUFFIX_RELATION.values() for s in m}
-        | {s for m in rungs.WRITER_SUFFIX_RELATION.values() for s in m}
+        {*m for m in rungs.OWNER_SUFFIX_RELATION.values()}
+        | {*m for m in rungs.WRITER_SUFFIX_RELATION.values()}
         | set(read_actions.META_READ_ACTIONS)
         | set(read_actions.DATA_READ_ACTIONS)
     )

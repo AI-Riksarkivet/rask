@@ -593,7 +593,7 @@ async def governed_with_aliases(decider: AccessDecider, events: Sequence[RunEven
         for event, vouched in zip(events, attested, strict=True)
     ]
     owners = [position for position, datasets in enumerate(named_by) for _ in datasets]
-    aliases = await resolve_aliases(decider, [dataset for datasets in named_by for dataset in datasets], user=user)
+    aliases = await resolve_aliases(decider, [*datasets for datasets in named_by], user=user)
     objects: list[set[str]] = [set() for _ in events]
     unseen: list[set[str]] = [set() for _ in events]
     for index, owner in enumerate(owners):

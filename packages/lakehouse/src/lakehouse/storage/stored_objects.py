@@ -119,7 +119,7 @@ def list_under_at(uri: str, storage_options: StorageOptions) -> StoreListing:
     bucket, pages = _s3_pages(uri, storage_options)
     # A paginator always answers a first page, an empty listing's included.
     first = next(pages)
-    return StoreListing(objects=[*_on_page(bucket, first), *(listed for page in pages for listed in _on_page(bucket, page))], at=store_clock(first))
+    return StoreListing(objects=[*_on_page(bucket, first), *(*_on_page(bucket, page) for page in pages)], at=store_clock(first))
 
 
 def _s3_pages(uri: str, storage_options: StorageOptions) -> tuple[str, Iterator[Mapping[str, Any]]]:

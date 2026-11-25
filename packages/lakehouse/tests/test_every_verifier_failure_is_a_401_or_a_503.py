@@ -332,7 +332,7 @@ def test_a_burst_meeting_a_key_rotation_waits_for_one_key_set_fetch(
     release = _rotated(idp, rsa_key, stranger_key, client)
     rotated = [_token(idp, stranger_key, "RS256", kid="signing-2") for _ in range(8)]
     forged = [_token(idp, rsa_key, "RS256", kid=f"forged-{n}") for n in range(8)]
-    burst = [token for pair in zip(rotated, forged, strict=True) for token in pair]
+    burst = [*pair for pair in zip(rotated, forged, strict=True)]
 
     with ThreadPoolExecutor(max_workers=len(burst)) as pool:
         answers = [pool.submit(_call, idp, token, client=client) for token in burst]
