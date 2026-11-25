@@ -310,7 +310,7 @@ def claim_bases(registry: BaseRegistry, location: str, entries: Sequence[Recorde
 
 
 #: The pin of an entry a record does not hold, which equals no entry's.
-_ABSENT: Final = ("absent",)
+_ABSENT: Final = sentinel("_ABSENT")
 
 
 def _add_missing(registry: BaseRegistry, key: str, wanted: BaseRecord) -> list[RecordedBase]:
