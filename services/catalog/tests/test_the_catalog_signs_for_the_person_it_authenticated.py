@@ -25,8 +25,6 @@ relay the connection its emitters publish on and the identity they sign as, so t
 against the keys the catalog publishes and sends it, as staged, on that connection ([[XC-199]]).
 """
 
-from __future__ import annotations
-
 import json
 import time
 import uuid

@@ -8,8 +8,6 @@ A delete names the tuple by key and evaluates nothing, so it stays open: a pinne
 store must remain revocable.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from typing import cast
 

@@ -7,8 +7,6 @@ compares refs through it, so a second spelling of main can never read as a secon
 is neither a str nor None is the caller's type error, not a ref.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from catalog.core.version_retention import recorded_branch

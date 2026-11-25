@@ -42,8 +42,6 @@ string. An absent actor, or one that is not a `user:` principal, is a service ac
 signs it with no delegation declared.
 """
 
-from __future__ import annotations
-
 import base64
 import binascii
 import copy

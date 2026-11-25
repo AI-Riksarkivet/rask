@@ -15,8 +15,6 @@ THE SKIP MESSAGE SAYS HOW LONG IT WAITED, because the reason this went unnoticed
 reachable at <url>" is indistinguishable from "not configured" once it reaches a CI log.
 """
 
-from __future__ import annotations
-
 import time
 from collections.abc import Callable
 

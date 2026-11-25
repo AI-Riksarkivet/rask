@@ -9,8 +9,6 @@ door where getting it wrong means an Overwrite that silently creates or an Exist
 ownership. ``drop_namespace``'s ``behavior`` had the same shape.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from enum import StrEnum
 from typing import Final

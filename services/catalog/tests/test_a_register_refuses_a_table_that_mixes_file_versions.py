@@ -24,8 +24,6 @@ pylance-11 open refusal the installed pylance cannot produce, the seed and emit 
 and the failing deregister that forces the partial-apply path.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from collections.abc import Awaitable, Callable, Iterator

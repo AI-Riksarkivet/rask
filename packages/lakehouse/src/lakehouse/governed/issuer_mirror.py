@@ -24,8 +24,6 @@ state, and the chart runs it from the catalog image with ``uvicorn --factory``. 
 the mirror depends on.
 """
 
-from __future__ import annotations
-
 import logging
 import ssl
 from collections.abc import AsyncGenerator

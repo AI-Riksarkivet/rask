@@ -18,8 +18,6 @@ A SECOND DOOR IS A FINE ANSWER, which is why this is a registry rather than one 
 and should stay that way". What is not fine is no door at all.
 """
 
-from __future__ import annotations
-
 from lakehouse.governed import fga_model
 
 

@@ -14,8 +14,6 @@ one unreadable record is skipped with a warning, never allowed to void the tenan
 All IO here is blocking; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 

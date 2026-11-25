@@ -12,8 +12,6 @@ Driven through the catalog's own handling of one followed event (`catalog.api.co
 app's loop. The keys are read from the secret store, which the suite's double answers.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Callable, Iterator
 from typing import Any

@@ -17,8 +17,6 @@ and the row count needs no I/O at all because the payload is already decoded to 
 schema.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

@@ -19,8 +19,6 @@ its own tests' claim; these hold what the purge does around it, the load-bearing
 ended only once its bytes are gone.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import io

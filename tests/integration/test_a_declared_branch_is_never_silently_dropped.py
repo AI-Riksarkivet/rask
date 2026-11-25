@@ -14,8 +14,6 @@ defect takes; a door that opens its own ref goes through ``DoorTable.open`` and 
 (``tests/integration/test_column_branch.py``).
 """
 
-from __future__ import annotations
-
 import io
 from typing import Any
 

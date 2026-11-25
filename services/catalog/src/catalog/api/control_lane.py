@@ -22,8 +22,6 @@ an event whose keys still cannot be read after ``_KEY_READS`` judgements is give
 its one judgement until ``_WAIT_AGAIN_SECONDS`` have passed.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from typing import TYPE_CHECKING, Any, Final, get_args

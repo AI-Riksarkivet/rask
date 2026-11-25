@@ -82,11 +82,11 @@ extend-exclude = [".vulture-whitelist.py", "lance_docs"]
 select = ["E", "F", "W", "I", "UP", "B", "S", "C4", "SIM", "RUF", "C901", "RET", "PERF", "FURB", "A", "ANN"]
 ignore = ["S101", "S104", "ANN001", "ANN003", "ANN204", "RET504"]
 # Code-shape rules live here, not in a test that reads source: TID251 enforces the bans in
-# [tool.ruff.lint.flake8-tidy-imports.banned-api] below at every import and attribute use, and FAST001
-# refuses a `response_model=` that restates the route's own return annotation (the parameter exists to
-# say the wire shape DIFFERS from the return type). FAST001 does not fire in a module that postpones
-# annotations (`from __future__ import annotations`; measured on ruff 0.15.13 and 0.16.0), which is 56
-# of the 78 route modules on 2026-09-29, so it guards only the other 22. T20 refuses a `print` in library and service
+# [tool.ruff.lint.flake8-tidy-imports.banned-api] below at every import and attribute use. FAST001, which refuses a
+# `response_model=` that restates the route's own return annotation (the parameter exists to say the wire shape DIFFERS
+# from the return type), fires at a py313 target and at no py314+ one, rask's included (measured 2026-11-25 on ruff
+# 0.16.0 and 0.17.6 with ruff's own example), so it guards nothing here; that day none of the 189 routes restated its
+# return type. T20 refuses a `print` in library and service
 # code, where a diagnostic is a log record carrying its trace; the scripts and tests trees are exempt below.
 # PLR0917, PLR0915 and PLR1702 hold a function's shape to the writing-python references (anti-patterns F1, design-patterns
 # § Function size): more than three positional parameters, thirty statements or three nested blocks is the signal, and

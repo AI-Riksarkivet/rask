@@ -12,8 +12,6 @@ schema evolution commits to, and it rides through to the response's version and 
 branch write is never reported — or recorded — against main (#100).
 """
 
-from __future__ import annotations
-
 from functools import partial
 from typing import Annotated, Any
 

@@ -18,8 +18,6 @@ Three routes: an idempotent grant, a revoke that refuses to remove the last admi
 not there is a no-op, not a 404".
 """
 
-from __future__ import annotations
-
 import logging
 from typing import TYPE_CHECKING, Annotated, Any
 

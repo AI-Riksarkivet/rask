@@ -18,8 +18,6 @@ outside the catalog's doors as the suites' own store identity, as a pipeline wri
 `bash scripts/e2e_live.sh tests/e2e-py/test_a_registered_table_is_judged_by_its_own_storage.py`.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 
 import correctness

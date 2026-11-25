@@ -5,8 +5,6 @@ The door authorizes the caller, plans the delete, announces each step and ends g
 or a grant.
 """
 
-from __future__ import annotations
-
 import logging
 from contextlib import suppress
 from functools import partial

@@ -3,8 +3,6 @@
 A plain module, so a test names the double's type and its address in one place instead of writing either out.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from typing import Final
 

@@ -11,8 +11,6 @@ These pin the audit-confirmed contracts WITHOUT touching the network:
 Uses stdlib ``asyncio.run`` so no pytest-asyncio dependency is needed.
 """
 
-from __future__ import annotations
-
 import asyncio
 from pathlib import Path
 from typing import Any, cast

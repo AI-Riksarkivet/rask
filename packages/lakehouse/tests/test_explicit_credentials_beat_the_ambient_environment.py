@@ -14,8 +14,6 @@ The credential keys are canonical too: with the bare ones object_store blended a
 options' secret and signed as neither identity (``403 SignatureDoesNotMatch``, measured in-cluster 2026-09-03).
 """
 
-from __future__ import annotations
-
 import os
 import re
 import socket

@@ -13,8 +13,6 @@ request would otherwise be refused. Measured on pylance 12.0.0 against a closed 
 builder offers no knob: one fact cannot disagree with itself.
 """
 
-from __future__ import annotations
-
 import pytest
 from pydantic import SecretStr
 

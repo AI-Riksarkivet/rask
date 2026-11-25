@@ -19,8 +19,6 @@ carries `model.fga`, `model.fga.yaml` and `model.json` in site-packages — so t
 there. Rendering it into a ConfigMap would have created the fourth copy this row is about.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

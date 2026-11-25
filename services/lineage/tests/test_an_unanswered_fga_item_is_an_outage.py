@@ -12,8 +12,6 @@ Driven through the real ``fga_reads.batch_check`` with a client double built fro
 classes; nothing here replaces ``batch_check`` itself.
 """
 
-from __future__ import annotations
-
 import asyncio
 import uuid
 from typing import Any, cast

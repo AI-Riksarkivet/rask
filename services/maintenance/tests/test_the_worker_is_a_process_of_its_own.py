@@ -12,8 +12,6 @@ no task: it connects to no bus, so every task stays queued on the work queue wit
 replica the window rolls back takes them.
 """
 
-from __future__ import annotations
-
 import asyncio
 import signal
 import socket

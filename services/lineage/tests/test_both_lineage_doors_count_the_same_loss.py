@@ -22,8 +22,6 @@ DRIVEN THROUGH THE ENDPOINT rather than compared as source text: the property is
 answer the same exception with the same outcome, and only running them shows that.
 """
 
-from __future__ import annotations
-
 from collections.abc import Collection
 from typing import Any, cast
 

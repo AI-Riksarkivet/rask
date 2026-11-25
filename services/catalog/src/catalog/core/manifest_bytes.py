@@ -8,8 +8,6 @@ The message is parsed by `lakehouse.lancekit.manifest_wire`, which `lakehouse.la
 message that does not parse is refused here as the bytes a caller handed the catalog.
 """
 
-from __future__ import annotations
-
 import secrets
 import struct
 from contextlib import contextmanager

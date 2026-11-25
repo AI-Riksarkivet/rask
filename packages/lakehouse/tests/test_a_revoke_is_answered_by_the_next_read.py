@@ -6,8 +6,6 @@ have read a role's grant on a table, deleting that grant leaves both answering f
 table still listed), whatever clock the check carries. Only a read that asks for `HIGHER_CONSISTENCY` sees the delete.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any
 

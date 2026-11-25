@@ -4,8 +4,6 @@ Driven against real botocore exceptions raised by moto wherever moto answers the
 a status moto does not answer (a server error, a 501) is a ``ClientError`` built in the shape botocore parses one into.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from typing import Any
 

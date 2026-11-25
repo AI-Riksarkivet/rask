@@ -19,8 +19,6 @@ pydantic's Rust regex and a JSON Schema reader, neither of which knows ``\\Z``. 
 ``$``-anchored and the enforcement never relies on it.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from lakehouse.naming import is_safe_project

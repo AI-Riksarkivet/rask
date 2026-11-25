@@ -1,8 +1,6 @@
 """The write judge asked at the door: the write a route makes, the inputs its run declares, the deregister of a table no
 uuid identifies, a stock client's staged run, and the credential tier a spec door vends."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Sequence
 from functools import partial

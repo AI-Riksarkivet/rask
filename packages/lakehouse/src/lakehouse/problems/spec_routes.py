@@ -15,8 +15,6 @@ vending extension, the warehouse and project registries, health probes), so its 
 say which of those the spec owns.
 """
 
-from __future__ import annotations
-
 import re
 from typing import Final
 

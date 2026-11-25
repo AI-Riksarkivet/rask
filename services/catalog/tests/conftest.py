@@ -1,7 +1,5 @@
 """Shared fixtures for the catalog member's own suite."""
 
-from __future__ import annotations
-
 import json
 import sys
 import uuid

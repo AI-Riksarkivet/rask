@@ -7,8 +7,6 @@ it carries no error, and a dataset no pass can maintain, stamped as maintained, 
 whole interval rather than the standing refusal it is.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path

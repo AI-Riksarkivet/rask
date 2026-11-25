@@ -23,8 +23,6 @@ the file). The gates ``catalog.services.managed_versions`` runs on each data fil
   every external blob lies under one of the table's external bases and exists.
 """
 
-from __future__ import annotations
-
 import re
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor

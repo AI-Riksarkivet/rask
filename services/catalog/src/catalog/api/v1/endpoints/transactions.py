@@ -1,7 +1,5 @@
 """Transaction endpoints: a transaction is named ``<table id>$<transaction>`` and answered on that table ([[LH-221]])."""
 
-from __future__ import annotations
-
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (

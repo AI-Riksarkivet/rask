@@ -7,8 +7,6 @@ one and, after it raised the table's listing floor, holds the table's pass; a tr
 runs on one replica at a time, as the queue hands it out.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncGenerator, Callable, Collection
 from contextlib import asynccontextmanager

@@ -19,8 +19,6 @@ Driven through the real catalog app on real pylance, and the event is captured o
 ``BusEmitter`` builds and publishes it, and the bus double stands in for the bus.
 """
 
-from __future__ import annotations
-
 import io
 import json
 import threading

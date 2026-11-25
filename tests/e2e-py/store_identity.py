@@ -6,8 +6,6 @@ on the suites' scratch prefixes only. So no suite holds the store's root pair, a
 not grant.
 """
 
-from __future__ import annotations
-
 from credentials import Credential, credential
 
 from lakehouse.storage.options import StorageOptions

@@ -15,8 +15,6 @@ read back unchanged), and the file is still one the version names and a writer m
 is not under the table's root, and no vend puts there.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Iterator
 from typing import Final

@@ -7,8 +7,6 @@ Found on 2026-08-05 by driving the real doors, not by reading code.
   dropped AT ALL, and three guarded loops below it were unreachable code.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import AsyncIterator
 from pathlib import Path

@@ -10,8 +10,6 @@ keeps both under ``…$sp ace/``. The two are one place for a name that needs no
 Every function that reads the store is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 from lakehouse.lancekit.base_refs import decoded_path, normalise, store_of
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.stored_objects import StoredObject, list_under

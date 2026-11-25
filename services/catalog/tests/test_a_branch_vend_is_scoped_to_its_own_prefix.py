@@ -23,8 +23,6 @@ carrying `..` would climb out of the table's own scope — the one thing a sessi
 let a caller do.
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any, cast
 

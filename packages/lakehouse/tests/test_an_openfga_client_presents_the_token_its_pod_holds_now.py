@@ -10,8 +10,6 @@ client, the file rotated between them. A refused credential is not an outage, so
 service's `on_failure` posture: a pod that kept serving with no client would stay Ready with every door failing closed.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

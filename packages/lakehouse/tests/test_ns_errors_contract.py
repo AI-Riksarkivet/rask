@@ -11,8 +11,6 @@ The completeness pin below is the real fix: the next code the spec adds fails a 
 of failing a client with a 500.
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any
 

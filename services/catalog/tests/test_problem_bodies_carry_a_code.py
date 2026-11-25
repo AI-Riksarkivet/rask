@@ -27,8 +27,6 @@ headers. That satisfies the rule the finding actually cites (the envelope must c
 without regressing a documented HTTP behaviour.
 """
 
-from __future__ import annotations
-
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

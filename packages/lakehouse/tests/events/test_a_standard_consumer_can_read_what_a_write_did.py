@@ -25,8 +25,6 @@ meaning "wrote rows", and mapping `INSERT` onto `OVERWRITE` would tell a reader 
 An absent facet is the honest answer; a wrong one is acted upon.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from lakehouse.events.openlineage import (

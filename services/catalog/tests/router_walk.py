@@ -6,8 +6,6 @@ two suites that walk the router split it on that line: `test_an_undeclared_door_
 decides, `test_a_door_the_router_leaves_open_decides_for_itself.py` the rest.
 """
 
-from __future__ import annotations
-
 import re
 from collections.abc import Iterator
 

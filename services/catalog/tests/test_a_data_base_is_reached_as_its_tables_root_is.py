@@ -11,8 +11,6 @@ as the deployed catalog's canned policy allows its whole store: the table's root
 ``second/data``. Rows are compared, not counted.
 """
 
-from __future__ import annotations
-
 import uuid
 from datetime import UTC, datetime
 

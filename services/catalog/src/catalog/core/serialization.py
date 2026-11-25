@@ -5,8 +5,6 @@ the fallback for the few non-typed payloads (e.g. the structured explain /
 analyze plan results returned as plain text).
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 

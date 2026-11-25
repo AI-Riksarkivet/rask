@@ -1,7 +1,5 @@
 """Table metadata + lifecycle endpoints (no data plane)."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable

@@ -12,8 +12,6 @@ Two catalog apps stand for two replicas: they share one bus, whose stream is wha
 (`tests.bus_double.BusDouble`). The keys are read from the secret store, which the suite's double answers.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from typing import Any
 

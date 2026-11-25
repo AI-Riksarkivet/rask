@@ -26,8 +26,6 @@ unrecorded — is what the doors refuse and the pre-pass reports.
 Every IO function is BLOCKING — callers threadpool it, as they do for every control-root registry.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Sequence
 from enum import StrEnum

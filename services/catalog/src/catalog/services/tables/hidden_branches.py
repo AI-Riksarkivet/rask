@@ -11,8 +11,6 @@ and lists it again once the file is back is measured on pylance 14.0.3.
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import datetime
 

@@ -6,8 +6,6 @@ the version into Chart.yaml. An install that sets nothing about images then pull
 signed, on any architecture each index holds.
 """
 
-from __future__ import annotations
-
 import shutil
 import subprocess
 import sys

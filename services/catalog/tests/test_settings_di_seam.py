@@ -22,12 +22,6 @@ FastAPI caches `request_settings` per request, so a route already declaring `Set
 the injection.
 """
 
-from __future__ import annotations
-
-# Module level, NOT inside the test: `from __future__ import annotations` makes every annotation a
-# string, and FastAPI resolves them against the DEFINING module's namespace. A function-local
-# import leaves `Request` unresolvable, and FastAPI then treats it as a query parameter — which
-# presents as a 422 about a missing `request` field rather than as an import problem.
 from fastapi import FastAPI, Request
 
 from catalog.api import dependencies as deps

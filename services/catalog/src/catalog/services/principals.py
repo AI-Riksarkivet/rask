@@ -7,8 +7,6 @@ issuer's subject does, which an object key cannot carry as written. The first de
 door, which revokes whatever was granted since, keeps it.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from hashlib import blake2s
 from typing import Final

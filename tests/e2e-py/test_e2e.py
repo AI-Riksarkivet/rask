@@ -4,8 +4,6 @@ Set ``LANCE_REST_E2E_URL`` (e.g. http://localhost:2333) to run; skipped otherwis
 ``scripts/e2e_live.sh`` derives it — and the bearer and the warehouse below — from the deployed release.
 """
 
-from __future__ import annotations
-
 import os
 import uuid
 

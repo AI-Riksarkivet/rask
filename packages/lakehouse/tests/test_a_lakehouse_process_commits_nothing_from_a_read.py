@@ -7,8 +7,6 @@ process of its own that boots the factory as a service does, so a crash is an ex
 end of the test run, and its environment holds no switch the test run's own processes may have set.
 """
 
-from __future__ import annotations
-
 import os
 import subprocess
 import sys

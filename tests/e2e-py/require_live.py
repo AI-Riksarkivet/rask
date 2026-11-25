@@ -18,8 +18,6 @@ That conftest also carries a session-scoped cleanup fixture that reaches for a l
 copying the whole file to check this option would be standing up the estate to test a flag.
 """
 
-from __future__ import annotations
-
 import pytest
 
 

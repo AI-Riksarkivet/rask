@@ -32,8 +32,6 @@ flags, and it reads as part of writing, so compaction and GC keep asking both fi
 about WHICH FIELD an operation is entitled to ignore, never about relaxing a write.
 """
 
-from __future__ import annotations
-
 from lakehouse.lancekit import features
 
 

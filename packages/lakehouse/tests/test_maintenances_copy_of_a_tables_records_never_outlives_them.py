@@ -9,8 +9,6 @@ or its absence), and a copy written where none was is taken back once the record
 Over a moto server: the conditional puts are S3's, and an end is landed in the window by the test.
 """
 
-from __future__ import annotations
-
 import uuid
 from collections.abc import Iterator
 

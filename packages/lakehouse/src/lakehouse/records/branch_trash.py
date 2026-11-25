@@ -16,8 +16,6 @@ you must first delete the tag").
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import hashlib
 import logging
 from collections.abc import Callable

@@ -26,8 +26,6 @@ the only rung that opens ``can_vend_maintain``; a maintainer, a writer and a rea
 The caller is authenticated as the maintenance identity, and the vendor mints a fixed credential.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator, Sequence
 
 import pytest

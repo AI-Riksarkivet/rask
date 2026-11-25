@@ -1,7 +1,5 @@
 """The table a catalog door hands its handler, built without a request for a test that drives the handler's service."""
 
-from __future__ import annotations
-
 from collections.abc import Callable
 
 from lance_namespace import LanceNamespace

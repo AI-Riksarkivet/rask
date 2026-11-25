@@ -1,7 +1,5 @@
 """Materialized view endpoints (delegated to the native backend)."""
 
-from __future__ import annotations
-
 from fastapi import APIRouter
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import (

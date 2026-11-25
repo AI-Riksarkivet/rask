@@ -16,8 +16,6 @@ Create-on-parent: creating a child authorizes the parent (the child has no id ye
 namespace directly in a warehouse is the warehouse.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping, Sequence
 from typing import Final
 

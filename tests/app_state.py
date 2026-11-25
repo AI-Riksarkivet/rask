@@ -6,8 +6,6 @@ request here and sets only that piece: a name the code reads that is not set rai
 ``State`` raises in the pod, where a stand-in object would answer whatever its author gave it.
 """
 
-from __future__ import annotations
-
 from fastapi import FastAPI, Request
 
 

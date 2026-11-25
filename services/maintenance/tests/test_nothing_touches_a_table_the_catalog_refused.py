@@ -18,8 +18,6 @@ The fixture carries seven versions, and a cleanup keeping one leaves one, so an 
 it did not run. The vend door is driven through the real client over respx.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path

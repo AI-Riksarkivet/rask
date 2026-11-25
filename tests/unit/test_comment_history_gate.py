@@ -6,8 +6,6 @@ the third from the first two would be rejected on its first false positive, so t
 load-bearing here in exactly the way the reject case is.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import sys
 from pathlib import Path

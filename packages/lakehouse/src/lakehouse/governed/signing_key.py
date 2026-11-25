@@ -31,8 +31,6 @@ THE VERIFIERS' READ LIVES HERE TOO ([[XC-078]]). `published_key_fetch` is the se
 `lakehouse.events.published_keys.PublishedKeys`, so the timeout and retry policy of a read on the delivery path is written once.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import re

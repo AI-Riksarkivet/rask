@@ -25,8 +25,6 @@ shallow-clone protection), and 134 stack traces of a permanent misconfiguration 
 how a reader learns to scroll past the whole category.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import cast
 

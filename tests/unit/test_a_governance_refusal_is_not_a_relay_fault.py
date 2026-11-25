@@ -30,8 +30,6 @@ authorizes AS the subject the producer stamped, the only principal a tick has; a
 "may you record this" is how the two doors would drift.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Collection
 from typing import Any, cast

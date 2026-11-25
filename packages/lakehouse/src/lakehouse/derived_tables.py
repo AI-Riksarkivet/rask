@@ -14,8 +14,6 @@ An edge is followed whatever version of its input the run read: a table derived 
 what an erasure removes from it.
 """
 
-from __future__ import annotations
-
 import uuid
 from collections.abc import Callable, Collection, Iterable, Mapping
 from datetime import datetime

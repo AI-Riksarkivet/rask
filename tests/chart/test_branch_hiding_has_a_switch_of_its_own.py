@@ -1,7 +1,5 @@
 """The catalog is told whether a branch delete hides the branch by a chart value of its own ([[LH-604]], ADR 0229)."""
 
-from __future__ import annotations
-
 import pytest
 
 from tests.chart.chart_render import containers, env_of, render

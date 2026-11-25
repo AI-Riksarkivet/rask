@@ -10,8 +10,6 @@ not read the answer as all of them, so a hidden table turns ``complete`` false, 
 tells the caller that something it may not see exists, and nothing about which table it is.
 """
 
-from __future__ import annotations
-
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query

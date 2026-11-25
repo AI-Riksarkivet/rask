@@ -10,8 +10,6 @@ whatever that library raises. All of them are refused here as `ArrowBodyError`, 
 sees a row. The two-batch bodies pin that every batch is read, not only the first.
 """
 
-from __future__ import annotations
-
 import importlib
 import struct
 from collections.abc import Callable

@@ -8,8 +8,6 @@ per ref. Like every reclaim, it reclaims nothing while a write of the table's ta
 0162), so nothing here compacts.
 """
 
-from __future__ import annotations
-
 import inspect
 from collections.abc import Callable
 from datetime import timedelta

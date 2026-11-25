@@ -16,8 +16,6 @@ table no door commits on, asked by maintenance's own client on main and on a bra
 naming the ref and the answer it reads are the catalog's own.
 """
 
-from __future__ import annotations
-
 import io
 from typing import Literal
 

@@ -5,8 +5,6 @@ Each schema under `spec/facets/rask/` refers to OpenLineage's `BaseFacet` by its
 vendored 2-0-2 document, so the judgement needs no network.
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Any, Final

@@ -18,8 +18,6 @@ Each test names the finding it closes and fails for that finding's own reason wi
 Uses stdlib ``asyncio.run`` so no pytest-asyncio dependency is needed (matches its sibling suites).
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from typing import Any, ClassVar, cast

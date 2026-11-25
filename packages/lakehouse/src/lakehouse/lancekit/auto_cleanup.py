@@ -22,8 +22,6 @@ need hold no delete right (Lance then only logs the hook's failure), and nothing
 the one reclaimer, and every committer disarms the ref it is about to commit on.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 

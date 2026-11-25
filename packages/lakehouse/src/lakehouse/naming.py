@@ -2,8 +2,6 @@
 property a table's uuid is held under and the shape a control-plane id has; and the lineage half, how a table's location
 and its OpenLineage dataset name map to each other and which dataset namespaces name the world outside the catalog."""
 
-from __future__ import annotations
-
 import re
 from collections.abc import Mapping
 from typing import Final

@@ -24,8 +24,6 @@ Config via env (defaults target the local governance stack):
 Exits non-zero if any governance invariant does not hold.
 """
 
-from __future__ import annotations
-
 import os
 import sys
 import time

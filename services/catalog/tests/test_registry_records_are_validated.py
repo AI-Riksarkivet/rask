@@ -18,8 +18,6 @@ model that made a listing fail closed on one bad object would be a different (wo
 ``list_warehouses``' own docstring says one bad record must never void the whole listing.
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 

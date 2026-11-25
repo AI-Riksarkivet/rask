@@ -8,8 +8,6 @@ Code 13: the payload cannot be aligned at the door, which `test_insert_coercion_
 keeps distinct from code 20, a payload that aligns and that pylance refuses.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

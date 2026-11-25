@@ -31,8 +31,6 @@ loses the write, or finds the lease live, leaves the record alone.
 place the identifier is written ([[LH-281]]). The release needs only the refs, which ``pinned_by`` names.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Sequence
 from datetime import datetime, timedelta

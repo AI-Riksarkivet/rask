@@ -12,8 +12,6 @@ of that check is
 ``lakehouse.problems.spec_routes.SPEC_ROUTES``, committed because no image carries ``lance_docs/``.
 """
 
-from __future__ import annotations
-
 import re
 from pathlib import Path
 from typing import Any, cast

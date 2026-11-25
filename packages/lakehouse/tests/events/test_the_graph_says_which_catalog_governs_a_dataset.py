@@ -10,8 +10,6 @@ the catalog is reached through; `name` REUSES the lineage job namespace, so the 
 it rides on cannot disagree about who is speaking.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from lakehouse.events.openlineage import CATALOG_FRAMEWORK, catalog_facet, table_type_facet

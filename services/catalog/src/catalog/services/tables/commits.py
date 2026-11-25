@@ -2,8 +2,6 @@
 the catalog's stamp, planned again when another writer took that version, and Lance's own operation staged through a
 capturing namespace so the catalog finalizes it."""
 
-from __future__ import annotations
-
 import logging
 import tempfile
 import time

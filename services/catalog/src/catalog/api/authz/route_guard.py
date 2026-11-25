@@ -6,8 +6,6 @@ the authenticated caller against OpenFGA. Batch routes read the (Starlette-cache
 a transaction door is authorized on the table its id names.
 """
 
-from __future__ import annotations
-
 import logging
 
 from fastapi import Request

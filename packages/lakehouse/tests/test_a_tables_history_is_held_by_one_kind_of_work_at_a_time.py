@@ -7,8 +7,6 @@ fence's own rules: holders of one kind share it, and a hold that lapsed because 
 other kind. That a released hold frees it is what every door test writing a ref and then reclaiming relies on.
 """
 
-from __future__ import annotations
-
 from datetime import timedelta
 from pathlib import Path
 

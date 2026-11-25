@@ -10,8 +10,6 @@ Driven through the real handler with the round trip replaced by a recorder, so t
 never dialled", not a reading of the source.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any, cast
 

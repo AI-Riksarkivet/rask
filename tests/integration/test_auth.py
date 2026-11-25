@@ -4,8 +4,6 @@ The verifier is faked, so these assert our dependency's behavior: off → open,
 on + no token → 401 problem+json, on + token → delegates to the verifier.
 """
 
-from __future__ import annotations
-
 from unittest.mock import MagicMock
 
 import pytest

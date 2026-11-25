@@ -20,8 +20,6 @@ DETECTED ON THE COMMAND, not on a list of job names. A Job earns the requirement
 covered the day it is written, and one that does not poll is not asked for a ceiling it does not need.
 """
 
-from __future__ import annotations
-
 import re
 
 from tests.chart.chart_render import OIDC_ARGS, render

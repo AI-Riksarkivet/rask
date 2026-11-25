@@ -10,8 +10,6 @@ did not answer, a ref write holds the table's history) keeps its record for the 
 It runs on the catalog's own timer (`catalog.api.timers`), once a window whatever the replica count.
 """
 
-from __future__ import annotations
-
 import logging
 from functools import partial
 

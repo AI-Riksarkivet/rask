@@ -11,8 +11,6 @@ stable row ids by being registered at an empty location and written there afterw
 door judges the dataset it attaches, and there is none yet to judge.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Iterator
 from pathlib import Path
 

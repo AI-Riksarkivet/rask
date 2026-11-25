@@ -18,8 +18,6 @@ on re-POSTing an existing id, so a claim already held by the caller's own projec
 collision. Only a claim naming a DIFFERENT project is a refusal.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

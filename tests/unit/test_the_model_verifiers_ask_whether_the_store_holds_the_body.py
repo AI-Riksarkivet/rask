@@ -19,8 +19,6 @@ interpreter with no site-packages. The catalog image lags the checkout in exactl
 exists to report, so the pod half may rely on nothing but the stdlib.
 """
 
-from __future__ import annotations
-
 import copy
 import importlib.util
 import io

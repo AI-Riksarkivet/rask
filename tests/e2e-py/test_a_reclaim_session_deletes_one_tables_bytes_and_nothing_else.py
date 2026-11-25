@@ -18,8 +18,6 @@ and its reservation marker sit under two spellings of its location ([[LH-319]]).
 Run by `dagger call rustfs-provisioning` (`make rustfs-provisioning`) against the throwaway RustFS it binds.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import uuid

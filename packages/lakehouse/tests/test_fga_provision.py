@@ -5,8 +5,6 @@ a model whose relations name a condition the write left out ("condition non_expi
 reader"), and with the model refused the FGA client never builds and every authorized route fail-closes 503.
 """
 
-from __future__ import annotations
-
 import logging
 import uuid
 from collections.abc import Callable

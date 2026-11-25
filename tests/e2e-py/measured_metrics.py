@@ -6,8 +6,6 @@ onto the imported module, so the functions the worker calls (`record_*`, which r
 count into the reader under the names the alert rules read, and no process-global provider is installed.
 """
 
-from __future__ import annotations
-
 import importlib.util
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager

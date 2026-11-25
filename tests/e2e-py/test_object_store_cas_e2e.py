@@ -18,8 +18,6 @@ Run: ``make e2e-cas`` (port-forwards RustFS + sets LANCE_E2E_S3_*). Writes under
 maintenance's discovery skips ``__`` prefixes, so this never collides with the lakehouse or gets GC'd.
 """
 
-from __future__ import annotations
-
 import multiprocessing
 import os
 import pathlib

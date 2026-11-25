@@ -17,8 +17,6 @@ seeded as the catalog's declaration grants it; the label tuples are written thro
 reads them back from.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 

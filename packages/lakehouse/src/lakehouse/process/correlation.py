@@ -13,8 +13,6 @@ The trace id is a correlation id, never evidence: a caller may send any well-for
 or attributes on it. The W3C grammar is what is held to, so a caller's text reaches no record unchecked.
 """
 
-from __future__ import annotations
-
 import logging
 import re
 from collections.abc import Generator

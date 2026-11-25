@@ -4,8 +4,6 @@ The trace a request runs under is the one id its log lines, audit records, commi
 tells requests apart sends each one under a trace of its own and filters the records by that trace's id.
 """
 
-from __future__ import annotations
-
 import hashlib
 
 

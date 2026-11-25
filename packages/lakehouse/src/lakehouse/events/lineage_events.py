@@ -7,8 +7,6 @@ reader and a writer cannot disagree about a facet key, a uuid's place or an even
 events by their published contract (`docs/COMMIT-EVENTS.md`, `spec/facets/rask/`), with no import from the lakehouse.
 """
 
-from __future__ import annotations
-
 import uuid
 from collections.abc import Mapping
 from typing import Any, Final

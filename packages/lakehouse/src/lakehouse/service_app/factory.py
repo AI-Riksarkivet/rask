@@ -44,8 +44,6 @@ and what it owns is the part of the boot that is identical in all three:
 5. ``/livez`` + ``/readyz`` at the ROOT — a kubelet does not know a service's prefix.
 """
 
-from __future__ import annotations
-
 import logging
 import os
 from collections.abc import AsyncGenerator, Callable, Sequence

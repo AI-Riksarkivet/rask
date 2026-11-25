@@ -59,8 +59,6 @@ duckdb (76 jemalloc references in its extension module and a live `jemalloc_bg_t
 configuration already measured not to work, and it looks correct.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from tests.chart.chart_render import DEFAULT_ARGS, containers, env_of, render

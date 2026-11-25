@@ -18,8 +18,6 @@ announcement of a change and an event a poster sends under the same identity are
 signed announcement needs is never one a poster could take first.
 """
 
-from __future__ import annotations
-
 import asyncio
 import uuid
 from collections.abc import Iterator

@@ -7,8 +7,6 @@ backend's plain "not implemented" errors into ``UnsupportedOperationError`` so
 unsupported operations surface as the spec's 406 (code 0).
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Mapping
 from http import HTTPStatus

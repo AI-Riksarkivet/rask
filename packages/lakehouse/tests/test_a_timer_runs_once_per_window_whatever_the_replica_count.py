@@ -6,8 +6,6 @@ conditional write is the operating system's (`lakehouse.storage.conditional_reco
 timer's own turn says the next one is away.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections import Counter
 from datetime import UTC, datetime, timedelta

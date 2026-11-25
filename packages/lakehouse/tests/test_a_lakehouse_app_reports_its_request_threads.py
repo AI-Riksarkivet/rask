@@ -5,8 +5,6 @@ queues requests with no error anywhere. `build_service_app` reports the pool of 
 (`lakehouse.service_app.thread_pool`); the gauges are read through an OpenTelemetry reader, as the Collector reads them.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager

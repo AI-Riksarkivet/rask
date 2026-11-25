@@ -6,8 +6,6 @@ leaves unset gets the default rather than the value of the record it shadowed. A
 global defaults. A dataset's tier is not read here: it is a namespace property the catalog judges (ADR 0160).
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import datetime, timedelta
 

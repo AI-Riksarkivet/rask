@@ -22,8 +22,6 @@ than argument: this is the same reasoning `tests/unit/test_e2e_collection_gate.p
 out to `pytest --collect-only`.
 """
 
-from __future__ import annotations
-
 import os
 import shutil
 import subprocess

@@ -1,8 +1,6 @@
 """A warehouse's grants, declared and converged: its project edge and the maintenance rung of the release's own
 accounts."""
 
-from __future__ import annotations
-
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.authz.context import AuthzContext

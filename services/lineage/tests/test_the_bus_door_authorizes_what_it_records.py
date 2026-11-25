@@ -17,8 +17,6 @@ Every check is the real model's on an OpenFGA store of the test's own, where bob
 each is governed and a refusal of anyone else is a denial rather than a table with nothing to grant on.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from typing import Any

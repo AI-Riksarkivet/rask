@@ -26,8 +26,6 @@ loop marks a beat each second and ``/livez`` fails once the last one is stale (`
 Run: ``python -m maintenance.worker``.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import os

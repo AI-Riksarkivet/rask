@@ -21,8 +21,6 @@ only if the member is inside the signed bytes. Leaving the whole facet out of th
 signature value, turns those rows green: that is the mutation they exist to catch.
 """
 
-from __future__ import annotations
-
 import base64
 import binascii
 import json

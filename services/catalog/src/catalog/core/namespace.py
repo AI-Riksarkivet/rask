@@ -6,8 +6,6 @@ table at the location its door resolved with pylance — used by the data-plane 
 operations the native backend does not implement.
 """
 
-from __future__ import annotations
-
 import inspect
 import logging
 import threading

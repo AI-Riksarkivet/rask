@@ -15,8 +15,6 @@ only the background refresh fetches again. A request that fetched on a cache's e
 fetch for itself, hold a worker thread for up to the fetch timeout, and answer 503 although the keys had not changed.
 """
 
-from __future__ import annotations
-
 import base64
 import time
 from collections.abc import Iterator

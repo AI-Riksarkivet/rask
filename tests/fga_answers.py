@@ -8,8 +8,6 @@ that reader assumes; this one is the shape the SDK hands over on the estate.
 The synchronous client's deserializer is the same generated code as the asynchronous one's, and needs no running loop.
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any
 

@@ -11,8 +11,6 @@ Why this matters more than the usual wiring gate: a pipeline whose next step sta
 and polls nothing loses that step with the tag moved, the route 200 and every pod green.
 """
 
-from __future__ import annotations
-
 import pathlib
 
 from tests.chart.chart_render import render

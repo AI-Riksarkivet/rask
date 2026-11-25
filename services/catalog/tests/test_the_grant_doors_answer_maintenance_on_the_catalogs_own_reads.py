@@ -12,8 +12,6 @@ On a real OpenFGA, each caller a person holding the `reconciler` estate role as 
 maintenance's ServiceAccount.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from catalog.core.config import get_settings

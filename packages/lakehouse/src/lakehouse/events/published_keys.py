@@ -10,8 +10,6 @@ are one answer, `KeySourceUnavailableError`: either way nothing is known about a
 blip would destroy honest events.
 """
 
-from __future__ import annotations
-
 import threading
 import time
 from collections import OrderedDict

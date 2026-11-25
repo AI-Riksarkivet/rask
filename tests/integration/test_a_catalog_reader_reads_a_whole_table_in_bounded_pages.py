@@ -10,8 +10,6 @@ The table is 2,000 rows of 4 KiB, so the catalog's ceiling is about 4,000 rows a
 (64 rows, then about 1,000 at its measured width) take three answers to cover it.
 """
 
-from __future__ import annotations
-
 import threading
 import time
 from collections.abc import Iterator

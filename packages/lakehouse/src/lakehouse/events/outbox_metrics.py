@@ -23,8 +23,6 @@ control relay drains. One process can work both (the catalog stages into each), 
 say which outbox a point is about; the `lance.outbox.lane` attribute does, and an alert about one lane selects it.
 """
 
-from __future__ import annotations
-
 from typing import Final, Literal
 
 from opentelemetry import metrics

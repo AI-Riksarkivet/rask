@@ -8,8 +8,6 @@ data-plane request — an endpoint that accepts the connection and never answers
 instead of failing the vend.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 from lakehouse.storage.client import aws_session

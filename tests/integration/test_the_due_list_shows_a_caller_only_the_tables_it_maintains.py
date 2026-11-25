@@ -6,8 +6,6 @@ loopback Dex signing callers in and a real OpenFGA deciding on a store of the te
 named. How many records a walk reads is counted with an in-memory store that allows exactly the grants named.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock

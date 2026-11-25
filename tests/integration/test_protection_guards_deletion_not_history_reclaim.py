@@ -11,8 +11,6 @@ Driven through the real catalog app on a real `dir` namespace. The table is prot
 and its history is read back through the list doors, so each door is shown to remove its target and nothing else.
 """
 
-from __future__ import annotations
-
 import io
 from typing import Any
 

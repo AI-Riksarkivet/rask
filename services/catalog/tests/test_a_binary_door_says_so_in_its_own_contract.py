@@ -10,8 +10,6 @@ drift, and `frontend/console/src/lib/api/generated/catalog.ts` is generated from
 from the catalog's own spec is told to parse Arrow as JSON ([[LH-186]]).
 """
 
-from __future__ import annotations
-
 import logging
 
 import pytest

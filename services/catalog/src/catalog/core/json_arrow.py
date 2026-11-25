@@ -20,8 +20,6 @@ time, timestamp or duration (answered without its unit, so the name says no one 
 which a re-type refuses, and a dictionary (answered as its value type, so it reads back as that).
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, Protocol, cast
 

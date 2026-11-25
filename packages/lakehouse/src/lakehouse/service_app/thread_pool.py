@@ -11,8 +11,6 @@ Observable gauges, read at each export from the limiter of the loop that called 
 reports them: one that never serves (a script importing the library) exports no constant zero.
 """
 
-from __future__ import annotations
-
 from anyio import CapacityLimiter, to_thread
 from opentelemetry import metrics
 

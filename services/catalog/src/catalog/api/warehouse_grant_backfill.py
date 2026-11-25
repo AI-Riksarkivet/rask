@@ -21,8 +21,6 @@ the object id and user cannot be empty"), and ListObjects answers per-user, whic
 job is trying to fix the answer to. The registry under `LANCE_REST_ROOT` is the authoritative list.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import TYPE_CHECKING
 

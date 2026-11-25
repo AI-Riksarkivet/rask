@@ -12,8 +12,6 @@ are exhausted (OpenFGA outage) we **fail closed** and raise ``ServiceUnavailable
 so the request surfaces as a 503 rather than a 500 — and never as a silent allow/deny.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import time

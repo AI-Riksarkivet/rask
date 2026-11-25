@@ -11,8 +11,6 @@ surface, and every one of them will arrive through these two functions. A gate o
 alone would pass while the forty-second regressed.
 """
 
-from __future__ import annotations
-
 import pytest
 from lance_namespace import InternalError
 

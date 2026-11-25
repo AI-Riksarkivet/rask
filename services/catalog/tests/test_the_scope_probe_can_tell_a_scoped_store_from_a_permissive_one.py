@@ -14,8 +14,6 @@ code, and a request the store never answered is a transport error, so the probe 
 two apart as well.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any

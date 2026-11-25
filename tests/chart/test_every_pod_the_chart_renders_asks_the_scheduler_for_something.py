@@ -21,8 +21,6 @@ backup CronJobs and the default overlay renders the OpenBao seed. A container is
 render produces it.
 """
 
-from __future__ import annotations
-
 import pathlib
 
 import pytest

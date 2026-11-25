@@ -1,7 +1,5 @@
 """Aggregate all v1 endpoint routers."""
 
-from __future__ import annotations
-
 from fastapi import APIRouter, Depends
 
 from catalog.api.authz.request_reads import require_request_names

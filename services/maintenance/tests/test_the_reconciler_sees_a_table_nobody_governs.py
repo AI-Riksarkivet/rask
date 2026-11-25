@@ -20,8 +20,6 @@ already argues that an unreachable gate is not a safety property; this obeys tha
 re-opening it.
 """
 
-from __future__ import annotations
-
 from maintenance.services import reconcile
 
 

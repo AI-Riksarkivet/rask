@@ -18,8 +18,6 @@ So this module is the two halves of that gate:
   facet's published version moves, which is the only thing that made the drift invisible before.
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Any

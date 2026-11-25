@@ -10,8 +10,6 @@ token it admits (empty where the lane's OpenFGA admits anyone), and ``RASK_FGA_D
 warehouse where the lane renamed it.
 """
 
-from __future__ import annotations
-
 import os
 import sys
 

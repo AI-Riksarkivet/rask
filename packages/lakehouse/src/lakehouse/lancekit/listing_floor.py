@@ -6,8 +6,6 @@ on the clock that stamps the raise's own manifest, so the floor (the earliest re
 the versions beneath the raise are cleaned.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 

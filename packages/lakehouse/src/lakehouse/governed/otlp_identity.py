@@ -8,8 +8,6 @@ is not sent rather than sent anonymously. The platform's OTLP gateway verifies t
 issuer, so no telemetry credential is configured anywhere.
 """
 
-from __future__ import annotations
-
 from typing import override
 
 import requests

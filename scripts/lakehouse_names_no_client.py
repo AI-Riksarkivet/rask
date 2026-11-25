@@ -18,8 +18,6 @@ is used as a name: a path, an account, an image, a module, a backticked name, "<
 matched as a whole word.
 """
 
-from __future__ import annotations
-
 import argparse
 import re
 import sys

@@ -7,8 +7,6 @@ request's head (its method, its routed path and what the lifespan wired), so a r
 a passed request reaches the door exactly as it arrived.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 
 from starlette.requests import Request

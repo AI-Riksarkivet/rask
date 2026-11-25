@@ -9,8 +9,6 @@ lets the process serve the next request: one table that makes Lance panic takes 
 (ADR 0203). A request to stop (a cancellation, ``SystemExit``) passes through untouched.
 """
 
-from __future__ import annotations
-
 import logging
 
 from lance_namespace import ErrorCode

@@ -4,8 +4,6 @@ Both readers are tolerant rather than a `RunEvent` parse: they fire on the paths
 validation or was refused, so the strict model is unavailable exactly where the answer is needed.
 """
 
-from __future__ import annotations
-
 from lineage.models import author_sub_from_payload, run_id_from_payload
 
 

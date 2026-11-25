@@ -6,8 +6,6 @@ needs one too ([[XC-204]]). So the chart tells the catalog its pool and its cap,
 reaches the pool; the values schema refuses no cap at all.
 """
 
-from __future__ import annotations
-
 import subprocess
 
 import pytest

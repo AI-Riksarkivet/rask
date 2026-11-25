@@ -23,8 +23,6 @@ event, and its reader keeps the copy that reaches it first.
 All IO here is blocking; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging

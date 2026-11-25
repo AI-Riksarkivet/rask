@@ -11,8 +11,6 @@ Between the two, a service answers from its dependencies' verdicts (`lakehouse.p
 answering keeps it in rotation, `degraded` (200), and one it cannot serve without takes it out, `unhealthy` (503).
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 import time

@@ -6,8 +6,6 @@ far above it refuses an honest insert. So each realistic cast is held to both si
 ones (a number written as text, a list view that references one range from many rows) to the first.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import pyarrow as pa

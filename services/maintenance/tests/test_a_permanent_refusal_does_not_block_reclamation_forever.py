@@ -15,8 +15,6 @@ The per-refusal coverage — that every arm which refuses by shape sets `exclude
 `services/maintenance/tests/test_orphan_files.py`.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import lance

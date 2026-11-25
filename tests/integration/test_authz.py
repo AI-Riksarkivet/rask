@@ -11,8 +11,6 @@ Every table and namespace is asked about as the object its name resolves to, ``t
 (ADR 0173 §8), resolved here through the namespace double.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from typing import cast, override
 from unittest.mock import AsyncMock, MagicMock

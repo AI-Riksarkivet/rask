@@ -33,8 +33,6 @@ rather than failing, because the mutations here are field-level (flip ``status``
 top of a fresh one and silently reverting a field the caller never looked at.
 """
 
-from __future__ import annotations
-
 import fcntl
 import hashlib
 import json

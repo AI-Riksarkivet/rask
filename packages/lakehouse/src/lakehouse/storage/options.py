@@ -10,8 +10,6 @@ whose session token were dropped would sign as the pod's own broader role. A lak
 credential build both through here, so neither failure can come back in a copy.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit

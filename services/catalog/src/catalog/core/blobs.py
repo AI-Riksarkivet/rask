@@ -14,8 +14,6 @@ Detection picks no storage version: no writer chooses one from the schema, and e
 row-aligned with the tabular columns and with a null payload as ``None`` on its own row.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, cast

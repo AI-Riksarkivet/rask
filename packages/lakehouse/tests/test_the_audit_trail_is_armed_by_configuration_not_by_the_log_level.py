@@ -17,8 +17,6 @@ logger it writes to is unarmed. `audit_enabled` is a required keyword, like `doc
 it, so the type checker makes every new lakehouse service answer it.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager

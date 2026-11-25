@@ -16,8 +16,6 @@ The rule these encode: a claim that cannot be proven by a grep, a test, or a ren
 a guess. Each test below fails on the ORIGINAL buggy code and passes now.
 """
 
-from __future__ import annotations
-
 import functools
 import json
 import re

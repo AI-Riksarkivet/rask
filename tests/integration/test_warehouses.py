@@ -6,8 +6,6 @@ dir so the registry round-trips on the local FS with no object storage. Covers: 
 the real model in `services/catalog/tests/test_a_door_the_router_leaves_open_decides_for_itself.py`.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Iterator
 from fnmatch import fnmatchcase

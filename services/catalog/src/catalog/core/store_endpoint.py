@@ -17,8 +17,6 @@ is still the estate (scheme and host case, a default port, a trailing slash or d
 carrying userinfo, a query, a fragment or an unparseable port is another store.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Final
 from urllib.parse import urlsplit

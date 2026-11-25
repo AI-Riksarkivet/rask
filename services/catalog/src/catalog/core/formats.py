@@ -25,8 +25,6 @@ one (``catalog.services.managed_versions``), the register door a dataset carryin
 a version carrying one (``catalog.services.tables.writes``), and this guard refuses one a door would only have echoed.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 
 from lance_namespace import InvalidInputError, UnsupportedOperationError

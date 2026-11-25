@@ -11,8 +11,6 @@ for (ADR 0170), and maintenance's expiry pass holding its own key pair in the ta
 signs with. Only the STS exchange and the catalog's vend door (with respx, at the URL maintenance asks) are played.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

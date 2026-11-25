@@ -10,8 +10,6 @@ role alice granted ``reader`` on it, and the assignee door refuses alice herself
 access, as the grant doors refuse it) and a role of another project.
 """
 
-from __future__ import annotations
-
 import asyncio
 import uuid
 from concurrent.futures import ThreadPoolExecutor

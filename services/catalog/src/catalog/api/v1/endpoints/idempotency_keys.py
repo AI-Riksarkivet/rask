@@ -12,8 +12,6 @@ The router guard leaves this path to its handler (``rungs._RESOURCES`` names non
 router's own dependency, as the trash doors' is.
 """
 
-from __future__ import annotations
-
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends

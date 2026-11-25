@@ -6,8 +6,6 @@ directory is on the path. A conftest is loaded before collection begins, so the 
 whole directory.
 """
 
-from __future__ import annotations
-
 import pathlib
 import sys
 

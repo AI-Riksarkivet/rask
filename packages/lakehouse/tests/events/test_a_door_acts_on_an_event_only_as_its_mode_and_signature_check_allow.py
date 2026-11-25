@@ -9,8 +9,6 @@ Both ways of being wrong are pinned. A fail-open ENFORCE admits the forgery the 
 destroys honest events during the soak, where a refusal is acknowledged and gone.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from typing import NoReturn
 

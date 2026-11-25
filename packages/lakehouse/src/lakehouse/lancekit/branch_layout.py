@@ -19,8 +19,6 @@ So the layout is a rule the estate keeps, and this module is that rule in one pl
 create, delete and vend doors and maintenance's reclaim all ask it.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable
 from typing import Final
 from urllib.parse import quote

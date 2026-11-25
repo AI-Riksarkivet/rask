@@ -7,8 +7,6 @@ restore and prune, and `docs/runbooks/RUNBOOK-restore.md` documents the drill; t
 signs is `test_a_backup_run_signs_with_a_session_its_token_is_exchanged_for.py`'s ([[XC-084]]).
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 from tests.chart.chart_render import render

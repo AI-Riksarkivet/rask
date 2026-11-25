@@ -11,8 +11,6 @@ store answers a delete of an object already gone as done. A root that fails is l
 every other root to this tick.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import timedelta
 from functools import partial

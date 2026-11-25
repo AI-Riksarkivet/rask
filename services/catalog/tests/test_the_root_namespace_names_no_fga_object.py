@@ -35,8 +35,6 @@ Every other action on the root (drop, policy, protection, grants) is refused: an
 the check lets any signed-in caller cascade-drop the whole default root.
 """
 
-from __future__ import annotations
-
 import asyncio
 from contextlib import nullcontext
 from pathlib import Path

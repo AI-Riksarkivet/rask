@@ -18,8 +18,6 @@ namespace. That check is the security boundary of this whole behaviour, which is
 both directions.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from catalog.services.tables.registering import registration_points_at

@@ -19,8 +19,6 @@ return VendFacts()`) and answered 200, and the project delete read the warehouse
 and answered 409 naming the warehouse it still held. Both are the answers these legs give with no fault planted.
 """
 
-from __future__ import annotations
-
 import time
 import uuid
 from collections.abc import Iterator

@@ -22,8 +22,6 @@ A PERSON who creates a table still owns it: pinned on a real OpenFGA by
 `services/catalog/tests/test_a_grant_is_held_by_the_objects_uuid.py::test_every_tuple_a_create_writes_names_the_objects_uuid`.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any
 

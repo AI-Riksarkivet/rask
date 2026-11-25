@@ -39,8 +39,6 @@ THE CREDENTIAL MAINTENANCE PRESENTS IS THE POD'S OWN SERVICE-ACCOUNT TOKEN, proj
 600 s lifetime (measured, LH-220 probe d). An unreadable token stops the dataset as unauthenticated and nothing is sent.
 """
 
-from __future__ import annotations
-
 import logging
 from functools import cache
 from time import monotonic

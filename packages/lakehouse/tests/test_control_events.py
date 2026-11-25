@@ -6,8 +6,6 @@ outage never fails a catalog mutation). The emit sites, the broadcast subscripti
 covered by their own tests once wired; these pin the foundation.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any
 

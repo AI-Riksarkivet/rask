@@ -34,8 +34,6 @@ condition is that this service cannot currently trust its own issuer. `_provider
 "Unrecognized token issuer" stays a 401: that one IS about the token.
 """
 
-from __future__ import annotations
-
 import httpx
 import pytest
 

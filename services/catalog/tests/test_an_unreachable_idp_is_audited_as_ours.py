@@ -12,8 +12,6 @@ THE VERIFIER IS REAL, and its issuer is a loopback port nothing accepts on, so t
 actually raises rather than a double's.
 """
 
-from __future__ import annotations
-
 import logging
 import socket
 from collections.abc import Iterator

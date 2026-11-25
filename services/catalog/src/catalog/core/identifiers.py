@@ -12,8 +12,6 @@ rule a segment must meet to be a name (ADR 0173 §4). It also owns the key the c
 beside its name (ADR 0173): the property both are answered under, and the minting of a namespace's.
 """
 
-from __future__ import annotations
-
 import re
 import unicodedata
 from collections.abc import Mapping, Sequence

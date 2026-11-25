@@ -26,8 +26,6 @@ poisoned manifest must not make a table permanently un-vendable. The caller keep
 entitled to and loses only the grant it was not.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from catalog.core.vending import build_session_policy

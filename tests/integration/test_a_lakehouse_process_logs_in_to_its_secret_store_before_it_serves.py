@@ -7,8 +7,6 @@ theirs reads a secret. Each is started here against a store that never admits it
 the role the store refused, never on the first secret the process went on to read, and leaves no session behind.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable, Coroutine
 

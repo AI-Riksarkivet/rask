@@ -16,8 +16,6 @@ Driven on a real local control root, with the record's reads wrapped to make the
 signed as another identity stands in for another replica's.
 """
 
-from __future__ import annotations
-
 import asyncio
 import threading
 import time

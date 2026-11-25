@@ -8,8 +8,6 @@ store does not trust is refused at verification; a key pair in the environment i
 and a role policy grants its policy to every ServiceAccount token in the cluster.
 """
 
-from __future__ import annotations
-
 import json
 import subprocess
 from pathlib import Path

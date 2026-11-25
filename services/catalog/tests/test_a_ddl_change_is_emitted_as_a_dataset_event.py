@@ -13,8 +13,6 @@ reads it downstream is the authorizer (`rask_author.sub`) and a notifier (`rask_
 write's run slot.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

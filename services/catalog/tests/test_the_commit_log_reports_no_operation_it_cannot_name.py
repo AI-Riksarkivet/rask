@@ -21,8 +21,6 @@ now learn, and it collides with the day Lance adds a real operation of that name
 "this log cannot tell you", is already produced by the sibling branch, and needs no new vocabulary.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, cast
 

@@ -24,8 +24,6 @@ warehouses, and what each person holds on them, are other runs' and the seed's, 
 That no binding record is READ is not observable from outside the catalog; the module holds that none stands to be read.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import time

@@ -23,8 +23,6 @@ NAMED `parent_branch`/`parent_version`, matching `list_branches`, because that i
 bag that has no schema to keep them apart.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from pathlib import Path

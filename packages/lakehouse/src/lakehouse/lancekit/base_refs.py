@@ -7,8 +7,6 @@ two spellings of one path are never two places: a comparator that silently never
 all.
 """
 
-from __future__ import annotations
-
 from urllib.parse import unquote_to_bytes
 
 

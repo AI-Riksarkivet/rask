@@ -4,8 +4,6 @@ Scope: pylance dataset semantics only. HTTP read semantics over a blob payload â
 satisfiability, the bounded streaming window â€” belong to ``blob_serving.py``, which changes for RFC 9110 reasons
 rather than pylance ones. Nothing here shapes a response."""
 
-from __future__ import annotations
-
 import io
 import itertools
 from collections.abc import Iterator

@@ -22,8 +22,6 @@ cannot see it, and that path can still only be caught at verify time. It gets th
 always promised.
 """
 
-from __future__ import annotations
-
 import logging
 
 import pytest

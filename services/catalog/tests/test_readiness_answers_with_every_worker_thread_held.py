@@ -8,8 +8,6 @@ the Service together. The threads are held as such a burst holds them, by borrow
 the app's own event loop.
 """
 
-from __future__ import annotations
-
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor

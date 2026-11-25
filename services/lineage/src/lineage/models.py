@@ -4,8 +4,6 @@ OpenLineage is an external standard whose wire format is camelCase (``eventType`
 ``runId``); we read it with field aliases and expose snake_case in Python.
 """
 
-from __future__ import annotations
-
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, model_validator

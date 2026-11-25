@@ -1,7 +1,5 @@
 """Lineage suite fixtures."""
 
-from __future__ import annotations
-
 import sys
 from collections.abc import Iterator
 from pathlib import Path

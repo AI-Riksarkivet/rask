@@ -7,8 +7,6 @@ here, so a message that ends inside a field, or carries a wire type proto3 does 
 stopped there and answered what it had read so far would answer feature flags ``(0, 0)``, which every gate passes.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 

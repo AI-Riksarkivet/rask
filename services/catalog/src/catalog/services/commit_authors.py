@@ -10,8 +10,6 @@ the version unrecorded, so a lost announcement of it is counted unauthored and p
 (owner, 2026-11-01).
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 

@@ -6,8 +6,6 @@ next step starts when it receives the event (a tag's move, say) and that polls n
 staged before the publish and dropped only on ack, and the relay delivers what stayed staged.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any

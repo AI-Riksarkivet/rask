@@ -6,9 +6,6 @@ That is a property of this service's listings, not of pagination in general: an 
 precondition.
 """
 
-from __future__ import annotations
-
-
 __all__ = ["paginate"]
 
 

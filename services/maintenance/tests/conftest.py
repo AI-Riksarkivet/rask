@@ -1,7 +1,5 @@
 """Shared fixtures for the maintenance suite: the catalog's own app, one dataset's pass, an S3 store, and recorders for the counters."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path

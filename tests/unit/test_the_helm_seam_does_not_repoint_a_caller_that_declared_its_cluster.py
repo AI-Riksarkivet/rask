@@ -17,8 +17,6 @@ The script runs for real with `kubectl` stubbed onto the front of the real PATH 
 its own source of wrong answers — so what is under test is the seam rather than a copy of its logic.
 """
 
-from __future__ import annotations
-
 import os
 import subprocess
 from pathlib import Path

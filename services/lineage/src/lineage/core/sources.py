@@ -1,7 +1,5 @@
 """Which datasets an event names are outside the governed estate: the one rule every door, record and read here applies."""
 
-from __future__ import annotations
-
 from lakehouse.naming import is_external_source_namespace
 from lineage.core.config import get_settings
 

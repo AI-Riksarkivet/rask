@@ -13,8 +13,6 @@ Rust client sends; and `%2F` is a `/` that no route can carry, refused before ro
 missing route.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pyarrow as pa

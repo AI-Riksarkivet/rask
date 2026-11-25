@@ -1,7 +1,5 @@
 """An object's grants over its life, from its create to its removal."""
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence

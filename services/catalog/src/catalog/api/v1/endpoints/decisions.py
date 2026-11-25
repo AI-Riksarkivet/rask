@@ -28,8 +28,6 @@ asking what a subject may do reads the authorization graph, so the question is i
 route's role is audited by the gate itself (`door_gates.require_relation`).
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Annotated, Final
 

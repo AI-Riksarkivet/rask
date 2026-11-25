@@ -12,8 +12,6 @@ The contract is checked where every commit passes (`catalog.services.contracts`)
 version, scan no row and run no timer.
 """
 
-from __future__ import annotations
-
 from functools import partial
 from typing import Annotated, Any
 

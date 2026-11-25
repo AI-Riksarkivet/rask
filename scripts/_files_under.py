@@ -6,8 +6,6 @@ the same way: the tracked files and the untracked ones git does not ignore, or, 
 listing, so two lints cannot judge two different trees.
 """
 
-from __future__ import annotations
-
 import subprocess
 from collections.abc import Sequence
 from pathlib import Path

@@ -7,8 +7,6 @@ lets through and the other drops is a silent miss. A value that is not one perso
 addresses a role, a team or `*`, which no one reads.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from lakehouse.governed.principal import Principal

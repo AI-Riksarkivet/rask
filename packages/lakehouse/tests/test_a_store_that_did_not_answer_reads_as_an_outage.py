@@ -9,8 +9,6 @@ store's rate limit, which says "not now", and S3's 400 ``RequestTimeout``, the s
 finished receiving. A retry is for both, so each is an outage in every dialect that names it.
 """
 
-from __future__ import annotations
-
 import pytest
 from botocore.exceptions import ConnectionClosedError, EndpointConnectionError, ParamValidationError, ReadTimeoutError
 from lance_namespace import InternalError

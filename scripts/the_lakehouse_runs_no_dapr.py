@@ -9,8 +9,6 @@ The guards themselves name it; `GUARDS` lists those files. The research and the 
 the agent instructions are not code and are not judged.
 """
 
-from __future__ import annotations
-
 import argparse
 import re
 import sys

@@ -1,7 +1,5 @@
 """Storage options that answer as a service's do while it holds no store session (``lakehouse.storage.store_session``)."""
 
-from __future__ import annotations
-
 from lakehouse.storage.credential import StoreCredentialUnavailableError
 from lakehouse.storage.options import StorageOptions
 

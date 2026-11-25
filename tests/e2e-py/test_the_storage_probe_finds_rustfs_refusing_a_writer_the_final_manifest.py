@@ -13,8 +13,6 @@ reclaim session's test mints its own.
 Run by `dagger call rustfs-provisioning` (`make rustfs-provisioning`) against the throwaway RustFS it binds.
 """
 
-from __future__ import annotations
-
 import json
 import uuid
 from collections.abc import Sequence

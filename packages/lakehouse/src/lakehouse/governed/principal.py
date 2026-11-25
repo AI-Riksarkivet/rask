@@ -15,8 +15,6 @@ A string that names no identity provider is no principal. Every place that requi
 seed, an admin list, an inbox address. A bare name is refused there, because no token can ever prove it.
 """
 
-from __future__ import annotations
-
 import re
 import unicodedata
 from typing import Annotated, Final, Self

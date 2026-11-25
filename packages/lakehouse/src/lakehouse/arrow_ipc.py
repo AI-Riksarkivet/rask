@@ -27,8 +27,6 @@ readers in the root ``pyproject.toml``.
 own import time) can take the constant without pulling pyarrow.
 """
 
-from __future__ import annotations
-
 import struct
 from collections import Counter
 from collections.abc import Generator

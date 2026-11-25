@@ -24,8 +24,6 @@ again never revives it, and it never blocks a delete.
 All IO here is blocking; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import logging
 import re
 import uuid

@@ -12,8 +12,6 @@ with ``endpoint_override`` empty or unset and ``scheme="http"``, it opened TLS t
 so its own ``proxy_options`` and ``tls_ca_file_path`` are the only route to a local store, and the front hands a test both.
 """
 
-from __future__ import annotations
-
 import datetime
 import http.client
 import http.server

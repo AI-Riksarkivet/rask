@@ -11,8 +11,6 @@ accepted edit exits 0; a refused one exits 1, `nats: error: could not edit Strea
 gitops-from-empty`), which changes the max age on a running estate and reads the stream back.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import subprocess

@@ -12,8 +12,6 @@ Two things are being pinned, and they fail differently on purpose:
   somewhere else, so the mask itself is asserted as a value.
 """
 
-from __future__ import annotations
-
 import pathlib
 from typing import Any, cast
 

@@ -6,8 +6,6 @@ with a BTREE index, compacted, which is the commit that rewrites one (measured 2
 INVERTED rewrite none).
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 

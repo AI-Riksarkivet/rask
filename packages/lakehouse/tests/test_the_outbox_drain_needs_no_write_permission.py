@@ -22,8 +22,6 @@ each event starts it again on every tick. The relay's own comment argues a dupli
 at-least-once, which is true of ONE redelivery and false of an unbounded one.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

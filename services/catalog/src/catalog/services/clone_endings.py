@@ -46,8 +46,6 @@ Nothing here commits a table version or announces anything: the door's own tag r
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import timedelta
 from typing import Final

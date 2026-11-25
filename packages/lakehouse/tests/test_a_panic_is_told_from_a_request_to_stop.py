@@ -7,8 +7,6 @@ request the server is stopping, or keep a process its owner told to exit; mistak
 the loop it escaped. A group is a panic when it holds no request to stop.
 """
 
-from __future__ import annotations
-
 import asyncio
 
 import pytest

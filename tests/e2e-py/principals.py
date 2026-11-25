@@ -8,8 +8,6 @@ is the deployment's. So a suite asks the catalog, whose `/management/v1/me` answ
 that bearer on.
 """
 
-from __future__ import annotations
-
 import os
 
 import requests

@@ -6,8 +6,6 @@ too, so what a finish sends for a failed door is exactly what that door would ha
 (:mod:`catalog.services.announcement_intents` says why).
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncGenerator, Awaitable, Callable, Iterable, Mapping, Sequence
 from contextlib import asynccontextmanager

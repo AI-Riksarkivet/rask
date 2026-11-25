@@ -14,8 +14,6 @@ and they run inside the process, behind no mount. Through a window every timer i
 nothing, so the first window after the window ends does the work.
 """
 
-from __future__ import annotations
-
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path

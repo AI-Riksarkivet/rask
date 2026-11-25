@@ -12,8 +12,6 @@ pins that, because "delete the unused auth dependency" is exactly the cleanup th
 door.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 
 import pytest

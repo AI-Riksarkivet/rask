@@ -5,8 +5,6 @@ ONE implementation for both sides of `fga-store-check.sh`'s report (`_fga_store_
 of the thing that check exists to catch, and the estate has already paid for that class of drift once.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 

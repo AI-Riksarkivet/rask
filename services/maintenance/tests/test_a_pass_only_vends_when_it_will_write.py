@@ -25,8 +25,6 @@ vend is the ambient key acting on tenant bytes. A table overwritten once and nev
 version left to ask for a vend, so the stranded file must ask on its own.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 

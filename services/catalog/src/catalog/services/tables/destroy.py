@@ -1,8 +1,6 @@
 """A destructive drop: the table's bytes deleted at the location its door resolved, refused while a registered clone
 reads them or while the location is not one table's bytes."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Iterable, Sequence
 from contextlib import suppress

@@ -11,8 +11,6 @@ vended credentials, a `session_token`. Both must survive the swap: a dropped reg
 warehouse to `AWS_REGION`, and a dropped token makes a scoped credential sign as an unknown identity.
 """
 
-from __future__ import annotations
-
 import json
 from datetime import UTC, datetime
 from typing import Any

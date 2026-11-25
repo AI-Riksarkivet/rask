@@ -22,8 +22,6 @@ so `medallion.bronze` is captured by prefix. Comparing literally would report ev
 uncovered and the gate would be abandoned on its first run.
 """
 
-from __future__ import annotations
-
 import re
 
 from tests.chart import chart_render

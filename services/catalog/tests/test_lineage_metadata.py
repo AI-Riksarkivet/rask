@@ -4,8 +4,6 @@ The round-trip tests prove the coordinates land in the Arrow schema metadata; th
 they survive a real ``write_dataset`` → ``dataset`` cycle (i.e. the data is genuinely self-describing).
 """
 
-from __future__ import annotations
-
 import pyarrow as pa
 
 from catalog.core.lineage_metadata import build_lineage_metadata, stamp_lineage_metadata

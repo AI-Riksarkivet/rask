@@ -7,8 +7,6 @@ content-types, and error → HTTP / Problem-Details mapping. No lance operations
 are exercised.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Callable
 from pathlib import Path

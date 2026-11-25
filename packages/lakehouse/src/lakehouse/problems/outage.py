@@ -70,8 +70,6 @@ is rather than becoming a 503 that invites a retry loop against a misconfigurati
 `PermissionDenied`, not `Generic`, and its status is neither a 5xx nor a 429.
 """
 
-from __future__ import annotations
-
 from lance_namespace import InternalError, ServiceUnavailableError
 
 from lakehouse.storage.errors import no_answer

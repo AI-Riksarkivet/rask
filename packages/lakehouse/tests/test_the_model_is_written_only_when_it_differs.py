@@ -8,8 +8,6 @@ is the drift a name-keyed comparison cannot see at all, because a tightened `can
 Every one of those failures is silent.
 """
 
-from __future__ import annotations
-
 import copy
 from typing import Any
 

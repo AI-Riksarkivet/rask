@@ -15,8 +15,6 @@ Run with `bash scripts/e2e_live.sh tests/e2e-py/test_an_erasure_is_rewritten_by_
 discovers every address from the release, or `make e2e-byo-erasure` with the addresses set.
 """
 
-from __future__ import annotations
-
 import os
 import time
 import uuid

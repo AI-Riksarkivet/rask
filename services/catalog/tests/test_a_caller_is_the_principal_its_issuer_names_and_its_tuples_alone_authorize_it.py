@@ -34,8 +34,6 @@ tuple per principal granted below and refuses a user id that is not one user as 
 therefore the one user its tuple names, and a caller refused holds none.
 """
 
-from __future__ import annotations
-
 import json
 import time
 import uuid

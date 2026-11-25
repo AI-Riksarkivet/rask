@@ -11,8 +11,6 @@ the ordering, the route CHOICE (a namespace is created inside its warehouse, thr
 convergence rule and the refusal handling are all assertable offline.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import json
 import sys

@@ -26,8 +26,6 @@ records `update` and `delete` silently rewriting MAIN. Same door family, same as
 because nothing compared the two paths.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

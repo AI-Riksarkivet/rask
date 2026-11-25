@@ -24,8 +24,6 @@ own check, which no erasure, hold, ref or fence reads, and it ends with them (:f
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Sequence
 from typing import Final

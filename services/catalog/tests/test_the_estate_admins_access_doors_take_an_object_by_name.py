@@ -10,8 +10,6 @@ name beside it. The tuple door's names are pinned beside its filters
 Every answer is the real OpenFGA's, on a store of this test's own; every tuple is written by the door that writes it.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pyarrow as pa

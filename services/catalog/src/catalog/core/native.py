@@ -5,8 +5,6 @@ implements. Absent methods and backend stubs are translated to
 ``UnsupportedOperationError`` (HTTP 406, code 0).
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from lance_namespace import LanceNamespace, UnsupportedOperationError

@@ -16,8 +16,6 @@ for a pass to expire: `undrop` deliberately does not consult the clock, so a rec
 reclaimed still describes recoverable bytes.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4

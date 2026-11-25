@@ -8,8 +8,6 @@ code 13 before it is held, at every door and on both arms, with nothing written.
 real `dir` backend with the cap at 1 MiB, which the middleware (sized at import) does not see.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import pyarrow as pa

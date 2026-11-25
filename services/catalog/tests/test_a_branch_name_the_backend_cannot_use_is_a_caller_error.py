@@ -11,8 +11,6 @@ name. The bound's own side cannot be created there, since a local filesystem roo
 refuses it, so it is held here.
 """
 
-from __future__ import annotations
-
 import pytest
 from lance_namespace import TableBranchAlreadyExistsError
 

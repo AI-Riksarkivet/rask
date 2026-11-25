@@ -21,8 +21,6 @@ Driven through lineage's own app and lifespan, each delivery handed to its inges
 counter read through a real in-memory reader.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from collections.abc import Callable

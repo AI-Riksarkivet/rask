@@ -10,8 +10,6 @@ REPORT ONLY is asserted MECHANICALLY, not by comment: :func:`test_a_full_run_lea
 snapshots the control root before and after a run and drives it with stores whose write paths raise.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import io

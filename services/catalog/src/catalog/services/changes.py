@@ -58,8 +58,6 @@ row carries its creation version there (measured 2026-09-11). A writer that merg
 selects may collapse them; this module may not, because a consumer applying both streams double-counts an insert reported as both.
 """
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 from typing import Final
 

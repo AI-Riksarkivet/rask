@@ -12,8 +12,6 @@ IT LIVES HERE, BESIDE THE MODEL IT WRITES, rather than inline in the chart's hoo
 and versioned, so writing unconditionally mints a new id on every upgrade — the store already held 50.
 """
 
-from __future__ import annotations
-
 import http.client
 import json
 import logging

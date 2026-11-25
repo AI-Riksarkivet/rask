@@ -20,8 +20,6 @@ once no retained version names its files, under the table's vend ([[LH-219]]); w
 record is kept and the pass carries the refusal.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import re

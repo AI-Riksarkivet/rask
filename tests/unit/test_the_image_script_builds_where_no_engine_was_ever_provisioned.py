@@ -15,8 +15,6 @@ front of PATH — the real PATH, kept intact, because a scrubbed one is its own 
 exports a tarball. The three cases are the three the guard now distinguishes.
 """
 
-from __future__ import annotations
-
 import os
 import subprocess
 from pathlib import Path

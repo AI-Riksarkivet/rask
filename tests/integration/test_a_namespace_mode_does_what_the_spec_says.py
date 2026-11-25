@@ -14,8 +14,6 @@ own: alice and bob may each create a namespace in the warehouse (``writer`` on i
 drop it, so the seed and revoke paths run as written and every refusal is the model's.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from pathlib import Path
 

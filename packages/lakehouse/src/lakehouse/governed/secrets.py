@@ -70,8 +70,6 @@ a secret answers that token too; the login's `token_policies` name the role's ow
 question is the rendered policy's.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import re

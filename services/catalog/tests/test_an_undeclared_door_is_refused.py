@@ -16,8 +16,6 @@ The walk at the bottom is what makes the refusal safe to ship: it drives the rea
 mounted route, so a route added without a rung fails HERE rather than in front of its first caller.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

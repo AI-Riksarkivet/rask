@@ -13,8 +13,6 @@ Run with `bash scripts/e2e_live.sh tests/e2e-py/test_a_stock_client_commits_on_a
 address from the release, or `make e2e-byo-branch` with the addresses set.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from typing import Any
 

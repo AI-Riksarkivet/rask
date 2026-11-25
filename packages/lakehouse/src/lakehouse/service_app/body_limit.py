@@ -15,8 +15,6 @@ Pure ASGI (not ``BaseHTTPMiddleware``) so the cap applies as bytes arrive, indep
 reads the body — and so it composes below the app's exception handlers without buffering the request itself.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 
 from lance_namespace import ErrorCode

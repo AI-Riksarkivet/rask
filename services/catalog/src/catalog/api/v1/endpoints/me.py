@@ -26,8 +26,6 @@ records authorization *decisions* (allow/deny gates), and these gate nothing (th
 ``require_*`` gate is a no-op there, so the caller genuinely can do everything).
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 

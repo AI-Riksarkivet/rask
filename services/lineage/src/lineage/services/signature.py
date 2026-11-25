@@ -19,8 +19,6 @@ outcomes into the three answers a door needs.
   would destroy honest events during a store blip.
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import Callable, Mapping

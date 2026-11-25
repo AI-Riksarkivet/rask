@@ -15,8 +15,6 @@ A file the store lists to the whole second is placed anywhere in that second, so
 the check starts in a later second (`_a_second_after`): a polled clock, not a sleep.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import time

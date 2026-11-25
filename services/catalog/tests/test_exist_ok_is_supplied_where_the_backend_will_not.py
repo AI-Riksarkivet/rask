@@ -16,8 +16,6 @@ create the namespace in, and on the create door the loser of that race would the
 somebody else's object. The backend's own refusal is the only answer that cannot be stale.
 """
 
-from __future__ import annotations
-
 from typing import Any, cast
 
 import pytest

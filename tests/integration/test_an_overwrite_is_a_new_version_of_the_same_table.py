@@ -16,8 +16,6 @@ Driven through the real catalog app on a real `dir` namespace, with the lineage 
 wire: the real `BusEmitter` builds it and publishes it on the bus double.
 """
 
-from __future__ import annotations
-
 import io
 
 import lance

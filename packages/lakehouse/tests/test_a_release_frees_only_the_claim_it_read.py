@@ -16,8 +16,6 @@ claim the table's own name still holds: a release lost to a crash leaves that cl
 has ended, since the door's backend call found the name free.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

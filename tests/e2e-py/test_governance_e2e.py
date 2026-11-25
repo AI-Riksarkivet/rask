@@ -26,8 +26,6 @@ Asserts the dataops/governance story end to end:
 has its own e2e. This test focuses on catalog authz + provenance authorship + tier lineage.)
 """
 
-from __future__ import annotations
-
 import os
 import time
 from collections.abc import Callable

@@ -12,8 +12,6 @@ That is safe for the catalog's connections only because none is served past ``co
 (``catalog.core.namespace.NamespaceConnections``). The index carries no tag or branch, so no history fence applies.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import timedelta
 from typing import Final

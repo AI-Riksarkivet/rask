@@ -6,8 +6,6 @@ Every read sends the condition clock (:func:`condition_context`) and asks past O
 too.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Collection, Iterable
 from datetime import UTC, datetime

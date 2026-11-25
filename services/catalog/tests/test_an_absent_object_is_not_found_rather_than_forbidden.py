@@ -27,8 +27,6 @@ lights `can_get_metadata` on `db1` through its `child` edge and nothing on the o
 nothing.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pyarrow as pa

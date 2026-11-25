@@ -10,8 +10,6 @@ release, so a 409 (`NamespaceAlreadyExists`, the spec's default `Create` mode) m
 and the suite proceeds in it.
 """
 
-from __future__ import annotations
-
 import os
 
 import requests

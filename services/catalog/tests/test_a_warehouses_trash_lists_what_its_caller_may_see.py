@@ -10,8 +10,6 @@ Against the catalog as deployed, a loopback Dex signing callers in and a real Op
 store of the test's own ([[LH-235]]).
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from typing import Any
 

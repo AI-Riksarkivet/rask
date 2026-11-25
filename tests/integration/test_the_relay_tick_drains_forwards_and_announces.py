@@ -18,8 +18,6 @@ made and handed to the tick, and where the relay's timer is started: with a peri
 from outside the process.
 """
 
-from __future__ import annotations
-
 import json
 import time
 from collections.abc import Callable, Generator, Iterator, Sequence

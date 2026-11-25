@@ -14,8 +14,6 @@ the backend's own put-if-not-exists (``create_table_version`` of the ``dir`` nam
 version number meet the store's arbitration, not the catalog's.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from collections import Counter

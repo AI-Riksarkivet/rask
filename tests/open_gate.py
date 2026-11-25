@@ -4,8 +4,6 @@ The handler takes its gate with no default, so a call site that names none does 
 (`lineage.services.consumer.handle_cloud_event`); a test whose claim is the parse, the record or the verdict names this one.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from typing import Any
 

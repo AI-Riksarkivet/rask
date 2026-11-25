@@ -15,8 +15,6 @@ against real pylance on ``tmp_path``: the claim is the whole path a person sees,
 completes.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager

@@ -4,8 +4,6 @@ The crash it prevents is measured in `tests/integration/test_a_long_boolean_chai
 this file pins the counting rule, which decides what a caller may still send.
 """
 
-from __future__ import annotations
-
 from typing import cast
 
 import pytest

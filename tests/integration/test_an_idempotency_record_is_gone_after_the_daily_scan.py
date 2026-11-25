@@ -11,8 +11,6 @@ store stamped on its last write, and moto stamps every write with the real clock
 two days on: the one double here.
 """
 
-from __future__ import annotations
-
 from datetime import datetime, timedelta
 from typing import Any
 

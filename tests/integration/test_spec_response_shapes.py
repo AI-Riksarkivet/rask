@@ -22,8 +22,6 @@ under R2 they belong on the management API, not on a spec route whose response a
 able to deserialise.
 """
 
-from __future__ import annotations
-
 from unittest.mock import MagicMock
 
 from fastapi.testclient import TestClient

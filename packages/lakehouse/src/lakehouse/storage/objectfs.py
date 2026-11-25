@@ -13,8 +13,6 @@ The options travel as :class:`~lakehouse.storage.options.StorageOptions`, whose 
 and become the flat map only at the call that signs with them, through that guard's own S3 filesystem builder.
 """
 
-from __future__ import annotations
-
 from functools import partial
 from typing import TYPE_CHECKING, Final
 

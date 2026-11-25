@@ -9,8 +9,6 @@ still stands), logged by the ending's id at WARNING and asked again next audit; 
 whose clone stands is removed by the catalog a day after its filing, so no refusal repeats for longer.
 """
 
-from __future__ import annotations
-
 import logging
 
 from fastapi.concurrency import run_in_threadpool

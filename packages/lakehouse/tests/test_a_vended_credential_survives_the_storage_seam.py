@@ -24,8 +24,6 @@ invented key produced no error and no signature change), so a mis-spelled option
 with nothing to notice. The wire test below is what makes that unmissable.
 """
 
-from __future__ import annotations
-
 import contextlib
 import threading
 from collections.abc import Iterator

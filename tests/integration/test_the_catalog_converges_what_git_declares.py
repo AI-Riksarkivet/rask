@@ -6,8 +6,6 @@ any door. Driven on the deployed shape: the real app with authorization on (a lo
 test's own) over an S3 store, the tick run on the app's own event loop as the catalog's timer runs it.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from collections.abc import Generator, Iterator

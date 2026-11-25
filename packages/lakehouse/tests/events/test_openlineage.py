@@ -3,8 +3,6 @@
 The OpenLineage spec gate for what the emitters put on the bus is ``tests/unit/test_openlineage_spec_conformance.py``.
 """
 
-from __future__ import annotations
-
 import uuid
 
 from lakehouse.events.openlineage import run_id_for

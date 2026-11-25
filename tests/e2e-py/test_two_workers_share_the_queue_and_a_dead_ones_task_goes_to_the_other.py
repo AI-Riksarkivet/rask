@@ -70,8 +70,6 @@ asking, with its process kept, until they answer.
 Run by `dagger call nats-auth` (`make nats-auth`), beside the bus's permission proof, whose rig it shares.
 """
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import inspect

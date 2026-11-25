@@ -8,8 +8,6 @@ under the key `timeout` and ignores `request_timeout` without a word, so the cla
 which keys the options hold.
 """
 
-from __future__ import annotations
-
 import socket
 import threading
 from collections.abc import Iterator

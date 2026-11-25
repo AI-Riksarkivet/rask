@@ -23,8 +23,6 @@ past one 255-byte key segment is refused with an error that carries no code, so 
 name itself.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

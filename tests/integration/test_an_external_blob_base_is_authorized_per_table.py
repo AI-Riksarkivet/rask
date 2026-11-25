@@ -14,8 +14,6 @@ a case in ``test_a_forged_fragment_is_refused_and_the_table_is_unchanged.py``, b
 fragment.
 """
 
-from __future__ import annotations
-
 import json
 import uuid
 from collections.abc import Iterator

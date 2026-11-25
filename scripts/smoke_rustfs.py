@@ -18,8 +18,6 @@ Exits non-zero on any failure. No credentials are hard-coded; everything is env-
 (the agnostic invariant — swap RustFS/AWS/any S3 with env only).
 """
 
-from __future__ import annotations
-
 import os
 import sys
 import uuid

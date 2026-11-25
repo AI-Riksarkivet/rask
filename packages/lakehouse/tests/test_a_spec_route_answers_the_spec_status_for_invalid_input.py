@@ -16,8 +16,6 @@ DRIVEN THROUGH A REAL APP rather than by calling the branch: the handler reads
 Calling `is_spec_route` alone would pin the table and not the seam that consults it.
 """
 
-from __future__ import annotations
-
 import logging
 
 import pytest

@@ -18,8 +18,6 @@ closes it — so this test enumerates the pairs by DRIVING the real resolvers in
 resolves in ``lakehouse/governed/auth/model.json``, the file the app actually loads.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any, cast
 

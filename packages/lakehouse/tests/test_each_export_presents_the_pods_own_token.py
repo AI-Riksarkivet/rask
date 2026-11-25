@@ -8,8 +8,6 @@ minutes. No secret is configured; the platform's gateway verifies the token agai
 The exporter is the SDK's own, built the way auto-configuration builds it, against a server that records what arrives.
 """
 
-from __future__ import annotations
-
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

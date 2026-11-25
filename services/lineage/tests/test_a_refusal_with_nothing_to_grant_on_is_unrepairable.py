@@ -16,8 +16,6 @@ MEASURED on the deployed estate 2026-09-19: all 7 parks in a six-hour window nam
 from the catalog. So the repairable arm was holding nothing repairable.
 """
 
-from __future__ import annotations
-
 from typing import Any, cast
 
 import pytest

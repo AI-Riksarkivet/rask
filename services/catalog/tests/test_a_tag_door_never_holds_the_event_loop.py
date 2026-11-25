@@ -9,8 +9,6 @@ The store call is the one thing replaced: the door, its claim, its dependencies 
 `dir` root of the test's own.
 """
 
-from __future__ import annotations
-
 import threading
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor

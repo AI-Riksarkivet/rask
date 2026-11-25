@@ -15,8 +15,6 @@ concurrent request. Storing a claim on it would leak one caller's identity onto 
 event, which is worse than the silence it replaces: a row in the wrong person's inbox.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any
 

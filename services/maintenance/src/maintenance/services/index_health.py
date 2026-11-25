@@ -14,8 +14,6 @@ table's values; it panics on a JSON index (``lance-index/src/scalar/json.rs:95``
 covering one fragment it commits index migrations, then crashes the process (measured on #796's work, 2026-11-12).
 """
 
-from __future__ import annotations
-
 import lance
 
 from lakehouse.records.maintenance_due import IndexDue

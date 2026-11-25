@@ -8,8 +8,6 @@ the names that hold no object. A test driving a door through a request passes ``
 location its table's resolution read ([[LH-530]]), so that resolution is the one the test's own backend describes.
 """
 
-from __future__ import annotations
-
 import uuid
 from collections.abc import Callable
 from typing import override

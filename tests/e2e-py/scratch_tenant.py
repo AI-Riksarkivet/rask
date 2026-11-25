@@ -5,8 +5,6 @@ and grants the job identity the relations a drill names on that namespace. The j
 deleted again at the end: the tables first, then the warehouse with its bucket, then the project.
 """
 
-from __future__ import annotations
-
 import os
 import uuid
 from collections.abc import Callable, Iterator, Sequence

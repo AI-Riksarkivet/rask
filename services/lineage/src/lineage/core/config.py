@@ -8,8 +8,6 @@ catalog's — and while the twin existed they were configured under two differen
 config: enabling a layer without the inputs it needs raises at startup, never silently opens.
 """
 
-from __future__ import annotations
-
 from functools import lru_cache
 from typing import Annotated, Self
 

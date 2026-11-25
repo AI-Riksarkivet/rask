@@ -11,8 +11,6 @@ table's uuid ([[LH-523]]): a rename keeps the record, and the name it carries is
 evaluated. A dataset no manifest row names — unregistered, trashed, dropped — gets no record.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 from datetime import datetime

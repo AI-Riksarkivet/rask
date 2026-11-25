@@ -7,8 +7,6 @@ runs the upstream `rustfs/rustfs` image from its fixture (`deploy/fixtures/rustf
 names a digest.
 """
 
-from __future__ import annotations
-
 from tests.chart.chart_render import containers, render, render_fixture
 
 

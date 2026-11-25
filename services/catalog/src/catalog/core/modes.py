@@ -26,8 +26,6 @@ joined. Both are matched case-insensitively and nothing else is, so ``EXIST_OK``
 and ``exis_tok`` does not.
 """
 
-from __future__ import annotations
-
 from enum import StrEnum
 
 from lance_namespace import InvalidInputError

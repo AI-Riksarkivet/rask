@@ -12,8 +12,6 @@ caller's body is redacted. A tick, or a background task, raises instead, so its 
 supervisor ends the process. Driven against the real apps with their lifespans run, one wire taken away at a time.
 """
 
-from __future__ import annotations
-
 import asyncio
 import io
 import logging

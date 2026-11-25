@@ -19,8 +19,6 @@ writer can plant one: no vend puts under ``_refs/`` (`lakehouse.lancekit.table_l
 Every function is blocking IO.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final

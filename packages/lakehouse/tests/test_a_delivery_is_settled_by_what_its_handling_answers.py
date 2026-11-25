@@ -7,8 +7,6 @@ ended message that never comes back) is the nats-auth lane's to show
 (`tests/e2e-py/test_nats_admits_each_client_only_to_its_own_subjects.py`).
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

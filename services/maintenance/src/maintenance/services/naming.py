@@ -5,8 +5,6 @@ producer's ``lineage.dataset_id`` stamp is a claim, not the catalog's word ([[LH
 acts on a dataset, or reports one the catalog does not know, asks the one rule here.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from typing import Any

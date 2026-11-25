@@ -21,8 +21,6 @@ one prefix by the oldest route, so a second release attached host-less to the sa
 refuses one that names none ([[XC-146]]); a development estate's routes stay host-less.
 """
 
-from __future__ import annotations
-
 import subprocess
 
 import pytest

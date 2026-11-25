@@ -18,8 +18,6 @@ The provenance namespace's retention is filled the same way ([[LH-529]]), from t
 of the release's own accounts, the only ones whose `writer` the catalog's boot takes back ([[LH-563]]).
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any
 

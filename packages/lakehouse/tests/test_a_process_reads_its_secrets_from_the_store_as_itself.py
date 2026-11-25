@@ -6,8 +6,6 @@ each secret under it. Driven at the store's HTTP API, which respx answers in the
 store (the root conftest's `secret_store`); the one claim about TLS runs against a real listener.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

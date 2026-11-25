@@ -7,8 +7,6 @@ carries the password. The fixture is one stock PostgreSQL server, its image name
 and the server holds every grant of the estate it serves.
 """
 
-from __future__ import annotations
-
 import re
 import subprocess
 from typing import Any

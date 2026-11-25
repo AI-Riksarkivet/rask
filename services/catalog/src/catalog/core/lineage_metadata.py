@@ -19,8 +19,6 @@ principal key into the file: it is identity/PII and the Lance file lives on obje
 OpenFGA boundary, so embedding it would leak the principal to anyone with raw bucket access. (#22 audit)
 """
 
-from __future__ import annotations
-
 import pyarrow as pa
 
 

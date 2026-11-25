@@ -5,8 +5,6 @@ A subject becomes a ``user`` only through :func:`user_object`, and a table or na
 (:func:`table_object`, :func:`namespace_object`; ADR 0173 §8), so no name reaches OpenFGA as an object.
 """
 
-from __future__ import annotations
-
 import unicodedata
 from typing import Final
 from urllib.parse import unquote

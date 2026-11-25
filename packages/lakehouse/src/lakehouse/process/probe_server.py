@@ -12,8 +12,6 @@ from another loop, ``/livez`` says nothing of the serving loop by itself, so tha
 (:class:`LoopBeat`) and ``/livez`` fails once the last one is :data:`STALE_SECONDS` old.
 """
 
-from __future__ import annotations
-
 import asyncio
 import threading
 from collections.abc import AsyncGenerator, Generator

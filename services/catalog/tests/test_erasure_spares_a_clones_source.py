@@ -8,8 +8,6 @@ subject too, which is its own surface ([[LH-263]]). The job here rewrites the so
 tag keeps the version the clone reads while the source's own history is reclaimed.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from pathlib import Path

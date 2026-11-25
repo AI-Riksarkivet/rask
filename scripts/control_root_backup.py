@@ -37,8 +37,6 @@ does (`docs/runbooks/RUNBOOK-restore.md`).
                                                          --into s3://lance-catalog/_restore_probe
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import sys

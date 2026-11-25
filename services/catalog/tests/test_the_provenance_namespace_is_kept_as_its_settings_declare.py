@@ -14,8 +14,6 @@ driven on a real ``dir`` namespace and a real OpenFGA store; the policy is read 
 root.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Iterator
 from pathlib import Path

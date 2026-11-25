@@ -15,8 +15,6 @@ refuses a name a standing role holds. A project holds few roles, so a role is fo
 All IO here is blocking; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import uuid

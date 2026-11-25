@@ -25,8 +25,6 @@ of their own (nats' PDB annotations, greptimedb's serviceaccount command, perses
 imagePullPolicy); those belong to upstream and the next `helm dependency update` overwrites any edit.
 """
 
-from __future__ import annotations
-
 import pathlib
 import re
 

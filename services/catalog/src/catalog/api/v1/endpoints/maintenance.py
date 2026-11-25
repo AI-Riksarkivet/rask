@@ -16,8 +16,6 @@ credential, since its vend puts nothing of a table ([[LH-575]], :mod:`catalog.se
 the maintainer rung (``can_maintain``), which the maintenance identity holds and every owner keeps.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import Sequence

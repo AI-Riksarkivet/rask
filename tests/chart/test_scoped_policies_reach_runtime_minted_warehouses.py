@@ -22,8 +22,6 @@ credential gets. A string grep cannot: it can only check the buckets the chart n
 by definition not among them.
 """
 
-from __future__ import annotations
-
 import json
 from fnmatch import fnmatchcase
 

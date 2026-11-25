@@ -8,8 +8,6 @@ doors ask; otherwise once its lifespan has run, over a ``TupleStore`` that holds
 check (``openfga_grants``), for a test whose claim is not who may act.
 """
 
-from __future__ import annotations
-
 import json
 import uuid
 from collections.abc import AsyncGenerator, Generator

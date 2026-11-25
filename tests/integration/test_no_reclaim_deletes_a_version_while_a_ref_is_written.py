@@ -13,8 +13,6 @@ the sweep's pass over the table is skipped this tick and reclaims on the next. O
 the trash again, so a table dropped since its pass began is not reclaimed.
 """
 
-from __future__ import annotations
-
 import time
 import uuid
 from collections.abc import Iterator

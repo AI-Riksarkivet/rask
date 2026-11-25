@@ -8,8 +8,6 @@ Object-store credentials are required (no silent fallback) so a misconfigured
 deployment fails fast at boot.
 """
 
-from __future__ import annotations
-
 import re
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Self

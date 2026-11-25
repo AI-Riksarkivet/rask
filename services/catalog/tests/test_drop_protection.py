@@ -15,8 +15,6 @@ Registry round-trips against a LOCAL filesystem control root (the real store pri
 the native namespace is a recording stand-in so a refusal can assert the native call NEVER ran.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 from typing import Any

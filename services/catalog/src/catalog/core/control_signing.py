@@ -4,8 +4,6 @@ The control emitter is the one signer: it signs each event before it stages and 
 cannot sign. The control relay signs nothing; it delivers only staged events that verify as signed by this catalog.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from lakehouse.events.control_emit import ControlSign

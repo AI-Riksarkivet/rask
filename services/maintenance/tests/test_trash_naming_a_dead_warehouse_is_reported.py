@@ -20,8 +20,6 @@ Keyed on the BUCKET rather than the warehouse id, because the two are separate f
 record — keying on the id would report a record as orphaned while it is perfectly reachable.
 """
 
-from __future__ import annotations
-
 from uuid import uuid4
 
 import pytest

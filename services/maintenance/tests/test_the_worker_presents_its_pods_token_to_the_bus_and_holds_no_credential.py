@@ -4,8 +4,6 @@ worker dials the bus with nothing to show for itself. What the bus does with the
 scope, its end) is the bus lane's.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

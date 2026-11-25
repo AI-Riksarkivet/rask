@@ -22,8 +22,6 @@ bare ``/path`` read the process's local filesystem and ``S3://`` reads the same 
 (lh279fx probe_scheme_resolve), so a path is own, configured or recorded only in the same store.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from lakehouse.lancekit.features import BasePathRef

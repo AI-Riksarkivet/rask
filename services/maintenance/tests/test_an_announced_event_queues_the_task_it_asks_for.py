@@ -17,8 +17,6 @@ format alone. The handling answers how the delivery is acknowledged, or raises w
 recording fake with `TaskQueue`'s own signatures: the bus contract is the `nats-auth` lane's.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import json
 from collections.abc import Callable, Iterator, Sequence

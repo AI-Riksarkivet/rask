@@ -18,8 +18,6 @@ door (``POST /v1/table/{id}/insert``), whose own emitter announces the write ont
 publishes no lineage event of its own for that write.
 """
 
-from __future__ import annotations
-
 import time
 from typing import Annotated, Any, Literal
 

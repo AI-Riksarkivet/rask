@@ -11,8 +11,6 @@ verified caller is a stand-in (`authenticate` answers the person `dex~alice`), b
 announcement carries the caller as its author is.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path

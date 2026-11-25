@@ -23,8 +23,6 @@ it read beside it ([[LH-541]], ADR 0183), so a table written while lineage is do
 reconciler's tick lists on a released obligation a table lineage records only after the release, whose run came before it.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import uuid

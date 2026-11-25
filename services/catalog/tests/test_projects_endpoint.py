@@ -8,8 +8,6 @@ and a malformed id is refused before any lookup; grouping tolerates a corrupt re
 never a 500); ``admins`` degrades to ``[]`` when FGA is off or the ``list_users`` lookup is unavailable.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any
 from unittest.mock import create_autospec

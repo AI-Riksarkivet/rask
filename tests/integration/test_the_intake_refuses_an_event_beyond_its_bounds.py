@@ -7,8 +7,6 @@ run's inputs) or weighing more than 1 MiB as JSON (the bus's own ceiling), and r
 lineage's HTTP door, its store a live catalog; every other door parses through the same models.
 """
 
-from __future__ import annotations
-
 import uuid
 from pathlib import Path
 

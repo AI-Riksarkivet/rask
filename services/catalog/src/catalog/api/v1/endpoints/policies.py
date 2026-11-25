@@ -23,8 +23,6 @@ at once. It names a table record as its table is named now and scopes each recor
 its warehouse, whose record names its project, [[LH-593]]).
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 

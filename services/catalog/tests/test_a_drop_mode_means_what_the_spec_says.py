@@ -28,8 +28,6 @@ subscriber of the control stream that an object died when none did. What a Skip 
 cleans up is pinned on the real app in `tests/integration/test_a_namespace_mode_does_what_the_spec_says.py`.
 """
 
-from __future__ import annotations
-
 from typing import Any
 from unittest.mock import MagicMock
 

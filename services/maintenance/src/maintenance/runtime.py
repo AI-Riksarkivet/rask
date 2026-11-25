@@ -6,8 +6,6 @@ on and the two emitters (:func:`collaborators`). Each is built once at the proce
 start that fails part-way stops what it had started.
 """
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator
 from contextlib import AsyncExitStack, asynccontextmanager
 from typing import TYPE_CHECKING

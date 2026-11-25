@@ -12,8 +12,6 @@ built by a helper that fills them in would assert nothing. The bus subscription 
 `test_lineage_refuses_an_event_no_listed_signer_signed.py` drives it through the registered route with such an event.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Collection
 from typing import Any, cast

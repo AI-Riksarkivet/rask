@@ -18,8 +18,6 @@ emitters and their author. The secret store is answered by the suite's double, t
 recording stand-in, and the store session is exchanged at moto's STS.
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import AsyncGenerator, Callable, Iterator, Sequence

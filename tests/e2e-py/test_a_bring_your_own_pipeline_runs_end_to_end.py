@@ -17,8 +17,6 @@ Run with `bash scripts/e2e_live.sh tests/e2e-py/test_a_bring_your_own_pipeline_r
 every address from the release, or `make e2e-byo-pipeline` with the addresses set.
 """
 
-from __future__ import annotations
-
 import json
 import uuid
 

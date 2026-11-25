@@ -6,8 +6,6 @@ vendored upstream file and in a dependency's installed copy is not judged. This 
 the lint leaves it out, as the no-client lint leaves out its own gate tests.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import sys
 from pathlib import Path

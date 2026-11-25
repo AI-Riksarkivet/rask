@@ -21,8 +21,6 @@ THE REFUSAL LEGS ARE THE POINT, and both are asserted rather than assumed from t
   unrecoverable.
 """
 
-from __future__ import annotations
-
 from functools import partial
 from pathlib import Path
 from uuid import uuid4

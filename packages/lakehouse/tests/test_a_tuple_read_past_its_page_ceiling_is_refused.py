@@ -6,8 +6,6 @@ indistinguishable from a whole one, so the ceiling (which exists so a cursor tha
 the read as an outage. Driven on a real OpenFGA with the page and the ceiling set small.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Awaitable, Callable
 from typing import Any

@@ -7,8 +7,6 @@ the catalog's provenance namespace, and a test whose claim is what the catalog h
 (`tests/integration/test_a_repaired_park_is_replayed_into_the_feed.py`).
 """
 
-from __future__ import annotations
-
 import asyncio
 import importlib.util
 from collections.abc import Awaitable, Callable, Collection, Generator, Mapping, Sequence

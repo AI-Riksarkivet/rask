@@ -14,8 +14,6 @@ policy then grants at the object store only what that rung may change (``vending
 [[LH-202]]).
 """
 
-from __future__ import annotations
-
 import logging
 from functools import partial
 from typing import Annotated

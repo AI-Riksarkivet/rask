@@ -10,8 +10,6 @@ such header and a stock client must work with no rask SDK, so a door that requir
 conformance on 54 routed operations — a worse defect than the one being fixed.
 """
 
-from __future__ import annotations
-
 from datetime import timedelta
 from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple

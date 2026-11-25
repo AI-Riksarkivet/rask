@@ -1,8 +1,6 @@
 """What a committed version says: the version, schema facet, location and time a write's announcement reads back, the
 version a transaction committed, a branch's identifier, a tag's ref, and the table's commit log."""
 
-from __future__ import annotations
-
 import logging
 from typing import Any, Final, cast
 

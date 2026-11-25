@@ -15,8 +15,6 @@ every route.
 A label authorizes nothing: no door reads one to decide whether to answer.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import Sequence

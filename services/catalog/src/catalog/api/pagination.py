@@ -4,8 +4,6 @@ The page size is a door's concern (FastAPI's `Query` and `Depends`), so it stays
 listing pages by, the doors' and the services' alike, is `catalog.core.pagination`.
 """
 
-from __future__ import annotations
-
 from typing import Annotated, Final
 
 from fastapi import Depends, Query

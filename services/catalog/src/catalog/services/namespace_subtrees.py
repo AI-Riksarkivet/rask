@@ -5,8 +5,6 @@ The door authorizes the caller, identifies what stands under the namespace, hold
 announces what goes; nothing here reads a request or a grant.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import AsyncIterator

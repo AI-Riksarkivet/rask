@@ -18,8 +18,6 @@ template renders only behind a switch none of these overlays turns on, and NOTES
 `helm template` does not render.
 """
 
-from __future__ import annotations
-
 import re
 from collections.abc import Iterator
 from typing import Any

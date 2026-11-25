@@ -15,8 +15,6 @@ table still ends. By uuid, never by name ([[LH-575]]): a table registered under 
 none of its bytes.
 """
 
-from __future__ import annotations
-
 import logging
 
 from pydantic import BaseModel, ConfigDict

@@ -57,8 +57,6 @@ NO FEED ANNOUNCES IT. The raise changes no row, so the catalog announces nothing
 counts a version committed past every door, confirms this one by the author its door recorded.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import TYPE_CHECKING
 

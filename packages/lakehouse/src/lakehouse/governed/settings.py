@@ -22,8 +22,6 @@ Mix into a `pydantic-settings` `BaseSettings` subclass. Deliberately plain mixin
 `model_config`, and inheriting a second one would fight over that config.
 """
 
-from __future__ import annotations
-
 from typing import Self
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator

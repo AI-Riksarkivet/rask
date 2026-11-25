@@ -9,8 +9,6 @@ test can wrap it to fail one backend call; without it the catalog opens each war
 The catalog suite's and the integration suite's ``governed_catalog`` fixtures both build from here.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Generator
 from contextlib import contextmanager

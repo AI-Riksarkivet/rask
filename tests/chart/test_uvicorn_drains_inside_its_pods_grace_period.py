@@ -15,8 +15,6 @@ What uvicorn does with the flag once the drain has handed it SIGTERM is proven a
 `packages/lakehouse/tests/test_sigterm_still_stops_the_server.py`.
 """
 
-from __future__ import annotations
-
 import re
 import subprocess
 from collections.abc import Callable

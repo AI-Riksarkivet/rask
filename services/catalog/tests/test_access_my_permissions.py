@@ -14,8 +14,6 @@ Three properties, and each exists because its opposite was the reason no such su
 Sync via ``asyncio.run`` — no async-plugin dependency (this repo does not set ``asyncio_mode``).
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any, cast
 

@@ -10,8 +10,6 @@ does not hold, so lineage refuses it and nothing reports the loss.
 Rendered into a namespace other than `default`, so a subject built from a hand-typed namespace cannot pass.
 """
 
-from __future__ import annotations
-
 import json
 
 from tests.chart.chart_render import env_of, render

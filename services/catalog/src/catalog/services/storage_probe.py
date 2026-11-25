@@ -6,8 +6,6 @@ Each step is one call under a credential the catalog vends as it would for a tab
 only the store's own answer counts as a verdict: a step the store did not answer is reported as skipped, never passed.
 """
 
-from __future__ import annotations
-
 import uuid
 from collections.abc import Callable, Mapping
 from typing import Any, Final

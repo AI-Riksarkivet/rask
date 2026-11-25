@@ -22,8 +22,6 @@ lane asks again without end and takes nothing.
 NAMED `bus.*`: the instruments say what the lakehouse did, whichever client and broker carry it.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable, Mapping
 
 from opentelemetry import metrics

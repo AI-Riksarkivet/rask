@@ -12,8 +12,6 @@ The fixture is narrow in rows and wide in bytes: the ceiling is the response bud
 projected row width, so 4 KiB rows put it at about four thousand, and the row count does not move it.
 """
 
-from __future__ import annotations
-
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest

@@ -11,8 +11,6 @@ feed is an in-memory one of this test's own: the real one is a catalog's tables,
 share the process's one secret-store session.
 """
 
-from __future__ import annotations
-
 from typing import cast
 
 import httpx

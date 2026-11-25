@@ -2,8 +2,6 @@
 one facade that receives the raw Arrow-IPC ``data`` and writes it directly at file format 2.2 with stable row ids — the
 durable row identity row-id lineage needs."""
 
-from __future__ import annotations
-
 import logging
 import uuid
 from collections.abc import Callable, Sequence

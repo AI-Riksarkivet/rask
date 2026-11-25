@@ -8,8 +8,6 @@ warehouse's name, and one under a warehouse whose id merely begins with the same
 Driven over a real local control root with the trash records the doors write.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from uuid import uuid4
 

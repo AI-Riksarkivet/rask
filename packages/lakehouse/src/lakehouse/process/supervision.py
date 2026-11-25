@@ -12,8 +12,6 @@ lakehouse pod's stdout copy, since the pod ships its records over OTLP, so a rec
 the process ends never reaches the store.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import os

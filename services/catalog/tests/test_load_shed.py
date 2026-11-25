@@ -8,8 +8,6 @@ Driven at the ASGI layer (not via TestClient, which is synchronous) so overlap i
 held in flight while a second is issued, proving the cap sheds the second BEFORE its body is read.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Annotated
 

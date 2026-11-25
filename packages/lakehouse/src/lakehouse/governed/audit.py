@@ -16,8 +16,6 @@ The log path the records ride is not lossless, so each record emitted is also co
 as were counted for it.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Sequence
 from enum import StrEnum

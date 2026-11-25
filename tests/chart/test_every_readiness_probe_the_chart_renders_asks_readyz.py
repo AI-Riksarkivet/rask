@@ -9,8 +9,6 @@ The catalog, lineage and the maintenance worker are probed on a port of the prob
 serve them on from a thread of its own ([[XC-204]]): a probe on the serving port waits behind a burst of requests.
 """
 
-from __future__ import annotations
-
 import pathlib
 import sys
 

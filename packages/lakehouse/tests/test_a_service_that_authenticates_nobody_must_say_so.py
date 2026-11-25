@@ -17,8 +17,6 @@ A STARTUP REFUSAL: the service fails closed when it starts rather than serve an 
 and the check is a no-op once the feature is properly configured.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from lakehouse.governed.settings import assert_authentication_configured

@@ -23,8 +23,6 @@ name under ``id``, as it was when the record was set, for display. The store mec
 :mod:`lakehouse.records.record_store`'s; this module is the protection vocabulary over them.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from typing import Any, Final, Literal
 

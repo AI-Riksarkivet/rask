@@ -11,8 +11,6 @@ own: alice makes `lance_catalog$db` and `lance_catalog$db$t` through their doors
 `describer` and carol `modifier` on the table through its access door.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pyarrow as pa

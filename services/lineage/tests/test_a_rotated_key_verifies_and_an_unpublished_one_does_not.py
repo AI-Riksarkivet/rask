@@ -10,8 +10,6 @@ off. The published list comes from the secret store, which the suite's double an
 conftest's `EventSigner`.
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any
 

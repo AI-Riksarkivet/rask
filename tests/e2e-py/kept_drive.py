@@ -12,8 +12,6 @@ The record is written before the tenant is marked kept, so a record that could n
 session's own teardown rather than keeping a tenant nothing names.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from pathlib import Path
 

@@ -19,8 +19,6 @@ NOT mockable: the point is the object store's own evaluation of the session poli
 Both tenants are this module's own (`scratch_tenant.provisioned`), created per run and removed with their buckets.
 """
 
-from __future__ import annotations
-
 import os
 import uuid
 from collections.abc import Iterator

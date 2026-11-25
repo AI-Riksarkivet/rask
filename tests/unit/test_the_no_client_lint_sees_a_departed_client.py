@@ -11,8 +11,6 @@ the console, which is the lakehouse's own UI and no client, and uses the same wo
 must let through. The console's tree is the lakehouse's, so a departed client named there is refused too.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import sys
 from pathlib import Path

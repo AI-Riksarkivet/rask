@@ -11,8 +11,6 @@ the release namespace, is on OpenFGA's subject list, which names no other accoun
 then answers an uncredentialed call 401 is the live probe's (`scratch/probe_openfga_authn.py`).
 """
 
-from __future__ import annotations
-
 import subprocess
 from pathlib import PurePosixPath
 

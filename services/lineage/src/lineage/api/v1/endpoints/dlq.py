@@ -23,8 +23,6 @@ warns about nothing and answers an outage as "not attested", so the event takes 
 answers; only the replay's own verification (`enforce_bus_authz`) answers a refusal or an outage as such.
 """
 
-from __future__ import annotations
-
 import logging
 from collections import Counter
 from typing import Annotated, Any

@@ -5,8 +5,6 @@ error's code and message, and the HTTP status under ``ResponseMetadata``), so th
 the estate. A double raising a Python built-in in its place agrees with whatever its reader catches.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from botocore.exceptions import ClientError

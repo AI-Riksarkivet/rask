@@ -21,8 +21,6 @@ leaves it out, so the default-deny holds for it, and its one port is admitted fr
 is the platform's ([[XC-195]]).
 """
 
-from __future__ import annotations
-
 import json
 import re
 import subprocess

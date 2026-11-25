@@ -12,8 +12,6 @@ The router guard leaves these paths to their handlers (``rungs._RESOURCES`` name
 router's own dependency, as the decision door's is.
 """
 
-from __future__ import annotations
-
 from functools import partial
 
 from fastapi import APIRouter, Depends

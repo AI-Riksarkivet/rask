@@ -24,8 +24,6 @@ rules keep a change of who is in a role from raising anyone's access past what i
   ([[LH-434]]).
 """
 
-from __future__ import annotations
-
 import logging
 import uuid
 from datetime import UTC, datetime

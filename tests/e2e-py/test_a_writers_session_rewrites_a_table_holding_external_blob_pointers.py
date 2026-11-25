@@ -14,8 +14,6 @@ write tier's policy leaves to it.
 Run by `dagger call rustfs-provisioning` (`make rustfs-provisioning`) against the throwaway RustFS it binds.
 """
 
-from __future__ import annotations
-
 import json
 import uuid
 

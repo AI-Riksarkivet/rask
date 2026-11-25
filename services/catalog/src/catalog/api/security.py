@@ -19,8 +19,6 @@ idp id. A service-account token never falls
 through to the IdP, no header names the caller, and OpenFGA alone decides what the principal may do.
 """
 
-from __future__ import annotations
-
 from typing import Annotated, cast
 
 from fastapi import Depends, Request

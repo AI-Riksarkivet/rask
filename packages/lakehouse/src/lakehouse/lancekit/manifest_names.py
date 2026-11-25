@@ -7,8 +7,6 @@ version first. Two more names are the catalog's managed versioning (ADR 0157): a
 ``d<id>.manifest``, before it finalizes it.
 """
 
-from __future__ import annotations
-
 import re
 from typing import Final
 

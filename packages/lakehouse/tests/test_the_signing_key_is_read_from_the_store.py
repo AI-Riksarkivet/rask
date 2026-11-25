@@ -13,8 +13,6 @@ The holder's key constructor and list parser are plain stand-ins here, so each a
 suites build the holder with the real two (`services/maintenance/tests/test_the_sweep_signs_what_it_emits.py`).
 """
 
-from __future__ import annotations
-
 import asyncio
 import time
 

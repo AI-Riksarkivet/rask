@@ -28,8 +28,6 @@ for a request they are already authorized to make. The rule bites on paths the A
 tracebacks, server filesystem, driver internals — not on a resource location the contract names.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import lance

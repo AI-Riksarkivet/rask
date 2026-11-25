@@ -25,8 +25,6 @@ process dying in between, are released by the same finish.
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 from datetime import datetime
 from typing import Final
 

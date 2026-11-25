@@ -12,8 +12,6 @@ Every decision is the real model's, on a store of this test's own ([[LH-235]]), 
 services use.
 """
 
-from __future__ import annotations
-
 from collections.abc import AsyncIterator
 from pathlib import Path
 from typing import Any, cast

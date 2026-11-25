@@ -14,8 +14,6 @@ as an OpenFGA with OIDC authn does ([[XC-077]]): a client that sends no credenti
 before the file was rotated, is refused.
 """
 
-from __future__ import annotations
-
 import json
 import threading
 from collections.abc import Generator

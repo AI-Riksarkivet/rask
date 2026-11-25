@@ -22,8 +22,6 @@ The clauses (design.md §3), each one test:
 and, from the row's How, register location-exclusivity.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

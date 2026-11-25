@@ -7,8 +7,6 @@ Lance version without changing data or columns, so it emits a best-effort versio
 (``drop_index``) naming the version its transaction committed (``tables.versions.committed_version``).
 """
 
-from __future__ import annotations
-
 import logging
 from functools import partial
 from typing import Annotated

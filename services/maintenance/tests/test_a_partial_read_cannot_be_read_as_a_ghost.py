@@ -30,8 +30,6 @@ tick that revoked nothing must be able to see that the pass considered the categ
 because an input was partial, rather than conclude the estate is clean.
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 

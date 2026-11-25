@@ -13,8 +13,6 @@ gone, and that the bucket's bytes are never removed by default. What a cascade r
 pylance, is `tests/integration/test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5

@@ -20,8 +20,6 @@ What a pass costs follows the one table, never the estate: its claim, its trash 
 policies, and its own datasets. Blocking S3/Lance work; the worker runs :func:`run_table_pass` in the threadpool.
 """
 
-from __future__ import annotations
-
 import logging
 import sys
 from collections.abc import Callable

@@ -27,8 +27,6 @@ themselves at import, and importing thirteen of them into the pytest process wou
 behind for several thousand unrelated tests.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import pathlib

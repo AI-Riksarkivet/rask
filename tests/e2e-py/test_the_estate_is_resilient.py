@@ -58,8 +58,6 @@ its throwaway cluster, and the deployed release only when invoked explicitly, wi
 --require-live --chaos`.
 """
 
-from __future__ import annotations
-
 import os
 import threading
 import time

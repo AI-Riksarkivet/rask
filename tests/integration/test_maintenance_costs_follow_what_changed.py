@@ -28,8 +28,6 @@ before that commit.
   one landing in a pass's window cost it 51).
 """
 
-from __future__ import annotations
-
 import uuid
 from collections import Counter
 from collections.abc import Iterator

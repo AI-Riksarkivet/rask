@@ -6,8 +6,6 @@ explicit grant set, for a test that counts what a door asks or whose claim is wh
 what the doors write and allows every check, for a test whose claim is neither.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 

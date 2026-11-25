@@ -6,8 +6,6 @@ mapping — never lance's actual operations. ``real_ns_client`` runs the real ``
 ``tmp_path``, and ``moto_url`` is an S3 endpoint the native Lance and Arrow clients can reach.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any

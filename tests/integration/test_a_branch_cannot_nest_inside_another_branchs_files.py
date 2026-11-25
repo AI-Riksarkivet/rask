@@ -13,8 +13,6 @@ backend, and survival is read from a cold interpreter: a reclaim's damage shows 
 the handle that did it.
 """
 
-from __future__ import annotations
-
 import io
 import subprocess
 import sys

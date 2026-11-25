@@ -7,8 +7,6 @@ THE ORDERING IS THE LOAD-BEARING PART. Lance's retryable and incompatible messag
 word `concurrent`, so a flat set of markers answers the dangerous one with the safe one's remedy.
 """
 
-from __future__ import annotations
-
 import pytest
 from lance.commit import CommitConflictError
 

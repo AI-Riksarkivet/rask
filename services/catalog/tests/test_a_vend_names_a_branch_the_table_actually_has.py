@@ -26,8 +26,6 @@ included: ADR 0159 D3 rules that a table writer writes every branch, pinned with
 other half: a branch that does not exist is not somebody's work, it is nobody's.
 """
 
-from __future__ import annotations
-
 import asyncio
 from pathlib import Path
 from typing import Any, cast

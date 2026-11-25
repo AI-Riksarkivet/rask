@@ -26,8 +26,6 @@ Run with `bash scripts/e2e_live.sh -m phase1 --require-live` against the deploye
 addresses set, or the e2e-stack lane, which runs it on every push.
 """
 
-from __future__ import annotations
-
 from collections import Counter
 
 import bus

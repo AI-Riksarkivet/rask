@@ -21,8 +21,6 @@ read's timeout. The secret store is the suite's double, and the signatures are b
 `EventSigner` from the wire format alone.
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any, Final
 

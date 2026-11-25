@@ -16,8 +16,6 @@ held it while FastAPI waited for a body that never came, so the held uploads wer
 (code 21), which this leg answers too with the held uploads admitted.
 """
 
-from __future__ import annotations
-
 import json
 import socket
 from collections.abc import Iterator

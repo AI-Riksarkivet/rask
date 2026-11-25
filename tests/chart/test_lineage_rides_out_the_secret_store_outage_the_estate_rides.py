@@ -6,8 +6,6 @@ again, and parked on its last. So the lane's attempts and delay cover that outag
 do not.
 """
 
-from __future__ import annotations
-
 import json
 import subprocess
 from typing import Final

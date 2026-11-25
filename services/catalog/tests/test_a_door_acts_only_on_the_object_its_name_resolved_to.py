@@ -24,8 +24,6 @@ she made it. Unraced, the same door acts.
 Every decision is the real model's, on a store of this test's own ([[LH-235]]); every tuple is the one the door writes.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, Final
 

@@ -5,8 +5,6 @@ The listing doors ask the backend for every table and judge each one's storage t
 own filter misjudges a table registered at a nested location (``table_objects.holds_a_version``).
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Sequence
 

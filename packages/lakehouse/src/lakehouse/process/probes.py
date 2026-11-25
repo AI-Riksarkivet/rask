@@ -15,8 +15,6 @@ work and fails exactly when the pod is busiest. One home, one shape, ``async def
 asked once the lifecycle gates pass.
 """
 
-from __future__ import annotations
-
 from collections.abc import Awaitable, Callable
 from http import HTTPStatus
 

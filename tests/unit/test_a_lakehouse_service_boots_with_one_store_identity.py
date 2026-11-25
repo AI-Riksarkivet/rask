@@ -2,8 +2,6 @@
 identity, or hand its token to the wrong STS, refuses to boot, and one the chart named a secret store is handed no key
 pair to sign with."""
 
-from __future__ import annotations
-
 import pytest
 
 from catalog.core.config import Settings

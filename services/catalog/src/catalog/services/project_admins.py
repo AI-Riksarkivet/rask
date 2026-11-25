@@ -13,8 +13,6 @@ the project's ``admin_revision``, which the store refuses whole once another suc
 each judged on its own read, both commit.
 """
 
-from __future__ import annotations
-
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Final
 

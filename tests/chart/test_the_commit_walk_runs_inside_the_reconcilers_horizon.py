@@ -5,8 +5,6 @@ neither looks for a version older than `catalog.commitReconcile.horizonSeconds`.
 would let such a version age out unseen, so the render refuses it.
 """
 
-from __future__ import annotations
-
 import subprocess
 
 import pytest

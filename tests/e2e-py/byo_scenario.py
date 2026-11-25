@@ -27,8 +27,6 @@ pipeline did and saw while it ran, each commit with the version its write answer
 asserts it afterwards without driving again.
 """
 
-from __future__ import annotations
-
 import io
 import json
 import os

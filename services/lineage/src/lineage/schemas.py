@@ -1,7 +1,5 @@
 """Typed response schemas for the lineage API (Pydantic, snake_case)."""
 
-from __future__ import annotations
-
 from typing import Any
 
 from pydantic import BaseModel, Field

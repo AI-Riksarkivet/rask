@@ -34,8 +34,6 @@ name (``rust/lance-table/src/io/commit.rs`` at v13.0.0), so the Deny covers ever
 The catalog's vending door reads this module, so what a vended credential may write is named in one place.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 from lakehouse.lancekit.branch_layout import BRANCH_CONTAINER

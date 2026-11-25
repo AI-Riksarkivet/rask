@@ -6,8 +6,6 @@ object in place, and one that changes any of them creates the next. A name that 
 migration on every upgrade.
 """
 
-from __future__ import annotations
-
 from tests.chart.chart_render import DEFAULT_ARGS, render
 
 

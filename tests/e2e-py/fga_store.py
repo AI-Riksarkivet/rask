@@ -6,8 +6,6 @@ credential, [[XC-077]]). The store is `LANCE_E2E_FGA_STORE_ID` when the runner p
 `lance-catalog` (`fga_provision.newest_store`), the rule the hook and every service share ([[LH-201]]).
 """
 
-from __future__ import annotations
-
 import os
 from typing import Any
 

@@ -16,8 +16,6 @@ recording stand-in (`tests.bus_double`), and so is the queue the pass schedules 
 `TaskQueue`'s own signatures.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager

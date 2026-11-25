@@ -5,8 +5,6 @@ pylance 8.0.0's describe_table leaves DescribeTableResponse.metadata empty, so t
 the dataset's Arrow schema metadata, decoding bytes and excluding internal ``lineage.*`` bookkeeping keys.
 """
 
-from __future__ import annotations
-
 import pyarrow as pa
 
 from catalog.services.tables.schema import user_schema_metadata

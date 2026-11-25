@@ -9,8 +9,6 @@ backend reloads a held ``__manifest`` by probing only the version after it (lanc
 ``rust/lance-namespace-impls/src/dir/manifest.rs``, ``DatasetConsistencyWrapper``).
 """
 
-from __future__ import annotations
-
 import importlib.util
 from collections.abc import Callable, Iterator, Sequence
 from pathlib import Path

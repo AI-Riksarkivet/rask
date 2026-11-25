@@ -44,8 +44,6 @@ either; and with authorization off, lineage admits a name-keyed output, which ho
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from datetime import UTC, datetime
 from functools import cache, partial

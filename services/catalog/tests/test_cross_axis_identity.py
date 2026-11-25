@@ -7,8 +7,6 @@ file names another and provenance splits. The real ``create_table`` handler deri
 (ADR 0173 §8).
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any, cast
 

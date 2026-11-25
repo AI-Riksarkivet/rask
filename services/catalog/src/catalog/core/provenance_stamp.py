@@ -4,8 +4,6 @@
 ([[LH-520]]). The platform names no column of a table's: a row's run and inputs ride its commit (ADR 0156 C9).
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 import pyarrow as pa

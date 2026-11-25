@@ -16,8 +16,6 @@ Every decision is the real model's, on a store of this test's own: alice owns ``
 discarded is still a grant at the store.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from typing import Any
 

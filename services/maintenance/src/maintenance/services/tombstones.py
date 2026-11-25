@@ -27,8 +27,6 @@ CAPPED PER TICK because the probe is one listing PER RECORD. Sweeping 989 in a t
 reconcile pass into a whole-estate scan, which is the cost this service exists to bound.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING

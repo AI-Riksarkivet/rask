@@ -11,8 +11,6 @@ for a session as the catalog's lifespan does (`lakehouse.storage.store_session.s
 Only a scratch object of the calling test is ever named.
 """
 
-from __future__ import annotations
-
 import select
 import subprocess
 from collections.abc import Generator

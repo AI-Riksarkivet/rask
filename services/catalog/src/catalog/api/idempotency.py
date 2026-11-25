@@ -58,8 +58,6 @@ stable, bounded and opaque — and being opaque is a property rather than a cost
 not an audit trail and the audit lane already carries the principal.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging

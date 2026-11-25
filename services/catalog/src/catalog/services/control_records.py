@@ -7,8 +7,6 @@ conditional (mint-iff-absent, ETag-guarded mutate) and lives in ``lakehouse.stor
 All IO here is BLOCKING; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 

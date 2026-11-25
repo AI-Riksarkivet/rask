@@ -11,8 +11,6 @@ maintenance a truthful answer. Same store shape as its siblings (one JSON per re
 and that primitive now exists: :mod:`lakehouse.records.record_store`.
 """
 
-from __future__ import annotations
-
 import logging
 from enum import StrEnum
 from typing import Any, Self

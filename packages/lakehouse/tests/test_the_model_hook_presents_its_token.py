@@ -6,8 +6,6 @@ exits 1 at once rather than retrying for two minutes and exiting 0, which would 
 with the model unwritten. A token file the Job cannot read fails the hook the same way: no wait mends it either.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

@@ -11,8 +11,6 @@ On the catalog as deployed with authorization on: a loopback Dex signs the calle
 (`governed_catalog`).
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 

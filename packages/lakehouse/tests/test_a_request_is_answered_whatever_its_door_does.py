@@ -10,8 +10,6 @@ Every answer, a door's or a layer's refusal in front of it, tells any cache betw
 none of it ([[LH-486]]): a door may answer the credentials it vends, and what one caller is answered is no other's.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import threading

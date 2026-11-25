@@ -8,8 +8,6 @@ store; restoring it would commit them again. Driven through the real catalog app
 keyed version written by pylance at the table's own location.
 """
 
-from __future__ import annotations
-
 import io
 
 import lance

@@ -33,8 +33,6 @@ hooks, and this gate measures only the manifest. A chart that doubled its non-te
 slip past. The manifest is where this estate's growth has actually happened, twice.
 """
 
-from __future__ import annotations
-
 import gzip
 
 from tests.chart.chart_render import DEFAULT_ARGS, render_text

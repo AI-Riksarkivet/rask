@@ -22,8 +22,6 @@ by more subjects than the server's ``listUsersMaxResults`` cap returns a partial
 logs a warning when a result looks capped).
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from functools import lru_cache

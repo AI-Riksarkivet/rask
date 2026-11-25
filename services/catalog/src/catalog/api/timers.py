@@ -6,8 +6,6 @@ every timer is held: a tick writes (a release deletes tags and branches, a recla
 nothing and runs nothing until the window ends, and the first window after it does the work.
 """
 
-from __future__ import annotations
-
 from collections.abc import Awaitable, Callable
 from functools import partial
 

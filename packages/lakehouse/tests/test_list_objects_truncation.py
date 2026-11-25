@@ -24,8 +24,6 @@ rather than on a ceiling nobody has hit. The guard is also exactly what the sibl
 so it is the version this codebase can be consistent about.
 """
 
-from __future__ import annotations
-
 import logging
 
 import pytest

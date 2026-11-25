@@ -6,8 +6,6 @@ whenever that scores better, and the node's loss is then the service's. A node t
 control plane) is no domain to spread over, or a surge pod finding the other nodes full would wait on it forever.
 """
 
-from __future__ import annotations
-
 from tests.chart.chart_render import PROD_ARGS, render
 
 

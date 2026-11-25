@@ -14,8 +14,6 @@ store of the test's own holding what the doors seed and revoke, and a backend wh
 or after the row goes. alice may create a namespace in the estate's warehouse and owns what she creates.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pyarrow as pa

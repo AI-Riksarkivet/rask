@@ -29,8 +29,6 @@ the main branch's references from a listing, which those layouts break.
 Blocking S3/Lance work; the worker runs :func:`run_orphan_check` in the threadpool.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Final

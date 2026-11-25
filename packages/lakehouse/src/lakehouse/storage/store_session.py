@@ -14,8 +14,6 @@ exchanges again once half the session's life is used. A request that took the ol
 to finish, and an STS outage shorter than that half serves nobody a 503.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import threading

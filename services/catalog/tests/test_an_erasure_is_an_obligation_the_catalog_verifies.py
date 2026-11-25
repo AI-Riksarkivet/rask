@@ -8,8 +8,6 @@ records and verifies. A stock client's commits through ``version/create`` are
 ``test_a_stock_client_commits_every_operation_through_version_create.py``'s claim.
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import Callable, Generator

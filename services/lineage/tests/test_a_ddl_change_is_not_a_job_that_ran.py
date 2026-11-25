@@ -14,8 +14,6 @@ move its author onto a facet the authorizer is required to distrust, so the veri
 reserved `rask_author` facet on the DATASET, and `ownership` may ride beside it for external consumers only.
 """
 
-from __future__ import annotations
-
 import pytest
 from pydantic import ValidationError
 

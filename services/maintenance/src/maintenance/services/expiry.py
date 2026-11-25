@@ -8,8 +8,6 @@ nothing: the disarm of Lance's commit-path auto-cleanup is the catalog's, which 
 runs ([[LH-575]]). Every gate here guards one of those deletes.
 """
 
-from __future__ import annotations
-
 import logging
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime, timedelta

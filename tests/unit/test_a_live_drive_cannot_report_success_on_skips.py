@@ -15,8 +15,6 @@ proves the flag is typed, not that it fails a run — the shape this file exists
 test drives pytest for real, on a throwaway suite, and asserts the exit code.
 """
 
-from __future__ import annotations
-
 import subprocess
 import sys
 from pathlib import Path

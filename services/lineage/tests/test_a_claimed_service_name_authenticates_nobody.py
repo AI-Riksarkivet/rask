@@ -11,8 +11,6 @@ conftest, which serves its key set only to a bearer from a private CA, as k3s do
 projected token is driven end to end by `tests/integration/test_a_service_account_records_lineage_on_the_tables_it_names.py`.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager

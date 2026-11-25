@@ -18,8 +18,6 @@ under it one 5 MiB upload part at a few MB/s is cut off. A legitimate write and 
 proxy capped at 4 MB/s must succeed on the data plane's bounds while the metadata plane stays tight.
 """
 
-from __future__ import annotations
-
 import socket
 import threading
 import time

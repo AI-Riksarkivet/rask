@@ -16,8 +16,6 @@ data doors announce through the lineage emitter alone; every other write also em
 whatever namespace it names.
 """
 
-from __future__ import annotations
-
 from typing import cast
 
 from fastapi import Request

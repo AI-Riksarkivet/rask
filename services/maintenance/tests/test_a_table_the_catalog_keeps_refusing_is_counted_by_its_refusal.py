@@ -12,8 +12,6 @@ healthy, and granting it changes nothing. A 401 (`unauthenticated`) is about mai
 own service credential, which every table would report at once.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path

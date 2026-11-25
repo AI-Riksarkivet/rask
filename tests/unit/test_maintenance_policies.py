@@ -6,8 +6,6 @@ version survives any retention policy (``cleanup_old_versions`` exempts tagged v
 whole feature is unsafe if that ever regresses.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any

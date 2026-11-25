@@ -6,8 +6,6 @@ renamed or a validator added, and the real class can. A field a test depends on 
 reads the environment for the rest, as it does in the pod.
 """
 
-from __future__ import annotations
-
 from typing import Any, Final
 
 from catalog.core.config import Settings

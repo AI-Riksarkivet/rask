@@ -6,8 +6,6 @@ project no token, sign with the environment's pair. Every one of these is an :cl
 token are ``SecretStr`` so a repr, a log line or an error that echoes one carries neither ([[LH-543]]).
 """
 
-from __future__ import annotations
-
 from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, SecretStr
 

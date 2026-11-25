@@ -12,8 +12,6 @@ Against the catalog as deployed, a loopback Dex signing callers in and a real Op
 own ([[LH-235]]).
 """
 
-from __future__ import annotations
-
 import logging
 from hashlib import blake2s
 from typing import Any, Final

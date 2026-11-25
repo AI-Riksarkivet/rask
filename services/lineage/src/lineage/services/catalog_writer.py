@@ -7,8 +7,6 @@ refuses or cannot serve raises the outage, the catalog's answer in the log and i
 (`catalog_reader.translate_catalog_errors`).
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 from lakehouse.arrow_ipc import encode_arrow_stream

@@ -8,8 +8,6 @@ with ``{sub, name, email, estate_admin, can_create_project, projects}``; anonymo
 degrading PER RELATION on an FGA outage — the endpoint never 5xxes over authz-lookup health.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any
 

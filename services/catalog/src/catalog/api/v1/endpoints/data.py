@@ -1,7 +1,5 @@
 """Table data endpoints: Arrow-IPC writes, query, count, update/delete, plans, blob serving."""
 
-from __future__ import annotations
-
 import json
 import logging
 import re

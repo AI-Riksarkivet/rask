@@ -20,8 +20,6 @@ another tenant's namespaces is a disclosure a 403 must beat to — and `force` o
 PROTECTION only, never the gate. Both are asserted rather than described.
 """
 
-from __future__ import annotations
-
 import os
 import uuid
 from collections.abc import Iterator

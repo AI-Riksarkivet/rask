@@ -1,7 +1,5 @@
 """§9 P4 — blob-aware lineage SchemaDatasetFacet (the type helper)."""
 
-from __future__ import annotations
-
 from typing import cast
 
 import pyarrow as pa

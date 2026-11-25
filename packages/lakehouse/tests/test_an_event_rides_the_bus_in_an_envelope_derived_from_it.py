@@ -6,8 +6,6 @@ off the event and nothing is minted at publish. The expected values are literals
 § The envelope on the bus, never the builders' own derivation.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

@@ -26,8 +26,6 @@ tolerant listing. Neither is a substitute for the other.
 Every function is BLOCKING IO — callers threadpool it, exactly as they did when the bodies were inline.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging

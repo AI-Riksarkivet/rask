@@ -25,8 +25,6 @@ Driven over HTTP against a real `dir` backend, so the status, the spec `code` an
 side effect are each read where a client would read them.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, Any
 
 import lance

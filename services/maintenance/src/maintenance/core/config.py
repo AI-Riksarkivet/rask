@@ -9,8 +9,6 @@ The signature door's knobs are the estate's too ([[XC-078]]): ``SignatureDoorSet
 treats the signature of a write event before it acts on it.
 """
 
-from __future__ import annotations
-
 from functools import lru_cache
 from typing import TYPE_CHECKING, Annotated, Self
 

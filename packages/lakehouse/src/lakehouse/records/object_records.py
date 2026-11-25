@@ -20,8 +20,6 @@ Not listed, each for its own reason:
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 from lakehouse.records import branch_trash, commit_records, commit_turns, control_prefixes, file_identities, history_fences, maintenance_policies, protection

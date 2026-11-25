@@ -14,8 +14,6 @@ relay tick runs on the app's own event loop as its timer runs it, and the backen
 records what it is sent.
 """
 
-from __future__ import annotations
-
 from collections.abc import Generator
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path

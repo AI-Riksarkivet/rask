@@ -8,8 +8,6 @@ answers the first request on a connection, then reads the next one and closes th
 race made certain.
 """
 
-from __future__ import annotations
-
 import socket
 import threading
 from collections.abc import Callable, Iterator

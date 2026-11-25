@@ -21,8 +21,6 @@ A *meaningful* poll (events delivered or a reset) is audited
 (``event_stream_opened``) — never an empty tick, so a 5s-polling console doesn't flood the audit trail.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Annotated
 

@@ -6,8 +6,6 @@ root, the name URL-encoded (:func:`lakehouse.lancekit.branch_layout.ref_file_nam
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 from pyarrow import fs as pafs
 
 from catalog.core.table_objects import dataset_fs

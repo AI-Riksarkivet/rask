@@ -5,8 +5,6 @@ A browser's apache-arrow infers float64 for every JS number, so an insert into a
 turns a genuinely incompatible payload into a clean 400 (InvalidInputError), never a 500.
 """
 
-from __future__ import annotations
-
 from typing import Any, ClassVar, cast
 from unittest.mock import create_autospec
 

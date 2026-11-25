@@ -6,8 +6,6 @@ real pylance behind the endpoint: the value under test is the HTTP contract — 
 mapping — on top of genuine blob reads, exactly what a credential-less consumer sees.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from pathlib import Path
 

@@ -11,8 +11,6 @@ and every FGA object it writes is ``table:<uuid>`` or ``namespace:<uuid>``, its 
 Every decision is the real model's, on a store of this test's own ([[LH-235]]); every tuple is the one the door writes.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 

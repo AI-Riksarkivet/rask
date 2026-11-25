@@ -20,8 +20,6 @@ thread-safety under concurrent opens.
 What this file pins is what is specific to the catalog's own session.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import lance

@@ -11,8 +11,6 @@ the numeric code. These tests pin the refusal AND its wording, because a guard w
 is missing just moves the confusion one layer out.
 """
 
-from __future__ import annotations
-
 import asyncio
 
 import pytest

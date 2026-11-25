@@ -10,8 +10,6 @@ in a header, and, for a test whose claim is what the doors record rather than wh
 OpenFGA store instead.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

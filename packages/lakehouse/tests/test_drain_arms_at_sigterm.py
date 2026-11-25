@@ -11,8 +11,6 @@ signal handed on without the default disposition terminating pytest. The real uv
 `test_sigterm_still_stops_the_server.py`.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import signal

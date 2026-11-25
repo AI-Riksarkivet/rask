@@ -15,8 +15,6 @@ operation demands on every dataset the event says it wrote (``fga_deps.enforce_b
 nothing a forger did not already have.
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping

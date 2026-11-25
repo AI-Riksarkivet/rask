@@ -21,8 +21,6 @@ walk one path through the catalog and a different rule each through pylance's va
 it validates on any one rule fails here.
 """
 
-from __future__ import annotations
-
 import io
 from pathlib import Path
 from urllib.parse import urlsplit

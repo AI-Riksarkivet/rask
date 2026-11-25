@@ -5,8 +5,6 @@ another, so the cap on the first and the seats of the second together stay below
 read always finds a thread ([[XC-204]]). A pool the catalog is not given a bound for is anyio's own, which it does not judge.
 """
 
-from __future__ import annotations
-
 import pytest
 from pydantic import ValidationError
 

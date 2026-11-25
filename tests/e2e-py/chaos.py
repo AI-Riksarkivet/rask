@@ -20,8 +20,6 @@ The names are the dev fixtures' (`deploy/fixtures`): in production these depende
 runs there.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import subprocess

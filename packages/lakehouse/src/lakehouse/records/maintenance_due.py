@@ -8,8 +8,6 @@ on ``GET /management/v1/maintenance/due`` to the callers that may maintain each 
 Written by maintenance alone, so a reader ignores a field a newer writer added. Every function is blocking IO.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final

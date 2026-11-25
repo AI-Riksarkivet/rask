@@ -1,8 +1,6 @@
 """Lineage's relay timer claims each window under a control root, so a period needs a root, and a root on the object
 store is one more thing lineage signs requests for."""
 
-from __future__ import annotations
-
 import pytest
 from pydantic import ValidationError
 

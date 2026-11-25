@@ -11,8 +11,6 @@ Driven on a real pylance ``dir`` estate: through the real purge with a real tras
 control root, and through the real catalog app.
 """
 
-from __future__ import annotations
-
 import asyncio
 import io
 from datetime import UTC, datetime, timedelta

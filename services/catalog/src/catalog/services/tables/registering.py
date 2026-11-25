@@ -5,8 +5,6 @@ The door authorizes the caller, seeds and takes back grants and files what it an
 or a grant.
 """
 
-from __future__ import annotations
-
 import logging
 from functools import partial
 

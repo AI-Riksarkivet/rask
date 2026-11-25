@@ -13,8 +13,6 @@ so it never takes the listing down for the callers it was never answered to ([[L
 Every decision is the real model's, on a store of this test's own ([[LH-235]]).
 """
 
-from __future__ import annotations
-
 import logging
 import uuid
 from pathlib import Path

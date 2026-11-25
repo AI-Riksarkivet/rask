@@ -22,8 +22,6 @@ inside that read, so the interleaving happens on every run; a claim stamped a da
 clock answered a day ago, the one double here, since a lease is timed on that clock alone ([[LH-576]]).
 """
 
-from __future__ import annotations
-
 import os
 import tracemalloc
 from datetime import UTC, datetime, timedelta

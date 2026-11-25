@@ -20,8 +20,6 @@ the tier it was asked for. A vend that fails is driven with FGA's answers faked 
 store's STS failing, not who may act.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Iterator
 from unittest.mock import AsyncMock, MagicMock

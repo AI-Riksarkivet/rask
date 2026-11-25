@@ -9,8 +9,6 @@ problem handlers; it spells the spec's `INVALID_INPUT` itself, because `body_lim
 Lance-Namespace extra, and a generated client validating the body requires that `code`.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from typing import Annotated, Any
 

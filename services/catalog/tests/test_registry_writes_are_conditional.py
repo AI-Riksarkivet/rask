@@ -21,8 +21,6 @@ These tests interleave the write, which is the only way to distinguish a conditi
 unconditional one — a sequential test passes under both.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

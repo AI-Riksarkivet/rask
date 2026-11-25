@@ -1,7 +1,5 @@
 """Who may grant or revoke what."""
 
-from __future__ import annotations
-
 import logging
 from functools import lru_cache
 

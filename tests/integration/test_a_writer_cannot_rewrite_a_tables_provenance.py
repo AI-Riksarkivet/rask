@@ -15,8 +15,6 @@ Driven through the real catalog app on a real `dir` namespace, and each case rea
 disk, because a 400 that still committed the change would be the worst answer of all.
 """
 
-from __future__ import annotations
-
 import io
 import json
 from typing import Any, Final

@@ -6,8 +6,6 @@ event on to the bus. Separate copies would let one path drop as poison what anot
 subscribers what another withholds, unseen.
 """
 
-from __future__ import annotations
-
 from lakehouse.events.bus import Bus, publish_event  # noqa: TID251 — the relay's republish is a registered publish site
 from lakehouse.events.cloud_events import CloudEvent, lineage_envelope
 from lakehouse.events.outbox import staged_envelope

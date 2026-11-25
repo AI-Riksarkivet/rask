@@ -18,8 +18,6 @@ Lance refuses to delete a branch while another branch is cut from it ("Branch wo
 [("t", 2)]"), so a branch that must go brings those first.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path

@@ -12,8 +12,6 @@ The router guard leaves these paths to their handlers (``rungs._RESOURCES`` name
 router's own dependency, as the trash doors' is.
 """
 
-from __future__ import annotations
-
 from typing import Annotated
 from uuid import uuid4
 

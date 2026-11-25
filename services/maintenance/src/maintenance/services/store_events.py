@@ -24,8 +24,6 @@ with one record, its bucket at ``data.s3.bucket.name``, its key URL-encoded at `
 S3's own record shape names them at ``s3.bucket.name``, ``s3.object.key`` and ``eventName``, which are read as well.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import UTC, datetime, timedelta
 from time import monotonic

@@ -16,8 +16,6 @@ A client-written commit is judged at ``version/create``
 (``services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py``).
 """
 
-from __future__ import annotations
-
 import io
 import threading
 from collections.abc import Callable

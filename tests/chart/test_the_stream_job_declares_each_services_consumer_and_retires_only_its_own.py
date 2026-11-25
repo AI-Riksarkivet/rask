@@ -14,8 +14,6 @@ the mark the retire phase removes by: a consumer added to one phase and not the 
 fails here rather than on the estate. What the two scripts do on a real bus is the `nats-auth` lane's.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from lineage.api import ingest_lane

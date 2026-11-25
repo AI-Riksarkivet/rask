@@ -17,8 +17,6 @@ second time. A stack with no secret store derives under the empty key, as it emi
 a producer, so nothing is protected by a key it cannot hold.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import hmac

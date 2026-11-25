@@ -15,8 +15,6 @@ release door (``catalog_doors``). One in-memory ``TupleStore`` stands behind the
 table whose undrop crashed before clearing its record are the controls: the audit must keep both tables' grants.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import uuid

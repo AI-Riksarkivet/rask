@@ -11,8 +11,6 @@ Every decision is the real model's, on a store of this test's own: alice owns ``
 writer on ``lance_catalog$db2`` with no grant on ``lance_catalog$db``, and bob is a writer on ``lance_catalog$db2`` and a reader on ``lance_catalog$db``.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 

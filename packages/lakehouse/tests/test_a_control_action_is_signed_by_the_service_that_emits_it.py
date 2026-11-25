@@ -6,8 +6,6 @@ own door (`services/catalog/tests/test_the_control_lane_acts_only_on_signed_even
 test reaches, the expiry purge maintenance's sweep emits.
 """
 
-from __future__ import annotations
-
 from lakehouse.events.control_events import control_signer_role
 
 

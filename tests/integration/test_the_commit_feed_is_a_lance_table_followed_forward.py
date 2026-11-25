@@ -17,8 +17,6 @@ A page reads only its own rows ([[LH-590]]): the catalog's traffic for a page is
 one seam every feed read goes through, and a store answering its queries in another order stands in at the same seam.
 """
 
-from __future__ import annotations
-
 import asyncio
 import uuid
 from collections.abc import Callable, Iterator, Mapping

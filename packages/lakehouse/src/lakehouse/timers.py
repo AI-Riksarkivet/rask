@@ -17,8 +17,6 @@ window lost is time lost and nothing else. A native panic is no Exception, so it
 the process.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import socket

@@ -5,8 +5,6 @@ an external OpenLineage producer that names its owner only in the standard facet
 no producer-supplied name ever authorizes anything (`lineage.models.author_sub_from_payload` reads `sub` alone).
 """
 
-from __future__ import annotations
-
 from lineage.models import RunEvent
 
 

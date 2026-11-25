@@ -5,8 +5,6 @@ Fail-closed twice over: an unwired client raises 503 here, and ``fga_reads.check
 on an OpenFGA outage rather than allowing.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Sequence
 

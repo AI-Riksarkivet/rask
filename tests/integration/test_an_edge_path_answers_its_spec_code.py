@@ -17,8 +17,6 @@ The races and the panic are driven where they happen: a competing ExistOk create
 declaration, and Lance panics inside the first write.
 """
 
-from __future__ import annotations
-
 import io
 import re
 from collections.abc import Callable

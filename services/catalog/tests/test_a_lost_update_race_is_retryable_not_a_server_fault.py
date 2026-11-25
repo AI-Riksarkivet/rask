@@ -8,8 +8,6 @@ version that won ([[LH-542]]): measured on pylance 13.0.0, Lance's own delete ex
 version, which the door then reads as a race it lost.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

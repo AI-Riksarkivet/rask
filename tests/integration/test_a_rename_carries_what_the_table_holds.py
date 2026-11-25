@@ -14,8 +14,6 @@ The real catalog app over a real `dir` namespace on pylance, the in-memory `Tupl
 `lakehouse.governed.fga_writes` seed and revoke; maintenance's own policy resolution over the same control root.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path

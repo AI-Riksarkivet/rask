@@ -18,8 +18,6 @@ Driven against a real `dir` namespace and real pylance writes, because the subje
 bytes landed in — a mock would only prove the argument was forwarded.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

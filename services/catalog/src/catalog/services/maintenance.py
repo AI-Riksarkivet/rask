@@ -13,8 +13,6 @@ is the layout gate a compaction a client stages is judged against at ``version/c
 it lists a table as due for compaction.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Mapping, Sequence
 from datetime import timedelta

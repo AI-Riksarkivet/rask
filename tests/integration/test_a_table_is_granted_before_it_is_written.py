@@ -20,8 +20,6 @@ parent`` too, so one standing with no tuple is invisible to its creator and its 
 refuses every retry.
 """
 
-from __future__ import annotations
-
 import uuid
 from collections.abc import Callable, Iterator
 from datetime import timedelta

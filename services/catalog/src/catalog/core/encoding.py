@@ -40,8 +40,6 @@ every commit, a catalog door's (``tables.commits.commit_stamped``) and a stock c
 adds or changes (:func:`require_no_new_invalid_encoding`).
 """
 
-from __future__ import annotations
-
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import TYPE_CHECKING, Final

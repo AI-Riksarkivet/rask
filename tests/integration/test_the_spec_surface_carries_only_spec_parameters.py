@@ -22,8 +22,6 @@ Headers are deliberately NOT checked here: that class has typed consumers and is
 the row, and a gate that fails on an undecided question is one people learn to skip.
 """
 
-from __future__ import annotations
-
 import inspect
 from typing import Any, cast
 

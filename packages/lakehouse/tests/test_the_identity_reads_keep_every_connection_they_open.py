@@ -7,8 +7,6 @@ full, discarding connection: rask-rustfs. Connection pool size: 10` on every swe
 HEAD after a pause, so all sixteen requests are in flight together, as they are against a store across the network.
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 import time

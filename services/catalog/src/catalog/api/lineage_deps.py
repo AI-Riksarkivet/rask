@@ -16,8 +16,6 @@ Ops that emit a versionless marker with no read-back (drop/deregister/declare/re
 ``emit_write_event`` directly.
 """
 
-from __future__ import annotations
-
 from fastapi.concurrency import run_in_threadpool
 
 from catalog.api.authz import write_doors

@@ -7,8 +7,6 @@ process-wide singleton per cap-pair, the maintenance opens actually engage it (s
 orphan walk reuses the head dataset's cache via ``checkout_version`` instead of reopening.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import lance

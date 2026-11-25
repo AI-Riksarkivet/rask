@@ -1,7 +1,5 @@
 """A table's or a namespace's deletion-protection record, as the catalog's doors read it."""
 
-from __future__ import annotations
-
 from lance_namespace import InternalError
 
 from catalog.core.config import CatalogStore

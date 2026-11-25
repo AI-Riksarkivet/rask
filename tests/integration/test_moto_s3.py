@@ -5,8 +5,6 @@ moto S3 server, exercising the full create → insert → count → query path o
 Lance data. This is the deterministic, infra-free counterpart to the Docker e2e.
 """
 
-from __future__ import annotations
-
 import uuid
 from collections.abc import Callable, Iterator
 from typing import Any

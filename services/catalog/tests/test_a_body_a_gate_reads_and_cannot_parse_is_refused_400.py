@@ -8,8 +8,6 @@ one 422 before any gate runs), so the gate's read is the first a body of another
 with authorization on: a loopback Dex signs alice in and a real OpenFGA decides on a store of the test's own.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

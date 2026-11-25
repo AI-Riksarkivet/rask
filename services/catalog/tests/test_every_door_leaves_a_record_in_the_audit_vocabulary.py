@@ -9,8 +9,6 @@ obligation is recorded once per ref it covers. The trail they leave is judged as
 reads without naming its columns and version fails here.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator, Sequence
 from typing import Any

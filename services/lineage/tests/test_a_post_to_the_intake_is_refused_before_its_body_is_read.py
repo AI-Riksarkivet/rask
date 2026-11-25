@@ -9,8 +9,6 @@ Authentication is on, against the loopback Dex in the root conftest; the provena
 once, since the claim is about the door.
 """
 
-from __future__ import annotations
-
 import json
 import socket
 import threading

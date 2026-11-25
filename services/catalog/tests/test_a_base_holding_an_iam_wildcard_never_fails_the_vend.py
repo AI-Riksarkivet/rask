@@ -12,8 +12,6 @@ Driven through the real register, credentials and describe doors on the two-stor
 is replaced, keeping the policy it would send.
 """
 
-from __future__ import annotations
-
 import json
 import uuid
 from datetime import UTC, datetime

@@ -6,8 +6,6 @@ only the rungs named: alice administers the project and owns everything in it, b
 carol is a member who reads one table.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from pathlib import Path
 

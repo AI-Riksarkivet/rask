@@ -15,8 +15,6 @@ A response already begun when the deadline passes (a long stream) has its caller
 no deadline at all.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from contextlib import suppress

@@ -13,8 +13,6 @@ Fork would sidestep the whole problem and must not be used — lance holds its o
 child can deadlock, which is why the suite spawns.
 """
 
-from __future__ import annotations
-
 
 def append_rows(args: tuple[str, dict[str, str], int, int]) -> None:
     """A worker PROCESS: append ``n`` rows starting at ``start`` to the Lance dataset at ``uri``. Runs in its

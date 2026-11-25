@@ -22,8 +22,6 @@ location is excluded explicitly — a dropped table's bytes are still on disk un
 names them, so counting those would report every ordinary drop as an unregistered dataset.
 """
 
-from __future__ import annotations
-
 import pytest
 from pydantic import SecretStr
 

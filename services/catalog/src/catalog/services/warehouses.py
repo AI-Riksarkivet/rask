@@ -9,8 +9,6 @@ no database. Bucket creation uses boto3 ``create_bucket``, idempotent: an existi
 All IO here is blocking; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from contextlib import suppress

@@ -16,8 +16,6 @@ authorization decision allows (``served``); where it is who may make a commit, t
 names (``_holding``).
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import importlib

@@ -21,8 +21,6 @@ Storage-agnostic: an ``s3://`` outbox uses an ``S3FileSystem`` built from the SA
 producer/relay already use; a local/``file://`` path uses the local filesystem (dev + unit tests).
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import time

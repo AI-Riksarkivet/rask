@@ -12,8 +12,6 @@ as its sibling). Writes under ``__cas_stress/`` — maintenance's discovery skip
 with the lakehouse or gets GC'd.
 """
 
-from __future__ import annotations
-
 import os
 import threading
 import uuid

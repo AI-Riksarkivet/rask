@@ -27,8 +27,6 @@ and `seccompProfile` at POD level, which every container inherits — so a third
 reported was a false positive of its own making.
 """
 
-from __future__ import annotations
-
 import re
 from typing import Final
 

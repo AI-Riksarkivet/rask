@@ -15,8 +15,6 @@ it. The session is exchanged at moto's STS through `lakehouse.storage.store_sess
   of the replica's life ([[LH-494]]).
 """
 
-from __future__ import annotations
-
 import json
 import uuid
 from collections.abc import Iterator

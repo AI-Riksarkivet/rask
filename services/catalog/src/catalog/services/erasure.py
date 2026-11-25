@@ -106,8 +106,6 @@ And the external payloads it names are those a version retained when the erasure
 only an already-reclaimed version pointed at is beyond what the table still records.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from datetime import UTC, datetime, timedelta

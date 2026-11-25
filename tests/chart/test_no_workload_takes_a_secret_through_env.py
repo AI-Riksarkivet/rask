@@ -12,8 +12,6 @@ local-development overlay that carries every development fixture (the AGE Postgr
 Job), and production.
 """
 
-from __future__ import annotations
-
 import re
 
 import pytest

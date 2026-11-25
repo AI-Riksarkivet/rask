@@ -8,8 +8,6 @@ drain and the teardown; the render refuses a drain it cannot hold (`test_invaria
 pod to the same arithmetic with every lifecycle number moved, so only a computed grace passes it.
 """
 
-from __future__ import annotations
-
 import pytest
 import yaml
 

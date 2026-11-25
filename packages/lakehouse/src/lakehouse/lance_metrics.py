@@ -7,8 +7,6 @@ gateway with no new config. The catalog and maintenance call it once per process
 auto-instrumentation wrapper has set the provider.
 """
 
-from __future__ import annotations
-
 import logging
 
 from lance.otel import instrument_lance_metrics

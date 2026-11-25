@@ -23,8 +23,6 @@ What that settles, so nobody reopens it as a feature request:
   platform, and no one workload's task is its identity.)
 """
 
-from __future__ import annotations
-
 import pytest
 from lance_namespace import InvalidInputError
 

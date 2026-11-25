@@ -29,8 +29,6 @@ Usage: wrap the call, not the handler, so only the store's failures are mapped::
         resp = client.head_object(Bucket=bucket, Key=key)
 """
 
-from __future__ import annotations
-
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from http import HTTPStatus

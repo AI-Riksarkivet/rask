@@ -9,8 +9,6 @@ The client is the SDK's own ``OpenFgaClient`` against a server speaking OpenFGA'
 requests that reach the server.
 """
 
-from __future__ import annotations
-
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer

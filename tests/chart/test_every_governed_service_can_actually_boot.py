@@ -19,8 +19,6 @@ WHAT IT DOES NOT ASSERT: which answer. A service may be authenticated or may be 
 are legitimate and the choice belongs to the values. What is never legitimate is neither.
 """
 
-from __future__ import annotations
-
 import pathlib
 import sys
 

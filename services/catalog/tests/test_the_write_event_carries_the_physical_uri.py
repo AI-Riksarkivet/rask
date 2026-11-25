@@ -20,8 +20,6 @@ The URI costs nothing to include: `read_version_and_schema` already opens the da
 version and the schema in ONE open, and the location is an attribute of that same handle.
 """
 
-from __future__ import annotations
-
 import asyncio
 from pathlib import Path
 from typing import Any, cast

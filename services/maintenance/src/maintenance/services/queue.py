@@ -26,8 +26,6 @@ follow-up never replaces the schedule a pass writes. Fired, it waits while a tas
 running may have read the table before the commits it follows.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

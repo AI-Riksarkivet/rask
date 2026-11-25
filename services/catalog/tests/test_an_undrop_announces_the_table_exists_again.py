@@ -8,8 +8,6 @@ catalog runs a 7-day grace period, so every drop there is recoverable. Both undr
 same versionless `register_table` marker the register door sends, at the location the trash record kept.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Iterator
 from pathlib import Path

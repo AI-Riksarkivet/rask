@@ -20,8 +20,6 @@ Run by `dagger call rustfs-provisioning` (`make rustfs-provisioning`), which bin
 names it in the `RASK_RUSTFS_PROVISIONING_*` variables; nothing else sets them, so no other run touches a store's IAM.
 """
 
-from __future__ import annotations
-
 import json
 import re
 import secrets

@@ -45,8 +45,6 @@ It makes and removes buckets of its own, which no identity on the shared estate 
 throwaway RustFS `dagger call rustfs-provisioning` binds (`rustfs_store`), signed with that store's own root pair.
 """
 
-from __future__ import annotations
-
 import json
 import time
 import uuid

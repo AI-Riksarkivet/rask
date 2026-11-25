@@ -24,8 +24,6 @@ a refusal, so anything else is the door's own bug, and treating it as a refusal 
 `judge` BLOCKS when the check does (a key read is a blocking call), so an async door runs it in a worker thread.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from enum import StrEnum
 from typing import Final

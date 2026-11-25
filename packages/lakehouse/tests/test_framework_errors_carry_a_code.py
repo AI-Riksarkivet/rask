@@ -19,8 +19,6 @@ operation", which is what code 0 means. A `TableNotFound` 404 is unaffected: it 
 `LanceNamespaceError` and answered with code 4 by the handler above this one.
 """
 
-from __future__ import annotations
-
 import pytest
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.testclient import TestClient

@@ -5,8 +5,6 @@ A table or namespace is asked about as the object its grants are held by, ``tabl
 (``catalog.api.dependencies.Resolver``), so the door acts on the object it authorized.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import Sequence

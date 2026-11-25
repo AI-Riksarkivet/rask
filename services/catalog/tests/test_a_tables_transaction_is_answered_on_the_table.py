@@ -14,8 +14,6 @@ Every decision is the real model's, on a store of this test's own: alice creates
 which seed her ownership, and grants bob `reader` on the table. Carol holds nothing.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pyarrow as pa

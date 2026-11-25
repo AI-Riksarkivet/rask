@@ -7,8 +7,6 @@ sits in a suite's environment, which every process the run starts inherits and a
 it skips or fails by its own rule.
 """
 
-from __future__ import annotations
-
 import os
 from enum import StrEnum
 from pathlib import Path

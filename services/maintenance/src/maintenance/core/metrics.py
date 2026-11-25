@@ -4,8 +4,6 @@ A table's pass counts its own work: the datasets it reached, the versions it rec
 failed. The worker counts its tasks under ``maintenance.tasks.*``, the store events and fired schedules it settles, and
 samples its streams and durable consumers under ``maintenance.queue.*`` (ADR 0198 §2)."""
 
-from __future__ import annotations
-
 from typing import Literal, get_args
 
 from opentelemetry import metrics

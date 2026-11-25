@@ -36,8 +36,6 @@ the dev estate 2026-11-13 at 3,825 rows: a read of every retained row's key took
 count on row ids 150 ms.
 """
 
-from __future__ import annotations
-
 import asyncio
 import hashlib
 import json

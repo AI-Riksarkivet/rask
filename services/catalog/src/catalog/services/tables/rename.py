@@ -1,7 +1,5 @@
 """A table's rename: its pointer moves under its location claim's fence, and no data byte is read, written or deleted."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 

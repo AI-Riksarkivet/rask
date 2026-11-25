@@ -15,8 +15,6 @@ table by what its commits declared (ADR 0183). The judge answers allow or refuse
 here.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final, Literal

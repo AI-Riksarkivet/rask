@@ -24,8 +24,6 @@ and the bus's CA and nothing else (`Pod`). The broker's trace log carries each s
 its user JWT and a signature over that run's nonce, and each session's CONNECT with its token redacted.
 """
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import contextlib

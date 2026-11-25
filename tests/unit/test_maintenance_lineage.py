@@ -12,8 +12,6 @@ Drives the async emit with stdlib ``asyncio.run`` (the project convention). Cove
   outage must never fail a pass).
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from pathlib import Path

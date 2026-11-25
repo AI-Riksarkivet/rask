@@ -1,7 +1,5 @@
 """Aggregate the always-on lineage v1 endpoint routers."""
 
-from __future__ import annotations
-
 from fastapi import APIRouter
 
 from lineage.api.v1.endpoints import dlq, events, ingest, tables

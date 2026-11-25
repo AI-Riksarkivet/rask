@@ -25,8 +25,6 @@ refuses it, which the drain assertion below names.
 Skipped unless the live stack env is set. Run via `make e2e-ci` / the CI `e2e-stack` job.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import shutil

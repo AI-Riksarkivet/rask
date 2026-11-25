@@ -7,8 +7,6 @@ judges its records only as a page fills ([[LH-576]] E10b), as the due list does,
 that allows exactly the grants named.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path

@@ -5,8 +5,6 @@ ADR 0173 §7, [[LH-530]]). A test arranging a table before a request, or reading
 resolution, so it opens where the backend describes that name.
 """
 
-from __future__ import annotations
-
 import lance
 from lance_namespace import DescribeTableRequest, LanceNamespace, TableNotFoundError
 

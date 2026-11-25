@@ -6,8 +6,6 @@ credential of its own and reads none from its surroundings: every client signs w
 a caller with none gets no client ([[XC-219]]).
 """
 
-from __future__ import annotations
-
 import os
 from functools import cache
 from typing import TYPE_CHECKING, Any, Final

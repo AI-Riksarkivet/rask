@@ -20,8 +20,6 @@ Fail-closed invariant: if OIDC is enabled but the verifier that would answer a b
 request through or handing it to the other verifier.
 """
 
-from __future__ import annotations
-
 from typing import Annotated, Protocol, cast
 
 from fastapi import Depends, Request

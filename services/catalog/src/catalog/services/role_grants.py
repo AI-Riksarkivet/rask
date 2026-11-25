@@ -12,8 +12,6 @@ role is listed and its ``can_delete`` still resolves through the edge, so the do
 ended, an edge whose removal failed names an object that grants nothing, which no door reaches.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import TYPE_CHECKING
 

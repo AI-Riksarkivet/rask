@@ -3,8 +3,6 @@ and an index's drop.
 
 Most take the table a door resolved (``table_claims.DoorTable``) and the storage options."""
 
-from __future__ import annotations
-
 import json
 from collections import Counter
 from collections.abc import Callable, Iterator, Sequence

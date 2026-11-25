@@ -18,8 +18,6 @@ plans its first attempt on the handle the door opened, so the door's checked ope
 Counted, not read: the opens are tallied through the real ops against a real ``dir`` namespace.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any
 

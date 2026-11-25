@@ -35,8 +35,6 @@ again, since it says nothing about the signature. Only an event the lane would h
 (:func:`lane_task`), so an event it acknowledges untouched costs no key read.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, Final, Literal

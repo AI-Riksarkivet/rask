@@ -11,8 +11,6 @@ CREDENTIALS ARE DELIBERATELY NOT HERE. Material never travels in a record: a rec
 door resolves one.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

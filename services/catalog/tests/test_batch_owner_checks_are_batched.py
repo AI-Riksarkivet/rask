@@ -15,8 +15,6 @@ Driven through the real coroutine with recording fakes, so a future rewrite that
 is caught by the call COUNTS rather than by reading the code.
 """
 
-from __future__ import annotations
-
 import asyncio
 import uuid
 from typing import Any, cast, override

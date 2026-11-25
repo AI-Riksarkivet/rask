@@ -33,8 +33,6 @@ or 422 is the backend refusing that one event; retrying it would hold back every
 and passed.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Final
 

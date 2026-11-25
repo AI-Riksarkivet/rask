@@ -16,8 +16,6 @@ READ OFF THE MAKEFILE AND THE SCRIPT, never a cluster. A test that needed a live
 which is where a prerequisite is most likely to be dropped by someone shortening a recipe.
 """
 
-from __future__ import annotations
-
 import pathlib
 import subprocess
 import sys

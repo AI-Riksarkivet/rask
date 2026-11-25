@@ -5,8 +5,6 @@ over a native ``lance.namespace`` backend (``DirectoryNamespace`` on the object 
 default), with the pylance data plane filling operations the backend stubs.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import os

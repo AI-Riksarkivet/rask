@@ -1,8 +1,6 @@
 """#75 on-demand GC — preview must honour the current version, tag pins, the retain-window, and the age
 cutoff, and never mutate; run passes the bounds through with the sweep's tag exemption."""
 
-from __future__ import annotations
-
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from unittest.mock import create_autospec

@@ -32,8 +32,6 @@ shared contract, and the reader below is deliberately the *tolerant* half of it 
 parse is reported as an incomplete scan, never allowed to void a category.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

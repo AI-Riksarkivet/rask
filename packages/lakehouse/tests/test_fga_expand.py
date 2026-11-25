@@ -18,8 +18,6 @@ What these pin, and why each matters more than it looks:
 stdlib ``asyncio.run`` throughout, so no pytest-asyncio dependency, matching ``test_fga_resilience.py``.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any, cast
 

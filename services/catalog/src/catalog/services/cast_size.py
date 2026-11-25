@@ -9,8 +9,6 @@ the widths the target types store, and refused over the door's cap before it all
 Every figure is an upper bound, so a cast that fits is never refused for a miscount in its favour.
 """
 
-from __future__ import annotations
-
 import pyarrow as pa
 import pyarrow.compute as pc
 

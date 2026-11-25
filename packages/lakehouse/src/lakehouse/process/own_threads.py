@@ -16,8 +16,6 @@ never runs more threads than it seats, whatever is cancelled, and a call that ha
 does: a call given to a set should be bounded by a timeout of its own.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextvars
 import os

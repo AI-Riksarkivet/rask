@@ -23,8 +23,6 @@ half is a separate, larger change and is tracked in the audit entry; this gate c
 instrumentor can actually reach.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING, cast
 
 

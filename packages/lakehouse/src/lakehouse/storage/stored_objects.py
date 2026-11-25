@@ -9,8 +9,6 @@ beneath it (measured 2026-10-28), so the refusal shows only on a conformant stor
 through pyarrow's filesystem.
 """
 
-from __future__ import annotations
-
 import hashlib
 import logging
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence

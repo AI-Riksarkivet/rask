@@ -19,8 +19,6 @@ So both doors decode through `tables.writes.read_arrow_body`, over the fleet's o
 over HTTP against a real `dir` backend.
 """
 
-from __future__ import annotations
-
 import struct
 from decimal import Decimal
 from typing import TYPE_CHECKING

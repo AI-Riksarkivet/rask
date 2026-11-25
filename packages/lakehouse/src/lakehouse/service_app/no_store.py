@@ -18,8 +18,6 @@ point, which takes an ASGI app, because a middleware the app installs sits insid
 sees the 500 that layer answers.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 from starlette.datastructures import MutableHeaders

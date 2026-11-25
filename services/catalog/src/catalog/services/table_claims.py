@@ -13,8 +13,6 @@ once it has acted (:func:`lift_fence`); a rename hands over the claim it read (:
 acts on that reading through :class:`DoorTable` ([[LH-530]]).
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager

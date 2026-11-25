@@ -11,8 +11,6 @@ own loggers write at is `observability.logLevel`, rendered as `RASK_LOG_LEVEL`: 
 reconcile from git restores.
 """
 
-from __future__ import annotations
-
 import posixpath
 
 from tests.chart import chart_render

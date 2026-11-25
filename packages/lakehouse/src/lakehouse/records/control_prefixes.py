@@ -14,8 +14,6 @@ restore would publish their events again, the leases and caches it skips because
 the three that are not control-root records at all.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 

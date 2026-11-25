@@ -6,8 +6,6 @@ calls it (its `banned-api` entry in ``pyproject.toml``); :func:`resolve` is its 
 not own the estate's permissions.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

@@ -40,8 +40,6 @@ Two ways this fails SILENTLY in-cluster, named because "best-effort" hides them:
   nowhere — never a half-configured transport pretending to emit.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 from typing import Any, Literal, Protocol, runtime_checkable

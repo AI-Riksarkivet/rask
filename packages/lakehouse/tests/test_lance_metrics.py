@@ -1,7 +1,5 @@
 """The Lance-native metrics bridge: it activates against the installed pylance, and its failure never reaches startup."""
 
-from __future__ import annotations
-
 import pytest
 
 from lakehouse import lance_metrics

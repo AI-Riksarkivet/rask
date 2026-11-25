@@ -19,8 +19,6 @@ own catalog row are written where the warehouse door writes them (the door provi
 through the namespace door and one table.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import threading

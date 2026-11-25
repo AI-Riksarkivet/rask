@@ -5,8 +5,6 @@ control-lane consumers) mixes :class:`SignatureDoorSettings` into its own settin
 lane's (:data:`~lakehouse.events.control_events.ControlSigner`), part of the contract the lakehouse publishes for its events.
 """
 
-from __future__ import annotations
-
 from typing import Self
 
 from pydantic import Field, model_validator

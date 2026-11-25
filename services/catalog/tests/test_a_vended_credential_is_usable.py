@@ -27,8 +27,6 @@ What the exchange sends and the triple it answers are driven on a moto STS by
 BUILD from what it was handed.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any

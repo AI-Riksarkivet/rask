@@ -17,8 +17,6 @@ configured, and the target's own bus may be down. A bucket the store will not an
 unknown, and never counted as configured.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Mapping
 from typing import Any, Final

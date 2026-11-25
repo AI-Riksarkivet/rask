@@ -42,8 +42,6 @@ Both postures default to the cautious value (`ModelRole.READER`, `BootFailure.SE
 neither publishes no model, and a build of its that fails leaves the governed doors answering 503 rather than open.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Sequence
 from enum import StrEnum

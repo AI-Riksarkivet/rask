@@ -11,8 +11,6 @@ Nothing is set by default (ADR 0066, [[LH-034]]): a plain create stamps no knob.
 Driven over HTTP against a real `dir` backend; the stamped metadata is read off the dataset the create wrote.
 """
 
-from __future__ import annotations
-
 import json
 from typing import TYPE_CHECKING
 from urllib.parse import quote

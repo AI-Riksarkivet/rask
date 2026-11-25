@@ -21,8 +21,6 @@ resolved when it took the event in, never one its body claims ([[LH-522]]): driv
 lineage, with authentication off.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncGenerator, Iterator
 from contextlib import asynccontextmanager

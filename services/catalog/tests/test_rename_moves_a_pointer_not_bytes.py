@@ -21,8 +21,6 @@ where the spec says a rename "transitions to the V2 hash-based path naming" — 
 the refusal below says so rather than quietly copying a dataset inside a request.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import lance

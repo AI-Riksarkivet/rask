@@ -9,8 +9,6 @@ Driven against a moto server, which answers every request with a ``Date`` header
 clock is the only thing changed.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta, tzinfo
 

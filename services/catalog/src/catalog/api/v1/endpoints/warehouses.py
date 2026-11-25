@@ -20,8 +20,6 @@ bucket `purge_bucket` and `force` are three SEPARATE opt-ins that never share a 
 `delete_warehouse`.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import aclosing, suppress

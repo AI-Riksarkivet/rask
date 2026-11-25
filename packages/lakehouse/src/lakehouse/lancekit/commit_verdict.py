@@ -27,8 +27,6 @@ through to `STORE_UNAVAILABLE`, which is the safe direction for a new store's wo
 "the store is unavailable" retries later and loses nothing, where one told "your input is wrong" stops.
 """
 
-from __future__ import annotations
-
 from enum import Enum
 from typing import Final
 

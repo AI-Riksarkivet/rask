@@ -33,8 +33,6 @@ each other. The assertions name the exception CLASS rather than a message, becau
 `.code` and the code is the contract.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from pathlib import Path
 from uuid import uuid4

@@ -24,8 +24,6 @@ right trade for a read-only corpus); per-tick reopens are CORRECT for a mutating
 was wrong was each reopen minting and discarding gigabyte-scale cache ceilings.
 """
 
-from __future__ import annotations
-
 import logging
 from functools import cache
 from pathlib import Path

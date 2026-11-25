@@ -9,8 +9,6 @@ Every outcome writes one ``authn`` audit record: who was admitted, or why a bear
 and lineage both call this, so no door admits or refuses a caller without the record another door would have left.
 """
 
-from __future__ import annotations
-
 from typing import Protocol
 
 import jwt

@@ -33,8 +33,6 @@ emitted location is pinned by behaviour in
 `services/catalog/tests/test_a_register_refuses_a_table_that_mixes_file_versions.py`.
 """
 
-from __future__ import annotations
-
 from typing import Any, cast
 
 from catalog.services.tables import registering

@@ -10,8 +10,6 @@ floor: a stock client calls ``namespace.describe_table(DescribeTableRequest(id=.
 version pin read latest instead.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Iterator
 from typing import Any
 from unittest.mock import MagicMock

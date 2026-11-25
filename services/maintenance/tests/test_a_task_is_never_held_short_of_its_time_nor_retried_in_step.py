@@ -9,8 +9,6 @@ that bound (full jitter): tasks that failed together, on one store outage, would
 second, delivery after delivery.
 """
 
-from __future__ import annotations
-
 import random
 from datetime import UTC, datetime
 

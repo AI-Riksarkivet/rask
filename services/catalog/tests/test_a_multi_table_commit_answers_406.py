@@ -7,8 +7,6 @@ would run without the protection, ownership and lineage their own doors carry.
 The refusal is the catalog's, not the backend's: a backend that implements the op is not called.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 from unittest.mock import MagicMock

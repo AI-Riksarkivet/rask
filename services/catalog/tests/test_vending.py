@@ -5,8 +5,6 @@ door answers are driven through the real catalog app on a moto STS in
 `services/catalog/tests/test_the_catalog_signs_only_with_sessions_its_token_is_exchanged_for.py`.
 """
 
-from __future__ import annotations
-
 import hashlib
 import re
 from typing import Any

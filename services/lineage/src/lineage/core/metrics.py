@@ -16,8 +16,6 @@ underscores → ``lance_lineage_outcome``.)
 (before ``opentelemetry-instrument`` installs the real MeterProvider) is safe.
 """
 
-from __future__ import annotations
-
 from enum import StrEnum
 from typing import get_args
 

@@ -30,8 +30,6 @@ Pinned by `tests/chart/test_a_stack_builds_every_image_it_side_loads.py`, which 
 functions below so the gate and the stack scripts cannot hold different answers.
 """
 
-from __future__ import annotations
-
 import argparse
 import re
 import sys

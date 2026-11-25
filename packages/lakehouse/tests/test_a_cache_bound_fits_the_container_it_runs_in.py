@@ -17,8 +17,6 @@ Python, and the failure that follows is an OOMKill with no line to blame. Readin
 two impossible to drift apart.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import lance

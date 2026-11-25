@@ -37,8 +37,6 @@ Two bounds, both measured on pylance 12.0.0:
   that version is judged again.
 """
 
-from __future__ import annotations
-
 import re
 from collections.abc import Generator, Sequence
 from contextlib import contextmanager

@@ -16,8 +16,6 @@ hold. pylance reports a refused finalize as an unknown outcome and keeps its sta
 read by asking for that manifest again: 400 ``InvalidInput`` naming the forgery.
 """
 
-from __future__ import annotations
-
 import copy
 import hashlib
 import json

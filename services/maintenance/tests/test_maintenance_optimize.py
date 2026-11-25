@@ -7,8 +7,6 @@ shallow clone's compaction would materialise the shared data into the clone, whi
 prefix compacts as an ordinary merge. Local filesystem, no S3.
 """
 
-from __future__ import annotations
-
 from datetime import timedelta
 from pathlib import Path
 from uuid import uuid4

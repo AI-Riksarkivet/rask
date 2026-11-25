@@ -7,8 +7,6 @@ lane's counters exist at 0 from its start, since an alert reads a counter's incr
 through an OpenTelemetry reader, as the Collector reads them.
 """
 
-from __future__ import annotations
-
 import importlib.util
 from pathlib import Path
 from types import ModuleType

@@ -15,8 +15,6 @@ disarm is the catalog's commit, asked at its maintainer door, since maintenance'
 disarms first.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path

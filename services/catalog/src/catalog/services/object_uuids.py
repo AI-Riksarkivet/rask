@@ -10,8 +10,6 @@ A door or a walk that acts on a namespace by name is held to the uuid it identif
 (:func:`require_standing_as_identified`), which refuses rather than answer best-effort.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Literal
 

@@ -17,8 +17,6 @@ inferred from the next tick's behaviour and from nothing in the tick that perfor
 would inflate the evidence the preview exists to show. A null there is the preview working.
 """
 
-from __future__ import annotations
-
 from maintenance.services.purge import RefusedRecord, refusal_log_entry
 
 

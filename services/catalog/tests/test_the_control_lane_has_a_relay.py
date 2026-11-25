@@ -13,8 +13,6 @@ event loop, as the catalog's timer runs it, and one runs the timer itself (`cata
 from outside the process.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import time

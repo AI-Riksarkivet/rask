@@ -47,8 +47,6 @@ root, while this writes to the authorization store, where a wrong revoke is felt
 grant rather than by a reclaimer.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import TYPE_CHECKING, Final
 

@@ -21,8 +21,6 @@ than raise. `env_prefix` redirects the bare-name fallback onto the namespaced na
 declares, so the fallback becomes harmless instead of absent.
 """
 
-from __future__ import annotations
-
 import importlib
 import os
 import sys

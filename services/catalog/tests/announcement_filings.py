@@ -1,7 +1,5 @@
 """What a door filed before its change, as a test reaches it: made older than the lease, so the finish judges it."""
 
-from __future__ import annotations
-
 import os
 
 import pyarrow.fs as pafs

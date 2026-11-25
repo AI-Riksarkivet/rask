@@ -9,8 +9,6 @@ none of them loads pyarrow; `options` does, and importing it from a settings mod
 re-exports nothing for the same reason, so importing this module loads no sibling.
 """
 
-from __future__ import annotations
-
 from urllib.parse import urlsplit
 
 

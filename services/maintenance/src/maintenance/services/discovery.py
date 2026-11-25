@@ -4,8 +4,6 @@ Pure list-logic over a pyarrow filesystem: the drift report's storage walk (``re
 datasets with it.
 """
 
-from __future__ import annotations
-
 import pyarrow.fs as pafs
 from pydantic import BaseModel
 

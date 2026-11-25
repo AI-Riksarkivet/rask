@@ -11,8 +11,6 @@ The error is handed to the door as Lance raised it there, since which writer los
 the table and the door are real.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import lance

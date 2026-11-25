@@ -11,8 +11,6 @@ Covers:
 * the governed feed (`GET /events`): what a caller may see, and how its cursors move.
 """
 
-from __future__ import annotations
-
 import asyncio
 import uuid
 from collections.abc import Collection

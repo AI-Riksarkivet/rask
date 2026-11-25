@@ -9,8 +9,6 @@ the rule: a comment, a docstring, a test, the chart, a script. A rule about what
 `REFERENCE_PRODUCTS` is the one place in code that names one, as the no-client lint's `DEPARTED` is for clients.
 """
 
-from __future__ import annotations
-
 import argparse
 import re
 import sys

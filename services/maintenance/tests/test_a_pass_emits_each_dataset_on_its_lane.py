@@ -5,8 +5,6 @@ A raising publish is caught for its own dataset, in either lane, so every event 
 worker still schedules the table's next pass.
 """
 
-from __future__ import annotations
-
 import asyncio
 
 import pytest

@@ -10,8 +10,6 @@ store through the front ``store_requests.at_aws_proper`` stands for that endpoin
 handed the front's proxy and CA, and nothing else about the client changes.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from typing import Any
 

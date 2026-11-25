@@ -16,8 +16,6 @@ only that its author was recorded, and counts a raise that carries none.
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from typing import Final

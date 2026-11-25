@@ -1,7 +1,5 @@
 """A listing's page filtered by what the caller may see, judged batch by batch on the objects its candidates name."""
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
 from typing import Literal

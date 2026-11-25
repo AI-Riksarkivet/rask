@@ -13,8 +13,6 @@ THE ORDER IS THE POINT: run the cleanup before the branches are handled and it r
 estate could report an erasure that reclaimed exactly zero bytes and looked successful.
 """
 
-from __future__ import annotations
-
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta

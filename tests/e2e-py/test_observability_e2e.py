@@ -21,8 +21,6 @@ Run (port-forward the three services first), or `make e2e-obs`:
     uv run pytest tests/e2e-py/test_observability_e2e.py -v
 """
 
-from __future__ import annotations
-
 import os
 import time
 import uuid

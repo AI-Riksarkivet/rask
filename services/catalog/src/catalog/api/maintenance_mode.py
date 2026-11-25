@@ -13,8 +13,6 @@ NOT the table maintenance surface: version cleanup is ``services/maintenance``'s
 at ``version/create`` (ADR 0174). This module only gates writes.
 """
 
-from __future__ import annotations
-
 import logging
 
 from fastapi import Request

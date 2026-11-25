@@ -13,8 +13,6 @@ caller: an outage wearing a permission error's clothes.
 Sync via ``asyncio.run`` — no async-plugin dependency (this repo does not set ``asyncio_mode``).
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 from typing import Any, cast

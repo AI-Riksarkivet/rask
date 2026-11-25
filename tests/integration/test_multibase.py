@@ -5,8 +5,6 @@ real Lance write happens — the point is the governance decision: an off-allowl
 BEFORE any write; an on-allowlist one is threaded through to the write path.
 """
 
-from __future__ import annotations
-
 import io
 from typing import Any
 from uuid import uuid4

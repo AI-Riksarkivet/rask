@@ -14,8 +14,6 @@ its namespace: a pod dials a store when its spec, or a ConfigMap or Secret it mo
 `helm test` pod runs only when someone runs `helm test`.
 """
 
-from __future__ import annotations
-
 import json
 import re
 from typing import Final

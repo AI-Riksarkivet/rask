@@ -11,8 +11,6 @@ imagined the transaction log has, and the shape is exactly the thing worth verif
 was scoped from a probe rather than from the docs.
 """
 
-from __future__ import annotations
-
 import io
 
 import lance

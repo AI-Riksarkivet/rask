@@ -17,8 +17,6 @@ Driven through the real create, register and credentials doors on the two-store 
 keys each table's fragments occupy. Whether RustFS's STS enforces it is the live probe's question.
 """
 
-from __future__ import annotations
-
 import json
 import uuid
 from datetime import UTC, datetime, timedelta

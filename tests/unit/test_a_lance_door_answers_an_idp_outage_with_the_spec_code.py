@@ -19,8 +19,6 @@ catalog's door also has its own file, `services/catalog/tests/test_an_unreachabl
 it also audits the refusal.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import socket

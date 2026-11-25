@@ -26,8 +26,6 @@ moto's S3 does not enforce session policies, so the policy is judged with moto's
 applies IAM's wildcard semantics and an explicit Deny's precedence. The store's own 403s are the deployed probe's job.
 """
 
-from __future__ import annotations
-
 import json
 import re
 import threading

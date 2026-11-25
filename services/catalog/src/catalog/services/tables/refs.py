@@ -1,7 +1,5 @@
 """A table's branches and tags: list, create, update and delete, and the rules a ref's name is held to."""
 
-from __future__ import annotations
-
 from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from typing import Any, Final

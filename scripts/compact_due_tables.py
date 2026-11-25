@@ -28,8 +28,6 @@ Env (argparse overrides both)::
     COMPACT_CATALOG_TOKEN  the caller's OIDC bearer; empty = an auth-off local stack
 """
 
-from __future__ import annotations
-
 import argparse
 import os
 import sys

@@ -15,8 +15,6 @@ certificate carries (`LANCE_E2E_NATS_TLS_NAME`, since the address is the Service
 the streams read and the subjects written here (deploy/values-e2e-suites.yaml, docs/OPERATORS.md § 7).
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import os

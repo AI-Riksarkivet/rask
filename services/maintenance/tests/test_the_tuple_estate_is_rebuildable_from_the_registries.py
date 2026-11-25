@@ -18,8 +18,6 @@ person an operator took care to remove. `test_a_stranded_project_is_REPORTED_not
 that matters here; a structural edge cannot confer access, and a grant can.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Iterator
 from pathlib import Path

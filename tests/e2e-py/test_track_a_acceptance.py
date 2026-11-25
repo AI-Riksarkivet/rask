@@ -56,8 +56,6 @@ and a credentials directory whose `token` file holds a project-creating user's D
     uv run pytest tests/e2e-py/test_track_a_acceptance.py -v
 """
 
-from __future__ import annotations
-
 import io
 import os
 import uuid

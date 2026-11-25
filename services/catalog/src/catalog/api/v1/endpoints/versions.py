@@ -4,8 +4,6 @@
 ``cleanup_old_versions``, and the three version-TRACKING ops answer 406 — see :func:`_versions_are_unmanaged`.
 """
 
-from __future__ import annotations
-
 import logging
 from functools import partial
 from typing import Annotated

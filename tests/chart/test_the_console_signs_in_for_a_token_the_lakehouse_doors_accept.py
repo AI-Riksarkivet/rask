@@ -14,8 +14,6 @@ Read from the product chart's render and the dex fixture's, as `make k3s-up` ins
 the doors require to whatever `console.oidc.scopes` names, so a value cannot drop them.
 """
 
-from __future__ import annotations
-
 import json
 from typing import Final
 

@@ -22,8 +22,6 @@ round-trips the raw path parameter byte-for-byte. Checked, because the differenc
 is not.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from pathlib import Path

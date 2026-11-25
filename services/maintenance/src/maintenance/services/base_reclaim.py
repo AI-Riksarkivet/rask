@@ -29,8 +29,6 @@ only a compaction rewrites it; pylance 13.0.0's ``CompactionOptions`` carries no
 move the table's rows off the base into its root.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator, Sequence
 from datetime import datetime, timedelta

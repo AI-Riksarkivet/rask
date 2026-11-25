@@ -28,8 +28,6 @@ THE PYTHON PLANE IS THE GATE'S SCOPE, as its title says: a container whose proce
 `BaseSettings` is checked by nothing here.
 """
 
-from __future__ import annotations
-
 import importlib
 import pathlib
 import pkgutil

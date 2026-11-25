@@ -25,8 +25,6 @@ This layer is **pure** (builders + emitter transports only); the per-pass orches
 never imports up into ``services``.
 """
 
-from __future__ import annotations
-
 import logging
 import uuid
 from collections.abc import Callable

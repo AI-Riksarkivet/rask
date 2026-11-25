@@ -24,8 +24,6 @@ Three separate things now have to agree about the number, which is why it is ONE
 disagreeing about how deep a tree may go.
 """
 
-from __future__ import annotations
-
 import pytest
 from lance_namespace import InvalidInputError
 

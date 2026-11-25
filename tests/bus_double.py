@@ -13,8 +13,6 @@ What was taken is also the stream a reader reads by sequence (`read`): the n-th 
 n, and `expire_through` drops the front as a stream's retention does.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 from collections.abc import AsyncGenerator, Callable, Mapping

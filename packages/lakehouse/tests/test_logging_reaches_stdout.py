@@ -12,8 +12,6 @@ never a probe handler of their own: a handler attached to root receives propagat
 its job.
 """
 
-from __future__ import annotations
-
 import io
 import logging
 import re

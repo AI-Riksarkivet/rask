@@ -8,8 +8,6 @@ The lifespan does not run, on purpose: every route is registered at import from 
 store, the bus and the IdP.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import subprocess

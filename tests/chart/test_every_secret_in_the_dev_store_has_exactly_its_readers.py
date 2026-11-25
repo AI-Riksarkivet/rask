@@ -16,8 +16,6 @@ The store's root access key is named only where it is used or created: by the pr
 policy with it and prunes what git no longer declares, and by the dev store's seed, which writes it (ADR 0168).
 """
 
-from __future__ import annotations
-
 import json
 import re
 import subprocess

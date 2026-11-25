@@ -5,8 +5,6 @@ twelve. `_finding_identity` takes the first present field from a fixed list, so 
 each category's findings are named by.
 """
 
-from __future__ import annotations
-
 import pytest
 from pydantic import BaseModel
 

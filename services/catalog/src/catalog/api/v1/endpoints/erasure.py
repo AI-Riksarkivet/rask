@@ -23,8 +23,6 @@ pinning the versions that held them, and reclaims history, a destruction of the 
 two differ in what they must REPORT: a delete answers with a version, an erasure with what it could not reach.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime, timedelta

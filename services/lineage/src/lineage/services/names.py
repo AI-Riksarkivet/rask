@@ -17,8 +17,6 @@ other failure is the outage: an event recorded under a name it should have been 
 lineage, so the producer's retry is the better answer.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Generator
 from contextlib import contextmanager

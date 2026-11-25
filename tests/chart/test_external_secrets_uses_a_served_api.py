@@ -15,8 +15,6 @@ has to fail in CI, where no cluster exists. `v1beta1` is asserted absent by name
 specific version this estate shipped and the one a copy-paste from old docs reintroduces.
 """
 
-from __future__ import annotations
-
 import pathlib
 
 from tests.chart.chart_render import render

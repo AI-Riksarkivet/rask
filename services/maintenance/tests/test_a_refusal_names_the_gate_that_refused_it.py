@@ -16,8 +16,6 @@ tick that refused nothing, and a `refused_by="none"` would put a value in the la
 gate. `sum(rate(...))` is unaffected; `sum by (refused_by)` reads the breakdown.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any

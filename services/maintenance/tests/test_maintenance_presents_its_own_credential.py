@@ -8,8 +8,6 @@ The token is the kubelet-projected `rask-catalog` file, re-read per request: the
 ~515 s of a 600 s life (LH-220 probe d), so a client that read it once is refused ten minutes after boot.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import httpx

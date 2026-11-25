@@ -10,8 +10,6 @@ beneath its handler.
 Driven through lineage's own lifespan, which hands the lane to its bus as a pod's does (`lineage_lane.started`).
 """
 
-from __future__ import annotations
-
 import pytest
 from lineage_lane import Feed, started
 

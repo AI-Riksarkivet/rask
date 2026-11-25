@@ -6,8 +6,6 @@ encodes a JSON value nested in a list or a map, and one beneath a null list, so 
 HTTP against a real ``dir`` backend.
 """
 
-from __future__ import annotations
-
 from typing import TYPE_CHECKING
 
 import lance

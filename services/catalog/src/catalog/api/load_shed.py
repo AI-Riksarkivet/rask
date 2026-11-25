@@ -25,8 +25,6 @@ The in-flight counter is a plain int: the event loop is single-threaded and ther
 capacity check and the increment, so the read-modify-write is atomic (no lock needed).
 """
 
-from __future__ import annotations
-
 import re
 
 from lance_namespace import ErrorCode

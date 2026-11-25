@@ -7,8 +7,6 @@ for a first install, where OpenFGA itself is one of the resources and there is n
 at the level the release names, as every lakehouse process does.
 """
 
-from __future__ import annotations
-
 from tests.chart.chart_render import DEFAULT_ARGS, env_of, render
 
 

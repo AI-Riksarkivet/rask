@@ -10,8 +10,6 @@ own ([[LH-235]]): alice makes `lance_catalog$db$t` and its branch `exp` through 
 bob `writer` on the table alone. Each door runs to its write, so a rung asked anywhere on its way refuses bob.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from typing import Any
 

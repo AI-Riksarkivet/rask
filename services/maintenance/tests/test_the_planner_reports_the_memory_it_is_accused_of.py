@@ -7,8 +7,6 @@ so the readings ride the pass's own line (``maintenance_table_pass``): the compa
 instant, and the row records ~10Mi of spread between two samplers reading seconds apart.
 """
 
-from __future__ import annotations
-
 import gc
 import logging
 from pathlib import Path

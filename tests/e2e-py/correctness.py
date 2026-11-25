@@ -34,8 +34,6 @@ back waits out its lane's 120 s delay (`services.lineage.delivery.retrySeconds`)
 passes a window of its own.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import time

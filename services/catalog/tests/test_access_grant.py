@@ -6,8 +6,6 @@ or the structural ``parent`` edge is a 4xx, never a junk tuple; the grantee is r
 propagates (fail-closed), never a silent no-op. Sync via ``asyncio.run`` — no async-plugin dependency.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from typing import Any, cast

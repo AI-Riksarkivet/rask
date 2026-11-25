@@ -8,8 +8,6 @@ or replay what is judged by the real model on an OpenFGA store of the test's own
 tables so each is governed.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

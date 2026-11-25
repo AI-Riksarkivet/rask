@@ -15,8 +15,6 @@ and it climbs `k` by doubling until the door refuses, so it measures the largest
 actually serves rather than a number this test assumes the ceiling to be.
 """
 
-from __future__ import annotations
-
 import os
 import socket
 import subprocess

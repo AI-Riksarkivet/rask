@@ -13,8 +13,6 @@ at 0 from the moment the lane starts, so the alert's `rate()` sees the first ref
 through a real in-memory reader.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 from collections.abc import Callable, Iterator

@@ -37,9 +37,6 @@ a store whose wording nobody anticipated costs a refusal, while a wrong ABSENT c
 duplicate append, or a control that reports live data as missing.
 """
 
-from __future__ import annotations
-
-
 __all__ = ["reads_as_absent"]
 
 #: Substrings that PROVE the target is not there. Each is pylance's OWN wording for a specific

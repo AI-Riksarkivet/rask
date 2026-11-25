@@ -4,8 +4,6 @@ A warehouse is the first segment of every identifier, so ``wh-a$bronze$clips`` i
 root and its own directory catalog. The control-plane doors (create, list, get) are ``test_warehouses.py``'s.
 """
 
-from __future__ import annotations
-
 import io
 from collections.abc import Callable, Iterator
 from pathlib import Path

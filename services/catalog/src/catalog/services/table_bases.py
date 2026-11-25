@@ -12,8 +12,6 @@ table registered at ``.`` is vended ``<bucket>/*`` and one at ``_bases`` is vend
 (lh279 s1). The rule is what makes the record unreachable by any vend.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Sequence
 from uuid import UUID

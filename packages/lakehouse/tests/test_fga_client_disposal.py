@@ -17,8 +17,6 @@ Suppressed rather than raised: a shutdown path that raises hides whatever came a
 close cannot be retried on a pod that is leaving.
 """
 
-from __future__ import annotations
-
 import pytest
 
 

@@ -10,8 +10,6 @@ due, the call its background loop makes on every wake. The store's clock is moto
 dates the expiry STS answers, so a store whose clock disagrees with the catalog's is played by shifting it.
 """
 
-from __future__ import annotations
-
 import json
 import uuid
 from collections.abc import Callable, Iterator

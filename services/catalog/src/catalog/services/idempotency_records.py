@@ -40,8 +40,6 @@ first replaces an expired record, under the ETag it read, with a mark no claim t
 it never deletes a key a retry took over meanwhile: the store offers no conditional delete.
 """
 
-from __future__ import annotations
-
 import logging
 import re
 from datetime import datetime, timedelta

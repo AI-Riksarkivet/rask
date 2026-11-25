@@ -16,8 +16,6 @@ nested namespace → table / materialized_view). Every API operation is checked 
 Nothing here dials OpenFGA; the reads, the writes and the provisioning do (`fga_reads`, `fga_writes`, `fga_provision`).
 """
 
-from __future__ import annotations
-
 import functools
 import json
 from pathlib import Path

@@ -16,8 +16,6 @@ re-reads state through the normal FGA-governed path, so a dropped/duplicated/lat
 redundant re-read. `event_id` is the client-side dedupe key.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from typing import Any, Literal, assert_never
 from uuid import uuid7

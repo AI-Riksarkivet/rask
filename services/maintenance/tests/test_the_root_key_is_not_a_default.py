@@ -15,8 +15,6 @@ Fail-closed lives at BOOT, not in the model, so tests and tools may still build 
 without credentials — the same split the secret half already uses.
 """
 
-from __future__ import annotations
-
 import asyncio
 
 import pytest

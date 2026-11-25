@@ -6,8 +6,6 @@ may contain records it cannot act on, and being honest about it. A repair that h
 success is how an estate ends up believing it is repaired.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from catalog.api import warehouse_grant_backfill

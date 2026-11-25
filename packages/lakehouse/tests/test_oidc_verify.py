@@ -30,8 +30,6 @@ The tests are written against this *public* behaviour. If the constructor keywor
 changes name, only ``_make_verifier`` below needs updating.
 """
 
-from __future__ import annotations
-
 import base64
 import time
 from typing import Any

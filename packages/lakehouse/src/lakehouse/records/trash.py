@@ -27,8 +27,6 @@ objects may share one, each under its own record: :func:`named` finds them by th
 the trash vocabulary over it.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta

@@ -9,8 +9,6 @@ A finding against `lakehouse` about a seam written more than once:
   `resolve_policy` as whatever JSON happened to be on disk.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Callable
 from pathlib import Path

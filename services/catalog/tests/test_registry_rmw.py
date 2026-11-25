@@ -23,8 +23,6 @@ host, which is the whole scope of a local root); the S3 branch is driven through
 `test_registry_cas.py`'s treatment of the create branch.
 """
 
-from __future__ import annotations
-
 import json
 from datetime import UTC, datetime
 from pathlib import Path

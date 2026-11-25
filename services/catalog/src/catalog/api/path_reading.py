@@ -21,8 +21,6 @@ Pure ASGI and outermost, so every layer beneath it reads the one path: the write
 classify a write by its path, routing and the doors.
 """
 
-from __future__ import annotations
-
 import re
 from typing import Final
 from urllib.parse import unquote

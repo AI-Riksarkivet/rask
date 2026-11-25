@@ -38,8 +38,6 @@ being away, so its tick must depend on nothing but the store the events are stag
 level-triggered, idempotent, self-healing and late-is-free, and it runs once a window whatever the replica count.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from collections.abc import Callable, Mapping

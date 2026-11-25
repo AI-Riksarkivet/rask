@@ -6,8 +6,6 @@ ref file of Lance's, and a branch adds no finding of its own: a live table's bra
 recoverably dropped table's branch lies under the trash record that keeps the table's bytes.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, cast
 

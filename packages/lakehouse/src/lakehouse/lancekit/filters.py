@@ -6,8 +6,6 @@ A filter is written as a template (`lance_filter`), whose every interpolation is
 so a value cannot reach the filter as SQL by being left unquoted.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable, Iterator
 from string.templatelib import Interpolation, Template
 from typing import Final

@@ -25,8 +25,6 @@ files, so each must be one an ExternalSecret writes from the store. What the bus
 table is the `nats-auth` lane's.
 """
 
-from __future__ import annotations
-
 import json
 import pathlib
 import posixpath

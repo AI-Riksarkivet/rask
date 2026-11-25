@@ -7,8 +7,6 @@ it, so a workload answering to the name `rask-dex` is sent no token exchange and
 https is refused at render.
 """
 
-from __future__ import annotations
-
 import json
 import subprocess
 

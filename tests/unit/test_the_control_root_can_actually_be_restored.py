@@ -22,8 +22,6 @@ correct recovery is to be empty, and a future reader "completing" the prefix lis
 silently.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import json
 import sys

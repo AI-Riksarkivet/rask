@@ -9,8 +9,6 @@ The ``/query`` door is vector-search-first: it requires a ``vector`` and ``k`` a
 is an EMPTY vector, a bounded ``k`` and the filter.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Generator
 from contextlib import contextmanager

@@ -8,8 +8,6 @@ The one exception is ``/events/projection``: the same feed with no per-dataset f
 the estate rung ``can_read_event_feed`` and cut to the fields that decide whom to notify.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable

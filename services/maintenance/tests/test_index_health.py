@@ -6,8 +6,6 @@ should fan out over. Both are read off the manifest (``describe_indices()``'s se
 which on pylance 13.0.0 answer what ``stats.index_stats`` does without reading the index's files ([[LH-575]]).
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from pathlib import Path
 

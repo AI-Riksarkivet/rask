@@ -14,8 +14,6 @@ One object's failure is logged and counted and leaves every other object to this
 A declaration that cannot be read converges nothing and releases nothing.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Awaitable, Callable
 from functools import partial

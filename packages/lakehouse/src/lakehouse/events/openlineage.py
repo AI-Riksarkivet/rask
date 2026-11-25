@@ -23,8 +23,6 @@ is `lakehouse.events.lineage_events`, which the lakehouse's readers share; the b
 A client reads the same events by their published contract (`docs/COMMIT-EVENTS.md`), importing neither.
 """
 
-from __future__ import annotations
-
 import logging
 import uuid
 from typing import Final

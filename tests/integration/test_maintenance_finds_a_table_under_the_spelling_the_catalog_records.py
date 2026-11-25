@@ -23,8 +23,6 @@ its doors. Its readers here, each one claim:
 - the compaction gate's dataset-root probe finds the dataset a base declared in the catalog's spelling names.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import uuid

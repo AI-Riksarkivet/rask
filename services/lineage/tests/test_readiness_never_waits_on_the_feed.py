@@ -6,8 +6,6 @@ only pod left the Service and the feed door refused every connection. Driven thr
 with the provenance store replaced by one whose feed read takes longer than the probe allows, then fails.
 """
 
-from __future__ import annotations
-
 import asyncio
 import time
 from functools import partial

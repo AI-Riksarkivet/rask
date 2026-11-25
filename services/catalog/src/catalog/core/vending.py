@@ -25,8 +25,6 @@ OpenFGA decides the tier: ``can_read_data`` -> ``"read"``, ``can_write_data`` ->
 ``can_vend_maintain`` -> ``"maintain"`` (:func:`build_session_policy` says what each grants).
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging

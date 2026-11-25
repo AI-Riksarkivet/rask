@@ -12,8 +12,6 @@ two prunes delete the same rows once; two forwards send an event at least once, 
 neither moves the cursor back (`lineage.services.forward`).
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from contextlib import suppress

@@ -20,8 +20,6 @@ so its record stays. The check only reads; forgetting a reclaimed record is a wr
 ([[LH-219]], :func:`forget`).
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Iterable
 

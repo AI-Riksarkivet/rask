@@ -6,8 +6,6 @@ graph backend show meaningful column types for multimodal tables (``payload : bl
 ``thumbnail : binary``, ``alignments_json : json``) instead of the raw pyarrow repr.
 """
 
-from __future__ import annotations
-
 import pyarrow as pa
 
 from catalog.core.blobs import is_blob_field

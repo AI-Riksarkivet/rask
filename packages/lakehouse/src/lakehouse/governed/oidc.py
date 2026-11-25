@@ -67,8 +67,6 @@ Security posture:
   installed, as the request that fetched is.
 """
 
-from __future__ import annotations
-
 import asyncio
 import itertools
 import logging

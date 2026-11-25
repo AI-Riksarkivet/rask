@@ -16,8 +16,6 @@ The calls on the store are `storage_probe`'s, so the reduction is testable witho
 rule that `skip` is not `pass` is stated once rather than at each call site.
 """
 
-from __future__ import annotations
-
 from typing import Final, Literal
 
 from pydantic import BaseModel, Field

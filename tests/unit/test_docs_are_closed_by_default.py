@@ -25,8 +25,6 @@ upstream fetches at a 10 s timeout, to an unauthenticated caller, which is an am
 well as a disclosure.
 """
 
-from __future__ import annotations
-
 import os
 import subprocess
 import sys

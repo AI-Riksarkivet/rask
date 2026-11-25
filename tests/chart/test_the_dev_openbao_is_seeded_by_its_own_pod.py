@@ -53,8 +53,6 @@ own server and the one the Service routes to, the nk stand-in hands out generate
 that carry the permissions it was given.
 """
 
-from __future__ import annotations
-
 import base64
 import hashlib
 import io

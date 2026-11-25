@@ -14,8 +14,6 @@ The store is reached from its own seed container, which runs `bao`. A ServiceAcc
 value stay in this process or on a command's stdin, never in an argument list or an assertion message.
 """
 
-from __future__ import annotations
-
 import json
 import subprocess
 from typing import Final

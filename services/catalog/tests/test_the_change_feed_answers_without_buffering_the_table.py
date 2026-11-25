@@ -7,8 +7,6 @@ service ships is measured from outside a real catalog process by
 `tests/integration/test_a_wide_read_stays_under_the_catalog_memory_limit.py`.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from pathlib import Path

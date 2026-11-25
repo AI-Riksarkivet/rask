@@ -15,8 +15,6 @@ refused again on every restart replay. The loss is TERMINAL rather than deferred
 the constants the emitters export, and a spelling added tomorrow fails here instead of in a refusal nobody reads.
 """
 
-from __future__ import annotations
-
 from lineage.api import fga_deps
 
 

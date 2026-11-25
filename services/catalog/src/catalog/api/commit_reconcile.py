@@ -31,8 +31,6 @@ overlaps another all the same (one that outlasts its window) announces a found v
 lands once on the feed; a mark one writes lower than another's costs a re-read, never a skipped version.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import UTC, timedelta
 from functools import partial

@@ -14,8 +14,6 @@ session, and a version that cannot be read whole is judged fragment by fragment.
 rewrites every ref first (the conftest's ``ErasureJob``, [[LH-493]]); every claim here is the verification's.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager

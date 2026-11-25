@@ -21,8 +21,6 @@ misconfiguration the store will not reject; refusing it at the builder is the on
 caught before the bytes land.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from pathlib import Path
 

@@ -16,8 +16,6 @@ before it delivers to one. A value one side lets through and the other drops is 
 sanitizing is an undeliverable address that still acks SUCCESS.
 """
 
-from __future__ import annotations
-
 from lakehouse.governed.principal import Principal
 
 

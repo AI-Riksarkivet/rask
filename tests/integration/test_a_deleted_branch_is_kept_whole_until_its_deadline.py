@@ -7,8 +7,6 @@ Driven through the catalog's own doors on a real `dir` root; the branch's name h
 spells `%2F`.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta

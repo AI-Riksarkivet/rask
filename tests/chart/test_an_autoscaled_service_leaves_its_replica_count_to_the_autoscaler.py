@@ -5,8 +5,6 @@ HorizontalPodAutoscaler moves it, and the two flap. Without the field the Deploy
 set, and the autoscaler's `minReplicas` is the floor its PodDisruptionBudget has to protect.
 """
 
-from __future__ import annotations
-
 from tests.chart.chart_render import DEFAULT_ARGS, render
 
 

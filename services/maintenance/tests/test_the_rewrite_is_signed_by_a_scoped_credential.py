@@ -18,8 +18,6 @@ WHAT EACH TEST BELOW HOLDS, because each would be a silent regression:
   session the pass reads with.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import traceback

@@ -24,8 +24,6 @@ root; the live sweep holds several (`s3://tracka-wh/425bbde2_tracka$rd2_28877454
 would refuse every one of them — a guard that fires on the healthy majority and is then turned off.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 
 import httpx

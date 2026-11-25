@@ -12,8 +12,6 @@ for schema generation, so the placeholders below are inert. The frontend types a
 (``bun run gen:types``).
 """
 
-from __future__ import annotations
-
 import json
 import os
 import sys

@@ -6,8 +6,6 @@ now owns, and the only thing that makes it correct is agreeing with what Lance a
 case here writes real fragments, asks the predicate, then commits and reads the flag Lance set.
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 from typing import Any, Literal, cast

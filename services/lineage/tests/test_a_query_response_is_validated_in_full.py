@@ -5,8 +5,6 @@ table read from such a file without full validation carries values read from out
 (pyarrow 25.0.0) into whatever the caller does next.
 """
 
-from __future__ import annotations
-
 import struct
 from typing import TYPE_CHECKING
 

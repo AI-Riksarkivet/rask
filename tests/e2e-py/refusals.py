@@ -11,8 +11,6 @@ Criterion 2's matrix (`test_the_catalog_is_correct.py`) sends each cell before t
 answer itself, and judges a refused one through the same `body_of`, `problem_code` and `names_in`.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Callable, Iterable, Mapping
 from typing import Any

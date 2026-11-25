@@ -10,8 +10,6 @@ It is the raw ASGI path with the prefix off, never ``request.url.path``: that re
 ends it at a ``?`` or ``#`` inside a name ([[LH-526]]).
 """
 
-from __future__ import annotations
-
 from starlette._utils import get_route_path
 from starlette.types import Scope
 

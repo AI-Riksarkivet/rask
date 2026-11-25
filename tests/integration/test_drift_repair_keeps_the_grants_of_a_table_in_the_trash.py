@@ -15,8 +15,6 @@ grants are held by. Every object is a table's uuid (``table:<uuid>``, [[LH-524]]
 its record keeps.
 """
 
-from __future__ import annotations
-
 import uuid
 from collections.abc import Iterator
 from typing import Any

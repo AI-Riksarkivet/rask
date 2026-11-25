@@ -16,8 +16,6 @@ label ``pii``; bob is a writer on ``lance_catalog$db``. The vendor records every
 still a grant at the store.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from pathlib import Path

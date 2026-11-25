@@ -4,8 +4,6 @@ One model for the record: what is no warehouse record refuses the read a decisio
 quarantined by the one status that says so.
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 

@@ -18,8 +18,6 @@ TWO SHAPES, because they are genuinely different: self-signed (maintenance), and
 catalog, acting for the person it authenticated).
 """
 
-from __future__ import annotations
-
 import json
 from contextlib import nullcontext
 from typing import Any, cast

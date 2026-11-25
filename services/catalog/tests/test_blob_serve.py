@@ -7,8 +7,6 @@ ranged, streamed in bounded windows) through the catalog, and that the probed py
 precise 4xx instead of a 500.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

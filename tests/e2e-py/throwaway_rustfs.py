@@ -5,8 +5,6 @@ a store's IAM: a module using this skips without them, and the lane's `--require
 the fixture boots it, its root pair from files, so a test reads the root secret from the file the hook reads it from.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import os
 from pathlib import Path

@@ -1,7 +1,5 @@
 """The gates a handler asks itself, for the doors the router leaves to their handler or decides only in part."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Mapping, Sequence
 from functools import partial

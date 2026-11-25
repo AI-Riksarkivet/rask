@@ -15,8 +15,6 @@ root conftest's `EventSigner`, which writes the wire format from the contract al
 server, on a store of the test's own holding the tuples a case names.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import os

@@ -6,8 +6,6 @@ deployed estate 2026-09-20: 884 expired records, a cap of 25, 18 of them refused
 maintained estate" — 7 slots of real work and a queue that never advances.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from lakehouse.records import trash

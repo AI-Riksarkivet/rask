@@ -10,8 +10,6 @@ Against the catalog as deployed, a loopback Dex signing callers in and a real Op
 own ([[LH-235]]), on a real ``dir`` namespace.
 """
 
-from __future__ import annotations
-
 import contextlib
 from collections.abc import Callable, Iterator
 from typing import Any

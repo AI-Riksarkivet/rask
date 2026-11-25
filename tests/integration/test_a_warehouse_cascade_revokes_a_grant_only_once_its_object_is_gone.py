@@ -16,8 +16,6 @@ what its owner reads it through. Where OpenFGA stops answering part-way, the cli
 the chosen revokes, every other call reaching the store.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import uuid

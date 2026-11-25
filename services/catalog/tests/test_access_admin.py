@@ -10,8 +10,6 @@ the ``test_fga_model_contract`` posture. The read door's filters are pinned agai
 ``services/catalog/tests/test_the_tuple_browser_answers_only_a_filter_openfga_reads.py``.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Awaitable, Callable
 from functools import partial

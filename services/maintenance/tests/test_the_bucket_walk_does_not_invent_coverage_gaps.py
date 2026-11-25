@@ -26,8 +26,6 @@ The depth bound stays a POLICY LEVER rather than a rescue — it reveals no hidd
 is unchanged. It is bounded at both ends because the walk lists every directory it descends into, in every bucket.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from pathlib import Path

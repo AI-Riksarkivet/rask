@@ -58,8 +58,6 @@ error. An envelope past the hard cap raises ``ValueError`` naming the rule befor
 soft cap is published and logged, the early sight of facet bloat (docs/DATA-CONTRACT.md §4).
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import json

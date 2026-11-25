@@ -8,8 +8,6 @@ size: the same values as one `id IN (...)` list answer normally. Each probe runs
 the unguarded door takes pytest down with it.
 """
 
-from __future__ import annotations
-
 import io
 import json
 import os

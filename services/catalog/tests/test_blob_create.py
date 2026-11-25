@@ -6,8 +6,6 @@ plain schema still takes the native 2.1 path, and that the create ``mode`` (Crea
 honoured on the blob path.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, cast
 

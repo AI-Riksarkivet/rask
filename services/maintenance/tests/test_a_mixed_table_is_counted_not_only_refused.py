@@ -10,8 +10,6 @@ estate-wide. So expiry reads the table's version and the flag before any gate re
 pass records them, with a per-tick zero so the series exists before the first mix.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 from pathlib import Path

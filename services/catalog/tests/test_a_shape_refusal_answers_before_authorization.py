@@ -15,8 +15,6 @@ it splits identifiers on `$` and refuses a client naming `.`.
 Every decision is the real model's, on a store of this test's own ([[LH-235]]).
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pyarrow as pa

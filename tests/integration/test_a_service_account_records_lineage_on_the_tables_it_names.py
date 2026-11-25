@@ -24,8 +24,6 @@ token a real verifier checks: the loopback Dex for the person who makes the tabl
 for lineage and the producer. The grants a deployment's declaration writes are seeded straight to the store.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack

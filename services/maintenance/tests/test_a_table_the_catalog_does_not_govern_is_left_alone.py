@@ -9,8 +9,6 @@ so the 404 the sweep classifies is the door's own answer. Two ways a swept datas
   the history an undrop restores.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path

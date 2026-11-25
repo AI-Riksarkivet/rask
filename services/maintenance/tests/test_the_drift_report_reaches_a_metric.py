@@ -17,8 +17,6 @@ A GAUGE, not a counter: drift is a level that rises and falls, and `delta()` ove
 a repaired estate as no change at all.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

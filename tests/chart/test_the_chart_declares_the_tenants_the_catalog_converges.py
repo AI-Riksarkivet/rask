@@ -5,8 +5,6 @@ The chart and the catalog meet at one file: the ConfigMap `<release>-catalog-dec
 model refuses would converge nothing on a deployed estate and report it only in the catalog's log.
 """
 
-from __future__ import annotations
-
 import subprocess
 from pathlib import Path
 from typing import Any

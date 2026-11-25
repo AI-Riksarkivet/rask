@@ -10,8 +10,6 @@ emits are the catalog's own ref-plane verbs (`table_tag_deleted`, `table_branch_
 `table_branch_created`), untargeted as their doors emit them: the person was told by the scheduled notice.
 """
 
-from __future__ import annotations
-
 import logging
 from functools import partial
 

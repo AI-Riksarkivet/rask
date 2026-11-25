@@ -4,8 +4,6 @@ Lance's planner recurses once per connective of a flat boolean chain, and the na
 whose size the caller chooses: each bound here refuses the request, as the caller's mistake, before Lance sees it.
 """
 
-from __future__ import annotations
-
 import re
 from typing import Final
 

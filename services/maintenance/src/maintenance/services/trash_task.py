@@ -9,8 +9,6 @@ ended; a table undropped stands again under the same uuid, so it gets a table ta
 A drop that filed no record, a destructive one, leaves its task nothing to read past that.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import UTC, datetime, timedelta
 

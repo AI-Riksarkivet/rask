@@ -6,8 +6,6 @@ backend namespace + vendor injected via dependency override. The exchange itself
 answer is proven by the e2e lanes against RustFS.
 """
 
-from __future__ import annotations
-
 import socket
 from collections.abc import Callable, Sequence
 from unittest.mock import MagicMock

@@ -11,8 +11,6 @@ body grew the reader by 1,603 MB. Compression itself stays accepted, because lan
 LZ4-compresses every create and insert and Lance's own namespace backend reads it.
 """
 
-from __future__ import annotations
-
 import struct
 from collections.abc import Callable
 from typing import Final, cast

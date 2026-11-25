@@ -1,7 +1,5 @@
 """Unit tests for the compliance audit trail (``lakehouse.governed.audit``)."""
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Iterator
 

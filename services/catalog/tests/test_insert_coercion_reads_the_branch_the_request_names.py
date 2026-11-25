@@ -24,8 +24,6 @@ probes every DOOR that hands a branched request to the upstream op. Neither reac
 `coerce_insert_arrow` is a helper inside a door that serves the branch, so it sits between the two.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

@@ -20,8 +20,6 @@ door that opened the branch and then reclaimed main would satisfy a spy on the o
 the irreversible defect. So the parent's data files are counted before and after.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from pathlib import Path

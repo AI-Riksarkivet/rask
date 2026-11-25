@@ -5,8 +5,6 @@ A door names its objects by the uuids the catalog minted (ADR 0173 §10). Throug
 whose claim is not about the uuids passes these, so its events name no uuid but one the door resolved itself.
 """
 
-from __future__ import annotations
-
 from typing import cast
 
 from catalog.api.dependencies import ObjectUuids

@@ -16,8 +16,6 @@ of a 600 s lifetime (measured: rotated at age 515 s), so a copy kept for the lif
 ten minutes.
 """
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 from typing import Self

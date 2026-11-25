@@ -13,8 +13,6 @@ A call lineage makes as itself is the other half, driven against a live catalog 
 the caller reads the outage.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import threading

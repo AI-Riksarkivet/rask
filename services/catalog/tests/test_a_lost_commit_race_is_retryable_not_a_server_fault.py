@@ -11,8 +11,6 @@ THE RACES ARE REAL, NOT SIMULATED. Threads commit against one dataset on a real 
 measured at a few seconds, because nothing large is written.
 """
 
-from __future__ import annotations
-
 import threading
 import time
 from collections.abc import Callable

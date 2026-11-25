@@ -7,8 +7,6 @@ a POST and is told from a write by the last segment of the route it matches. The
 reader's rung is one the window serves; the vend door alone differs, a read to the window at its read tier only.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 

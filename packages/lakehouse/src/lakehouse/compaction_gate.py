@@ -11,8 +11,6 @@ calls a table's own (:func:`lakehouse.records.base_registry.is_own`), is not wei
 weighed by :func:`lakehouse.lancekit.features.describe_compaction_unsupported_flags`.
 """
 
-from __future__ import annotations
-
 import logging
 
 from lakehouse.lancekit.features import (

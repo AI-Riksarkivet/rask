@@ -6,8 +6,6 @@ change as its :class:`Author`. A record git declares carries ``managed_by: git``
 declares of it refuses: the declaration is the only writer of those fields, so the estate is what git says.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 from lance_namespace import PermissionDeniedError

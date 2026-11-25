@@ -16,8 +16,6 @@ S3's `NoSuchBucket` body verbatim. Both make "the bucket is gone" indistinguisha
 was never written".
 """
 
-from __future__ import annotations
-
 import pytest
 
 from lakehouse.lancekit.absence import reads_as_absent

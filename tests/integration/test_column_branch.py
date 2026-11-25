@@ -13,8 +13,6 @@ own sequence — the version is the part that silently reverts if only the write
 is not.
 """
 
-from __future__ import annotations
-
 import io
 
 import lance

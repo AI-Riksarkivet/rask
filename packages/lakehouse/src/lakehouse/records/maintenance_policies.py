@@ -32,8 +32,6 @@ dataset until the interval has elapsed since its last maintenance; maintenance r
 threadpool it.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Sequence
 from datetime import datetime

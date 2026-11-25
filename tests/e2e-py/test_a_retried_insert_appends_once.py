@@ -12,8 +12,6 @@ The e2e-stack lane runs it on every push. Against a deployed release, `bash scri
 tests/e2e-py/test_a_retried_insert_appends_once.py` discovers the addresses.
 """
 
-from __future__ import annotations
-
 import os
 import time
 import uuid

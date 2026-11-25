@@ -11,8 +11,6 @@ seeded as the catalog's declaration grants it; everything else goes through the 
 the rungs, and the ``acme`` fixture says which two admins it leaves.
 """
 
-from __future__ import annotations
-
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any

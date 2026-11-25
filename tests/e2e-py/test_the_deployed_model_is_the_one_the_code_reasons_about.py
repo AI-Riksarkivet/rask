@@ -31,8 +31,6 @@ wrong reason. A rule narrowed under unchanged names leaves the name diff empty, 
 so rather than reading as a match.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import urllib.request

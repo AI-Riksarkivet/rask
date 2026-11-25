@@ -6,8 +6,6 @@ you nothing about the other six." The walk's filesystem construction is a storag
 transient S3 failure there reports its categories unavailable and keeps the store categories that completed.
 """
 
-from __future__ import annotations
-
 import asyncio
 from pathlib import Path
 from typing import Any

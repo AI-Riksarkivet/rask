@@ -29,8 +29,6 @@ just before the deadline registers before it clears the record, and a revoke lan
 restored table ownerless. A refusal the catalog judges it notes on the record; this step reports it as held.
 """
 
-from __future__ import annotations
-
 import logging
 from datetime import UTC, datetime
 from functools import partial

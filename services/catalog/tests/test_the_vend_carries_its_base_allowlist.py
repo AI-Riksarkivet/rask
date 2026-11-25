@@ -6,8 +6,6 @@ granted, is driven through the credentials door by
 `test_a_declared_base_cannot_reach_a_table_the_caller_never_opened.py`.
 """
 
-from __future__ import annotations
-
 import json
 from datetime import UTC, datetime
 from pathlib import Path

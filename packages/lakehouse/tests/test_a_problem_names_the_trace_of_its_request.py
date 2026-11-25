@@ -6,8 +6,6 @@ redacted error's log line sits. Driven through `install_problem_handlers` on an 
 `opentelemetry-instrument` wraps every lakehouse service, with the caller's ``traceparent`` naming the trace.
 """
 
-from __future__ import annotations
-
 import logging
 
 import pytest

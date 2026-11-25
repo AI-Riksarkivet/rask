@@ -18,8 +18,6 @@ door must answer 409) and as the door calls the backend (the rename must answer 
 on the table it resolved).
 """
 
-from __future__ import annotations
-
 import io
 import threading
 from collections.abc import Callable

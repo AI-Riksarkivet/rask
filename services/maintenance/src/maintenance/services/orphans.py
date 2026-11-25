@@ -43,8 +43,6 @@ alone would report most of a healthy dataset's history as orphaned — a report 
 table if anyone acted on it.
 """
 
-from __future__ import annotations
-
 import logging
 import time
 from collections.abc import Iterator

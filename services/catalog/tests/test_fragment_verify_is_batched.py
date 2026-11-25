@@ -5,8 +5,6 @@
 hot path. pyarrow's list overload does the lookups concurrently, so all candidate paths go in one call.
 """
 
-from __future__ import annotations
-
 import pyarrow.fs as pafs
 import pytest
 

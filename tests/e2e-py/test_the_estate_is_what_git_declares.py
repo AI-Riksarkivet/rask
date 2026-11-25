@@ -18,8 +18,6 @@ warehouse fails the refusal leg rather than skipping it, so a `--require-live` d
 Run via ``bash scripts/e2e_live.sh tests/e2e-py/test_the_estate_is_what_git_declares.py``.
 """
 
-from __future__ import annotations
-
 import json
 
 import pytest

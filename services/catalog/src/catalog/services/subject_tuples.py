@@ -9,8 +9,6 @@ Ending a subject never leaves a project whose ``admin`` reaches nobody: not by r
 emptying any role of a chain the project's ``admin`` reaches its people through ([[LH-597]]).
 """
 
-from __future__ import annotations
-
 from functools import lru_cache
 from typing import TYPE_CHECKING
 

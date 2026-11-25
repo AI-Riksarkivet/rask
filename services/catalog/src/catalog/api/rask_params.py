@@ -16,8 +16,6 @@ the next extension is spelled the same way by construction. Pinned by
 own vocabulary from the pinned client rather than listing parameter names.
 """
 
-from __future__ import annotations
-
 from typing import Annotated
 
 from fastapi import Query

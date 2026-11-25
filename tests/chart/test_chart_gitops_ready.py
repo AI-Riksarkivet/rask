@@ -4,8 +4,6 @@ Neither was true before 2026-08-04, and both failed the same way: silently at re
 much later in a cluster nobody was watching.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from tests.chart.chart_render import DEFAULT_ARGS, render, render_fixture

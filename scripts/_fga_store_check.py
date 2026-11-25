@@ -13,8 +13,6 @@ checks against the model its own image carries, so a body held below the newest 
 this checkout resolves, and the chart's hook writes only a body the store lacks.
 """
 
-from __future__ import annotations
-
 import sys
 from collections.abc import Iterable
 from typing import Any

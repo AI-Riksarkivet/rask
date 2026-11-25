@@ -12,8 +12,6 @@ provisioned — the allowlist is a governance gate, not a provisioner. Multi-bas
 failing it: a red test there would say the estate is broken when it is merely not configured.
 """
 
-from __future__ import annotations
-
 import io
 import os
 

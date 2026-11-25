@@ -7,8 +7,6 @@ as the catalog's announcement of that version, or a lost one is never announced.
 lays out its feed (`lineage.services.provenance.FEED_SCHEMA`), so the catalog's read is held to the schema lineage writes.
 """
 
-from __future__ import annotations
-
 import json
 from datetime import UTC, datetime
 from pathlib import Path

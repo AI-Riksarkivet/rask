@@ -36,8 +36,6 @@ does not depend on two pods' clocks agreeing.
 Every method is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import logging
 import threading
 import uuid

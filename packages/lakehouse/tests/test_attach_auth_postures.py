@@ -16,8 +16,6 @@ So these are asserted on the helper rather than remembered per call site, becaus
 is the finding and "the helper cannot express the difference" is the reason the copies exist.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from typing import Any, Final

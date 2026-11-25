@@ -6,8 +6,6 @@ in `docs/`, where decisions are recorded, and in a vendored upstream file is not
 lint leaves it out.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import sys
 from pathlib import Path

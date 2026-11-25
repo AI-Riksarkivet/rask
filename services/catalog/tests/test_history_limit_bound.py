@@ -23,8 +23,6 @@ validation at the boundary rather than a redesign.
 `ge=1` alone kills the inversion; `le` makes the docstring's claim true.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from catalog.api.v1.endpoints import versions as versions_ep

@@ -12,8 +12,6 @@ history is not written again, and only a body the store has never held is writte
 it waits, up to a deadline, for the store and the model to exist, re-reading one page per poll.
 """
 
-from __future__ import annotations
-
 import asyncio
 import copy
 import json

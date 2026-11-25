@@ -1,7 +1,5 @@
 """The hierarchy's shape and existence guards, which ask no FGA question."""
 
-from __future__ import annotations
-
 import asyncio
 
 from fastapi.concurrency import run_in_threadpool

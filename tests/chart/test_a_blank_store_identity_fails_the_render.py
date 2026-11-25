@@ -12,8 +12,6 @@ Every door verifies a service's token against `auth.serviceAccountIssuer`. With 
 refuses every service account, and nothing it logs says the issuer is missing, so a blank one is refused as well.
 """
 
-from __future__ import annotations
-
 import subprocess
 
 import pytest

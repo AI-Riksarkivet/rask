@@ -11,8 +11,6 @@ asserted on the response body would have passed the whole time the defect existe
 was never the broken part.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import lance

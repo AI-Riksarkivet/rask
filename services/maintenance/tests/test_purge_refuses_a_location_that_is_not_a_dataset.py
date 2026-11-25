@@ -27,8 +27,6 @@ the record clear re-runs the whole record, and the existing contract is that `de
 already-absent path succeeds. Refusing there would strand every half-completed purge forever.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pytest

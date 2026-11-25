@@ -23,8 +23,6 @@ Default OFF (``RASK_FGA_ENABLED``), exactly like the catalog; production enables
 Fail-closed when enabled-but-unwired (503, never silent allow).
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Annotated, Any, Final, TypeGuard

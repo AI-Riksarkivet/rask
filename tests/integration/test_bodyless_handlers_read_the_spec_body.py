@@ -23,8 +23,6 @@ remain as a fallback so existing callers keep working. `reconcile_body_id` runs 
 so a body `id` that contradicts the path is a 400 rather than silently ignored (spec duality rule).
 """
 
-from __future__ import annotations
-
 from typing import Any
 from unittest.mock import MagicMock
 

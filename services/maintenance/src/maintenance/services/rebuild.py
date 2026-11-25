@@ -41,8 +41,6 @@ this estate want the behaviour" and "does this tick act" are different questions
 turning it on to SEE what it would write must not thereby write to the authorization store.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import TYPE_CHECKING
 

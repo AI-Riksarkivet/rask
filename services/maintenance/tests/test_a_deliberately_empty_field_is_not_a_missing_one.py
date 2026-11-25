@@ -25,8 +25,6 @@ handles an empty location correctly one layer down — "A location that names no
 reported. It is malformed rather than orphaned" — so nothing downstream needs to learn anything new.
 """
 
-from __future__ import annotations
-
 import json
 from pathlib import Path
 

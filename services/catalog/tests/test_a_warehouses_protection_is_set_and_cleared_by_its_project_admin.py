@@ -10,8 +10,6 @@ Against the catalog as deployed with warehouses on, a loopback Dex signing calle
 store of the test's own ([[LH-235]]).
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from typing import Any
 

@@ -11,8 +11,6 @@ create door leaves ([[LH-593]]): a namespace directly in the warehouse and a nes
 namespace door.
 """
 
-from __future__ import annotations
-
 import asyncio
 import uuid
 from collections.abc import Callable

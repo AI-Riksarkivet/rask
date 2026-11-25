@@ -1,7 +1,5 @@
 """A table's columns and metadata: add, alter and drop columns, and its schema-level and field metadata."""
 
-from __future__ import annotations
-
 from collections import Counter
 from collections.abc import Iterable
 from typing import Any, cast

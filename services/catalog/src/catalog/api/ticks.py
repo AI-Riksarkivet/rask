@@ -7,8 +7,6 @@ resolves its namespaces, uuids and emitters with, so a :class:`Tick` carries a r
 cache that lives for this tick alone, as a request's does for the request.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import UTC, datetime
 

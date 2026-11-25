@@ -6,8 +6,6 @@ critically, that the #5a invariant (2.2 + stable-row-ids) SURVIVES multi-base. C
 mirrors the external-blob-bases property.
 """
 
-from __future__ import annotations
-
 from typing import Any
 from unittest.mock import MagicMock, patch
 

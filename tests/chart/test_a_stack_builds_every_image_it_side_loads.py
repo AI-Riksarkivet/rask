@@ -17,8 +17,6 @@ carrying a registry path; `busybox`/`nats` are Docker Hub library images and car
 tags this filter keys on.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import pathlib
 

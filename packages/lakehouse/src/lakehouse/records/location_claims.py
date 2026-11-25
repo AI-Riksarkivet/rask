@@ -74,8 +74,6 @@ between its take and its attach — not yet in the manifest — is never mistake
 Every function is BLOCKING IO — callers threadpool it.
 """
 
-from __future__ import annotations
-
 import hashlib
 import logging
 from collections.abc import Callable

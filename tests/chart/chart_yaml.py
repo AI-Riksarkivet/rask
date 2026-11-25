@@ -16,8 +16,6 @@ DEGRADING COSTS TIME, NEVER CORRECTNESS: a platform without libyaml pays the 10x
 which `pytest --durations` shows, and parses to the same result.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import yaml

@@ -36,8 +36,6 @@ Every step is idempotent, so the catalog runs the whole in the background at boo
 holds, and never fails its own boot on it: until it holds, lineage retries creating its tables.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Sequence
 

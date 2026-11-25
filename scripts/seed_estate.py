@@ -77,8 +77,6 @@ cannot show you what it made has not proved anything, and "the calls returned 2x
 made here. The registry is the witness, so the summary compares against it rather than reprinting the plan.
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import os

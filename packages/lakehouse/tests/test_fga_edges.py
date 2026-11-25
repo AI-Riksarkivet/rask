@@ -17,8 +17,6 @@ Sync via stdlib ``asyncio.run``, matching test_fga_revoke / test_fga_resilience 
 dependency (this repo does not set ``asyncio_mode``).
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any, cast
 

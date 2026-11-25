@@ -6,8 +6,6 @@ answers a registered location percent-encoded, and the store keeps the key it de
 files a commit names, re-attach a table under its namespace root, or delete one object of a table's layout ask here.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Sequence
 from typing import Any, Final

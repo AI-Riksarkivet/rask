@@ -12,8 +12,6 @@ A route is chosen by its dependencies, never by its path, so a door gains the ju
 gate, and the probes, which depend on another gate or none, are left as they are.
 """
 
-from __future__ import annotations
-
 from collections.abc import Awaitable, Callable
 from typing import Final
 

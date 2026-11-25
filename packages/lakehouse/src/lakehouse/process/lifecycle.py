@@ -12,8 +12,6 @@ set it permanently out of service, while defaulting ``started`` to True would le
 app claim readiness.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING

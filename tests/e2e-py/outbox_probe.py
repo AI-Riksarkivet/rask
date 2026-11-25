@@ -20,8 +20,6 @@ authorize against, and demanding a token there would skip the suite on the deplo
 written for.
 """
 
-from __future__ import annotations
-
 import os
 
 import pyarrow as pa

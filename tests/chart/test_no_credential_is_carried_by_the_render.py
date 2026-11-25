@@ -12,8 +12,6 @@ The render tests of `templates/prod-credentials.yaml` live here, and that templa
 authentication off, and a platform address a credential or the estate's data would cross over http.
 """
 
-from __future__ import annotations
-
 import re
 import subprocess
 

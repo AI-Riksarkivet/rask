@@ -9,8 +9,6 @@ for it, and refuses anyone else as it refuses a name that holds nothing. A dereg
 The real catalog app over a real ``dir`` namespace, each decision OpenFGA's on a store of this test's own.
 """
 
-from __future__ import annotations
-
 import logging
 from pathlib import Path
 from typing import Any

@@ -23,8 +23,6 @@ deregistered table's bytes may still hold the subject, and a gone one costs a ve
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from functools import partial

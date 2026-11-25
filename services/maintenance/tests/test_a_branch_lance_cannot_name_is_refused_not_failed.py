@@ -28,8 +28,6 @@ a pylance upgrade away from clearing, `protected_base` stays true forever, and t
 somebody deletes a directory.
 """
 
-from __future__ import annotations
-
 from maintenance.services.expiry import classify_maintain_failure
 
 

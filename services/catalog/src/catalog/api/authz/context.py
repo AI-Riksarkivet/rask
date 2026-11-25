@@ -1,7 +1,5 @@
 """What a request is authorized with, before anything is decided: the OpenFGA client, the settings and the caller."""
 
-from __future__ import annotations
-
 from typing import Annotated
 
 from fastapi import Depends

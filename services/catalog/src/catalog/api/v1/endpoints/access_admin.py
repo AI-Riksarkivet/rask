@@ -16,8 +16,6 @@ Tuple writes/deletes are additionally audited (``access_tuple_write`` / ``access
 (``access_tuples_read``), mirroring ``access_review``.
 """
 
-from __future__ import annotations
-
 import logging
 from functools import lru_cache
 from typing import Annotated, Final, Literal

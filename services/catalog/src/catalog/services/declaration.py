@@ -12,8 +12,6 @@ written, one record per tuple, so the tuple git stops declaring is revoked and a
 made at a door, which no record names, is never taken.
 """
 
-from __future__ import annotations
-
 import hashlib
 import json
 import logging

@@ -18,8 +18,6 @@ records' bucket-claim read — and the dataset seam in :mod:`catalog.core.namesp
 declaring only bases inside its own root is answered without either.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Sequence
 from functools import partial

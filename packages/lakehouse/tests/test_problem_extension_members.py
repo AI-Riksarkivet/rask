@@ -7,8 +7,6 @@ caller's own objects can only travel as extensions. The members the builder owns
 would turn a convenience into a way to lie about the status or un-redact the detail.
 """
 
-from __future__ import annotations
-
 import logging
 
 from fastapi import FastAPI

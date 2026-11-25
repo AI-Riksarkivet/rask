@@ -37,8 +37,6 @@ its ``payload`` ``pii``; bob holds exactly the rungs a case names. A refused wri
 was.
 """
 
-from __future__ import annotations
-
 import logging
 import re
 from typing import Any

@@ -10,8 +10,6 @@ Driven through lineage's router over the real store in a live catalog (`lineage_
 taking its deliveries from a `tests.bus_double.BusDouble` on the app's loop.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Generator
 from contextlib import contextmanager

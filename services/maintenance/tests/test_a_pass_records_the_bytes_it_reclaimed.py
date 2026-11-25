@@ -17,8 +17,6 @@ matters more for bytes than for any of them: "nothing was reclaimed this pass" a
 ran" must not look identical on a dashboard, and the second is what a broken reclaimer looks like.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from maintenance.core import metrics

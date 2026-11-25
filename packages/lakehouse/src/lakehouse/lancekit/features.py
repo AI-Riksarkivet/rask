@@ -41,8 +41,6 @@ its own counted, logged and metric'd line in the sweep summary rather than folde
 answer that rewrote a shallow clone.
 """
 
-from __future__ import annotations
-
 import logging
 import re
 from typing import TYPE_CHECKING, Final, Protocol

@@ -23,8 +23,6 @@ reconcile route awaits — with only the two OpenFGA writes stood in: whether a 
 property of that coroutine, and a copy of its decision logic could be right while it is wrong.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Iterator
 from pathlib import Path

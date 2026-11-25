@@ -9,8 +9,6 @@ The reconciler is stubbed, as the audit's wiring test stubs it: this pins what t
 report. The same store on RustFS 1.0.3 answers as moto does (measured 2026-11-10, ADR 0198's amendment of that day).
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

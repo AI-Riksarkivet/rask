@@ -10,8 +10,6 @@ publish is timed and counted as, what a connect presents, and what the loop keep
 an attempt can fail and a session can end. The broker's client is a double carrying nats-py's own signatures.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import json

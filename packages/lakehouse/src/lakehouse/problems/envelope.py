@@ -7,8 +7,6 @@ a refusal that sets ``Retry-After``) build it here, with :func:`problem_response
 layer, and every problem response names its media type by ``PROBLEM_JSON``.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Mapping, Sequence
 from typing import Final

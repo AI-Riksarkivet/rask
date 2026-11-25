@@ -30,8 +30,6 @@ their instruments, and two faults, each injected for one step: the store refusin
 one version's transaction reading as none.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import os

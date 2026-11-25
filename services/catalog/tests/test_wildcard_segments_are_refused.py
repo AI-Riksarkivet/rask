@@ -8,8 +8,6 @@ vends holds either: a table the catalog makes lives under its uuid, and the regi
 them. The refusal here is the builder's own, should a prefix ever arrive holding one.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from catalog.core.vending import build_session_policy

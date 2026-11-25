@@ -13,8 +13,6 @@ is read as its bytes (``blob_handling="all_binary"``), never as its descriptor: 
 holds an id and 32 bytes per row, and the rows of one batch at a time.
 """
 
-from __future__ import annotations
-
 import hashlib
 from collections.abc import Iterable
 

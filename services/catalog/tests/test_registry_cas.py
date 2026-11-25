@@ -15,8 +15,6 @@ The live contended-writer proof against RustFS lives in ``tests/e2e-py/test_regi
 (env-gated, ``cas`` marker) — this file is the always-running half.
 """
 
-from __future__ import annotations
-
 from typing import Any
 from unittest.mock import MagicMock
 

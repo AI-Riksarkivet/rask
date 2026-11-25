@@ -17,8 +17,6 @@ estate reclaim anything, when, and from what" and not "how many times did MY tab
 That half needs a durable record kind and is an owner decision, not a call site.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import TYPE_CHECKING, cast
 

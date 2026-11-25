@@ -2,8 +2,6 @@
 sends each announcement as the door sends it. What the filing does is pinned through the app, on a real control root, by
 `services/catalog/tests/test_a_door_that_failed_after_its_change_is_announced_by_the_finish.py`."""
 
-from __future__ import annotations
-
 from collections.abc import AsyncGenerator, Sequence
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime

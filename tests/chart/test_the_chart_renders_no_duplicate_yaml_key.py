@@ -15,8 +15,6 @@ check has to run while the mapping is being built, since by the time `safe_load`
 is gone.
 """
 
-from __future__ import annotations
-
 import yaml
 import yaml.constructor
 import yaml.resolver

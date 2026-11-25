@@ -1,7 +1,5 @@
 """The table or namespace a door or a walk acts on, named with the uuid its records are keyed by."""
 
-from __future__ import annotations
-
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict

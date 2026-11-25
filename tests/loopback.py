@@ -1,7 +1,5 @@
 """Loopback ports for the servers a test stands up, chosen before each server binds its own."""
 
-from __future__ import annotations
-
 import socket
 from contextlib import ExitStack
 

@@ -11,8 +11,6 @@ Run by `dagger call rustfs-provisioning` (`make rustfs-provisioning`), whose sto
 RustFS refuses a bucket's event configuration naming no target it has.
 """
 
-from __future__ import annotations
-
 import json
 import secrets
 import uuid

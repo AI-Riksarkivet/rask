@@ -14,8 +14,6 @@ leaves its objects unnamed and is logged at WARNING, rather than failing the ans
 BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from collections.abc import Iterable

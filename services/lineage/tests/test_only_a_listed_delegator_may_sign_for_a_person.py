@@ -15,8 +15,6 @@ the secret store, which the suite's double answers; signatures are built by the 
 wire format alone.
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any, Literal
 

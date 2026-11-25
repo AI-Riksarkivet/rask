@@ -10,8 +10,6 @@ On the catalog as deployed with authorization on (``governed_catalog``): root, t
 administers it, and every tuple is read back off the real store.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

@@ -11,8 +11,6 @@ replaces with its own, as it does the real door's ([[LH-489]]). Each stands in f
 about it: a pass that asks nothing leaves its route uncalled, and every other request goes where it was sent.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Callable, Generator
 from contextlib import contextmanager

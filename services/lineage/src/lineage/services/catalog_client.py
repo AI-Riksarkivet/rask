@@ -24,8 +24,6 @@ Measured live 2026-11-12: all 8 of lineage's readiness flips in 6.7 h were that 
 client, since a write the catalog may have applied is never sent twice.
 """
 
-from __future__ import annotations
-
 from functools import cache
 from typing import TYPE_CHECKING, Final, cast
 

@@ -24,8 +24,6 @@ and dropped through its doors, so its base record and its directory claim are th
   a purging cascade whose directory delete fails deletes it when re-issued.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import uuid

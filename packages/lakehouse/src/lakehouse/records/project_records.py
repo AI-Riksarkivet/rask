@@ -6,8 +6,6 @@ maintenance reads the same records for its drift report and tenancy rebuild, and
 drift.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field

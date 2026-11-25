@@ -26,8 +26,6 @@ within the root", while the live catalog answers an ABSOLUTE `s3://…` for a ta
 registered table or mis-resolve every ordinary one.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from maintenance.services.reconcile import ReconcileReport, Sources, _absent_datasets, _registration_drift

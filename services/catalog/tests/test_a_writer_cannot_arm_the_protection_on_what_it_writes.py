@@ -9,8 +9,6 @@ own ([[LH-235]]): alice makes `lance_catalog$db` and `lance_catalog$db$t` throug
 rung that writes the table's rows.
 """
 
-from __future__ import annotations
-
 import logging
 from typing import Any
 

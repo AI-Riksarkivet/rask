@@ -24,8 +24,6 @@ Both fail closed the same way: an answer that cannot be had raises `ServiceUnava
 turns into a 503, never an allow and never a deny.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Final, Protocol, Self

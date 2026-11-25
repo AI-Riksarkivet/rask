@@ -15,8 +15,6 @@ toward it" is observed at the host rather than inferred. The estate is a moto S3
 provision or purge that reached the estate's store shows up in its bucket listing.
 """
 
-from __future__ import annotations
-
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

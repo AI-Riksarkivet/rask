@@ -8,8 +8,6 @@ together in the next one. Driven against the real catalog app under uvicorn on a
 hands out the deliveries it holds at once.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import threading

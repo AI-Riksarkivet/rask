@@ -20,8 +20,6 @@ how the format numbers refs, and a fake would restate the belief under test. The
 every ref first (the conftest's ``ErasureJob``, [[LH-493]]); the tag's fate is the verification's.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path

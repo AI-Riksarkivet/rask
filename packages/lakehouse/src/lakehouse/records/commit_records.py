@@ -26,8 +26,6 @@ the name inherits neither (ADR 0173 §8):
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import hashlib
 import logging
 import uuid

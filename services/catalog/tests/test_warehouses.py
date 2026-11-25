@@ -6,8 +6,6 @@ against moto, which answers a create, a refused create and a delete as S3 does.
 The gate is driven through the real ``require_can_create_warehouse`` resolver.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path

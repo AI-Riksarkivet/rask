@@ -15,8 +15,6 @@ BOTH DEPLOYMENTS, because the planner and the worker each carry their own copy o
 copies of a bucket list is how the first one drifted.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import yaml

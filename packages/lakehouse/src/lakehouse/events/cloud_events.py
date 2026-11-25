@@ -14,8 +14,6 @@ A model of the lakehouse's own rather than the CloudEvents Python SDK: that SDK 
 model and no NATS binding, and what is sent here is a handful of attributes and the event.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final

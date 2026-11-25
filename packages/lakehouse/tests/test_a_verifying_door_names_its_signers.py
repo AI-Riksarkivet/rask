@@ -9,8 +9,6 @@ Driven through the environment, the way the chart configures a service, on a min
 the shared one, not one service's.
 """
 
-from __future__ import annotations
-
 import pytest
 from pydantic import ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict

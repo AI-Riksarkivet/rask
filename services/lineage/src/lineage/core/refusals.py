@@ -5,8 +5,6 @@ name a defect no tuple, redelivery or restart changes, so the doors take the eve
 for a repair that cannot come.
 """
 
-from __future__ import annotations
-
 from lance_namespace import PermissionDeniedError
 
 from lakehouse.events.signing import RefusalReason

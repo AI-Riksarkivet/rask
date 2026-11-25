@@ -8,8 +8,6 @@ the read would outlast the health watch's budget, and the replica would leave th
 Driven on lineage's real provenance store over a live catalog, the callers' threads held as such a burst holds them.
 """
 
-from __future__ import annotations
-
 import asyncio
 import threading
 from pathlib import Path

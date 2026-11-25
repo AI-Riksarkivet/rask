@@ -23,8 +23,6 @@ every few seconds. Counted on the wire, in front of a moto S3 server, since Lanc
 through no Python hook.
 """
 
-from __future__ import annotations
-
 import asyncio
 import datetime as dt
 import uuid

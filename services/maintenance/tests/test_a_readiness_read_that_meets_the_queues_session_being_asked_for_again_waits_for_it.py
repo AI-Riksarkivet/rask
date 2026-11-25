@@ -2,8 +2,6 @@
 is back in a round trip. The readiness read of the queue answers for the connection that came back: a read that fell in
 the moment between the two would report the bus away at every renewal, when nothing was."""
 
-from __future__ import annotations
-
 import asyncio
 from unittest.mock import create_autospec
 

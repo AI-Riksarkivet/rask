@@ -4,8 +4,6 @@ Each write is whole and unconditional, which no door's is: a door creates a reco
 its ETag, so these stand for the state an earlier request left, never for a request.
 """
 
-from __future__ import annotations
-
 from datetime import UTC, datetime
 from typing import Any
 

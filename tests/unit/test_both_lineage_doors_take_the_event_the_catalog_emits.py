@@ -11,8 +11,6 @@ other. A test that hand-writes the payload proves only that someone can write a 
 defect is that the two sides disagree, and only the real producer's output can show that.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Collection, Iterator
 from typing import Any, cast

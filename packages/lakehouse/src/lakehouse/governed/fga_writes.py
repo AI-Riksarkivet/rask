@@ -5,8 +5,6 @@ Tuples persist in the OpenFGA datastore (Postgres in the deployed stack; SQLite 
 or revokes is held to its registered call sites by a `banned-api` entry in ``pyproject.toml``.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Awaitable, Callable, Collection
 from http import HTTPStatus

@@ -44,8 +44,6 @@ tuples. It degrades to ``[]`` when FGA is off or unavailable (the registry-deriv
 an authz-lookup outage must not 500 the tenant list — the gate above already failed closed for callers).
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from datetime import UTC, datetime

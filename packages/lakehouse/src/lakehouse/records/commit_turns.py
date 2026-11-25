@@ -42,8 +42,6 @@ the store (:meth:`TableTurns.keeps`), as Lance decides a commit it lost the answ
 Every method but :meth:`TableTurns.wait_in_loop` is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import random

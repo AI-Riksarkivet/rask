@@ -12,8 +12,6 @@ frontend's ``bun run gen:types:catalog`` if the catalog spec changed).
 The ``make openapi-check`` CI gate catches the same drift from the other direction.
 """
 
-from __future__ import annotations
-
 import importlib
 import json
 import os

@@ -31,8 +31,6 @@ for an object is (ADR 0173 §8), so a rename keeps it and the table's ending end
 All IO here is blocking; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import re
 from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime

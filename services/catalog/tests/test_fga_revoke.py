@@ -7,8 +7,6 @@ an already-absent delete is idempotent, and an OpenFGA outage fails closed (503)
 Uses stdlib ``asyncio.run`` so no pytest-asyncio dependency is needed (matches test_fga_resilience).
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any, cast
 

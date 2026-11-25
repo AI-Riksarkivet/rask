@@ -8,8 +8,6 @@ boto3's default chain finds nothing to sign with, and what each exchange asked f
 this process.
 """
 
-from __future__ import annotations
-
 import importlib.util
 import sys
 import uuid

@@ -24,8 +24,6 @@ rather than hides; while the obligation is open the table itself still holds wha
 wiped when the obligation is released.
 """
 
-from __future__ import annotations
-
 import hashlib
 import hmac
 import logging

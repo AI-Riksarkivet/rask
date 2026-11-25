@@ -64,8 +64,6 @@ USAGE
     uv run python scripts/comment_history_gate.py --report            # whole tree, ADVISORY, never gates
 """
 
-from __future__ import annotations
-
 import argparse
 import io
 import re

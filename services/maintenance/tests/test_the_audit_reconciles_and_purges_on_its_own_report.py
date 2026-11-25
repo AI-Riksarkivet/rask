@@ -7,8 +7,6 @@ report its purge is gated on, and a missing client degrading rather than failing
 task is one subject on the work queue, which the queue's own lane proves on a real broker.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import Callable, Coroutine, Iterable

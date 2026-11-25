@@ -1,7 +1,5 @@
 """What the router reads off a request before it decides."""
 
-from __future__ import annotations
-
 from collections.abc import Iterator, Mapping
 from typing import Annotated
 

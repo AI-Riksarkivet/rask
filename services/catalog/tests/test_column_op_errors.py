@@ -11,8 +11,6 @@ as UNMARKED ``ValueError``s — so the match had to widen, and widening is exact
 blaming callers for outages.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

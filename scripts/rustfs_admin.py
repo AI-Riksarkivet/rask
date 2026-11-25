@@ -31,8 +31,6 @@ removes what it does not declare (tests/e2e-py/test_a_policy_the_store_refuses_f
         --policy 'system:serviceaccount:default:rask-sa-catalog={"Version": "2012-10-17", "Statement": [...]}' --prune
 """
 
-from __future__ import annotations
-
 import argparse
 import json
 import sys

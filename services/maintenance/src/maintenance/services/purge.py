@@ -60,8 +60,6 @@ but #80 (maintenance vs a live RustFS estate) is still open, so "tests green" is
 witnessed". The flag ships OFF.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Callable, Sequence
 from contextlib import suppress

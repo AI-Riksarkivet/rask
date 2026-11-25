@@ -15,8 +15,6 @@ Run against a deployed estate, or `make e2e-edge`:
     RASK_E2E_EDGE_URL=http://<gateway-address> LANCE_E2E_DEX=http://<dex>/dex uv run pytest tests/e2e-py/test_the_cluster_route_reaches_each_service.py -v
 """
 
-from __future__ import annotations
-
 import os
 
 import pytest

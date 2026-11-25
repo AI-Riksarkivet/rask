@@ -11,8 +11,6 @@ The doubles below speak the SDK's own response classes, and the last test drives
 what the SDK actually returns.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from typing import Any, cast

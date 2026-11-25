@@ -15,8 +15,6 @@ reading the source: drive the real `reconcile()` and require the recorded keys t
 keys. A future pass that adds a category after the recorder reds this the same day.
 """
 
-from __future__ import annotations
-
 import asyncio
 from pathlib import Path
 from typing import Any

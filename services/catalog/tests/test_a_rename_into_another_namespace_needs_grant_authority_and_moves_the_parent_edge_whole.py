@@ -30,8 +30,6 @@ Every tuple is the one a door writes, except the drift two arrangements start fr
 inheriting from both namespaces, and one inheriting from none.
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from datetime import timedelta

@@ -27,8 +27,6 @@ without `opentelemetry-instrument`. That would turn a correlation aid into a cra
 guaranteed by the filter, which reads it off the active span (ADR 0209).
 """
 
-from __future__ import annotations
-
 import io
 import logging
 from collections.abc import Iterator

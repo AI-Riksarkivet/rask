@@ -1,7 +1,5 @@
 """#4 — durable object-store outbox for lineage events (the crash-window durability primitive)."""
 
-from __future__ import annotations
-
 import asyncio
 import json
 import time

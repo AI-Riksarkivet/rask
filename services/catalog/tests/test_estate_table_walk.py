@@ -9,8 +9,6 @@ DRIVEN THROUGH `list_all_tables`, the route handler, over real warehouse records
 per-warehouse walks, which a test of one walk alone cannot see.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import cast
 

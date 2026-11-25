@@ -24,8 +24,6 @@ which is the failure this exists to prevent — so `record_outcome` takes `door`
 argument with no default and a missing one is a TypeError at import-time coverage, not a wrong number.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from lineage.core.metrics import Door, Outcome

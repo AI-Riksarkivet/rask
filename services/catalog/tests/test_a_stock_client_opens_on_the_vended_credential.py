@@ -18,8 +18,6 @@ vends the store's address for clients (``LANCE_S3_VENDED_ENDPOINT``). pylance ap
 over the client's own (measured on pylance 13.0.0), so the endpoint the catalog vends is the one the client writes to.
 """
 
-from __future__ import annotations
-
 import http.client
 import json
 import re

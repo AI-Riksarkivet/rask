@@ -10,8 +10,6 @@ The contract, in one line: **upsert, with ``null`` meaning DELETE this key** —
 that would drop the #21 ``lineage.*`` coordinates the caller never sees.
 """
 
-from __future__ import annotations
-
 import io
 
 import lance

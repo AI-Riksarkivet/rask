@@ -29,8 +29,6 @@ the day: `bash scripts/e2e_live.sh -m phase1 --require-live --chaos --keep-drive
 `bash scripts/e2e_live.sh -m soak --require-live --soak PATH`, which removes the kept tenant once the soak passes.
 """
 
-from __future__ import annotations
-
 import os
 from collections import Counter
 from collections.abc import Iterator

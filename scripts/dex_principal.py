@@ -15,8 +15,6 @@ refusal in every suite.
 Usage:  uv run python scripts/dex_principal.py alice@example.com
 """
 
-from __future__ import annotations
-
 import argparse
 from pathlib import Path
 

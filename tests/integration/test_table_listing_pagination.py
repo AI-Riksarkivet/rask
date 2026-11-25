@@ -9,8 +9,6 @@ return every item in one response answers a `page_token` (`lance_docs/ns_catalog
 naming no `limit` is answered the same page, so no listing answers the whole estate in one response ([[LH-576]] E10a).
 """
 
-from __future__ import annotations
-
 from unittest.mock import MagicMock
 
 import pytest

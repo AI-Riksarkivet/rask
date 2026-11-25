@@ -11,8 +11,6 @@ door would show them as user properties — and the map a caller holds is the ma
 `update_schema_metadata` documents as unable to destroy them only because it MERGES.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

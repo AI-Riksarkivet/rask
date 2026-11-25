@@ -16,8 +16,6 @@ CLASS is inconsistent (``ValueError`` from ``update()``, ``OSError`` from ``dele
 type-keyed guard would have fixed update and left delete returning 500s.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 import pyarrow as pa

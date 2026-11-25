@@ -9,8 +9,6 @@ checked before it is written.
 Usage: pin_chart_release.py <chart dir> --version X.Y.Z --repository <registry> --digest <image>=sha256:<hex> ...
 """
 
-from __future__ import annotations
-
 import argparse
 import re
 import sys

@@ -25,8 +25,6 @@ past every door, so the catalog announced none of them and vouches for no ``rask
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from collections import defaultdict

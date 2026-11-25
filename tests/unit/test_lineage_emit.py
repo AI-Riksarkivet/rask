@@ -6,8 +6,6 @@ the lineage service ingests (``RunEvent`` parses the emitted event; the ``create
 operation string is shared by both sides).
 """
 
-from __future__ import annotations
-
 import asyncio
 from collections.abc import Callable
 from pathlib import Path

@@ -7,8 +7,6 @@ dropped, so several trashed objects may have held one, each its own uuid with it
 restores exactly the one its caller names, and asks which when the name leads to several.
 """
 
-from __future__ import annotations
-
 from functools import partial
 
 from fastapi.concurrency import run_in_threadpool

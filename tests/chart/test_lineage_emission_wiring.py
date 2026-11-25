@@ -17,8 +17,6 @@ Asserted against the render rather than values.yaml, because the rendered manife
 moved off its default, so two equal defaults cannot pass for one derivation.
 """
 
-from __future__ import annotations
-
 from lineage.api import ingest_lane
 from maintenance.services import queue
 from tests.chart.chart_render import DEFAULT_ARGS, bus_consumers, containers, env_of, render

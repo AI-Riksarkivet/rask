@@ -12,8 +12,6 @@ in-process double of either one cannot see it (resilience.md §1 measured the pr
 after SIGTERM with the flag already flipped).
 """
 
-from __future__ import annotations
-
 import os
 import signal
 import socket

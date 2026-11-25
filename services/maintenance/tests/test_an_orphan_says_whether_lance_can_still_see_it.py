@@ -24,8 +24,6 @@ THE UNIT TRAP, measured on this host: `versions()[i]["timestamp"]` is NAIVE LOCA
 the host's offset, so both sides go through `.timestamp()`.
 """
 
-from __future__ import annotations
-
 import datetime as dt
 import math
 import os

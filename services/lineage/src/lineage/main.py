@@ -3,8 +3,6 @@
 Run: ``uvicorn lineage.main:app``. See ``docs/LINEAGE.md``.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import AsyncGenerator

@@ -18,8 +18,6 @@ numbers (:class:`Lane`):
 This module names no broker: `lakehouse.events.bus` applies a :class:`Settlement` to the message it came for.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging

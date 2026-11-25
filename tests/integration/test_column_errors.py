@@ -14,8 +14,6 @@ imagined. It also means a pylance bump that rewords a message reds a test here i
 returning these paths to 500s.
 """
 
-from __future__ import annotations
-
 import io
 
 import httpx

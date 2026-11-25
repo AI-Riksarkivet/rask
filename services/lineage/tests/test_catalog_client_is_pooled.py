@@ -11,8 +11,6 @@ write hold different policies (`catalog_read_client` sends a read again on a con
 so each kind of call shares one pool per catalog.
 """
 
-from __future__ import annotations
-
 import pytest
 
 from lineage.services.catalog_client import reset_catalog_clients

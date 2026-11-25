@@ -28,8 +28,6 @@ assignee, then describes it.
 A refused grant leaves dave refused; an admitted one lets him read.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from typing import Any, Final
 

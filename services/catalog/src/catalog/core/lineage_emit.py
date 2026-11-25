@@ -22,8 +22,6 @@ A versioned announcement's run id is derived from its commit (:mod:`catalog.core
 the commit's own time, so the original and a re-announcement of one commit are one event.
 """
 
-from __future__ import annotations
-
 import logging
 import uuid
 from collections.abc import Awaitable, Callable

@@ -5,8 +5,6 @@ stand-in instead of two that drift. Both keep every call they receive and fail l
 making, so a script that starts calling a tool nobody measured goes red instead of passing against a double that shrugs.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 

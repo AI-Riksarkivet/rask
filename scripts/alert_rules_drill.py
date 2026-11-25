@@ -30,8 +30,6 @@ refuses. Exit 2 = no reachable datasource (the caller decides whether that is a 
 `make alert-rules-drill` treats it as a skip so a laptop without a cluster is not a red build).
 """
 
-from __future__ import annotations
-
 import http.client
 import json
 import os

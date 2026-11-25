@@ -6,8 +6,6 @@ Each acts on the table the door's name resolved to, under the fence that holds t
 table's grants; nothing here reads a request or a grant.
 """
 
-from __future__ import annotations
-
 import logging
 from functools import partial
 

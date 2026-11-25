@@ -25,8 +25,6 @@ body) raises `UnicodeEncodeError` in the table's writer, and the log handler the
 renders each attribute of a record by recursion and raises what that raises.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from typing import TYPE_CHECKING, Any, Final

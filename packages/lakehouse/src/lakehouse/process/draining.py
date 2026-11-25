@@ -11,8 +11,6 @@ the window it exists for, which is the rule `/readyz` already states: once `shut
 regardless of anything else.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 import signal

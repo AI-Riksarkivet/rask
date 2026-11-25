@@ -5,8 +5,6 @@ file as it sends. A file that is there and holds nothing is no token: presented,
 charged to this pod. Each caller maps the two failures to its own (a 503, an attempt not served, a connect tried again).
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 
 

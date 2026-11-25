@@ -9,8 +9,6 @@ nothing the client did not send ([[LH-255]]), while the tenant's admin, who owns
 teardown.
 """
 
-from __future__ import annotations
-
 import os
 from collections.abc import Iterator
 

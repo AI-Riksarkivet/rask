@@ -9,8 +9,6 @@ door, at the keys `lance_docs/lance/guide/object_store.md:288-298` names.
 Only the STS exchange is faked: the vendor, its storage options builder and both doors are the deployed ones.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import traceback

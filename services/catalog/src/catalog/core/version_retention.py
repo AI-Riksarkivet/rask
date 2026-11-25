@@ -8,8 +8,6 @@ spells it, so the versions are read off those names. Tags and child branches pin
 that refuses to delete a pinned version.
 """
 
-from __future__ import annotations
-
 from collections.abc import Mapping, Sequence
 from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Final, Protocol

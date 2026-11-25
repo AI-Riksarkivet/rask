@@ -14,8 +14,6 @@ A rule with that failure mode belongs somewhere a test can reach, which is what 
 The IO — listing the registry, reading manifests, issuing the DELETEs — stays in the shell script.
 """
 
-from __future__ import annotations
-
 import re
 from collections.abc import Iterable, Mapping, Sequence
 

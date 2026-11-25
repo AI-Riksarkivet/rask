@@ -16,8 +16,6 @@ ever references; and a blob column's bytes live in a `data/<data-file-stem>/` SI
 does not name, so a scan that stops at the `.lance` reports every page image in the estate as reclaimable.
 """
 
-from __future__ import annotations
-
 import pathlib
 import posixpath
 import uuid

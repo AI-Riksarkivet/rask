@@ -6,8 +6,6 @@ store policy, would leave the Application Synced, and no auto-sync would run the
 `<release>-bootstrap-inputs` is a plain ConfigMap holding, per bootstrap template, a digest of its Jobs' specs.
 """
 
-from __future__ import annotations
-
 from tests.chart.chart_render import DEFAULT_ARGS, by_source
 
 

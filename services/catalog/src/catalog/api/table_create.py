@@ -34,8 +34,6 @@ It is a door's sequence, so it lives with the doors and asks ``catalog.api.authz
 implementation, and re-deriving them here would be the weakened duplicate the audit keeps finding elsewhere.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from collections.abc import Callable

@@ -12,8 +12,6 @@ Run, with the lane's binaries exported as `dagger call nats-auth` lays them out 
     RASK_NATS_AUTH_TOOLS=<dir> PYTHONPATH=tests/e2e-py:. uv run python scripts/measure_maintenance_queue.py out.json
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import os

@@ -9,8 +9,6 @@ Domain value objects that are NOT wire schemas stay where they belong: ``VendedS
 ``core/lineage_emit`` (a lineage-emit input reference).
 """
 
-from __future__ import annotations
-
 from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 from uuid import UUID

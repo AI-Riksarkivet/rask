@@ -18,8 +18,6 @@ An endpoint's PATH is part of the root both halves address. Measured against a l
 pyarrow override that keeps only the host reaches `/bucket/key`, a different root of the same store.
 """
 
-from __future__ import annotations
-
 import threading
 from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

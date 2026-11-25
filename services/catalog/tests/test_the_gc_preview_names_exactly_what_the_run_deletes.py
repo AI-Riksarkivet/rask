@@ -24,8 +24,6 @@ disagrees with the run on both refs: ``pinned`` tags ``work`` v3, ``release`` ta
 forks from main v2, and ``deeper`` forks from ``work`` v5.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from pathlib import Path

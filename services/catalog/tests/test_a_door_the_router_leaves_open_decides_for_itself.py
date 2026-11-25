@@ -22,8 +22,6 @@ way. With that rung removed, every door refuses as the router would: 503 code 17
 (`lance_docs/ns_catalog/namespace/operations/errors.md`).
 """
 
-from __future__ import annotations
-
 import logging
 from abc import abstractmethod
 from collections.abc import Callable

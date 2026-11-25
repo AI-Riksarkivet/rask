@@ -18,8 +18,6 @@ The e2e-stack lane runs it on every push. Against a deployed release, `bash scri
 tests/e2e-py/test_maintenance_e2e.py` discovers the addresses.
 """
 
-from __future__ import annotations
-
 import time
 import uuid
 from typing import Any

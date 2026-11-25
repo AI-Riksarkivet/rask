@@ -34,8 +34,6 @@ included; `escalate` on ClusterRoles bound to the catalog's account fails it lik
 fails both tests; and a Role creating `deployments` bound to `default` fails the grants test as the `pods` one does.
 """
 
-from __future__ import annotations
-
 import functools
 import re
 from typing import Final

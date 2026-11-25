@@ -7,8 +7,6 @@ the mirror's file holds at that moment, and advertises a `jwks_uri` on another h
 IP. A verifier must be pointed back at the mirror for the keys, and the file is rotated between the two GETs.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 import re

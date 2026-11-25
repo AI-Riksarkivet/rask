@@ -1,7 +1,5 @@
 """Shared FastAPI dependencies (Annotated type aliases) for the lineage service."""
 
-from __future__ import annotations
-
 import logging
 from typing import Annotated, Final, cast, overload
 

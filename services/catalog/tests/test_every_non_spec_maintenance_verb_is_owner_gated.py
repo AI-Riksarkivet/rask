@@ -23,8 +23,6 @@ commits a stamp that changes no row, so they sit at the maintainer rung the swee
 next still meets the owner bar.
 """
 
-from __future__ import annotations
-
 from typing import Final
 
 import pytest

@@ -8,8 +8,6 @@ Empty by default. An estate that declares no maintenance identity gets only the 
 creator's grant.
 """
 
-from __future__ import annotations
-
 import asyncio
 from typing import Any
 

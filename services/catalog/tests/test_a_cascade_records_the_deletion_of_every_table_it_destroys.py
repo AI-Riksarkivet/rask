@@ -16,8 +16,6 @@ EMITTED BEFORE THE REVOKE, the same ordering the table door states and for the s
 that fails ends the request with the event that records who dropped the table already published.
 """
 
-from __future__ import annotations
-
 import logging
 from collections.abc import Iterator
 from pathlib import Path

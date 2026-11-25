@@ -11,8 +11,6 @@ refuse rather than skip what they cannot read: a revoke justified by an absence 
 Every function is BLOCKING IO; callers threadpool it.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import datetime
 

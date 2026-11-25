@@ -11,8 +11,6 @@ Driven over HTTP against a real `dir` backend, each as a keyed typo followed by 
 the same key, so the second status is read where a retrying client reads it.
 """
 
-from __future__ import annotations
-
 import struct
 from typing import TYPE_CHECKING, Final
 

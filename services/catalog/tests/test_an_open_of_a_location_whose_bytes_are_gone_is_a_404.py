@@ -15,8 +15,6 @@ So the open every door makes at its resolved location (`namespace.open_resolved_
 nothing behind it as `TableNotFoundError`: the table the name resolved to is not there.
 """
 
-from __future__ import annotations
-
 from pathlib import Path
 from urllib.parse import urlparse
 

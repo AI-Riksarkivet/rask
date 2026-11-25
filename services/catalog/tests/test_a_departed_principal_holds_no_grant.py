@@ -16,8 +16,6 @@ Every decision is the real model's, on a store of this test's own. The estate ad
 seeded as the catalog's declaration grants it; everything else goes through the doors.
 """
 
-from __future__ import annotations
-
 import json
 from typing import Any
 

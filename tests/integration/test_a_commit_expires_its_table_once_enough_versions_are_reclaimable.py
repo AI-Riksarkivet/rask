@@ -17,8 +17,6 @@ The table's name is one the catalog percent-encodes ([[LH-319]]): the event name
 namespace carries its own in its ``__manifest`` row (ADR 0173 §8).
 """
 
-from __future__ import annotations
-
 import json
 import uuid
 from collections.abc import Callable, Iterator

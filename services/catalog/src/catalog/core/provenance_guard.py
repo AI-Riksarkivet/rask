@@ -33,8 +33,6 @@ key is a reserved key and cannot be changed once set"). Those stay Lance's refus
 `catalog.core.lance_refusals.column_op`, and are not restated here.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Final
 

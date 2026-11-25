@@ -26,8 +26,6 @@ refused when the caller cannot see it. A change that relaxes the second to fix t
 test written only for the first.
 """
 
-from __future__ import annotations
-
 import uuid
 from collections.abc import AsyncGenerator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager

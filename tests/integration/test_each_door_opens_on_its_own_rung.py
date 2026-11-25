@@ -13,8 +13,6 @@ alice granted the rung just below it is refused 403 (code 15), with the store's 
 were. bob owns every object, as the doors that made them seed him.
 """
 
-from __future__ import annotations
-
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, Final

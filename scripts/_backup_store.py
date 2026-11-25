@@ -8,8 +8,6 @@ Every S3 call is wrapped in :func:`lakehouse.storage.errors.store_call`, so a mi
 own :class:`~lakehouse.storage.errors.BucketNotFoundError` rather than a raw botocore ``ClientError`` it cannot name.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from pathlib import Path
 from typing import TYPE_CHECKING

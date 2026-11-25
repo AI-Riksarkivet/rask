@@ -19,8 +19,6 @@ Driven as the estate's admin in a scratch tenant of its own, removed at the end.
 `bash scripts/e2e_live.sh tests/e2e-py/test_a_table_lives_its_whole_lifecycle_under_any_name.py`.
 """
 
-from __future__ import annotations
-
 import time
 from collections.abc import Iterator
 from urllib.parse import quote

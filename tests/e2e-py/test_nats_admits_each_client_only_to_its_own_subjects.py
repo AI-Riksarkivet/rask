@@ -58,8 +58,6 @@ JWT or (in an environment) a bus token, and no signer logged a token.
 Run by `dagger call nats-auth` (`make nats-auth`), which provides the binaries and selects this file by path.
 """
 
-from __future__ import annotations
-
 import asyncio
 import base64
 import json

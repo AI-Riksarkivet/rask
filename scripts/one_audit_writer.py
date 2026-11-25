@@ -15,8 +15,6 @@ assembled at run time (`"lance." + part`) is not seen: the rule is a floor under
 not judged: a test captures the trail, and nothing it logs ships.
 """
 
-from __future__ import annotations
-
 import argparse
 import ast
 import sys

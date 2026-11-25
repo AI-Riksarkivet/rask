@@ -23,8 +23,6 @@ the two bounds are held together from both sides.
 Driven through lineage's own app and lifespan, each event delivered to its ingest lane.
 """
 
-from __future__ import annotations
-
 from typing import Any
 
 import pytest

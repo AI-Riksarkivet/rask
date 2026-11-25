@@ -22,8 +22,6 @@ audited like one (§ J1). A consumer that can follow every row a table ever rece
 disclosing read available, not a metadata lookup.
 """
 
-from __future__ import annotations
-
 import pytest
 from lance_namespace import InvalidInputError
 

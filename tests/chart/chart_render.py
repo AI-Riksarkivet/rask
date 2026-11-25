@@ -13,8 +13,6 @@ PARSED WITH `chart_yaml.FAST_LOADER` for the reason that module states: ~57% of 
 clock was attributed to the pure-Python parser, and the C loader returns equal documents.
 """
 
-from __future__ import annotations
-
 import copy
 import functools
 import json

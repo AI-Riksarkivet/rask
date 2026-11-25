@@ -11,8 +11,6 @@ begun its answer (a stream reading its body as it answers) has nothing to send, 
 the connection.
 """
 
-from __future__ import annotations
-
 from collections.abc import Awaitable, Callable
 from typing import NoReturn
 

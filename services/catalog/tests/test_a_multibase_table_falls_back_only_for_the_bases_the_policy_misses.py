@@ -23,8 +23,6 @@ BOTH DOORS OR NEITHER. `has_external_bases`'s own docstring says the vend door a
 the table is on every multi-base table that passes the guard.
 """
 
-from __future__ import annotations
-
 from catalog.core.vending import unsanctioned_bases
 
 

@@ -15,8 +15,6 @@ A verdict is the latest read's: one that fails or overruns its budget turns it a
 starved by a wedged event loop) turns it once the last answer is older than two rounds.
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence

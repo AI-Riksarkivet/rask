@@ -6,8 +6,6 @@ caller's malformed expression, a write whose schema does not match, a column op 
 ref failure is a 4xx and not a 500. Each marker is measured on the pylance it names.
 """
 
-from __future__ import annotations
-
 import logging
 import re
 from collections.abc import Generator, Sequence

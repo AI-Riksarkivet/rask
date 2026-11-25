@@ -10,8 +10,6 @@ exception, so no handler keyed on a class could catch them all. Any other failur
 begun, is raised on unchanged.
 """
 
-from __future__ import annotations
-
 import logging
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send

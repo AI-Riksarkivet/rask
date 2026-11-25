@@ -16,8 +16,6 @@ Nothing here buffers a payload — a multi-GB blob is served through bounded ``r
 the read-side counterpart of the write-side body-limit OOM guard.
 """
 
-from __future__ import annotations
-
 from collections.abc import Iterator
 from typing import Any
 

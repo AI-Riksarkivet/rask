@@ -28,8 +28,6 @@ The run's properties and the author are the only ``rask.*`` keys a stock client'
 spec identifier as a list of names, so reading it needs no delimiter.
 """
 
-from __future__ import annotations
-
 import json
 from collections.abc import Mapping
 from typing import Annotated, Final

@@ -8,8 +8,6 @@ mounted file no longer has that digest, which has the kubelet restart it onto th
 written outside the Secret's volume. The rendered commands run here against a stand-in for the store's health door.
 """
 
-from __future__ import annotations
-
 import os
 import stat
 import subprocess

@@ -6,8 +6,6 @@ it rather than end there, and any other refusal still fails the Job. The rendere
 that answers as RustFS does.
 """
 
-from __future__ import annotations
-
 import os
 import stat
 import subprocess

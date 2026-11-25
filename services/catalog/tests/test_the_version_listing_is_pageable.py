@@ -25,8 +25,6 @@ with an integer key and an order that `descending` may flip, so it gets a siblin
 second cursor implementation that can drift from the first.
 """
 
-from __future__ import annotations
-
 import pathlib
 import tempfile
 from typing import Any
