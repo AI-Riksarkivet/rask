@@ -180,7 +180,7 @@ def _client(door: _Door, provider: _BrokenProvider) -> TestClient:
     app.state.oidc = IdpVerifier(provider.verifier, [OidcProvider(issuer=provider.issuer, idp_id="dex", connectors={"local": "dex"})])
     # Never verified: every fault is met before a signature is checked. The `kid` carries it to the key-set fetch.
     claims = {"iss": provider.issuer, "sub": "gina", "aud": AUDIENCE, "iat": 0, "exp": 1 << 31}
-    bearer = jwt.encode(claims, "unverified", algorithm="HS256", headers={"kid": "k1"})
+    bearer = jwt.encode(claims, "a-signing-key-the-unreachable-idp-never-checks", algorithm="HS256", headers={"kid": "k1"})
 
     @app.get("/door")
     async def _door(request: Request) -> dict[str, str]:

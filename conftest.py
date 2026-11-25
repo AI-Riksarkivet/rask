@@ -685,26 +685,28 @@ class OpenFgaServer:
             http_port, grpc_port = free_port(), free_port()
             # A file, not a pipe: nothing reads a running server's stderr, and a full pipe would block it mid-session.
             log = log_dir / f"openfga-{attempt}.log"
-            process = subprocess.Popen(  # noqa: S603 - argv is a literal around the pinned binary the fixture resolved
-                [
-                    binary,
-                    "run",
-                    "--datastore-engine=memory",
-                    f"--http-addr=127.0.0.1:{http_port}",
-                    f"--grpc-addr=127.0.0.1:{grpc_port}",
-                    "--playground-enabled=false",
-                    "--metrics-enabled=false",
-                    "--log-level=warn",
-                    "--check-query-cache-enabled",
-                    "--check-query-cache-ttl=1h",
-                    "--check-iterator-cache-enabled",
-                    "--check-iterator-cache-ttl=1h",
-                    "--list-objects-iterator-cache-enabled",
-                    "--list-objects-iterator-cache-ttl=1h",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=log.open("wb"),
-            )
+            # The server holds its own copy of the log's descriptor; the fixture's copy closes once it has started.
+            with log.open("wb") as stderr:
+                process = subprocess.Popen(  # noqa: S603 - argv is a literal around the pinned binary the fixture resolved
+                    [
+                        binary,
+                        "run",
+                        "--datastore-engine=memory",
+                        f"--http-addr=127.0.0.1:{http_port}",
+                        f"--grpc-addr=127.0.0.1:{grpc_port}",
+                        "--playground-enabled=false",
+                        "--metrics-enabled=false",
+                        "--log-level=warn",
+                        "--check-query-cache-enabled",
+                        "--check-query-cache-ttl=1h",
+                        "--check-iterator-cache-enabled",
+                        "--check-iterator-cache-ttl=1h",
+                        "--list-objects-iterator-cache-enabled",
+                        "--list-objects-iterator-cache-ttl=1h",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=stderr,
+                )
             url = f"http://127.0.0.1:{http_port}"
             deadline = time.monotonic() + 30
             while process.poll() is None and time.monotonic() < deadline:

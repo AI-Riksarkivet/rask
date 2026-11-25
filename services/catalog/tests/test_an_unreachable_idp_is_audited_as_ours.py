@@ -71,7 +71,9 @@ def _client(verifier: IdpVerifier | None, issuer: str) -> TestClient:
 
 
 def _bearer(issuer: str) -> dict[str, str]:
-    token = jwt.encode({"iss": issuer, "sub": "gina", "aud": AUDIENCE, "iat": 0, "exp": 1 << 31}, "unverified", algorithm="HS256")
+    token = jwt.encode(
+        {"iss": issuer, "sub": "gina", "aud": AUDIENCE, "iat": 0, "exp": 1 << 31}, "a-signing-key-the-unreachable-idp-never-checks", algorithm="HS256"
+    )
     return {"Authorization": f"Bearer {token}"}
 
 

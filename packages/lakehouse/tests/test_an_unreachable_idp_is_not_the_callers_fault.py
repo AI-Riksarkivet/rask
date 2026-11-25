@@ -55,7 +55,9 @@ def _unverified_token() -> str:
     """
     import jwt
 
-    return jwt.encode({"iss": ISSUER, "sub": "u1", "aud": "rask", "exp": 9999999999, "iat": 1}, "secret", algorithm="HS256")
+    return jwt.encode(
+        {"iss": ISSUER, "sub": "u1", "aud": "rask", "exp": 9999999999, "iat": 1}, "a-signing-key-the-unreachable-idp-never-checks", algorithm="HS256"
+    )
 
 
 def _discovery_document(monkeypatch: pytest.MonkeyPatch, **document: object) -> None:
