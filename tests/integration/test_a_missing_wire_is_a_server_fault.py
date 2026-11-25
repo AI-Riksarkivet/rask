@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
+import httpx2
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
@@ -33,6 +34,7 @@ from lance_namespace import ConcurrentModificationError, DescribeNamespaceReques
 from catalog.core.config import Settings
 from lakehouse.records import maintenance_policies
 from lakehouse.records.record_store import put_record, record_key
+from tests.app_state import app_of
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event, served_relay_tick
 
 
@@ -50,19 +52,19 @@ def _rows() -> bytes:
     return sink.getvalue()
 
 
-def _create_namespace(client: TestClient) -> httpx.Response:
+def _create_namespace(client: TestClient) -> httpx2.Response:
     return client.post(f"/v1/namespace/{NAMESPACE}$child/create", json={})
 
 
-def _declare(client: TestClient) -> httpx.Response:
+def _declare(client: TestClient) -> httpx2.Response:
     return client.post(f"/v1/table/{NAMESPACE}$declared/declare", json={})
 
 
-def _count_rows(client: TestClient) -> httpx.Response:
+def _count_rows(client: TestClient) -> httpx2.Response:
     return client.post(f"/v1/table/{TABLE}/count_rows", json={})
 
 
-def _poll_events(client: TestClient) -> httpx.Response:
+def _poll_events(client: TestClient) -> httpx2.Response:
     return client.get("/management/v1/events")
 
 
@@ -95,7 +97,7 @@ def test_a_door_refuses_as_a_server_fault_when_its_wire_is_missing(
     assert real_ns_client.post(f"/v1/namespace/{NAMESPACE}/create", json={}).status_code == 200
     created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=_rows(), headers=ARROW)
     assert created.status_code == 200, created.text
-    monkeypatch.delattr(real_ns_client.app.state, wire)
+    monkeypatch.delattr(app_of(real_ns_client).state, wire)
 
     with caplog.at_level(logging.ERROR):
         answer = door(real_ns_client)

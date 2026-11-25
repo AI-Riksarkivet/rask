@@ -66,6 +66,7 @@ dev = [
     # than into `addopts`, so a developer's run under a debugger is not cut off at the ceiling.
     "pytest-timeout>=2.3",
     "pytest-xdist>=3.6",
+    "httpx2>=2.16.2",
 ]
 
 [tool.ruff]

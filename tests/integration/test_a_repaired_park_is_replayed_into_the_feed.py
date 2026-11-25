@@ -27,6 +27,7 @@ from openfga_sdk.client.models import ClientTuple
 from lakehouse.events.bus_delivery import Outcome, Settlement
 from lakehouse.governed import fga_reads
 from lakehouse.governed.fga_ids import user_object
+from tests.app_state import app_of
 from tests.bus_double import BusDouble
 from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, relay_tick, run_event
 
@@ -91,12 +92,12 @@ def _estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[_Estat
 
         with governed_lineage(catalog_url, monkeypatch, set()) as lineage:
             settings = get_settings()
-            lineage.app.state.grants.allowed.update(
+            app_of(lineage).state.grants.allowed.update(
                 (user_object(_ADMIN), verb, settings.fga_root_object) for verb in ("can_read_parked_events", "can_replay_parked_events")
             )
             bus = BusDouble()
-            lineage.app.state.bus = bus
-            ingest = IngestLane(lineage.app, settings)
+            app_of(lineage).state.bus = bus
+            ingest = IngestLane(app_of(lineage), settings)
             portal = lineage.portal
             assert portal is not None, "the client runs no lifespan, so nothing would take a delivery"
             # The lane as lineage's lifespan starts it (`lineage.main._take_deliveries`), on the app's own loop.
@@ -111,7 +112,7 @@ def _recorded(lineage: TestClient, state: str, table: str) -> bool:
     from lineage.services.provenance import delivery_feed_key
 
     key = delivery_feed_key({"data": _event(state, table, outputs=True)})
-    return key in asyncio.run(lineage.app.state.provenance.events_recorded({key}))
+    return key in asyncio.run(app_of(lineage).state.provenance.events_recorded({key}))
 
 
 def test_a_refused_complete_is_kept_and_replayed_into_the_feed_once_its_tuple_is_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -122,7 +123,7 @@ def test_a_refused_complete_is_kept_and_replayed_into_the_feed_once_its_tuple_is
         listed = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
         not_admin = lineage.post(_REPLAY, headers={SUBJECT_HEADER: _AUTHOR})
         refused = lineage.post(_REPLAY, headers={SUBJECT_HEADER: _ADMIN})
-        lineage.app.state.grants.allowed.add((user_object(_AUTHOR), "can_write_data", table))
+        app_of(lineage).state.grants.allowed.add((user_object(_AUTHOR), "can_write_data", table))
         replayed = lineage.post(_REPLAY, headers={SUBJECT_HEADER: _ADMIN})
         again = lineage.post(_REPLAY, headers={SUBJECT_HEADER: _ADMIN})
         left = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
@@ -153,12 +154,12 @@ def test_a_staged_event_a_grant_would_admit_is_parked_by_the_relay_and_replayed_
         refused = relay_tick(lineage)
         listed = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
         staged = list(outbox.list_events(outbox_uri, StorageOptions()))
-        lineage.app.state.grants.allowed.add((user_object(_AUTHOR), "can_write_data", table))
+        app_of(lineage).state.grants.allowed.add((user_object(_AUTHOR), "can_write_data", table))
         replayed = lineage.post(_REPLAY, headers={SUBJECT_HEADER: _ADMIN})
         again = lineage.post(_REPLAY, headers={SUBJECT_HEADER: _ADMIN})
         relay_tick(lineage)
         left = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
-        feed = asyncio.run(lineage.app.state.provenance.list_events())
+        feed = asyncio.run(app_of(lineage).state.provenance.list_events())
 
     assert (refused.outbox_refused, staged, listed.json()) == (1, [], {"runs": {_RUN: 1}}), "the refused staged event is not kept for replay"
     assert (replayed.status_code, replayed.json()) == (200, {"status": "recovered", "run_id": _RUN}), replayed.text
@@ -172,7 +173,7 @@ def test_the_relay_tick_retires_a_kept_park_the_feed_holds(tmp_path: Path, monke
     with _estate(tmp_path, monkeypatch) as estate:
         lineage, table = estate.lineage, estate.table
         parked = estate.deliver({"id": "evt-complete", "data": _event("COMPLETE", table, outputs=True)})
-        lineage.app.state.grants.allowed.add((user_object(_AUTHOR), "can_write_data", table))
+        app_of(lineage).state.grants.allowed.add((user_object(_AUTHOR), "can_write_data", table))
         ingested = lineage.post("/api/v1/lineage", json=_event("COMPLETE", table, outputs=True), headers={SUBJECT_HEADER: _AUTHOR})
         tick = relay_tick(lineage)
         left = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})

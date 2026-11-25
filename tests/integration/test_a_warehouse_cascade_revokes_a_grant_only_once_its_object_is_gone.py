@@ -25,7 +25,7 @@ from typing import Any
 from uuid import uuid4 as _uuid4
 
 import boto3
-import httpx
+import httpx2
 import lance
 import pyarrow as pa
 import pytest
@@ -145,7 +145,7 @@ class _Tenant:
         assert answer.status_code == 200, answer.text
         self.policy_uuids[table] = str(answer.json()["uuid"])
 
-    def delete_warehouse(self) -> httpx.Response:
+    def delete_warehouse(self) -> httpx2.Response:
         return self.client.delete(f"/management/v1/warehouses/{self.warehouse}", params={"cascade": "true", "purge_bucket": "true"})
 
     def trashed(self, objects: list[tuple[TrashKind, str]]) -> list[tuple[TrashKind, str]]:

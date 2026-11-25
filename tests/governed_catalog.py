@@ -24,7 +24,7 @@ from lakehouse.storage.options import StorageOptions
 
 
 if TYPE_CHECKING:
-    from httpx import Response
+    from httpx2 import Response
 
 
 #: A table's rows as the create door takes them.

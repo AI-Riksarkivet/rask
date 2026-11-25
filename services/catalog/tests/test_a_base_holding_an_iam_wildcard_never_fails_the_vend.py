@@ -25,6 +25,7 @@ from pydantic import SecretStr
 
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.store_session import IssuedSession
+from tests.app_state import app_of
 
 
 def _options(two_stores: Any) -> dict[str, str]:  # noqa: ANN401 — conftest.TwoStores
@@ -41,7 +42,7 @@ def _capture_policy(client: TestClient) -> dict[str, Any]:
             expiration=datetime(2030, 1, 1, tzinfo=UTC),
         )
 
-    client.app.state.vendor._exchange = _exchange  # noqa: SLF001 — the one call that would reach the store
+    app_of(client).state.vendor._exchange = _exchange  # noqa: SLF001 — the one call that would reach the store
     return sent
 
 

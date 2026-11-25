@@ -16,13 +16,13 @@ from typing import TYPE_CHECKING, cast
 
 import lance
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, DropNamespaceRequest, connect
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
+from tests.app_state import app_of
 
 
 if TYPE_CHECKING:
@@ -71,7 +71,7 @@ def _reclaim(catalog: Catalog) -> ManifestReclaimTick:
     from catalog.core.config import get_settings
 
     assert catalog.client.portal is not None, "the reclaim ticks inside the app's lifespan"
-    return catalog.client.portal.call(manifest_reclaim.tick, Tick(cast(FastAPI, catalog.client.app), get_settings()))
+    return catalog.client.portal.call(manifest_reclaim.tick, Tick(app_of(catalog.client), get_settings()))
 
 
 @pytest.fixture

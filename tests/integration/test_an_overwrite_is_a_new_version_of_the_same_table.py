@@ -26,6 +26,7 @@ from fastapi.testclient import TestClient
 
 from catalog.core.lineage_emit import BusEmitter
 from lakehouse.events.control_events import CatalogControlEvent
+from tests.app_state import app_of
 from tests.bus_double import BusDouble
 
 
@@ -57,7 +58,7 @@ def bus(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> BusDoubl
         dataset_namespace="lance-namespace://localhost/api/catalog",
         timeout_seconds=5.0,
     )
-    monkeypatch.setattr(real_ns_client.app.state, "lineage_emitter", emitter, raising=False)
+    monkeypatch.setattr(app_of(real_ns_client).state, "lineage_emitter", emitter, raising=False)
     return bus
 
 
@@ -110,7 +111,7 @@ def test_an_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
 ) -> None:
     minted = _uuid(real_ns_client)
     control = _Control()
-    monkeypatch.setattr(real_ns_client.app.state, "control_emitter", control, raising=False)
+    monkeypatch.setattr(app_of(real_ns_client).state, "control_emitter", control, raising=False)
 
     answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS[door]}", content=_ipc(_rows(9)), headers=ARROW)
 
@@ -132,7 +133,7 @@ def test_an_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
 def test_an_overwrite_create_of_an_absent_table_is_announced_as_a_created_table(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     assert real_ns_client.post("/v1/namespace/lance_catalog$lh242/create", json={}).status_code == 200
     control = _Control()
-    monkeypatch.setattr(real_ns_client.app.state, "control_emitter", control, raising=False)
+    monkeypatch.setattr(app_of(real_ns_client).state, "control_emitter", control, raising=False)
 
     answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS['create']}", content=_ipc(_rows(1)), headers=ARROW)
 

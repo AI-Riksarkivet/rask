@@ -17,7 +17,7 @@ from datetime import UTC, timedelta
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
@@ -26,6 +26,7 @@ from moto.sts import models as sts_models
 
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.storage import store_session
+from tests.app_state import app_of
 
 
 #: The account moto files every role and session under.
@@ -78,14 +79,14 @@ class _Rig:
     def later(self, seconds: float) -> None:
         """Move the catalog's clock forward, then wake its session holder once."""
         self.clock.now += seconds
-        self.catalog.app.state.store_session.refresh_if_due()
+        app_of(self.catalog).state.store_session.refresh_if_due()
 
     def with_warehouses(self) -> None:
         """Serve the warehouse doors, vending nothing: their scope probe asks for a session policy moto does not enforce."""
         from catalog.api.dependencies import get_vendor
         from catalog.core.vending import ModeBVendor
 
-        self.catalog.app.dependency_overrides[get_vendor] = ModeBVendor
+        app_of(self.catalog).dependency_overrides[get_vendor] = ModeBVendor
 
 
 @pytest.fixture
@@ -141,22 +142,22 @@ def sessions(store_clock: None, encryption: None, two_stores: Any, tmp_path: Pat
     get_settings.cache_clear()
 
 
-def _a_namespace_create(rig: _Rig) -> Callable[[], httpx.Response]:
+def _a_namespace_create(rig: _Rig) -> Callable[[], httpx2.Response]:
     return lambda: rig.catalog.post(f"/v1/namespace/lance_catalog$ses{uuid.uuid4().hex[:10]}/create", json={})
 
 
-def _a_table_create(rig: _Rig) -> Callable[[], httpx.Response]:
+def _a_table_create(rig: _Rig) -> Callable[[], httpx2.Response]:
     namespace = f"lance_catalog$ses{uuid.uuid4().hex[:10]}"
     assert rig.catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
     return lambda: rig.catalog.post(f"/v1/table/{namespace}${uuid.uuid4().hex[:10]}/create", content=_ipc(ROWS), headers=ARROW)
 
 
-def _a_bucket_it_provisions(rig: _Rig) -> Callable[[], httpx.Response]:
+def _a_bucket_it_provisions(rig: _Rig) -> Callable[[], httpx2.Response]:
     rig.with_warehouses()
     project = f"ses{uuid.uuid4().hex[:10]}"
     assert rig.catalog.post("/management/v1/projects", json={"id": project}).status_code == 200
 
-    def create() -> httpx.Response:
+    def create() -> httpx2.Response:
         warehouse = f"wh{uuid.uuid4().hex[:10]}"
         return rig.catalog.post("/management/v1/warehouses", json={"id": warehouse, "project": project, "bucket": f"{rig.bucket}-{warehouse}"})
 
@@ -174,7 +175,7 @@ def _a_bucket_it_provisions(rig: _Rig) -> Callable[[], httpx.Response]:
     indirect=["store_clock"],
 )
 def test_the_catalogs_session_is_exchanged_again_before_it_expires_without_a_restart(
-    sessions: _Rig, door: Callable[[_Rig], Callable[[], httpx.Response]]
+    sessions: _Rig, door: Callable[[_Rig], Callable[[], httpx2.Response]]
 ) -> None:
     call = door(sessions)
     first = call()
@@ -195,7 +196,7 @@ def test_a_vend_is_a_session_of_its_own_named_for_the_caller(sessions: _Rig) -> 
     assert sessions.catalog.post(f"/v1/table/{table}/create", content=_ipc(ROWS), headers=ARROW).status_code == 200
     from catalog.api.security import authenticate
 
-    sessions.catalog.app.dependency_overrides[authenticate] = lambda: ServicePrincipal.for_account("system:serviceaccount:rask:rask-sa-maintenance")
+    app_of(sessions.catalog).dependency_overrides[authenticate] = lambda: ServicePrincipal.for_account("system:serviceaccount:rask:rask-sa-maintenance")
 
     vended = sessions.catalog.post(f"/management/v1/table/{table}/credentials")
 

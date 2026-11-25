@@ -35,6 +35,7 @@ from catalog.core.vending import TableRecords, Tier, VendedSession
 from lakehouse.governed.fga_ids import user_object
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.storage.credential import S3KeyPair
+from tests.app_state import app_of
 from tests.governed_catalog import GovernedCatalog
 
 
@@ -69,7 +70,7 @@ def governed(governed_catalog: GovernedCatalog) -> Iterator[tuple[GovernedCatalo
     assert governed_catalog.create_in_the_estate("bob", "db").status_code == 200
     governed_catalog.create_table("bob", TABLE)
     table = f"table:{governed_catalog.uuid('table', TABLE, 'bob')}"
-    app = governed_catalog.client.app
+    app = app_of(governed_catalog.client)
     app.dependency_overrides[get_vendor] = lambda: _Vendor()
     app.dependency_overrides[security.authenticate] = lambda: _MAINTENANCE
     yield governed_catalog, table

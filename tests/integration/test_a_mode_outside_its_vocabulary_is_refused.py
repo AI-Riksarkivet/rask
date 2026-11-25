@@ -48,7 +48,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from fastapi.testclient import TestClient
-    from httpx import Response
+    from httpx2 import Response
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 INVALID_INPUT = 13

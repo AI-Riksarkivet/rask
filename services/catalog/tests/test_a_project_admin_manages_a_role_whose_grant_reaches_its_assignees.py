@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import httpx
+import httpx2
 import lance_namespace
 import pytest
 from fastapi.testclient import TestClient
@@ -34,7 +34,7 @@ NAMESPACE_ALREADY_EXISTS, TABLE_NOT_FOUND, INVALID_INPUT, CONCURRENT_MODIFICATIO
 ROLES = "/management/v1/projects/acme/roles"
 
 
-def _status(response: httpx.Response, status: int, code: int | None = None) -> httpx.Response:
+def _status(response: httpx2.Response, status: int, code: int | None = None) -> httpx2.Response:
     assert response.status_code == status, response.text
     if code is not None:
         assert response.json()["code"] == code, response.text

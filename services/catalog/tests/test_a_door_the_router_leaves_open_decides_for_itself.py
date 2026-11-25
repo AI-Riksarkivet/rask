@@ -28,7 +28,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
-import httpx
+import httpx2
 import lance_namespace
 import pyarrow as pa
 import pytest
@@ -67,7 +67,7 @@ class _Answered(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    response: httpx.Response
+    response: httpx2.Response
     refused_by_a_decision: bool
 
 
@@ -88,7 +88,7 @@ class _Door(BaseModel):
     def request_id(self) -> str:
         return f"{self.caller} {self.method} {self.route}"
 
-    def send(self, client: TestClient, headers: dict[str, str]) -> httpx.Response:
+    def send(self, client: TestClient, headers: dict[str, str]) -> httpx2.Response:
         """Send this door's request with ``headers``, in the trace its request id names, which the trail records."""
         path = router_walk.PARAM.sub(lambda match: self.params[match.group(1)], self.route)
         return client.request(self.method, path, headers={**headers, **traceparent_named(self.request_id)}, json=self.body)
@@ -116,7 +116,7 @@ class _Listing(_Door):
         return answered.response.status_code == 200 and answered.response.json() == self.shown
 
 
-def _refusal(answer: httpx.Response) -> tuple[int, int | None]:
+def _refusal(answer: httpx2.Response) -> tuple[int, int | None]:
     """The status of ``answer`` and the spec code of its problem body; an answer that is no problem body carries no code."""
     problem = answer.headers.get("content-type") == "application/problem+json"
     return answer.status_code, answer.json().get("code") if problem else None
@@ -278,7 +278,7 @@ def _as_a_caller_sees_it(client: TestClient) -> TestClient:
     return answering
 
 
-def _ok(answer: httpx.Response) -> httpx.Response:
+def _ok(answer: httpx2.Response) -> httpx2.Response:
     assert answer.status_code == 200, f"{answer.request.url}: {answer.status_code} {answer.text}"
     return answer
 

@@ -39,6 +39,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.storage.credential import S3KeyPair
+from tests.app_state import app_of
 from tests.governed_catalog import GovernedCatalog
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
@@ -68,26 +69,26 @@ def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[st
     table resolves to the location ``fake_ns`` describes, whose claim records its uuid, which its credential is scoped
     by (ADR 0173 §6).
     """
-    client.app.dependency_overrides[request_settings] = _auth_settings
+    app_of(client).dependency_overrides[request_settings] = _auth_settings
     claims = table_claims.claim_store(_auth_settings())
-    client.app.dependency_overrides[get_resolver] = lambda: NamedResolver(tables=lambda segments: table_claims.resolve(fake_ns, claims, segments))
+    app_of(client).dependency_overrides[get_resolver] = lambda: NamedResolver(tables=lambda segments: table_claims.resolve(fake_ns, claims, segments))
     claim_described("lance_catalog$db$t")
     verifier = MagicMock()
     verifier.verify.return_value = PersonPrincipal(
         principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
     )
-    client.app.state.oidc = verifier
+    app_of(client).state.oidc = verifier
     fga_client = MagicMock()
     fga_client.close = AsyncMock()
-    client.app.state.fga = fga_client
+    app_of(client).state.fga = fga_client
     # The namespace the backend describes is the one the resolver names: a declare reads its parent again once its row stands.
     fake_ns.describe_namespace.return_value = DescribeNamespaceResponse(
         properties={"rask.requires_run": "true", "rask.uuid": uuid_of("namespace", ["lance_catalog", "db"])}
     )
     recorder = _recording_vendor()
-    client.app.dependency_overrides[get_vendor] = lambda: recorder
+    app_of(client).dependency_overrides[get_vendor] = lambda: recorder
     yield recorder
-    client.app.dependency_overrides.pop(get_vendor, None)
+    app_of(client).dependency_overrides.pop(get_vendor, None)
 
 
 def _grants(monkeypatch: pytest.MonkeyPatch, relations: set[str]) -> None:
@@ -123,9 +124,9 @@ def estate(governed_catalog: GovernedCatalog) -> Iterator[tuple[GovernedCatalog,
     assert governed_catalog.create_in_the_estate("bob", "db").status_code == 200
     governed_catalog.create_table("bob", "lance_catalog$db$t")
     recorder = _recording_vendor()
-    governed_catalog.client.app.dependency_overrides[get_vendor] = lambda: recorder
+    app_of(governed_catalog.client).dependency_overrides[get_vendor] = lambda: recorder
     yield governed_catalog, recorder
-    governed_catalog.client.app.dependency_overrides.pop(get_vendor, None)
+    app_of(governed_catalog.client).dependency_overrides.pop(get_vendor, None)
 
 
 @pytest.mark.parametrize(

@@ -29,6 +29,7 @@ from lakehouse.records import location_claims, maintenance_policies
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 from maintenance.services.purge import objects_held
+from tests.app_state import app_of
 from tests.governed_catalog import GovernedCatalog
 
 
@@ -101,15 +102,14 @@ def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroy
     assert len(governed.naming(governed_objects)) == len(governed_objects), "an object was seeded no tuple, so the revoke below would pass vacuously"
     kept = {t for t in governed.store.tuples() if t[2] == trashed}
     assert kept, "the trashed table kept no grant, so the claim that it keeps them would pass vacuously"
-    failing = _SecondDeregisterFails(real_ns_client.app.dependency_overrides[get_namespace](), row_goes=row_goes)
-    real_ns_client.app.dependency_overrides[get_namespace] = lambda: failing
-    cascade = {"params": {"purge": "true"}, "json": {"behavior": "Cascade"}}
+    failing = _SecondDeregisterFails(app_of(real_ns_client).dependency_overrides[get_namespace](), row_goes=row_goes)
+    app_of(real_ns_client).dependency_overrides[get_namespace] = lambda: failing
     if not row_goes:
         # The attempt the failure stops: the first table is destroyed, and its grants and policy are left for the re-issue.
-        stopped = real_ns_client.post("/v1/namespace/lance_catalog$db/drop", **cascade)
+        stopped = real_ns_client.post("/v1/namespace/lance_catalog$db/drop", params={"purge": "true"}, json={"behavior": "Cascade"})
         assert stopped.status_code == 503, stopped.text
 
-    finished = real_ns_client.post("/v1/namespace/lance_catalog$db/drop", **cascade)
+    finished = real_ns_client.post("/v1/namespace/lance_catalog$db/drop", params={"purge": "true"}, json={"behavior": "Cascade"})
 
     assert finished.status_code == 200, finished.text
     assert failing.deregisters == deregisters, "the failure was never injected where the case puts it, so the case would pass vacuously"

@@ -21,6 +21,7 @@ from lakehouse.governed.fga_ids import user_object
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal, is_principal
+from tests.app_state import app_of
 
 
 if TYPE_CHECKING:
@@ -143,4 +144,4 @@ def act_as(client: TestClient, who: str) -> None:
     """
     principal = Principal.parse(principal_key(who))
     claims = IDToken(iss="i", sub=principal.subject, aud="lance", exp=1, iat=1)
-    client.app.state.oidc.verify.return_value = PersonPrincipal(principal=principal, claims=claims)
+    app_of(client).state.oidc.verify.return_value = PersonPrincipal(principal=principal, claims=claims)

@@ -19,7 +19,7 @@ import time
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import httpx
 import pytest
@@ -44,6 +44,7 @@ from lakehouse.process.supervision import Supervisor
 from lakehouse.storage import store_session
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
+from tests.app_state import app_of
 from tests.bus_double import BusDouble
 from tests.secret_store_double import SecretStoreDouble
 
@@ -124,7 +125,7 @@ def _relay_app(
 def _tick(client: TestClient, settings: Settings) -> ControlRelayReport:
     """One relay tick over the app ``client`` serves, on that app's own event loop, as the catalog's timer runs one."""
     assert client.portal is not None, "the relay ticks inside the app's lifespan"
-    return client.portal.call(control_relay.tick, Tick(cast(FastAPI, client.app), settings))
+    return client.portal.call(control_relay.tick, Tick(app_of(client), settings))
 
 
 def _catalog_key(secret_store: SecretStoreDouble, pair: Any | None) -> SigningKeyHolder[SigningKey]:

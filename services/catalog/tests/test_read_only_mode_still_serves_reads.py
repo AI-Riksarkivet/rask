@@ -17,14 +17,13 @@ nothing, so the first window after the window ends does the work.
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import cast
 
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from catalog.api.timers import TIMERS_STATE
 from lakehouse.timers import Outcome, Timer
+from tests.app_state import app_of
 
 
 #: Reads served as POST, on both mounts: the spec puts the action in the path, and rask's management doors
@@ -115,7 +114,7 @@ TIMER_PERIODS = {
 
 def test_every_catalog_timer_is_held_through_the_window(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     with _catalog_in_a_window(monkeypatch, tmp_path, **TIMER_PERIODS) as client:
-        timers: dict[str, Timer] = getattr(cast(FastAPI, client.app).state, TIMERS_STATE)
+        timers: dict[str, Timer] = getattr(app_of(client).state, TIMERS_STATE)
         assert client.portal is not None
         turns = {name: client.portal.call(timer.turn).outcome for name, timer in timers.items()}
 

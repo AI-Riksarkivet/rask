@@ -48,6 +48,7 @@ from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.table_pass import TableTask, run_table_pass
 from maintenance.services.tasks import run_task
 from tests import seeding
+from tests.app_state import app_of
 from tests.bus_double import BusDouble, session_holding
 
 
@@ -203,8 +204,8 @@ def test_a_tables_task_expires_versions_lists_the_compaction_it_does_not_run_and
                 task,
                 settings=get_settings(),
                 queue=cast(TaskQueue, queue),
-                emitter=maintenance.app.state.held.lineage,
-                control=maintenance.app.state.held.control,
+                emitter=app_of(maintenance).state.held.lineage,
+                control=app_of(maintenance).state.held.control,
             )
         )
 

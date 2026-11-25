@@ -240,6 +240,7 @@ class _TableWrite(NamedTuple):
     def send(self, client: TestClient, tid: str, headers: dict[str, str], *, other: bool = False) -> Any:
         if self.content is not None:
             content = self.other if other else self.content
+            assert isinstance(content, bytes), "an Arrow door's other request is bytes"
             return client.post(f"/v1/table/{tid}/{self.path}", content=content, headers={**ARROW_STREAM, **headers})
         return client.post(f"/v1/table/{tid}/{self.path}", json=self.other if other else self.json, headers=headers)
 

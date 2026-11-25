@@ -22,6 +22,7 @@ from pydantic import SecretStr
 
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.store_session import IssuedSession
+from tests.app_state import app_of
 
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -69,7 +70,7 @@ def test_every_door_serves_a_table_whose_fragments_sit_on_a_data_base(
     replaced = two_store_catalog.post(f"/v1/table/{table}/create?mode=overwrite&data_base={second_base}", content=_ipc(REPLACED), headers=ARROW)
     assert replaced.status_code == 200, replaced.text
     # The one call that would reach the store: a vend that minted answers `direct` with these.
-    two_store_catalog.app.state.vendor._exchange = lambda *_a, **_kw: IssuedSession(  # noqa: SLF001
+    app_of(two_store_catalog).state.vendor._exchange = lambda *_a, **_kw: IssuedSession(  # noqa: SLF001
         key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST")), expiration=datetime(2030, 1, 1, tzinfo=UTC)
     )
 

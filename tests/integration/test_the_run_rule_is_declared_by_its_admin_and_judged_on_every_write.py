@@ -12,7 +12,7 @@ import logging
 from pathlib import Path
 from typing import Final
 
-import httpx
+import httpx2
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
@@ -23,6 +23,7 @@ from catalog.services import object_uuids, table_claims, warehouses
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AUDIT_LOGGER
 from tests import seeding
+from tests.app_state import app_of
 from tests.governed_catalog import GovernedCatalog
 
 
@@ -48,7 +49,7 @@ def grants(governed_catalog: GovernedCatalog, tmp_path: Path, monkeypatch: pytes
         get_settings().storage_options(),
         {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"},
     )
-    warehouses.ensure_catalog_row(catalog.client.app.dependency_overrides[get_namespace](), WAREHOUSE)
+    warehouses.ensure_catalog_row(app_of(catalog.client).dependency_overrides[get_namespace](), WAREHOUSE)
     catalog.store.write(
         (f"project:{PROJECT}", "project", f"warehouse:{WAREHOUSE}"),
         (catalog.person("alice"), "admin", f"project:{PROJECT}"),
@@ -60,7 +61,7 @@ def grants(governed_catalog: GovernedCatalog, tmp_path: Path, monkeypatch: pytes
 def _object(client: TestClient, kind: str, name: str) -> str:
     """The FGA object the catalog governs the table or namespace ``name`` as: ``<kind>:<uuid>`` (ADR 0173 §8), read where
     the catalog keeps it, since a grant is written before the caller may describe it."""
-    ns = client.app.dependency_overrides[get_namespace]()
+    ns = app_of(client).dependency_overrides[get_namespace]()
     segments = name.split("$")
     if kind == "namespace":
         return fga_ids.namespace_object(object_uuids.require_namespace_uuid(ns, segments))
@@ -88,7 +89,7 @@ def _rule(client: TestClient, namespace: str) -> str | None:
     return _properties(client, namespace).get("rask.requires_run")
 
 
-def _refused(resp: httpx.Response, code: int) -> None:
+def _refused(resp: httpx2.Response, code: int) -> None:
     assert resp.status_code in (400, 403), resp.text
     assert resp.headers["content-type"] == "application/problem+json"
     assert resp.json()["code"] == code, resp.json()

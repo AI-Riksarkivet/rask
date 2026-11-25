@@ -34,6 +34,7 @@ from maintenance.core.config import MaintenanceSettings
 from maintenance.services.naming import policy_owners
 from maintenance.services.plan import resolve_plan
 from maintenance.services.table_pass import read_for
+from tests.app_state import app_of
 from tests.integration.openfga_grants import TupleStore, act_as
 
 
@@ -54,7 +55,7 @@ _CONTRACT = {
 @pytest.fixture
 def governed(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Iterator[TupleStore]:
     """The real catalog with OIDC and FGA on, as the person `dex~alice`, over an in-memory tuple store, with one table ``db$src``."""
-    app = real_ns_client.app
+    app = app_of(real_ns_client)
     settings = get_settings().model_copy(
         update={
             "oidc_enabled": True,

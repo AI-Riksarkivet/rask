@@ -21,6 +21,7 @@ from catalog.services import table_claims
 from lakehouse.records import location_claims, maintenance_due
 from lakehouse.records.maintenance_due import DUE_PREFIX, CompactionDue, DueRecord, write_due
 from lakehouse.storage.options import StorageOptions
+from tests.app_state import app_of
 from tests.governed_catalog import GovernedCatalog
 from tests.integration.openfga_grants import Grants, act_as
 
@@ -45,10 +46,10 @@ def _governed(client: TestClient, tmp_path: Path) -> tuple[Settings, Grants]:
             "s3_secret_access_key": "x",
         }
     )
-    client.app.dependency_overrides[request_settings] = lambda: settings
-    client.app.state.oidc = MagicMock()
+    app_of(client).dependency_overrides[request_settings] = lambda: settings
+    app_of(client).state.oidc = MagicMock()
     grants = Grants()
-    client.app.state.fga = grants
+    app_of(client).state.fga = grants
     return settings, grants
 
 

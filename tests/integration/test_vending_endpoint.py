@@ -20,6 +20,7 @@ from catalog.api.dependencies import get_vendor
 from catalog.core.config import get_settings
 from catalog.core.vending import TableRecords, Tier, VendedSession
 from lakehouse.storage.credential import S3KeyPair
+from tests.app_state import app_of
 
 
 def test_mode_b_returns_server_mediated(client: TestClient, claim_described: Callable[[str], str]) -> None:
@@ -52,7 +53,7 @@ def test_direct_creds_from_the_vendor_carry_scoped_storage_options(client: TestC
             key_pair = S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST"))
             return VendedSession(key_pair=key_pair, endpoint=None, region="us-east-1", expires_at_millis=123456)
 
-    client.app.dependency_overrides[get_vendor] = lambda: _FakeVendor()
+    app_of(client).dependency_overrides[get_vendor] = lambda: _FakeVendor()
     resp = client.post("/management/v1/table/lance_catalog$db$t/credentials?tier=write")
     assert resp.status_code == 200
     body = resp.json()
@@ -82,7 +83,7 @@ def test_an_exchange_the_store_refuses_answers_unavailable(client: TestClient, c
         ) -> VendedSession:
             raise ClientError({"Error": {"Code": "AccessDenied", "Message": "token verification failed"}}, "AssumeRoleWithWebIdentity")
 
-    client.app.dependency_overrides[get_vendor] = lambda: _RefusedVendor()
+    app_of(client).dependency_overrides[get_vendor] = lambda: _RefusedVendor()
     resp = client.post("/management/v1/table/lance_catalog$db$t/credentials")
 
     assert (resp.status_code, resp.headers["content-type"]) == (503, "application/problem+json"), resp.text
@@ -122,7 +123,7 @@ def test_a_vend_whose_store_does_not_answer_the_open_is_refused_unavailable(
                 key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1
             )
 
-    client.app.dependency_overrides[get_vendor] = lambda: _RecordingVendor()
+    app_of(client).dependency_overrides[get_vendor] = lambda: _RecordingVendor()
     resp = client.post("/management/v1/table/lance_catalog$db$t/credentials")
 
     assert (resp.status_code, resp.headers["content-type"], resp.json().get("code")) == (503, "application/problem+json", 17), resp.text

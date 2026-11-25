@@ -21,7 +21,7 @@ import threading
 from collections.abc import Callable
 from pathlib import Path
 
-import httpx
+import httpx2
 import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -33,7 +33,7 @@ ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 TABLE = "lance_catalog$lh243$t"
 _SCHEMA = pa.schema([pa.field("id", pa.int64(), nullable=False, metadata={"lance-schema:unenforced-primary-key": "true"}), pa.field("v", pa.string())])
 
-type Act = Callable[[TestClient, str], list[httpx.Response]]
+type Act = Callable[[TestClient, str], list[httpx2.Response]]
 
 
 def _rows(*ids: int) -> pa.Table:
@@ -47,21 +47,21 @@ def _ipc(table: pa.Table) -> bytes:
     return sink.getvalue()
 
 
-def _create(client: TestClient, *ids: int, mode: str = "Create") -> httpx.Response:
+def _create(client: TestClient, *ids: int, mode: str = "Create") -> httpx2.Response:
     return client.post(f"/v1/table/{TABLE}/create", params={"mode": mode}, content=_ipc(_rows(*ids)), headers=ARROW)
 
 
-def _insert(client: TestClient, *ids: int, context: dict[str, str] | None = None) -> httpx.Response:
+def _insert(client: TestClient, *ids: int, context: dict[str, str] | None = None) -> httpx2.Response:
     return client.post(f"/v1/table/{TABLE}/insert", content=_ipc(_rows(*ids)), headers={**ARROW, **(context or {})})
 
 
-def _merge(client: TestClient, *ids: int, on: tuple[str, ...] = ("id",), v: str | None = None) -> httpx.Response:
+def _merge(client: TestClient, *ids: int, on: tuple[str, ...] = ("id",), v: str | None = None) -> httpx2.Response:
     params = {"on": list(on), "when_matched_update_all": "true", "when_not_matched_insert_all": "true"}
     rows = _rows(*ids) if v is None else pa.table({"id": pa.array(ids, pa.int64()), "v": [v] * len(ids)}, schema=_SCHEMA)
     return client.post(f"/v1/table/{TABLE}/merge_insert", params=params, content=_ipc(rows), headers=ARROW)
 
 
-def _update(client: TestClient, predicate: str, column: str, value: str) -> httpx.Response:
+def _update(client: TestClient, predicate: str, column: str, value: str) -> httpx2.Response:
     return client.post(f"/v1/table/{TABLE}/update", json={"predicate": predicate, "updates": [[column, value]]})
 
 
@@ -76,9 +76,9 @@ def _files_no_version_names(location: str) -> tuple[list[str], list[str]]:
     return transactions, sorted(p.name for p in (root / "data").iterdir() if p.name not in named)
 
 
-def _two_inserts_of_one_new_key(client: TestClient, _location: str, context: dict[str, str] | None = None) -> list[httpx.Response]:
+def _two_inserts_of_one_new_key(client: TestClient, _location: str, context: dict[str, str] | None = None) -> list[httpx2.Response]:
     start = threading.Barrier(2)
-    answers: list[httpx.Response] = []
+    answers: list[httpx2.Response] = []
 
     def insert() -> None:
         start.wait()

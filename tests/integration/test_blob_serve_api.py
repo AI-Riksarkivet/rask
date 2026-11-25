@@ -16,6 +16,7 @@ from lance import blob_array, blob_field
 from lance_namespace import CreateNamespaceRequest, connect
 
 from lakehouse.storage.options import StorageOptions
+from tests.app_state import app_of
 
 
 def _blob_table(payloads: list[bytes | None]) -> pa.Table:
@@ -180,7 +181,7 @@ def test_get_blob_version_param_over_http(blob_client: TestClient, tmp_path: Pat
     from catalog.api.dependencies import get_namespace
     from catalog.services.tables.creation import create_table as recreate
 
-    ns = blob_client.app.dependency_overrides[get_namespace]()
+    ns = app_of(blob_client).dependency_overrides[get_namespace]()
     recreate(ns, StorageOptions(), ["lance_catalog", "db", "clips"], table=_blob_table([b"replacement"]), root=str(tmp_path), mode="overwrite", registry=None)
 
     head = blob_client.get("/management/v1/table/lance_catalog$db$clips/blobs", params={"column": "payload", "row": 0})

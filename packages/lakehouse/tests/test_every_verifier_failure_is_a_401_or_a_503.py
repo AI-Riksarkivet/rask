@@ -63,6 +63,7 @@ from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import UNKNOWN_KID_REFRESH_INTERVAL_SECONDS, OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
 from lakehouse.problems.ns_errors import install_problem_handlers
+from tests.app_state import app_of
 
 
 AUDIENCE = "rask"
@@ -395,7 +396,7 @@ def test_a_refresh_landing_beside_a_refetch_leaves_its_requests_one_answer(
     before_rotation = refreshed_before_rotation._held[idp.issuer]
     client = _client(idp)
     release = _rotated(idp, rsa_key, stranger_key, client)
-    verifier: OIDCVerifier = client.app.state.oidc._verifier
+    verifier: OIDCVerifier = app_of(client).state.oidc._verifier
 
     class _RefreshLandsWithTheRefetch(oidc._Flight):
         def end(self, failure: str | None) -> None:

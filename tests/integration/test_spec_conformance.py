@@ -14,13 +14,13 @@ of that check is
 
 import re
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import yaml
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from lakehouse.problems.spec_routes import SPEC_ROUTES
+from tests.app_state import app_of
 
 
 _SPEC = Path(__file__).resolve().parents[2] / "lance_docs" / "ns_catalog" / "spec.yaml"
@@ -42,7 +42,7 @@ def _spec() -> dict[str, Any]:
 
 def test_every_spec_operation_is_served(client: TestClient) -> None:
     spec_ops = _ops(_spec().get("paths", {}))
-    served = _ops(client.app.openapi().get("paths", {}))
+    served = _ops(app_of(client).openapi().get("paths", {}))
     missing = spec_ops - served
     assert not missing, f"spec operations with NO served route: {sorted(missing)}"
 
@@ -62,7 +62,7 @@ def test_every_spec_operation_publishes_the_error_statuses_the_spec_lists(client
     (``lakehouse.problems.spec_routes.SPEC_ERROR_STATUSES``, committed because no image carries ``lance_docs/``) and the 406 any of
     them may answer, the spec's status for code 0 (ADR 0020 row 11)."""
     listed = _error_statuses(_spec().get("paths", {}))
-    served = _error_statuses(client.app.openapi().get("paths", {}))
+    served = _error_statuses(app_of(client).openapi().get("paths", {}))
 
     assert {operation: served.get(operation) for operation in listed} == {operation: statuses | {"406"} for operation, statuses in listed.items()}
 
@@ -81,7 +81,7 @@ def test_the_v1_surface_holds_only_spec_operations(client: TestClient) -> None:
     `client.app` is typed as the ASGI protocol, which has no `openapi`; the cast says what the fixture
     actually builds rather than silencing the checker.
     """
-    served = _ops(cast(FastAPI, client.app).openapi().get("paths", {}))
+    served = _ops(app_of(client).openapi().get("paths", {}))
     intruders = _on_the_spec_surface(served) - SPEC_ROUTES
 
     assert not intruders, (
@@ -124,7 +124,7 @@ def test_every_error_both_documents_publish_is_the_problem_body(client: TestClie
     ``default`` names it."""
     from lineage.main import app as lineage
 
-    documents = {"catalog": cast(FastAPI, client.app).openapi(), "lineage": lineage.openapi()}
+    documents = {"catalog": app_of(client).openapi(), "lineage": lineage.openapi()}
 
     assert {name: _undeclared_problems(schema)[:3] for name, schema in documents.items()} == {"catalog": [], "lineage": []}
     assert "instance" in documents["lineage"]["components"]["schemas"]["ProblemDetails"]["properties"]

@@ -17,6 +17,7 @@ from contextlib import contextmanager
 from urllib.parse import quote, unquote
 
 import httpx
+import httpx2
 import respx
 from fastapi.testclient import TestClient
 
@@ -35,7 +36,7 @@ MAINTAIN_TIER_DOOR = rf"^{CATALOG_URL}/management/v1/table/(?P<table>[^/]+)/cred
 MAINTAINER_DOOR = rf"^{CATALOG_URL}/management/v1/table/(?P<table>[^/]+)/maintenance/(?P<act>disarm|floor)"
 
 
-def described_by(catalog: httpx.Client) -> Callable[[str], str]:
+def described_by(catalog: httpx.Client | httpx2.Client) -> Callable[[str], str]:
     """The location the catalog ``catalog`` reaches (a `TestClient` or a client of a live one) describes a table at, by its id."""
 
     def _location(table: str) -> str:

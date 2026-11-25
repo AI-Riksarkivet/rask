@@ -27,7 +27,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
-import httpx
+import httpx2
 import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -42,6 +42,7 @@ from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.storage.options import StorageOptions
 from lineage.models import parse_event
 from lineage.services.provenance import edges_of
+from tests.app_state import app_of
 from tests.bus_double import BusDouble
 from tests.door_tables import door_table
 
@@ -81,7 +82,7 @@ def bus(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> BusDoubl
         dataset_namespace="lance-namespace://localhost/api/catalog",
         project_resolver=_tenant_of,
     )
-    monkeypatch.setattr(real_ns_client.app.state, "lineage_emitter", emitter, raising=False)
+    monkeypatch.setattr(app_of(real_ns_client).state, "lineage_emitter", emitter, raising=False)
     return bus
 
 
@@ -172,7 +173,7 @@ def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_cli
     from lakehouse.governed.principal import Principal
 
     caller = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=4102444800, iat=1))
-    real_ns_client.app.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: caller
+    app_of(real_ns_client).dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: caller
     client = real_ns_client
     assert client.post(f"/v1/table/{TABLE}/branches/create", json={"name": BRANCH}).status_code == 200
     for ids in ((4,), (5,), (6,)):
@@ -183,7 +184,7 @@ def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_cli
     def _nothing() -> None:
         return None
 
-    doors: list[tuple[str, Callable[[], None], Callable[[], httpx.Response]]] = [
+    doors: list[tuple[str, Callable[[], None], Callable[[], httpx2.Response]]] = [
         ("insert", _nothing, lambda: client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=_ipc(_rows(10)), headers=ARROW)),
         (
             "merge_insert",
@@ -250,7 +251,7 @@ def test_a_recreated_branch_emits_a_different_identifier_for_the_same_version(
     """
     client = real_ns_client
     control = _Control()
-    monkeypatch.setattr(client.app.state, "control_emitter", control, raising=False)
+    monkeypatch.setattr(app_of(client).state, "control_emitter", control, raising=False)
 
     def _write_once() -> dict[str, Any]:
         assert client.post(f"/v1/table/{TABLE}/branches/create", json={"name": BRANCH}).status_code == 200
@@ -303,7 +304,7 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(real_ns_cl
 
     client = real_ns_client
     control = _Control()
-    monkeypatch.setattr(client.app.state, "control_emitter", control, raising=False)
+    monkeypatch.setattr(app_of(client).state, "control_emitter", control, raising=False)
     assert client.post("/v1/namespace/lance_catalog$lh522/create", json={}).status_code == 200
     assert client.post("/v1/table/lance_catalog$lh522$t/create", content=_ipc(_rows(1)), headers=ARROW).status_code == 200
     described = client.post("/v1/table/lance_catalog$lh522$t/describe", json={}).json()
@@ -379,7 +380,7 @@ def test_a_branch_delete_announces_every_branch_it_removes_as_the_incarnation_it
     hears what went even when a pin made since the check stops the delete part-way."""
     client = real_ns_client
     control = _Control()
-    monkeypatch.setattr(client.app.state, "control_emitter", control, raising=False)
+    monkeypatch.setattr(app_of(client).state, "control_emitter", control, raising=False)
     # Planted through pylance: the create door refuses a name nesting with another, so only a table made before that
     # refusal carries the pair.
     lance.dataset(location).create_branch("a")

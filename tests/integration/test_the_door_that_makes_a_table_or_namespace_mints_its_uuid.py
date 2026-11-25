@@ -28,6 +28,7 @@ from catalog.services.provenance_namespace import ensure_provenance_namespace
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
+from tests.app_state import app_of
 
 
 WAREHOUSE = "acme-bucket"
@@ -42,13 +43,13 @@ type Door = Callable[[TestClient, Settings], str]
 def estate(real_ns_client: TestClient, tmp_path: Path) -> tuple[TestClient, Settings]:
     """The catalog with warehouse ``WAREHOUSE`` at its root, its row there, and the namespace ``acme`` in it."""
     settings = Settings.model_validate({"root": str(tmp_path), "s3_access_key_id": "x", "s3_secret_access_key": "x"})
-    real_ns_client.app.dependency_overrides[request_settings] = lambda: settings
+    app_of(real_ns_client).dependency_overrides[request_settings] = lambda: settings
     seeding.put_warehouse(
         str(tmp_path),
         StorageOptions(),
         {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": str(tmp_path), "project": "acme", "status": "active", "created_at": "t"},
     )
-    warehouses.ensure_catalog_row(real_ns_client.app.dependency_overrides[get_namespace](), WAREHOUSE)
+    warehouses.ensure_catalog_row(app_of(real_ns_client).dependency_overrides[get_namespace](), WAREHOUSE)
     made = real_ns_client.post(f"/v1/namespace/{ACME}/create", json={})
     assert made.status_code == 200, made.text
     return real_ns_client, settings
@@ -87,7 +88,7 @@ def _through_the_namespace_door(client: TestClient, _settings: Settings) -> str:
 
 def _at_boot(client: TestClient, settings: Settings) -> str:
     """The provenance namespace, made by the function the catalog's lifespan runs at boot."""
-    ns = client.app.dependency_overrides[get_namespace]()
+    ns = app_of(client).dependency_overrides[get_namespace]()
     assert asyncio.run(ensure_provenance_namespace(ns, settings.model_copy(update={"provenance_namespace": "lance_catalog$prov"}), None)) is True
     return "/v1/namespace/lance_catalog$prov/describe"
 

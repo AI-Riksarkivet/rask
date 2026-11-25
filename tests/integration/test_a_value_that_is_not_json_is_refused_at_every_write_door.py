@@ -8,6 +8,7 @@ HTTP against a real ``dir`` backend.
 
 from typing import TYPE_CHECKING
 
+import httpx2
 import lance
 import pyarrow as pa
 import pytest
@@ -16,7 +17,6 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 if TYPE_CHECKING:
-    import httpx
     from fastapi.testclient import TestClient
 
 
@@ -28,7 +28,7 @@ def _rows(row: int, doc: pa.Array) -> bytes:
     return encode_arrow_stream(pa.table({"id": pa.array([row], pa.int64()), "doc": doc}))
 
 
-def _write(client: TestClient, door: str, body: bytes) -> httpx.Response:
+def _write(client: TestClient, door: str, body: bytes) -> httpx2.Response:
     return client.post(f"/v1/table/{door}", content=body, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
 
 

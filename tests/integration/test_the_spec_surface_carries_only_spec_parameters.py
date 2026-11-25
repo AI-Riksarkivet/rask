@@ -23,12 +23,13 @@ the row, and a gate that fails on an undecided question is one people learn to s
 """
 
 import inspect
-from typing import Any, cast
+from typing import Any
 
 import lance_namespace_urllib3_client.models as spec_models
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
+
+from tests.app_state import app_of
 
 
 #: The four prefixes the spec owns.
@@ -50,7 +51,7 @@ def _spec_vocabulary() -> frozenset[str]:
 def _non_spec_query_params(client: TestClient) -> dict[tuple[str, str], list[str]]:
     """(METHOD, path) -> the query parameters the document advertises that the spec does not define."""
     vocabulary = _spec_vocabulary()
-    paths: dict[str, Any] = cast(FastAPI, client.app).openapi().get("paths", {})
+    paths: dict[str, Any] = app_of(client).openapi().get("paths", {})
     offenders: dict[tuple[str, str], list[str]] = {}
     for path, operations in paths.items():
         if not path.startswith(_SPEC_PREFIXES):
@@ -120,7 +121,7 @@ def test_no_UNRECORDED_header_appears_on_a_spec_route(client: TestClient) -> Non
     zero; this one holds a set the owner decided to keep, so it can only catch something ARRIVING.
     """
     vocabulary = _spec_vocabulary() | _RECORDED_HEADER_EXCEPTIONS
-    paths: dict[str, Any] = cast(FastAPI, client.app).openapi().get("paths", {})
+    paths: dict[str, Any] = app_of(client).openapi().get("paths", {})
     unrecorded: dict[tuple[str, str], list[str]] = {}
     for path, operations in paths.items():
         if not path.startswith(_SPEC_PREFIXES):

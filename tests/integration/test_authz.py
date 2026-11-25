@@ -43,6 +43,7 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
 from lakehouse.naming import UUID_PROPERTY
+from tests.app_state import app_of
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
@@ -118,18 +119,18 @@ def _wire(client: TestClient) -> MagicMock:
     The verifier proves the person ``dex~alice``; the FGA client is a sentinel that the faked
     ``fga.*`` functions ignore. Returns the sentinel so a test can drop it (fail-closed).
     """
-    client.app.dependency_overrides[request_settings] = _auth_settings
-    double = client.app.dependency_overrides[get_namespace]()
+    app_of(client).dependency_overrides[request_settings] = _auth_settings
+    double = app_of(client).dependency_overrides[get_namespace]()
     double.describe_namespace.side_effect = _described_namespace
-    client.app.dependency_overrides[get_resolver] = lambda: _DoubleResolver(double)
+    app_of(client).dependency_overrides[get_resolver] = lambda: _DoubleResolver(double)
     verifier = MagicMock()
     verifier.verify.return_value = PersonPrincipal(
         principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
     )
-    client.app.state.oidc = verifier
+    app_of(client).state.oidc = verifier
     fga_client = MagicMock()  # sentinel; the faked fga.* functions below ignore it
     fga_client.close = AsyncMock()  # closed by the lifespan on shutdown
-    client.app.state.fga = fga_client
+    app_of(client).state.fga = fga_client
     return fga_client
 
 
@@ -205,7 +206,7 @@ def test_batch_commit_answers_503_when_openfga_cannot_answer_an_item(client: Tes
     """CONTRACT: an item OpenFGA could not evaluate is an outage, not a denial — the same 503 the
     single-object guard answers, never a 403 naming a table the caller may well hold a grant on."""
     _wire(client)
-    client.app.state.fga = _BatchOpenFga(unanswered={_table("lance_catalog$db1$b")})
+    app_of(client).state.fga = _BatchOpenFga(unanswered={_table("lance_catalog$db1$b")})
 
     resp = client.post("/v1/table/batch-commit", json=_TWO_TABLE_COMMIT, headers={"Authorization": "Bearer t"})
 
@@ -223,8 +224,8 @@ def test_fail_closed_when_fga_client_missing(client: TestClient, fake_ns: MagicM
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
     _wire(client)
     # Simulate an unwired client (e.g. lifespan provisioning failed).
-    if hasattr(client.app.state, "fga"):
-        delattr(client.app.state, "fga")
+    if hasattr(app_of(client).state, "fga"):
+        delattr(app_of(client).state, "fga")
 
     # check must never even be reached.
     def boom(*_a: object, **_k: object):

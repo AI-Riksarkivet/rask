@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import httpx
+import httpx2
 import lance
 import lance_namespace
 import pyarrow as pa
@@ -38,6 +39,7 @@ from lineage.models import parse_event
 from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport
 from lineage.services.catalog_writer import RestCatalogWriteTransport
 from lineage.services.provenance import FEED, ProvenanceStore
+from tests.app_state import app_of
 from tests.integration.lineage_app import SUBJECT_HEADER, ensure_tables, governed_lineage, joined_bus, live_catalog, live_lineage, run_event
 
 
@@ -67,7 +69,7 @@ def _rows(start: int, stop: int) -> bytes:
     return sink.getvalue().to_pybytes()
 
 
-def _follow(client: httpx.Client, headers: Mapping[str, str] | None = None, **filters: str) -> list[dict[str, Any]]:
+def _follow(client: httpx.Client | httpx2.Client, headers: Mapping[str, str] | None = None, **filters: str) -> list[dict[str, Any]]:
     """Walk the feed the way a pipeline does: poll from the last cursor until a poll brings nothing new."""
     seen: list[dict[str, Any]] = []
     cursor = 0
@@ -182,7 +184,7 @@ def governed_feed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, openfga_store
         uuid_of = _declared(url, _TABLES)
         granted = {(_PIPELINE, "reader", f"table:{uuid_of[name].table_uuid}") for name in _VISIBLE}
         with governed_lineage(url, monkeypatch, granted, openfga_store) as client:
-            store = client.app.state.provenance
+            store = app_of(client).state.provenance
 
             async def _seed() -> None:
                 for event in feed:
@@ -268,7 +270,7 @@ def test_a_page_costs_the_same_whatever_the_feeds_length(tmp_path: Path, monkeyp
         uuid_of = _declared(url, _TABLES)
         granted = {(_PIPELINE, "can_get_metadata", f"table:{uuid_of[name].table_uuid}") for name in _VISIBLE}
         with governed_lineage(url, monkeypatch, granted) as client:
-            store = client.app.state.provenance
+            store = app_of(client).state.provenance
             caller = {SUBJECT_HEADER: _PIPELINE}
             traffic = _CatalogTraffic(monkeypatch)
 

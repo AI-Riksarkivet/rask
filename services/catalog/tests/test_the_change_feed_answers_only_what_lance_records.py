@@ -14,7 +14,7 @@ door judges the dataset it attaches, and there is none yet to judge.
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
-import httpx
+import httpx2
 import lance
 import pyarrow as pa
 import pyarrow.ipc
@@ -85,7 +85,7 @@ def _governed(catalog: TestClient, root: Path) -> str:
     return uri
 
 
-def _ids(resp: httpx.Response, uri: str) -> list[int]:
+def _ids(resp: httpx2.Response, uri: str) -> list[int]:
     """The ids a feed answer names: scanned rows carry them, and a deleted feed's `_rowid`s are resolved at version 1."""
     assert resp.status_code == 200, f"{resp.status_code}: {resp.text[:300]}"
     answered = pyarrow.ipc.open_file(pa.py_buffer(resp.content)).read_all()

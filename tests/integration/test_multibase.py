@@ -20,6 +20,7 @@ from catalog.core.config import Settings
 from catalog.services import table_claims
 from catalog.services.tables import creation
 from lakehouse.records import location_claims
+from tests.app_state import app_of
 
 
 ARROW_STREAM = "application/vnd.apache.arrow.stream"
@@ -55,7 +56,7 @@ def _stub_create(calls: list[dict[str, Any]]) -> Any:
 
 
 def test_on_allowlist_data_base_threaded_through(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
-    client.app.dependency_overrides[request_settings] = _settings
+    app_of(client).dependency_overrides[request_settings] = _settings
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(creation, "create_table", _stub_create(calls))
     r = client.post(

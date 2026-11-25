@@ -17,7 +17,7 @@ import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import asynccontextmanager
 
-import httpx
+import httpx2
 import pytest
 from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
@@ -117,20 +117,20 @@ def test_a_door_in_which_a_native_library_panics_is_answered_500_with_the_proble
     assert (answered.status_code, answered.headers.get("content-type"), answered.json().get("code")) == (500, "application/problem+json", 18), answered.text
 
 
-def _a_doors_answer(client: TestClient) -> httpx.Response:
+def _a_doors_answer(client: TestClient) -> httpx2.Response:
     return client.get("/answers")
 
 
-def _a_refusal_in_front_of_the_door(client: TestClient) -> httpx.Response:
+def _a_refusal_in_front_of_the_door(client: TestClient) -> httpx2.Response:
     """A body over the app's cap, which the body cap refuses before the door runs."""
     return client.post("/answers", content=b"x" * 2048)
 
 
-def _an_answer_naming_its_own_caching(client: TestClient) -> httpx.Response:
+def _an_answer_naming_its_own_caching(client: TestClient) -> httpx2.Response:
     return client.get("/cached")
 
 
-def _a_door_that_fails_unexpectedly(client: TestClient) -> httpx.Response:
+def _a_door_that_fails_unexpectedly(client: TestClient) -> httpx2.Response:
     """A door raising an exception no handler names, which the server's own error layer answers."""
     return client.get("/fails")
 
@@ -145,7 +145,7 @@ def _a_door_that_fails_unexpectedly(client: TestClient) -> httpx.Response:
     ],
 )
 def test_every_answer_tells_a_cache_to_keep_none_of_it_unless_its_door_says_otherwise(
-    ask: Callable[[TestClient], httpx.Response], status: int, cache_control: str, vary: str
+    ask: Callable[[TestClient], httpx2.Response], status: int, cache_control: str, vary: str
 ) -> None:
     app = _app(deadline_seconds=30.0)
 

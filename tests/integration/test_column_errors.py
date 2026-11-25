@@ -16,7 +16,7 @@ returning these paths to 500s.
 
 import io
 
-import httpx
+import httpx2
 import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
@@ -46,7 +46,7 @@ def table(real_ns_client: TestClient) -> TestClient:
     return real_ns_client
 
 
-def _problem(response: httpx.Response) -> dict[str, object]:
+def _problem(response: httpx2.Response) -> dict[str, object]:
     """The RFC 9457 body, asserted to BE one — a bare FastAPI error body would pass a status check."""
     body = response.json()
     assert response.headers["content-type"].startswith("application/problem+json"), body

@@ -15,6 +15,7 @@ from catalog.core.config import Settings
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
+from tests.app_state import app_of
 
 
 def _enabled_settings() -> Settings:
@@ -43,8 +44,8 @@ def _enabled_settings() -> Settings:
     ],
 )
 def test_oidc_enabled_missing_token_is_401_problem_json(client: TestClient, method: str, path: str, body: bytes | None) -> None:
-    client.app.dependency_overrides[request_settings] = _enabled_settings
-    client.app.state.oidc = MagicMock()  # a verifier is present
+    app_of(client).dependency_overrides[request_settings] = _enabled_settings
+    app_of(client).state.oidc = MagicMock()  # a verifier is present
     resp = client.request(method, path, content=body, headers={"Content-Type": "application/json"} if body else {})
     assert resp.status_code == 401, resp.text
     assert resp.headers["content-type"].startswith("application/problem+json")
@@ -55,8 +56,8 @@ def test_oidc_enabled_valid_token_passes_through(client: TestClient, fake_ns: Ma
     fake_ns.list_all_tables.return_value = ListTablesResponse(tables=[])
     verifier = MagicMock()
     verifier.verify.return_value = PersonPrincipal(principal=Principal(idp_id="dex", subject="s"), claims=IDToken(iss="i", sub="s", aud="lance", exp=1, iat=1))
-    client.app.dependency_overrides[request_settings] = _enabled_settings
-    client.app.state.oidc = verifier
+    app_of(client).dependency_overrides[request_settings] = _enabled_settings
+    app_of(client).state.oidc = verifier
 
     resp = client.get("/v1/table", headers={"Authorization": "Bearer tok"})
     assert resp.status_code == 200
@@ -83,8 +84,8 @@ def test_oidc_verifier_failure_maps_to_401_problem_json(client: TestClient) -> N
     is rendered by our error handler as a 401 problem+json, never leaking the cause."""
     verifier = MagicMock()
     verifier.verify.side_effect = UnauthenticatedError("Invalid or expired token")
-    client.app.dependency_overrides[request_settings] = _enabled_settings
-    client.app.state.oidc = verifier
+    app_of(client).dependency_overrides[request_settings] = _enabled_settings
+    app_of(client).state.oidc = verifier
 
     resp = client.get("/v1/table", headers={"Authorization": "Bearer expired-or-forged"})
     assert resp.status_code == 401
@@ -95,8 +96,8 @@ def test_oidc_verifier_failure_maps_to_401_problem_json(client: TestClient) -> N
 
 def test_oidc_enabled_empty_bearer_is_401(client: TestClient) -> None:
     """CONTRACT: an ``Authorization: Bearer`` header with no token value is unauthenticated."""
-    client.app.dependency_overrides[request_settings] = _enabled_settings
-    client.app.state.oidc = MagicMock()
+    app_of(client).dependency_overrides[request_settings] = _enabled_settings
+    app_of(client).state.oidc = MagicMock()
     resp = client.get("/v1/table", headers={"Authorization": "Bearer "})
     assert resp.status_code == 401
     assert resp.json()["code"] == 16

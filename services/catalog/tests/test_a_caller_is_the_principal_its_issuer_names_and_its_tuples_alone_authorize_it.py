@@ -41,7 +41,7 @@ from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from typing import Any
 
-import httpx
+import httpx2
 import jwt
 import pyarrow as pa
 import pytest
@@ -224,7 +224,7 @@ def _another_clusters_token(issuer: Any, directory: Any) -> str:
         other.close()
 
 
-def _describe(client: TestClient, token: str) -> httpx.Response:
+def _describe(client: TestClient, token: str) -> httpx2.Response:
     return client.post("/v1/namespace/lance_catalog$db/describe", json={}, headers={"Authorization": f"Bearer {token}"})
 
 

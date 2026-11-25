@@ -39,6 +39,7 @@ import pyarrow.ipc as ipc
 import pytest
 
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
+from tests.app_state import app_of
 from tests.integration.lineage_app import SUBJECT_HEADER, catalog_tick, governed_lineage, joined_bus, live_catalog, live_lineage, run_event
 
 
@@ -348,7 +349,7 @@ def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Pa
         ]
         with governed_lineage(catalog_url, monkeypatch, granted, openfga_store) as lineage:
             for event in chain:
-                asyncio.run(lineage.app.state.provenance.record(parse_event(_stamped(event, uuid_of)), aliased=()))
+                asyncio.run(app_of(lineage).state.provenance.record(parse_event(_stamped(event, uuid_of)), aliased=()))
 
             answer = lineage.get("/tables/lance_catalog$acme-bronze$events/derived", headers={SUBJECT_HEADER: "dex~eraser"})
 

@@ -9,7 +9,7 @@ carol is a member who reads one table.
 from collections.abc import Mapping
 from pathlib import Path
 
-import httpx
+import httpx2
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +20,7 @@ from catalog.services import object_uuids, table_claims, warehouses
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids
 from tests import seeding
+from tests.app_state import app_of
 from tests.governed_catalog import GovernedCatalog
 
 
@@ -49,7 +50,7 @@ def estate(governed_catalog: GovernedCatalog, tmp_path: Path, monkeypatch: pytes
         get_settings().storage_options(),
         {"id": WAREHOUSE, "bucket": WAREHOUSE, "root_uri": root, "project": PROJECT, "status": "active", "created_at": "t"},
     )
-    warehouses.ensure_catalog_row(client.app.dependency_overrides[get_namespace](), WAREHOUSE)
+    warehouses.ensure_catalog_row(app_of(client).dependency_overrides[get_namespace](), WAREHOUSE)
     project = f"project:{PROJECT}"
     catalog.store.write(
         (project, "project", f"warehouse:{WAREHOUSE}"),
@@ -90,7 +91,7 @@ def _rows() -> bytes:
 
 def _object(client: TestClient, kind: str, name: str) -> str:
     """The FGA object the catalog governs ``name`` as, read where the catalog keeps its uuid (ADR 0173 §8)."""
-    ns = client.app.dependency_overrides[get_namespace]()
+    ns = app_of(client).dependency_overrides[get_namespace]()
     segments = name.split("$")
     if kind == "namespace":
         return fga_ids.namespace_object(object_uuids.require_namespace_uuid(ns, segments))
@@ -99,15 +100,15 @@ def _object(client: TestClient, kind: str, name: str) -> str:
     return fga_ids.table_object(table_uuid)
 
 
-def _define(client: TestClient, body: Mapping[str, object]) -> httpx.Response:
+def _define(client: TestClient, body: Mapping[str, object]) -> httpx2.Response:
     return client.post(f"/management/v1/projects/{PROJECT}/labels/define", json=body)
 
 
-def _set(client: TestClient, kind: str, name: str, label: str, value: str | None = None) -> httpx.Response:
+def _set(client: TestClient, kind: str, name: str, label: str, value: str | None = None) -> httpx2.Response:
     return client.post(f"/management/v1/{kind}/{name}/labels/set", json={"name": label, "value": value})
 
 
-def _code(resp: httpx.Response) -> tuple[int, int]:
+def _code(resp: httpx2.Response) -> tuple[int, int]:
     assert resp.headers["content-type"] == "application/problem+json", resp.text
     return resp.status_code, resp.json()["code"]
 
@@ -127,7 +128,7 @@ def test_only_the_projects_admin_defines_a_label_and_a_definition_only_grows(est
 
     estate.act_as("alice")
     announced = _Announced()
-    client.app.dependency_overrides[get_control_emitter] = lambda: announced
+    app_of(client).dependency_overrides[get_control_emitter] = lambda: announced
     defined = _define(client, DOMAIN)
     assert defined.status_code == 200, defined.text
     assert _define(client, DOMAIN).json() == defined.json()

@@ -11,11 +11,10 @@ import logging
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import boto3
 import pytest
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError
 from moto.server import ThreadedMotoServer
@@ -27,6 +26,7 @@ from lakehouse.governed import fga_ids, fga_writes
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.records import control_prefixes
 from tests import seeding
+from tests.app_state import app_of
 
 
 ESTATE_BUCKET = "estate"
@@ -55,7 +55,7 @@ class Estate:
 
     def tick(self) -> declaration_converge.ConvergeTick:
         """One converge tick on the catalog app's own event loop, as its timer runs one; what the tick did."""
-        app = cast(FastAPI, self.client.app)
+        app = app_of(self.client)
         assert self.client.portal is not None, "the converge ticks inside the app's lifespan"
         return self.client.portal.call(declaration_converge.tick, Tick(app, app.state.settings))
 
@@ -64,7 +64,7 @@ class Estate:
 
     def record(self, warehouse_id: str) -> dict[str, str] | None:
         """The warehouse's record as the registry stores it."""
-        settings = self.client.app.state.settings
+        settings = app_of(self.client).state.settings
         held = warehouses.get_warehouse(settings.registry_root, settings.storage_options(), warehouse_id)
         return held.stored() if held is not None else None
 
@@ -394,7 +394,7 @@ def test_a_declaration_granting_what_it_may_not_converges_nothing(estate: Estate
 def test_a_tick_corrects_a_declared_warehouse_that_drifted(estate: Estate) -> None:
     """The drift is planted on the record itself, as nothing but a write past the doors can make it."""
     _declared_acme(estate)
-    settings = estate.client.app.state.settings
+    settings = app_of(estate.client).state.settings
     warehouses.set_warehouse_status(settings.registry_root, settings.storage_options(), "acme", status="deactivated")
 
     answer = estate.tick()
@@ -449,7 +449,7 @@ def test_a_project_whose_record_cannot_be_read_keeps_the_admins_git_recorded_for
     admins are handed over) or one that is gone (whose admins are revoked) is unknown, so the tick revokes nothing and
     says the grants could not be converged."""
     _released_acme(estate)
-    settings = estate.client.app.state.settings
+    settings = app_of(estate.client).state.settings
     seeding.put_record(settings.registry_root, settings.storage_options(), f"{control_prefixes.PROJECTS}/acme.json", record={"id": ["not", "text"]})
 
     answer = estate.tick()

@@ -27,6 +27,7 @@ from catalog.services import warehouses
 from lakehouse.records import maintenance_policies
 from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.options import StorageOptions
+from tests.app_state import app_of
 from tests.governed_catalog import GovernedCatalog
 
 
@@ -69,7 +70,7 @@ def _create_top_level(client: TestClient, name: str) -> None:
 
 
 def _ns(client: TestClient) -> LanceNamespace:
-    return client.app.dependency_overrides[get_namespace]()
+    return app_of(client).dependency_overrides[get_namespace]()
 
 
 def test_skip_over_a_half_dropped_namespace_is_refused_as_any_destructive_door_on_an_absent_name(governed: GovernedCatalog, tmp_path: Path) -> None:

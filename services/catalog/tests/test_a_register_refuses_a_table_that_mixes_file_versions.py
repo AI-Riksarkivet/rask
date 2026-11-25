@@ -36,6 +36,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from lakehouse.lancekit.features import manifest_feature_flags
+from tests.app_state import app_of
 
 
 @pytest.fixture
@@ -224,7 +225,7 @@ class TestThePublicDoor:
         monkeypatch.setattr(object_grants, "seed_ownership", _spy("seed"))
         monkeypatch.setattr(object_grants, "take_back_seed", _spy("taken back"))
         monkeypatch.setattr(announcing, "emit_write_event", _spy("lineage"))
-        catalog.app.dependency_overrides[get_control_emitter] = _Control
+        app_of(catalog).dependency_overrides[get_control_emitter] = _Control
 
         resp = catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"})
 
@@ -300,7 +301,7 @@ class TestThePublicDoor:
         _create_namespace(catalog, "lance_catalog$db")
         _write(root / "t", [1], version="2.2")
         monkeypatch.setattr(announcing, "emit_write_event", _lineage)
-        catalog.app.dependency_overrides[get_control_emitter] = _Control
+        app_of(catalog).dependency_overrides[get_control_emitter] = _Control
 
         assert catalog.post("/v1/table/lance_catalog$db$t/register", json={"location": "t"}).status_code == 200
 

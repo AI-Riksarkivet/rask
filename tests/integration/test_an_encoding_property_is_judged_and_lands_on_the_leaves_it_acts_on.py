@@ -15,6 +15,7 @@ import json
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
+import httpx2
 import lance
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -25,7 +26,6 @@ from lance import blob_field
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator
 
-    import httpx
     from fastapi.testclient import TestClient
 
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
@@ -50,7 +50,7 @@ SCHEMA = pa.schema(
 LEAVES = {"id", "score", "half", "flag", "name", "tags.item", "point.x", "point.label"}
 
 
-def _create(client: TestClient, properties: dict[str, str], schema: pa.Schema = SCHEMA) -> httpx.Response:
+def _create(client: TestClient, properties: dict[str, str], schema: pa.Schema = SCHEMA) -> httpx2.Response:
     sink = pa.BufferOutputStream()
     with ipc.new_stream(sink, schema) as writer:
         writer.write_table(schema.empty_table())

@@ -35,6 +35,7 @@ from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE
 from lineage.api.v1.endpoints.events import targeting_view
 from lineage.core.metrics import Door
 from lineage.services.consumer import handle_cloud_event
+from tests.app_state import app_of
 from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, run_event
 from tests.open_gate import admits_everything
 
@@ -75,7 +76,7 @@ def test_a_run_is_extended_by_its_author_and_refused_to_anyone_else(lineage: Tes
 
     opened = lineage.post("/api/v1/lineage", json=run_event(run, "START", "2026-10-15T10:00:00+00:00", outputs=[]), headers={SUBJECT_HEADER: _ALICE})
     # Retention takes every row the feed holds, the run's START among them.
-    asyncio.run(lineage.app.state.provenance.prune_events(0))
+    asyncio.run(app_of(lineage).state.provenance.prune_events(0))
     hijacked = lineage.post("/api/v1/lineage", json=run_event(run, "COMPLETE", "2026-10-15T10:05:00+00:00", outputs=[_TABLE]), headers={SUBJECT_HEADER: _BOB})
     finished = lineage.post("/api/v1/lineage", json=run_event(run, "COMPLETE", "2026-10-15T10:01:00+00:00", outputs=[_TABLE]), headers={SUBJECT_HEADER: _ALICE})
 
@@ -83,12 +84,12 @@ def test_a_run_is_extended_by_its_author_and_refused_to_anyone_else(lineage: Tes
     assert hijacked.status_code == 403, hijacked.text
     assert finished.status_code == 201, finished.text
     # WHAT WAS RECORDED, read off the store: the feed door hides a row naming no dataset from every caller.
-    recorded = asyncio.run(lineage.app.state.provenance.list_events(since=0))
+    recorded = asyncio.run(app_of(lineage).state.provenance.list_events(since=0))
     assert [(row.event_type, row.author) for row in recorded if row.event["run"]["runId"] == run] == [("COMPLETE", _ALICE)]
 
 
 def test_a_change_the_catalog_announces_is_recorded_though_a_poster_sent_its_identity_first(lineage: TestClient, event_signer: Any) -> None:
-    table_uuid = next(iter(lineage.app.state.grants.allowed))[2].removeprefix("table:")
+    table_uuid = next(iter(app_of(lineage).state.grants.allowed))[2].removeprefix("table:")
     announced = build_write_event(
         table_id=_TABLE,
         namespace=DEFAULT_DATASET_NAMESPACE,
@@ -105,13 +106,13 @@ def test_a_change_the_catalog_announces_is_recorded_though_a_poster_sent_its_ide
     posted = lineage.post("/api/v1/lineage", json=announced, headers={SUBJECT_HEADER: _BOB})
     delivered = asyncio.run(
         handle_cloud_event(
-            lineage.app.state.provenance, {"data": event_signer(_CATALOG).sign(announced, on_behalf_of=_ALICE)}, admits_everything, door=Door.SUBSCRIBER
+            app_of(lineage).state.provenance, {"data": event_signer(_CATALOG).sign(announced, on_behalf_of=_ALICE)}, admits_everything, door=Door.SUBSCRIBER
         )
     )
 
     assert posted.status_code == 201, posted.text
     assert delivered is Verdict.TAKEN
-    recorded = asyncio.run(lineage.app.state.provenance.list_events(since=0))
+    recorded = asyncio.run(app_of(lineage).state.provenance.list_events(since=0))
     assert sorted((row.author, "rask_signature" in row.event["dataset"]["facets"]) for row in recorded if row.job is None) == [(_ALICE, True), (_BOB, False)]
     # A feed walker tells the two apart by the signer lineage verified, which the projection keeps ([[LH-576]]).
     projected = [targeting_view(row.event)["dataset"]["facets"] for row in recorded if row.job is None]

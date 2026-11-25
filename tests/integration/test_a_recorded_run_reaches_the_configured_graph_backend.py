@@ -23,6 +23,7 @@ import httpx
 import pytest
 
 from lineage.services.provenance import ProvenanceStore
+from tests.app_state import app_of
 from tests.integration.lineage_app import SUBJECT_HEADER, GraphBackend, ensure_tables, governed_lineage, graph_backend, live_catalog, relay_tick, run_event
 
 
@@ -135,7 +136,7 @@ def test_a_feed_created_again_is_forwarded_from_its_first_row(tmp_path: Path, mo
 
             def on_a_new_feed(runs: list[dict[str, Any]]) -> list[str]:
                 """What the first tick on a feed created again sends, ``runs`` having been recorded on it before that tick."""
-                _feed_created_again(catalog_url, lineage.app.state.provenance)
+                _feed_created_again(catalog_url, app_of(lineage).state.provenance)
                 post(runs)
                 return tick()
 

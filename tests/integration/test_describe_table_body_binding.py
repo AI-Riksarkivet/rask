@@ -21,6 +21,7 @@ from pydantic import SecretStr
 from catalog.api.dependencies import get_vendor
 from catalog.core.vending import VendedSession
 from lakehouse.storage.credential import S3KeyPair
+from tests.app_state import app_of
 
 
 _VEND = VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)
@@ -61,9 +62,9 @@ def vendor(client: TestClient, claim_described: Callable[[str], str]) -> Iterato
     claim_described("lance_catalog$db$t")
     vend = MagicMock()
     vend.vend.return_value = _VEND
-    client.app.dependency_overrides[get_vendor] = lambda: vend
+    app_of(client).dependency_overrides[get_vendor] = lambda: vend
     yield vend
-    client.app.dependency_overrides.pop(get_vendor, None)
+    app_of(client).dependency_overrides.pop(get_vendor, None)
 
 
 def _sent(fake_ns: MagicMock) -> Any:

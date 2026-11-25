@@ -29,6 +29,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from tests.app_state import app_of
 from tests.bus_double import BusDouble, session_holding
 from tests.secret_store_double import SecretStoreDouble
 
@@ -130,8 +131,8 @@ def boot(  # noqa: PLR0913 — the fixtures a started, signing worker stands on
 
 def _emit(client: TestClient, kind: str) -> None:
     """Emit through the worker's own emitters, on the loop they were built on: a pass's lineage, or the purge's control event."""
-    lineage = client.app.state.held.lineage
-    control = client.app.state.held.control
+    lineage = app_of(client).state.held.lineage
+    control = app_of(client).state.held.control
     portal = client.portal
     assert portal is not None, "the client was never entered, so the service's lifespan did not run"
     if kind == "purge":
@@ -203,7 +204,7 @@ def test_a_worker_takes_no_task_while_the_connection_its_control_events_go_out_o
     waits for the connection as it waits for its key."""
     pair = event_signer(IDENTITY)
     client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}))
-    held = client.app.state.held
+    held = app_of(client).state.held
     deadline = time.monotonic() + 10
     while not held.ready() and time.monotonic() < deadline:
         time.sleep(0.02)
