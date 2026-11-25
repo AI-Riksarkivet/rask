@@ -29,10 +29,11 @@ from catalog.api.control_lane import ControlLane, create_signature_refused_serie
 from catalog.api.control_relay import attach_published_keys
 from catalog.api.dependencies import app_wire, declared_base_judge
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware, is_bulk_write
-from catalog.api.maintenance_mode import maintenance_middleware
+from catalog.api.maintenance_mode import maintenance_refusal
 from catalog.api.path_reading import PathReadingMiddleware
+from catalog.api.refusal_gate import RefusalGate
 from catalog.api.security import authenticate, judge
-from catalog.api.signing_gate import commit_ids_ready_check, signing_gate_middleware
+from catalog.api.signing_gate import commit_ids_ready_check, unsigned_refusal
 from catalog.api.timers import start_timers
 from catalog.api.v1.router import api_router
 from catalog.core import base_judge
@@ -455,8 +456,8 @@ _settings = get_settings()
 # gate, the handler pair in the order that makes it work, one trace per request, every layer a request passes, and the
 # probes — see `lakehouse.service_app.factory` for what each is for and what a copy of it got wrong.
 #
-# `maintenance_middleware` (the read-only gate, a no-op unless LANCE_MAINTENANCE_READ_ONLY=true) and
-# `signing_gate_middleware` (the writes a catalog without its signing key refuses) go in as `inner_middleware`, inside
+# The read-only gate (`maintenance_refusal`, which refuses nothing unless LANCE_MAINTENANCE_READ_ONLY=true) and the signing
+# gate (`unsigned_refusal`, the writes a catalog without its signing key refuses) go in as `inner_middleware`, inside
 # the request's trace, so their 503 names the trace (the problem body's `instance`) an operator correlates the refusal with.
 #
 # The OUTER layers, in order: the write shed answers 429 once the concurrent-write cap is reached, when a write begins
@@ -479,7 +480,7 @@ app = build_service_app(
     max_body_bytes=_settings.json_body_cap,
     bulk_bodies=BulkBodies(max_bytes=_settings.max_body_bytes, matches=is_bulk_write),
     request_deadline_seconds=_settings.request_deadline_seconds,
-    inner_middleware=[maintenance_middleware, signing_gate_middleware],
+    inner_middleware=[Middleware(RefusalGate, refuser=maintenance_refusal), Middleware(RefusalGate, refuser=unsigned_refusal)],
     outer_middleware=[Middleware(WriteConcurrencyLimitMiddleware, max_concurrent=_settings.max_concurrent_writes), Middleware(PathReadingMiddleware)],
 )
 # Every door that authenticates its caller does so from the request's headers before its body is read

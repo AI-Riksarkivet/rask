@@ -39,8 +39,8 @@ and what it owns is the part of the boot that is identical in all three:
    * ``outer_middleware``, the caller's own, in its order (the catalog's path reading and write shed).
    * ``BodySizeLimitMiddleware`` at ``max_body_bytes`` (a bulk route at ``bulk_bodies``' ceiling), a body over it
      refused 413 before it is buffered.
-   * ``inner_middleware``, the caller's ``http`` functions that must run INSIDE every other layer: the
-     catalog's read-only gate and signing gate answer inside the request's trace this way.
+   * ``inner_middleware``, the caller's pure-ASGI layers that must run INSIDE every other layer: the catalog's
+     read-only gate and signing gate answer inside the request's trace this way.
 5. ``/livez`` + ``/readyz`` at the ROOT — a kubelet does not know a service's prefix.
 """
 
@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import logging
 import os
-from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
+from collections.abc import AsyncGenerator, Callable, Sequence
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Final, override
 
@@ -59,8 +59,6 @@ from opentelemetry import trace
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.sdk.trace import TracerProvider
 from starlette.middleware import Middleware
-from starlette.requests import Request
-from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
 from lakehouse.governed.audit import configure_audit
@@ -77,9 +75,6 @@ from lakehouse.service_app.no_store import NoStoreMiddleware
 from lakehouse.service_app.outage_answer import StoreOutageMiddleware
 from lakehouse.service_app.panic_catcher import PanicCatcherMiddleware
 
-
-#: A Starlette ``http`` middleware function: the request, and the rest of the app to call with it.
-type HttpMiddleware = Callable[[Request, Callable[[Request], Awaitable[Response]]], Awaitable[Response]]
 
 #: Lance's switch for the migration a read commits. A dataset whose fragment metadata is out of date, or whose index
 #: segments overlap, is migrated by a commit from whichever read noticed, ``index_stats`` among them, unless it is
@@ -207,7 +202,7 @@ def build_service_app(
     probes_port: int | None = None,
     request_threads: int | None = None,
     routers: Sequence[APIRouter] = (),
-    inner_middleware: Sequence[HttpMiddleware] = (),
+    inner_middleware: Sequence[Middleware] = (),
     outer_middleware: Sequence[Middleware] = (),
 ) -> FastAPI:
     """Assemble one lance-plane service's FastAPI app. See the module docstring for what and why.
@@ -236,8 +231,8 @@ def build_service_app(
     ``bulk_bodies`` names the routes whose bodies are bulk and the larger ceiling they take; every other route is held
     to ``max_body_bytes``.
 
-    ``inner_middleware`` are ``http`` middleware functions that must run INSIDE every other layer, and
-    ``outer_middleware`` the caller's pure-ASGI layers, which run inside the deadline and outside the body cap
+    ``inner_middleware`` are the caller's pure-ASGI layers that must run INSIDE every other layer, and
+    ``outer_middleware`` those that run inside the deadline and outside the body cap
     (see the module docstring for the whole order).
 
     ``audit_enabled`` arms the `lance.audit` compliance stream, and is REQUIRED for the same reason
@@ -265,8 +260,8 @@ def build_service_app(
         _mount_docs(app)
     install_problem_handlers(app, log)
     # Each layer added is OUTER to those added before it: innermost first.
-    for middleware in inner_middleware:
-        app.middleware("http")(middleware)
+    for layer in inner_middleware:
+        app.add_middleware(layer.cls, *layer.args, **layer.kwargs)
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=max_body_bytes, bulk=bulk_bodies)
     for layer in outer_middleware:
         app.add_middleware(layer.cls, *layer.args, **layer.kwargs)

@@ -6,18 +6,16 @@ wants a tighter bound states it itself.
 
 The refusal is built by pure-ASGI middleware, which answers before the body is buffered and so cannot raise into the
 problem handlers; it spells the spec's `INVALID_INPUT` itself, because `body_limit` stays importable without the
-Lance-Namespace extra, and a generated client validating the body requires that `code`. Each test's app carries an
-inner `http` middleware, as the catalog's read-only gate is: a `BaseHTTPMiddleware` whose task group wraps an app
-exception in an `ExceptionGroup`, which the streaming refusal must still answer as a 413 rather than a 500.
+Lance-Namespace extra, and a generated client validating the body requires that `code`.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Iterator
+from collections.abc import Iterator
 from typing import Annotated, Any
 
 import pytest
-from fastapi import Body, FastAPI, Request, Response
+from fastapi import Body, FastAPI, Request
 from fastapi.testclient import TestClient
 from lance_namespace import ErrorCode
 
@@ -30,10 +28,6 @@ CAP = 1000
 
 def _capped_app() -> FastAPI:
     app = FastAPI(telemetry=FRAMEWORK_TELEMETRY_OFF)
-
-    @app.middleware("http")
-    async def _inner(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-        return await call_next(request)
 
     @app.post("/echo")
     async def _echo(request: Request) -> dict[str, int]:

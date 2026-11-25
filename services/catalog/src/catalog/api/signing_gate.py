@@ -18,10 +18,9 @@ whatever namespace it names.
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
 from typing import cast
 
-from fastapi import Request, Response
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from lance_namespace import ErrorCode, InternalError
 
@@ -94,8 +93,9 @@ def _unready(request: Request) -> bool:
     return (holder is not None and not holder.ready) or not commit_ids_of(request).ready
 
 
-async def signing_gate_middleware(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-    """Refuse a write the catalog would announce while it holds no signing key or no commit id key.
+def unsigned_refusal(request: Request) -> JSONResponse | None:
+    """The refusal of a write the catalog would announce while it holds no signing key or no commit id key, or ``None``
+    to let the request through (the signing gate, :class:`catalog.api.refusal_gate.RefusalGate`).
 
     A catalog whose lifespan wired either holder not at all, or no settings, cannot say whether it could sign, so each
     such write is refused as the server fault it is (500, the spec's InternalError, with :func:`app_wire`'s ERROR line
@@ -109,10 +109,10 @@ async def signing_gate_middleware(request: Request, call_next: Callable[[Request
     # would end the path there and the action read would be a segment of the name ([[LH-526]]).
     path = route_path(request.scope)
     if not (unready and path.startswith(GATED_MOUNTS) and is_mutating(request)):
-        return await call_next(request)
+        return None
     try:
         if not announces(path, app_wire(request, "settings", Settings)):
-            return await call_next(request)
+            return None
     except InternalError as exc:
         fault = fault or exc
     return fault_response(fault) if fault is not None else unsigned_response()

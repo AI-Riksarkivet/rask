@@ -11,11 +11,10 @@ held in flight while a second is issued, proving the cap sheds the second BEFORE
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from typing import Annotated
 
 import pytest
-from fastapi import Body, FastAPI, Request, Response
+from fastapi import Body, FastAPI
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
@@ -154,17 +153,13 @@ def test_a_write_not_yet_reading_its_body_holds_no_seat() -> None:
     assert asyncio.run(scenario()) == ((401, 0), (200, 1))
 
 
-def test_a_write_whose_declared_body_fastapi_reads_through_a_function_middleware_is_shed_429() -> None:
+def test_a_write_whose_declared_body_fastapi_reads_is_shed_429() -> None:
     """The catalog's writes declare their Arrow body, which FastAPI reads before the handler and answers its own 400 when
-    the read raises, and pass the catalog's function middlewares: a shed decided in that read is still answered 429."""
+    the read raises: a shed decided in that read is still answered 429."""
 
     async def scenario() -> tuple[tuple[int, int], tuple[int, int]]:
         release, entered = asyncio.Event(), asyncio.Event()
         app = FastAPI()
-
-        @app.middleware("http")
-        async def _gate(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
-            return await call_next(request)
 
         @app.post("/v1/table/{id}/insert")
         async def _insert(id: str, data: Annotated[bytes, Body(media_type=_ARROW.decode())]) -> dict[str, int]:

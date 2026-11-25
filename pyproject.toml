@@ -200,6 +200,7 @@ max-nested-blocks = 3
 # pylance's own `LanceOperation.RewrittenIndex` dataclass, which pylance's binding builds by name, and a BaseModel cannot.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "dataclasses.dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python)."
+"starlette.middleware.base.BaseHTTPMiddleware".msg = "A layer every request passes is pure ASGI: an http middleware wraps every answer, Arrow streams included (fastapi production-patterns.md, Middleware). `@app.middleware(\"http\")` builds one too, which this ban cannot see."
 "typing.NamedTuple".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python): frozen with ConfigDict(frozen=True)."
 "typing.TypedDict".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python): a dict shape is a model the caller builds."
 "dataclasses.make_dataclass".msg = "Structured values are pydantic BaseModel (CLAUDE.md, writing-python)."

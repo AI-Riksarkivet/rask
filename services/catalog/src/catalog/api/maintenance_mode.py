@@ -16,9 +16,8 @@ at ``version/create`` (ADR 0174). This module only gates writes.
 from __future__ import annotations
 
 import logging
-from collections.abc import Awaitable, Callable
 
-from fastapi import Request, Response
+from fastapi import Request
 from fastapi.responses import JSONResponse
 from fastapi.routing import iter_route_contexts
 from lance_namespace import ErrorCode, InternalError
@@ -106,11 +105,9 @@ def maintenance_response() -> JSONResponse:
     )
 
 
-async def maintenance_middleware(
-    request: Request,
-    call_next: Callable[[Request], Awaitable[Response]],
-) -> Response:
-    """Short-circuit mutating requests on every catalog mount with 503 when read-only is on.
+def maintenance_refusal(request: Request) -> JSONResponse | None:
+    """The 503 a mutating request on every catalog mount is answered while read-only is on, or ``None`` to let the
+    request through (the read-only gate, :class:`catalog.api.refusal_gate.RefusalGate`).
 
     The window is what the settings the lifespan wired say. A catalog wired none cannot say whether a window is open,
     so each write is refused as the server fault it is (:func:`catalog.api.dependencies.app_wire`), never let through as
@@ -121,13 +118,13 @@ async def maintenance_middleware(
     except InternalError as exc:
         read_only, fault = True, exc
     if not read_only:
-        return await call_next(request)
+        return None
     # The path routing matches, never `request.url.path`: that re-parses the decoded path as a URL, so a `?` in a name
     # would end the path there ([[LH-526]]).
     path = route_path(request.scope)
     if path.startswith(GATED_MOUNTS) and is_mutating(request):
         return fault_response(fault) if fault is not None else maintenance_response()
-    return await call_next(request)
+    return None
 
 
 def fault_response(fault: InternalError) -> JSONResponse:
