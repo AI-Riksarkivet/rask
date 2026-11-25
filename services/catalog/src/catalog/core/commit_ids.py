@@ -73,10 +73,7 @@ def lifecycle_run_id(key: bytes, *, table_uuid: str, operation: str, announced_a
 def _keyed_uuid(key: bytes, fields: tuple[str, ...]) -> str:
     """A UUIDv8 carrying 122 bits of HMAC-SHA256 under ``key`` over ``fields``, separated by a unit separator."""
     value = int.from_bytes(hmac.new(key, "\x1f".join(fields).encode(), hashlib.sha256).digest()[:16])
-    # Version 8 and the RFC 9562 variant, set by hand: Python 3.13's `uuid.UUID(version=...)` takes 1 to 5 only.
-    value = (value & ~(0xF << 76)) | (8 << 76)
-    value = (value & ~(0x3 << 62)) | (0x2 << 62)
-    return str(uuid.UUID(int=value))
+    return str(uuid.UUID(int=value, version=8))
 
 
 class CommitIdKeyHolder:

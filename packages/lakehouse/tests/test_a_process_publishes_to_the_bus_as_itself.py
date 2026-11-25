@@ -273,7 +273,7 @@ async def test_a_publish_the_bus_refuses_is_not_delivered_and_keeps_its_cause(co
     [
         pytest.param(RawStreamMsg(seq=41, data=json.dumps(_envelope(run="r1", attempt=1.0).as_wire()).encode()), id="its-number-spelt-as-a-float"),
         pytest.param(RawStreamMsg(seq=41, data=b'["an", "array"]'), id="json-that-is-no-envelope"),
-        pytest.param(RawStreamMsg(seq=41, data=b"[" * 20_000), id="bytes-nested-deeper-than-a-parser-reads"),
+        pytest.param(RawStreamMsg(seq=41, data=b"[" * 2**19 + b"]" * 2**19), id="bytes-nested-deeper-than-a-parser-reads"),
         pytest.param(NotFoundError(), id="nothing-stored-at-that-sequence"),
     ],
 )

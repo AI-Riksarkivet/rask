@@ -38,11 +38,11 @@ _MAX_FAILURE_CHARS = 300
 #: How deep a body nests and is still read as an envelope: the envelope is the first level, and each object or array
 #: inside another is one more. A delivery is its publisher's bytes, and everything that reads one walks it: a model, a
 #: serialiser, the row a park keeps and every later read of that row, a log handler. Each walks by recursion within a
-#: bound of its own, and a value just inside one reader's bound is past the next reader's. Measured 2026-11-14 on
-#: CPython 3.13.15 and the locked libraries: in a task `json.loads` reads an envelope whose id is 9,993 lists deep;
-#: `str` of that id fails two levels sooner; opentelemetry-sdk's log handler renders a value 491 lists deep; and
-#: lineage's event model accepts a facet 254 lists deep, an envelope 258 deep, pydantic refusing to serialise one
-#: deeper. 300 refuses nothing a door of the lakehouse accepts, and hands on nothing a reader of it cannot walk.
+#: bound of its own, and a value just inside one reader's bound is past the next reader's. Measured in a task on CPython
+#: 3.15.2, aarch64, 2026-11-25: `json.loads` reads an envelope whose id is 65,197 lists deep, and `str` of that id fails
+#: past 26,080. Measured 2026-11-14 on CPython 3.13.15 and the libraries then locked: opentelemetry-sdk's log handler
+#: renders a value 491 lists deep; and lineage's event model accepts a facet 254 lists deep, an envelope 258 deep,
+#: pydantic refusing to serialise one deeper. 300 refuses nothing a door of the lakehouse accepts, and hands on nothing a reader of it cannot walk.
 MAX_ENVELOPE_DEPTH: Final = 300
 
 

@@ -567,10 +567,10 @@ def _raw_signature(text: str) -> bytes:
     """
     if _SIGNATURE_TEXT.fullmatch(text) is None:
         raise _refused("encoding", "the signature is not 86 base64url characters")
-    raw = base64.urlsafe_b64decode(text + "==")
-    if base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=") != text:
-        raise _refused("encoding", "the signature is not the canonical base64url spelling")
-    return raw
+    try:
+        return base64.b64decode(text, altchars=b"-_", validate=True, padded=False, canonical=True)
+    except binascii.Error as exc:
+        raise _refused("encoding", "the signature is not the canonical base64url spelling") from exc
 
 
 def _raw_public_key_named(listed: Iterable[str], kid: str) -> bytes | None:

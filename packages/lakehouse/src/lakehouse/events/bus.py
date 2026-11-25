@@ -811,8 +811,8 @@ def processing(subject: str, envelope: Mapping[str, object], *, consumer: str | 
     NOTHING HERE RENDERS WHAT THE PUBLISHER SENT. This runs before any rule can settle the delivery, so a failure here
     would end the loop that took it, and the bus would hand the same message to the next replica. The span carries the
     envelope's id only when it is a string: an id of another kind names nothing, and one nested as deep as the parser
-    still reads cannot be rendered at all (measured on CPython 3.13.15, 2026-11-14, in a task: `json.loads` reads an id
-    9,993 lists deep, and `str` of one 9,992 deep raises `RecursionError`).
+    still reads cannot be rendered at all (measured in a task on CPython 3.15.2, aarch64, 2026-11-25: `json.loads` reads
+    an id 65,197 lists deep, and `str` raises `RecursionError` past 26,080).
 
     Args:
         subject: The subject the message was published on.
