@@ -197,8 +197,8 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # digest is read off https://astral.sh/uv/<version>/install.sh (2026-11-16).
 DAGGER_VERSION="0.21.8"
 BUN_VERSION="1.4.4"
-UV_VERSION="0.12.18"
-UV_INSTALLER_SHA256="e62a5ea089de9c6a9b1f767166c9f33194e18d350e9f375c6355fac3ba0fb42b"
+UV_VERSION="0.13.10"
+UV_INSTALLER_SHA256="51781aafe6950cc659f79873e1bdca55fbb9da6e0ef650bf98093a0f0aaaf453"
 
 banner "rask on a new computer"
 
