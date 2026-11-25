@@ -469,9 +469,17 @@ def _nsc(nsc: Path, home: Path, *args: str) -> str:
 #: copies of each stream the chart declares at its default `nats.streamReplicas`.
 _NODES = 3
 
-#: How much of a server's log a failed start quotes, traces left out: enough for the startup lines and a fatal error, or
-#: a crash's stack, which a server writes last.
+#: How much of a server's log a failure quotes, traces left out: enough for the startup lines and a fatal error, or a
+#: crash's stack, which a server writes last.
 _LOG_END_LINES = 30
+
+#: How long Kubernetes waits before each run of a failed Job's pod after the first, for the runs the lane gives the
+#: stream Job inside the chart's `backoffLimit` of 20: its back-off starts at 10 s and doubles (Kubernetes Jobs, § Pod
+#: backoff failure policy). The Job relies on that wait when the bus refuses it for a while: a route that comes back
+#: leaves the JetStream metadata leader without its peer's config and stats until that peer's next STATSZ, sent every
+#: 10 s, and a stream copied to every server is refused 10005 ("peer offline") until then (nats-server 2.15.2
+#: `route.go` and `selectPeerGroup`; measured 2026-11-25: refused for 10.1 s after a stopped follower's route came back).
+JOB_BACKOFF: Final = (10.0, 20.0)
 
 
 class Broker:
@@ -570,6 +578,11 @@ class Broker:
     def log_text(self) -> str:
         """Every server's log, the first's first: a client's calls and refusals are logged by the server it is on."""
         return "".join(self._log(node) for node in range(_NODES))
+
+    def log_ends(self) -> str:
+        """Each server's state and the end of its own log, traces left out: a finding that the bus refused a stream or a
+        consumer carries what its servers said as it did (a metadata leader that moved, a route that closed)."""
+        return self._log_ends(list(range(_NODES)))
 
     def _node_dir(self, node: int) -> Path:
         return self._dir / f"node-{node}"
@@ -921,6 +934,23 @@ class Rig:
             stdin=subprocess.DEVNULL,
             check=False,
         )
+
+    def run_stream_job_until_done(self, script: str, home: Path, timeout: float) -> list[subprocess.CompletedProcess[str]]:
+        """The stream Job's runs as Kubernetes makes them: one, and after each that fails a wait (`JOB_BACKOFF`) and the
+        next, until one exits 0 or the last has failed. Each phase of the Job is idempotent, so a run finishes what the one
+        before began: creating a stream copied to three servers can outlast the CLI's request deadline on a loaded host
+        (measured 2026-11-09). Returns every run, the last last.
+
+        Raises:
+            subprocess.TimeoutExpired: A run did not finish within ``timeout`` seconds.
+        """
+        runs: list[subprocess.CompletedProcess[str]] = []
+        for wait in (0.0, *JOB_BACKOFF):
+            time.sleep(wait)
+            runs.append(self.run_stream_job(script, home, timeout))
+            if runs[-1].returncode == 0:
+                break
+        return runs
 
 
 class Link:

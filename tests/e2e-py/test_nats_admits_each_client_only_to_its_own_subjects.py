@@ -78,6 +78,7 @@ import pytest
 import yaml
 from nats.js.errors import APIError
 from nats_auth_rig import (
+    JOB_BACKOFF,
     RENDER_ARGS,
     VALUES_ENV,
     Client,
@@ -122,8 +123,6 @@ REPO = Path(__file__).resolve().parents[2]
 #: and lays out the bus the stream Job first runs on, so no table user's call set carries the test's bookkeeping. It is
 #: minted beside the table and is not a row of it.
 RIG = "rask-test-rig"
-#: How many times the stream Job runs before the lane gives up on it, inside the chart's `backoffLimit` of 20.
-_JOB_RUNS = 3
 #: The topics a service publishes on its own connection: its lineage events (`lakehouse.events.outbox`) and the control lane's.
 OWN_CONNECTION_TOPICS = ("lineage.events.v1", "catalog.control.v1")
 LINEAGE_TOPIC, CONTROL_TOPIC = OWN_CONNECTION_TOPICS
@@ -519,19 +518,20 @@ async def _a_session_with_no_inbox_of_its_own_is_not_held(bus: Rig, rig: Client)
 
 def _stream_job(bus: Rig, script: str, home: Path) -> tuple[list[str], str]:
     """One phase of the chart's stream Job, run as `admin` against this broker; it must exit 0 within the runs Kubernetes
-    would give it: a failed run is run again (the chart's `backoffLimit`), since creating a stream copied to three
-    servers can outlast the CLI's request deadline on a loaded host (measured 2026-11-09), and each phase is idempotent.
-    Returns the findings and what the runs printed."""
-    printed = ""
-    for _ in range(_JOB_RUNS):
-        try:
-            done = bus.run_stream_job(script, home, 300.0)
-        except subprocess.TimeoutExpired as exc:
-            return [f"the stream Job did not finish as admin (its readiness loop retries a refused connection): {str(exc.stdout or '')[-600:]}"], printed
-        printed += done.stdout + done.stderr
-        if done.returncode == 0:
-            return [], printed
-    return [f"the stream Job exited {done.returncode} as admin on each of {_JOB_RUNS} runs: {(done.stdout + done.stderr)[-800:]}"], printed
+    would give it (`Rig.run_stream_job_until_done`). Returns the findings and what the runs printed."""
+    try:
+        runs = bus.run_stream_job_until_done(script, home, 300.0)
+    except subprocess.TimeoutExpired as exc:
+        return [
+            f"the stream Job did not finish as admin (its readiness loop retries a refused connection): {str(exc.stdout or '')[-600:]}\n{bus.broker.log_ends()}"
+        ], ""
+    printed = "".join(done.stdout + done.stderr for done in runs)
+    done = runs[-1]
+    if done.returncode == 0:
+        return [], printed
+    return [
+        f"the stream Job exited {done.returncode} as admin on each of {len(runs)} runs: {(done.stdout + done.stderr)[-800:]}\n{bus.broker.log_ends()}"
+    ], printed
 
 
 class _Object(BaseModel):
@@ -589,16 +589,18 @@ async def _a_bus_holding_events_and_other_subscribers(bus: Rig, home: Path, rig:
     findings: list[str] = []
 
     async def laid_out(name: str, args: list[str], info: str) -> list[str]:
-        """Add one stream or consumer with the nats CLI, and again when the bus did not answer in time: one copied to
-        three servers can outlast the CLI's request deadline (as a stream the Job creates can, `_JOB_RUNS`), and an add
-        the bus finished after the CLI gave up shows as the object being there."""
+        """Add one stream or consumer with the nats CLI, and again after the Job's waits (`JOB_BACKOFF`) when the bus did
+        not take it: one copied to three servers can outlast the CLI's request deadline, and an add the bus finished after
+        the CLI gave up shows as the object being there; or the bus refuses it until a peer whose route came back is
+        known again, as it refuses the Job."""
         printed = ""
-        for _ in range(_JOB_RUNS):
+        for wait in (0.0, *JOB_BACKOFF):
+            await asyncio.sleep(wait)
             done = await asyncio.to_thread(bus.run_cli, args, RIG, home)
             if done.returncode == 0 or "config" in (await rig.request(info) or {}):
                 return []
             printed = done.stdout + done.stderr
-        return [f"{name} could not be laid out: {printed[-400:]}"]
+        return [f"{name} could not be laid out: {printed[-400:]}\n{bus.broker.log_ends()}"]
 
     for name, config in streams.items():
         findings += await laid_out(name, ["stream", "add", name, "--config", _prepared(home, name, config)], f"$JS.API.STREAM.INFO.{name}")

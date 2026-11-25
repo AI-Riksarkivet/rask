@@ -84,6 +84,11 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
   every run after the one that created it; converge a bucket with JetStream's own `$JS.API.STREAM.UPDATE` request and
   read its answer, since `nats req` exits 0 however it is answered (`converge_bucket`, LH-494, natscli 0.5.1, 2026-11-09).
 - **An empty JetStream stream has no sequence 0.** a fresh stream reports 0 at both ends and a get of sequence 0 answers 400; read by sequence only while `messages` > 0 (XC-094, 2026-10-17).
+- **A route that comes back refuses a stream copied to every server for up to 10 s.** On the route's first connection
+  the JetStream metadata leader forgets that peer's config and stats until the peer's next STATSZ, sent every 10 s, and
+  placing a stream on every server answers 10005 `peer offline` until then (nats-server 2.15.2 `route.go` and
+  `selectPeerGroup`; measured 2026-11-25: 0 to 10.1 s over seven trials). The stream Job rides it out on Kubernetes'
+  back-off; a run that retries at once falls inside it, so the nats-auth rig waits as Kubernetes does (`JOB_BACKOFF`).
 - **A stock client may decline a spec op itself.** pylance's `RestNamespace` implements 51 of the 54: `UpdateFieldMetadata`, `BatchCreateTableVersions` and `BatchCommitTables` fall to the base class, which answers code 0 and sends nothing; a probe read that as the catalog declining (XC-092, 2026-10-17). Drive those through `lance_namespace_urllib3_client`.
 - **A namespace and a table share an id.** the `dir` backend keeps one object-id space, so a table created at a child namespace's id answers 409 code 14 ("concurrently created"), not TableAlreadyExists (XC-092, 2026-10-17).
 - **pylance reports an unreachable host as a door's 503.** its REST client answers `ServiceUnavailableError` (code 17) for a refused connection too, so a probe that must tell the door's verdict from no door at all sends raw HTTP (XC-095, 2026-10-17).

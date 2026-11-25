@@ -174,8 +174,6 @@ _MAX_DELIVER = 2
 #: The exit a worker ends its process with once a pass runs past twice its bound, once the bus stops answering its
 #: heartbeats until the ack wait runs out, or once its drain ends with a pass still running (`maintenance.services.queue`).
 _HUNG_EXIT = 70
-#: How many times the stream Job runs before the lane gives up on it, inside the chart's `backoffLimit` of 20.
-_JOB_RUNS = 3
 #: How long a worker in a process of its own drains once told to stop.
 _DOOMED_DRAIN = 1.0
 #: How far into a worker's 5 s pull its task is put: past the 4 s ack wait, so a lease counted from the pull's sending
@@ -407,16 +405,13 @@ async def _until(done: Callable[[], bool | Awaitable[bool]], seconds: float) -> 
 
 
 def _declare_the_queue(bus: Rig, home: Path) -> None:
-    """The chart's stream Job, run as `admin` against this broker, as the estate runs it before maintenance starts: a run
-    that fails is run again, as Kubernetes runs a failed Job's pod again (the chart's `backoffLimit`). Creating a stream
-    copied to three servers can outlast the CLI's request deadline on a loaded host (measured 2026-11-09), and the Job is
-    idempotent, so a second run finishes what the first began."""
-    script = stream_job_script(bus.docs, bus.url)
-    runs = [bus.run_stream_job(script, home, 300.0)]
-    while runs[-1].returncode and len(runs) < _JOB_RUNS:
-        runs.append(bus.run_stream_job(script, home, 300.0))
+    """The chart's stream Job, run as `admin` against this broker, as the estate runs it before maintenance starts and as
+    Kubernetes runs a Job that fails (`Rig.run_stream_job_until_done`)."""
+    runs = bus.run_stream_job_until_done(stream_job_script(bus.docs, bus.url), home, 300.0)
     done = runs[-1]
-    assert done.returncode == 0, f"the stream Job exited {done.returncode} on each of {len(runs)} runs: {(done.stdout + done.stderr)[-800:]}"
+    assert done.returncode == 0, (
+        f"the stream Job exited {done.returncode} on each of {len(runs)} runs: {(done.stdout + done.stderr)[-800:]}\n{bus.broker.log_ends()}"
+    )
 
 
 def _the_bus(tmp_path: Path) -> Rig:
@@ -2126,9 +2121,14 @@ def _task_spans(exporter: InMemorySpanExporter) -> list[ReadableSpan]:
 
 
 @pytest.mark.asyncio
-async def test_a_fired_schedule_the_queue_refuses_is_counted_and_given_back(fleet: _Fleet, maintenance_metrics: Measured) -> None:
+async def test_a_fired_schedule_the_queue_refuses_is_counted_and_given_back(
+    fleet: _Fleet, maintenance_metrics: Measured, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A fired schedule the queue does not take (its stream is gone, as on a bus whose stream Job has not run again yet)
     is counted on `maintenance.schedules.not_queued` and given back, and is moved once the queue takes it again."""
+    # The give-back's delay is drawn at random beneath 15 s; drawn here at 5 s, the count reads 1 for five seconds before
+    # the schedule is refused again, where a draw shorter than one poll counts it twice before the count is read.
+    monkeypatch.setattr(worker_queue, "redelivery_delay", lambda _delivered: 5.0)
     rig = await fleet.rig()
     dropped = await rig.request(f"$JS.API.STREAM.DELETE.{TASKS_STREAM}")
     assert dropped is not None and dropped.get("success") is True, f"the task stream was not removed: {dropped}"
