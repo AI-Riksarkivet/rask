@@ -16,10 +16,10 @@ from catalog.core.version_retention import recorded_branch
 from catalog.services import table_claims
 from lakehouse.lancekit.transactions import read_transaction
 from lakehouse.lancekit.versions import committed_at
-from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.process.supervision import is_fault
 from lakehouse.records import commit_records
 from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.outage import reads_as_store_outage
 
 
 __all__ = [

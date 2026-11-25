@@ -23,6 +23,7 @@ from catalog.api.v1.endpoints.trash_reclaim import require_can_reclaim_trash
 from catalog.schemas import IdempotencyKeysReclaimResponse
 from catalog.services import idempotency_records
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 
 
 management_router = APIRouter(prefix="/management/v1/idempotency-keys", tags=["idempotency-keys"], dependencies=[Depends(require_can_reclaim_trash)])
@@ -52,7 +53,7 @@ async def reclaim_idempotency_keys(settings: SettingsDep, token: CurrentToken) -
     audit(
         AuditAction.IDEMPOTENCY_KEYS_RECLAIM,
         AuditOutcome.SUCCESS,
-        subject=token.subject if token is not None else None,
+        subject=caller_subject(token),
         resource=f"control:{idempotency_records.PREFIX}",
         reclaimed=done.reclaimed,
         kept=done.kept,

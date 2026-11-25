@@ -9,10 +9,10 @@ from botocore.exceptions import ClientError
 from moto import mock_aws
 from pydantic import SecretStr
 
-from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.errors import StoreUnansweredError
 from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.outage import reads_as_store_outage
 from lakehouse.storage.stored_objects import delete_objects, list_under
 from lakehouse.storage.uri import s3_object, split_s3_uri
 

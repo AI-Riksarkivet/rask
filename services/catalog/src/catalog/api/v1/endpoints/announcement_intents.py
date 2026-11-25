@@ -21,6 +21,7 @@ from catalog.api.v1.endpoints.trash_reclaim import require_can_reclaim_trash
 from catalog.schemas import AnnouncementIntentsFinishResponse
 from catalog.services import announcement_intents
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 
 
 management_router = APIRouter(prefix="/management/v1/announcement-intents", tags=["announcement-intents"], dependencies=[Depends(require_can_reclaim_trash)])
@@ -56,7 +57,7 @@ async def finish_announcement_intents(
     audit(
         AuditAction.ANNOUNCEMENT_INTENTS_FINISH,
         AuditOutcome.SUCCESS,
-        subject=token.subject if token is not None else None,
+        subject=caller_subject(token),
         resource=f"control:{announcement_intents.PREFIX}",
         finished=done.finished,
         sent=done.sent,

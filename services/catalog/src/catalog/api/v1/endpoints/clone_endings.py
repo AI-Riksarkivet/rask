@@ -26,6 +26,7 @@ from catalog.schemas import CloneEndingEntry, CloneEndingFinishResponse, CloneEn
 from catalog.services import clone_endings
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 
 
 management_router = APIRouter(prefix="/management/v1/clone-endings", tags=["trash-reclaim"], dependencies=[Depends(require_can_reclaim_trash)])
@@ -57,7 +58,7 @@ async def finish_clone_ending(
     the ending is removed with nothing released; 409 (code 14) when the ending or the claim changed under the finish. No
     such ending answers 404.
     """
-    subject = token.subject if token is not None else None
+    subject = caller_subject(token)
     try:
         outcome = await run_in_threadpool(clone_endings.finish, ns, settings, digest, filing=filing, token=uuid4().hex)
     except LanceNamespaceError as refused:

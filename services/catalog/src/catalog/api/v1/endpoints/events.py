@@ -36,6 +36,7 @@ from catalog.schemas import EventsResponse
 from lakehouse.events.bus import Bus, BusUnavailableError
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 
 
 log = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ async def poll_control_events(
         audit(
             AuditAction.EVENT_STREAM_OPENED,
             AuditOutcome.SUCCESS,
-            subject=context.token.subject if context.token is not None else None,
+            subject=caller_subject(context.token),
             resource=context.settings.fga_root_object,
             delivered=len(events),
             reset=reset,

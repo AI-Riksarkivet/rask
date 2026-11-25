@@ -21,7 +21,7 @@ from lakehouse.governed.secrets import secret_store_configured, secret_store_ses
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import secret_store_dependency
 from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
-from lakehouse.process.lifecycle import closed_quietly
+from lakehouse.process.lifecycle import closed_quietly, mark_draining, mark_started, mark_starting
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.factory import build_service_app
@@ -64,10 +64,8 @@ async def _ensure_tables(store: ProvenanceStore) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     settings = get_settings()
-    # Readiness flags (mirrors the catalog): /readyz returns 503 until startup_complete and again once
-    # shutting_down, so k8s pulls the pod from rotation during boot and graceful drain.
-    app.state.startup_complete = False
-    app.state.shutting_down = False
+    # /readyz answers 503 until the start completes and again once the drain begins, so the pod is out of rotation then.
+    mark_starting(app)
     # Q17-6 / §F2-2: the CODE default is anonymous while the chart flips auth ON, so a service
     # started any other way serves every route to whoever reaches the port. Refused on the
     # AMBIGUITY — an operator declares which they meant. See `assert_authentication_configured`.
@@ -84,11 +82,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         await _build(app, settings, stack=stack, loops=loops)
         # Registered after everything it stops, so run before any of it is released.
         stack.push_async_callback(loops.stop)
-        app.state.startup_complete = True
+        mark_started(app)
         try:
             yield
         finally:
-            app.state.shutting_down = True
+            mark_draining(app)
 
 
 async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitStack, loops: Supervisor) -> None:

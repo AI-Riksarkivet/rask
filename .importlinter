@@ -124,7 +124,7 @@ forbidden_modules =
     lakehouse.events
     lakehouse.storage
 ignore_imports =
-    lakehouse.problems.outage -> lakehouse.storage.errors
+    lakehouse.problems.ns_errors -> lakehouse.storage.outage
 
 # The store is reached from everything above it and builds on almost nothing (ADR 0224): the clients, the credential and
 # options a process signs with, its filesystem, its session, objects by key and the writes the store arbitrates. Seven
@@ -171,8 +171,8 @@ ignore_imports =
 # error mapping and the handlers every service app installs, the committed set of spec routes and the store-outage
 # reading. The service app installs them and the services answer through them, so they import nothing else in the
 # library, directly or through another module, beyond the request's trace id the body names as its `instance`
-# (`process.correlation`) and the store's rule for which of its client's failures is an outage (`storage.errors`, which
-# imports nothing in the library).
+# (`process.correlation`) and the store's rule for which of its clients' failures is an outage (`storage.outage`, which
+# imports nothing in the library but the store's own errors).
 [importlinter:contract:the-problems-import-nothing-else-in-the-library]
 name = ADR 0224: lakehouse.problems imports nothing else in the library beyond the request's trace id and the store's outage rule
 type = forbidden
@@ -182,7 +182,8 @@ forbidden_modules =
     lakehouse.*
 ignore_imports =
     lakehouse.problems.envelope -> lakehouse.process.correlation
-    lakehouse.problems.outage -> lakehouse.storage.errors
+    lakehouse.problems.ns_errors -> lakehouse.storage.outage
+    lakehouse.problems.outage -> lakehouse.storage.outage
 
 # The Lance table plane is the floor of the library (ADR 0224): how every service reads and judges a Lance table, from a
 # version's commit time and a manifest's wire to its feature flags, its layout and a location's spellings. It is built
@@ -253,6 +254,7 @@ ignore_imports =
     lakehouse.records.record_store -> lakehouse.storage.errors
     lakehouse.records.record_store -> lakehouse.storage.objectfs
     lakehouse.records.record_store -> lakehouse.storage.options
+    lakehouse.records.record_store -> lakehouse.storage.outage
     lakehouse.records.record_store -> lakehouse.storage.stored_objects
     lakehouse.records.record_store -> lakehouse.storage.uri
     lakehouse.records.trash -> lakehouse.naming

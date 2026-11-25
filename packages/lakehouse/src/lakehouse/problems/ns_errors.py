@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING, Any, Final, cast
 from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
 
 from lakehouse.problems.envelope import problem_response
-from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.problems.spec_routes import SPEC_ERROR_STATUSES, UNSUPPORTED_STATUS, is_spec_route, structural
+from lakehouse.storage.outage import reads_as_store_outage
 
 
 if TYPE_CHECKING:

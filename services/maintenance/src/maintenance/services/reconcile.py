@@ -517,13 +517,6 @@ def _list_bucket_names(client: Any) -> tuple[list[str], str | None]:
     return names, None
 
 
-class TupleScan(BaseModel):
-    """One whole-store tuple read, bucketed by object type — the input to every authz category."""
-
-    #: ``{object_type: {object_id: tuple_count}}``
-    counts_by_type: dict[str, dict[str, int]] = Field(default_factory=dict)
-
-
 # --------------------------------------------------------------------------- #
 # The detectors — pure, one per category
 # --------------------------------------------------------------------------- #
@@ -692,9 +685,9 @@ class Sources(BaseModel):
     that 500s.
     """
 
-    #: ONE whole-store tuple scan (see `_scan_tuples`), bucketed by object type. All four authz
-    #: categories read this same snapshot, so they cannot disagree about the store's contents.
-    tuples: TupleScan | None = None
+    #: ONE census of the store's grants (`_fga_source`), bucketed by object type. All four authz categories read this
+    #: same snapshot, so they cannot disagree about the store's contents.
+    tuples: fga_reads.GrantCensus | None = None
     tuples_error: str | None = None
     project_records: list[ProjectRecord] | None = None
     project_records_error: str | None = None
@@ -750,7 +743,7 @@ def _bucket_of(root_uri: str) -> str | None:
     return split_s3_uri(root_uri)[0] or None
 
 
-async def _fga_source(sources: Sources, grants: GrantCensusReader | None) -> tuple[TupleScan | None, str | None]:
+async def _fga_source(sources: Sources, grants: GrantCensusReader | None) -> tuple[fga_reads.GrantCensus | None, str | None]:
     """ONE census of the store's grants feeding all four authz categories, so they cannot disagree about its contents.
 
     A census the catalog could not read to the end is no census: the catalog refuses it, and the categories built on it
@@ -764,7 +757,7 @@ async def _fga_source(sources: Sources, grants: GrantCensusReader | None) -> tup
         return None, error
     if census is None:
         return None, _FGA_OFF
-    return TupleScan(counts_by_type=census.counts_by_type), None
+    return census, None
 
 
 async def _registry_source(

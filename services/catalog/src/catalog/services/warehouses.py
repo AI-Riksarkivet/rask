@@ -9,13 +9,11 @@ no database. Bucket creation uses boto3 ``create_bucket``, idempotent: an existi
 All IO here is blocking; callers threadpool it.
 """
 
-import json
 import logging
 from contextlib import suppress
 from itertools import batched
 from typing import Any
 
-import pyarrow.fs as pafs
 from lance_namespace import (
     CreateNamespaceRequest,
     DescribeNamespaceRequest,
@@ -36,16 +34,15 @@ from catalog.services.control_records import (
     with_protection,
 )
 from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
-from lakehouse.problems.outage import reads_as_store_outage, store_refusal
+from lakehouse.problems.outage import store_refusal
 from lakehouse.records import control_prefixes, trash
-from lakehouse.records.record_store import delete_record
+from lakehouse.records.record_store import delete_record, read_listing
 from lakehouse.records.trash import TrashRecord
-from lakehouse.records.warehouse_records import DeleteMode, UnreadableWarehouseRecordError, WarehouseRecord
+from lakehouse.records.warehouse_records import DeleteMode, UnreadableWarehouseRecordError, WarehouseRecord, record_key
 from lakehouse.records.warehouse_records import read as read_warehouse_record
 from lakehouse.storage import stored_objects
 from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError, create_json, exchange_json, mutate_json
 from lakehouse.storage.errors import BucketExistsError, BucketNotFoundError, store_call
-from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import DEFAULT_REGION, StorageOptions, object_client
 
 
@@ -122,12 +119,6 @@ def provision_bucket(bucket: str, storage_options: StorageOptions) -> None:
         log.info("warehouse_bucket_exists", extra={"bucket": bucket})
 
 
-def _warehouse_key(warehouse_id: str) -> str:
-    """The registry key for one warehouse. One definition because three call sites now build it —
-    and a conditional write that targeted a different key from the read would silently do nothing."""
-    return f"{_REGISTRY_PREFIX}/{warehouse_id}.json"
-
-
 #: The fields an idempotent re-create OWNS. Everything else on the live record belongs to the
 #: record's own lifecycle and is carried forward from the record AS IT STANDS AT WRITE TIME — not as
 #: the caller read it, which is the whole of diff2 F4.
@@ -177,7 +168,7 @@ def set_warehouse_protection(
             raise WarehouseProjectConflict(f"warehouse {warehouse_id!r} is registered to another project")
         return with_protection(record, change)
 
-    key = _warehouse_key(warehouse_id)
+    key = record_key(warehouse_id)
     try:
         return _record(mutate_json(control_root, storage_options, key, mutate=protect), path=key)
     except RecordMissingError, WarehouseProjectConflict:
@@ -190,7 +181,7 @@ def set_warehouse_manager(control_root: str, storage_options: StorageOptions, wa
     Conditional on the record's ETag, every other field as it stands at the write. ``None`` is answered when the
     record is gone.
     """
-    key = _warehouse_key(warehouse_id)
+    key = record_key(warehouse_id)
     try:
         return _record(mutate_json(control_root, storage_options, key, mutate=lambda record: with_manager(record, manager)), path=key)
     except RecordMissingError:
@@ -267,7 +258,7 @@ def upsert_warehouse(
             merged["primary"] = "true"
         return merged
 
-    key = _warehouse_key(wanted.id)
+    key = record_key(wanted.id)
     replaced, written = exchange_json(control_root, storage_options, key, mutate=merge)
     return _record(replaced, path=key), _record(written, path=key)
 
@@ -279,7 +270,7 @@ def create_warehouse_record(control_root: str, storage_options: StorageOptions, 
     re-reads and re-applies its guards against the WINNER's record (the cross-project takeover
     guard's read may predate the rival's write; this refusal is what closes that window).
     """
-    create_json(control_root, storage_options, _warehouse_key(record.id), record=record.stored())
+    create_json(control_root, storage_options, record_key(record.id), record=record.stored())
 
 
 def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> WarehouseRecord | None:
@@ -287,7 +278,7 @@ def get_warehouse(control_root: str, storage_options: StorageOptions, warehouse_
 
     A malformed record REFUSES rather than reading as unregistered: every destructive door starts here,
     and "not found" is an answer they act on."""
-    key = _warehouse_key(warehouse_id)
+    key = record_key(warehouse_id)
     record = read_json(control_root, storage_options, key)
     return _record(record, path=key) if record is not None else None
 
@@ -309,28 +300,18 @@ def read_warehouses(control_root: str, storage_options: StorageOptions) -> tuple
     Raises:
         ServiceUnavailableError: The store did not answer a record's read.
     """
-    fs, base = fs_and_base(control_root, storage_options)
+    try:
+        listing = read_listing(control_root, storage_options, _REGISTRY_PREFIX, event="warehouse_record")
+    except OSError as exc:
+        raise store_refusal(exc, reading=f"reading {_REGISTRY_PREFIX}", so="the registry cannot be read") from exc
     out: list[WarehouseRecord] = []
-    skipped: list[str] = []
-    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_REGISTRY_PREFIX}", allow_not_found=True)):
-        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
-            continue
+    skipped = list(listing.unreadable)
+    for path, raw in listing.records:
         try:
-            with fs.open_input_stream(info.path) as stream:
-                record = json.loads(stream.readall().decode("utf-8"))
-        except FileNotFoundError:
-            continue
-        except Exception as exc:
-            if reads_as_store_outage(exc):
-                raise store_refusal(exc, reading=f"reading {info.path}", so="the registry cannot be read") from exc
-            log.warning("warehouse_record_unreadable", extra={"path": info.path, "error": str(exc)})
-            skipped.append(info.path)
-            continue
-        try:
-            out.append(read_warehouse_record(record, at=info.path))
+            out.append(read_warehouse_record(raw, at=path))
         except UnreadableWarehouseRecordError as exc:
-            log.warning("warehouse_record_malformed", extra={"path": info.path, "error": str(exc)})
-            skipped.append(info.path)
+            log.warning("warehouse_record_malformed", extra={"path": path, "error": str(exc)})
+            skipped.append(path)
     return out, skipped
 
 
@@ -468,7 +449,7 @@ def set_warehouse_status(control_root: str, storage_options: StorageOptions, war
     field-level toggle: last writer wins on the field they actually touched, nobody wins on a field
     they merely read.
     """
-    key = _warehouse_key(warehouse_id)
+    key = record_key(warehouse_id)
     try:
         return _record(mutate_json(control_root, storage_options, key, mutate=lambda record: {**record, "status": status}), path=key)
     except RecordMissingError:
@@ -481,11 +462,6 @@ def set_warehouse_status(control_root: str, storage_options: StorageOptions, war
 # --------------------------------------------------------------------------- #
 
 
-def record_key(warehouse_id: str) -> str:
-    """Where warehouse ``warehouse_id``'s record lives on the control root."""
-    return _warehouse_key(warehouse_id)
-
-
 def delete_warehouse_record(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> None:
     """Remove the registry record. Idempotent: an absent record is a no-op, so a retried delete converges.
 
@@ -494,7 +470,7 @@ def delete_warehouse_record(control_root: str, storage_options: StorageOptions, 
     the two never share a default). A record-less bucket is reported by the reconciler, not silently
     forgotten. The warehouse's trash is ended by the delete door before this runs (:func:`trash_owned_by`).
     """
-    delete_record(control_root, storage_options, _warehouse_key(warehouse_id))
+    delete_record(control_root, storage_options, record_key(warehouse_id))
 
 
 def trash_owned_by(control_root: str, storage_options: StorageOptions, warehouse_id: str) -> list[TrashRecord]:

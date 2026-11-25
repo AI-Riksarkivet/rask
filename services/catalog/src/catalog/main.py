@@ -53,14 +53,15 @@ from lakehouse.governed.secrets import secret_store_configured, secret_store_ses
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
 from lakehouse.lance_metrics import register_lance_metrics
-from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
+from lakehouse.process.lifecycle import mark_draining, mark_started, mark_starting
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.body_limit import BulkBodies
 from lakehouse.service_app.factory import build_service_app
 from lakehouse.storage.conditional_records import RecordChangedError
 from lakehouse.storage.objectfs import store_dependency
+from lakehouse.storage.outage import reads_as_store_outage
 from lakehouse.storage.store_session import require_env_pair, start_store_session
 
 
@@ -190,8 +191,7 @@ def bound_lance_scans(settings: CatalogReadBounds) -> None:
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
     settings = get_settings()
     app.state.settings = settings
-    app.state.shutting_down = False
-    app.state.startup_complete = False
+    mark_starting(app)
     # Q17-6 / §F2-2: the CODE default is anonymous and the chart flips it on, so a catalog started
     # any other way serves every route to anyone who can reach the port. Refused on the AMBIGUITY —
     # an operator declares which they meant. See `assert_authentication_configured`.
@@ -209,11 +209,11 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         await _build(app, settings, stack=stack, loops=loops)
         # Registered last, so run FIRST: every background loop and task is stopped while the clients it uses are open.
         stack.push_async_callback(loops.stop)
-        app.state.startup_complete = True
+        mark_started(app)
         try:
             yield
         finally:
-            app.state.shutting_down = True
+            mark_draining(app)
 
 
 async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> None:

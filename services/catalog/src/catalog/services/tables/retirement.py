@@ -22,10 +22,10 @@ from catalog.services.tables import destroy
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids
 from lakehouse.problems.ns_errors import PartiallyAppliedError
-from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.process.supervision import is_fault
 from lakehouse.records import base_registry, location_claims, object_records, protection, trash
 from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.outage import reads_as_store_outage
 
 
 log = logging.getLogger(__name__)

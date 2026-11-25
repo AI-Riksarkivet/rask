@@ -35,7 +35,7 @@ from typing import Any, Final, Literal
 import pyarrow.fs as pafs
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
 
-from lakehouse.naming import ANONYMOUS_ACTOR
+from lakehouse.naming import ANONYMOUS
 from lakehouse.records import control_prefixes, location_claims, object_records
 from lakehouse.records.base_registry import BaseRegistry, forget_base_record
 from lakehouse.records.record_store import (
@@ -128,7 +128,7 @@ class TrashRecord(BaseModel):
     uuid: str | None = None
     #: Where a table has its bytes, with no trailing slash; empty for a namespace and a declared-only table.
     location: str = ""
-    dropped_by: str = ANONYMOUS_ACTOR
+    dropped_by: str = ANONYMOUS
     dropped_at: str = ""
     #: The id the drop that filed the record minted, which its announcements and its keyed resend are filed under, so
     #: each finds this record as that drop's own.
@@ -191,7 +191,7 @@ class TrashRecord(BaseModel):
     @field_validator("dropped_by", mode="before")
     @classmethod
     def _someone_or_nobody_known(cls, value: object) -> object:
-        return value if isinstance(value, str) and value else ANONYMOUS_ACTOR
+        return value if isinstance(value, str) and value else ANONYMOUS
 
     @field_validator("last_refusal", mode="before")
     @classmethod
@@ -308,7 +308,7 @@ def make_record(
         id=canonical_id,
         uuid=uuid,
         location=location,
-        dropped_by=dropped_by or ANONYMOUS_ACTOR,
+        dropped_by=dropped_by or ANONYMOUS,
         dropped_at=at.isoformat(),
         expires_at=(at + timedelta(days=grace_days)).isoformat(),
         properties=dict(properties) if properties else None,

@@ -32,6 +32,7 @@ from catalog.services import announcement_intents, trash_reclaim
 from catalog.services.announcement_intents import Announcement
 from lakehouse.governed import fga_ids, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.problems.outage import store_refusal
 from lakehouse.records import trash
@@ -144,7 +145,7 @@ async def vend_reclaim_credentials(
     audit(
         AuditAction.VEND_CREDENTIALS,
         AuditOutcome.SUCCESS,
-        subject=token.subject if token is not None else None,
+        subject=caller_subject(token),
         resource=fga_ids.object_of(kind, uuid),
         tier="reclaim",
         door="trash_credentials",
@@ -189,7 +190,7 @@ async def note_trash_refusal(*, kind: TrashKind, uuid: str, body: TrashRefusalRe
 
 def _audited(action: AuditAction, outcome: AuditOutcome, token: Caller | None, *, kind: TrashKind, uuid: str, **fields: object) -> None:
     """One audit record of a trash door's act on the object ``kind`` and ``uuid`` name, for the caller that asked."""
-    audit(action, outcome, subject=token.subject if token is not None else None, resource=fga_ids.object_of(kind, uuid), **fields)
+    audit(action, outcome, subject=caller_subject(token), resource=fga_ids.object_of(kind, uuid), **fields)
 
 
 async def _noted(settings: CatalogStore, *, kind: TrashKind, uuid: str, reason: str) -> InvalidTableStateError:

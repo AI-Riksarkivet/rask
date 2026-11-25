@@ -57,7 +57,7 @@ from catalog.api.dependencies import (
     namespace_for_root,
 )
 from catalog.api.pagination import ListLimit
-from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken, actor_of, record_actor_of
+from catalog.api.security import Caller, CurrentToken, actor_of, record_actor_of
 from catalog.core import native
 from catalog.core.config import CatalogStorageSettings, CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
@@ -89,10 +89,11 @@ from catalog.services.vend_probe import (
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids, fga_writes
-from lakehouse.naming import ANONYMOUS_ACTOR, CATALOG_DELIMITER, CONTROL_ID_RE
+from lakehouse.governed.door_caller import caller_subject
+from lakehouse.naming import ANONYMOUS, CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.problems.ns_errors import PartiallyAppliedError, status_for
 from lakehouse.records.trash import TrashRecord
-from lakehouse.records.warehouse_records import WarehouseRecord
+from lakehouse.records.warehouse_records import WarehouseRecord, record_key
 from lakehouse.storage.conditional_records import RecordExistsError, RecordMissingError
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.uri import split_s3_uri
@@ -220,7 +221,7 @@ async def establish_warehouse(
     await run_in_threadpool(warehouses.provision_bucket, bucket, context.settings.storage_options())
     await _require_a_conforming_store(context.settings, vendor, root_uri, warehouse_id=warehouse_id, author=author)
     actor = author.actor if author is not None else None
-    protection = None if body.protected is None else ProtectionChange(protected=body.protected, by=actor or ANONYMOUS_ACTOR)
+    protection = None if body.protected is None else ProtectionChange(protected=body.protected, by=actor or ANONYMOUS)
     record = _record_for(body, existing, warehouse_id=warehouse_id, project=project, bucket=bucket, protection=protection)
     replaced, record = await _write_record(context.settings, body, record, existing=existing, protection=protection)
     # ITS OWN ROW IN ITS OWN CATALOG ([[LH-593]]): every name beneath a warehouse begins with its id, and the directory
@@ -338,7 +339,7 @@ async def _require_a_conforming_store(
         ServiceUnavailableError: The store or its STS could not be probed.
     """
     bucket = split_s3_uri(root_uri)[0]
-    creator = role_session_name(author.subject if author is not None else ANONYMOUS_SUBJECT)
+    creator = role_session_name(author.subject if author is not None else ANONYMOUS)
     probe = partial(storage_probe.run_scope_probe, root_uri, vendor=vendor, store_endpoint=settings.s3_endpoint, session_name=creator)
     report = summarize_probe(await run_in_threadpool(probe))
     failed = [c.name for c in report.checks if c.outcome == "fail"]
@@ -1066,7 +1067,7 @@ async def _what_the_delete_announces(delete: _WarehouseDelete, *, announcer: Ann
             "objects_purged": 0,
         },
     )
-    deleted = Announcement(evidence=RecordGone(key=warehouses.record_key(delete.warehouse_id)), message=ControlMessage(event=planned))
+    deleted = Announcement(evidence=RecordGone(key=record_key(delete.warehouse_id)), message=ControlMessage(event=planned))
     return _DeleteAnnouncements(detached=detached, planned=planned, deleted=deleted)
 
 
@@ -1237,7 +1238,7 @@ async def validate_warehouse_credentials(
     # a record naming another store it would vend and write against the wrong store entirely.
     require_estate_store(record.endpoint, estate=context.settings.s3_endpoint, subject=f"warehouse {warehouse_id!r}")
 
-    subject = context.token.subject if context.token is not None else ANONYMOUS_SUBJECT
+    subject = caller_subject(context.token)
     probe = partial(
         storage_probe.run_scope_probe, record.root_uri, vendor=vendor, store_endpoint=context.settings.s3_endpoint, session_name=role_session_name(subject)
     )

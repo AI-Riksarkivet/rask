@@ -19,6 +19,7 @@ from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.idp_identity import IdpVerifier, PersonPrincipal
 from lakehouse.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
 from lakehouse.governed.oidc import ProviderUnavailableError
+from lakehouse.naming import ANONYMOUS
 
 
 class DoorSettings(Protocol):
@@ -28,6 +29,19 @@ class DoorSettings(Protocol):
     def oidc_enabled(self) -> bool: ...
     @property
     def sa_issuer(self) -> str | None: ...
+
+
+class NamedCaller(Protocol):
+    """A verified caller, as far as naming it goes: a person's or a machine's principal, each named by its key."""
+
+    @property
+    def subject(self) -> str: ...
+
+
+def caller_subject(caller: NamedCaller | None) -> str:
+    """The subject a door's audit record, a tuple it writes and a refusal it answers name its caller by: the principal key
+    :func:`caller_of` verified, or `lakehouse.naming.ANONYMOUS` where no caller was verified (authentication off)."""
+    return caller.subject if caller is not None else ANONYMOUS
 
 
 def caller_of(state: State, settings: DoorSettings, bearer: str | None) -> PersonPrincipal | ServicePrincipal | None:
@@ -89,5 +103,7 @@ def _proved(verifier: IdpVerifier | ServiceAccountVerifier | None, bearer: str) 
 
 __all__ = [
     "DoorSettings",
+    "NamedCaller",
     "caller_of",
+    "caller_subject",
 ]

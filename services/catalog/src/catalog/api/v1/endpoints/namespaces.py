@@ -55,7 +55,6 @@ from catalog.core.identifiers import UUID_PROPERTY, parse_identifier, reconcile_
 from catalog.core.lineage_emit import DROP_TABLE, REGISTER_TABLE
 from catalog.core.modes import CreateMode, DropBehavior, DropMode
 from catalog.core.namespace import warn_if_mixed_file_versions
-from catalog.core.pagination import paginate
 from catalog.schemas import ProtectionResponse, SetProtectionRequest, TrashEntry
 from catalog.services import namespace_subtrees, protections, table_claims, trash_doors, warehouses
 from catalog.services.announcement_intents import Announcement, ControlMessage, NameResolves, NamespaceResolves, Unregistered
@@ -387,18 +386,14 @@ async def list_namespaces(
             partial(warehouses.served_ids, context.settings.registry_root, context.settings.storage_options(), estate=context.settings.estate_warehouse)
         )
 
-    if (authz := decisions.authorization(context)) is not None:
-        response.namespaces, response.page_token = await visible_pages.authorized_page(
-            authz,
-            resolver,
-            relation="can_get_metadata",
-            kind="namespace",
-            candidates=[(name, [*segments, name]) for name in names],
-            page_token=page_token,
-            limit=limit,
-        )
-        return response
-    response.namespaces, response.page_token = paginate(names, page_token, limit)
+    response.namespaces, response.page_token = await visible_pages.authorized_page(
+        decisions.authorization(context),
+        resolver,
+        kind="namespace",
+        candidates=[(name, [*segments, name]) for name in names],
+        page_token=page_token,
+        limit=limit,
+    )
     return response
 
 
@@ -1065,18 +1060,7 @@ async def list_tables(
     candidates = [(name, [*segments, name]) for name in names]
     if not include_declared:
         candidates = await listings.holding_a_version(resolver, so, candidates)
-    # With FGA on, keep only the tables the caller may see (`can_get_metadata`, the describer's rung, [[LH-570]]), each
-    # judged on the object its name resolves to ([[LH-223]], [[LH-524]]).
-    if (authz := decisions.authorization(context)) is not None:
-        response.tables, response.page_token = await visible_pages.authorized_page(
-            authz,
-            resolver,
-            relation="can_get_metadata",
-            kind="table",
-            candidates=candidates,
-            page_token=page_token,
-            limit=limit,
-        )
-        return response
-    response.tables, response.page_token = paginate([name for name, _ in candidates], page_token, limit)
+    response.tables, response.page_token = await visible_pages.authorized_page(
+        decisions.authorization(context), resolver, kind="table", candidates=candidates, page_token=page_token, limit=limit
+    )
     return response

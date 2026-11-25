@@ -240,7 +240,8 @@ string ([[LH-608]]). The doors answer who acted on a record the same way: a tras
 `defined_by`. A service acting for itself names itself (`system:declaration`, `service:maintenance`) or no actor, and a
 stack that authenticates nobody names no actor (a trash entry and a protection say `anonymous`). The actor is who
 acted, never whom to tell: a notifier targets `extra.subject`. A role's `created_by` and an offboarding record's
-`deleted_by` name the principal key itself, as the audit trail does, and so does lineage's run feed (§ Whom a run names).
+`deleted_by` name the principal key itself, as the audit trail does, and so does lineage's run feed (§ Whom a run names);
+where no caller was verified, each names `anonymous`, the one spelling the trail gives an unverified caller.
 
 ### What a notifier asks
 

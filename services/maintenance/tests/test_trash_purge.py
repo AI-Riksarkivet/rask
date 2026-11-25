@@ -481,8 +481,10 @@ def test_one_records_failed_release_holds_it_and_the_step_goes_on(tmp_path: Path
 @pytest.mark.parametrize(
     ("act", "released", "stopped_by"),
     [
-        pytest.param(_purges, True, "the maintained estate or the trash listing could not be read (JSONDecodeError: ", id="the-purge"),
-        pytest.param(_releases, False, "the trash, the warehouse registry or the estate could not be read (JSONDecodeError: ", id="the-release"),
+        pytest.param(_purges, True, "the maintained estate or the trash listing could not be read (UnreadableRecordError: the records at ", id="the-purge"),
+        pytest.param(
+            _releases, False, "the trash, the warehouse registry or the estate could not be read (UnreadableRecordError: the records at ", id="the-release"
+        ),
     ],
 )
 def test_a_reclaimer_whose_warehouse_registry_holds_an_unreadable_record_does_not_run(

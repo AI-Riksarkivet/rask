@@ -15,22 +15,20 @@ refuses a name a standing role holds. A project holds few roles, so a role is fo
 All IO here is blocking; callers threadpool it.
 """
 
-import json
 import logging
 import uuid
 from datetime import UTC, datetime
 from hashlib import blake2s
 from typing import Final
 
-import pyarrow.fs as pafs
 from lance_namespace import InternalError
 from pydantic import ValidationError
 
 from catalog.schemas import RoleRecord
-from lakehouse.problems.outage import reads_as_store_outage, store_refusal
+from lakehouse.problems.outage import store_refusal
 from lakehouse.records import control_prefixes
+from lakehouse.records.record_store import read_listing
 from lakehouse.storage.conditional_records import RecordChangedError, RecordExistsError, create_json, read_json, replace_json
-from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 
 
@@ -90,22 +88,19 @@ def _read_roles(control_root: str, storage_options: StorageOptions, project: str
         ServiceUnavailableError: The store did not answer a record's read: one skipped as unreadable would read as a
             corrupt record, which no retry mends ([[LH-572]]).
     """
-    fs, base = fs_and_base(control_root, storage_options)
+    prefix = f"{_ROLES_PREFIX}/{project}"
+    try:
+        listing = read_listing(control_root, storage_options, prefix, event="role_record")
+    except OSError as exc:
+        raise store_refusal(exc, reading=f"reading {prefix}", so="the project's roles cannot be read") from exc
     found: list[RoleRecord] = []
-    unreadable: list[str] = []
-    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_ROLES_PREFIX}/{project}", allow_not_found=True)):
-        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
-            continue
+    unreadable = list(listing.unreadable)
+    for path, raw in listing.records:
         try:
-            with fs.open_input_stream(info.path) as stream:
-                stored = StoredRole.model_validate(json.loads(stream.readall().decode("utf-8")))
-        except FileNotFoundError:
-            continue
-        except (OSError, ValueError, ValidationError) as exc:
-            if reads_as_store_outage(exc):
-                raise store_refusal(exc, reading=f"reading {info.path}", so="the project's roles cannot be read") from exc
-            log.warning("role_record_unreadable", extra={"path": info.path, "error": str(exc)})
-            unreadable.append(info.path)
+            stored = StoredRole.model_validate(raw)
+        except ValidationError as exc:
+            log.warning("role_record_malformed", extra={"path": path, "error": str(exc)})
+            unreadable.append(path)
             continue
         if stored.ended_at is None:
             found.append(RoleRecord(**stored.model_dump(exclude={"ended_at"})))

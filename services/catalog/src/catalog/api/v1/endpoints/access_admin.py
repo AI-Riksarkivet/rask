@@ -64,6 +64,7 @@ from catalog.services.announcement_intents import Announcement, ControlMessage, 
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids, fga_model, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.governed.principal import is_principal
 
 
@@ -326,7 +327,7 @@ async def read_access_tuples(
         )
     else:
         obj_filter = None  # no filter at all → the whole store, paginated
-    subject = token.subject if token else "anonymous"
+    subject = caller_subject(token)
     resource = obj_filter or "*"
     try:
         tuples, next_token = await fga_reads.read_tuples(
@@ -422,7 +423,7 @@ async def _change_tuple(
     client: OpenFgaClient, announcer: Announcer, token: Caller | None, *, body: AccessTuple, change: _TupleChange, store: fga_writes.TupleStore
 ) -> AccessTuple:
     tup = _validated_write_tuple(body, evaluated=change.evaluated)
-    actor = token.subject if token else "anonymous"
+    actor = caller_subject(token)
     # The control-plane feed documents that GRANTS tick the cursor — and the per-object grant surface
     # emits, so a raw-tuple write that stayed silent made this the one grant path live surfaces could
     # not see. Filed before the store mutation and sent after it, like access.py ([[LH-576]]).
@@ -511,7 +512,7 @@ async def check_access(
         raise InvalidInputError(f"{body.relation!r} is not a relation the model defines on {fga_type}")
     obj, name = await _named(resolver, settings, body.object)
     user = _qualified_subject(body.user)
-    subject = token.subject if token else "anonymous"
+    subject = caller_subject(token)
     try:
         allowed = await fga_reads.check_fga_user(client, fga_user=user, relation=body.relation, obj=obj, context=body.context or None)
     except ServiceUnavailableError:
@@ -550,7 +551,7 @@ async def list_access_objects(
         raise InvalidInputError(f"{body.type!r} is not a type the authorization model defines")
     relation = _validated_relation(body.type, body.relation)
     user = _qualified_subject(body.user)
-    subject = token.subject if token else "anonymous"
+    subject = caller_subject(token)
     try:
         listing = await fga_reads.list_fga_user_objects(client, fga_user=user, relation=relation, object_type=body.type)
     except ServiceUnavailableError:
@@ -588,7 +589,7 @@ async def list_access_users(
         raise InvalidInputError(f"{body.user_type!r} is not a type the authorization model defines")
     if body.user_relation is not None and body.user_relation not in _defined_relations(body.user_type):
         raise InvalidInputError(f"{body.user_relation!r} is not a relation the model defines on {body.user_type}")
-    subject = token.subject if token else "anonymous"
+    subject = caller_subject(token)
     try:
         users = await fga_reads.list_fga_users(
             client,
@@ -634,7 +635,7 @@ async def expand_access(
     relation = _validated_relation(_validated_object(body.object), body.relation)
     obj, name = await _named(resolver, settings, body.object)
     depth = max(1, min(body.depth, fga_reads.MAX_EXPAND_TREE_DEPTH))
-    subject = token.subject if token else "anonymous"
+    subject = caller_subject(token)
     try:
         tree = await fga_reads.expand_tree(client, relation=relation, obj=obj, max_depth=depth)
     except ServiceUnavailableError:
@@ -680,7 +681,7 @@ async def simulate_access(
     user = _qualified_subject(body.user)
     # Validated, not merely parsed — same gate a real write clears.
     hypothetical = [_validated_write_tuple(t.model_copy(update={"object": await _held_object(resolver, t.object)}), evaluated=True) for t in body.hypothetical]
-    subject = token.subject if token else "anonymous"
+    subject = caller_subject(token)
     try:
         # Two checks, one round trip each. The baseline cannot be skipped when `hypothetical` is empty
         # either: the caller still asked for a delta, and answering with allowed == baseline is the
@@ -753,7 +754,7 @@ async def delete_principal(
     ([[LH-576]]). ``revoked`` counts the tuples this call removed.
     """
     key = _principal_key(principal)
-    actor = token.subject if token else "anonymous"
+    actor = caller_subject(token)
     if token is not None and token.subject == key:
         raise InvalidInputError("an estate admin cannot offboard themselves: the rung this door asks would go with them")
     user = fga_ids.user_object(key)

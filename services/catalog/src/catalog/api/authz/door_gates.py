@@ -17,6 +17,7 @@ from catalog.services import table_claims
 from catalog.services.table_claims import ResolvedTable
 from catalog.services.tables import commits
 from lakehouse.governed import fga_ids
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.storage.options import StorageOptions
 
 
@@ -169,7 +170,7 @@ async def require_relation_on_a_path(
     """
     authz = authorization(context)
     if obj is None:
-        raise refusal_of_absent(user=context.token.subject if context.token is not None else "", relation=relation, label=path)
+        raise refusal_of_absent(user=caller_subject(context.token), relation=relation, label=path)
     if authz is not None:
         await authz.require(relation, obj, label=path)
 

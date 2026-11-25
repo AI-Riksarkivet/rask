@@ -68,7 +68,7 @@ from catalog.api.authz import decisions, door_gates, hierarchy, object_grants
 from catalog.api.authz.context import AuthzContextDep
 from catalog.api.declared import Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import ControlEmitterDep, SettingsDep
-from catalog.api.security import CurrentToken, actor_of, record_actor_of, subject_of
+from catalog.api.security import CurrentToken, actor_of, record_actor_of
 from catalog.core.config import CatalogStore, Settings
 from catalog.schemas import (
     CreateProjectRequest,
@@ -86,6 +86,7 @@ from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids, fga_reads, fga_resilience, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import CONTROL_ID_RE
 from lakehouse.records import maintenance_policies
@@ -438,7 +439,7 @@ async def project_to_delete(project_id: str, context: AuthzContextDep) -> Projec
     if record is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     starter = record.deleting_by
-    if starter is not None and starter == subject_of(context.token):
+    if starter is not None and starter == caller_subject(context.token):
         audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=project_registry.DELETING_BY, subject=starter, resource=f"project:{project_id}")
         return record
     doors = [("can_administer", f"project:{project_id}")]
@@ -554,7 +555,7 @@ async def _start_delete(project_id: str, record: ProjectRecord, settings: Catalo
             holds=held,
         )
     # Recorded before the first destructive step, so whichever step fails, the retry finds the delete and who started it.
-    if await run_in_threadpool(project_registry.mark_deleting, settings.registry_root, so, project_id, by=subject_of(token)) is None:
+    if await run_in_threadpool(project_registry.mark_deleting, settings.registry_root, so, project_id, by=caller_subject(token)) is None:
         raise TableNotFoundError(f"project not found: {project_id}")
 
 
@@ -627,9 +628,9 @@ async def delete_project(
     if not record.is_being_deleted:
         await _start_delete(project_id, record, context.settings, token=context.token, force=force)
     # The caller who retired the tenant, in the two spellings `establish_project` names its author by: the subject the
-    # audit trail and the revoked tuples' writer name, and the actor its control events name. `system:catalog` is the
-    # honest writer on an auth-off stack, where there genuinely is no principal, never a stand-in for one we failed to thread.
-    writer = context.token.subject if context.token is not None else "system:catalog"
+    # audit trail and the revoked tuples' writer name, and the actor its control events name; on a stack that verifies no
+    # caller, `anonymous` in both (`lakehouse.naming.ANONYMOUS`), never a service that did not act.
+    writer = caller_subject(context.token)
     announced = actor_of(context.token)
     obj = f"project:{project_id}"
     retiring = _Retiring(project_id=project_id, settings=context.settings, so=so, authz=authz, writer=writer, announced=announced)

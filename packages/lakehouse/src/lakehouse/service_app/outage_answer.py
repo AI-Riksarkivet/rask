@@ -15,7 +15,7 @@ import logging
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from lakehouse.problems.ns_errors import store_unavailable
-from lakehouse.problems.outage import reads_as_store_outage
+from lakehouse.storage.outage import reads_as_store_outage
 
 
 class StoreOutageMiddleware:

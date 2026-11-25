@@ -29,20 +29,21 @@ Every function is BLOCKING IO — callers threadpool it, exactly as they did whe
 import hashlib
 import json
 import logging
-from collections.abc import Callable
 from typing import Any
 
 import pyarrow.fs as pafs
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from lakehouse.storage import stored_objects
 from lakehouse.storage.errors import store_call
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions, object_client, on_s3
+from lakehouse.storage.outage import reads_as_store_outage
 from lakehouse.storage.uri import s3_object
 
 
 __all__ = [
+    "Listing",
     "UnreadableRecordError",
     "delete_record",
     "get_record",
@@ -50,6 +51,7 @@ __all__ = [
     "list_records",
     "parse_record",
     "put_record",
+    "read_listing",
     "read_record",
     "record_key",
     "record_name",
@@ -181,59 +183,75 @@ def delete_record(control_root: str, storage_options: StorageOptions, key: str) 
     return stored_objects.delete_object(control_root, storage_options, key)
 
 
-def list_records(control_root: str, storage_options: StorageOptions, prefix: str, *, event: str) -> list[dict[str, Any]]:
-    """Every readable record under ``prefix`` (unordered). An absent prefix yields ``[]``.
+class Listing(BaseModel):
+    """What a read of a prefix's records found: each record, by the path it sits at, and the path of each record that is
+    there and cannot be read as a JSON object."""
 
-    NON-RECURSIVE on purpose: registries park their own state under a child prefix
-    (``_policies/state/``, ``_warehouses/bucket-claims/``) and those are not records of this kind.
-
-    One unreadable or malformed record is SKIPPED with a warning rather than voiding the listing. That
-    is the tolerance every caller was written for — these feed maintenance sweeps, where one bad record
-    must not stop every other tenant being maintained — and it is also why a caller making a DESTRUCTIVE
-    decision must not use this: a record it cannot read is silently not in the answer. Such a caller reads
-    :func:`list_every_record`, which decides on the whole listing or none.
-    """
-    return _read_listing(control_root, storage_options, prefix, event=event, on_unreadable=_skip)
+    records: list[tuple[str, dict[str, Any]]] = Field(default_factory=list)
+    unreadable: list[str] = Field(default_factory=list)
 
 
-def list_every_record(control_root: str, storage_options: StorageOptions, prefix: str, *, event: str) -> list[dict[str, Any]]:
-    """Every record under ``prefix`` (unordered), as :func:`list_records` reads them, raising on one it cannot read.
+def read_listing(control_root: str, storage_options: StorageOptions, prefix: str, *, event: str) -> Listing:
+    """Every record under ``prefix`` (unordered), and every record there that cannot be read as one, logged
+    ``<event>_unreadable`` or ``<event>_malformed``. An absent prefix reads as empty.
+
+    NON-RECURSIVE on purpose: registries park their own state under a child prefix (``_policies/state/``,
+    ``_warehouses/bucket-claims/``) and those are not records of this kind.
+
+    A record deleted since the listing named it is no record. A read the store did not answer raises: skipped as
+    unreadable, it would read as a corrupt record, which no retry mends, and leave a tolerant caller deciding on a
+    listing one record short ([[LH-572]]).
 
     Raises:
-        ValueError: A record is not a JSON object.
+        OSError: The store did not answer the listing or a record's read (`lakehouse.storage.outage`).
     """
-    return _read_listing(control_root, storage_options, prefix, event=event, on_unreadable=_refuse)
-
-
-def _skip(_error: Exception) -> None:
-    """Leave an unreadable record out of the listing; its warning is already logged."""
-
-
-def _refuse(error: Exception) -> None:
-    """Refuse the whole listing over one record it cannot read."""
-    raise error
-
-
-def _read_listing(
-    control_root: str, storage_options: StorageOptions, prefix: str, *, event: str, on_unreadable: Callable[[Exception], None]
-) -> list[dict[str, Any]]:
-    """The records under ``prefix``, each one that cannot be read logged and handed to ``on_unreadable``."""
     fs, base = fs_and_base(control_root, storage_options)
-    records: list[dict[str, Any]] = []
-    selector = pafs.FileSelector(f"{base}/{prefix}", allow_not_found=True, recursive=False)
-    for info in fs.get_file_info(selector):
+    listing = Listing()
+    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{prefix}", allow_not_found=True, recursive=False)):
         if info.type != pafs.FileType.File or not info.path.endswith(".json"):
             continue
         try:
             with fs.open_input_stream(info.path) as stream:
                 loaded: Any = json.loads(stream.readall().decode())
-        except Exception as exc:  # noqa: BLE001 — logged, then skipped or re-raised by on_unreadable
+        except FileNotFoundError:
+            continue
+        except Exception as exc:
+            if reads_as_store_outage(exc):
+                raise
             log.warning(f"{event}_unreadable", extra={"path": info.path, "error": str(exc)})
-            on_unreadable(exc)
+            listing.unreadable.append(info.path)
             continue
         if isinstance(loaded, dict):
-            records.append(loaded)
+            listing.records.append((info.path, loaded))
         else:
             log.warning(f"{event}_malformed", extra={"path": info.path})
-            on_unreadable(ValueError(f"the record at {info.path} is not a JSON object"))
-    return records
+            listing.unreadable.append(info.path)
+    return listing
+
+
+def list_records(control_root: str, storage_options: StorageOptions, prefix: str, *, event: str) -> list[dict[str, Any]]:
+    """Every readable record under ``prefix`` (unordered), as :func:`read_listing` reads them.
+
+    One record that is there and cannot be read is SKIPPED with a warning rather than voiding the listing. That is the
+    tolerance every caller was written for (these feed maintenance sweeps, where one bad record must not stop every
+    other tenant being maintained), and it is also why a caller making a DESTRUCTIVE decision must not use this: a record
+    it cannot read is not in the answer. Such a caller reads :func:`list_every_record`.
+
+    Raises:
+        OSError: The store did not answer the listing or a record's read.
+    """
+    return [raw for _, raw in read_listing(control_root, storage_options, prefix, event=event).records]
+
+
+def list_every_record(control_root: str, storage_options: StorageOptions, prefix: str, *, event: str) -> list[dict[str, Any]]:
+    """Every record under ``prefix`` (unordered), as :func:`read_listing` reads them, deciding on the whole listing or
+    none.
+
+    Raises:
+        UnreadableRecordError: A record is there and cannot be read as one.
+        OSError: The store did not answer the listing or a record's read.
+    """
+    listing = read_listing(control_root, storage_options, prefix, event=event)
+    if listing.unreadable:
+        raise UnreadableRecordError(f"the records at {', '.join(listing.unreadable)} cannot be read")
+    return [raw for _, raw in listing.records]

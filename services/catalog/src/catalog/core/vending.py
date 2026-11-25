@@ -48,13 +48,14 @@ from lakehouse.lancekit.features import CREATE_FORMAT, BasePathRef, TableFileFor
 from lakehouse.lancekit.table_layout import BRANCH_STAGING_GLOB, FINAL_MANIFEST_GLOB, REFS_GLOB, WRITER_PUT_GLOBS
 from lakehouse.naming import PLATFORM_PREFIX
 from lakehouse.problems.ns_errors import ProblemExtensions
-from lakehouse.problems.outage import reads_as_store_outage, store_refusal
+from lakehouse.problems.outage import store_refusal
 from lakehouse.records import file_identities, history_fences
 from lakehouse.records.base_registry import BaseJudgement, BaseRole, BaseStanding
 from lakehouse.storage import store_session
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.outage import reads_as_store_outage
 from lakehouse.storage.store_session import IssuedSession, WebIdentity
 
 

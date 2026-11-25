@@ -39,6 +39,7 @@ from catalog.core.version_retention import recorded_branch
 from catalog.schemas import CredentialResponse, VendedCredentials
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.records import maintenance_policies
 
 
@@ -226,7 +227,7 @@ async def vend_credentials(
         audit(
             AuditAction.VEND_CREDENTIALS,
             AuditOutcome.SUCCESS,
-            subject=token.subject if token is not None else None,
+            subject=caller_subject(token),
             resource=obj,
             tier=tier,
             door="credentials",

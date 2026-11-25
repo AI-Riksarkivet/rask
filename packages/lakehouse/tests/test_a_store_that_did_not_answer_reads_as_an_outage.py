@@ -13,7 +13,7 @@ import pytest
 from botocore.exceptions import ConnectionClosedError, EndpointConnectionError, ParamValidationError, ReadTimeoutError
 from lance_namespace import InternalError
 
-from lakehouse.problems.outage import reads_as_store_outage
+from lakehouse.storage.outage import reads_as_store_outage
 from tests.store_answers import answered
 
 

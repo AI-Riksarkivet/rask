@@ -38,6 +38,7 @@ from catalog.api.v1.endpoints.credentials import vend_credentials
 from catalog.core.config import Settings
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse.lancekit.features import TableFileFormat
+from lakehouse.naming import ANONYMOUS
 from lakehouse.records import location_claims
 from lakehouse.records.location_claims import ClaimStore
 from tests.catalog_settings import catalog_settings
@@ -96,7 +97,7 @@ def _vend(location: str, branch: str) -> tuple[Any, RecordingVendor]:
             settings=cast("Any", _settings()),
             token=None,
             vendor=vendor,
-            subject="anon",
+            subject=ANONYMOUS,
             tier="write",
             branch=branch,
         )
@@ -116,7 +117,7 @@ def test_the_refusal_happens_BEFORE_a_credential_is_minted(table: str) -> None:
                 settings=cast("Any", _settings()),
                 token=None,
                 vendor=vendor,
-                subject="anon",
+                subject=ANONYMOUS,
                 tier="write",
                 branch="nobody-made-this",
             )

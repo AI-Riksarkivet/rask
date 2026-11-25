@@ -50,6 +50,7 @@ from lakehouse import derived_tables
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.lancekit.lance_session import fresh_session, open_dataset
 from lakehouse.records.history_fences import TableHistory
 from lakehouse.storage.conditional_records import RecordExistsError
@@ -145,7 +146,7 @@ async def erase_subject(
     audit(
         AuditAction.ERASURE_OBLIGATION_RECORDED,
         AuditOutcome.SUCCESS,
-        subject=token.subject if token is not None else None,
+        subject=caller_subject(token),
         resource=obligation.object_id,
         obligation=obligation.obligation_id,
         deadline=obligation.deadline.isoformat(),
@@ -156,14 +157,14 @@ async def erase_subject(
         audit(
             AuditAction.ERASURE_REF_OBLIGED,
             AuditOutcome.SUCCESS,
-            subject=token.subject if token is not None else None,
+            subject=caller_subject(token),
             resource=obligation.object_id,
             obligation=obligation.obligation_id,
             ref=ref,
             version=head,
         )
     try:
-        await _purge_hidden_branches(settings, so, table_uuid, subject=token.subject if token is not None else None)
+        await _purge_hidden_branches(settings, so, table_uuid, subject=caller_subject(token))
     except Exception as exc:  # noqa: BLE001 — the obligation stands and its trail is written; the verification purges again and settles only once it has
         log.warning("erasure_hidden_branches_not_purged", extra={"obligation": obligation.obligation_id, "table_uuid": table_uuid, "error": str(exc)[:300]})
     return obligation.view(now, table=canonical, hidden=())
@@ -231,7 +232,7 @@ async def verify_erasure(
     dataset = await run_in_threadpool(table.open, so)
     erasure_obligations.require_verifiable(obligation, table_uuid=table_uuid, location=str(dataset.uri), predicate=body.predicate)
     # Only for a verification admitted above: one hidden since the record raced the record's own purge.
-    await _purge_hidden_branches(context.settings, so, table_uuid, subject=context.token.subject if context.token is not None else None)
+    await _purge_hidden_branches(context.settings, so, table_uuid, subject=caller_subject(context.token))
     report = await run_in_threadpool(
         erasure.verify,
         dataset,
@@ -267,7 +268,7 @@ async def verify_erasure(
     audit(
         AuditAction.ERASURE_OBLIGATION_VERIFIED,
         AuditOutcome.SUCCESS,
-        subject=context.token.subject if context.token is not None else None,
+        subject=caller_subject(context.token),
         resource=obligation.object_id,
         obligation=obligation_id,
         state=standing.state,

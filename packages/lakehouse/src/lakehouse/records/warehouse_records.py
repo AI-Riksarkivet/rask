@@ -33,6 +33,7 @@ __all__ = [
     "maintainable_buckets",
     "read",
     "read_warehouse_records",
+    "record_key",
     "warehouse_record",
 ]
 
@@ -41,6 +42,13 @@ log = logging.getLogger(__name__)
 
 #: Where the catalog writes warehouse records.
 REGISTRY_PREFIX = control_prefixes.WAREHOUSES
+
+
+def record_key(warehouse_id: str) -> str:
+    """The key of warehouse ``warehouse_id``'s record under the control root: one spelling for every read and write,
+    since a conditional write aimed at another key than the read's would silently do nothing."""
+    return f"{REGISTRY_PREFIX}/{warehouse_id}.json"
+
 
 #: The event stem for this registry's store warnings (`<stem>_malformed`, `<stem>_unreadable`).
 _EVENT = "warehouse_record"
@@ -186,7 +194,7 @@ def warehouse_record(control_root: str, storage_options: StorageOptions, warehou
     """
     if not CONTROL_ID_RE.fullmatch(warehouse_id):
         return None
-    key = f"{REGISTRY_PREFIX}/{warehouse_id}.json"
+    key = record_key(warehouse_id)
     raw = read_record(control_root, storage_options, key)
     return read(raw, at=key) if raw is not None else None
 

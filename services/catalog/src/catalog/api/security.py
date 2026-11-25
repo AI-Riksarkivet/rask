@@ -27,15 +27,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from catalog.api.dependencies import SettingsDep, request_settings
 from catalog.core.config import Settings
 from lakehouse.governed.admission import admitted_caller, caller_judge
-from lakehouse.governed.door_caller import caller_of
+from lakehouse.governed.door_caller import caller_of, caller_subject
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
-from lakehouse.naming import ANONYMOUS_ACTOR
+from lakehouse.naming import ANONYMOUS
 
-
-#: The subject a door names when OIDC is disabled. Named rather than inlined so a grep for who can act
-#: without a token returns exactly one place.
-ANONYMOUS_SUBJECT = "anon"
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s are problem+json.
 _bearer = HTTPBearer(auto_error=False, description="OIDC bearer token")
@@ -79,11 +75,6 @@ CurrentToken = Annotated[Caller | None, Depends(authenticate)]
 judge = caller_judge(gate=authenticate, settings=request_settings, authenticated=_authenticated)
 
 
-def subject_of(token: Caller | None) -> str:
-    """The verified caller as the estate's subject id: its principal key, or ``anon`` with OIDC off."""
-    return token.subject if token is not None else ANONYMOUS_SUBJECT
-
-
 @overload
 def actor_of(token: Caller) -> str: ...
 @overload
@@ -93,20 +84,20 @@ def actor_of(token: Caller | None) -> str | None:
 
     The OpenFGA user its principal is (`Principal.fga_user`: `user:` and the key, percent-encoded), which every tuple
     naming the caller holds, so a client joining an actor to the grants finds the same person ([[LH-608]]). The audit
-    trail and a tuple's writer name the caller by its subject (:func:`subject_of`).
+    trail and a tuple's writer name the caller by its subject (`lakehouse.governed.door_caller.caller_subject`).
     """
     return token.principal.fga_user if token is not None else None
 
 
 def record_actor_of(token: Caller | None) -> str:
     """The verified caller as a record that always says who acted names it: :func:`actor_of`, or ``anonymous`` with
-    OIDC off (`lakehouse.naming.ANONYMOUS_ACTOR`), as a trash entry and a deletion protection do."""
-    return actor_of(token) or ANONYMOUS_ACTOR
+    OIDC off (`lakehouse.naming.ANONYMOUS`), as a trash entry and a deletion protection do."""
+    return actor_of(token) or ANONYMOUS
 
 
 async def current_subject(token: CurrentToken) -> str:
-    """:func:`subject_of` the request's caller, as a dependency."""
-    return subject_of(token)
+    """The request's caller as its subject (`lakehouse.governed.door_caller.caller_subject`), as a dependency."""
+    return caller_subject(token)
 
 
 CurrentSubject = Annotated[str, Depends(current_subject)]

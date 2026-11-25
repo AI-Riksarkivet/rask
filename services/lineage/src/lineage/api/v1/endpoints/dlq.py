@@ -37,6 +37,7 @@ from lakehouse.events.cloud_events import CloudEvent
 from lakehouse.events.lineage_events import dataset_uuids
 from lakehouse.governed import audit, fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome
+from lakehouse.governed.door_caller import caller_subject
 from lineage.api.dependencies import ProvenanceDep, PublisherDep, SettingsDep
 from lineage.api.fga_deps import (
     FilterDep,
@@ -203,14 +204,14 @@ async def replay_dlq(
     try:
         await republish_staged(publisher, settings, staged)
     except Exception as exc:
-        audit.audit(AuditAction.DLQ_REPLAY, AuditOutcome.FAILURE, subject=token.subject if token else "", resource=_audited(event, run_id))
+        audit.audit(AuditAction.DLQ_REPLAY, AuditOutcome.FAILURE, subject=caller_subject(token), resource=_audited(event, run_id))
         log.warning("lineage_dlq_replay_unannounced", extra={"run_id": run_id, "error": str(exc)})
         raise ServiceUnavailableError(f"replayed {run_id} into the feed, but re-announcing it failed; it stays staged for the relay to retry") from exc
     # Drop exactly what was replayed — dropping by run id would miss it and leave a redundant object.
     await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, staged_key)
     # A completed ACTION records SUCCESS unconditionally (house vocabulary: ALLOW/DENY belong to authz
     # decisions — mirror access_grant/vend_credentials); the subject is empty in auth-off dev.
-    audit.audit(AuditAction.DLQ_REPLAY, AuditOutcome.SUCCESS, subject=token.subject if token else "", resource=_audited(event, run_id))
+    audit.audit(AuditAction.DLQ_REPLAY, AuditOutcome.SUCCESS, subject=caller_subject(token), resource=_audited(event, run_id))
     log.info("lineage_dlq_replayed", extra={"run_id": run_id})
     return DlqReplayResponse(status="replayed", run_id=run_id)
 
@@ -264,7 +265,7 @@ async def replay_parked(*, run_id: str, request: Request, provenance: Provenance
         await provenance.forget_parked([delivery.key for delivery in recovered])
         for _ in recovered:
             record_outcome(Outcome.RECOVERED, door=Door.DEAD_LETTER)
-    subject = token.subject if token else ""
+    subject = caller_subject(token)
     left = [(delivery, answer) for delivery, answer in zip(kept, answers, strict=True) if delivery.feed_key not in held]
     if left:
         audit.audit(AuditAction.DLQ_PARKED_REPLAY, AuditOutcome.FAILURE, subject=subject, resource=f"run:{run_id}")

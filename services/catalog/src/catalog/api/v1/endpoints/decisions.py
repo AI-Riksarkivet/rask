@@ -57,6 +57,7 @@ from lakehouse.governed.decider import (
     DecisionLocateResult,
     TableDecision,
 )
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.lancekit.base_refs import names_a_location
 from lakehouse.records import location_claims
@@ -248,7 +249,7 @@ async def decide_check(
 @management_router.post("/list-users", dependencies=[Depends(require_can_expand_members)])
 async def decide_list_users(client: WiredFgaClient, token: CurrentToken, body: DecisionListUsers) -> DecisionListUsersResult:
     """The people in a membership userset (``role:<id>#assignee``, ``project:<id>#member``)."""
-    caller = token.subject if token else "anonymous"
+    caller = caller_subject(token)
     asked = {"resource": body.object, "relation": body.relation}
     obj_type, sep, obj_id = body.object.partition(":")
     if not (sep and obj_id and fga_ids.is_object_id(body.object)) or (obj_type, body.relation) not in _EXPANDABLE_USERSETS:
@@ -265,7 +266,7 @@ async def decide_list_users(client: WiredFgaClient, token: CurrentToken, body: D
 @management_router.post("/governed", dependencies=[Depends(require_can_probe_governance)])
 async def decide_governed(client: WiredFgaClient, token: CurrentToken, body: DecisionGoverned) -> DecisionGovernedResult:
     """Whether any tuple names each ``table:`` object: a refusal on an object nothing governs can never be granted away."""
-    caller = token.subject if token else "anonymous"
+    caller = caller_subject(token)
     asked = {"objects": ",".join(body.objects)}
     if foreign := sorted(o for o in body.objects if o.partition(":")[0] not in _PROBEABLE_TYPES):
         raise _refused(caller, "governed", f"governed answers for {', '.join(sorted(_PROBEABLE_TYPES))} objects only, not {', '.join(foreign[:5])}", **asked)
@@ -304,7 +305,7 @@ async def decide_locate(token: CurrentToken, settings: SettingsDep, body: Decisi
     claims are the answer because the ``dir`` backend keeps no location exclusive (``lance_docs/ns_catalog/catalog/dir``
     § Manifest Table Commits) and the claim store picks one holder (`lakehouse.records.location_claims`).
     """
-    caller = token.subject if token else "anonymous"
+    caller = caller_subject(token)
     asked = {"locations": ",".join(body.locations)}
     store = table_claims.claim_store(settings)
     try:

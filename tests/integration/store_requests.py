@@ -55,6 +55,17 @@ class StoreRequest(BaseModel):
 
 #: The body S3 answers a request with while it cannot serve it (its ``ServiceUnavailable`` error).
 _UNAVAILABLE = b"<?xml version='1.0' encoding='UTF-8'?><Error><Code>ServiceUnavailable</Code><Message>Service is unable to handle request.</Message></Error>"
+#: The body S3 answers a read of a key it does not hold with (its ``NoSuchKey`` error).
+_NO_SUCH_KEY = b"<?xml version='1.0' encoding='UTF-8'?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message></Error>"
+
+
+class _Answer(BaseModel):
+    """What the proxy answers each of ``requests`` with in place of forwarding it."""
+
+    requests: Callable[[StoreRequest], bool]
+    status: int
+    reason: str
+    body: bytes
 
 
 class _Forwarding(http.server.ThreadingHTTPServer):
@@ -65,8 +76,9 @@ class _Forwarding(http.server.ThreadingHTTPServer):
         self.upstream = upstream
         self.lock = threading.Lock()
         self.seen: list[StoreRequest] = []
-        #: The requests answered 503 rather than forwarded: none unless a test names them (:meth:`CountedStore.answering_unavailable`).
-        self.answered_unavailable: Callable[[StoreRequest], bool] | None = None
+        #: The requests answered in place of being forwarded, and with what: none unless a test names them
+        #: (:meth:`CountedStore.answering_unavailable`, :meth:`CountedStore.answering_absent`).
+        self.answered_instead: _Answer | None = None
 
     def record(self, request: StoreRequest) -> None:
         """Keep ``request`` among those seen. Called before its answer reaches the client, so a request is in the window
@@ -133,20 +145,20 @@ class _Handler(_Relaying):
             query=urllib.parse.parse_qs(parsed.query),
             access_key=signed.group(1) if signed else "",
         )
-        unavailable = forwarding.answered_unavailable
-        if unavailable is not None and unavailable(request):
-            self._answer_unavailable()
+        instead = forwarding.answered_instead
+        if instead is not None and instead.requests(request):
+            self._answer(instead)
             return
         headers = {key: value for key, value in self.headers.items() if key.lower() not in _HOP_HEADERS}
         self._relay(forwarding.upstream, self.path, body=body, headers=headers, answered=partial(forwarding.record, request))
 
-    def _answer_unavailable(self) -> None:
-        self.send_response_only(503, "Service Unavailable")
+    def _answer(self, answer: _Answer) -> None:
+        self.send_response_only(answer.status, answer.reason)
         self.send_header("Content-Type", "application/xml")
-        self.send_header("Content-Length", str(len(_UNAVAILABLE)))
+        self.send_header("Content-Length", str(len(answer.body)))
         self.end_headers()
         if self.command != "HEAD":
-            self.wfile.write(_UNAVAILABLE)
+            self.wfile.write(answer.body)
 
     do_GET = do_PUT = do_POST = do_HEAD = do_DELETE = _forward
 
@@ -171,11 +183,23 @@ class CountedStore:
     def answering_unavailable(self, requests: Callable[[StoreRequest], bool]) -> Generator[None]:
         """For the life of the block, answer each of ``requests`` 503 ``ServiceUnavailable`` instead of forwarding it, as a
         store that cannot serve it answers; every other request is forwarded."""
-        self._server.answered_unavailable = requests
+        with self._answering(_Answer(requests=requests, status=503, reason="Service Unavailable", body=_UNAVAILABLE)):
+            yield
+
+    @contextmanager
+    def answering_absent(self, requests: Callable[[StoreRequest], bool]) -> Generator[None]:
+        """For the life of the block, answer each of ``requests`` 404 ``NoSuchKey`` instead of forwarding it, as the store
+        answers a read of an object deleted since a listing named it; every other request is forwarded."""
+        with self._answering(_Answer(requests=requests, status=404, reason="Not Found", body=_NO_SUCH_KEY)):
+            yield
+
+    @contextmanager
+    def _answering(self, answer: _Answer) -> Generator[None]:
+        self._server.answered_instead = answer
         try:
             yield
         finally:
-            self._server.answered_unavailable = None
+            self._server.answered_instead = None
 
 
 @contextmanager

@@ -41,8 +41,8 @@ makes itself (the catalog's reservation marker, its warehouse buckets and its st
 `PreconditionFailedError` (412: a conditional write whose condition did not hold), `WriteConflictError` (409: another
 write of the key was in flight, which the store has not settled), `StoreRefusedError` and `StoreUnansweredError`. The
 family is `OSError`, the type pyarrow and Lance raise for the same failures, and each error chains the client's own as
-its cause; `no_answer` is the one rule for which failure is an outage, which `lakehouse.problems.outage` reads: no
-response, a 5xx other than 501, a 429, or a code by which S3 says it did not get to what was asked
+its cause; `no_answer` is the one rule for which botocore failure is an outage, which `lakehouse.storage.outage` reads
+beside the Lance and pyarrow dialects (`reads_as_store_outage`, the one answer every reader asks): no response, a 5xx other than 501, a 429, or a code by which S3 says it did not get to what was asked
 (`unanswered_code`: `InternalError`, `SlowDown`, `ServiceUnavailable`, and `RequestTimeout`, which it answers as a 400).
 No module outside this seam names the S3 client's own exception types: ruff bans `botocore.exceptions` (TID251), and
 the two exchanges with STS and maintenance's bucket audit hold the reasoned exemptions. A lost race (`RecordExistsError`, `RecordChangedError`) and an absent

@@ -820,8 +820,10 @@ governing their data. The project-scoped surface is the console's project page, 
   `trash.list_all` skips (`trash.named`, an undrop restoring its cascade, `warehouses.trash_owned_by`, a cascade's
   `objects.trashed_objects`). A record you cannot read may be the one the decision is about. Every such refusal tells
   an outage from a record (`lakehouse.problems.outage.store_refusal`): a store that did not answer is 503 code 17, which a retry
-  may clear; a record that is there and cannot be read as one is 500 code 18, which only writing it again clears. The
-  registry reader raises the outage itself, so even a tolerant listing never reads one as a corrupt record.
+  may clear; a record that is there and cannot be read as one is 500 code 18, which only writing it again clears.
+  Every registry listing reads through one reader (`lakehouse.records.record_store.read_listing`): a record deleted
+  since the listing named it is no record, and one the store did not answer raises, so even a tolerant listing never
+  reads one as a corrupt record.
 - `deactivate` = offboarding step one (quarantine; routing 403s every name whose first segment is the warehouse).
 - Maintenance lives in **`services/maintenance`** and DECIDES; it rewrites no data (ADR 0162, [[LH-467]]). It runs
   version expiry (`cleanup_old_versions`, tags EXEMPT), trash purge, each table's orphan check and cross-store reconcile, and
@@ -1173,7 +1175,7 @@ governing their data. The project-scoped surface is the console's project page, 
   outcome and keeps its staged manifest. A version another writer took since the writer staged it answers 409 code 14
   before it is judged (`managed_versions.VersionTakenError`, the spec's 409 for a version that exists) and hands the
   writer the ref's next turn ([[LH-259]]); a version beyond the next answers 400. A read the judgment needs that the store
-  cannot serve answers 503 code 17, in Lance's dialect and pyarrow's alike (`lakehouse.problems.outage`), never the 400
+  cannot serve answers 503 code 17, in Lance's dialect and pyarrow's alike (`lakehouse.storage.outage`), never the 400
   code 13 a stock client drops as its own malformed commit; only a ref `table_objects.holds_a_version` finds holding no
   committed version follows version 0, and one whose latest committed version does not open answers 500 code 18
   ([[LH-545]], `lance_docs/ns_catalog/namespace/operations/errors.md`). The door admits a writer or a maintainer (`can_create_version`), and the judge

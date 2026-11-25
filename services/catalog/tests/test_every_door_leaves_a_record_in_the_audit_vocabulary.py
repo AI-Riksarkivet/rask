@@ -9,11 +9,13 @@ obligation is recorded once per ref it covers. The trail they leave is judged as
 reads without naming its columns and version fails here.
 """
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
+from pathlib import Path
 from typing import Any
 
 import pyarrow as pa
 import pytest
+from fastapi.testclient import TestClient
 from lance import blob_array, blob_field
 from pydantic import BaseModel, SecretStr
 
@@ -278,3 +280,48 @@ def test_a_projects_door_names_its_caller_as_every_other_door_does(
     action, reason = recorded
     assert [r["audit.subject"] for r in _trail(caplog) if (r["audit.action"], r.get("audit.reason")) == (action, reason)] == [*conforming]
     assert {r["audit.subject"] for r in _trail(caplog)} == conforming
+
+
+@pytest.fixture
+def unauthenticated_catalog(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+    """The catalog on a real ``dir`` namespace with authentication off, as an estate run with
+    `RASK_INSECURE_ALLOW_UNAUTHENTICATED` serves it: no door verifies a caller."""
+    for key, value in {
+        "LANCE_REST_IMPL": "dir",
+        "LANCE_REST_ROOT": str(tmp_path),
+        "LANCE_S3_ACCESS_KEY_ID": "test",
+        "LANCE_S3_SECRET_ACCESS_KEY": "test",
+        "LANCE_CONTROL_EMIT_ENABLED": "false",
+    }.items():
+        monkeypatch.setenv(key, value)
+    from catalog.core.config import get_settings
+
+    get_settings.cache_clear()
+    from catalog.main import app
+
+    app.dependency_overrides[get_vendor] = _StsVendor
+    try:
+        with TestClient(app) as client:
+            yield client
+    finally:
+        app.dependency_overrides.clear()
+        get_settings.cache_clear()
+
+
+def test_a_caller_no_door_verified_is_named_anonymous_at_every_door(unauthenticated_catalog: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    """With authentication off no caller is verified, and the trail names every such caller one way, ``anonymous``, so a
+    query by subject finds all an unverified caller did, and no record names a service that never acted: a read of rows,
+    a credential vend and a describe that vends each name it."""
+    client = unauthenticated_catalog
+    assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+    assert client.post(f"{_TABLE}/create", content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE}).status_code == 200
+    configure_audit(enabled=True)
+    caplog.clear()
+
+    for path, body in ((f"{_TABLE}/query", _QUERY), (f"{_MANAGED}/credentials", {}), (f"{_TABLE}/describe", {})):
+        answer = client.post(path, json=body)
+        assert answer.status_code == 200, f"{path}: {answer.status_code} {answer.text}"
+
+    named = {(r["audit.action"], r["audit.subject"]) for r in _trail(caplog)}
+    assert {action for action, _ in named} >= {AuditAction.READ_DATA, AuditAction.VEND_CREDENTIALS}, named
+    assert {subject for _, subject in named} == {"anonymous"}, named

@@ -37,10 +37,13 @@ def uuid_of(properties: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-#: Who a record that always says who acted names where no caller was verified (a stack that authenticates nobody): a
-#: trash entry's ``dropped_by``, a deletion protection's armer. A caller is named by the OpenFGA user it is ([[LH-608]]),
-#: and this names no user.
-ANONYMOUS_ACTOR: Final = "anonymous"
+#: Who the estate names where no caller was verified (a stack that authenticates nobody), in both of a caller's spellings:
+#: the actor a record that always says who acted names (a trash entry's ``dropped_by``, a deletion protection's armer),
+#: where a verified caller is the OpenFGA user it is ([[LH-608]]), and the subject the audit trail and a refusal name,
+#: where a verified caller is its principal key (`lakehouse.governed.door_caller.caller_subject`). It names no user and
+#: no principal, so a query by subject finds everything an unverified caller did, and nothing names a service that never
+#: acted.
+ANONYMOUS: Final = "anonymous"
 
 
 #: The shape a control-plane id (project, warehouse, bucket) must have: DNS-safe — lowercase

@@ -55,6 +55,7 @@ from catalog.schemas import (
 )
 from lakehouse.governed import fga_ids, fga_model, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.governed.settings import FgaSettings
 
 
@@ -160,7 +161,7 @@ async def _access_list(context: AuthzContext, *, resolver: Resolver, fga_type: s
     segments = parse_identifier(id)
     obj, name = await _target(resolver, fga_type, segments)
     relations = _can_relations(fga_type)
-    subject = context.token.subject if context.token else "anonymous"
+    subject = caller_subject(context.token)
     try:
         # TaskGroup, not gather: one failed relation cancels the siblings, so a degraded OpenFGA is
         # never hammered by up-to-nine orphaned retry loops after the request has already 503'd.
@@ -303,7 +304,7 @@ async def _access_check(
         raise InvalidInputError(f"{body.relation!r} is not a can_* relation on {fga_type}")
     segments = parse_identifier(id)
     obj, name = await _target(resolver, fga_type, segments)
-    subject = context.token.subject if context.token else "anonymous"
+    subject = caller_subject(context.token)
     # Resolve to a FULL subject (`fga_ids.grantee_object`): a subject is the user it is; a qualified userset
     # (``role:…#assignee``) is passed through as-is. Then `fga_reads.check_fga_user` sends it verbatim —
     # `fga_reads.check` would qualify it again, to ``user:user:…``
@@ -524,7 +525,7 @@ async def _change_access(
         raise InvalidInputError(f"{body.relation!r} is not a grantable rung on {fga_type} (one of {', '.join(grantable)})")
     segments = parse_identifier(target.id)
     obj, name = await _target(resolver, fga_type, segments)
-    actor = context.token.subject if context.token else "anonymous"
+    actor = caller_subject(context.token)
     # Resolve the grantee to a FULL subject (as access/check does for `check_fga_user`): a subject is the
     # user it is; a qualified userset (``role:…#assignee``) is passed through verbatim.
     grantee = fga_ids.grantee_object(body.user)
@@ -730,7 +731,7 @@ async def _access_graph(context: AuthzContext, *, resolver: Resolver, fga_type: 
     client = decisions.require_fga(context.settings, context.client, feature="access graph")
     segments = parse_identifier(id)
     obj, name = await _target(resolver, fga_type, segments)
-    subject = context.token.subject if context.token else "anonymous"
+    subject = caller_subject(context.token)
     try:
         tuples = await fga_reads.read_object_tuples(client, obj)
     except ServiceUnavailableError:
@@ -842,7 +843,7 @@ async def _set_managed_access(
     client = decisions.require_fga(context.settings, context.client, feature="managed access")
     segments = parse_identifier(id)
     obj, name = await _target(resolver, fga_type, segments)
-    actor = context.token.subject if context.token else "system:catalog"
+    actor = caller_subject(context.token)
     tup = fga_writes.ClientTuple(user=_MANAGED_ACCESS_SUBJECT, relation="managed_access", object=obj)
 
     told = announcing.grant_announcement(tup, action="grant_added" if enabled else "grant_revoked", actor=actor_of(context.token), object_name=name)

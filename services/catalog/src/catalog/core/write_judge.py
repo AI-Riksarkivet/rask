@@ -152,9 +152,7 @@ async def requires_run(ns: LanceNamespace, namespace: Sequence[str]) -> bool:
     return False
 
 
-async def judge(
-    op: Write, *, caller: str | None, check: RungCheck | None, inputs: InputsCheck, namespace: Callable[[str], Awaitable[LanceNamespace]]
-) -> Judgement:
+async def judge(op: Write, *, caller: str, check: RungCheck | None, inputs: InputsCheck, namespace: Callable[[str], Awaitable[LanceNamespace]]) -> Judgement:
     """Allow ``op`` or refuse it with the spec's typed error.
 
     ``check`` asks the rung (``None`` with FGA off, when no rung exists to ask). ``inputs`` judges the inputs a stamping

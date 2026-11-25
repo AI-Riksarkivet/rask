@@ -46,6 +46,7 @@ from catalog.core.identifiers import parse_identifier
 from catalog.services import object_uuids
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.naming import PLATFORM_PREFIX
 
 
@@ -247,7 +248,7 @@ async def judge_write(request: Request, *, context: AuthzContext, resolver: Reso
 
     await write_judge.judge(
         write,
-        caller=context.token.subject if context.token is not None else None,
+        caller=caller_subject(context.token),
         check=check,
         inputs=partial(require_declared_inputs, context=context, resolver=resolver),
         namespace=namespace,
@@ -283,7 +284,7 @@ async def judge_staged_run(
     # The stock client's door asks the rule directly, so its decision is audited here as the catalog's own doors' is in
     # `write_judge.judge`: every decision under the run rule leaves a record, whichever door took the write.
     judged = {
-        "subject": context.token.subject if context.token is not None else None,
+        "subject": caller_subject(context.token),
         "resource": f"table:{fga_ids.canonical_object_id(list(segments))}",
         "op": "version_create",
         "requires_run": str(required).lower(),
@@ -352,7 +353,7 @@ async def spec_vend_tier(context: AuthzContext, *, ns: LanceNamespace, segments:
         return ns
 
     write = write_judge.Write(op=door, obj=addressed_object("table", list(segments)), rung=None, table=tuple(segments))
-    await write_judge.judge(write, caller=context.token.subject if context.token is not None else None, check=None, inputs=_names_no_run, namespace=namespace)
+    await write_judge.judge(write, caller=caller_subject(context.token), check=None, inputs=_names_no_run, namespace=namespace)
     return "write"
 
 

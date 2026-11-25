@@ -67,7 +67,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.pagination import ListLimit
 from catalog.api.rask_params import RaskFlag
-from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken, actor_of, record_actor_of
+from catalog.api.security import Caller, CurrentToken, actor_of, record_actor_of
 from catalog.core import json_arrow, native, provenance_guard, table_objects
 from catalog.core.config import Settings
 from catalog.core.formats import refuse_properties_kept_nowhere, reject_unsupported_properties
@@ -81,7 +81,6 @@ from catalog.core.lineage_emit import (
     RESTORE_TABLE,
 )
 from catalog.core.namespace import open_resolved_dataset_unchecked, warn_if_mixed_file_versions
-from catalog.core.pagination import paginate
 from catalog.core.vending import (
     CredentialVendor,
     ModeBVendor,
@@ -103,6 +102,7 @@ from lakehouse.events.control_events import CatalogControlEvent, ControlAction
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.lancekit.features import CREATE_FORMAT, table_file_format
 from lakehouse.naming import uuid_of
 from lakehouse.problems.ns_errors import PartiallyAppliedError
@@ -198,20 +198,9 @@ async def list_all_tables(
     candidates = [(name, parse_identifier(name)) for name in sorted(await _tables_of_every_warehouse(request, context.settings))]
     if not include_declared:
         candidates = await listings.holding_a_version(resolver, so, candidates)
-    # With FGA on, return only the tables the caller may see (`can_get_metadata`, the describer's rung, [[LH-570]]),
-    # each judged on the object its name resolves to; pages count only those.
-    if (authz := decisions.authorization(context)) is not None:
-        response.tables, response.page_token = await visible_pages.authorized_page(
-            authz,
-            resolver,
-            relation="can_get_metadata",
-            kind="table",
-            candidates=candidates,
-            page_token=page_token,
-            limit=limit,
-        )
-        return response
-    response.tables, response.page_token = paginate([name for name, _ in candidates], page_token, limit)
+    response.tables, response.page_token = await visible_pages.authorized_page(
+        decisions.authorization(context), resolver, kind="table", candidates=candidates, page_token=page_token, limit=limit
+    )
     return response
 
 
@@ -292,7 +281,7 @@ async def _vend_on_spec_door(
             if asked:
                 raise PermissionDeniedError(f"can_read_data required on table:{fga_ids.canonical_object_id(segments)} to vend credentials")
             return None
-        subject = context.token.subject if context.token is not None else ANONYMOUS_SUBJECT
+        subject = caller_subject(context.token)
         options = await run_in_threadpool(partial(_mint, location, tier=tier, bases=bases, vendor=vendor, session_name=role_session_name(subject)))
     except LanceNamespaceError:
         if asked:
@@ -304,7 +293,7 @@ async def _vend_on_spec_door(
         audit(
             AuditAction.VEND_CREDENTIALS,
             AuditOutcome.SUCCESS,
-            subject=context.token.subject if context.token is not None else None,
+            subject=caller_subject(context.token),
             resource=resource,
             tier=tier,
             door=door,

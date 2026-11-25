@@ -2,7 +2,7 @@
 
 import asyncio
 from collections.abc import Awaitable, Callable, Sequence
-from typing import Literal
+from typing import Final, Literal
 
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError
@@ -11,6 +11,7 @@ from catalog.api.authz.decisions import Authorization
 from catalog.api.authz.objects import listed_object
 from catalog.api.authz.rungs import LISTING_BATCH
 from catalog.api.dependencies import Resolver
+from catalog.core.pagination import paginate
 from catalog.services import table_claims
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
@@ -18,23 +19,29 @@ from lakehouse.records.location_claims import ClaimStore
 
 
 __all__ = [
+    "LISTING_RELATION",
     "authorized_page",
     "judged_page",
     "named_record_page",
 ]
 
 
+#: What a listing asks of each name it would answer: the describer's rung ([[LH-570]]).
+LISTING_RELATION: Final = "can_get_metadata"
+
+
 async def authorized_page(
-    authz: Authorization,
+    authz: Authorization | None,
     resolver: Resolver,
     *,
-    relation: str,
     kind: Literal["table", "namespace"],
     candidates: Sequence[tuple[str, Sequence[str]]],
     page_token: str | None,
     limit: int | None,
 ) -> tuple[list[str], str | None]:
-    """The page of ``candidates`` the caller holds ``relation`` on, and the page token after it ([[LH-223]]).
+    """The page of ``candidates`` a listing answers its caller, and the page token after it ([[LH-223]]): with
+    authorization on, those the caller holds :data:`LISTING_RELATION` on, each judged on the object its name resolves to
+    ([[LH-524]]); with it off (``authz`` ``None``), every one.
 
     Each candidate is the name the listing answers (sorted) and the segments of the object it names.
 
@@ -48,12 +55,15 @@ async def authorized_page(
     listing for every caller ([[LH-534]]).
     """
 
+    if authz is None:
+        return paginate([name for name, _ in candidates], page_token, limit)
+
     async def resolved(batch: Sequence[tuple[str, Sequence[str]]]) -> list[str | None]:
         return list(await asyncio.gather(*(listed_object(resolver, kind, name, segments=list(segments)) for name, segments in batch)))
 
     page, token = await judged_page(
         authz,
-        relation=relation,
+        relation=LISTING_RELATION,
         candidates=[(name, (name, segments)) for name, segments in candidates],
         objects_of=resolved,
         page_token=page_token,

@@ -11,9 +11,10 @@ from typing import Final
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict
 
-from catalog.api.security import ANONYMOUS_SUBJECT, Caller, actor_of
+from catalog.api.security import Caller, actor_of
 from catalog.services.control_records import GIT
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 
 
 class Author(BaseModel):
@@ -47,7 +48,7 @@ def refuse_what_git_declares(manager: str | None, *, obj: str, token: Caller | N
     """
     if manager != GIT:
         return
-    subject = token.subject if token is not None else ANONYMOUS_SUBJECT
+    subject = caller_subject(token)
     audit(AuditAction.AUTHZ, AuditOutcome.DENY, subject=subject, resource=obj, reason="managed_by_git")
     raise PermissionDeniedError(
         f"{obj} is declared in git, which owns its status, deletion protection, delete profile and existence. Change the declaration (the "

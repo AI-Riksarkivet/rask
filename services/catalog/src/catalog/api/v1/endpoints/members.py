@@ -33,6 +33,7 @@ from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from catalog.services import project_admins
 from lakehouse.governed import fga_ids, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.governed.settings import FgaSettings
 
 
@@ -126,7 +127,7 @@ async def grant_member(
     await door_gates.require_relation(context, relation=f"can_grant_{payload.relation}", obj=obj)
     wired = _client_or_conflict(context.client, context.settings)
     user = _user_string(payload.user)
-    actor = context.token.subject if context.token else "system:catalog"
+    actor = caller_subject(context.token)
     await grant_authority.refuse_a_cross_tenant_role_grant(wired, user, fga_type="project", segments=[project_id], settings=context.settings)
 
     existing = await fga_reads.read_object_tuples(wired, obj)
@@ -172,7 +173,7 @@ async def revoke_member(
     await door_gates.require_relation(context, relation=f"can_grant_{payload.relation}", obj=obj)
     wired = _client_or_conflict(context.client, context.settings)
     user = _user_string(payload.user)
-    actor = context.token.subject if context.token else "system:catalog"
+    actor = caller_subject(context.token)
 
     tup = fga_writes.ClientTuple(user=user, relation=payload.relation, object=obj)
     if payload.relation not in ADMINISTRATIVE:

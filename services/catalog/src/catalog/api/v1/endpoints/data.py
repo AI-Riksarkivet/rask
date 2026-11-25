@@ -63,6 +63,7 @@ from catalog.services.tables import reads, writes
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import audit_read
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.storage.options import StorageOptions
 
 
@@ -686,7 +687,7 @@ def _reader(token: Caller | None) -> str:
     Same expression the grant doors use (`members.py`), and it must never be blank: a read record whose
     subject is empty answers the one question the log exists for with silence.
     """
-    return token.subject if token is not None else "system:catalog"
+    return caller_subject(token)
 
 
 @spec_router.post(

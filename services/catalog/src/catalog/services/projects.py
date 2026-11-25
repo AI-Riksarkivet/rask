@@ -14,20 +14,17 @@ one unreadable record is skipped with a warning, never allowed to void the tenan
 All IO here is blocking; callers threadpool it.
 """
 
-import json
 import logging
 
-import pyarrow.fs as pafs
 from lance_namespace import InternalError
 
 from catalog.services.control_records import ProtectionChange, read_json, with_manager, with_protection
-from lakehouse.problems.outage import reads_as_store_outage, store_refusal
+from lakehouse.problems.outage import store_refusal
 from lakehouse.records import control_prefixes
 from lakehouse.records.project_records import ProjectRecord, UnreadableProjectRecordError
 from lakehouse.records.project_records import read as read_project_record
-from lakehouse.records.record_store import delete_record
+from lakehouse.records.record_store import delete_record, read_listing
 from lakehouse.storage.conditional_records import RecordMissingError, create_json, mutate_json
-from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 
 
@@ -211,28 +208,18 @@ def read_projects(control_root: str, storage_options: StorageOptions) -> tuple[l
     Raises:
         ServiceUnavailableError: The store did not answer a record's read.
     """
-    fs, base = fs_and_base(control_root, storage_options)
+    try:
+        listing = read_listing(control_root, storage_options, _PROJECTS_PREFIX, event="project_record")
+    except OSError as exc:
+        raise store_refusal(exc, reading=f"reading {_PROJECTS_PREFIX}", so="the project registry cannot be read") from exc
     out: list[ProjectRecord] = []
-    skipped: list[str] = []
-    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{_PROJECTS_PREFIX}", allow_not_found=True)):
-        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
-            continue
+    skipped = list(listing.unreadable)
+    for path, raw in listing.records:
         try:
-            with fs.open_input_stream(info.path) as stream:
-                record = json.loads(stream.readall().decode("utf-8"))
-        except FileNotFoundError:
-            continue
-        except Exception as exc:
-            if reads_as_store_outage(exc):
-                raise store_refusal(exc, reading=f"reading {info.path}", so="the project registry cannot be read") from exc
-            log.warning("project_record_unreadable", extra={"path": info.path, "error": str(exc)})
-            skipped.append(info.path)
-            continue
-        try:
-            out.append(read_project_record(record, at=info.path))
+            out.append(read_project_record(raw, at=path))
         except UnreadableProjectRecordError as exc:
-            log.warning("project_record_malformed", extra={"path": info.path, "error": str(exc)})
-            skipped.append(info.path)
+            log.warning("project_record_malformed", extra={"path": path, "error": str(exc)})
+            skipped.append(path)
     return out, skipped
 
 

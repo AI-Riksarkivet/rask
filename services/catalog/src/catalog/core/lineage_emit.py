@@ -233,16 +233,6 @@ def _input_dataset(ref: InputRef, *, namespace: str) -> dict[str, Any]:
     return with_dataset_uuids(dataset, ref.uuids, producer=_PRODUCER)
 
 
-#: Principals that are not an address: a wildcard names everyone, a role names a job.
-#: Values that name a role, a machine, or everyone — never one person. `anon` is the estate-wide
-#: ANONYMOUS_SUBJECT (`catalog.api.security`): with OIDC off every verified-subject dependency
-#: resolves to it, so without this entry a dev or auth-off estate would address one shared inbox
-#: actor literally named `anon` on behalf of everybody.
-
-
-#: `is_person_subject` is imported from the library rather than defined here: it has more than one
-#: producer, and a producer outside the catalog cannot depend on it, so a rule written here could only
-#: ever be applied here. See that module for why that matters.
 def _is_ddl(operation: str) -> bool:
     """Whether this operation CHANGED THE TABLE'S DEFINITION rather than its rows.
 

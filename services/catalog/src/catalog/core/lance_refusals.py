@@ -27,7 +27,7 @@ from lance_namespace import (
 )
 
 from lakehouse.lancekit.commit_verdict import CommitVerdict, classify_commit_failure
-from lakehouse.problems.outage import reads_as_store_outage
+from lakehouse.storage.outage import reads_as_store_outage
 
 
 __all__ = [

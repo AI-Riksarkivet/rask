@@ -35,11 +35,11 @@ from lakehouse.lancekit import auto_cleanup
 from lakehouse.lancekit.absence import reads_as_absent
 from lakehouse.lancekit.features import BasePathRef, flags_from_open_error, manifest_base_path_refs, manifest_feature_flags, mixes_data_file_versions
 from lakehouse.lancekit.lance_session import open_dataset
-from lakehouse.problems.outage import reads_as_store_outage
 from lakehouse.process.supervision import is_fault
 from lakehouse.records.clone_sources import CloneReference, clone_reference
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
+from lakehouse.storage.outage import reads_as_store_outage
 
 
 if TYPE_CHECKING:

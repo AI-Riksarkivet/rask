@@ -29,6 +29,13 @@ _STARTED_FLAG = "startup_complete"
 _DRAINING_FLAG = "shutting_down"
 
 
+def mark_starting(app: FastAPI) -> None:
+    """Declare this process starting: not started and not draining, whatever an earlier lifespan of the same app left
+    (a test client enters one app's lifespan many times in one process)."""
+    setattr(app.state, _STARTED_FLAG, False)
+    setattr(app.state, _DRAINING_FLAG, False)
+
+
 def mark_started(app: FastAPI) -> None:
     """Declare this process's startup finished — called once the base lifespan has entered."""
     setattr(app.state, _STARTED_FLAG, True)

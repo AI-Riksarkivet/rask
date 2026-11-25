@@ -21,6 +21,7 @@ from catalog.core.config import Settings
 from catalog.services import object_uuids
 from catalog.services.tables import creation, rename
 from lakehouse.governed import fga_ids, fga_reads, fga_writes
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.governed.subjects import is_person_subject
@@ -557,10 +558,8 @@ async def revoke_ownership(context: AuthzContext, *, obj: str, origin: fga_write
     """
     if (client := wired(context.settings, context.client)) is None:
         return
-    # The actor is the caller who dropped the object. `system:catalog` is the honest fallback for an
-    # auth-off stack, where there genuinely is no principal — never a stand-in for one we simply did
-    # not thread through.
-    actor = context.token.subject if context.token is not None else "system:catalog"
+    # The revoked tuples' writer is the caller who dropped the object.
+    actor = caller_subject(context.token)
     removed = await fga_writes.revoke_object_tuples(client, obj, actor=actor, origin=origin)  # noqa: TID251
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
@@ -578,7 +577,7 @@ async def revoke_removed_object(
     """
     if (client := wired(context.settings, context.client)) is None:
         return 0
-    actor = context.token.subject if context.token is not None else "system:catalog"
+    actor = caller_subject(context.token)
     removed = await fga_writes.revoke_object_tuples(client, obj, actor=actor, origin="lifecycle_delete")  # noqa: TID251
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
@@ -597,7 +596,7 @@ async def revoke_ghost_object(
     """
     if (client := wired(context.settings, context.client)) is None:
         return 0
-    actor = context.token.subject if context.token is not None else "system:catalog"
+    actor = caller_subject(context.token)
     return len(await fga_writes.revoke_object_tuples(client, obj, actor=actor, origin="drift_repair"))  # noqa: TID251
 
 
@@ -610,7 +609,7 @@ async def write_registry_edges(
     with no client wired."""
     if (client := wired(context.settings, context.client)) is None or not edges:
         return
-    actor = context.token.subject if context.token is not None else "system:catalog"
+    actor = caller_subject(context.token)
     await fga_writes.write_tuples(client, edges, actor=actor, origin="registry_rebuild")  # noqa: TID251
 
 
@@ -626,7 +625,7 @@ async def revoke_expired_object(
     """
     if (client := wired(context.settings, context.client)) is None:
         return []
-    actor = context.token.subject if context.token is not None else "system:catalog"
+    actor = caller_subject(context.token)
     removed = await fga_writes.revoke_object_tuples(client, obj, actor=actor, origin="trash_expired")  # noqa: TID251
     if removed:
         log.info("fga_tuples_revoked", extra={"object": obj, "removed": len(removed)})
