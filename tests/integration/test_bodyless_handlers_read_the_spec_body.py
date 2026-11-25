@@ -4,7 +4,7 @@ The Lance Namespace spec declares a REQUIRED `application/json` body and NO quer
 `DescribeNamespace`, `NamespaceExists`, `TableExists`, `DeregisterTable`, `DescribeTransaction`,
 `ListTableIndices`, `DescribeTableIndexStats` and `GetTableStats` (verified against the vendored
 `lance_docs/ns_catalog/spec.yaml`: every one has `requestBody.required: true` and `query=[]`). Every
-shipped client — pylance's Rust `RestNamespace`, lancedb `namespace_client_impl="rest"`, lance-ray in
+shipped client — pylance's Rust `RestNamespace`, lancedb `namespace_client_impl="rest"` in
 namespace mode, and the generated urllib3 client — sends those fields in the body.
 
 rask declared none of them, so FastAPI bound rask's own aliases as QUERY parameters and dropped the

@@ -788,7 +788,7 @@ class WarehouseResponse(BaseModel):
 class VendedCredentials(BaseModel):
     """Scoped storage credentials for one table at one tier.
 
-    ``storage_options`` is consumed directly by pylance / lance-ray /
+    ``storage_options`` is consumed directly by pylance / the LanceDB SDK /
     object_store. ``expires_at_millis`` is when the client must refresh
     (``None`` for long-lived static keys).
     """

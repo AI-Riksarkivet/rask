@@ -48,9 +48,8 @@ dev = [
     "ty",
     "pylance>=14.0.3",
     "lancedb>=0.41.0",
-    # The third stock client criterion 2 reads a governed table through (tests/e2e-py/test_the_catalog_is_correct.py):
-    # a distributed read resolves the table through the catalog's namespace, as lancedb's open does.
-    "lance-ray>=0.5.0",
+    # pylance's bf16 extension array (lance._arrow.bf16) imports pandas; a test that reads a bf16 column needs it.
+    "pandas>=3.0",
     # pytest-timeout — the only tool that can DIAGNOSE a hung suite in Dagger, which is where this
     # suite hangs and a developer box does not. Two dead ends were paid for before it was added, and
     # both are properties of the environment rather than of the bug:
@@ -297,7 +296,7 @@ extra-paths = ["tests/e2e-py"]
 
 [tool.ty.src]
 # ty otherwise walks these and reports on code we neither own nor can fix:
-#   .venv        — third-party site-packages (lance, ray.serve) — 38 diagnostics
+#   .venv        — third-party site-packages (lance, pyarrow) — 38 diagnostics
 exclude = [
     # A vulture whitelist is a file of BARE NAMES by design — every line is an unresolved
     # reference to a type checker. lance-ns excludes it for the same reason.

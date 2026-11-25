@@ -1,7 +1,7 @@
 """Credential vending for the catalog data plane.
 
 The catalog authenticates (OIDC) and authorizes (OpenFGA), then a :class:`CredentialVendor` turns *(table
-object-store location, access tier)* into the ``storage_options`` a client (LanceDB SDK / lance-ray / pylance) uses
+object-store location, access tier)* into the ``storage_options`` a client (pylance, the LanceDB SDK, any stock Lance client) uses
 to reach object storage directly. The target is **S3-compatible** storage: the platform's object store in production
 (AWS S3, Ceph RGW, RustFS), and RustFS as the development store. Two plugs:
 

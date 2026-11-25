@@ -16,7 +16,6 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "lance-namespace>=0.13.0,<0.14",
     "opentelemetry-distro>=0.65b0",
-    "opentelemetry-exporter-otlp>=1.44.0",
     "opentelemetry-instrumentation-fastapi>=0.65b0",
     "opentelemetry-instrumentation-logging>=0.65b0",
 ]

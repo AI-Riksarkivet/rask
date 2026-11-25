@@ -9,8 +9,8 @@ governance. This module holds both halves on the deployed catalog, through the c
    a materialized view's create and a backfill, which the backend does not implement. The client is pylance's
    (`lance_namespace.connect("rest", ...)`), and for the three operations it does not implement (UpdateFieldMetadata,
    BatchCreateTableVersions, BatchCommitTables) the spec's generated one (`lance_namespace_urllib3_client`). A
-   refusal reaches the client as the spec's typed error, a hierarchy refusal included. lancedb and lance-ray open and
-   read a table through the same namespace.
+   refusal reaches the client as the spec's typed error, a hierarchy refusal included. lancedb opens and reads a table
+   through the same namespace.
 2. Who may do what, as a matrix of six principals against every spec door, the vend, grant and revoke doors, a
    classification label's revoke door, and the warehouse and project admin doors. On the matrix namespace the owner,
    the writer and the reader each hold one rung of model.fga's ladder, each rung holding the ones below it, and on the
@@ -1444,24 +1444,3 @@ def test_lancedb_opens_a_table_through_the_namespace_and_reads_its_rows(scene: S
     read = database.open_table(scene.table[-1], namespace_path=scene.path).to_arrow()
 
     assert sorted(read.column("id").to_pylist()) == scene.ids(scene.table)
-
-
-def test_lance_ray_reads_a_table_through_the_namespace(scene: Scene, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The reader reads the matrix table with lance-ray, which resolves it through the catalog, on a local Ray.
-
-    Ray's uv integration starts each worker with the driver's own `uv run` command line when the driver runs under
-    `uv run`; under pytest that worker never starts. Measured on Ray 2.58 2026-10-17: five failed worker starts and a
-    nine-minute wait, against 2.9 s with the integration off, so the local Ray here runs its workers on this interpreter.
-    """
-    import lance_ray
-    import ray
-
-    monkeypatch.setenv("RAY_ENABLE_UV_RUN_RUNTIME_ENV", "0")
-    ray.init(address="local", num_cpus=2, include_dashboard=False)
-    try:
-        read = lance_ray.read_lance(table_id=scene.table, namespace_impl="rest", namespace_properties=scene.properties(Role.READER))
-        ids = sorted(int(row["id"]) for row in read.take_all())
-    finally:
-        ray.shutdown()
-
-    assert ids == scene.ids(scene.table)

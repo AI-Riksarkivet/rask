@@ -3604,7 +3604,7 @@ export interface paths {
          *     ``DescribeTableRequest`` BODY (``lance_docs/ns_catalog/catalog/rest/index.md`` §DescribeTable; the generated client's
          *     ``_describe_table_serialize`` sends exactly that split). This route once bound all six as bare scalars,
          *     so FastAPI made them all query params and the body was dropped unread — a spec-conformant client
-         *     (``lance_ray.utils``, which calls ``describe_table(DescribeTableRequest(id=...))`` and merges
+         *     (a stock client calling ``describe_table(DescribeTableRequest(id=...))`` and merging
          *     ``storage_options``) got a location and NO credentials, and any version pin silently read latest.
          *     Both forms are now accepted: **a field present in the body wins**, because the body is the spec's form
          *     and the query is rask's own older shorthand that existing callers and its tests speak. Presence is decided by
@@ -10001,7 +10001,7 @@ export interface components {
          * VendedCredentials
          * @description Scoped storage credentials for one table at one tier.
          *
-         *     ``storage_options`` is consumed directly by pylance / lance-ray /
+         *     ``storage_options`` is consumed directly by pylance / the LanceDB SDK /
          *     object_store. ``expires_at_millis`` is when the client must refresh
          *     (``None`` for long-lived static keys).
          */

@@ -5,7 +5,7 @@ puts only ``with_table_uri`` / ``load_detailed_metadata`` / ``check_declared`` i
 ``tag`` and ``vend_credentials`` travel in a ``DescribeTableRequest`` BODY, and the generated client
 (``lance_namespace_urllib3_client.api.table_api._describe_table_serialize``) sends them that way. The route
 bound all six as bare scalars, so FastAPI made every one a QUERY param and the body was dropped on the
-floor: ``lance_ray.utils`` calls ``namespace.describe_table(DescribeTableRequest(id=...))`` and merges
+floor: a stock client calls ``namespace.describe_table(DescribeTableRequest(id=...))`` and merges
 ``describe_response.storage_options``, so a spec-conformant client got a location and NO credentials, and any
 version pin read latest instead.
 """
