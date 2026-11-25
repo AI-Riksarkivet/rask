@@ -55,7 +55,10 @@ Every service builds `app` at module import. Pick the fixture by how settings re
 3. Import the app **inside** the fixture.
 4. Set `app.dependency_overrides[...]` on the registered callables (`real_ns_client` overrides
    `get_namespace` and `get_storage_options`).
-5. `with TestClient(app) as client:` so that the lifespan runs.
+5. `with TestClient(app) as client:` so that the lifespan runs. A test holding only the client reaches its app's
+   `state`, `dependency_overrides` or `openapi()` through `tests.app_state.app_of(client)`: Starlette types
+   `TestClient.app` as any ASGI callable, and the test client runs on `httpx2` (a `TestClient` answers
+   `httpx2.Response`; the services' own outbound calls stay `httpx`, which respx mocks).
 6. Teardown: `app.dependency_overrides.clear()` and `.cache_clear()` again.
 
 `cache_clear()` reaches only what is read per request. What the module reads at import stays as the
