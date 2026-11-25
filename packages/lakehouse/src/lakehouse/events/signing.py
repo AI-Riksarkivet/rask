@@ -217,9 +217,10 @@ def _decode_nkey(text: str, *, prefix: bytes, text_length: int, what: str) -> by
     text = text.strip(string.whitespace)
     if len(text) != text_length or _NKEY_ALPHABET.fullmatch(text) is None:
         raise ValueError(f"not an {what}: wrong length or alphabet")
-    decoded = base64.b32decode(text + "=" * (-len(text) % 8))
-    if base64.b32encode(decoded).decode("ascii").rstrip("=") != text:
-        raise ValueError(f"not an {what}: not the canonical spelling")
+    try:
+        decoded = base64.b32decode(text, padded=False, canonical=True)
+    except binascii.Error as exc:
+        raise ValueError(f"not an {what}: not the canonical spelling") from exc
     body, checksum = decoded[:-2], decoded[-2:]
     if binascii.crc_hqx(body, 0) != int.from_bytes(checksum, "little"):
         raise ValueError(f"not an {what}: checksum mismatch")
