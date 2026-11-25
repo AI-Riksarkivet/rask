@@ -16,7 +16,6 @@ or after the row goes. alice may create a namespace in the estate's warehouse an
 
 from typing import Any
 
-import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
 from fastapi.testclient import TestClient
@@ -24,16 +23,14 @@ from lance_namespace import DeregisterTableRequest, DeregisterTableResponse, Lan
 
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import get_settings
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import location_claims, maintenance_policies
 from lakehouse.storage.objectfs import fs_and_base
 from lakehouse.storage.options import StorageOptions
 from maintenance.services.purge import objects_held
 from tests.app_state import app_of
-from tests.governed_catalog import GovernedCatalog
-
-
-_ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
+from tests.governed_catalog import ROWS, GovernedCatalog
 
 
 class _SecondDeregisterFails:
@@ -75,7 +72,7 @@ def _uuid(client: TestClient, kind: str, name: str) -> str:
     """The uuid the catalog minted for the table or namespace ``name``, which its grants and records are keyed by (ADR 0173 §8)."""
     answer = client.post(f"/v1/{kind}/{name}/describe", json={})
     assert answer.status_code == 200, answer.text
-    return str(answer.json()["properties"]["rask.uuid"])
+    return str(answer.json()["properties"][UUID_PROPERTY])
 
 
 @pytest.mark.parametrize(
@@ -90,7 +87,7 @@ def test_a_finished_cascade_leaves_no_byte_grant_or_policy_of_a_table_it_destroy
     _ok(real_ns_client, "/v1/namespace/lance_catalog$db/create", json={})
     tables = ["lance_catalog$db$a", "lance_catalog$db$b", "lance_catalog$db$c"]
     for table in [*tables, "lance_catalog$db$t"]:
-        _ok(real_ns_client, f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        _ok(real_ns_client, f"/v1/table/{table}/create", content=ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
     for table in tables:
         _ok(real_ns_client, f"/management/v1/table/{table}/policy/set", json={"retention_days": 7})
     uuids = {table: _uuid(real_ns_client, "table", table) for table in [*tables, "lance_catalog$db$t"]}
@@ -136,7 +133,7 @@ def test_a_cascade_that_cannot_read_a_trash_record_ends_no_grant_it_may_keep(gov
     real_ns_client = governed.client
     _ok(real_ns_client, "/v1/namespace/lance_catalog$db/create", json={})
     for table in ("lance_catalog$db$a", "lance_catalog$db$t"):
-        _ok(real_ns_client, f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        _ok(real_ns_client, f"/v1/table/{table}/create", content=ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
     trashed = f"table:{_uuid(real_ns_client, 'table', 'lance_catalog$db$t')}"
     _ok(real_ns_client, "/v1/table/lance_catalog$db$t/drop", json={})
     kept = {t for t in governed.store.tuples() if t[2] == trashed}

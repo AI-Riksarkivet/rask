@@ -11,10 +11,9 @@ from collections import Counter
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from time import monotonic
-from typing import Any, NoReturn
+from typing import NoReturn
 
 import pytest
-from botocore.exceptions import ClientError
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import HistogramDataPoint, InMemoryMetricReader, NumberDataPoint
 
@@ -23,6 +22,7 @@ from lakehouse.storage import conditional_records
 from lakehouse.storage.errors import store_call
 from lakehouse.storage.options import StorageOptions
 from lakehouse.timers import Outcome, Timer, Turn, claim_key
+from tests.store_answers import answered
 
 
 PERIOD = 0.3
@@ -92,9 +92,8 @@ async def test_a_replica_that_finds_the_window_claimed_drops_what_only_the_claim
 
 def _forbidden(*_: object) -> NoReturn:
     """What the read raises when S3 answers a key to an identity that may not list its bucket, whether or not it exists."""
-    answer: Any = {"Error": {"Code": "AccessDenied"}, "ResponseMetadata": {"HTTPStatusCode": 403, "HTTPHeaders": {}}}
     with store_call("reading the claim"):
-        raise ClientError(answer, "GetObject")
+        raise answered(403, "AccessDenied", operation="GetObject")
 
 
 @pytest.mark.asyncio

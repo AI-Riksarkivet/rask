@@ -12,8 +12,8 @@ defect is that the two sides disagree, and only the real producer's output can s
 """
 
 import logging
-from collections.abc import Collection, Iterator
-from typing import Any, cast
+from collections.abc import Iterator
+from typing import Any, Final, cast
 
 import pytest
 from fastapi import FastAPI
@@ -28,6 +28,7 @@ from lineage.models import DatasetEvent, RunEvent
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.provenance import ProvenanceStore
 from tests.open_gate import admits_everything
+from tests.provenance_store_double import ProvenanceStoreDouble
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 
@@ -35,18 +36,13 @@ _RUN_ID = "b1b2c3d4-0000-4000-8000-000000000001"
 _AUTHOR = "CgVhbGljZRIFbG9jYWw"
 
 
-class _Repo:
-    """Files what it records by the shape the door parsed it into, because the defect is the parse."""
+#: The shape each door's parse files an event under, by the name the parametrization gives it.
+_SHAPES: Final = frozendict({"datasets": DatasetEvent, "runs": RunEvent})
 
-    def __init__(self) -> None:
-        self.runs: list[RunEvent] = []
-        self.datasets: list[DatasetEvent] = []
 
-    async def record(self, event: RunEvent | DatasetEvent, *, aliased: Collection[str]) -> None:
-        if isinstance(event, DatasetEvent):
-            self.datasets.append(event)
-        else:
-            self.runs.append(event)
+def _recorded_as(store: ProvenanceStoreDouble, door: str) -> list[RunEvent | DatasetEvent]:
+    """What ``store`` recorded in the shape ``door`` names: the defect is the parse, so the shape is the assertion."""
+    return [event for event in store.recorded if isinstance(event, _SHAPES[door])]
 
 
 def _emitted(operation: str) -> dict[str, Any]:
@@ -66,7 +62,7 @@ def _emitted(operation: str) -> dict[str, Any]:
 
 
 @pytest.fixture
-def unauthenticated_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FastAPI, _Repo]]:
+def unauthenticated_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FastAPI, ProvenanceStoreDouble]]:
     """The lineage API with auth off — this gate is about the SHAPE the door accepts, not the policy."""
     from lineage.core.config import get_settings
 
@@ -77,7 +73,7 @@ def unauthenticated_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FastA
     app = FastAPI()
     install_problem_handlers(app, logging.getLogger(__name__))
     app.include_router(api_router)
-    repo = _Repo()
+    repo = ProvenanceStoreDouble()
     app.state.provenance = repo
     app.state.names = NO_CATALOG_NAMES
     app.state.decider = None
@@ -87,7 +83,7 @@ def unauthenticated_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FastA
 
 @pytest.mark.parametrize("operation,door", [("create_table", "datasets"), ("insert", "runs")])
 def test_the_http_door_accepts_it_and_records_no_signature_with_it(
-    unauthenticated_app: tuple[FastAPI, _Repo], operation: str, door: str, event_signer: Any
+    unauthenticated_app: tuple[FastAPI, ProvenanceStoreDouble], operation: str, door: str, event_signer: Any
 ) -> None:
     """The event arrives carrying a `rask_signature` a client wrote for itself. This door holds a bearer token and no signing key,
     so the facet is a claim and not a signature: the event is recorded without it, from whichever bag it sat on."""
@@ -97,18 +93,18 @@ def test_the_http_door_accepts_it_and_records_no_signature_with_it(
     response = TestClient(app).post("/api/v1/lineage", json=claimed)
 
     assert response.status_code == 201, f"{operation} -> {response.status_code}: {response.text[:400]}"
-    [recorded] = getattr(repo, door)
-    facets = recorded.dataset.facets if door == "datasets" else recorded.run.facets
+    [recorded] = _recorded_as(repo, door)
+    facets = recorded.dataset.facets if isinstance(recorded, DatasetEvent) else recorded.run.facets
     assert "rask_signature" not in facets, f"a signature nobody verified was recorded with the event: {sorted(facets)}"
 
 
 @pytest.mark.parametrize("operation,door", [("create_table", "datasets"), ("insert", "runs")])
 def test_the_bus_door_accepts_it(operation: str, door: str) -> None:
-    repo = _Repo()
+    repo = ProvenanceStoreDouble()
     import asyncio
 
     # CAST, not a subclass: the fake records which shape arrived, which is the whole assertion, and the real
     # store would need a catalog for a test about the parse.
     verdict = asyncio.run(handle_cloud_event(cast(ProvenanceStore, repo), {"data": _emitted(operation)}, admits_everything, door=Door.SUBSCRIBER))
     assert verdict is Verdict.TAKEN, f"{operation} -> {verdict}"
-    assert len(getattr(repo, door)) == 1, f"{operation} was recorded as neither shape: runs={repo.runs} datasets={repo.datasets}"
+    assert len(_recorded_as(repo, door)) == 1, f"{operation} was recorded as neither shape: recorded={repo.recorded}"

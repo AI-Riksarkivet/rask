@@ -12,27 +12,14 @@ Every answer is the real OpenFGA's, on a store of this test's own; every tuple i
 
 from typing import Any
 
-import pyarrow as pa
 import pytest
 
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga_ids
 
 
 ACCESS = "/management/v1/access"
-_ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
 #: The spec's codes for an absent table and an absent namespace (`lance_docs/ns_catalog/spec.yaml`).
 TABLE_NOT_FOUND, NAMESPACE_NOT_FOUND = 4, 1
-
-
-def _ok(catalog: Any, path: str, caller: str = "alice", **kwargs: Any) -> dict[str, Any]:
-    answer = catalog.client.post(path, headers={**catalog.bearer(caller), **kwargs.pop("headers", {})}, **kwargs)
-    assert answer.status_code == 200, f"{path}: {answer.status_code} {answer.text}"
-    return answer.json()
-
-
-def _uuid(catalog: Any, kind: str, name: str) -> str:
-    return str(_ok(catalog, f"/v1/{kind}/{name}/describe", json={})["properties"]["rask.uuid"])
 
 
 @pytest.fixture
@@ -41,8 +28,8 @@ def estate(governed_catalog: Any) -> Any:
     catalog = governed_catalog
     catalog.store.write((fga_ids.user_object("dex~root"), "owner", "estate:rask"))
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
-    _ok(catalog, "/v1/table/lance_catalog$db$t/create", content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
-    _ok(catalog, f"{ACCESS}/tuples", "root", json={"user": catalog.person("bob"), "relation": "reader", "object": "table:lance_catalog$db$t"})
+    catalog.create_table("alice", "lance_catalog$db$t")
+    catalog.ok(f"{ACCESS}/tuples", "root", json={"user": catalog.person("bob"), "relation": "reader", "object": "table:lance_catalog$db$t"})
     return catalog
 
 
@@ -69,11 +56,11 @@ def _asking(door: str, obj: str, catalog: Any) -> dict[str, Any]:
     ],
 )
 def test_a_door_answers_an_object_by_name_as_it_answers_it_by_uuid(estate: Any, door: str, kind: str, name: str, absent: str, code: int) -> None:
-    uuid_object = f"{kind}:{_uuid(estate, kind, name)}"
+    uuid_object = f"{kind}:{estate.uuid(kind, name, 'alice')}"
 
-    by_name = _ok(estate, f"{ACCESS}/{door}", "root", json=_asking(door, f"{kind}:{name}", estate))
+    by_name = estate.ok(f"{ACCESS}/{door}", "root", json=_asking(door, f"{kind}:{name}", estate))
 
-    assert by_name == _ok(estate, f"{ACCESS}/{door}", "root", json=_asking(door, uuid_object, estate))
+    assert by_name == estate.ok(f"{ACCESS}/{door}", "root", json=_asking(door, uuid_object, estate))
     named = by_name["checked"] if door in ("check", "simulate") else by_name
     assert (named["object"], named["name"]) == (uuid_object, name)
     assert by_name.get("allowed", by_name.get("tree") or by_name.get("users")), f"{door} answered nothing on an object bob sees"

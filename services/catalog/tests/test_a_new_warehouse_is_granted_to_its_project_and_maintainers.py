@@ -15,33 +15,11 @@ import pytest
 
 from catalog.api.authz import warehouse_grants
 from catalog.api.authz.context import AuthzContext
-from catalog.core.config import Settings
 from lakehouse.governed import fga_ids, fga_provision
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
-
-
-def _settings(**overrides: object) -> Settings:
-    """Settings with only the fields the model REQUIRES, so this test is about the new one."""
-    base = {"LANCE_S3_ACCESS_KEY_ID": "x", "LANCE_S3_SECRET_ACCESS_KEY": "y"}
-    return Settings.model_validate({**base, **overrides})
-
-
-def _fga_settings(**overrides: object) -> Settings:
-    """Settings with FGA on. The model fail-closes — `RASK_OIDC_ENABLED is required when
-    RASK_FGA_ENABLED is set (authz needs a user)` — so authorization can never be switched on
-    without an identity source behind it."""
-    return _settings(
-        RASK_FGA_ENABLED=True,
-        RASK_OIDC_ENABLED=True,
-        RASK_OIDC_ISSUER="https://dex",
-        RASK_OIDC_AUDIENCE="rask",
-        RASK_OIDC_IDP_ID="dex",
-        RASK_OIDC_CONNECTORS={"local": "dex"},
-        **overrides,
-    )
+from tests.callers import person
+from tests.catalog_settings import governed_settings
 
 
 def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
@@ -56,7 +34,7 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
     dropped = fga_ids.user_object("kubernetes~system:serviceaccount:rask:rask-sa-lineage")
     client = fga_ids.user_object("kubernetes~system:serviceaccount:rask:rask-sa-a-tenant-service")
     openfga_store.write((dropped, "maintenance", "warehouse:wh1"), (dropped, "reader", "warehouse:wh1"), (client, "maintenance", "warehouse:wh1"))
-    settings = _fga_settings(
+    settings = governed_settings(
         LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"],
         LANCE_OWN_ACCOUNTS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance", "kubernetes~system:serviceaccount:rask:rask-sa-lineage"],
     )
@@ -75,10 +53,7 @@ def test_a_repair_converges_a_warehouse_to_the_grants_the_release_declares(openf
     }
 
 
-_PERSON = PersonPrincipal(
-    principal=Principal(idp_id="dex", subject="alice"),
-    claims=IDToken.model_validate({"sub": "alice", "iss": "https://dex", "aud": "rask", "iat": 0, "exp": 1}),
-)
+_PERSON = person("alice")
 _MACHINE = ServicePrincipal.for_account("system:serviceaccount:etl:loader")
 
 
@@ -108,7 +83,7 @@ def test_creating_a_warehouse_grants_it(
     written, a project admin grant least of all: that is minted only at POST /management/v1/projects, behind the estate
     gate, so a warehouse's owner never escalates to its tenant's admin by creating one.
     """
-    settings = _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
+    settings = governed_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
 
     async def _create() -> None:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as store:

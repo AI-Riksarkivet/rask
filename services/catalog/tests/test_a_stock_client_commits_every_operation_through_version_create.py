@@ -39,32 +39,30 @@ import lance
 import lance_namespace
 import pyarrow as pa
 import pytest
-import uvicorn
 from lance.bitmap import Bitmap
 from lance.commit import CommitConflictError
 from lance.dataset import AlterColumn, Index, Transaction
 from lance.optimize import Compaction
-from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
 
 from catalog.core import manifest_bytes
-from catalog.core.lineage_emit import NO_FIELDS, EmitFields
 from catalog.services import table_claims
 from catalog.services.tables import commits
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga_reads, fga_writes
 from lakehouse.governed.audit import AUDIT_LOGGER
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
 from lakehouse.lancekit import manifest_wire
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import commit_records, commit_turns, control_prefixes
 from lakehouse.records.record_store import put_record, record_key
 from lakehouse.storage import conditional_records
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.options import StorageOptions
+from tests.callers import person
 from tests.control_emitter_double import ControlEmitterDouble
 from tests.integration import store_requests
+from tests.lineage_emitter_double import LineageEmitterDouble
+from tests.live_server import serve
 
 
 _TOKEN = {"Authorization": "Bearer t"}
@@ -131,8 +129,8 @@ def _governed(openfga_store: Any, dex_issuer: Any) -> dict[str, str]:  # noqa: A
 def _holding(served: Served, stock: lance_namespace.LanceNamespace, *, table: Iterable[str] = (), namespace: Iterable[str] = ()) -> None:
     """alice holds exactly ``table``'s rungs on ``_TABLE`` and ``namespace``'s on ``lance_catalog$db``: every grant her creates
     gave her is withdrawn first. The grants are held by the uuids the catalog minted, which the describes answer."""
-    on_namespace = (stock.describe_namespace(lance_namespace.DescribeNamespaceRequest(id=_TABLE[:2])).properties or {})["rask.uuid"]
-    on_table = (stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"]
+    on_namespace = (stock.describe_namespace(lance_namespace.DescribeNamespaceRequest(id=_TABLE[:2])).properties or {})[UUID_PROPERTY]
+    on_table = (stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})[UUID_PROPERTY]
     served.fga.delete(*(held for held in served.fga.tuples() if held[0] == "user:dex~alice"))
     served.fga.write(
         *(("user:dex~alice", relation, f"table:{on_table}") for relation in table),
@@ -160,15 +158,6 @@ def served_without_the_write_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
         get_settings.cache_clear()
         importlib.reload(catalog.main)
         get_settings.cache_clear()
-
-
-@pytest.fixture(scope="module")
-def moto_url() -> Iterator[str]:
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
 
 
 @pytest.fixture
@@ -259,28 +248,17 @@ def _serve(served: Served, env: dict[str, str], monkeypatch: pytest.MonkeyPatch)
     )
     assert isinstance(signed_in, Settings)
 
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 30
-    while not server.started:
-        if not thread.is_alive() or time.monotonic() > deadline:
-            raise RuntimeError("uvicorn did not start")
-        time.sleep(0.05)
-    verifier = MagicMock()
-    verifier.verify.return_value = PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
-    )
-    app.state.oidc = verifier
-    if served.fga is None:
-        fga_client = MagicMock()
-        fga_client.close = AsyncMock()
-        app.state.fga = fga_client
-    app.dependency_overrides[request_settings] = lambda: signed_in
-    served.url = f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
-    yield served
-    server.should_exit = True
-    thread.join(timeout=30)
+    with serve(app) as url:
+        verifier = MagicMock()
+        verifier.verify.return_value = person("alice")
+        app.state.oidc = verifier
+        if served.fga is None:
+            fga_client = MagicMock()
+            fga_client.close = AsyncMock()
+            app.state.fga = fga_client
+        app.dependency_overrides[request_settings] = lambda: signed_in
+        served.url = url
+        yield served
     app.dependency_overrides.clear()
     get_settings.cache_clear()
 
@@ -347,7 +325,7 @@ def test_append_delete_merge_insert_update_and_restore_each_commit_through_versi
     from catalog.core.config import get_settings
 
     # Each names the manifest it judged, which is the one that landed: the backend finalizes those bytes unchanged.
-    settings, table_uuid = get_settings(), str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    settings, table_uuid = get_settings(), str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})[UUID_PROPERTY])
     signed = []
     for version in range(1, 7):
         transaction = restored.read_transaction(version)
@@ -801,7 +779,7 @@ def _append_under_a_transaction_recorded_for_another_commit(stock: lance_namespa
 
     settings, dataset = get_settings(), _opened(stock)
     held = str(uuid.uuid4())
-    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})[UUID_PROPERTY])
     commit_records.record_author(
         settings.registry_root,
         settings.storage_options(),
@@ -829,7 +807,7 @@ def _append_under_a_transaction_whose_record_is_unreadable(stock: lance_namespac
 
     settings, dataset = get_settings(), _opened(stock)
     held = str(uuid.uuid4())
-    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})[UUID_PROPERTY])
     unreadable = Path(settings.registry_root) / commit_records.AUTHORS_PREFIX / table_uuid / held / f"{dataset.version + 1}.json"
     unreadable.parent.mkdir(parents=True)
     unreadable.write_bytes(b'{"author": ')
@@ -1316,7 +1294,7 @@ def test_a_commit_whose_answer_is_lost_lands_once_and_the_client_gets_its_versio
 
     settings, transaction = get_settings(), table.read_transaction(2)
     assert transaction is not None
-    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})[UUID_PROPERTY])
     record = commit_records.recorded(settings.registry_root, settings.storage_options(), table_uuid, transaction_uuid=transaction.uuid, version=2, ref="")
     assert record is not None
     assert (record.author, record.manifest) == ("dex~alice", commits.committed_manifest_digest(table.uri, StorageOptions(), 2))
@@ -1334,7 +1312,7 @@ def test_a_commit_whose_author_record_cannot_be_read_is_neither_announced_nor_co
     table, settings = _opened(stock), get_settings()
     transaction = table.read_transaction(2)
     assert transaction is not None
-    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})[UUID_PROPERTY])
     key = f"{commit_records.AUTHORS_PREFIX}/{table_uuid}/{transaction.uuid}/2.json"
     filed = Path(settings.registry_root.removeprefix("file://")) / key
     assert filed.is_file(), "the commit's door recorded no author, so there is nothing to corrupt"
@@ -1423,7 +1401,7 @@ def test_a_version_landed_past_every_door_under_an_in_flight_commits_transaction
     held, retried = landed.read_transaction(taken), landed.read_transaction(taken + 1)
     assert held is not None and retried is not None and held.uuid == retried.uuid
     settings = get_settings()
-    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})[UUID_PROPERTY])
     scan = commit_reconcile.scan_ref(
         landed.uri,
         StorageOptions(),
@@ -1476,7 +1454,7 @@ def test_a_retry_of_an_in_flight_commit_leaves_the_record_its_twin_made(served: 
     transaction = written.read_transaction(written.version)
     assert transaction is not None
     settings = get_settings()
-    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})[UUID_PROPERTY])
     record = commit_records.recorded(
         settings.registry_root, settings.storage_options(), table_uuid, transaction_uuid=transaction.uuid, version=written.version, ref=""
     )
@@ -1577,7 +1555,12 @@ def test_a_stock_writer_beside_a_writer_appending_through_insert_in_a_tight_loop
     through_insert = served.stock()
     writers = [
         _Appender(lambda row: lance.write_dataset(_row(row), namespace_client=through_version_create, table_id=_APPENDED_TO, mode="append"), 1),
-        _Appender(lambda row: through_insert.insert_into_table(lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(row))), 10**6),
+        _Appender(
+            lambda row: through_insert.insert_into_table(
+                lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), encode_arrow_stream(_row(row))
+            ),
+            10**6,
+        ),
     ]
     deadline = time.monotonic() + within_seconds
     while len(writers[0].landed) < appends and not any(writer.failed for writer in writers):
@@ -1602,7 +1585,7 @@ def test_a_stock_schema_change_that_loses_to_a_writer_appending_through_insert_h
     landed_at: list[float] = []
 
     def append(row: int) -> None:
-        through_insert.insert_into_table(lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(row)))
+        through_insert.insert_into_table(lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), encode_arrow_stream(_row(row)))
         landed_at.append(time.monotonic())
 
     writer = _Appender(append, 10**6)
@@ -1629,7 +1612,7 @@ def _turns(stock: lance_namespace.LanceNamespace, tmp_path: Path) -> commit_turn
     them."""
     described = stock.describe_table(lance_namespace.DescribeTableRequest(id=_APPENDED_TO))
     return commit_turns.TableTurns(
-        control_root=str(tmp_path / "control"), storage_options=StorageOptions(), table_uuid=(described.properties or {})["rask.uuid"]
+        control_root=str(tmp_path / "control"), storage_options=StorageOptions(), table_uuid=(described.properties or {})[UUID_PROPERTY]
     )
 
 
@@ -1667,7 +1650,9 @@ def test_a_stock_writer_whose_finalize_loses_is_handed_the_refs_next_turn(served
         kept = await waited(table, ref, mine=mine)
         if mine is not None and not beaten:
             beaten.append(mine)
-            await asyncio.to_thread(competitor.insert_into_table, lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(1)))
+            await asyncio.to_thread(
+                competitor.insert_into_table, lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), encode_arrow_stream(_row(1))
+            )
         return kept
 
     def _note_the_turn(_request: lance_namespace.CreateTableVersionRequest) -> None:
@@ -1684,7 +1669,7 @@ def test_a_stock_writer_whose_finalize_loses_is_handed_the_refs_next_turn(served
     assert (at_the_retry[:1], sorted(ids)) == ([(True, False)], [0, 1, 2])
     # Each version keeps its commit's author record, and the attempt whose finalize lost deleted its own: the retry staged
     # again under the same transaction landed a version later (ADR 0187).
-    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_APPENDED_TO)).properties or {})["rask.uuid"])
+    table_uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_APPENDED_TO)).properties or {})[UUID_PROPERTY])
     control = str(tmp_path / "control")
     authors = []
     for version in (1, 2, 3):
@@ -1724,7 +1709,9 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
     for table_id in (_APPENDED_TO, ["lance_catalog", "db", "other"]):
         lance.write_dataset(seeded, namespace_client=stock, table_id=table_id, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
     write = {
-        "insert": lambda row: served.stock().insert_into_table(lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), _ipc(_row(100 + row))),
+        "insert": lambda row: served.stock().insert_into_table(
+            lance_namespace.InsertIntoTableRequest(id=_APPENDED_TO, mode="append"), encode_arrow_stream(_row(100 + row))
+        ),
         "version-create": lambda row: lance.write_dataset(_row(100 + row), namespace_client=served.stock(), table_id=_APPENDED_TO, mode="append"),
         "delete": lambda row: served.stock().delete_from_table(lance_namespace.DeleteFromTableRequest(id=_APPENDED_TO, predicate=f"id = {row}")),
     }[door]
@@ -1797,20 +1784,13 @@ def _with_source(served: Served) -> lance_namespace.LanceNamespace:
     return stock
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
 def _insert(stock: lance_namespace.LanceNamespace) -> None:
-    stock.insert_into_table(lance_namespace.InsertIntoTableRequest(id=_TABLE, mode="append"), _ipc(_keyed([4], ["d"])))
+    stock.insert_into_table(lance_namespace.InsertIntoTableRequest(id=_TABLE, mode="append"), encode_arrow_stream(_keyed([4], ["d"])))
 
 
 def _merge_insert(stock: lance_namespace.LanceNamespace) -> None:
     request = lance_namespace.MergeInsertIntoTableRequest(id=_TABLE, on=["id"], when_matched_update_all=True, when_not_matched_insert_all=True)
-    stock.merge_insert_into_table(request, _ipc(_keyed([3, 4], ["C", "d"])))
+    stock.merge_insert_into_table(request, encode_arrow_stream(_keyed([3, 4], ["C", "d"])))
 
 
 def _committed_properties(dataset: lance.LanceDataset, version: int) -> dict[str, str]:
@@ -1820,22 +1800,6 @@ def _committed_properties(dataset: lance.LanceDataset, version: int) -> dict[str
     return dict(transaction.transaction_properties or {})
 
 
-class _Recorder:
-    """The lineage emitter, keeping what each write door announced."""
-
-    def __init__(self) -> None:
-        self.writes: list[dict[str, Any]] = []
-
-    async def project_for(self, warehouse_id: str) -> str | None:
-        return None
-
-    async def emit_create(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
-        self.writes.append({**required, **dict(fields)})
-
-    async def emit_write(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
-        self.writes.append({**required, **dict(fields)})
-
-
 @pytest.mark.parametrize(("door", "operation"), [pytest.param(_insert, "insert", id="insert"), pytest.param(_merge_insert, "merge_insert", id="merge_insert")])
 def test_a_catalog_write_door_commits_the_run_its_context_names(
     served: Served, door: Callable[[lance_namespace.LanceNamespace], None], operation: str, monkeypatch: pytest.MonkeyPatch
@@ -1843,7 +1807,7 @@ def test_a_catalog_write_door_commits_the_run_its_context_names(
     from catalog.main import app
 
     _with_source(served)
-    recorder = _Recorder()
+    recorder = LineageEmitterDouble()
     monkeypatch.setattr(app.state, "lineage_emitter", recorder, raising=False)
 
     door(served.stock(_RUN))
@@ -1895,8 +1859,8 @@ def _stock_append_naming_another_author(served: Served) -> tuple[int, int, str]:
 def _insert_door_naming_no_run(served: Served) -> tuple[int, int, str]:
     answer = httpx.post(
         f"{served.url}/v1/table/lance_catalog$lab$t/insert",
-        content=_ipc(_keyed([2], ["b"])),
-        headers={**_TOKEN, "content-type": "application/vnd.apache.arrow.stream"},
+        content=encode_arrow_stream(_keyed([2], ["b"])),
+        headers={**_TOKEN, "content-type": ARROW_STREAM_MEDIA_TYPE},
     )
     return answer.status_code, answer.json()["code"], answer.json()["detail"]
 
@@ -1970,7 +1934,7 @@ def test_a_commit_under_the_run_rule_lands_only_when_it_names_its_run_and_inputs
     judged = {(r.__dict__["audit.outcome"], r.__dict__["audit.requires_run"]) for r in caplog.records if r.__dict__.get("audit.action") == "write_judge"}
     assert (("deny", "true") in judged) == (names != "rask.author"), judged
     assert lance.dataset(namespace_client=stock, table_id=_SILVER).version == 1
-    recorder = _Recorder()
+    recorder = LineageEmitterDouble()
     monkeypatch.setattr(app.state, "lineage_emitter", recorder, raising=False)
     lance.write_dataset(_keyed([2], ["b"]), namespace_client=stock, table_id=_SILVER, mode="overwrite", transaction_properties=_PROVENANCE)
     landed = lance.dataset(namespace_client=stock, table_id=_SILVER)
@@ -2017,8 +1981,8 @@ def _a_table_the_caller_cannot_read(served: Served, stock: lance_namespace.Lance
     stock.create_namespace(lance_namespace.CreateNamespaceRequest(id=source[:2]))
     lance.write_dataset(_keyed([1], ["s"]), namespace_client=stock, table_id=source, mode="create", data_storage_version="2.2", enable_stable_row_ids=True)
     # The grants are held by the uuids the catalog minted, which the describes answer (ADR 0173 §8).
-    namespace = (stock.describe_namespace(lance_namespace.DescribeNamespaceRequest(id=source[:2])).properties or {})["rask.uuid"]
-    table = (stock.describe_table(lance_namespace.DescribeTableRequest(id=source)).properties or {})["rask.uuid"]
+    namespace = (stock.describe_namespace(lance_namespace.DescribeNamespaceRequest(id=source[:2])).properties or {})[UUID_PROPERTY]
+    table = (stock.describe_table(lance_namespace.DescribeTableRequest(id=source)).properties or {})[UUID_PROPERTY]
     served.fga.delete(*(held for held in served.fga.tuples() if held[0] == "user:dex~alice" and held[2] in {f"namespace:{namespace}", f"table:{table}"}))
     return source
 
@@ -2154,7 +2118,7 @@ def test_a_table_already_breaking_its_contract_is_not_frozen_and_an_unreadable_c
 
     stock = _created(served)
     table, settings = "/v1/table/lance_catalog$db$t", get_settings()
-    uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})["rask.uuid"])
+    uuid = str((stock.describe_table(lance_namespace.DescribeTableRequest(id=_TABLE)).properties or {})[UUID_PROPERTY])
     key = record_key(control_prefixes.CONTRACTS, "table", uuid)
     breached = _with_v({"name": "v", "physicalType": "int32"}, "1.0.0")
     put_record(settings.registry_root, settings.storage_options(), key, record={"table_uuid": uuid, "document": breached, "set_at": "2026-11-16T00:00:00Z"})

@@ -13,21 +13,22 @@ from pathlib import Path
 from typing import Final
 
 import httpx2
-import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import get_settings
 from catalog.services import object_uuids, table_claims, warehouses
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AUDIT_LOGGER
+from lakehouse.naming import UUID_PROPERTY
 from tests import seeding
 from tests.app_state import app_of
-from tests.governed_catalog import GovernedCatalog
+from tests.governed_catalog import ROWS, GovernedCatalog
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 WAREHOUSE = "acme-bucket"
 PROJECT = "acme"
 SALES = f"{WAREHOUSE}$sales"
@@ -120,7 +121,7 @@ def test_a_declaration_names_no_reserved_key_but_the_run_rule_as_true(grants: Go
     on a kept namespace that does not declare it is NamespaceAlreadyExists (2)."""
     client = grants.client
     grants.act_as("alice")
-    forged = {"rask.uuid": "00000000-0000-4000-8000-000000000000"}
+    forged = {UUID_PROPERTY: "00000000-0000-4000-8000-000000000000"}
     _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.requires_run": "false"}}), 13)
     _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.tier": "silver"}}), 13)
     _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": forged}), 13)
@@ -132,14 +133,6 @@ def test_a_declaration_names_no_reserved_key_but_the_run_rule_as_true(grants: Go
     assert client.post(f"/v1/namespace/{WAREHOUSE}$plain$sub/create", json={}).status_code == 200
     kept = client.post(f"/v1/namespace/{WAREHOUSE}$plain$sub/create", json={"mode": "ExistOk", "properties": RULE})
     assert (kept.status_code, kept.json()["code"]) == (409, 2), "ExistOk kept the namespace, so the rule it named never landed"
-
-
-def _rows() -> bytes:
-    table = pa.table({"id": pa.array([1, 2], pa.int64())})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 #: The run a write under the rule names (ADR 0156 C2): an input the writer may read, at a version.
@@ -165,21 +158,21 @@ def test_a_write_names_its_run_where_a_namespace_above_it_requires_one(grants: G
     assert client.post(f"/v1/namespace/{SALES}$lane/create", json={}).status_code == 200
     spaces = (SALES, f"{SALES}$lane", f"{WAREHOUSE}$gold")
     # The run's input is a table alice may read: a name that holds no table grants nothing to read.
-    assert client.post(f"/v1/table/{WAREHOUSE}$src$a/create?mode=create", content=_rows(), headers=ARROW).status_code == 200
+    assert client.post(f"/v1/table/{WAREHOUSE}$src$a/create?mode=create", content=ROWS, headers=ARROW).status_code == 200
     for ns in spaces:
-        assert client.post(f"/v1/table/{ns}$t/create?mode=create", content=_rows(), headers={**ARROW, **_RUN}).status_code == 200
+        assert client.post(f"/v1/table/{ns}$t/create?mode=create", content=ROWS, headers={**ARROW, **_RUN}).status_code == 200
 
     grants.act_as("dave")
-    _refused(client.post(f"/v1/table/{SALES}$t/insert", content=_rows(), headers={**ARROW, **_RUN}), 15)
+    _refused(client.post(f"/v1/table/{SALES}$t/insert", content=ROWS, headers={**ARROW, **_RUN}), 15)
 
     grants.act_as("alice")
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     caplog.clear()
     for ns in (SALES, f"{SALES}$lane"):
-        _refused(client.post(f"/v1/table/{ns}$t/insert", content=_rows(), headers=ARROW), 13)
-    assert client.post(f"/v1/table/{WAREHOUSE}$gold$t/insert", content=_rows(), headers=ARROW).status_code == 200
+        _refused(client.post(f"/v1/table/{ns}$t/insert", content=ROWS, headers=ARROW), 13)
+    assert client.post(f"/v1/table/{WAREHOUSE}$gold$t/insert", content=ROWS, headers=ARROW).status_code == 200
     for ns in spaces:
-        assert client.post(f"/v1/table/{ns}$t/insert", content=_rows(), headers={**ARROW, **_RUN}).status_code == 200
+        assert client.post(f"/v1/table/{ns}$t/insert", content=ROWS, headers={**ARROW, **_RUN}).status_code == 200
     judged = [
         (r.__dict__["audit.resource"], r.__dict__["audit.requires_run"], r.__dict__["audit.outcome"])
         for r in caplog.records
@@ -205,9 +198,9 @@ def test_a_recoverable_drop_and_its_undrop_keep_the_run_rule_and_the_uuid(grants
     grants.act_as("bob")
     ledger = _object(client, "namespace", LEDGER)
     grants.store.write((grants.person("bob"), "owner", ledger))
-    minted = _properties(client, LEDGER)["rask.uuid"]
+    minted = _properties(client, LEDGER)[UUID_PROPERTY]
 
     assert client.post(f"/v1/namespace/{WAREHOUSE}$ledger/drop", json={"behavior": "Cascade"}).status_code == 200
     assert client.post(f"/management/v1/namespace/{WAREHOUSE}$ledger/undrop", json={}).status_code == 200
 
-    assert _properties(client, LEDGER) == {"rask.requires_run": "true", "rask.uuid": minted}
+    assert _properties(client, LEDGER) == {"rask.requires_run": "true", UUID_PROPERTY: minted}

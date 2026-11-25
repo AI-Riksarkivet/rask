@@ -13,23 +13,15 @@ own sequence — the version is the part that silently reverts if only the write
 is not.
 """
 
-import io
-
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 
 def _location(client: TestClient) -> str:
@@ -51,7 +43,7 @@ def branched(real_ns_client: TestClient) -> tuple[TestClient, str]:
     """A real table at ``b1$t`` with a ``dev`` branch, plus its storage location."""
     assert real_ns_client.post("/v1/namespace/lance_catalog$b1/create", json={}).status_code == 200
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]})
-    created = real_ns_client.post("/v1/table/lance_catalog$b1$t/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
+    created = real_ns_client.post("/v1/table/lance_catalog$b1$t/create?mode=overwrite", content=encode_arrow_stream(rows), headers=ARROW)
     assert created.status_code == 200, created.text
     branch = real_ns_client.post("/v1/table/lance_catalog$b1$t/branches/create", json={"name": "dev"})
     assert branch.status_code == 200, branch.text

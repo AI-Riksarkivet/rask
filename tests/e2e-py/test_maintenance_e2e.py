@@ -27,6 +27,8 @@ import lance
 import pytest
 from byo_scenario import CATALOG, Tenant, ok, rows_of
 
+from lakehouse.naming import UUID_PROPERTY
+
 
 pytestmark = [pytest.mark.e2e, pytest.mark.compaction, pytest.mark.skipif(not scenario.LIVE, reason=scenario.REQUIRES)]
 
@@ -50,7 +52,7 @@ def test_a_commit_is_followed_by_its_tables_pass(byo_tenant: Tenant) -> None:
     byo_tenant.tables.append(table)
     for start in (10, 20, 30):
         lance.write_dataset(rows_of(range(start, start + 10)), namespace_client=stock, table_id=table_id, mode="append")
-    table_uuid = str(ok(byo_tenant.pipeline.http.post(f"{CATALOG}/v1/table/{table}/describe", json={}, timeout=60))["properties"]["rask.uuid"])
+    table_uuid = str(ok(byo_tenant.pipeline.http.post(f"{CATALOG}/v1/table/{table}/describe", json={}, timeout=60))["properties"][UUID_PROPERTY])
 
     deadline = time.monotonic() + scenario.COMMIT_PASS_SECONDS
     record = _due_record(byo_tenant, table_uuid)

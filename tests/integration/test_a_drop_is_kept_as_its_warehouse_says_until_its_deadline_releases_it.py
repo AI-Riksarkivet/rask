@@ -22,20 +22,20 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-import pyarrow as pa
 import pytest
 
 from catalog.core.config import get_settings as catalog_settings
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.governed.fga_ids import user_object
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import trash
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.trash_task import TrashUnreadableError, run_trash_task
 from tests import seeding
 from tests.control_emitter_double import ControlEmitterDouble
-from tests.governed_catalog import StoreTuples
+from tests.governed_catalog import ROWS, StoreTuples
 from tests.integration.catalog_and_maintenance import TwoServices, audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 from tests.integration.openfga_grants import principal_key
@@ -43,7 +43,6 @@ from tests.integration.store_requests import counted
 
 
 PROJECT = "acme"
-_ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 
 
 class _Estate:
@@ -71,9 +70,9 @@ class _Estate:
 
     def create_table(self, table: str) -> str:
         """``table``, created with two rows; the uuid the catalog minted for it."""
-        answer = self.catalog.post(f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        answer = self.catalog.post(f"/v1/table/{table}/create", content=ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert answer.status_code == 200, answer.text
-        return str(self.post(f"/v1/table/{table}/describe")["properties"]["rask.uuid"])
+        return str(self.post(f"/v1/table/{table}/describe")["properties"][UUID_PROPERTY])
 
     def location(self, table: str) -> str:
         return str(self.post(f"/v1/table/{table}/describe")["location"])
@@ -141,7 +140,7 @@ class _PastDeadline:
         self.expired, self.waiting, live = (estate.create_table(f"{self.bronze}${name}") for name in ("expired", "waiting", "live"))
         estate.post(f"/v1/namespace/{self.bronze}$gone/create")
         nested = estate.create_table(f"{self.bronze}$gone$t")
-        self.namespace = str(estate.post(f"/v1/namespace/{self.bronze}$gone/describe")["properties"]["rask.uuid"])
+        self.namespace = str(estate.post(f"/v1/namespace/{self.bronze}$gone/describe")["properties"][UUID_PROPERTY])
         self.location = estate.location(f"{self.bronze}$expired")
         estate.post(f"/v1/table/{self.bronze}$expired/drop")
         estate.post(f"/v1/table/{self.bronze}$waiting/drop")

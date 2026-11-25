@@ -36,15 +36,13 @@ from catalog.api.authz.context import AuthzContext
 from catalog.api.dependencies import Resolver, get_fga_client, request_settings
 from catalog.api.security import authenticate
 from catalog.core import write_judge
-from catalog.core.config import Settings
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.governed import fga_reads
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records.trash import TrashRecord
+from tests.callers import person
+from tests.catalog_settings import governed_settings
 
 
 _ID = "acme$events"
@@ -52,29 +50,6 @@ _ID = "acme$events"
 #: Nothing calls a method on it: `fga_reads.check` is replaced below before it is used, and a door that asked anything
 #: else of OpenFGA would fail on it.
 _CLIENT = cast("OpenFgaClient", object())
-
-
-def _settings() -> Settings:
-    return Settings.model_validate(
-        {
-            "oidc_enabled": True,
-            "oidc_issuer": "https://idp.example",
-            "oidc_audience": "lance",
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "fga_enabled": True,
-            "fga_api_url": "http://openfga:8080",
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
-
-
-def _token() -> PersonPrincipal:
-    return PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="alice"),
-        claims=IDToken(iss="https://idp.example", sub="alice", aud="lance", exp=2_000_000_000, iat=1_000_000_000),
-    )
 
 
 def _request(template: str, body: dict[str, object], query: str = "") -> Request:
@@ -147,7 +122,7 @@ class _EveryNameHolds(Resolver):
 def _authorize(template: str, body: dict[str, object] | None = None, query: str = "") -> None:
     asyncio.run(
         route_guard.authorize(
-            _request(template, body or {}, query), AuthzContext(client=_CLIENT, settings=_settings(), token=_token()), resolver=_EveryNameHolds()
+            _request(template, body or {}, query), AuthzContext(client=_CLIENT, settings=governed_settings(), token=person("alice")), resolver=_EveryNameHolds()
         )
     )
 
@@ -205,9 +180,9 @@ def test_an_undeclared_door_answers_the_specs_internal_error_on_the_wire(asked: 
     app = FastAPI()
     app.include_router(router)
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.dependency_overrides[request_settings] = _settings
+    app.dependency_overrides[request_settings] = lambda: governed_settings()
     app.dependency_overrides[get_fga_client] = lambda: _CLIENT
-    app.dependency_overrides[authenticate] = _token
+    app.dependency_overrides[authenticate] = lambda: person("alice")
 
     response = TestClient(app, raise_server_exceptions=False).post(f"/v1/table/{_ID}/a_verb_nobody_declared", json={})
 
@@ -307,7 +282,7 @@ def test_every_guarded_route_resolves_to_a_declared_rung_and_every_write_reaches
     asyncio.run(
         route_guard.authorize(
             _request(template, {}, query),
-            AuthzContext(client=None, settings=_settings().model_copy(update={"fga_enabled": False}), token=None),
+            AuthzContext(client=None, settings=governed_settings().model_copy(update={"fga_enabled": False}), token=None),
             resolver=_EveryNameHolds(),
         )
     )

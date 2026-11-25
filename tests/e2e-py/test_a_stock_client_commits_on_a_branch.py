@@ -7,7 +7,7 @@ through the namespace: it opens the branch from the table's own `DescribeTable`,
 with `branch`. Main stays at its version. A commit the judge refuses leaves the branch at its version and answers a
 typed spec error, and the store refuses the job's credential a final manifest on the branch and a ref.
 
-The Dex users and the scratch tenant are `scratch_tenant`'s; the tenant is deleted at the end.
+The Dex users are `byo_scenario`'s and the scratch tenant is `scratch_tenant`'s; the tenant is deleted at the end.
 
 Run with `bash scripts/e2e_live.sh tests/e2e-py/test_a_stock_client_commits_on_a_branch.py`, which discovers every
 address from the release, or `make e2e-byo-branch` with the addresses set.
@@ -16,16 +16,13 @@ address from the release, or `make e2e-byo-branch` with the addresses set.
 from collections.abc import Iterator
 from typing import Any
 
-import boto3
 import lance
 import lance_namespace
 import pyarrow as pa
 import pytest
-from botocore.config import Config
 from botocore.exceptions import ClientError
-from scratch_tenant import CATALOG, DEX, Identity, Tenant, provisioned
-
-from lakehouse.storage.options import ENDPOINT
+from byo_scenario import CATALOG, DEX, Identity, vended_store
+from scratch_tenant import Tenant, provisioned
 
 
 pytestmark = [
@@ -56,23 +53,6 @@ def _rows(dataset: lance.LanceDataset) -> list[tuple[int, str]]:
 def _branch(identity: Identity, table_id: list[str]) -> lance.LanceDataset:
     """The head of ``work``, opened as a stock client opens it: the table's own ``DescribeTable``, then the ref."""
     return lance.dataset(namespace_client=identity.namespace(), table_id=table_id).checkout_version(("work", None))
-
-
-def _vended_store(identity: Identity, table_id: list[str]) -> tuple[Any, str, str]:
-    """An S3 client on the credential the table's ``DescribeTable`` vends ``identity``, the table's bucket and its prefix."""
-    described = identity.namespace().describe_table(lance_namespace.DescribeTableRequest(id=table_id))
-    vended = described.storage_options or {}
-    bucket, _, prefix = str(described.location).removeprefix("s3://").partition("/")
-    store = boto3.client(
-        "s3",
-        endpoint_url=vended[ENDPOINT],
-        aws_access_key_id=vended["aws_access_key_id"],
-        aws_secret_access_key=vended["aws_secret_access_key"],
-        aws_session_token=vended["aws_session_token"],
-        region_name=vended.get("region", "us-east-1"),
-        config=Config(s3={"addressing_style": "path"}),
-    )
-    return store, bucket, prefix.strip("/")
 
 
 def _staged_manifests(store: Any, bucket: str, versions: str) -> list[str]:
@@ -117,7 +97,8 @@ def test_a_stock_client_commits_on_a_branch_and_main_is_unchanged(tenant: Tenant
     # 2. A commit the judge refuses (a key the branch holds) leaves the branch at its version and answers a typed error.
     with pytest.raises(OSError):
         lance.write_dataset(_keyed([1], ["again"]), _branch(job, table_id), mode="append")
-    store, bucket, prefix = _vended_store(job, table_id)
+    store, bucket, prefix = vended_store(job, table_id)
+    prefix = prefix.strip("/")
     (staged,) = _staged_manifests(store, bucket, f"{prefix}/tree/work/_versions/")
     answer = job.http.post(f"{CATALOG}/v1/table/{table}/version/create", json={"version": 5, "branch": "work", "manifest_path": staged}, timeout=60)
     assert (answer.status_code, answer.json().get("code")) == (400, 13), answer.text

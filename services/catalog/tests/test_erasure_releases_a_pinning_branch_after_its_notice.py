@@ -15,7 +15,6 @@ against real pylance on ``tmp_path``: the claim is the whole path a person sees,
 completes.
 """
 
-import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -24,54 +23,40 @@ from typing import Any, cast
 
 import lance
 import lance_namespace
-import pyarrow as pa
 import pytest
-from fastapi import FastAPI
+from erasure_rig import PREDICATE, SUBJECT, erasure_doors, rows
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from tables_by_name import open_by_name
 
 from catalog.api import erasure_release as release_tick
-from catalog.api.dependencies import get_clock, get_control_emitter, get_namespace, get_storage_options, request_settings
+from catalog.api.dependencies import get_clock, get_control_emitter
 from catalog.api.security import authenticate
 from catalog.api.ticks import Tick
 from catalog.api.v1.endpoints import erasure as door
-from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import erasure_release, table_claims
 from catalog.services.erasure import Pin
 from catalog.services.tables.creation import create_table
-from catalog.services.tables.writes import read_arrow_body
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
-from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.records.history_fences import HistoryWork, TableHistory
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
+from tests.callers import person
+from tests.catalog_settings import catalog_settings
 from tests.control_emitter_double import ControlEmitterDouble
 
 
-_PREDICATE = "pii = 'alice'"
 _TABLE_ID = ["db", "subjects"]
 _NOTICE = "erasure_release_scheduled"
-
-
-def _rows(*names: str) -> pa.Table:
-    return pa.table({"pii": pa.array(list(names))})
 
 
 def _created(root: Path) -> LanceNamespace:
     """``subjects`` at v1, alice and bob, through the catalog's create path, its claim on the control root beside ``root``."""
     ns = lance_namespace.connect("dir", {"root": str(root)})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, _rows("alice", "bob").schema) as writer:
-        writer.write_table(_rows("alice", "bob"))
     ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1], properties=with_minted_uuid(None)))
-    body = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20)
     registry = BaseRegistry(control_root=str(root.parent / "control"), storage_options={})
-    create_table(ns, StorageOptions(), _TABLE_ID, table=body, root=str(root), mode="create", registry=registry, holder="db$subjects")
+    create_table(ns, StorageOptions(), _TABLE_ID, table=rows(SUBJECT, "bob"), root=str(root), mode="create", registry=registry, holder="db$subjects")
     return ns
 
 
@@ -83,17 +68,17 @@ def _table_uuid(ns: LanceNamespace, tmp_path: Path) -> str:
 def _tagged_over_a_plain_delete(root: Path) -> LanceNamespace:
     """A writer's plain delete hides alice at v2, which a run's tag ``trained`` names; v3 adds carol."""
     ns = _created(root)
-    open_by_name(ns, StorageOptions(), _TABLE_ID).delete(_PREDICATE)
+    open_by_name(ns, StorageOptions(), _TABLE_ID).delete(PREDICATE)
     open_by_name(ns, StorageOptions(), _TABLE_ID).tags.create("trained", 2)
-    open_by_name(ns, StorageOptions(), _TABLE_ID).insert(_rows("carol"))
+    open_by_name(ns, StorageOptions(), _TABLE_ID).insert(rows("carol"))
     return ns
 
 
 def _pinned_subtree(root: Path) -> LanceNamespace:
     """main v2 adds carol; ``work`` cut from main v2 gains eve at v3; ``deeper`` cut from (work, 3), tagged ``t1``."""
     ns = _created(root)
-    open_by_name(ns, StorageOptions(), _TABLE_ID).insert(_rows("carol"))
-    lance.write_dataset(_rows("eve"), open_by_name(ns, StorageOptions(), _TABLE_ID).create_branch("work", 2), mode="append")
+    open_by_name(ns, StorageOptions(), _TABLE_ID).insert(rows("carol"))
+    lance.write_dataset(rows("eve"), open_by_name(ns, StorageOptions(), _TABLE_ID).create_branch("work", 2), mode="append")
     open_by_name(ns, StorageOptions(), _TABLE_ID).create_branch("deeper", ("work", 3))
     open_by_name(ns, StorageOptions(), _TABLE_ID).tags.create("t1", ("deeper", 3))
     return ns
@@ -113,16 +98,8 @@ type Release = Callable[[], release_tick.ErasureReleaseTick]
 @contextmanager
 def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: ControlEmitterDouble, clock: _Clock) -> Generator[tuple[TestClient, Release]]:
     """The erasure doors on one app, and the release's tick over that app, judged by ``clock`` and announced on ``emitter``."""
-    settings = Settings(
-        s3_access_key_id="k",
-        s3_secret_access_key="s",
-        LANCE_CONTROL_ROOT=str(tmp_path / "control"),
-        LANCE_ERASURE_RELEASE_GRACE_DAYS=grace_days,
-    )
-    application = FastAPI()
-    install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(door.table_router)
-    application.include_router(door.obligations_router)
+    settings = catalog_settings(LANCE_CONTROL_ROOT=str(tmp_path / "control"), LANCE_ERASURE_RELEASE_GRACE_DAYS=grace_days)
+    application = erasure_doors(ns, settings)
 
     table = f"table:{_table_uuid(ns, tmp_path)}"
 
@@ -130,12 +107,7 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: Co
         # The owners of the table's uuid, which its grants are held by (ADR 0173 §8); any other object has none.
         return ["user:dex~olivia", "user:dex~alice%40corp"] if obj == table else []
 
-    application.dependency_overrides[request_settings] = lambda: settings
-    application.dependency_overrides[get_namespace] = lambda: ns
-    application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
-    application.dependency_overrides[authenticate] = lambda: PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="alice@corp"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
-    )
+    application.dependency_overrides[authenticate] = lambda: person("alice@corp", sub="alice")
     application.dependency_overrides[get_control_emitter] = lambda: emitter
     application.dependency_overrides[door.get_table_owners] = lambda: _owners
     application.dependency_overrides[get_clock] = lambda: clock
@@ -153,13 +125,13 @@ def _branches(ns: LanceNamespace) -> dict[str, tuple[str | None, int]]:
 
 
 def _record(client: TestClient) -> str:
-    response = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE, "retain_days": 0})
+    response = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": PREDICATE, "retain_days": 0})
     assert response.status_code == 202, response.text
     return str(response.json()["obligation_id"])
 
 
 def _verify(client: TestClient, obligation_id: str) -> dict[str, Any]:
-    response = client.post(f"/management/v1/table/db$subjects/erasure/{obligation_id}/verify", json={"predicate": _PREDICATE})
+    response = client.post(f"/management/v1/table/db$subjects/erasure/{obligation_id}/verify", json={"predicate": PREDICATE})
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -170,7 +142,7 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
 
     with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as (client, run_release):
         obligation = _record(client)
-        erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
+        erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, PREDICATE).run()
         verified = _verify(client, obligation)
         refs = ["tag:trained"]
         assert ([pin["ref"] for pin in verified["report"]["pinned_by"]], verified["obligation"]["state"]) == (refs, "released")
@@ -212,7 +184,7 @@ def test_a_release_an_earlier_verification_scheduled_settles_the_obligation_only
     emitter, clock = ControlEmitterDouble(), _Clock()
     with _catalog(ns, tmp_path, grace_days=7, emitter=emitter, clock=clock) as (client, _run_release):
         obligation = _record(client)
-        erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
+        erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, PREDICATE).run()
         earlier = erasure_release.new_release(
             [Pin(ref=scheduled, holds="main@2")],
             release_id=obligation,
@@ -278,7 +250,7 @@ def test_a_release_cut_short_is_finished_at_the_reference_it_recorded(tmp_path: 
             expected["late"] = ("work", recorded)
         else:
             assert _branches(ns) == {}, "the first tick deleted the subtree and died before recreating it"
-        open_by_name(ns, StorageOptions(), _TABLE_ID).insert(_rows("zed"))
+        open_by_name(ns, StorageOptions(), _TABLE_ID).insert(rows("zed"))
         run_release()
 
     assert _branches(ns) == expected

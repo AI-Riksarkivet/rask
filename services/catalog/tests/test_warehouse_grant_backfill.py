@@ -10,39 +10,22 @@ import pytest
 
 from catalog.api import warehouse_grant_backfill
 from catalog.api.authz import warehouse_grants
-from catalog.core.config import Settings
 from lakehouse.governed import fga_provision, fga_resilience
 from lakehouse.records.warehouse_records import WarehouseRecord
-
-
-def _settings(**overrides: object) -> Settings:
-    base = {"LANCE_S3_ACCESS_KEY_ID": "x", "LANCE_S3_SECRET_ACCESS_KEY": "y"}
-    return Settings.model_validate({**base, **overrides})
-
-
-def _fga_settings(**overrides: object) -> Settings:
-    return _settings(
-        RASK_FGA_ENABLED=True,
-        RASK_OIDC_ENABLED=True,
-        RASK_OIDC_ISSUER="https://dex",
-        RASK_OIDC_AUDIENCE="rask",
-        RASK_OIDC_IDP_ID="dex",
-        RASK_OIDC_CONNECTORS={"local": "dex"},
-        **overrides,
-    )
+from tests.catalog_settings import catalog_settings, governed_settings
 
 
 @pytest.mark.asyncio
 async def test_fga_off_is_a_no_op_not_a_failure() -> None:
     """An estate without authorization has nothing to grant — and must not report a failure for it."""
-    assert await warehouse_grant_backfill.backfill(_settings()) == (0, 0, [])
+    assert await warehouse_grant_backfill.backfill(catalog_settings()) == (0, 0, [])
 
 
 @pytest.mark.asyncio
 async def test_no_declared_maintainers_is_a_no_op() -> None:
     """Empty by default. An estate that declares no maintenance identity and names no account of its own has no rung to
     grant or take back."""
-    assert await warehouse_grant_backfill.backfill(_fga_settings()) == (0, 0, [])
+    assert await warehouse_grant_backfill.backfill(governed_settings()) == (0, 0, [])
 
 
 @pytest.mark.asyncio
@@ -51,7 +34,7 @@ async def test_an_estate_that_declares_only_its_own_accounts_still_runs_the_back
     maintainer still has rungs to take back: a maintenance account that stopped vending writes keeps `maintenance` on
     every warehouse until a run revokes it, so the guard must not skip that estate.
     """
-    settings = _fga_settings(LANCE_OWN_ACCOUNTS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
+    settings = governed_settings(LANCE_OWN_ACCOUNTS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
     skipped: list[str] = []
 
     def _log_info(event: str, **kw: object) -> None:
@@ -90,7 +73,7 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
         lambda *a, **k: [WarehouseRecord(id=name, bucket=f"b-{name}", project="p", root_uri=f"s3://b-{name}") for name in ("a", "boom", "z")],
     )
     seen, written, failures = await warehouse_grant_backfill.backfill(
-        _fga_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
+        governed_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"])
     )
     assert calls == ["a", "boom", "z"], "the walk stopped at the failure"
     assert (seen, written) == (3, 4)

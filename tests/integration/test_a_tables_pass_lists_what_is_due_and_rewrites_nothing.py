@@ -33,10 +33,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, RegisterTableRequest
-from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
 from lakehouse.events.lineage_events import DatasetUuids, dataset_uuids
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.process.supervision import Supervisor
 from lakehouse.records import location_claims
 from lakehouse.records.maintenance_due import DueRecord, write_due
@@ -50,6 +50,7 @@ from maintenance.services.tasks import run_task
 from tests import seeding
 from tests.app_state import app_of
 from tests.bus_double import BusDouble, session_holding
+from tests.vend_answers import vended
 
 
 BUCKET = "lake"
@@ -76,22 +77,18 @@ DECLARED_UUID = "4d5e6f7a-8b9c-4d0e-a1f2-b3c4d5e6f7a8"
 
 
 @pytest.fixture(scope="module")
-def moto_url() -> Iterator[str]:
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    url = f"http://{host}:{port}"
-    boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=BUCKET)
-    yield url
-    server.stop()
+def store_url(moto_url: str) -> str:
+    """The shared moto server, holding this module's bucket."""
+    boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=BUCKET)
+    return moto_url
 
 
 @pytest.fixture
-def estate(moto_url: str) -> Iterator[StorageOptions]:
+def estate(store_url: str) -> Iterator[StorageOptions]:
     """Four small fragments in four versions registered as `lance_catalog$db$t`, under its own policy keeping two
     versions, and `lance_catalog$db$b` with a branch, under the bucket's project policy keeping one. The bucket is emptied after the test, since moto's
     backend outlives each server in the process."""
-    options = lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
+    options = lance_storage_options(store_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
     for uri, versions in ((URI, 4), (BRANCHED, 1)):
         for i in range(versions):
             rows = pa.table({"id": pa.array(range(i * 10, (i + 1) * 10), pa.int64())})
@@ -100,8 +97,8 @@ def estate(moto_url: str) -> Iterator[StorageOptions]:
             )
     lance.dataset(BRANCHED, storage_options=options.in_clear()).create_branch("work")
     namespace = connect("dir", {"root": ROOT, **{f"storage.{key}": value for key, value in options.in_clear().items()}})
-    namespace.create_namespace(CreateNamespaceRequest(id=[WAREHOUSE], properties={"rask.uuid": WAREHOUSE_UUID}))
-    namespace.create_namespace(CreateNamespaceRequest(id=[WAREHOUSE, "db"], properties={"rask.uuid": NAMESPACE_UUID}))
+    namespace.create_namespace(CreateNamespaceRequest(id=[WAREHOUSE], properties={UUID_PROPERTY: WAREHOUSE_UUID}))
+    namespace.create_namespace(CreateNamespaceRequest(id=[WAREHOUSE, "db"], properties={UUID_PROPERTY: NAMESPACE_UUID}))
     namespace.register_table(RegisterTableRequest(id=[WAREHOUSE, "db", "t"], location=LOCATION))
     claims = location_claims.ClaimStore(control_root=ROOT, storage_options=options)
     location_claims.take(claims, URI, TABLE, segments=[WAREHOUSE, "db", "t"], is_gone=lambda _claim: False, uuid=LOCATION)
@@ -111,7 +108,7 @@ def estate(moto_url: str) -> Iterator[StorageOptions]:
     seeding.put_policy(ROOT, options, policy)
     seeding.put_policy(ROOT, options, {"kind": "project", "id": "acme", "buckets": [BUCKET], "retain_versions": 1})
     yield options
-    s3 = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    s3 = boto3.client("s3", endpoint_url=store_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     for page in s3.get_paginator("list_objects_v2").paginate(Bucket=BUCKET):
         for entry in page.get("Contents", []):
             s3.delete_object(Bucket=BUCKET, Key=entry["Key"])
@@ -124,10 +121,10 @@ def bus() -> BusDouble:
 
 
 @pytest.fixture
-def maintenance(moto_url: str, monkeypatch: pytest.MonkeyPatch, bus: BusDouble) -> Iterator[TestClient]:
+def maintenance(store_url: str, monkeypatch: pytest.MonkeyPatch, bus: BusDouble) -> Iterator[TestClient]:
     for key, value in {
         "MAINTENANCE_LINEAGE_EMIT_ENABLED": "true",
-        "MAINTENANCE_S3_ENDPOINT": moto_url,
+        "MAINTENANCE_S3_ENDPOINT": store_url,
         "MAINTENANCE_S3_ACCESS_KEY_ID": "test",
         "MAINTENANCE_S3_SECRET_ACCESS_KEY": "test",
         "MAINTENANCE_S3_BUCKET": BUCKET,
@@ -160,9 +157,7 @@ def _vends_for(asked: list[str], options: dict[str, str]) -> respx.MockRouter:
     def _vend(request: httpx.Request) -> httpx.Response:
         table = request.url.path.removeprefix("/management/v1/table/").removesuffix("/credentials")
         asked.append(table)
-        credentials = {"storage_options": options}
-        location = URI if table == TABLE else BRANCHED
-        return httpx.Response(200, json={"mode": "direct", "credentials": credentials, "location": location})
+        return httpx.Response(200, json=vended(options, location=URI if table == TABLE else BRANCHED))
 
     router = respx.mock(base_url=CATALOG, assert_all_called=False)
     router.post(url__regex=r"/management/v1/table/.+/credentials").mock(side_effect=_vend)

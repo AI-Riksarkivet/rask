@@ -31,13 +31,11 @@ from lakehouse.events.bus_delivery import Outcome, Settlement
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.governed import fga_ids
 from lakehouse.governed.decider import OpenFgaDecider
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings, get_settings
 from lineage.models import RunEvent
 from tests.app_state import request_on
+from tests.callers import person
 
 
 def _uuid(name: str) -> str:
@@ -155,10 +153,7 @@ def _filter(fga_client: _OpenFga) -> fga_deps.DatasetFilter:
     return fga_deps.DatasetFilter(
         request,
         settings,
-        PersonPrincipal(
-            principal=Principal(idp_id="dex", subject="alice"),
-            claims=IDToken(iss="https://idp.example.com", sub="alice", aud="lance", exp=0, iat=0),
-        ),
+        person(),
     )
 
 

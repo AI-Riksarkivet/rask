@@ -22,6 +22,7 @@ from catalog.api.v1.endpoints import tables as t_ep
 from catalog.core.config import Settings
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
+from tests.catalog_settings import catalog_settings
 from tests.unit.named_resolver import NamedResolver
 
 
@@ -50,7 +51,7 @@ _MEDIA_CHILDREN = {"media": ["bronze", "silver"]}
 
 
 def _settings(tmp_path: object) -> Settings:
-    return Settings.model_validate({"root": f"file://{tmp_path}", "registry_root": f"file://{tmp_path}", "s3_access_key_id": "x", "s3_secret_access_key": "x"})
+    return catalog_settings(root=f"file://{tmp_path}", registry_root=f"file://{tmp_path}")
 
 
 def _list(monkeypatch: pytest.MonkeyPatch, tmp_path: object, catalogs: dict[str, _DirLike | Exception]) -> list[str]:

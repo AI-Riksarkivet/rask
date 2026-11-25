@@ -40,11 +40,11 @@ from tables_by_name import open_by_name
 from catalog.api.dependencies import get_namespace, get_storage_options, request_settings
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core import version_retention
-from catalog.core.config import Settings
 from catalog.services.tables.creation import create_table
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records import base_registry
 from lakehouse.storage.options import StorageOptions
+from tests.catalog_settings import catalog_settings
 
 
 lance = pytest.importorskip("lance")
@@ -84,7 +84,7 @@ def namespace(tmp_path: Path) -> LanceNamespace:
 
 @pytest.fixture
 def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
-    settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
+    settings = catalog_settings(LANCE_CONTROL_ROOT=str(tmp_path / "control"))
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.table_router)

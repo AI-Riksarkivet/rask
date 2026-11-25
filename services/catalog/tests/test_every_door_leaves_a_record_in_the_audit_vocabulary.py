@@ -9,8 +9,7 @@ obligation is recorded once per ref it covers. The trail they leave is judged as
 reads without naming its columns and version fails here.
 """
 
-import logging
-from collections.abc import Iterator, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 import pyarrow as pa
@@ -201,37 +200,20 @@ class _StsVendor:
         )
 
 
-class _Capture(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__()
-        self.records: list[dict[str, Any]] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append({k: v for k, v in record.__dict__.items() if k.startswith("audit.")})
-
-
-@pytest.fixture
-def trail() -> Iterator[list[dict[str, Any]]]:
-    """The ``lance.audit`` records, each as the flat field set a compliance query reads."""
-    handler = _Capture()
-    logger = logging.getLogger(AUDIT_LOGGER)
-    logger.addHandler(handler)
-    try:
-        yield handler.records
-    finally:
-        logger.removeHandler(handler)
-        configure_audit(enabled=True)
+def _trail(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    """The ``lance.audit`` records caplog holds, each as the flat field set a compliance query reads."""
+    return [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in caplog.records if r.name == AUDIT_LOGGER]
 
 
 def test_every_door_leaves_a_record_in_the_vocabulary_and_every_read_names_what_it_read(
     governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
-    trail: list[dict[str, Any]],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     catalog = governed_catalog
     catalog.client.app.dependency_overrides[get_vendor] = _StsVendor
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
     configure_audit(enabled=True)
-    trail.clear()
+    caplog.clear()
 
     for door in _CORPUS:
         headers = {**catalog.bearer(door.caller), **traceparent_named(door.request_id), **door.keywords.get("headers", {})}
@@ -240,12 +222,12 @@ def test_every_door_leaves_a_record_in_the_vocabulary_and_every_read_names_what_
 
     outside = [
         r
-        for r in trail
+        for r in _trail(caplog)
         if r.get("audit.format") != AUDIT_FORMAT or r.get("audit.action") not in set(AuditAction) or r.get("audit.outcome") not in set(AuditOutcome)
     ]
     assert outside == [], "records outside the format or the closed vocabularies"
-    assert [r for r in trail if not r["audit.subject"]] == [], "records naming no subject"
-    by_request = {door.request_id: [r for r in trail if r["audit.trace_id"] == trace_named(door.request_id)] for door in _CORPUS}
+    assert [r for r in _trail(caplog) if not r["audit.subject"]] == [], "records naming no subject"
+    by_request = {door.request_id: [r for r in _trail(caplog) if r["audit.trace_id"] == trace_named(door.request_id)] for door in _CORPUS}
     unauthenticated = [rid for rid, records in by_request.items() if not any(r["audit.action"] == AuditAction.AUTHN for r in records)]
     assert unauthenticated == [], "requests whose trail holds no authentication record"
     unverdicted = [rid for rid, records in by_request.items() if not any(r["audit.outcome"] in {"allow", "deny"} for r in records)]
@@ -268,7 +250,7 @@ def test_every_door_leaves_a_record_in_the_vocabulary_and_every_read_names_what_
 )
 def test_a_projects_door_names_its_caller_as_every_other_door_does(
     governed_catalog: Any,  # noqa: ANN401 — the catalog conftest's GovernedCatalog
-    trail: list[dict[str, Any]],
+    caplog: pytest.LogCaptureFixture,
     door: str,
     recorded: tuple[AuditAction, str],
 ) -> None:
@@ -278,13 +260,13 @@ def test_a_projects_door_names_its_caller_as_every_other_door_does(
     catalog = governed_catalog
     catalog.store.write((catalog.person("alice"), "admin", "estate:rask"))
     configure_audit(enabled=True)
-    trail.clear()
+    caplog.clear()
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
-    conforming = {r["audit.subject"] for r in trail if r["audit.action"] == AuditAction.AUTHZ}
+    conforming = {r["audit.subject"] for r in _trail(caplog) if r["audit.action"] == AuditAction.AUTHZ}
     assert len(conforming) == 1, conforming
     if door == "delete":
         assert catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("alice")).status_code == 200
-    trail.clear()
+    caplog.clear()
 
     answer = (
         catalog.client.post("/management/v1/projects", json={"id": "acme"}, headers=catalog.bearer("alice"))
@@ -294,5 +276,5 @@ def test_a_projects_door_names_its_caller_as_every_other_door_does(
 
     assert answer.status_code == 200, answer.text
     action, reason = recorded
-    assert [r["audit.subject"] for r in trail if (r["audit.action"], r.get("audit.reason")) == (action, reason)] == [*conforming]
-    assert {r["audit.subject"] for r in trail} == conforming
+    assert [r["audit.subject"] for r in _trail(caplog) if (r["audit.action"], r.get("audit.reason")) == (action, reason)] == [*conforming]
+    assert {r["audit.subject"] for r in _trail(caplog)} == conforming

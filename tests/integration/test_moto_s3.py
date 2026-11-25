@@ -15,41 +15,24 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
-from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.lancekit.base_refs import decoded_path, normalise
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 BUCKET = "lance-moto"
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
 @pytest.fixture(scope="module")
-def moto_endpoint() -> Iterator[str]:
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    url = f"http://{host}:{port}"
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=url,
-        aws_access_key_id="test",
-        aws_secret_access_key="test",
-        region_name="us-east-1",
-    )
-    s3.create_bucket(Bucket=BUCKET)
-    yield url
-    server.stop()
+def moto_endpoint(moto_url: str) -> str:
+    """The shared moto server, holding this module's bucket."""
+    boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=BUCKET)
+    return moto_url
 
 
 def _client(moto_endpoint: str, monkeypatch: pytest.MonkeyPatch, **extra: str) -> Iterator[TestClient]:
@@ -97,14 +80,14 @@ def test_catalog_roundtrip_on_moto_s3(moto_client: TestClient) -> None:
     assert moto_client.post("/v1/namespace/lance_catalog$m1/create", json={}).status_code == 200
 
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "name": ["a", "b", "c"]})
-    created = moto_client.post("/v1/table/lance_catalog$m1$t/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
+    created = moto_client.post("/v1/table/lance_catalog$m1$t/create?mode=overwrite", content=encode_arrow_stream(rows), headers=ARROW)
     assert created.status_code == 200, created.text
     assert created.json()["location"].startswith(f"s3://{BUCKET}/")
 
     assert (
         moto_client.post(
             "/v1/table/lance_catalog$m1$t/insert?mode=append",
-            content=_ipc(pa.table({"id": pa.array([4], pa.int64()), "name": ["d"]})),
+            content=encode_arrow_stream(pa.table({"id": pa.array([4], pa.int64()), "name": ["d"]})),
             headers=ARROW,
         ).status_code
         == 200
@@ -126,7 +109,7 @@ def _create(client: TestClient, ident: str, rows: pa.Table, query: str = "") -> 
     namespace = ident.rsplit("$", 1)[0]
     made = client.post(f"/v1/namespace/{namespace}/create", json={})
     assert made.status_code in {200, 409}, made.text
-    return client.post(f"/v1/table/{ident}/create{query}", content=_ipc(rows), headers=ARROW)
+    return client.post(f"/v1/table/{ident}/create{query}", content=encode_arrow_stream(rows), headers=ARROW)
 
 
 def _uuid(client: TestClient, ident: str) -> str:
@@ -134,8 +117,8 @@ def _uuid(client: TestClient, ident: str) -> str:
     described = client.post(f"/v1/table/{ident}/describe", json={})
     assert described.status_code == 200, described.text
     properties = described.json().get("properties") or {}
-    assert "rask.uuid" in properties, f"{ident} answers no uuid: {properties}"
-    return str(properties["rask.uuid"])
+    assert UUID_PROPERTY in properties, f"{ident} answers no uuid: {properties}"
+    return str(properties[UUID_PROPERTY])
 
 
 # --------------------------------------------------------------------------- #
@@ -159,7 +142,7 @@ def test_create_compensates_when_the_owner_grant_fails(moto_client: TestClient) 
     assert moto_client.post("/v1/namespace/lance_catalog$comp/create", json={}).status_code == 200
     with pytest.MonkeyPatch.context() as mp:  # dedicated context — never the fixture's instance
         mp.setattr(object_grants, "seed_ownership", failing_seed)
-        failed = moto_client.post("/v1/table/lance_catalog$comp$t/create", content=_ipc(rows), headers=ARROW)
+        failed = moto_client.post("/v1/table/lance_catalog$comp$t/create", content=encode_arrow_stream(rows), headers=ARROW)
     assert failed.status_code == 503, failed.text  # the grant failure surfaces (compensation ran)
     # the compensation deleted the half-created table…
     assert moto_client.post("/v1/table/lance_catalog$comp$t/describe", json={}).status_code == 404
@@ -336,7 +319,7 @@ def test_describe_at_tag_resolves_via_the_catalog(moto_client: TestClient) -> No
     assert (
         moto_client.post(
             "/v1/table/lance_catalog$dtag$t/insert?mode=append",
-            content=_ipc(pa.table({"id": pa.array([2], pa.int64())})),
+            content=encode_arrow_stream(pa.table({"id": pa.array([2], pa.int64())})),
             headers=ARROW,
         ).status_code
         == 200
@@ -345,7 +328,7 @@ def test_describe_at_tag_resolves_via_the_catalog(moto_client: TestClient) -> No
     # work@2 holds [1, 3] where main@2 holds [1, 2]: branch histories are numbered independently
     # (`lance_docs/lance/guide/tags_and_branches.md` § Branches), so `keep`'s number alone names main's snapshot.
     assert moto_client.post("/v1/table/lance_catalog$dtag$t/branches/create", json={"name": "work", "from_version": 1}).status_code == 200
-    on_work = _ipc(pa.table({"id": pa.array([3], pa.int64())}))
+    on_work = encode_arrow_stream(pa.table({"id": pa.array([3], pa.int64())}))
     assert moto_client.post("/v1/table/lance_catalog$dtag$t/insert?branch=work", content=on_work, headers=ARROW).status_code == 200
     assert moto_client.post("/v1/table/lance_catalog$dtag$t/tags/create", json={"tag": "keep", "version": 2, "branch": "work"}).status_code == 200
 
@@ -377,7 +360,7 @@ def test_describe_honours_a_version_pin_sent_in_the_spec_body(moto_client: TestC
     assert (
         moto_client.post(
             "/v1/table/lance_catalog$dbody$t/insert?mode=append",
-            content=_ipc(pa.table({"id": pa.array([2], pa.int64())})),
+            content=encode_arrow_stream(pa.table({"id": pa.array([2], pa.int64())})),
             headers=ARROW,
         ).status_code
         == 200
@@ -404,7 +387,7 @@ def test_describe_honours_a_version_pin_sent_in_the_spec_body(moto_client: TestC
 @pytest.mark.parametrize(
     ("door", "post"),
     [
-        ("arrow-create", lambda c: c.post("/v1/table/lance_catalog$ghostns$t9/create", content=_ipc(pa.table({"id": [1]})), headers=ARROW)),
+        ("arrow-create", lambda c: c.post("/v1/table/lance_catalog$ghostns$t9/create", content=encode_arrow_stream(pa.table({"id": [1]})), headers=ARROW)),
         ("declare", lambda c: c.post("/v1/table/lance_catalog$ghostns$t9/declare", json={"schema": {"fields": []}})),
         ("register", lambda c: c.post("/v1/table/lance_catalog$ghostns$t9/register", json={"location": "nope.lance"})),
     ],

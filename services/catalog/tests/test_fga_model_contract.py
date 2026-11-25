@@ -33,12 +33,10 @@ from catalog.api.authz import door_gates, grant_authority, route_guard, rungs
 from catalog.api.authz.context import AuthzContext
 from catalog.api.dependencies import Resolver
 from catalog.core import write_judge
-from catalog.core.config import Settings
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga_model, fga_reads
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
+from tests.callers import person
+from tests.catalog_settings import governed_settings
 from tests.unit.named_resolver import NamedResolver
 
 
@@ -61,24 +59,6 @@ def _model_relations() -> dict[str, set[str]]:
 # --------------------------------------------------------------------------- #
 # Enumerate every (type, relation) pair the CATALOG can check — by driving catalog.api.authz
 # --------------------------------------------------------------------------- #
-
-
-def _settings() -> Settings:
-    # model_validate (not Settings(...)) so field-name keys validate cleanly — the fields carry
-    # LANCE_* aliases. OIDC is required whenever FGA is on (authz needs an authenticated user).
-    return Settings.model_validate(
-        {
-            "oidc_enabled": True,
-            "oidc_issuer": "https://idp.example",
-            "oidc_audience": "lance",
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "fga_enabled": True,
-            "fga_api_url": "http://openfga:8080",
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
 
 
 class _FakeRequest:
@@ -108,7 +88,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     ``authorize_transaction`` is picked up here automatically instead of drifting from a copy.
     """
     pairs: set[tuple[str, str]] = set()
-    settings = _settings()
+    settings = governed_settings()
 
     # 1. Non-create ops: action_relation(type, suffix) for EVERY guarded type x EVERY suffix the rung
     #    maps declare — owner- and writer-tier full suffixes and reader-tier trailing actions. A suffix a type does not declare is refused and sends OpenFGA nothing, so it adds no
@@ -169,7 +149,7 @@ def _catalog_pairs(monkeypatch: pytest.MonkeyPatch) -> set[tuple[str, str]]:
     monkeypatch.setattr(fga_reads, "check", rec_check)
     monkeypatch.setattr(fga_reads, "batch_check", rec_batch)
 
-    token = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
+    token = person("alice")
     for suffix in ("describe", "alter"):
         asyncio.run(route_guard.authorize_transaction(_CLIENT, NamedResolver(), ["acme-wh", "db1", "t", "txn1"], suffix=suffix, token=token))
 

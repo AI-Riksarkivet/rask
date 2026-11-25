@@ -20,8 +20,6 @@ import copy
 import hashlib
 import json
 import os
-import threading
-import time
 import uuid
 from collections.abc import Callable, Iterator
 from typing import Any
@@ -33,7 +31,6 @@ import lance
 import lance_namespace
 import pyarrow as pa
 import pytest
-import uvicorn
 from lance import blob_array, blob_field
 from lance.blob import Blob
 from lance.dataset import Transaction
@@ -43,6 +40,7 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
+from tests.live_server import serve
 
 
 _INVALID_INPUT = 13
@@ -172,18 +170,8 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
     get_settings.cache_clear()
     from catalog.main import app
 
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 30
-    while not server.started:
-        if not thread.is_alive() or time.monotonic() > deadline:
-            raise RuntimeError("uvicorn did not start")
-        time.sleep(0.05)
-    with httpx.Client(base_url=f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}", timeout=120) as client:
+    with serve(app) as url, httpx.Client(base_url=url, timeout=120) as client:
         yield _Estate(moto_url, client, bucket, monkeypatch)
-    server.should_exit = True
-    thread.join(timeout=30)
     get_settings.cache_clear()
 
 

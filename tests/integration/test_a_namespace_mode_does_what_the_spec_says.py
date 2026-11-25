@@ -24,6 +24,7 @@ from lance_namespace import DropNamespaceRequest, LanceNamespace
 from catalog.api.dependencies import get_namespace
 from catalog.core.config import get_settings
 from catalog.services import warehouses
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import maintenance_policies
 from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.options import StorageOptions
@@ -103,7 +104,7 @@ def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership_and_a_new_uu
     """
     _create_top_level(governed.client, "ghost")
     assert governed.client.post(f"/management/v1/namespace/{WAREHOUSE}$ghost/policy/set", json={"retention_days": 7}).status_code == 200
-    replaced = _properties(governed.client, "ghost")["rask.uuid"]
+    replaced = _properties(governed.client, "ghost")[UUID_PROPERTY]
     old = f"namespace:{replaced}"
     governed.store.write(
         (governed.person("carol"), "reader", old), (governed.person("bob"), "owner", old), (governed.person("bob"), "writer", WAREHOUSE_OBJECT)
@@ -116,12 +117,12 @@ def test_overwrite_replaces_an_empty_namespace_with_fresh_ownership_and_a_new_uu
 
     assert resp.status_code == 200, resp.text
     properties = _properties(governed.client, "ghost")
-    assert properties.get("rask.uuid") not in (None, replaced), f"the replacement answers the replaced namespace's uuid: {properties}"
-    assert {key: value for key, value in properties.items() if key != "rask.uuid"} == {"team": "b"}
-    new = f"namespace:{properties['rask.uuid']}"
+    assert properties.get(UUID_PROPERTY) not in (None, replaced), f"the replacement answers the replaced namespace's uuid: {properties}"
+    assert {key: value for key, value in properties.items() if key != UUID_PROPERTY} == {"team": "b"}
+    new = f"namespace:{properties[UUID_PROPERTY]}"
     assert _naming(governed, old) == set(), "a grant on the replaced namespace survived it"
     policy = governed.client.post(f"/management/v1/namespace/{WAREHOUSE}$ghost/policy/describe")
-    assert (policy.status_code, policy.json()) == (200, {"kind": "namespace", "id": f"{WAREHOUSE}$ghost", "uuid": properties["rask.uuid"], "set": False})
+    assert (policy.status_code, policy.json()) == (200, {"kind": "namespace", "id": f"{WAREHOUSE}$ghost", "uuid": properties[UUID_PROPERTY], "set": False})
     assert _naming(governed, new) == {(governed.person("bob"), "owner", new), *{tuple(new if part == old else part for part in edge) for edge in edges}}
     assert maintenance_policies.get_policy(str(tmp_path), StorageOptions(), "namespace", key=replaced) is None
 
@@ -131,7 +132,7 @@ def test_a_create_over_a_standing_namespace_keeps_it_and_grants_its_caller_nothi
     """[[LH-416]] ExistOk over a namespace directly in a warehouse keeps it, and Create answers the conflict. The
     namespace is alice's either way: bob, who may create one, gains no tuple by asking for hers."""
     _create_top_level(governed.client, "kept")
-    kept = _properties(governed.client, "kept")["rask.uuid"]
+    kept = _properties(governed.client, "kept")[UUID_PROPERTY]
     governed.store.write((governed.person("bob"), "writer", WAREHOUSE_OBJECT))
     held = governed.store.tuples()
     governed.act_as("bob")
@@ -139,7 +140,7 @@ def test_a_create_over_a_standing_namespace_keeps_it_and_grants_its_caller_nothi
     resp = governed.client.post(f"/v1/namespace/{WAREHOUSE}$kept/create", json={"mode": mode})
 
     assert resp.status_code == status, resp.text
-    assert _properties(governed.client, "kept")["rask.uuid"] == kept
+    assert _properties(governed.client, "kept")[UUID_PROPERTY] == kept
     assert governed.store.tuples() == held, f"the create changed who holds what: {governed.store.tuples() ^ held}"
 
 
@@ -148,7 +149,7 @@ def test_overwrite_by_a_caller_who_may_not_delete_the_namespace_is_refused(gover
     namespace in the warehouse but owns none of alice's, is refused 403 (code 15), and the namespace and every grant stay
     as they were."""
     _create_top_level(governed.client, "kept")
-    kept = _properties(governed.client, "kept")["rask.uuid"]
+    kept = _properties(governed.client, "kept")[UUID_PROPERTY]
     governed.store.write((governed.person("bob"), "writer", WAREHOUSE_OBJECT))
     held = governed.store.tuples()
     governed.act_as("bob")
@@ -157,7 +158,7 @@ def test_overwrite_by_a_caller_who_may_not_delete_the_namespace_is_refused(gover
 
     assert (resp.status_code, resp.json()["code"]) == (403, 15), resp.text
     governed.act_as("alice")
-    assert _properties(governed.client, "kept")["rask.uuid"] == kept, "a refused overwrite replaced the namespace"
+    assert _properties(governed.client, "kept")[UUID_PROPERTY] == kept, "a refused overwrite replaced the namespace"
     assert governed.store.tuples() == held, "a refused overwrite changed a grant"
 
 

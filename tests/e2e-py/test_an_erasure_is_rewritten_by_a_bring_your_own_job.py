@@ -15,27 +15,18 @@ Run with `bash scripts/e2e_live.sh tests/e2e-py/test_an_erasure_is_rewritten_by_
 discovers every address from the release, or `make e2e-byo-erasure` with the addresses set.
 """
 
-import os
 import time
 import uuid
 from collections.abc import Iterator
 from typing import Any
 
-import boto3
 import lance
-import lance_namespace
 import pyarrow as pa
 import pytest
-from botocore.config import Config
+from byo_scenario import CATALOG, DEX, LINEAGE, SETTLE_SECONDS, Identity, feed_start, ok, vended_store
 from lance.optimize import Compaction
-from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
+from scratch_tenant import Tenant, provisioned
 
-from lakehouse.storage.options import ENDPOINT
-
-
-LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "").rstrip("/")
-#: How long a committed write may take to reach lineage's feed.
-SETTLE_SECONDS = float(os.environ.get("LANCE_E2E_SETTLE_SECONDS", "120"))
 
 #: The identifier being erased, spelled so that a byte search of storage finds nothing else.
 SUBJECT = f"subject-{uuid.uuid4().hex[:12]}"
@@ -59,13 +50,6 @@ def _people(names: list[str]) -> pa.Table:
 
 def _verify(identity: Identity, table: str, obligation_id: str) -> dict[str, Any]:
     return ok(identity.http.post(f"{CATALOG}/management/v1/table/{table}/erasure/{obligation_id}/verify", json={"predicate": PREDICATE}, timeout=300))
-
-
-def _feed_start(identity: Identity) -> int:
-    """Where a follower that has read nothing yet starts: the newest row it may see, else the oldest held."""
-    body = ok(identity.http.get(f"{LINEAGE}/events", params={"limit": 1}, timeout=30))
-    events = body.get("events") or []
-    return int(events[0]["seq"]) if events else max(int(body.get("oldest_seq") or 1) - 1, 0)
 
 
 def _authors_of(identity: Identity, *, since: int, table: str, versions: set[int]) -> dict[int, str]:
@@ -92,18 +76,7 @@ def _authors_of(identity: Identity, *, since: int, table: str, versions: set[int
 
 def _objects_holding(identity: Identity, table_id: list[str], needle: bytes) -> list[str]:
     """Every object under the table's prefix whose bytes hold ``needle``, read on the credential the catalog vends."""
-    described = identity.namespace().describe_table(lance_namespace.DescribeTableRequest(id=table_id))
-    vended = described.storage_options or {}
-    bucket, _, prefix = str(described.location).removeprefix("s3://").partition("/")
-    store = boto3.client(
-        "s3",
-        endpoint_url=vended[ENDPOINT],
-        aws_access_key_id=vended["aws_access_key_id"],
-        aws_secret_access_key=vended["aws_secret_access_key"],
-        aws_session_token=vended["aws_session_token"],
-        region_name=vended.get("region", "us-east-1"),
-        config=Config(s3={"addressing_style": "path"}),
-    )
+    store, bucket, prefix = vended_store(identity, table_id)
     holding: list[str] = []
     for page in store.get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=f"{prefix}/"):
         for item in page.get("Contents", []):
@@ -124,7 +97,7 @@ def test_a_job_rewrites_every_surface_and_the_catalog_releases_what_it_verifies(
     lance.write_dataset(_people(["cat", "dan"]), namespace_client=owner, table_id=table_id, mode="append")
     lance.dataset(namespace_client=owner, table_id=table_id).create_scalar_index("pii", index_type="BTREE", name="pii_idx")
     before = lance.dataset(namespace_client=owner, table_id=table_id).version
-    start = _feed_start(job)
+    start = feed_start(job)
 
     # 1. The door records the obligation and commits nothing.
     recorded = admin.http.post(f"{CATALOG}/management/v1/table/{table}/erasure", json={"predicate": PREDICATE}, timeout=120)

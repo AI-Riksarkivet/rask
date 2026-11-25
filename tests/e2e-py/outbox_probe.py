@@ -27,7 +27,9 @@ import requests
 from credentials import Credential, credential
 from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.lineage_events import DatasetUuids
+from lakehouse.naming import UUID_PROPERTY
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -96,15 +98,12 @@ def owned_output_table(namespace: str, table: str) -> str:
     # A 409 is the namespace an earlier run made; the table's create below fails on any parent that is not there.
     requests.post(f"{CATALOG}/v1/namespace/{namespace}/create", json={}, headers=auth, timeout=30)
     rows = pa.table({"id": pa.array([1], pa.int64())})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, rows.schema) as writer:
-        writer.write_table(rows)
     # `mode=overwrite` so a re-run adopts the table a previous run created rather than 409ing in setup,
     # which would report every test in the file as an ERROR.
     created = requests.post(
         f"{CATALOG}/v1/table/{table_id}/create?mode=overwrite",
-        data=sink.getvalue().to_pybytes(),
-        headers={**auth, "Content-Type": "application/vnd.apache.arrow.stream"},
+        data=encode_arrow_stream(rows),
+        headers={**auth, "Content-Type": ARROW_STREAM_MEDIA_TYPE},
         timeout=60,
     )
     assert created.status_code == 200, f"could not create the probe's output table {table_id}: {created.status_code} {created.text[:300]}"
@@ -124,6 +123,6 @@ def table_uuids(namespace: str, table: str) -> DatasetUuids:
     def minted(kind: str, name: str) -> str | None:
         described = requests.post(f"{CATALOG}/v1/{kind}/{name}/describe", json={}, headers=auth, timeout=30)
         assert described.status_code == 200, f"could not describe the probe's {kind} {name}: {described.status_code} {described.text[:300]}"
-        return (described.json().get("properties") or {}).get("rask.uuid")
+        return (described.json().get("properties") or {}).get(UUID_PROPERTY)
 
     return DatasetUuids(table_uuid=minted("table", f"{namespace}${table}"), namespace_uuid=minted("namespace", namespace))

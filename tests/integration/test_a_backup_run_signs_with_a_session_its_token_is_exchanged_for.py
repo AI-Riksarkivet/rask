@@ -8,36 +8,19 @@ boto3's default chain finds nothing to sign with, and what each exchange asked f
 this process.
 """
 
-import importlib.util
-import sys
 import uuid
 from collections.abc import Callable
 from pathlib import Path
-from types import ModuleType
 
 import boto3
 import pytest
 from moto.sts import models as sts_models
 
+from tests.script_module import script
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+
 #: The account moto files every role and session under.
 ACCOUNT = "123456789012"
-
-
-@pytest.fixture(autouse=True)
-def scripts_on_the_path(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The scripts' directory on the path, as `python /srv/<script>` puts it there, so each resolves its sibling."""
-    monkeypatch.syspath_prepend(str(REPO_ROOT / "scripts"))
-
-
-def _script(name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(f"{name}_under_test", REPO_ROOT / "scripts" / f"{name}.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
 
 
 @pytest.fixture
@@ -71,8 +54,9 @@ def role(moto_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     return role_arn
 
 
-def _back_up_the_control_root(bucket: str, _tmp_path: Path) -> int:
-    return _script("control_root_backup").main(["backup", "--root", f"s3://{bucket}"])
+def _back_up_the_control_root(bucket: str, monkeypatch: pytest.MonkeyPatch) -> int:
+    script("_backup_store", monkeypatch)
+    return script("control_root_backup", monkeypatch).main(["backup", "--root", f"s3://{bucket}"])
 
 
 @pytest.mark.parametrize(
@@ -84,9 +68,16 @@ def _back_up_the_control_root(bucket: str, _tmp_path: Path) -> int:
     ],
 )
 def test_a_backup_run_signs_with_one_session_its_token_is_exchanged_for(  # noqa: PLR0913 — the case's four facts and the fixtures it runs on
-    run: Callable[[str, Path], int], session_name: str, landed_under: str, landed_files: list[str], bucket: str, role: str, moto_url: str, tmp_path: Path
+    run: Callable[[str, pytest.MonkeyPatch], int],
+    session_name: str,
+    landed_under: str,
+    landed_files: list[str],
+    bucket: str,
+    role: str,
+    moto_url: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    exit_code = run(bucket, tmp_path)
+    exit_code = run(bucket, monkeypatch)
 
     sessions = [assumed.session_name for assumed in sts_models.sts_backends[ACCOUNT]["aws"].assumed_roles if assumed.role_arn == role]
     reader = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="read", aws_secret_access_key="read", region_name="us-east-1")

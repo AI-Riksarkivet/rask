@@ -15,13 +15,14 @@ from pathlib import Path
 import httpx
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 from tests.integration.lineage_app import catalog_tick, live_catalog
 
 
-_ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+_ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 _TABLE = "lance_catalog$db$t"
 _BRANCH = "team/work"
 _DELETE = f"/v1/table/{_TABLE}/branches/delete"
@@ -31,10 +32,7 @@ _ERASURE = f"/management/v1/table/{_TABLE}/erasure"
 
 def _rows(*ids: int) -> bytes:
     table = pa.table({"id": pa.array(ids, pa.int64())})
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+    return encode_arrow_stream(table)
 
 
 @contextmanager
@@ -178,7 +176,7 @@ def test_a_delete_that_died_before_the_reference_went_leaves_a_branch_that_stand
 
     with _a_table_with_a_branch_holding_a_commit(tmp_path, monkeypatch) as catalog:
         root = _root(catalog)
-        uuid = catalog.post(f"/v1/table/{_TABLE}/describe", json={}).json()["properties"]["rask.uuid"]
+        uuid = catalog.post(f"/v1/table/{_TABLE}/describe", json={}).json()["properties"][UUID_PROPERTY]
         settings = get_settings()
         # What a delete files before it takes the reference file away, and nothing after.
         died = branch_trash.HiddenBranch(
@@ -267,7 +265,7 @@ def _records(catalog: httpx.Client) -> list[str]:
     from lakehouse.records import branch_trash
 
     settings = get_settings()
-    uuid = catalog.post(f"/v1/table/{_TABLE}/describe", json={}).json()["properties"]["rask.uuid"]
+    uuid = catalog.post(f"/v1/table/{_TABLE}/describe", json={}).json()["properties"][UUID_PROPERTY]
     return [hidden.name for hidden in branch_trash.of_table(settings.registry_root, settings.storage_options(), uuid)]
 
 
@@ -292,7 +290,7 @@ def test_a_verification_the_catalog_refuses_deletes_no_deleted_branch(tmp_path: 
             dropped_at=datetime.now(UTC).isoformat(),
             expires_at=_later().isoformat(),
         )
-        uuid = catalog.post(f"/v1/table/{_TABLE}/describe", json={}).json()["properties"]["rask.uuid"]
+        uuid = catalog.post(f"/v1/table/{_TABLE}/describe", json={}).json()["properties"][UUID_PROPERTY]
         branch_trash.file(settings.registry_root, settings.storage_options(), uuid, hidden=raced)
         reference.unlink()
 
@@ -310,7 +308,7 @@ def _a_scheduled_release(catalog: httpx.Client) -> None:
     from catalog.services import erasure_release
 
     settings = get_settings()
-    uuid = catalog.post(f"/v1/table/{_TABLE}/describe", json={}).json()["properties"]["rask.uuid"]
+    uuid = catalog.post(f"/v1/table/{_TABLE}/describe", json={}).json()["properties"][UUID_PROPERTY]
     release = erasure_release.new_release(
         [], release_id="r1", table=_TABLE, table_uuid=uuid, location=str(_root(catalog)), requested_by=None, notified=[], due_at=_later()
     )

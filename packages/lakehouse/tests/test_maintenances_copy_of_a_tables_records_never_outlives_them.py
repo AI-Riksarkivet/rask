@@ -10,12 +10,10 @@ Over a moto server: the conditional puts are S3's, and an end is landed in the w
 """
 
 import uuid
-from collections.abc import Iterator
 
 import boto3
 import pytest
 from botocore.exceptions import ClientError
-from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
 from lakehouse.records import file_identities
@@ -24,15 +22,6 @@ from lakehouse.storage.errors import BucketNotFoundError
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions
 from lakehouse.storage.stored_objects import ObjectIdentity, list_under
-
-
-@pytest.fixture(scope="module")
-def moto_url() -> Iterator[str]:
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
 
 
 def _committed(transaction: str) -> file_identities.CommittedFiles:

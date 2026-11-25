@@ -18,10 +18,10 @@ from typing import Any, cast
 
 import boto3
 import pytest
-from botocore.exceptions import ClientError
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader, NumberDataPoint
 from pydantic import SecretStr
+from tests.store_answers import answered
 
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
@@ -52,7 +52,7 @@ class _RefusingStore:
         self._closed = closed
 
     def get_bucket_notification_configuration(self, **request: str) -> object:
-        raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Access Denied."}}, "GetBucketNotificationConfiguration")
+        raise answered(403, "AccessDenied", operation="GetBucketNotificationConfiguration")
 
     def close(self) -> None:
         self._closed.append("closed")

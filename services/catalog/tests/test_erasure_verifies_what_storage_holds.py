@@ -14,7 +14,6 @@ session, and a version that cannot be read whole is judged fragment by fragment.
 rewrites every ref first (the conftest's ``ErasureJob``, [[LH-493]]); every claim here is the verification's.
 """
 
-import logging
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from datetime import timedelta
@@ -26,13 +25,13 @@ import lance
 import lance_namespace
 import pyarrow as pa
 import pytest
-from fastapi import FastAPI
+from erasure_rig import PREDICATE, SUBJECT, Erase, erasure_doors, rows
 from fastapi.testclient import TestClient
 from lance.file import LanceFileReader
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from tables_by_name import open_by_name
 
-from catalog.api.dependencies import declared_base_judge, get_namespace, get_storage_options, request_settings
+from catalog.api.dependencies import declared_base_judge
 from catalog.api.v1.endpoints import erasure as door
 from catalog.core import base_judge
 from catalog.core.config import Settings
@@ -40,23 +39,14 @@ from catalog.core.identifiers import with_minted_uuid
 from catalog.services.erasure import ErasureReport, ref_heads, verify
 from catalog.services.tables.creation import create_table
 from catalog.services.tables.writes import read_arrow_body
-from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.problems.ns_errors import install_problem_handlers
+from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.records import base_registry
 from lakehouse.storage.options import StorageOptions
+from tests.catalog_settings import catalog_settings
+from tests.door_tables import BODY_LIMIT
 
 
-#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
-_BODY_LIMIT = 256 * 1024 * 1024
-
-
-_SUBJECT = "alice"
-_PREDICATE = "pii = 'alice'"
 _TABLE_ID = ["db", "subjects"]
-
-
-def _rows(*names: str) -> pa.Table:
-    return pa.table({"pii": pa.array(list(names))})
 
 
 def _alone(uri: str) -> None:
@@ -65,8 +55,8 @@ def _alone(uri: str) -> None:
     The tag makes step 4 READ main v2 through the erasure's session before dropping it. Work's delete
     drops the subject's whole fragment, so its head is main's lone bob fragment: nothing to rewrite.
     """
-    lance.write_dataset(_rows("bob"), uri)
-    lance.write_dataset(_rows(_SUBJECT), uri, mode="append")
+    lance.write_dataset(rows("bob"), uri)
+    lance.write_dataset(rows(SUBJECT), uri, mode="append")
     lance.dataset(uri).tags.create("snap", 2)
     lance.dataset(uri).create_branch("work", 2)
 
@@ -75,12 +65,9 @@ def _beside_a_large_base(uri: str) -> None:
     """A base fragment too large to be a compaction candidate, the subject beside carol in a small one;
     ``work`` cut after it with its own write, so work's rewrite leaves the base."""
     lance.write_dataset(pa.table({"pii": pa.array([f"bob-{i}" for i in range(1_100_000)])}), uri)
-    lance.write_dataset(_rows(_SUBJECT, "carol"), uri, mode="append")
+    lance.write_dataset(rows(SUBJECT, "carol"), uri, mode="append")
     lance.dataset(uri).create_branch("work", 2)
-    lance.write_dataset(_rows("eve"), lance.dataset(uri).checkout_version(("work", None)), mode="append")
-
-
-type _Erase = Callable[..., ErasureReport]
+    lance.write_dataset(rows("eve"), lance.dataset(uri).checkout_version(("work", None)), mode="append")
 
 
 def _verify(
@@ -97,7 +84,7 @@ def _verify(
         storage_options=StorageOptions(),
         reopen=reopen or (lambda: lance.dataset(uri)),
         table="t",
-        predicate=_PREDICATE,
+        predicate=PREDICATE,
         retention=retention,
         trusted=trusted if trusted is not None else ref_heads(lance.dataset(uri)),
         history=None,
@@ -106,31 +93,31 @@ def _verify(
 
 
 @pytest.fixture
-def erase(erasure_job: Any) -> _Erase:  # noqa: ANN401 — conftest.ErasureJob
+def erase(erasure_job: Any) -> Erase:  # noqa: ANN401 — conftest.ErasureJob
     """The job rewrites every ref, then the catalog verifies."""
 
     def _erase(uri: str, *, retention: timedelta = timedelta(0), reopen: Callable[[], Any] | None = None, dataset: Any = None) -> ErasureReport:  # noqa: ANN401
         recorded = ref_heads(lance.dataset(uri))
-        erasure_job(uri, _PREDICATE).run()
+        erasure_job(uri, PREDICATE).run()
         return _verify(uri, retention=retention, reopen=reopen, dataset=dataset, trusted=recorded)
 
     return _erase
 
 
 def _holding(uri: str) -> list[str]:
-    return [str(p.relative_to(uri)) for p in Path(uri).rglob("*.lance") if _SUBJECT.encode() in p.read_bytes()]
+    return [str(p.relative_to(uri)) for p in Path(uri).rglob("*.lance") if SUBJECT.encode() in p.read_bytes()]
 
 
 def _dangles(uri: str) -> bool:
     try:
-        lance.dataset(uri).checkout_version((None, 2)).count_rows(filter=_PREDICATE)
+        lance.dataset(uri).checkout_version((None, 2)).count_rows(filter=PREDICATE)
     except OSError:
         return True
     return False
 
 
 @pytest.mark.parametrize("build", [_alone, _beside_a_large_base], ids=["alone", "large-base"])
-def test_a_version_whose_subject_file_is_gone_is_not_a_residual(tmp_path: Path, build: Callable[[str], None], erase: _Erase) -> None:
+def test_a_version_whose_subject_file_is_gone_is_not_a_residual(tmp_path: Path, build: Callable[[str], None], erase: Erase) -> None:
     uri = str(tmp_path / "subjects")
     build(uri)
     shared = lance.Session(metadata_cache_size_bytes=64 << 20, index_cache_size_bytes=64 << 20)
@@ -149,25 +136,25 @@ def _unavailable(*_: object, **__: object) -> None:
     raise RuntimeError("object store unavailable")
 
 
-def _kept_by_a_tag(uri: str, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> ErasureReport:
+def _kept_by_a_tag(uri: str, monkeypatch: pytest.MonkeyPatch, erase: Erase) -> ErasureReport:
     """``work`` drops the subject at work v3, which a clean tag keeps, then overwrites its head: only the
     tag holds a version standing on main v2's files."""
-    lance.write_dataset(_rows("bob"), uri)
-    lance.write_dataset(_rows(_SUBJECT), uri, mode="append")
-    lance.dataset(uri).create_branch("work", 2).delete(_PREDICATE)
+    lance.write_dataset(rows("bob"), uri)
+    lance.write_dataset(rows(SUBJECT), uri, mode="append")
+    lance.dataset(uri).create_branch("work", 2).delete(PREDICATE)
     lance.dataset(uri).tags.create("kept", ("work", 3))
-    lance.write_dataset(_rows("zed"), lance.dataset(uri).checkout_version(("work", None)), mode="overwrite")
+    lance.write_dataset(rows("zed"), lance.dataset(uri).checkout_version(("work", None)), mode="overwrite")
     return erase(uri)
 
 
-def _inside_the_window(uri: str, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> ErasureReport:
+def _inside_the_window(uri: str, monkeypatch: pytest.MonkeyPatch, erase: Erase) -> ErasureReport:
     """Erased once, so main v2 dangles for ``work``; erased again under a window every version is inside."""
     _alone(uri)
     erase(uri)
     return erase(uri, retention=timedelta(days=1))
 
 
-def _not_reclaimed(uri: str, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> ErasureReport:
+def _not_reclaimed(uri: str, monkeypatch: pytest.MonkeyPatch, erase: Erase) -> ErasureReport:
     """Erased once, so main v2 dangles; erased again with every ref's cleanup failing."""
     _alone(uri)
     erase(uri)
@@ -175,7 +162,7 @@ def _not_reclaimed(uri: str, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> 
     return erase(uri)
 
 
-def _holder_unread(uri: str, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> ErasureReport:
+def _holder_unread(uri: str, monkeypatch: pytest.MonkeyPatch, erase: Erase) -> ErasureReport:
     """The verification cannot list ``work``'s versions, so whether one stands on main v2 is unknown."""
     _alone(uri)
     return erase(uri, reopen=lambda: _Failing(lance.dataset(uri), ("work", None), _Unlistable))
@@ -192,7 +179,7 @@ def _holder_unread(uri: str, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> 
     ids=["a-tag", "the-window", "an-unreclaimed-ref", "an-unread-holder"],
 )
 def test_a_dangling_version_names_every_kind_of_keeper(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, build: Callable[[str, pytest.MonkeyPatch, _Erase], ErasureReport], keepers: list[str], erase: _Erase
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, build: Callable[[str, pytest.MonkeyPatch, Erase], ErasureReport], keepers: list[str], erase: Erase
 ) -> None:
     """What releases a dangling version depends on what keeps it, so the surface names every keeper:
     a tag, the window, a ref whose reclaim did not run, and a holder the walk could not read."""
@@ -260,11 +247,11 @@ class _Failing(_Forwarding):
 
 
 def _clean_v1_then_the_subject(uri: str) -> None:
-    lance.write_dataset(_rows("bob"), uri)
-    lance.write_dataset(_rows(_SUBJECT), uri, mode="append")
+    lance.write_dataset(rows("bob"), uri)
+    lance.write_dataset(rows(SUBJECT), uri, mode="append")
 
 
-def test_a_version_that_cannot_be_read_is_a_residual_while_its_files_remain(tmp_path: Path, erase: _Erase) -> None:
+def test_a_version_that_cannot_be_read_is_a_residual_while_its_files_remain(tmp_path: Path, erase: Erase) -> None:
     """Unreadable is not evidence of absence: main v1 never held the subject, but a verification that
     cannot read it — every data file still on storage — has not proved that, so it is a residual."""
     uri = str(tmp_path / "subjects")
@@ -278,7 +265,7 @@ def test_a_version_that_cannot_be_read_is_a_residual_while_its_files_remain(tmp_
     assert report.complete is False
 
 
-def test_a_ref_whose_versions_cannot_be_listed_is_not_verified_clean(tmp_path: Path, erase: _Erase) -> None:
+def test_a_ref_whose_versions_cannot_be_listed_is_not_verified_clean(tmp_path: Path, erase: Erase) -> None:
     uri = str(tmp_path / "subjects")
     _clean_v1_then_the_subject(uri)
     lance.dataset(uri).create_branch("work", 1)
@@ -301,7 +288,7 @@ class _BranchesUnlistable(_Forwarding):
         return _NoBranchList()
 
 
-def test_a_branch_list_the_verification_cannot_read_again_is_not_verified_clean(tmp_path: Path, erase: _Erase) -> None:
+def test_a_branch_list_the_verification_cannot_read_again_is_not_verified_clean(tmp_path: Path, erase: Erase) -> None:
     """Step 1 listed the branches; a branch cut after that is found only by listing them again, so a
     verification that cannot has not proved the table clean."""
     uri = str(tmp_path / "subjects")
@@ -322,12 +309,12 @@ def _left_dangling_by_maintenance(uri: str) -> None:
     keeps standing on. Main merges carol and dan, and maintenance's expiry then cleans both refs, as it does
     whatever an erasure is doing: main v2 stays listed for work's head, its carol file is gone, and its first
     fragment still answers."""
-    lance.write_dataset(pa.table({"pii": pa.array([_SUBJECT, *(f"bob-{i}" for i in range(1_100_000))])}), uri)
-    lance.write_dataset(_rows("carol"), uri, mode="append")
-    lance.write_dataset(_rows("eve"), lance.dataset(uri).create_branch("work", 2), mode="append")
-    lance.write_dataset(_rows("dan"), uri, mode="append")
+    lance.write_dataset(pa.table({"pii": pa.array([SUBJECT, *(f"bob-{i}" for i in range(1_100_000))])}), uri)
+    lance.write_dataset(rows("carol"), uri, mode="append")
+    lance.write_dataset(rows("eve"), lance.dataset(uri).create_branch("work", 2), mode="append")
+    lance.write_dataset(rows("dan"), uri, mode="append")
     work = lance.dataset(uri).checkout_version(("work", None))
-    work.delete(f"_rowid IN ({', '.join(str(i) for i in work.to_table(columns=[], filter=_PREDICATE, with_row_id=True).column('_rowid').to_pylist())})")
+    work.delete(f"_rowid IN ({', '.join(str(i) for i in work.to_table(columns=[], filter=PREDICATE, with_row_id=True).column('_rowid').to_pylist())})")
     lance.dataset(uri).checkout_version(("work", None)).optimize.compact_files(materialize_deletions_threshold=0.0, excluded_fragment_ids=[0])
     lance.dataset(uri).optimize.compact_files(excluded_fragment_ids=[0])
     lance.dataset(uri).checkout_version(("work", None)).cleanup_old_versions(timedelta(0))
@@ -340,7 +327,7 @@ def test_a_version_unreadable_whole_is_a_residual_while_one_of_its_fragments_ans
 
     report = _verify(uri)
 
-    answering = lance.dataset(uri).checkout_version((None, 2)).get_fragments()[0].count_rows(filter=_PREDICATE)
+    answering = lance.dataset(uri).checkout_version((None, 2)).get_fragments()[0].count_rows(filter=PREDICATE)
     assert _dangles(uri) and answering == 1, "main v2 must fail a whole read while its first fragment answers for this to be the right test"
     assert "main@2" in report.residual_versions
     assert not [s.surface for s in report.surfaces if s.surface.startswith("dangling:")]
@@ -360,7 +347,7 @@ class _CheckoutFails(_Forwarding):
         return self._inner.checkout_version(reference)
 
 
-def test_a_version_that_cannot_be_checked_out_is_a_residual(tmp_path: Path, erase: _Erase) -> None:
+def test_a_version_that_cannot_be_checked_out_is_a_residual(tmp_path: Path, erase: Erase) -> None:
     uri = str(tmp_path / "subjects")
     _clean_v1_then_the_subject(uri)
 
@@ -384,7 +371,7 @@ class _StoreUnlisted(_Failing):
     ],
     ids=["version-files", "store-listing"],
 )
-def test_a_version_whose_files_cannot_be_listed_is_a_residual(tmp_path: Path, reopen: Callable[[str], Any], erase: _Erase) -> None:
+def test_a_version_whose_files_cannot_be_listed_is_a_residual(tmp_path: Path, reopen: Callable[[str], Any], erase: Erase) -> None:
     """The fragment-by-fragment judgement needs both listings; without either the version is unproved."""
     uri = str(tmp_path / "subjects")
     _clean_v1_then_the_subject(uri)
@@ -434,7 +421,7 @@ class _TrackedNowhere(_Forwarding):
     ],
     ids=["listing-spelled-elsewhere", "file-under-two-bases", "file-placed-nowhere"],
 )
-def test_a_lost_file_the_listing_cannot_place_is_not_proved_gone(tmp_path: Path, reopen: Callable[[str], Any], erase: _Erase) -> None:
+def test_a_lost_file_the_listing_cannot_place_is_not_proved_gone(tmp_path: Path, reopen: Callable[[str], Any], erase: Erase) -> None:
     """``_alone`` leaves main v2 dangling; each double removes one piece of the evidence that proves it,
     so v2 must stay a residual rather than be reported dangling."""
     uri = str(tmp_path / "subjects")
@@ -454,12 +441,12 @@ def test_a_lost_file_the_listing_cannot_place_is_not_proved_gone(tmp_path: Path,
     ids=["its-own-files", "a-branch-cut-from-it"],
 )
 def test_a_residual_whose_holders_cannot_all_be_read_is_called_unexplained(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reopen: Callable[[str], Any], erase: _Erase
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reopen: Callable[[str], Any], erase: Erase
 ) -> None:
     """The tag whose delete failed keeps main v1, but what else keeps it could not be read, so the tag is
     named AND the residual is said to be unexplained: pinned_by may be short."""
     uri = str(tmp_path / "subjects")
-    lance.write_dataset(_rows(_SUBJECT, "bob"), uri)
+    lance.write_dataset(rows(SUBJECT, "bob"), uri)
     lance.dataset(uri).tags.create("snap", 1)
     lance.dataset(uri).create_branch("work", 1)
 
@@ -499,7 +486,7 @@ def _keeps_every_version(
     )
 
 
-def test_a_residual_nothing_keeps_is_called_unexplained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
+def test_a_residual_nothing_keeps_is_called_unexplained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: Erase) -> None:
     """No tag, branch, window or unreclaimed ref keeps main v2, so the report names no holder for it and
     says nothing it could read accounts for it."""
     uri = str(tmp_path / "subjects")
@@ -519,7 +506,7 @@ class _Undated(_Forwarding):
         return [{**entry, "timestamp": None} for entry in self._inner.versions()]
 
 
-def test_a_residual_whose_commit_instant_cannot_be_read_is_counted_inside_the_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
+def test_a_residual_whose_commit_instant_cannot_be_read_is_counted_inside_the_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: Erase) -> None:
     """Without its instant the report cannot show the window has passed for main v2, so the window is
     what it names, and erasing again once it has passed is the remedy it gives."""
     uri = str(tmp_path / "subjects")
@@ -532,7 +519,7 @@ def test_a_residual_whose_commit_instant_cannot_be_read_is_counted_inside_the_wi
     assert "accounts for" not in next(s.detail for s in report.surfaces if s.surface == "verify")
 
 
-def test_a_verification_that_cannot_open_the_table_still_answers_with_the_report(tmp_path: Path, erase: _Erase) -> None:
+def test_a_verification_that_cannot_open_the_table_still_answers_with_the_report(tmp_path: Path, erase: Erase) -> None:
     """The verification opens its handle after steps 2 and 3 have dropped the pinning tag and reclaimed
     history, so a failed open must not lose their report: it is a failed `verify`."""
     uri = str(tmp_path / "subjects")
@@ -564,19 +551,15 @@ def _table(root: Path, first: pa.Table, *more: pa.Table) -> LanceNamespace:
     """``subjects`` through the catalog's own create path, one fragment per batch, its claim on the control root."""
     ns = lance_namespace.connect("dir", {"root": str(root)})
     ns.create_namespace(CreateNamespaceRequest(id=_TABLE_ID[:-1], properties=with_minted_uuid(None)))
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, first.schema) as writer:
-        writer.write_table(first)
-    body = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT)
     registry = base_registry.BaseRegistry(control_root=str(_control(root)))
-    create_table(ns, StorageOptions(), _TABLE_ID, table=body, root=str(root), mode="create", registry=registry, holder="$".join(_TABLE_ID))
+    create_table(ns, StorageOptions(), _TABLE_ID, table=first, root=str(root), mode="create", registry=registry, holder="$".join(_TABLE_ID))
     for batch in more:
         open_by_name(ns, StorageOptions(), _TABLE_ID).insert(batch)
     return ns
 
 
 def _namespace(root: Path) -> LanceNamespace:
-    ns = _table(root, _rows("bob"), _rows(_SUBJECT))
+    ns = _table(root, rows("bob"), rows(SUBJECT))
     open_by_name(ns, StorageOptions(), _TABLE_ID).tags.create("snap", 2)
     open_by_name(ns, StorageOptions(), _TABLE_ID).create_branch("work", 2)
     return ns
@@ -599,33 +582,25 @@ class _ResolvesOnce(_Forwarding):
 
 @contextmanager
 def _door(namespace: Any, settings: Settings) -> Generator[TestClient]:
-    application = FastAPI()
-    install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(door.table_router)
-    application.include_router(door.obligations_router)
-    application.state.control_emitter = NoopControlEmitter()  # the lifespan's, with control emission off
-    application.dependency_overrides[request_settings] = lambda: settings
-    application.dependency_overrides[get_namespace] = lambda: namespace
-    application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
-    with TestClient(application, raise_server_exceptions=False) as test_client:
+    with TestClient(erasure_doors(namespace, settings), raise_server_exceptions=False) as test_client:
         yield test_client
 
 
 def _settings(tmp_path: Path) -> Settings:
-    return Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
+    return catalog_settings(LANCE_CONTROL_ROOT=str(tmp_path / "control"))
 
 
 def _recorded(namespace: LanceNamespace, settings: Settings, erasure_job: Any) -> str:  # noqa: ANN401 — conftest.ErasureJob
     """Record an obligation through the door, then run the job on the table it names; the obligation's id."""
     with _door(namespace, settings) as client:
-        recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE})
+        recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": PREDICATE})
     assert recorded.status_code == 202, recorded.text
-    erasure_job(open_by_name(namespace, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
+    erasure_job(open_by_name(namespace, StorageOptions(), _TABLE_ID).uri, PREDICATE).run()
     return str(recorded.json()["obligation_id"])
 
 
 def _verified(client: TestClient, obligation_id: str) -> Any:  # noqa: ANN401 — an httpx.Response
-    return client.post(f"/management/v1/table/db$subjects/erasure/{obligation_id}/verify", json={"predicate": _PREDICATE})
+    return client.post(f"/management/v1/table/db$subjects/erasure/{obligation_id}/verify", json={"predicate": PREDICATE})
 
 
 def test_the_door_verifies_the_location_it_resolved_without_resolving_it_again(tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
@@ -663,7 +638,7 @@ def test_a_verification_the_door_cannot_open_answers_200_with_the_report(tmp_pat
 
 
 _IDENTIFIER = "alice-19700101-1234"
-_UNDER_THE_THRESHOLD = _rows(*(f"person-{i}" for i in range(19)), _IDENTIFIER)
+_UNDER_THE_THRESHOLD = rows(*(f"person-{i}" for i in range(19)), _IDENTIFIER)
 
 
 def _indexed(kind: Literal["BTREE", "BITMAP"]) -> Callable[[Path], LanceNamespace]:
@@ -686,10 +661,7 @@ def _created(root: Path, table: Callable[[Path], pa.Table], *, external: bool) -
     base = root / "bases" / "payloads"
     base.mkdir(parents=True)
     body = table(base)
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, body.schema) as writer:
-        writer.write_table(body)
-    payload = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT)
+    payload = read_arrow_body(encode_arrow_stream(body), max_bytes=BODY_LIMIT)
     bases = [str(base)]
     create_table(
         ns,
@@ -756,22 +728,22 @@ def _external_payloads_deleted_first(compacted: bool) -> Callable[[Path], LanceN
 def _tagged_before_the_subject_arrived(root: Path) -> LanceNamespace:
     """A run's tag names a BTREE-indexed version the subject never touched; it arrives after, and the index
     is optimized over it."""
-    ns = _table(root, _rows(*(f"person-{i}" for i in range(20))))
+    ns = _table(root, rows(*(f"person-{i}" for i in range(20))))
     dataset = open_by_name(ns, StorageOptions(), _TABLE_ID)
     dataset.create_scalar_index("pii", "BTREE")
     dataset.tags.create("trained", dataset.version)
-    dataset.insert(_rows(_IDENTIFIER))
+    dataset.insert(rows(_IDENTIFIER))
     dataset.optimize.optimize_indices()
     return ns
 
 
 def _through_a_mem_wal_shard(root: Path) -> LanceNamespace:
     """The subject arrives through a MemWAL shard writer, so the base table never holds it."""
-    ns = _table(root, _rows(*(f"person-{i}" for i in range(19))))
+    ns = _table(root, rows(*(f"person-{i}" for i in range(19))))
     dataset = open_by_name(ns, StorageOptions(), _TABLE_ID)
     dataset.initialize_mem_wal(unsharded=True)
     writer = open_by_name(ns, StorageOptions(), _TABLE_ID).mem_wal_writer("6f1d9a52-3c1e-4c5e-9a43-0b6f3c2d7e10")
-    writer.put(_rows(_IDENTIFIER))
+    writer.put(rows(_IDENTIFIER))
     writer.close()
     return ns
 
@@ -802,18 +774,18 @@ def _tagged_after_a_plain_delete(root: Path) -> LanceNamespace:
     [
         pytest.param(lambda root: _table(root, _UNDER_THE_THRESHOLD), True, (True, True, [], []), id="under-the-rewrite-threshold"),
         pytest.param(
-            lambda root: _table(root, _rows(*(f"person-{i}" for i in range(10))), _rows(_IDENTIFIER, _IDENTIFIER)),
+            lambda root: _table(root, rows(*(f"person-{i}" for i in range(10))), rows(_IDENTIFIER, _IDENTIFIER)),
             True,
             (True, True, [], []),
             id="a-whole-fragment",
         ),
         pytest.param(
-            lambda root: _table(root, _rows(*(f"x-{i}" for i in range(60_000))), _rows(_IDENTIFIER, "carol")),
+            lambda root: _table(root, rows(*(f"x-{i}" for i in range(60_000))), rows(_IDENTIFIER, "carol")),
             True,
             (True, True, [], []),
             id="beside-a-large-fragment",
         ),
-        pytest.param(lambda root: _table(root, _rows(*(f"x-{i}" for i in range(20_000)), _IDENTIFIER)), True, (True, True, [], []), id="in-a-large-fragment"),
+        pytest.param(lambda root: _table(root, rows(*(f"x-{i}" for i in range(20_000)), _IDENTIFIER)), True, (True, True, [], []), id="in-a-large-fragment"),
         pytest.param(_indexed("BTREE"), True, (True, True, [], []), id="a-btree-indexed-column"),
         pytest.param(_indexed("BITMAP"), True, (True, True, [], []), id="a-bitmap-indexed-column"),
         pytest.param(_tagged_before_the_subject_arrived, True, (True, True, [], []), id="a-tag-over-an-indexed-version-the-subject-never-touched"),
@@ -853,7 +825,7 @@ def test_no_object_under_the_table_root_holds_the_identifier_or_the_report_names
     the create wrote, as the deployed lifespan installs it."""
     root = tmp_path / "data"
     predicate = f"pii = '{_IDENTIFIER}'"
-    settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(_control(root)))
+    settings = catalog_settings(LANCE_CONTROL_ROOT=str(_control(root)))
     base_judge.install(partial(declared_base_judge, settings))
     try:
         namespace = build(root)
@@ -913,7 +885,7 @@ def _history(location: str) -> tuple[dict[str, Any], list[int], list[int], int]:
         dict(dataset.tags.list()),
         [entry["version"] for entry in dataset.versions()],
         [entry["version"] for entry in dataset.checkout_version(("work", None)).versions()],
-        dataset.count_rows(filter=_PREDICATE),
+        dataset.count_rows(filter=PREDICATE),
     )
 
 

@@ -20,23 +20,17 @@ import pyarrow.ipc as ipc
 import pytest
 
 from catalog.core.run_context import IDEMPOTENCY_ANSWER_PROPERTY
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
 
-ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return bytes(sink.getvalue().to_pybytes())
+ARROW_STREAM = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 
 def _rows(n: int = 3) -> bytes:
-    return _ipc(pa.table({"id": pa.array(range(n), pa.int64())}))
+    return encode_arrow_stream(pa.table({"id": pa.array(range(n), pa.int64())}))
 
 
 def _versions(client: TestClient, tid: str) -> Any:
@@ -211,7 +205,7 @@ class TestTheDestructiveDoorsConvergeToo:
 
 
 def _frame(ids: list[int], xs: list[int]) -> bytes:
-    return _ipc(pa.table({"id": pa.array(ids, pa.int64()), "x": pa.array(xs, pa.int64())}))
+    return encode_arrow_stream(pa.table({"id": pa.array(ids, pa.int64()), "x": pa.array(xs, pa.int64())}))
 
 
 def _table_rows(client: TestClient, tid: str) -> dict[str, list[int]]:

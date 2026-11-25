@@ -9,7 +9,7 @@ operation string is shared by both sides).
 import asyncio
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 import pytest
 from opentelemetry.sdk.metrics import MeterProvider
@@ -23,12 +23,10 @@ from catalog.core.lineage_emit import (
     DROP_TABLE,
     INSERT,
     MERGE_INSERT,
-    NO_FIELDS,
     BusEmitter,
     EmitFields,
     InputPin,
     InputRef,
-    LineageEmitter,
     NoopEmitter,
     build_write_event,
     emit_write_event,
@@ -41,6 +39,7 @@ from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE
 from lakehouse.storage.options import StorageOptions
 from lineage.models import RunEvent
 from tests.bus_double import BusDouble
+from tests.lineage_emitter_double import LineageEmitterDouble
 from tests.unit.no_store_session import no_store_session
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
@@ -200,21 +199,11 @@ def test_the_emitter_names_the_table_under_the_catalogs_endpoint_with_its_versio
 # --------------------------------------------------------------------------- #
 
 
-class _RecordingEmitter:
-    """Records the emit_write call kwargs (stands in for the real emitter)."""
-
-    def __init__(self) -> None:
-        self.writes: list[dict[str, Any]] = []
-
-    async def emit_write(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
-        self.writes.append({**required, **dict(fields)})
-
-
 def test_emit_write_event_maps_segments_to_canonical_ids_and_awaits_inline() -> None:
-    em = _RecordingEmitter()
+    em = LineageEmitterDouble()
     asyncio.run(
         emit_write_event(
-            cast(LineageEmitter, em),
+            em,
             ["db1", "users"],
             author="alice",
             version=3,
@@ -272,10 +261,10 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch_under_t
 def test_emit_write_event_carries_the_pinned_source_version_through() -> None:
     # The #115 reproducibility seam: an InputPin resolves to the canonical id the graph keys on, with that SAME
     # version (found-live 2026-07-13: pins emitted then dropped → READ edges with no version).
-    em = _RecordingEmitter()
+    em = LineageEmitterDouble()
     asyncio.run(
         emit_write_event(
-            cast(LineageEmitter, em),
+            em,
             ["db1", "dest"],
             author="alice",
             version=9,
@@ -289,8 +278,8 @@ def test_emit_write_event_carries_the_pinned_source_version_through() -> None:
 
 def test_emit_write_event_root_table_has_empty_namespace() -> None:
     # Boundary: a top-level (single-segment) table has no parent namespace → "".
-    em = _RecordingEmitter()
-    asyncio.run(emit_write_event(cast(LineageEmitter, em), ["t"], author=None, version=None, operation=INSERT, uuids=NO_OBJECT_UUIDS))
+    em = LineageEmitterDouble()
+    asyncio.run(emit_write_event(em, ["t"], author=None, version=None, operation=INSERT, uuids=NO_OBJECT_UUIDS))
     assert em.writes[0]["namespace"] == ""
     assert em.writes[0]["version"] is None
 

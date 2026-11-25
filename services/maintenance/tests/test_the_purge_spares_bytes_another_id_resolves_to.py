@@ -12,7 +12,6 @@ control root, and through the real catalog app.
 """
 
 import asyncio
-import io
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import uuid4
@@ -25,6 +24,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, CreateTableRequest, DeregisterTableRequest, DescribeTableRequest, RegisterTableRequest, connect
 from pydantic import SecretStr
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.records import trash
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
@@ -41,10 +41,7 @@ def test_an_expired_record_whose_bytes_another_id_resolves_to_is_refused(tmp_pat
     ns = connect("dir", {"root": str(data)})
     ns.create_namespace(CreateNamespaceRequest(id=["lance_catalog"]))
     ns.create_namespace(CreateNamespaceRequest(id=["lance_catalog", "team"]))
-    sink = io.BytesIO()
-    with pa.ipc.new_stream(sink, pa.schema([("a", pa.int64())])) as writer:
-        writer.write_table(pa.table({"a": [1, 2, 3]}))
-    ns.create_table(CreateTableRequest(id=["lance_catalog", "team", "orders"]), sink.getvalue())
+    ns.create_table(CreateTableRequest(id=["lance_catalog", "team", "orders"]), encode_arrow_stream(pa.table({"a": [1, 2, 3]})))
     location = str(ns.describe_table(DescribeTableRequest(id=["lance_catalog", "team", "orders"])).location)
     ns.deregister_table(DeregisterTableRequest(id=["lance_catalog", "team", "orders"]))
     record = trash.make_record(
@@ -85,11 +82,10 @@ def test_a_destructive_drop_of_an_alias_spares_the_bytes_the_claim_holder_resolv
 ) -> None:
     for name in ("team", "other"):
         assert catalog.post(f"/v1/namespace/lance_catalog${name}/create", json={}).status_code == 200
-    sink = io.BytesIO()
-    with pa.ipc.new_stream(sink, pa.schema([("a", pa.int64())])) as writer:
-        writer.write_table(pa.table({"a": [1, 2, 3]}))
     created = catalog.post(
-        "/v1/table/lance_catalog$team$src/create?mode=create", content=sink.getvalue(), headers={"content-type": "application/vnd.apache.arrow.stream"}
+        "/v1/table/lance_catalog$team$src/create?mode=create",
+        content=encode_arrow_stream(pa.table({"a": [1, 2, 3]})),
+        headers={"content-type": ARROW_STREAM_MEDIA_TYPE},
     )
     assert created.status_code == 200, created.text
     assert catalog.post("/v1/table/lance_catalog$team$src/rename", json={"new_table_name": "dst"}).status_code == 200

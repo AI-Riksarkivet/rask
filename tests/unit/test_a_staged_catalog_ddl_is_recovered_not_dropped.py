@@ -37,9 +37,6 @@ from lakehouse.events.openlineage import run_id_for
 from lakehouse.events.signing import signature_of
 from lakehouse.governed import fga_ids, fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
 from lakehouse.storage import store_session
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
@@ -47,11 +44,13 @@ from lineage.api import fga_deps, relay
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, Signing
 from lineage.core.refusals import UnverifiedEventError
-from lineage.models import DatasetEvent
-from lineage.services.provenance import feed_key
+from lineage.models import DatasetEvent, RunEvent
+from lineage.services.provenance import ProvenanceStore, feed_key
 from lineage.services.signature import store_published_keys
 from tests.app_state import request_on
 from tests.bus_double import BusDouble
+from tests.callers import person
+from tests.provenance_store_double import ProvenanceStoreDouble
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -70,33 +69,14 @@ def _uuids(table: str) -> DatasetUuids:
 _HOSTILE: Final = frozendict({"bigint": '{"eventType": ' + "1" * 5000 + "}", "deep": "[" * 100_000 + "]" * 100_000})
 
 
-class _Repo:
-    """The store, filing what it records by the shape it was parsed into, so the assertion is WHICH shape the relay recorded."""
+def _datasets(store: ProvenanceStoreDouble) -> list[DatasetEvent]:
+    """What ``store`` recorded as a dataset event, the shape a staged DDL is parsed into."""
+    return [event for event in store.recorded if isinstance(event, DatasetEvent)]
 
-    def __init__(self) -> None:
-        self.runs: list[Any] = []
-        self.datasets: list[DatasetEvent] = []
-        self.refusals: list[dict[str, str | None]] = []
 
-    async def record(self, event: Any, *, aliased: Collection[str]) -> None:  # noqa: ANN401 — the store's own shape
-        (self.datasets if isinstance(event, DatasetEvent) else self.runs).append(event)
-
-    async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
-        self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
-
-    async def events_recorded(self, keys: Collection[str]) -> set[str]:
-        """A park asks whether the feed holds the refused event's row first; this feed holds none."""
-        return set()
-
-    async def recorded_event(self, key: str) -> dict[str, Any] | None:
-        """A refused event is the replay of a row only if the feed holds it; this feed holds none."""
-        del key
-        return None
-
-    async def run_author(self, run_id: str) -> str | None:
-        """This feed holds no run, so an event founds its own."""
-        del run_id
-        return None
+def _runs(store: ProvenanceStoreDouble) -> list[RunEvent]:
+    """What ``store`` recorded as a run event."""
+    return [event for event in store.recorded if isinstance(event, RunEvent)]
 
 
 @pytest.fixture
@@ -106,10 +86,6 @@ def catalog(event_signer: Any, secret_store: SecretStoreDouble, respx_allows_unu
     signer = event_signer(_CATALOG)
     secret_store.hold(f"signing-public-{_CATALOG}", {"keys": signer.public})
     return signer
-
-
-def _person(name: str) -> PersonPrincipal:
-    return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss="i", sub=name, aud="lance", exp=0, iat=0))
 
 
 @pytest.fixture(autouse=True)
@@ -234,13 +210,13 @@ def _without_signature(staged_json: str) -> dict[str, Any]:
     return doc
 
 
-def _drain(settings: LineageSettings, repo: _Repo, publisher: BusDouble, store: Any = None) -> relay.DrainOutcome:  # noqa: ANN401 — the root conftest's OpenFgaStore
+def _drain(settings: LineageSettings, repo: ProvenanceStoreDouble, publisher: BusDouble, store: Any = None) -> relay.DrainOutcome:  # noqa: ANN401 — the root conftest's OpenFgaStore
     """One drain of the outbox, its gate asking ``store`` where one is given."""
 
     async def _once(request: Any) -> relay.DrainOutcome:  # noqa: ANN401 — the stand-in request
         # The feed lineage's lifespan wires on its app, the one the relay hands the drain.
         request.app.state.provenance = repo
-        return await relay._drain_outbox(request.app, cast("Any", repo), settings, opts=StorageOptions(), publisher=publisher)
+        return await relay._drain_outbox(request.app, cast(ProvenanceStore, repo), settings, opts=StorageOptions(), publisher=publisher)
 
     if store is None:
         return asyncio.run(_once(_request()))
@@ -271,15 +247,15 @@ async def _admit(_event: object, _app: object, _settings: object, *, arrived: ob
     return frozenset()
 
 
-class _CreateDoorDown(_Repo):
+class _CreateDoorDown(ProvenanceStoreDouble):
     @override
-    async def record(self, event: Any, *, aliased: Collection[str]) -> None:  # noqa: ANN401 — the store's own shape
+    async def record(self, event: RunEvent | DatasetEvent, *, aliased: Collection[str]) -> None:
         if isinstance(event, DatasetEvent):
             raise ConnectionError("catalog unreachable")
         await super().record(event, aliased=aliased)
 
 
-class _RefusalLedgerDown(_Repo):
+class _RefusalLedgerDown(ProvenanceStoreDouble):
     @override
     async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
         raise ConnectionError("catalog unreachable")
@@ -294,13 +270,13 @@ def test_the_drain_re_ingests_a_staged_create_through_the_dataset_door(tmp_path:
     settings = _settings(tmp_path, fga_enabled=True)
     _, staged_json = _stage_a_create(settings, catalog)
     _arm_gate(openfga_store, writer=_AUTHOR)
-    repo, publisher = _Repo(), BusDouble()
+    repo, publisher = ProvenanceStoreDouble(), BusDouble()
 
     outcome = _drain(settings, repo, publisher, openfga_store)
 
     assert outcome.drained == 1, f"the staged create was not recovered: {outcome}"
-    assert [e.dataset.name for e in repo.datasets] == [_TABLE] and repo.runs == [], "the create did not reach the dataset door"
-    assert repo.datasets[0].operation == "create_table"
+    assert [e.dataset.name for e in _datasets(repo)] == [_TABLE] and _runs(repo) == [], "the create did not reach the dataset door"
+    assert _datasets(repo)[0].operation == "create_table"
     assert publisher.events == [json.loads(staged_json)], "subscribers never hear of the create; the re-publish must carry the staged event"
     assert not list(outbox.list_events(settings.outbox_uri, StorageOptions())), "a recovered event must not stay staged"
 
@@ -313,12 +289,12 @@ def test_a_staged_create_the_gate_refuses_is_refused_and_never_ingested(tmp_path
     staged_json = json.dumps(_without_signature(staged_json))
     _rewrite_staged(settings, key, json.loads(staged_json))
     _arm_gate(openfga_store, writer=_AUTHOR)
-    repo, publisher = _Repo(), BusDouble()
+    repo, publisher = ProvenanceStoreDouble(), BusDouble()
 
     outcome = _drain(settings, repo, publisher, openfga_store)
 
     assert outcome.refused == outcome.recorded == 1 and outcome.drained == 0, f"a refused create was not handled as a refusal: {outcome}"
-    assert repo.datasets == [] and repo.runs == [] and publisher.events == [], "a refused create reached the feed or the bus"
+    assert repo.recorded == [] and publisher.events == [], "a refused create reached the feed or the bus"
     # No run to name: the key is what identifies a static change, and `run_id` stays empty rather than lying.
     [refusal] = repo.refusals
     assert "no signature" in str(refusal["reason"]), f"the recorded reason does not say what was refused: {refusal['reason']}"
@@ -357,12 +333,12 @@ def test_the_relay_admits_a_delegators_drop_without_a_grant_and_no_other_signers
     signed = catalog.sign(event, on_behalf_of=author) if by_the_catalog else other.sign(event)
     outbox.stage_envelope(settings.outbox_uri, StorageOptions(), lineage_envelope(signed))
     _arm_gate(openfga_store, writer=None)
-    repo = _Repo()
+    repo = ProvenanceStoreDouble()
 
     outcome = _drain(settings, repo, BusDouble(), openfga_store)
 
     assert (outcome.drained, outcome.refused) == (drained, 1 - drained), f"the relay answered {outcome}"
-    assert [(e.dataset.name, e.operation) for e in repo.datasets] == ([(_TABLE, "drop_table")] if drained else [])
+    assert [(e.dataset.name, e.operation) for e in _datasets(repo)] == ([(_TABLE, "drop_table")] if drained else [])
 
 
 @pytest.mark.parametrize("body", _HOSTILE.values(), ids=_HOSTILE.keys())
@@ -376,12 +352,12 @@ def test_bytes_no_parser_accepts_are_poison_and_do_not_wedge_the_create_behind_t
     _arm_gate(openfga_store, writer=_AUTHOR)
     poison: list[None] = []
     monkeypatch.setattr(outbox_metrics, "record_poison_dropped", lambda lane: poison.append(lane))
-    repo = _Repo()
+    repo = ProvenanceStoreDouble()
 
     outcome = _drain(settings, repo, BusDouble(), openfga_store)
 
     assert (outcome.drained, poison) == (1, ["lineage"]), f"the hostile object was not handled as poison of the lineage outbox: {outcome}, poison={poison}"
-    assert [e.dataset.name for e in repo.datasets] == [_TABLE], "the create staged behind the hostile object was not recovered"
+    assert [e.dataset.name for e in _datasets(repo)] == [_TABLE], "the create staged behind the hostile object was not recovered"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is None, "the poison object stays staged to wedge the next tick"
 
 
@@ -398,7 +374,7 @@ def test_a_create_whose_ingest_fails_is_stranded_and_the_run_behind_it_still_dra
     outcome = _drain(settings, repo, BusDouble())
 
     assert (outcome.drained, outcome.stranded, outcome.refused) == (1, 1, 0), f"one failed create aborted or misreported the tick: {outcome}"
-    assert [event.run.run_id for event in repo.runs] == [run_id], "the run staged behind the failed create was not recovered"
+    assert [event.run.run_id for event in _runs(repo)] == [run_id], "the run staged behind the failed create was not recovered"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "a transient failure destroyed the create's only durable copy"
 
 
@@ -452,7 +428,7 @@ def test_a_refusal_whose_record_fails_stays_staged_and_the_tick_goes_on(tmp_path
     assert (outcome.drained, outcome.refused, outcome.recorded, outcome.stranded) == (1, 1, 0, 0), (
         f"the tick misreported a refusal it could not record: {outcome}"
     )
-    assert [event.run.run_id for event in repo.runs] == [run_id], "a refusal whose record failed aborted the tick"
+    assert [event.run.run_id for event in _runs(repo)] == [run_id], "a refusal whose record failed aborted the tick"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "a refusal was retired before its record landed"
 
 
@@ -469,12 +445,12 @@ def test_a_refusal_whose_retirement_fails_is_recorded_and_the_tick_goes_on(tmp_p
         real_drop(uri, opts, dropped)
 
     monkeypatch.setattr(outbox, "drop_event", drop)
-    repo = _Repo()
+    repo = ProvenanceStoreDouble()
 
     outcome = _drain(settings, repo, BusDouble())
 
     assert (outcome.drained, outcome.refused, outcome.recorded) == (1, 1, 1), f"a failed retirement misreported the tick: {outcome}"
-    assert [event.run.run_id for event in repo.runs] == [run_id], "a refusal whose delete failed aborted the tick"
+    assert [event.run.run_id for event in _runs(repo)] == [run_id], "a refusal whose delete failed aborted the tick"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "the undeleted object should wait for the next tick"
 
 
@@ -492,11 +468,11 @@ def test_a_poison_object_whose_delete_fails_does_not_stop_the_create_behind_it(t
         real_drop(uri, opts, key)
 
     monkeypatch.setattr(outbox, "drop_event", drop)
-    repo = _Repo()
+    repo = ProvenanceStoreDouble()
 
     outcome = _drain(settings, repo, BusDouble())
 
-    assert outcome.drained == 1 and [e.dataset.name for e in repo.datasets] == [_TABLE], f"a failed poison delete aborted the tick: {outcome}"
+    assert outcome.drained == 1 and [e.dataset.name for e in _datasets(repo)] == [_TABLE], f"a failed poison delete aborted the tick: {outcome}"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), hostile) is not None, "the undeletable poison should wait for the next tick"
 
 
@@ -514,7 +490,7 @@ def test_a_create_the_feed_already_holds_is_a_replay_and_not_a_loss(
     _arm_gate(openfga_store, writer="dex~somebody-else")
     held = DatasetEvent.model_validate(json.loads(staged_json))
 
-    class _FeedHoldsIt(_Repo):
+    class _FeedHoldsIt(ProvenanceStoreDouble):
         async def recorded_event(self, key: str) -> dict[str, Any] | None:
             return held.model_dump(by_alias=True) if key == feed_key(held) else None
 
@@ -540,8 +516,8 @@ def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
     if unsigned:
         _rewrite_staged(settings, key, _without_signature(staged_json))
     _arm_gate(openfga_store, writer="dex~operator" if unsigned else None, readers=("dex~operator",))
-    operator = _person("operator")
-    repo, publisher = _Repo(), BusDouble()
+    operator = person("operator")
+    repo, publisher = ProvenanceStoreDouble(), BusDouble()
 
     with pytest.raises(PermissionDeniedError) as refused:
         _decided(
@@ -549,7 +525,7 @@ def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
             lambda request: dlq.replay_dlq(
                 run_id=key,
                 request=request,
-                provenance=cast("Any", repo),
+                provenance=cast(ProvenanceStore, repo),
                 settings=settings,
                 token=operator,
                 datasets=fga_deps.DatasetFilter(request, settings, operator),
@@ -558,7 +534,7 @@ def test_the_dlq_replay_refuses_a_create_it_may_not_record_and_leaves_it_staged(
         )
 
     assert isinstance(refused.value, UnverifiedEventError) is unsigned, f"the refusal came from the wrong gate: {refused.value!r}"
-    assert repo.datasets == [] and repo.runs == [] and publisher.events == [], "a refused replay reached the feed or the bus"
+    assert repo.recorded == [] and publisher.events == [], "a refused replay reached the feed or the bus"
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "a refused replay must leave the object staged"
 
 
@@ -572,7 +548,7 @@ def test_the_dlq_replay_re_publishes_the_staged_event_to_the_lineage_topic(tmp_p
         dlq.replay_dlq(
             run_id=key,
             request=_request(),
-            provenance=cast("Any", _Repo()),
+            provenance=cast(ProvenanceStore, ProvenanceStoreDouble()),
             settings=settings,
             token=None,
             datasets=fga_deps.DatasetFilter(_request(), settings, None),
@@ -595,7 +571,7 @@ def test_a_replay_whose_publish_fails_leaves_the_object_for_the_relay(tmp_path: 
             dlq.replay_dlq(
                 run_id=key,
                 request=_request(),
-                provenance=cast("Any", _Repo()),
+                provenance=cast(ProvenanceStore, ProvenanceStoreDouble()),
                 settings=settings,
                 token=None,
                 datasets=fga_deps.DatasetFilter(_request(), settings, None),
@@ -629,7 +605,13 @@ def test_the_dlq_replay_answers_bytes_no_parser_accepts_as_poison(tmp_path: Path
     with pytest.raises(answer):
         asyncio.run(
             dlq.replay_dlq(
-                run_id=hostile, request=_request(), provenance=cast("Any", _Repo()), settings=settings, token=None, datasets=flt, publisher=BusDouble()
+                run_id=hostile,
+                request=_request(),
+                provenance=cast(ProvenanceStore, ProvenanceStoreDouble()),
+                settings=settings,
+                token=None,
+                datasets=flt,
+                publisher=BusDouble(),
             )
         )
 
@@ -643,10 +625,10 @@ def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_repl
     settings = _settings(tmp_path, fga_enabled=True)
     key, _ = _stage_a_create(settings, catalog)
     _arm_gate(openfga_store, writer=_AUTHOR)
-    stranger = _person("stranger")
+    stranger = person("stranger")
     audited: list[tuple[str, str]] = []
     monkeypatch.setattr(dlq.audit, "audit", lambda action, outcome, **_kw: audited.append((action, outcome)))
-    repo, publisher = _Repo(), BusDouble()
+    repo, publisher = ProvenanceStoreDouble(), BusDouble()
 
     backlog = _decided(
         openfga_store, lambda request: dlq.list_dlq(settings=settings, token=stranger, datasets=fga_deps.DatasetFilter(request, settings, stranger), limit=100)
@@ -657,7 +639,7 @@ def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_repl
             lambda request: dlq.replay_dlq(
                 run_id=key,
                 request=request,
-                provenance=cast("Any", repo),
+                provenance=cast(ProvenanceStore, repo),
                 settings=settings,
                 token=stranger,
                 datasets=fga_deps.DatasetFilter(request, settings, stranger),
@@ -666,7 +648,7 @@ def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_repl
         )
 
     assert backlog.events == [], f"the view lists a create for a table the caller cannot see: {backlog.events}"
-    assert repo.datasets == [] and publisher.events == [] and audited == []
+    assert _datasets(repo) == [] and publisher.events == [] and audited == []
 
 
 def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -> None:
@@ -692,7 +674,7 @@ def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -
         dlq.replay_dlq(
             run_id=key,
             request=_request(),
-            provenance=cast("Any", _Repo()),
+            provenance=cast(ProvenanceStore, ProvenanceStoreDouble()),
             settings=settings,
             token=None,
             datasets=fga_deps.DatasetFilter(_request(), settings, None),

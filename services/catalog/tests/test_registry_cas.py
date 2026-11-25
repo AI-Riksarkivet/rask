@@ -25,6 +25,7 @@ import lakehouse.storage.client as storage_client
 from lakehouse.storage import conditional_records
 from lakehouse.storage.errors import PreconditionFailedError, StorageError, StoreRefusedError, WriteConflictError
 from lakehouse.storage.options import StorageOptions
+from tests.store_answers import answered
 
 
 # --------------------------------------------------------------------------- #
@@ -46,34 +47,11 @@ def test_create_json_local_bare_path_root(tmp_path: Any) -> None:
 _SO = StorageOptions.from_flat({"endpoint": "http://rf:9000", "access_key_id": "k", "secret_access_key": "s", "region": "us-east-1"})
 
 
-def _client_error(code: str, status: int) -> ClientError:
-    """A ClientError shaped like botocore's own — every `ResponseMetadata` key, not just the one read.
-
-    `_ResponseMetadataTypeDef` is a total TypedDict: botocore always populates all five. Supplying
-    only `HTTPStatusCode` built a fake no real call can produce, and `create_json` reads the block
-    through `.get()` chains that swallow the difference — so a consumer that grew a `RetryAttempts`
-    read would pass here and `KeyError` in production against the very error this fixture models.
-    """
-    return ClientError(
-        {
-            "Error": {"Code": code, "Message": code},
-            "ResponseMetadata": {
-                "RequestId": "req-test",
-                "HostId": "host-test",
-                "HTTPStatusCode": status,
-                "HTTPHeaders": {},
-                "RetryAttempts": 0,
-            },
-        },
-        "PutObject",
-    )
-
-
 def test_create_json_s3_412_maps_to_record_exists(monkeypatch: pytest.MonkeyPatch) -> None:
     """A lost race is no ``OSError``: every ``except OSError`` around a store call would answer it as an outage (503)
     where its caller answers 409."""
     client = MagicMock()
-    client.put_object.side_effect = _client_error("PreconditionFailed", 412)
+    client.put_object.side_effect = answered(412, "PreconditionFailed")
     monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(conditional_records.RecordExistsError) as caught:
         conditional_records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", record={"id": "wh-a"})
@@ -93,7 +71,7 @@ def test_create_json_s3_other_client_error_propagates(monkeypatch: pytest.Monkey
     # key still in flight, which may yet fail) must surface as itself: laundering it into "already exists" would hide
     # a real failure.
     client = MagicMock()
-    client.put_object.side_effect = _client_error(code, status)
+    client.put_object.side_effect = answered(status, code)
     monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(StorageError) as caught:
         conditional_records.create_json("s3://ctrl", _SO, "_warehouses/wh-a.json", record={"id": "wh-a"})

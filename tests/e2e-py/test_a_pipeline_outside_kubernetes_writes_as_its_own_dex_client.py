@@ -17,15 +17,16 @@ import lance_namespace
 import pyarrow as pa
 import pytest
 import requests
-from byo_scenario import CLOSE_EACH_REQUEST
+from byo_scenario import CATALOG, CLOSE_EACH_REQUEST, DEX, ok
 from fga_store import tuples_on
 from lance_namespace import ErrorCode
 from principals import DEX_AUDIENCE, principal_of
 from refusals import assert_refused, described, namespace_uuid
-from scratch_tenant import CATALOG, DEX, Tenant, ok, provisioned
+from scratch_tenant import Tenant, provisioned
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga_ids
+from lakehouse.naming import UUID_PROPERTY
 
 
 #: The machine client the Dex fixture declares, and its secret (`deploy/fixtures/dex/chart/values.yaml` `machineClients`).
@@ -70,7 +71,7 @@ def test_a_pipeline_signed_in_as_its_own_dex_client_writes_as_that_client_and_do
     assert (transaction.transaction_properties or {}).get("rask.author") == principal, transaction.transaction_properties
     owner = {"authorization": f"Bearer {tenant.admin.bearer}"}
     standing = described(CATALOG, table, owner)
-    table_uuid = str(standing["properties"]["rask.uuid"])
+    table_uuid = str(standing["properties"][UUID_PROPERTY])
     assert_refused(
         lambda: requests.post(f"{CATALOG}/v1/table/{table}/drop", json={}, headers=headers, timeout=60),
         status=403,

@@ -18,7 +18,6 @@ door must answer 409) and as the door calls the backend (the rename must answer 
 on the table it resolved).
 """
 
-import io
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -26,32 +25,26 @@ from typing import Any, cast
 
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import ConcurrentModificationError, InvalidInputError, LanceNamespace, TableAlreadyExistsError
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import location_claims
 from lakehouse.storage import conditional_records
 from lakehouse.storage.options import StorageOptions
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 RENAMES = 8
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
 
 
 @pytest.mark.parametrize("same_destination", [pytest.param(False, id="distinct-destinations"), pytest.param(True, id="one-destination")])
 def test_concurrent_renames_of_one_table_leave_one_live_id_on_its_location(real_ns_client: TestClient, same_destination: bool) -> None:
     client = real_ns_client
     assert client.post("/v1/namespace/lance_catalog$ns1/create", json={}).status_code == 200
-    created = client.post("/v1/table/lance_catalog$ns1$first/create?mode=create", content=_ipc(pa.table({"id": [1, 2, 3]})), headers=ARROW)
+    created = client.post("/v1/table/lance_catalog$ns1$first/create?mode=create", content=encode_arrow_stream(pa.table({"id": [1, 2, 3]})), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
     # Renamed once before the race, so the renames below start from the claim a finished rename leaves: handed to the
@@ -134,7 +127,7 @@ def test_a_door_racing_a_rename_acts_only_on_the_table_it_resolved(
     monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", trash_grace_days)
     get_settings.cache_clear()
     assert client.post("/v1/namespace/lance_catalog$ns1/create", json={}).status_code == 200
-    created = client.post("/v1/table/lance_catalog$ns1$src/create?mode=create", content=_ipc(pa.table({"id": [1, 2, 3]})), headers=ARROW)
+    created = client.post("/v1/table/lance_catalog$ns1$src/create?mode=create", content=encode_arrow_stream(pa.table({"id": [1, 2, 3]})), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
     pending = [True]
@@ -148,7 +141,7 @@ def test_a_door_racing_a_rename_acts_only_on_the_table_it_resolved(
         moved = client.post("/v1/table/lance_catalog$ns1$src/rename", json={"new_table_name": "moved"})
         rival.append(moved.status_code)
         if moved.status_code == 200:
-            again = client.post("/v1/table/lance_catalog$ns1$src/create?mode=create", content=_ipc(pa.table({"id": [9]})), headers=ARROW)
+            again = client.post("/v1/table/lance_catalog$ns1$src/create?mode=create", content=encode_arrow_stream(pa.table({"id": [9]})), headers=ARROW)
             rival.append(again.status_code)
 
     if rival_lands == "as-the-door-acts":
@@ -255,7 +248,7 @@ def test_a_register_of_a_renames_destination_landed_inside_the_rename_takes_noth
     registered = client.post("/v1/table/lance_catalog$ns1$src/register", json={"location": _HELD})
     assert registered.status_code == 200, registered.text
     described = client.post("/v1/table/lance_catalog$ns1$src/describe", json={}).json()
-    location, table_uuid = described["location"], described["properties"]["rask.uuid"]
+    location, table_uuid = described["location"], described["properties"][UUID_PROPERTY]
     rival: list[tuple[int, object]] = []
 
     def _register_the_destination() -> None:
@@ -289,7 +282,7 @@ def test_a_register_of_a_renames_destination_landed_inside_the_rename_takes_noth
     for name in ("src", "dst"):
         found = client.post(f"/v1/table/lance_catalog$ns1${name}/describe", json={})
         if found.status_code == 200:
-            resolving[name] = (found.json()["location"], found.json()["properties"]["rask.uuid"])
+            resolving[name] = (found.json()["location"], found.json()["properties"][UUID_PROPERTY])
     # The registrant gains nothing: the one table at the location is the one that was there, under the uuid it had, so
     # every grant held on it still reaches it.
     assert (rival, (renamed.status_code, renamed.json().get("code")), resolving) == ([rival_answer], rename_answer, {named: (location, table_uuid)}), (

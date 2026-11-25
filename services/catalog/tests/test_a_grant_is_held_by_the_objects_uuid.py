@@ -14,11 +14,10 @@ Every decision is the real model's, on a store of this test's own ([[LH-235]]); 
 import logging
 from typing import Any
 
-import pyarrow as pa
 import pytest
 
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.audit import AUDIT_LOGGER
+from lakehouse.naming import UUID_PROPERTY
 
 
 #: The logger of the catalog's authorization decisions (`catalog.api.authz.decisions`, which logs each refusal), named so the
@@ -26,30 +25,15 @@ from lakehouse.governed.audit import AUDIT_LOGGER
 _GATE_LOGGER = "catalog.api.authz.decisions"
 
 
-_ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
 _WAREHOUSE = "warehouse:lance_catalog"
-
-
-def _ok(catalog: Any, path: str, caller: str = "alice", **kwargs: Any) -> dict[str, Any]:  # noqa: ANN401 — the conftest's GovernedCatalog and the request's keywords
-    answer = catalog.client.post(path, headers={**catalog.bearer(caller), **kwargs.pop("headers", {})}, **kwargs)
-    assert answer.status_code == 200, f"{path}: {answer.status_code} {answer.text}"
-    return answer.json()
-
-
-def _create_table(catalog: Any, table: str) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
-    _ok(catalog, f"/v1/table/{table}/create", content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
-
-
-def _uuid(catalog: Any, kind: str, name: str) -> str:  # noqa: ANN401 — the conftest's GovernedCatalog
-    return str(_ok(catalog, f"/v1/{kind}/{name}/describe", json={})["properties"]["rask.uuid"])
 
 
 @pytest.fixture
 def estate(governed_catalog: Any) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog
     """alice's namespace ``lance_catalog$db`` holding ``lance_catalog$db$t``, which bob is granted ``reader`` on through the grant door."""
     assert governed_catalog.create_in_the_estate("alice", "db").status_code == 200
-    _create_table(governed_catalog, "lance_catalog$db$t")
-    _ok(governed_catalog, "/management/v1/table/lance_catalog$db$t/access/grant", json={"user": "dex~bob", "relation": "reader"})
+    governed_catalog.create_table("alice", "lance_catalog$db$t")
+    governed_catalog.ok("/management/v1/table/lance_catalog$db$t/access/grant", "alice", json={"user": "dex~bob", "relation": "reader"})
     return governed_catalog
 
 
@@ -60,12 +44,12 @@ def test_a_reader_keeps_a_renamed_table_and_holds_nothing_on_one_created_again_u
     caplog.set_level(logging.INFO, logger=_GATE_LOGGER)
     held = estate.store.tuples()
 
-    _ok(estate, "/v1/table/lance_catalog$db$t/rename", json={"new_table_name": "u"})
+    estate.ok("/v1/table/lance_catalog$db$t/rename", "alice", json={"new_table_name": "u"})
 
     assert estate.store.tuples() == held, "the rename wrote or removed a tuple"
     assert estate.client.post("/v1/table/lance_catalog$db$u/describe", json={}, headers=estate.bearer("bob")).status_code == 200, "bob lost the renamed table"
-    _ok(estate, "/v1/table/lance_catalog$db$u/drop", json={})
-    _create_table(estate, "lance_catalog$db$u")
+    estate.ok("/v1/table/lance_catalog$db$u/drop", "alice", json={})
+    estate.create_table("alice", "lance_catalog$db$u")
     refused = estate.client.post("/v1/table/lance_catalog$db$u/describe", json={}, headers=estate.bearer("bob"))
     assert refused.status_code == 403, f"bob reads a table created under the name he was granted: {refused.text}"
     denied = [r.__dict__ for r in caplog.records if r.name == AUDIT_LOGGER and r.__dict__["audit.outcome"] == "deny"]
@@ -76,10 +60,10 @@ def test_a_reader_keeps_a_renamed_table_and_holds_nothing_on_one_created_again_u
 
 
 def test_every_tuple_a_create_writes_names_the_objects_uuid(estate: Any) -> None:  # noqa: ANN401
-    _ok(estate, "/v1/namespace/lance_catalog$db$inner/create", json={})
-    _ok(estate, "/v1/table/lance_catalog$db$inner$declared/declare", json={})
-    namespace, inner = _uuid(estate, "namespace", "lance_catalog$db"), _uuid(estate, "namespace", "lance_catalog$db$inner")
-    table, declared = _uuid(estate, "table", "lance_catalog$db$t"), _uuid(estate, "table", "lance_catalog$db$inner$declared")
+    estate.ok("/v1/namespace/lance_catalog$db$inner/create", "alice", json={})
+    estate.ok("/v1/table/lance_catalog$db$inner$declared/declare", "alice", json={})
+    namespace, inner = estate.uuid("namespace", "lance_catalog$db", "alice"), estate.uuid("namespace", "lance_catalog$db$inner", "alice")
+    table, declared = estate.uuid("table", "lance_catalog$db$t", "alice"), estate.uuid("table", "lance_catalog$db$inner$declared", "alice")
     alice = estate.person("alice")
 
     assert estate.store.tuples() == {
@@ -100,10 +84,10 @@ def test_every_tuple_a_create_writes_names_the_objects_uuid(estate: Any) -> None
 
 
 def test_a_table_whose_name_holds_a_space_is_created_and_described(estate: Any) -> None:  # noqa: ANN401
-    _create_table(estate, "lance_catalog$db$sp ace")
+    estate.create_table("alice", "lance_catalog$db$sp ace")
 
-    described = _ok(estate, "/v1/table/lance_catalog$db$sp ace/describe", json={})
-    assert (estate.person("alice"), "owner", f"table:{described['properties']['rask.uuid']}") in estate.store.tuples()
+    described = estate.ok("/v1/table/lance_catalog$db$sp ace/describe", "alice", json={})
+    assert (estate.person("alice"), "owner", f"table:{described['properties'][UUID_PROPERTY]}") in estate.store.tuples()
 
 
 def test_a_check_openfga_does_not_answer_is_recorded_and_refuses_the_request(

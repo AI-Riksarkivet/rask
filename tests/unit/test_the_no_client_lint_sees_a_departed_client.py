@@ -11,12 +11,12 @@ the console, which is the lakehouse's own UI and no client, and uses the same wo
 must let through. The console's tree is the lakehouse's, so a departed client named there is refused too.
 """
 
-import importlib.util
-import sys
 from pathlib import Path
 from types import ModuleType
 
 import pytest
+
+from tests.script_module import script
 
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -36,14 +36,8 @@ RELAY = "rask-mailpit"
 
 @pytest.fixture
 def gate(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """`scripts/lakehouse_names_no_client.py`, imported the way `python scripts/...` resolves its sibling `_files_under`."""
-    monkeypatch.syspath_prepend(str(_SCRIPTS))
-    spec = importlib.util.spec_from_file_location("lakehouse_names_no_client", _SCRIPTS / "lakehouse_names_no_client.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, spec.name, module)
-    spec.loader.exec_module(module)
-    return module
+    """`scripts/lakehouse_names_no_client.py`."""
+    return script("lakehouse_names_no_client", monkeypatch)
 
 
 def test_the_lint_reports_each_place_a_lakehouse_file_names_a_departed_client(gate: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

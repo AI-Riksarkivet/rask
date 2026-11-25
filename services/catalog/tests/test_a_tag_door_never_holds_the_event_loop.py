@@ -16,13 +16,13 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import Any
 
-import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings
 from catalog.services.tables import refs
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+from tests.governed_catalog import ROWS
 
 
 #: The kubelet's default `timeoutSeconds`: the chart's probes set none (`lance.appProbes`).
@@ -47,8 +47,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClie
 
     with TestClient(app) as made:
         assert made.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
-        rows = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
-        assert made.post(f"{TABLE}/create", content=rows, headers={"content-type": ARROW_STREAM_MEDIA_TYPE}).status_code == 200
+        assert made.post(f"{TABLE}/create", content=ROWS, headers={"content-type": ARROW_STREAM_MEDIA_TYPE}).status_code == 200
         assert made.post(f"{TABLE}/tags/create", json={"tag": "kept", "version": 1}).status_code == 200
         yield made
     get_settings.cache_clear()

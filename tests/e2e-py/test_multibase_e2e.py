@@ -12,12 +12,10 @@ provisioned — the allowlist is a governance gate, not a provisioner. Multi-bas
 failing it: a red test there would say the estate is broken when it is merely not configured.
 """
 
-import io
 import os
 
 import pyarrow as pa
 import pyarrow.fs as pafs
-import pyarrow.ipc as ipc
 import pytest
 import requests
 from credentials import Credential, credential
@@ -25,6 +23,7 @@ from liveness import skip_unless_live
 from store_identity import store_options
 from topology import create_namespace
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.naming import CATALOG_DELIMITER
 from lakehouse.storage.options import s3_filesystem
 
@@ -43,7 +42,6 @@ S3 = os.environ.get("LANCE_E2E_S3", "http://localhost:9900")
 #: deployment does not have — a red test would say the estate is broken when it is merely not opted in.
 BASE_A = os.environ.get("LANCE_E2E_BASE_A", "")
 BASE_B = os.environ.get("LANCE_E2E_BASE_B", "")
-ARROW_STREAM = "application/vnd.apache.arrow.stream"
 
 pytestmark = pytest.mark.e2e
 
@@ -68,10 +66,7 @@ def _fragments_in(bucket: str) -> list[str]:
 
 def _arrow_many_rows(n: int = 4000) -> bytes:
     table = pa.table({"id": pa.array(range(n), pa.int64()), "v": pa.array([str(i) for i in range(n)])})
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
+    return encode_arrow_stream(table)
 
 
 @pytest.fixture(scope="module")
@@ -108,7 +103,7 @@ def test_multibase_redirects_data_and_reads_fan_out(catalog: str, catalog_ns: st
         # fragments still land in a data base (that is exactly what the audit's F1 fix made true).
         f"{catalog}/v1/table/{tbl}/create?{q}&mode=overwrite",
         data=_arrow_many_rows(),
-        headers={**_auth(), "content-type": ARROW_STREAM},
+        headers={**_auth(), "content-type": ARROW_STREAM_MEDIA_TYPE},
         timeout=60,
     )
     assert r.status_code == 200, r.text

@@ -29,10 +29,11 @@ import lance_namespace
 import pyarrow as pa
 import pytest
 import requests
+from byo_scenario import CATALOG, DEX, Identity, ok
 from fga_store import tuples_on
 from lance_namespace import ErrorCode
 from refusals import assert_refused, namespace_uuid
-from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
+from scratch_tenant import Tenant, provisioned
 
 from lakehouse.governed import fga_ids
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of

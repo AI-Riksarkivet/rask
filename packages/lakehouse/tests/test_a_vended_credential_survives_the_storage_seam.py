@@ -26,27 +26,15 @@ with nothing to notice. The wire test below is what makes that unmissable.
 
 import contextlib
 import threading
-from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
 import boto3
 import pytest
-from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import fs_and_base, lance_storage_options
-
-
-@pytest.fixture
-def moto_url() -> Iterator[str]:
-    """An S3 store of the test's own, holding no bucket, that pyarrow's native client reaches over HTTP."""
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
 
 
 @pytest.mark.parametrize("absent", [""])
@@ -107,7 +95,7 @@ def test_a_built_option_set_actually_signs_with_the_token(token: str) -> None:
 
 
 def test_a_filesystem_from_the_resolver_is_refused_a_bucket(moto_url: str) -> None:
-    """A bucket-level create through the resolver's filesystem fails, and the store holds no bucket afterwards."""
+    """A bucket-level create through the resolver's filesystem fails, and the store holds no such bucket afterwards."""
     options = lance_storage_options(moto_url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
     fs, base = fs_and_base("s3://unprovisioned/control", options)
 
@@ -115,4 +103,4 @@ def test_a_filesystem_from_the_resolver_is_refused_a_bucket(moto_url: str) -> No
         fs.create_dir(base.split("/", 1)[0])
 
     store = boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
-    assert store.list_buckets()["Buckets"] == []
+    assert "unprovisioned" not in {bucket["Name"] for bucket in store.list_buckets()["Buckets"]}

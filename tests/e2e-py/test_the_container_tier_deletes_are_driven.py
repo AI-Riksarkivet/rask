@@ -31,6 +31,8 @@ import requests
 from credentials import Credential, credential
 from liveness import skip_unless_live
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN = credential(Credential.TOKEN)
@@ -90,11 +92,7 @@ DELIM = "$"
 
 
 def _empty_arrow_stream() -> bytes:
-    schema = pa.schema([pa.field("id", pa.int64())])
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, schema) as writer:
-        writer.write_table(pa.table({"id": pa.array([], pa.int64())}, schema=schema))
-    return sink.getvalue().to_pybytes()
+    return encode_arrow_stream(pa.schema([pa.field("id", pa.int64())]).empty_table())
 
 
 def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehouse: str) -> None:
@@ -126,7 +124,7 @@ def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehou
         created = requests.post(
             f"{catalog}/v1/table/{quote(table_id, safe='')}/create",
             data=_empty_arrow_stream(),
-            headers={**_auth(), "content-type": "application/vnd.apache.arrow.stream"},
+            headers={**_auth(), "content-type": ARROW_STREAM_MEDIA_TYPE},
             timeout=60,
         )
         assert created.status_code == 200, f"cannot create {table_id!r} in the subtree: {created.status_code} {created.text[:300]}"

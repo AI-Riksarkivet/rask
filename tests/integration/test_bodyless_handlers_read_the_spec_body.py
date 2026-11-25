@@ -28,7 +28,6 @@ from unittest.mock import MagicMock
 
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import (
@@ -44,6 +43,7 @@ from lance_namespace_urllib3_client.models.fragment_stats import FragmentStats
 from lance_namespace_urllib3_client.models.fragment_summary import FragmentSummary
 
 from catalog.api.pagination import MAX_LIST_LIMIT
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 def _sent(mock: MagicMock) -> Any:
@@ -132,7 +132,9 @@ def test_drop_table_index_drops_the_index_its_PATH_names(real_ns_client: TestCli
     with the door's stamp ([[LH-497]]).
     """
     assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
-    created = real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=_ipc(pa.table({"id": pa.array([1, 2, 3], pa.int64())})), headers=_ARROW)
+    created = real_ns_client.post(
+        "/v1/table/lance_catalog$db$t/create", content=encode_arrow_stream(pa.table({"id": pa.array([1, 2, 3], pa.int64())})), headers=_ARROW
+    )
     assert created.status_code == 200, created.text
     location = real_ns_client.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["location"]
     lance.dataset(location).create_scalar_index("id", "BTREE", name="id_idx")
@@ -147,14 +149,7 @@ def test_drop_table_index_drops_the_index_its_PATH_names(real_ns_client: TestCli
     assert {key: value for key, value in stamped.items() if key != "rask.traceparent"} == {"rask.operation": "drop_index"}
 
 
-_ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+_ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 
 def test_drop_table_index_refuses_a_body_branch(client: TestClient, fake_ns: MagicMock) -> None:

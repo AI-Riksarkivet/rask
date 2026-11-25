@@ -27,13 +27,13 @@ from tables_by_name import open_by_name
 
 from catalog.api.dependencies import NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.v1.endpoints import versions as version_door
-from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import maintenance
 from catalog.services.tables.creation import create_table
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records import base_registry
 from lakehouse.storage.options import StorageOptions
+from tests.catalog_settings import catalog_settings
 
 
 lance = pytest.importorskip("lance")
@@ -74,7 +74,7 @@ def client(ns: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     application = FastAPI()
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(version_door.spec_router)
-    settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
+    settings = catalog_settings(LANCE_CONTROL_ROOT=str(tmp_path / "control"))
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: StorageOptions()

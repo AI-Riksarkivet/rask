@@ -28,9 +28,10 @@ from catalog.api import control_lane
 from catalog.api.control_lane import TOPIC, ControlLane, KeysUnavailableError
 from catalog.api.control_relay import attach_published_keys
 from catalog.api.dependencies import request_settings
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import get_settings
 from lakehouse.events.bus_delivery import Delivery
 from lakehouse.governed.signing_key import signing_public_secret
+from tests.catalog_settings import catalog_settings
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -116,16 +117,12 @@ def lane(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: Secre
     monkeypatch.setenv("RASK_BUS_USER", "catalog")
     get_settings.cache_clear()
     catalog, maintenance = event_signer(CATALOG), event_signer(MAINTENANCE)
-    settings = Settings.model_validate(
-        {
-            "LANCE_S3_ACCESS_KEY_ID": "k",
-            "LANCE_S3_SECRET_ACCESS_KEY": "s",
-            "LANCE_CONTROL_EMIT_ENABLED": "true",
-            "RASK_SIGNATURE_DOORS": "enforce",
-            "RASK_EVENT_SIGNERS": [CATALOG, MAINTENANCE],
-            "RASK_EVENT_DELEGATORS": [CATALOG],
-            "RASK_CONTROL_SIGNER_ROLES": {"catalog": [CATALOG], "maintenance": [MAINTENANCE]},
-        }
+    settings = catalog_settings(
+        LANCE_CONTROL_EMIT_ENABLED="true",
+        RASK_SIGNATURE_DOORS="enforce",
+        RASK_EVENT_SIGNERS=[CATALOG, MAINTENANCE],
+        RASK_EVENT_DELEGATORS=[CATALOG],
+        RASK_CONTROL_SIGNER_ROLES={"catalog": [CATALOG], "maintenance": [MAINTENANCE]},
     )
     reader = InMemoryMetricReader()
     meter = MeterProvider(metric_readers=[reader]).get_meter("lance.catalog")

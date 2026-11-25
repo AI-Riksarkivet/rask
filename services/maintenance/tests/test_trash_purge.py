@@ -21,7 +21,6 @@ ended only once its bytes are gone.
 
 import asyncio
 import hashlib
-import io
 import json
 from collections.abc import Callable, Iterator
 from contextlib import suppress
@@ -47,6 +46,8 @@ from pydantic import SecretStr
 from tests.control_emitter_double import ControlEmitterDouble
 from tests.integration.maintenance_vend_doors import CATALOG_URL, end_door, trash_doors
 
+from lakehouse.arrow_ipc import encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import base_registry, location_claims, trash
 from lakehouse.records.base_registry import BaseOrigin, BaseRole, RecordedBase
 from lakehouse.storage.options import StorageOptions
@@ -114,11 +115,7 @@ class _Estate:
                 # already-exists is fine; the estate only needs the parent to be there
                 with suppress(Exception):
                     self.ns.create_namespace(CreateNamespaceRequest(id=with_parent[:depth]))
-        sink = io.BytesIO()
-        arrow = pa.table({"a": pa.array([1, 2, 3])})
-        with pa.ipc.new_stream(sink, arrow.schema) as writer:
-            writer.write_table(arrow)
-        self.ns.create_table(CreateTableRequest(id=list(segments)), sink.getvalue())
+        self.ns.create_table(CreateTableRequest(id=list(segments)), encode_arrow_stream(pa.table({"a": pa.array([1, 2, 3])})))
         return str(self.ns.describe_table(DescribeTableRequest(id=list(segments))).location)
 
     def drop_recoverably(
@@ -307,7 +304,7 @@ def test_a_namespace_record_is_ended_and_deletes_nothing(tmp_path: Path, doors: 
     """
     estate = _Estate(tmp_path)
     estate.create_table("team", "orders")  # a live sibling, so "nothing deleted" is a real claim
-    estate.put_record("archive", uuid=_ARCHIVE_UUID, location="", kind="namespace", properties={"rask.uuid": _ARCHIVE_UUID})
+    estate.put_record("archive", uuid=_ARCHIVE_UUID, location="", kind="namespace", properties={UUID_PROPERTY: _ARCHIVE_UUID})
     before = _fingerprint(estate.data)
 
     out = _run(estate)
@@ -629,7 +626,7 @@ def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
     canonical, _ = estate.drop_recoverably("team", "orders", uuid=_ORDERS_UUID, namespace_uuid=_TEAM_UUID)
     orphaned, _ = estate.drop_recoverably("gone", "t", uuid=_T_UUID, namespace_uuid=_GONE_UUID)
     estate.ns.drop_namespace(DropNamespaceRequest(id=["gone"]))
-    estate.put_record("archive", uuid=_ARCHIVE_UUID, location="", kind="namespace", properties={"rask.uuid": _ARCHIVE_UUID})
+    estate.put_record("archive", uuid=_ARCHIVE_UUID, location="", kind="namespace", properties={UUID_PROPERTY: _ARCHIVE_UUID})
     control = ControlEmitterDouble()
 
     out = _run(estate, control=control)

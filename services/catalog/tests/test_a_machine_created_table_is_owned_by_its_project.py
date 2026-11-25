@@ -30,28 +30,11 @@ from pydantic import ValidationError
 
 from catalog.api.authz import object_grants
 from catalog.api.authz.context import AuthzContext
-from catalog.core.config import Settings
 from lakehouse.governed import fga_provision, fga_reads
-from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
+from tests.callers import person
+from tests.catalog_settings import governed_settings
 from tests.unit.named_resolver import NamedResolver, uuid_of
-
-
-def _settings() -> Settings:
-    base = {"LANCE_S3_ACCESS_KEY_ID": "x", "LANCE_S3_SECRET_ACCESS_KEY": "y"}
-    return Settings.model_validate(
-        {
-            **base,
-            "RASK_FGA_ENABLED": True,
-            "RASK_OIDC_ENABLED": True,
-            "RASK_OIDC_ISSUER": "https://dex",
-            "RASK_OIDC_AUDIENCE": "rask",
-            "RASK_OIDC_IDP_ID": "dex",
-            "RASK_OIDC_CONNECTORS": {"local": "dex"},
-        }
-    )
 
 
 #: The uuid the create minted for ``acme-silver$features``: the object its grants are held by (ADR 0173 §8).
@@ -66,7 +49,7 @@ def test_a_SERVICE_creating_a_table_is_not_granted_owner(openfga_store: Any) -> 
     async def _create() -> bool:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
             await object_grants.seed_ownership(
-                AuthzContext(client=client, settings=_settings(), token=service),
+                AuthzContext(client=client, settings=governed_settings(), token=service),
                 resolver=NamedResolver(),
                 resource="table",
                 segments=["acme-silver", "features"],
@@ -89,13 +72,13 @@ def test_the_context_keeps_the_principal_the_authenticator_built_and_builds_none
     """The type the ownership rule reads is the one the verifier proved: a principal passes as the same object, and its
     fields as a dict, which no verifier built, are refused rather than made into a ``ServicePrincipal``."""
     service = ServicePrincipal.for_account("system:serviceaccount:default:rask-sa-pipeline")
-    person = PersonPrincipal(principal=Principal(idp_id="dex", subject="bob"), claims=IDToken(iss="https://dex", sub="bob", aud="rask", exp=1, iat=1))
+    bob = person("bob")
 
-    kept = [AuthzContext(client=None, settings=_settings(), token=caller).token for caller in (service, person)]
+    kept = [AuthzContext(client=None, settings=governed_settings(), token=caller).token for caller in (service, bob)]
     with pytest.raises(ValidationError) as refused:
-        AuthzContext(client=None, settings=_settings(), token=service.model_dump())
+        AuthzContext(client=None, settings=governed_settings(), token=service.model_dump())
 
-    assert ([k is c for k, c in zip(kept, (service, person), strict=True)], [(e["type"], e["ctx"]["class"]) for e in refused.value.errors()]) == (
+    assert ([k is c for k, c in zip(kept, (service, bob), strict=True)], [(e["type"], e["ctx"]["class"]) for e in refused.value.errors()]) == (
         [True, True],
         [("is_instance_of", "PersonPrincipal"), ("is_instance_of", "ServicePrincipal")],
     )

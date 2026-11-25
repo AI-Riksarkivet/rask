@@ -29,9 +29,11 @@ import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+
 
 _BUCKET = "black-hole"
-_ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+_ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 _CONNECT_S, _REQUEST_S = 0.5, 1.0
 #: Lance re-issues a failed listing six times per open (measured, `objectfs.StoreTimeouts`), and a read
 #: makes a handful of store calls before the first fails; this is the most the bounds allow those to cost.
@@ -142,16 +144,9 @@ def client(proxy: _BlackHoleProxy, monkeypatch: pytest.MonkeyPatch) -> Iterator[
     get_settings.cache_clear()
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
 def test_a_read_against_a_black_holed_store_answers_503_within_the_deadline(client: TestClient, proxy: _BlackHoleProxy) -> None:
     assert client.post("/v1/namespace/lance_catalog$bh/create", json={}).status_code == 200
-    created = client.post("/v1/table/lance_catalog$bh$t/create", content=_ipc(pa.table({"id": pa.array([1, 2, 3], pa.int64())})), headers=_ARROW)
+    created = client.post("/v1/table/lance_catalog$bh$t/create", content=encode_arrow_stream(pa.table({"id": pa.array([1, 2, 3], pa.int64())})), headers=_ARROW)
     assert created.status_code == 200, created.text
 
     proxy.black_hole()
@@ -171,7 +166,7 @@ def test_a_slow_store_still_completes_a_large_write_and_full_read(client: TestCl
     proxy.throttle(_RATE_BYTES_S)
     # The same app, answering a store failure as the status a caller would receive rather than re-raising it here.
     caller = TestClient(client.app, raise_server_exceptions=False)
-    created = caller.post("/v1/table/lance_catalog$slow$t/create", content=_ipc(table), headers=_ARROW)
+    created = caller.post("/v1/table/lance_catalog$slow$t/create", content=encode_arrow_stream(table), headers=_ARROW)
     feed = caller.post("/management/v1/table/lance_catalog$slow$t/changes", json={"begin_version": 0, "kind": "inserted"})
 
     assert created.status_code == 200, created.text[:300]

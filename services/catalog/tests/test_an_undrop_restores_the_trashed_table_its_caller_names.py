@@ -16,6 +16,7 @@ import pyarrow as pa
 import pytest
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 
 
 def _ok(catalog: Any, path: str, caller: str = "alice", **kwargs: Any) -> Any:  # noqa: ANN401 — the conftest's GovernedCatalog and the request's keywords
@@ -28,7 +29,7 @@ def _create(catalog: Any, rows: int) -> str:  # noqa: ANN401 — the conftest's 
     """``lance_catalog$db$t`` created with ``rows`` rows; the uuid the catalog minted for it."""
     body = encode_arrow_stream(pa.table({"id": pa.array(range(rows), pa.int64())}))
     _ok(catalog, "/v1/table/lance_catalog$db$t/create", content=body, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
-    return str(_ok(catalog, "/v1/table/lance_catalog$db$t/describe", json={}).json()["properties"]["rask.uuid"])
+    return str(_ok(catalog, "/v1/table/lance_catalog$db$t/describe", json={}).json()["properties"][UUID_PROPERTY])
 
 
 @pytest.fixture
@@ -59,7 +60,7 @@ def test_an_undrop_of_a_name_two_dropped_tables_held_asks_which_and_restores_the
     assert tracked["status"] == "Queued", f"the queued deletion did not describe as queued while another table held the name: {tracked}"
     assert (asked.status_code, first in asked.text, second in asked.text) == (409, True, True), asked.text
     assert restored.status_code == 200
-    assert _ok(estate, "/v1/table/lance_catalog$db$t/describe", json={}).json()["properties"]["rask.uuid"] == first
+    assert _ok(estate, "/v1/table/lance_catalog$db$t/describe", json={}).json()["properties"][UUID_PROPERTY] == first
     assert int(_ok(estate, "/v1/table/lance_catalog$db$t/count_rows", json={}).text) == 2
     assert estate.client.post("/v1/table/lance_catalog$db$t/describe", json={}, headers=estate.bearer("bob")).status_code == 200, "the grant did not come back"
 

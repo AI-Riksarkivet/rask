@@ -33,14 +33,17 @@ from lance_namespace import (
 
 from catalog.services import table_bases
 from catalog.services.tables.versions import CommitReadback
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.lancekit.features import DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records.location_claims import ClaimStore
 from tests import seeding
 from tests.app_state import app_of
+from tests.callers import person
+from tests.catalog_settings import catalog_settings
 
 
-ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW_STREAM = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 
 # --- identifier parsing (our logic) ---------------------------------------- #
@@ -66,7 +69,7 @@ def test_create_namespace_routes_with_body_and_id(client: TestClient, fake_ns: M
     req = fake_ns.create_namespace.call_args.args[0]
     assert req.id == ["lance_catalog", "parent", "child"]
     # Beside the uuid the door mints for the namespace ([[LH-519]]).
-    assert {key: value for key, value in req.properties.items() if key != "rask.uuid"} == {"team": "ml"}
+    assert {key: value for key, value in req.properties.items() if key != UUID_PROPERTY} == {"team": "ml"}
     assert resp.json() == {"properties": {"team": "ml"}}  # our serialization
 
 
@@ -91,7 +94,7 @@ def test_create_table_passes_arrow_bytes_through(real_ns_client: TestClient) -> 
     # The raw Arrow-IPC body is written verbatim as the new table's first version. Driven against a REAL
     # dir namespace (a MagicMock can no longer stand in — the create does a real 2.2 write), so this now
     # proves the ACTUAL round-trip: the rows land, not merely that bytes reached a mocked method.
-    body = _arrow_ipc(pa.table({"id": [1, 2, 3]}))
+    body = encode_arrow_stream(pa.table({"id": [1, 2, 3]}))
     resp = real_ns_client.post("/v1/table/lance_catalog$db$t/create?mode=overwrite", content=body, headers=ARROW_STREAM)
     assert resp.status_code == 200
 
@@ -140,15 +143,8 @@ def test_describe_answers_the_file_format_the_table_was_written_at(real_ns_clien
     assert (described.status_code, detailed[DATA_STORAGE_VERSION_KEY], detailed[STABLE_ROW_IDS_KEY]) == (200, "2.1", "true"), described.text
 
 
-def _arrow_ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
-
-
 #: A real body for the write doors, which refuse one that is not a valid Arrow IPC stream.
-_ONE_ROW = _arrow_ipc(pa.table({"id": [1]}))
+_ONE_ROW = encode_arrow_stream(pa.table({"id": [1]}))
 
 
 def test_create_delegates_to_the_creation_facade(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
@@ -189,7 +185,7 @@ def test_create_delegates_to_the_creation_facade(client: TestClient, fake_ns: Ma
     claim_described("lance_catalog$media$clips")  # the table the overwrite replaces, which the double describes as existing
     resp = client.post(
         "/v1/table/lance_catalog$media$clips/create?mode=overwrite",
-        content=_arrow_ipc(pa.table({"id": [1]})),
+        content=encode_arrow_stream(pa.table({"id": [1]})),
         headers=ARROW_STREAM,
     )
 
@@ -219,11 +215,11 @@ def test_merge_insert_reads_its_query_params_as_the_spec_states_them(real_ns_cli
     source row matching nothing is not inserted unless asked.
     """
     _ensure_namespace(real_ns_client, "lance_catalog$db")
-    target = _arrow_ipc(
+    target = encode_arrow_stream(
         pa.table({"id": pa.array([1, 2, 3], pa.int64()), "rev": pa.array([1, 2, 3], pa.int64()), "score": pa.array([0.9, 0.1, 0.9]), "label": ["a", "b", "c"]})
     )
     assert real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=target, headers=ARROW_STREAM).status_code == 200
-    source = _arrow_ipc(
+    source = encode_arrow_stream(
         pa.table(
             {
                 "id": pa.array([1, 2, 9, 3], pa.int64()),
@@ -437,7 +433,9 @@ def test_a_committed_write_whose_read_back_panics_answers_committed(
     """The read-back runs after the write committed, so a native panic in it degrades the announcement and the door still
     answers the commit it made: a 500 for a write that landed sends the caller to retry it."""
     _ensure_namespace(real_ns_client, "lance_catalog$db")
-    assert real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+    assert (
+        real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=encode_arrow_stream(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+    )
 
     def _panics(*_args: object, **_kwargs: object) -> object:
         raise _NativePanic("called `Result::unwrap()` on an `Err` value")
@@ -447,7 +445,7 @@ def test_a_committed_write_whose_read_back_panics_answers_committed(
     as_a_caller_sees_it = TestClient(real_ns_client.app, raise_server_exceptions=False)
     as_a_caller_sees_it.portal = real_ns_client.portal
 
-    inserted = as_a_caller_sees_it.post("/v1/table/lance_catalog$db$t/insert", content=_arrow_ipc(pa.table({"id": [2, 3]})), headers=ARROW_STREAM)
+    inserted = as_a_caller_sees_it.post("/v1/table/lance_catalog$db$t/insert", content=encode_arrow_stream(pa.table({"id": [2, 3]})), headers=ARROW_STREAM)
 
     location = real_ns_client.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["location"]
     assert (inserted.status_code, inserted.json().get("version"), lance.dataset(location).count_rows()) == (200, 2, 3), inserted.text
@@ -495,7 +493,7 @@ def _declared(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -
 
 
 def _branched(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[Any, str]:
-    assert client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/create", content=encode_arrow_stream(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
     monkeypatch.setattr("catalog.api.v1.endpoints.branches.refs", _ListingPanics())
     return client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "b"}), "lance_catalog$db$t"
 
@@ -505,7 +503,7 @@ def _undropped(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) 
 
     monkeypatch.setenv("LANCE_TRASH_GRACE_DAYS", "1")
     get_settings.cache_clear()
-    assert client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/create", content=encode_arrow_stream(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
     assert client.post("/v1/table/lance_catalog$db$t/drop", json={}).status_code == 200
     monkeypatch.setattr("catalog.core.namespace.registered_dataset_facts", lambda *_a, **_k: _panics_now())
     return client.post("/management/v1/table/lance_catalog$db$t/undrop", json={}), "lance_catalog$db$t"
@@ -513,20 +511,16 @@ def _undropped(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) 
 
 def _authored_on_a_branch(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[Any, str]:
     from catalog.api.security import authenticate
-    from lakehouse.governed.idp_identity import PersonPrincipal
-    from lakehouse.governed.oidc import IDToken
-    from lakehouse.governed.principal import Principal
 
-    assert client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+    assert client.post("/v1/table/lance_catalog$db$t/create", content=encode_arrow_stream(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
     assert client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "b"}).status_code == 200
-    caller = PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="alice"),
-        claims=IDToken(iss="https://idp.example", sub="alice", aud="lance", exp=2_000_000_000, iat=1_000_000_000),
-    )
+    caller = person(iss="https://idp.example", exp=2_000_000_000, iat=1_000_000_000)
     monkeypatch.setitem(app_of(client).dependency_overrides, authenticate, lambda: caller)
     # The author's record is keyed by the branch's incarnation, read off the branch listing after the append landed.
     monkeypatch.setattr("catalog.services.tables.versions.open_resolved_dataset_unchecked", lambda *_a, **_k: _panics_now())
-    return client.post("/v1/table/lance_catalog$db$t/insert?branch=b", content=_arrow_ipc(pa.table({"id": [2]})), headers=ARROW_STREAM), "lance_catalog$db$t"
+    return client.post(
+        "/v1/table/lance_catalog$db$t/insert?branch=b", content=encode_arrow_stream(pa.table({"id": [2]})), headers=ARROW_STREAM
+    ), "lance_catalog$db$t"
 
 
 class _InputResolvedOncePanics:
@@ -551,7 +545,10 @@ class _InputResolvedOncePanics:
 
 def _read_from_a_branch(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[Any, str]:
     for table in ("src", "t"):
-        assert client.post(f"/v1/table/lance_catalog$db${table}/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+        assert (
+            client.post(f"/v1/table/lance_catalog$db${table}/create", content=encode_arrow_stream(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code
+            == 200
+        )
     assert client.post("/v1/table/lance_catalog$db$src/branches/create", json={"name": "feed"}).status_code == 200
     run = {
         "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
@@ -560,7 +557,9 @@ def _read_from_a_branch(client: TestClient, monkeypatch: pytest.MonkeyPatch, roo
         "x-rask-inputs": json.dumps([{"table": ["lance_catalog", "db", "src"], "version": 1, "branch": "feed"}]),
     }
     monkeypatch.setattr("catalog.api.dependencies.table_claims", _InputResolvedOncePanics())
-    return client.post("/v1/table/lance_catalog$db$t/insert", content=_arrow_ipc(pa.table({"id": [2]})), headers={**ARROW_STREAM, **run}), "lance_catalog$db$t"
+    return client.post(
+        "/v1/table/lance_catalog$db$t/insert", content=encode_arrow_stream(pa.table({"id": [2]})), headers={**ARROW_STREAM, **run}
+    ), "lance_catalog$db$t"
 
 
 def _created(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) -> tuple[Any, str]:
@@ -576,7 +575,7 @@ def _created(client: TestClient, monkeypatch: pytest.MonkeyPatch, root: Path) ->
         return real(schema)
 
     monkeypatch.setattr(versions, "facet_fields", second_panics)
-    return client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(pa.table({"id": [1]})), headers=ARROW_STREAM), "lance_catalog$db$t"
+    return client.post("/v1/table/lance_catalog$db$t/create", content=encode_arrow_stream(pa.table({"id": [1]})), headers=ARROW_STREAM), "lance_catalog$db$t"
 
 
 def _panics_now() -> None:
@@ -622,7 +621,7 @@ def test_create_exist_ok_reads_schema_back_instead_of_trusting_payload(real_ns_c
     # ExistOk KEEPS an existing table (nothing written, response.version = the existing version): the
     # payload's schema may then belong to a table that was never created — the true schema must be read back
     # PINNED at that version, never parsed from the payload. Now driven for real: the table genuinely exists.
-    body = _arrow_ipc(pa.table({"id": [1]}))
+    body = encode_arrow_stream(pa.table({"id": [1]}))
     assert real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=body, headers=ARROW_STREAM).status_code == 200
 
     seen: dict[str, object] = {}
@@ -766,7 +765,7 @@ def test_alter_columns_converts_json_arrow_type_to_pyarrow(real_ns_client: TestC
             "flag": pa.array([True, False]),
         }
     )
-    assert real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=_arrow_ipc(rows), headers=ARROW_STREAM).status_code == 200
+    assert real_ns_client.post("/v1/table/lance_catalog$db$t/create", content=encode_arrow_stream(rows), headers=ARROW_STREAM).status_code == 200
     described = real_ns_client.post("/v1/table/lance_catalog$db$t/describe", json={"load_detailed_metadata": True}).json()
     spelled = {field["name"]: field["type"] for field in described["schema"]["fields"]}
     alterations = [
@@ -921,19 +920,10 @@ def test_a_field_a_rask_door_does_not_define_is_refused_and_nothing_is_written(c
 
 
 def _project_policy_settings(tmp_path: object):
-    from catalog.core.config import Settings
 
     # A LOCAL control root so the warehouse registry + policy records round-trip on the FS per test
     # (the shared fixture's fixed /tmp root would leak records across tests).
-    return Settings.model_validate(
-        {
-            "impl": "dir",
-            "root": "s3://lance-catalog",
-            "control_root": f"file://{tmp_path}",
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
+    return catalog_settings(impl="dir", root="s3://lance-catalog", control_root=f"file://{tmp_path}")
 
 
 def test_project_policy_crud_round_trips(client: TestClient, tmp_path: object) -> None:

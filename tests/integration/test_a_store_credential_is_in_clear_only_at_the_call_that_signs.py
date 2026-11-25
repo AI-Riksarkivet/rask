@@ -35,6 +35,7 @@ from lakehouse.storage.credential import S3KeyPair
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from maintenance.services.expiry import ExpiryTarget
+from tests.vend_answers import vended
 
 
 log = logging.getLogger(__name__)
@@ -51,20 +52,17 @@ _TABLE = "acme-bronze$events"
 _URI = "s3://acme-bucket/4c49d010_acme-bronze$events"
 _CATALOG_URL = "http://catalog:2333"
 #: The table-scoped session the catalog's vend door answers maintenance with.
-_VEND = {
-    "mode": "direct",
-    "location": _URI,
-    "credentials": {
-        "storage_options": {
-            "endpoint": "https://s3.public.example",
-            "aws_access_key_id": "VENDEDKEY",
-            "aws_secret_access_key": _VEND_SECRET,
-            "aws_session_token": _VEND_TOKEN,
-            "region": "us-east-1",
-            "allow_http": "false",
-        }
+_VEND = vended(
+    {
+        "endpoint": "https://s3.public.example",
+        "aws_access_key_id": "VENDEDKEY",
+        "aws_secret_access_key": _VEND_SECRET,
+        "aws_session_token": _VEND_TOKEN,
+        "region": "us-east-1",
+        "allow_http": "false",
     },
-}
+    location=_URI,
+)
 
 
 @pytest.fixture

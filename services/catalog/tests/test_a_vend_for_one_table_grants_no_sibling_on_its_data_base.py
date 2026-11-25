@@ -25,28 +25,21 @@ from typing import Any
 import boto3
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
-from moto.iam.access_control import IAMPolicy, PermissionResult
 from pydantic import SecretStr
 
 from catalog.core.config import get_settings
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.lancekit.features import manifest_base_path_refs
 from lakehouse.records import location_claims
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.store_session import IssuedSession
 from tests.app_state import app_of
+from tests.iam_verdict import permits
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 
 def _ids(*ids: int) -> pa.Table:
@@ -55,7 +48,7 @@ def _ids(*ids: int) -> pa.Table:
 
 def _create(client: TestClient, base: str, rows: pa.Table) -> tuple[str, str]:
     table = f"lance_catalog$mb${uuid.uuid4().hex[:12]}"
-    created = client.post(f"/v1/table/{table}/create?data_base={base}", content=_ipc(rows), headers=ARROW)
+    created = client.post(f"/v1/table/{table}/create?data_base={base}", content=encode_arrow_stream(rows), headers=ARROW)
     assert created.status_code == 200, created.text
     return table, str(created.json()["location"])
 
@@ -75,16 +68,6 @@ def _fragment_keys(two_stores: Any, directory: str) -> list[tuple[str, str]]:  #
     keys = [(bucket, item["Key"]) for item in s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/").get("Contents", [])]
     assert keys, f"precondition: the table's fragments are under its data directory {directory}"
     return keys
-
-
-def _permits(policy: dict[str, Any], action: str, bucket: str, key: str) -> bool:
-    """IAM's verdict on ``action`` over ``bucket/key``, by moto's evaluator.
-
-    moto turns a Resource into a regex without escaping it, so the ``$`` a table directory carries would
-    read as an end anchor; it is swapped for a character IAM gives no meaning, on both sides alike.
-    """
-    document = json.dumps(policy).replace("$", "~")
-    return IAMPolicy(document).is_action_permitted(action, f"arn:aws:s3:::{bucket}/{key.replace('$', '~')}") == PermissionResult.PERMITTED
 
 
 def _capture_policy(client: TestClient) -> dict[str, Any]:
@@ -153,9 +136,9 @@ def test_a_table_on_a_data_base_reaches_none_of_another_tables_fragments(
             assert vended.status_code == 200, vended.text
             assert vended.json()["mode"] == "direct", vended.text
         sibling_keys = _fragment_keys(two_stores, _directory(two_stores, sibling_location))
-        granted = {action: [_permits(sent["policy"], action, *key) for key in sibling_keys] for action in ("s3:GetObject", "s3:DeleteObject")}
+        granted = {action: [permits(sent["policy"], action, *key) for key in sibling_keys] for action in ("s3:GetObject", "s3:DeleteObject")}
         assert granted == {"s3:GetObject": [True] * len(sibling_keys), "s3:DeleteObject": [deletes] * len(sibling_keys)}, sent["policy"]
-        reached = [(action, key) for action in ("s3:GetObject", "s3:DeleteObject") for key in owner_keys if _permits(sent["policy"], action, *key)]
+        reached = [(action, key) for action in ("s3:GetObject", "s3:DeleteObject") for key in owner_keys if permits(sent["policy"], action, *key)]
         assert reached == [], f"the sibling's vend reaches the owner's fragments: {sent['policy']}"
     else:
         # The thief writes its own dataset declaring the owner's directory as a base, as any holder of a

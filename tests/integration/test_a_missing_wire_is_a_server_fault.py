@@ -13,7 +13,6 @@ supervisor ends the process. Driven against the real apps with their lifespans r
 """
 
 import asyncio
-import io
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
@@ -23,8 +22,6 @@ from typing import Any
 
 import httpx
 import httpx2
-import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from botocore.exceptions import ClientError
 from fastapi import FastAPI
@@ -32,24 +29,19 @@ from fastapi.testclient import TestClient
 from lance_namespace import ConcurrentModificationError, DescribeNamespaceRequest, InternalError, LanceNamespace, connect
 
 from catalog.core.config import Settings
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import maintenance_policies
 from lakehouse.records.record_store import put_record, record_key
 from tests.app_state import app_of
+from tests.governed_catalog import ROWS
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event, served_relay_tick
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 NAMESPACE, TABLE = "lance_catalog$wire", "lance_catalog$wire$t"
 #: The spec's InternalError.
 _INTERNAL = (500, 18)
-
-
-def _rows() -> bytes:
-    sink = io.BytesIO()
-    table = pa.table({"id": pa.array([1, 2], pa.int64())})
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
 
 
 def _create_namespace(client: TestClient) -> httpx2.Response:
@@ -95,7 +87,7 @@ def test_a_door_refuses_as_a_server_fault_when_its_wire_is_missing(
     door: Callable[[TestClient], httpx.Response],
 ) -> None:
     assert real_ns_client.post(f"/v1/namespace/{NAMESPACE}/create", json={}).status_code == 200
-    created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=_rows(), headers=ARROW)
+    created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=ROWS, headers=ARROW)
     assert created.status_code == 200, created.text
     monkeypatch.delattr(app_of(real_ns_client).state, wire)
 
@@ -230,7 +222,7 @@ def _the_apps_own_run_has_ended(real_ns_client: TestClient) -> None:
 
 def _provenance_uuid(settings: Settings) -> str:
     properties = connect("dir", {"root": settings.root}).describe_namespace(DescribeNamespaceRequest(id=["lance_catalog", "provenance"])).properties or {}
-    return properties["rask.uuid"]
+    return properties[UUID_PROPERTY]
 
 
 def _logged(caplog: pytest.LogCaptureFixture) -> list[tuple[str, bool]]:

@@ -78,7 +78,9 @@ from byo_scenario import CATALOG, Commit, NamedRun, Tenant
 from chaos import Workload
 from correctness import as_named, edges_named, history_of, parked_since, rask_properties, recorded_edges, settled_control_outbox_depth, settled_outbox_depth
 from pydantic import BaseModel
+from refusals import body_of, problem_code
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.fga_ids import user_object
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM
@@ -106,7 +108,6 @@ NO_DOOR = "Failed to execute request"
 CONTENDED = "Too many concurrent writers"
 #: How many kills the kill drill may spend before one meets a commit in flight: a kill can land between two commits.
 KILLS = 3
-ARROW = "application/vnd.apache.arrow.stream"
 
 pytestmark = [
     pytest.mark.e2e,
@@ -188,8 +189,8 @@ class Drills:
             answer = self.pipeline.http.post(
                 f"{CATALOG}/v1/table/{'$'.join(table)}/insert",
                 params={"mode": "append"},
-                data=scenario.arrow_ipc(scenario.rows_of(ids)),
-                headers={"content-type": ARROW, **run.context()},
+                data=encode_arrow_stream(scenario.rows_of(ids)),
+                headers={"content-type": ARROW_STREAM_MEDIA_TYPE, **run.context()},
                 timeout=within,
             )
         except requests.Timeout:
@@ -199,7 +200,7 @@ class Drills:
         except requests.ConnectionError as error:
             return Refusal(status=None, code=None, text=f"no door reached: {str(error)[:200]}")
         if answer.status_code != 200:
-            return Refusal(status=answer.status_code, code=_problem_code(answer), text=f"{answer.status_code}: {answer.text[:300]}")
+            return Refusal(status=answer.status_code, code=problem_code(body_of(answer)), text=f"{answer.status_code}: {answer.text[:300]}")
         return self._record(table, int(answer.json()["version"]), run, operation="insert")
 
     def describe(self, table: list[str]) -> int | Refusal:
@@ -222,7 +223,7 @@ class Drills:
         except requests.ConnectionError as error:
             return Refusal(status=None, code=None, text=f"no door reached: {str(error)[:200]}")
         if answer.status_code != 200:
-            return Refusal(status=answer.status_code, code=_problem_code(answer), text=f"{answer.status_code}: {answer.text[:300]}")
+            return Refusal(status=answer.status_code, code=problem_code(body_of(answer)), text=f"{answer.status_code}: {answer.text[:300]}")
         return int(answer.json()["version"])
 
     def serving(self, table: list[str]) -> None:
@@ -310,14 +311,6 @@ class Drills:
         assert Counter(edge for edge in edges if edge not in unowed) == Counter(owed)
         assert Counter(unowed) <= Counter(edges_named(landed)), f"a commit whose answer was lost has an edge it does not name, or two: {unowed}"
         assert (parked, depths) == ([], (0, 0))
-
-
-def _problem_code(answer: requests.Response) -> int | None:
-    try:
-        body = answer.json()
-    except ValueError:
-        return None
-    return body.get("code") if isinstance(body, dict) else None
 
 
 def _outage_failure(error: Exception) -> Literal["lost", "refused"] | None:

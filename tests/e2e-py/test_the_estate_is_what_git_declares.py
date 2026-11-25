@@ -21,10 +21,11 @@ Run via ``bash scripts/e2e_live.sh tests/e2e-py/test_the_estate_is_what_git_decl
 import json
 
 import pytest
+from byo_scenario import ADMIN_USER, CATALOG, DEX, Identity, ok
 from chaos import RELEASE, kubectl
 from lance_namespace import ErrorCode
 from refusals import assert_refused
-from scratch_tenant import ADMIN_USER, CATALOG, DEX, Identity, ok, tuples_on
+from scratch_tenant import tuples_on
 
 from catalog.services.declaration import Declaration
 from lakehouse.problems.envelope import PROBLEM_JSON
@@ -50,7 +51,7 @@ def declaration() -> Declaration:
 @pytest.fixture(scope="module")
 def admin() -> Identity:
     """The estate admin, who reads every project, warehouse and tuple."""
-    return Identity(ADMIN_USER)
+    return Identity.person(ADMIN_USER)
 
 
 def test_every_declared_project_warehouse_and_grant_stands_managed_by_git(declaration: Declaration, admin: Identity) -> None:

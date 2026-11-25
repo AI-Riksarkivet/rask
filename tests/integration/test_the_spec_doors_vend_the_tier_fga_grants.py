@@ -31,34 +31,17 @@ from lance_namespace import DeclareTableResponse, DescribeNamespaceResponse
 from pydantic import SecretStr
 
 from catalog.api.dependencies import get_resolver, get_vendor, request_settings
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import get_settings
 from catalog.core.vending import VendedSession
 from catalog.services import table_claims
 from lakehouse.governed import fga_reads, fga_writes
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.credential import S3KeyPair
 from tests.app_state import app_of
+from tests.callers import person
+from tests.catalog_settings import governed_settings
 from tests.governed_catalog import GovernedCatalog
 from tests.unit.named_resolver import NamedResolver, uuid_of
-
-
-def _auth_settings(*, read_only: bool = False) -> Settings:
-    return Settings.model_validate(
-        {
-            "maintenance_read_only": read_only,
-            "oidc_enabled": True,
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "oidc_issuer": "https://idp.example",
-            "oidc_audience": "lance",
-            "fga_enabled": True,
-            "fga_api_url": "http://openfga:8080",
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
 
 
 @pytest.fixture
@@ -69,21 +52,19 @@ def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[st
     table resolves to the location ``fake_ns`` describes, whose claim records its uuid, which its credential is scoped
     by (ADR 0173 §6).
     """
-    app_of(client).dependency_overrides[request_settings] = _auth_settings
-    claims = table_claims.claim_store(_auth_settings())
+    app_of(client).dependency_overrides[request_settings] = lambda: governed_settings()
+    claims = table_claims.claim_store(governed_settings())
     app_of(client).dependency_overrides[get_resolver] = lambda: NamedResolver(tables=lambda segments: table_claims.resolve(fake_ns, claims, segments))
     claim_described("lance_catalog$db$t")
     verifier = MagicMock()
-    verifier.verify.return_value = PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
-    )
+    verifier.verify.return_value = person()
     app_of(client).state.oidc = verifier
     fga_client = MagicMock()
     fga_client.close = AsyncMock()
     app_of(client).state.fga = fga_client
     # The namespace the backend describes is the one the resolver names: a declare reads its parent again once its row stands.
     fake_ns.describe_namespace.return_value = DescribeNamespaceResponse(
-        properties={"rask.requires_run": "true", "rask.uuid": uuid_of("namespace", ["lance_catalog", "db"])}
+        properties={"rask.requires_run": "true", UUID_PROPERTY: uuid_of("namespace", ["lance_catalog", "db"])}
     )
     recorder = _recording_vendor()
     app_of(client).dependency_overrides[get_vendor] = lambda: recorder

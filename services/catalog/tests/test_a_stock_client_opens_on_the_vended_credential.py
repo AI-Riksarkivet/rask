@@ -22,7 +22,6 @@ import http.client
 import json
 import re
 import threading
-import time
 import uuid
 from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -36,14 +35,14 @@ import lance
 import lance_namespace
 import pyarrow as pa
 import pytest
-import uvicorn
-from fastapi import FastAPI
-from moto.iam.access_control import IAMPolicy, PermissionResult
 from moto.sts.models import sts_backends
 from pydantic import BaseModel
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.lancekit.base_refs import decoded_path
+from lakehouse.naming import UUID_PROPERTY
+from tests.iam_verdict import permits
+from tests.live_server import serve
 
 
 _REGION = "us-east-1"
@@ -64,20 +63,6 @@ def store(two_stores: Any, tmp_path: Path) -> _Store:  # noqa: ANN401 — confte
     token = tmp_path / "projected-rask-object-store-token"
     token.write_text("projected-for-rask-object-store")
     return _Store(url=two_stores.url, bucket=two_stores.estate_bucket, role_arn=two_stores.role_on(two_stores.estate_bucket), token_file=str(token))
-
-
-def _serve(app: FastAPI) -> Iterator[str]:
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 30
-    while not server.started:
-        if not thread.is_alive() or time.monotonic() > deadline:
-            raise RuntimeError("uvicorn did not start")
-        time.sleep(0.05)
-    yield f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
-    server.should_exit = True
-    thread.join(timeout=30)
 
 
 def _catalog_env(store: _Store, monkeypatch: pytest.MonkeyPatch, **extra: str) -> None:
@@ -111,7 +96,8 @@ def catalog_url(store: _Store, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]
     from catalog.core.config import get_settings
     from catalog.main import app
 
-    yield from _serve(app)
+    with serve(app) as url:
+        yield url
     get_settings.cache_clear()
 
 
@@ -195,7 +181,7 @@ def off_cluster_catalog_url(store: _Store, monkeypatch: pytest.MonkeyPatch) -> I
     from catalog.core.config import get_settings
     from catalog.main import app
 
-    for served in _serve(app):
+    with serve(app) as served:
         yield f"{served}/api/catalog"
     get_settings.cache_clear()
     proxy.shutdown()
@@ -240,7 +226,7 @@ def test_a_stock_client_off_the_cluster_creates_and_appends_through_the_endpoint
     # [[LH-520]] Its first commit landed where DeclareTable placed it: the root, under the uuid the catalog minted.
     with httpx.Client(base_url=off_cluster_catalog_url, timeout=60) as catalog:
         described = catalog.post(f"/v1/table/{namespace}$sp%20ace/describe", json={"vend_credentials": False}).json()
-    assert described["location"] == f"s3://{store.bucket}/{described['properties']['rask.uuid']}", described
+    assert described["location"] == f"s3://{store.bucket}/{described['properties'][UUID_PROPERTY]}", described
 
 
 #: A key the store refuses, as an ambient key outside the governed estate is: a client holding it reads only on what is vended.
@@ -275,16 +261,6 @@ def _keys_held(two_stores: Any, location: str) -> list[str]:  # noqa: ANN401 —
     bucket, _, prefix = decoded_path(location).partition("/")
     s3 = boto3.client("s3", endpoint_url=two_stores.url, region_name=_REGION, **two_stores.estate.model_dump())  # noqa: TID251 — a test reading moto
     return [str(item["Key"]) for item in s3.list_objects_v2(Bucket=bucket, Prefix=f"{prefix}/").get("Contents", [])]
-
-
-def _permits(policy: dict[str, Any], action: str, bucket: str, key: str) -> bool:
-    """IAM's verdict on ``action`` over ``bucket/key``, by moto's evaluator.
-
-    moto turns a Resource into a regex without escaping it, so a ``$`` in a key would read as an end anchor; it is swapped
-    for a character IAM gives no meaning, on both sides alike.
-    """
-    document = json.dumps(policy, ensure_ascii=False).replace("$", "~")
-    return IAMPolicy(document).is_action_permitted(action, f"arn:aws:s3:::{bucket}/{key.replace('$', '~')}") == PermissionResult.PERMITTED
 
 
 @pytest.mark.parametrize(
@@ -333,6 +309,6 @@ def test_every_vend_reaches_the_keys_the_store_keeps_for_the_table(
     assert vended, "the stock client was vended no credential"
     keys = _keys_held(two_stores, location)
     assert keys, f"precondition: the store holds the table's bytes under {decoded_path(location)}"
-    unreadable = sorted({key for key in keys for policy in vended if not _permits(policy, "s3:GetObject", store.bucket, key)})
-    unwritable = [key for key in keys if "/data/" in key and not any(_permits(policy, "s3:PutObject", store.bucket, key) for policy in vended)]
+    unreadable = sorted({key for key in keys for policy in vended if not permits(policy, "s3:GetObject", store.bucket, key)})
+    unwritable = [key for key in keys if "/data/" in key and not any(permits(policy, "s3:PutObject", store.bucket, key) for policy in vended)]
     assert (unreadable, unwritable) == ([], []), f"a vend for {location} is scoped to another prefix: {vended}"

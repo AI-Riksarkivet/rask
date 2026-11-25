@@ -14,17 +14,8 @@ import pytest
 from lance_namespace import InvalidInputError
 
 from catalog.services.tables import writes
-
-
-#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
-_BODY_LIMIT = 256 * 1024 * 1024
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as w:
-        w.write_table(table)
-    return sink.getvalue().to_pybytes()
+from lakehouse.arrow_ipc import encode_arrow_stream
+from tests.door_tables import BODY_LIMIT
 
 
 class _Table:
@@ -43,7 +34,7 @@ class _Table:
 
 
 def _coerce(table: _Table, data: bytes) -> pa.Table:
-    out = writes.coerce_insert_arrow(cast(Any, table), cast(Any, {}), data, max_bytes=_BODY_LIMIT)
+    out = writes.coerce_insert_arrow(cast(Any, table), cast(Any, {}), data, max_bytes=BODY_LIMIT)
     return pa.ipc.open_stream(out).read_all()
 
 
@@ -56,7 +47,7 @@ def test_reorders_columns_by_name() -> None:
             "id": pa.array([1.0], pa.float64()),
         }
     )
-    out = _coerce(table, _ipc(incoming))
+    out = _coerce(table, encode_arrow_stream(incoming))
     assert out.schema.names == ["id", "tag"]
     assert out.column("id").to_pylist() == [1]
 
@@ -65,21 +56,21 @@ def test_non_integral_value_is_400_not_500() -> None:
     table = _Table(pa.schema([("id", pa.int64())]))
     incoming = pa.table({"id": pa.array([4.5], pa.float64())})  # 4.5 can't become an int
     with pytest.raises(InvalidInputError):
-        _coerce(table, _ipc(incoming))
+        _coerce(table, encode_arrow_stream(incoming))
 
 
 def test_missing_column_is_400() -> None:
     table = _Table(pa.schema([("id", pa.int64()), ("score", pa.int64())]))
     incoming = pa.table({"id": pa.array([1], pa.int64())})  # no 'score'
     with pytest.raises(InvalidInputError):
-        _coerce(table, _ipc(incoming))
+        _coerce(table, encode_arrow_stream(incoming))
 
 
 def test_matching_names_with_differing_nullability_still_coerces() -> None:
     """Same names+types but a non-nullable target field ⇒ NOT the fast path — the cast must run so
     the declared nullability lands (the native append checks the schema, not the values)."""
     table = _Table(pa.schema([pa.field("id", pa.int64(), nullable=False)]))
-    data = _ipc(pa.table({"id": pa.array([1], pa.int64())}))  # incoming field is nullable=True
-    out = writes.coerce_insert_arrow(cast(Any, table), cast(Any, {}), data, max_bytes=_BODY_LIMIT)
+    data = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))  # incoming field is nullable=True
+    out = writes.coerce_insert_arrow(cast(Any, table), cast(Any, {}), data, max_bytes=BODY_LIMIT)
     assert out is not data
     assert pa.ipc.open_stream(out).read_all().schema.field("id").nullable is False

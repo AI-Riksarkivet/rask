@@ -31,7 +31,7 @@ from openfga_sdk.client.models import ClientTuple
 from openfga_sdk.models import ExpandResponse
 
 from lakehouse.governed import fga_reads, fga_resilience, fga_writes, oidc
-from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
+from lakehouse.governed.audit import AUDIT_LOGGER
 from tests.fga_answers import answer
 
 
@@ -40,37 +40,12 @@ def _client(c: object) -> OpenFgaClient:
     return cast(OpenFgaClient, c)
 
 
-class _AuditCapture(logging.Handler):
-    """Collect the structured audit records emitted while a block runs."""
-
-    def __init__(self) -> None:
-        super().__init__(level=logging.INFO)
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
-
-
-@pytest.fixture
-def audit_rows() -> Any:
-    """The audit stream, enabled and captured for the duration of one test."""
-    configure_audit(enabled=True)
-    handler = _AuditCapture()
-    log = logging.getLogger(AUDIT_LOGGER)
-    log.addHandler(handler)
-    try:
-        yield handler.records
-    finally:
-        log.removeHandler(handler)
-        configure_audit(enabled=False)
-
-
 # --------------------------------------------------------------------------- #
 # SKG-02 — a partial delete still audits what landed
 # --------------------------------------------------------------------------- #
 
 
-def test_delete_tuples_audits_the_tuples_that_landed_before_it_fails(audit_rows: list[logging.LogRecord]) -> None:
+def test_delete_tuples_audits_the_tuples_that_landed_before_it_fails(caplog: pytest.LogCaptureFixture) -> None:
     """SKG-02: `delete_tuples` deletes one tuple per write and raises from INSIDE that loop.
 
     The tuple that WAS removed is gone from OpenFGA whatever happens next, so the trail owes an
@@ -92,7 +67,7 @@ def test_delete_tuples_audits_the_tuples_that_landed_before_it_fails(audit_rows:
         ClientTuple(user="user:alice", relation="owner", object="table:t"),
         ClientTuple(user="user:bob", relation="reader", object="table:t"),
     ]
-    with pytest.raises(ServiceUnavailableError):
+    with caplog.at_level(logging.INFO, logger=AUDIT_LOGGER), pytest.raises(ServiceUnavailableError):
         asyncio.run(
             fga_writes.delete_tuples(
                 _client(_FlakyDeleteClient()),
@@ -103,7 +78,7 @@ def test_delete_tuples_audits_the_tuples_that_landed_before_it_fails(audit_rows:
             )
         )
 
-    removed = [r for r in audit_rows if getattr(r, "audit.action", None) == "access_tuple_delete"]
+    removed = [r for r in caplog.records if r.name == AUDIT_LOGGER and getattr(r, "audit.action", None) == "access_tuple_delete"]
     assert [getattr(r, "audit.grantee") for r in removed] == ["user:alice"], (
         "the tuple OpenFGA confirmed removed must be audited even though a later tuple failed"
     )

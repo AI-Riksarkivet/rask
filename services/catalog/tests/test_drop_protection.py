@@ -47,6 +47,7 @@ from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import location_claims, protection
 from lakehouse.storage.options import StorageOptions
+from tests.catalog_settings import catalog_settings
 from tests.unit.named_resolver import door_resolver
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
@@ -74,14 +75,7 @@ def _settings(tmp_path: Any, *, grace_days: int = 0) -> Settings:
     """``grace_days=0`` is also the SHIPPED default (#75): recoverable drops are opt-in, because a
     grace period changes what `drop_table` means for every existing caller. The trash tests below
     pass it explicitly, which is exactly how a deployment turns the feature on."""
-    data: dict[str, object] = {
-        "trash_grace_days": grace_days,
-        "control_root": f"file://{tmp_path}",
-        "s3_access_key_id": "x",
-        "s3_secret_access_key": "x",
-        "s3_endpoint_url": "http://localhost:9",
-    }
-    return Settings.model_validate(data)
+    return catalog_settings(trash_grace_days=grace_days, control_root=f"file://{tmp_path}", s3_endpoint_url="http://localhost:9")
 
 
 def _uuid(canonical: str) -> str:

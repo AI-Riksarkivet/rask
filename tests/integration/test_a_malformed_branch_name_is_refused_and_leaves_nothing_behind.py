@@ -21,25 +21,18 @@ walk one path through the catalog and a different rule each through pylance's va
 it validates on any one rule fails here.
 """
 
-import io
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 TABLE = "lance_catalog$b1$t"
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
 
 
 def _create(client: TestClient, name: str) -> tuple[int, int | None]:
@@ -76,7 +69,7 @@ def _branch_objects(table_dir: Path) -> list[str]:
 def test_a_malformed_branch_name_is_refused_on_every_try_and_leaves_nothing_behind(real_ns_client: TestClient, name: str, collapses_to: str) -> None:
     rows = pa.table({"id": pa.array(range(3), pa.int64())})
     assert real_ns_client.post("/v1/namespace/lance_catalog$b1/create", json={}).status_code == 200
-    assert real_ns_client.post(f"/v1/table/{TABLE}/create", content=_ipc(rows), headers=ARROW).status_code == 200
+    assert real_ns_client.post(f"/v1/table/{TABLE}/create", content=encode_arrow_stream(rows), headers=ARROW).status_code == 200
     # The described location is a `file://` URI; the table's directory is its path.
     table_dir = Path(urlsplit(real_ns_client.post(f"/v1/table/{TABLE}/describe", json={}).json()["table_uri"]).path)
     client = TestClient(real_ns_client.app, raise_server_exceptions=False)

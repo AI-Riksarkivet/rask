@@ -29,6 +29,8 @@ from catalog.services import storage_probe
 from catalog.services.vend_probe import CAS_CHECK, SCOPE_CHECK, STORE_ANSWERED, ProbeCheck
 from lakehouse.records.warehouse_records import WarehouseRecord
 from lakehouse.storage.credential import S3KeyPair
+from tests.callers import person
+from tests.catalog_settings import catalog_settings, governed_settings
 from tests.store_answers import answered
 
 
@@ -350,9 +352,7 @@ class TestTheDoorGatesBeforeItWrites:
 
     @staticmethod
     def _settings() -> Any:
-        from catalog.core.config import Settings
-
-        return Settings(s3_access_key_id="k", s3_secret_access_key="s")
+        return catalog_settings()
 
     @pytest.mark.parametrize(
         ("held", "admitted"),
@@ -373,23 +373,11 @@ class TestTheDoorGatesBeforeItWrites:
         a member, the rung below, is answered exactly what a missing warehouse answers and the probe never writes."""
         from lance_namespace import TableNotFoundError
 
-        from catalog.core.config import Settings
         from lakehouse.governed import fga_provision
 
         if held is not None:
             openfga_store.write(("user:dex~user-1", held, "project:acme"))
-        settings = Settings.model_validate(
-            {
-                "fga_enabled": True,
-                "oidc_enabled": True,
-                "oidc_issuer": "https://dex.test/dex",
-                "oidc_audience": "lance-catalog",
-                "oidc_idp_id": "dex",
-                "oidc_connectors": {"local": "dex"},
-                "s3_access_key_id": "k",
-                "s3_secret_access_key": "s",
-            }
-        )
+        settings = governed_settings(oidc_issuer="https://dex.test/dex", oidc_audience="lance-catalog")
         probed: list[str] = []
         monkeypatch.setattr(storage_probe, "run_scope_probe", lambda *a, **k: probed.append("ran") or [])
 
@@ -400,7 +388,7 @@ class TestTheDoorGatesBeforeItWrites:
                 async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
                     try:
                         await endpoint.validate_warehouse_credentials(
-                            context=AuthzContext(client=client, settings=settings, token=_token()), warehouse_id="wh", vendor=_Vendor(credentials=None)
+                            context=AuthzContext(client=client, settings=settings, token=person("user-1")), warehouse_id="wh", vendor=_Vendor(credentials=None)
                         )
                     except TableNotFoundError as refused:
                         return str(refused)
@@ -433,18 +421,8 @@ class TestTheDoorGatesBeforeItWrites:
         monkeypatch.setattr(storage_probe, "run_scope_probe", _probe)
 
         report = await endpoint.validate_warehouse_credentials(
-            context=AuthzContext(client=None, settings=self._settings(), token=_token()), warehouse_id="wh", vendor=_Vendor(credentials=None)
+            context=AuthzContext(client=None, settings=self._settings(), token=person("user-1")), warehouse_id="wh", vendor=_Vendor(credentials=None)
         )
 
         assert seen == [ROOT]
         assert report.enforced is None, "a probe that ran no checks proved nothing, and must not read as healthy"
-
-
-def _token() -> Any:
-    """A verified person, the shape `CurrentToken` resolves to."""
-    from lakehouse.governed.idp_identity import PersonPrincipal
-    from lakehouse.governed.oidc import IDToken
-    from lakehouse.governed.principal import Principal
-
-    claims = IDToken(iss="https://dex.test/dex", sub="user-1", aud="lance-catalog", iat=0, exp=1 << 31)
-    return PersonPrincipal(principal=Principal(idp_id="dex", subject="user-1"), claims=claims)

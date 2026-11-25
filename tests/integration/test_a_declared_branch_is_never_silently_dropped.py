@@ -14,27 +14,20 @@ defect takes; a door that opens its own ref goes through ``DoorTable.open`` and 
 (``tests/integration/test_column_branch.py``).
 """
 
-import io
 from typing import Any
 
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
+
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 _T = "/v1/table/lance_catalog$g1$t"
 _VECTOR = {"single_vector": [0.1, 0.2]}
 _UNSUPPORTED = 0
 _BRANCH_NOT_FOUND = 22
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
 
 
 @pytest.fixture
@@ -49,7 +42,7 @@ def table(real_ns_client: TestClient) -> tuple[TestClient, str]:
             "vec": pa.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]], pa.list_(pa.float32(), 2)),
         }
     )
-    created = client.post(f"{_T}/create?mode=overwrite", content=_ipc(rows), headers={"content-type": "application/vnd.apache.arrow.stream"})
+    created = client.post(f"{_T}/create?mode=overwrite", content=encode_arrow_stream(rows), headers={"content-type": ARROW_STREAM_MEDIA_TYPE})
     assert created.status_code == 200, created.text
     described = client.post(f"{_T}/describe", json={})
     assert described.status_code == 200, described.text

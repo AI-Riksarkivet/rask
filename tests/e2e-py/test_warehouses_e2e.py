@@ -34,13 +34,15 @@ import lance_namespace as ln
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
+from byo_scenario import CATALOG, DEX, Identity, ok
 from lance_namespace import ErrorCode
 from pydantic import BaseModel, ConfigDict
 from refusals import assert_refused, body_of, described
-from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
+from scratch_tenant import Tenant, provisioned
 from store_identity import store_options
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.problems.envelope import PROBLEM_JSON
 from lakehouse.storage.options import s3_filesystem
 
@@ -110,7 +112,7 @@ def same_names(tenant: Tenant, second_warehouse: str) -> SameNames:
     """`sales$t` in each warehouse, one row in the first and two in the second, made by the estate admin, with `reader`
     on the first's `sales` granted to the tenant's job identity and on the second's to the other person. The second
     warehouse's delete takes its table; the tenant's teardown drops the first's."""
-    admin, other = tenant.admin, Identity(OTHER_USER)
+    admin, other = tenant.admin, Identity.person(OTHER_USER)
     readers = {tenant.project: tenant.job, second_warehouse: other}
     for rows, (warehouse, reader) in enumerate(readers.items(), start=1):
         namespace = f"{warehouse}${SAME_NAME}"
@@ -178,7 +180,7 @@ def test_a_caller_holding_nothing_on_a_warehouse_is_answered_alike_for_any_name_
     sent = {"held": held, "absent": f"{same_names.second}${SAME_NAME}$absent", "no-warehouse": f"{tenant.project}-none${SAME_NAME}$t"}
     admin = dict(tenant.admin.http.headers)
     standing = described(CATALOG, held, admin)
-    foreign = {standing["location"], standing["properties"]["rask.uuid"], tenant.admin.principal, same_names.readers[same_names.second].principal}
+    foreign = {standing["location"], standing["properties"][UUID_PROPERTY], tenant.admin.principal, same_names.readers[same_names.second].principal}
 
     answers = {
         case: assert_refused(

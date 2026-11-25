@@ -13,7 +13,6 @@ backend, and survival is read from a cold interpreter: a reclaim's damage shows 
 the handle that did it.
 """
 
-import io
 import subprocess
 import sys
 import time
@@ -23,14 +22,14 @@ from urllib.parse import urlsplit
 
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 TABLE = "lance_catalog$b1$t"
 
 
@@ -38,18 +37,11 @@ def _rows(n: int) -> pa.Table:
     return pa.table({"id": pa.array(range(n), pa.int64())})
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
-
-
 @pytest.fixture
 def legacy(real_ns_client: TestClient) -> tuple[TestClient, str]:
     """``a`` cut from main and moved on, and ``a/_versions`` cut from main v1 so its numbers sit below a's."""
     assert real_ns_client.post("/v1/namespace/lance_catalog$b1/create", json={}).status_code == 200
-    assert real_ns_client.post(f"/v1/table/{TABLE}/create?mode=overwrite", content=_ipc(_rows(3)), headers=ARROW).status_code == 200
+    assert real_ns_client.post(f"/v1/table/{TABLE}/create?mode=overwrite", content=encode_arrow_stream(_rows(3)), headers=ARROW).status_code == 200
     location = real_ns_client.post(f"/v1/table/{TABLE}/describe", json={}).json()["table_uri"]
     lance.write_dataset(_rows(3), location, mode="append")
     lance.dataset(location).create_branch("a").insert(_rows(2))

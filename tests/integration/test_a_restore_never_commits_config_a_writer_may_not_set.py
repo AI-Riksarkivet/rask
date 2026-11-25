@@ -8,24 +8,16 @@ store; restoring it would commit them again. Driven through the real catalog app
 keyed version written by pylance at the table's own location.
 """
 
-import io
-
 import lance
-import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+from tests.governed_catalog import ROWS
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 TABLE = "lance_catalog$lh538$t"
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
 
 
 @pytest.mark.parametrize(
@@ -37,7 +29,7 @@ def _ipc(table: pa.Table) -> bytes:
 )
 def test_a_restore_of_a_version_carrying_refused_config_is_refused_and_moves_nothing(real_ns_client: TestClient, config: dict[str, str | None]) -> None:
     assert real_ns_client.post("/v1/namespace/lance_catalog$lh538/create", json={}).status_code == 200
-    created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=_ipc(pa.table({"id": pa.array([1, 2], pa.int64())})), headers=ARROW)
+    created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=ROWS, headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
     lance.dataset(location).update_config(config)

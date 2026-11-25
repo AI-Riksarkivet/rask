@@ -40,7 +40,6 @@ import pytest
 from fastapi.testclient import TestClient
 from lance.arrow import bfloat16_array
 from lance_namespace import CreateNamespaceRequest, DescribeTableRequest, connect
-from moto.server import ThreadedMotoServer
 from pydantic import BaseModel, ConfigDict
 
 from catalog.core.identifiers import with_minted_uuid
@@ -50,7 +49,8 @@ from lakehouse.storage.options import StorageOptions
 from lineage.services.provenance import ProvenanceStore
 from tests import seeding
 from tests.integration import store_requests
-from tests.integration.lineage_app import ensure_tables, serve
+from tests.integration.lineage_app import ensure_tables
+from tests.live_server import serve
 
 
 #: Where the table registered at a nested location lives, relative to its warehouse's root. A non-ASCII segment, which
@@ -278,15 +278,12 @@ def test_a_door_answers_a_table_by_its_own_storage(
 
 
 @pytest.fixture
-def feed_on_a_counted_store(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ProvenanceStore, store_requests.CountedStore, str]]:
+def feed_on_a_counted_store(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[ProvenanceStore, store_requests.CountedStore, str]]:
     """Lineage's store over the live catalog, whose bucket on a moto S3 server it reaches through a proxy counting what
     the store is asked; answers the store, the count, and where the feed table lives."""
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    s3 = boto3.client("s3", endpoint_url=f"http://{host}:{port}", region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test")
+    s3 = boto3.client("s3", endpoint_url=moto_url, region_name="us-east-1", aws_access_key_id="test", aws_secret_access_key="test")
     s3.create_bucket(Bucket="counted")
-    with store_requests.counted(f"http://{host}:{port}") as store:
+    with store_requests.counted(moto_url) as store:
         for key, value in {
             "LANCE_REST_IMPL": "dir",
             "LANCE_REST_ROOT": "s3://counted",
@@ -308,7 +305,6 @@ def feed_on_a_counted_store(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[P
                 feed = catalog.post("/v1/table/lance_catalog$provenance$events/describe", json={"vend_credentials": False}).json()["location"]
             yield provenance, store, feed
         get_settings.cache_clear()
-    server.stop()
 
 
 def test_lineages_read_of_its_feeds_version_lists_the_feeds_versions_once(

@@ -22,6 +22,7 @@ from lakehouse.records import location_claims, maintenance_due
 from lakehouse.records.maintenance_due import DUE_PREFIX, CompactionDue, DueRecord, write_due
 from lakehouse.storage.options import StorageOptions
 from tests.app_state import app_of
+from tests.catalog_settings import governed_settings
 from tests.governed_catalog import GovernedCatalog
 from tests.integration.openfga_grants import Grants, act_as
 
@@ -32,20 +33,7 @@ DUE = CompactionDue(fragments=5, candidate_fragments=5, tasks=1)
 
 def _governed(client: TestClient, tmp_path: Path) -> tuple[Settings, Grants]:
     """The catalog with OIDC and FGA on, its control root ``tmp_path``, and the in-memory OpenFGA store it asks."""
-    settings = Settings.model_validate(
-        {
-            "root": str(tmp_path),
-            "oidc_enabled": True,
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "oidc_issuer": "https://idp.example",
-            "oidc_audience": "lance",
-            "fga_enabled": True,
-            "fga_api_url": "http://openfga:8080",
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
+    settings = governed_settings(root=str(tmp_path))
     app_of(client).dependency_overrides[request_settings] = lambda: settings
     app_of(client).state.oidc = MagicMock()
     grants = Grants()

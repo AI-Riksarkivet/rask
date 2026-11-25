@@ -14,26 +14,18 @@ imagined. It also means a pylance bump that rewords a message reds a test here i
 returning these paths to 500s.
 """
 
-import io
-
 import httpx2
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 #: Lance appends the source location of the Rust frame that raised. It is the build path of a vendored
 #: library and must never reach a caller.
 RUST_PATH_FRAGMENT = ".rs:"
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
 
 
 @pytest.fixture
@@ -41,7 +33,7 @@ def table(real_ns_client: TestClient) -> TestClient:
     """A real two-column table at ``c1$t`` — ``id: int64``, ``v: string``."""
     assert real_ns_client.post("/v1/namespace/lance_catalog$c1/create", json={}).status_code == 200
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]})
-    created = real_ns_client.post("/v1/table/lance_catalog$c1$t/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
+    created = real_ns_client.post("/v1/table/lance_catalog$c1$t/create?mode=overwrite", content=encode_arrow_stream(rows), headers=ARROW)
     assert created.status_code == 200, created.text
     return real_ns_client
 

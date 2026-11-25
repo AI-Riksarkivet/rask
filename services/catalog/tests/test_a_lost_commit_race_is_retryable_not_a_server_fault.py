@@ -38,6 +38,7 @@ from catalog.services.tables.commits import committed_manifest_digest
 from catalog.services.tables.creation import create_table
 from catalog.services.tables.schema import add_columns, drop_columns
 from catalog.services.tables.writes import delete_from_table, insert_into_table, restore, update_table
+from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.records import base_registry, commit_records, file_identities
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
@@ -245,13 +246,6 @@ def _resolved(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
     return door_table(ns, ClaimStore(control_root=str(tmp_path / "control")), APPENDED_TO, announces=lambda _operation: True)
 
 
-def _ipc(rows: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, rows.schema) as writer:
-        writer.write_table(rows)
-    return sink.getvalue().to_pybytes()
-
-
 def _row(row: int) -> pa.Table:
     """One appended row, lacking the nullable columns a change adds or drops: Lance fills them null (pylance 13.0.0)."""
     return pa.table({"id": pa.array([row], pa.int64()), "v": pa.array([row], pa.int64())})
@@ -318,7 +312,7 @@ def test_a_commit_lands_while_insert_appends_in_a_tight_loop_and_every_append_la
                     writer,
                     StorageOptions(),
                     InsertIntoTableRequest(id=APPENDED_TO, mode="append"),
-                    data=_ipc(_row(row)),
+                    data=encode_arrow_stream(_row(row)),
                     max_bytes=1 << 20,
                     transaction_properties=STAMP,
                 )

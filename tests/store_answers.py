@@ -14,6 +14,11 @@ __all__ = ["answered"]
 
 
 def answered(status: int, code: str, *, operation: str = "PutObject") -> ClientError:
-    """What the S3 client raises for a store answering ``operation`` with ``status`` and the error ``code``."""
-    answer: Any = {"Error": {"Code": code, "Message": code}, "ResponseMetadata": {"HTTPStatusCode": status}}
+    """What the S3 client raises for a store answering ``operation`` with ``status`` and the error ``code``.
+
+    Every ``ResponseMetadata`` key is filled, as botocore fills each of them on a real answer: one holding only the
+    status a reader reads today would let a reader that grows a ``RetryAttempts`` read pass here and fail on the estate.
+    """
+    metadata = {"RequestId": "req-test", "HostId": "host-test", "HTTPStatusCode": status, "HTTPHeaders": {}, "RetryAttempts": 0}
+    answer: Any = {"Error": {"Code": code, "Message": code}, "ResponseMetadata": metadata}
     return ClientError(answer, operation)

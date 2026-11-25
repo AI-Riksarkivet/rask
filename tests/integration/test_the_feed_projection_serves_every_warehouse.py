@@ -36,6 +36,7 @@ from lakehouse.governed import fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.fga_ids import user_object
 from lakehouse.governed.machine_identity import ServicePrincipal
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lineage.api.security import authenticate
 from lineage.api.v1.router import api_router
@@ -204,8 +205,8 @@ def test_an_outside_producers_run_is_recorded_by_its_tables_uuid_not_the_one_it_
         with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
             assert catalog.post("/v1/namespace/lance_catalog$gold/create", json={}).status_code == 200
             assert catalog.post("/v1/table/lance_catalog$gold$catalog/declare", json={}).status_code == 200
-            table_uuid = catalog.post("/v1/table/lance_catalog$gold$catalog/describe", json={}).json()["properties"]["rask.uuid"]
-            namespace_uuid = catalog.post("/v1/namespace/lance_catalog$gold/describe", json={}).json()["properties"]["rask.uuid"]
+            table_uuid = catalog.post("/v1/table/lance_catalog$gold$catalog/describe", json={}).json()["properties"][UUID_PROPERTY]
+            namespace_uuid = catalog.post("/v1/namespace/lance_catalog$gold/describe", json={}).json()["properties"][UUID_PROPERTY]
         with httpx.Client(base_url=lineage_url, timeout=60) as lineage:
             assert lineage.post("/api/v1/lineage", json=event).status_code == 201
             recorded = lineage.get("/events", params={"table": "lance_catalog$gold$catalog"}).json()["events"]

@@ -11,25 +11,22 @@ Driven through the real catalog app on a real `dir` namespace. The table is prot
 and its history is read back through the list doors, so each door is shown to remove its target and nothing else.
 """
 
-import io
 from typing import Any
 
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 TABLE = "lance_catalog$lh300$t"
 
 
 def _ipc(*ids: int) -> bytes:
     rows = pa.table({"id": pa.array(ids, pa.int64())})
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, rows.schema) as writer:
-        writer.write_table(rows)
-    return sink.getvalue()
+    return encode_arrow_stream(rows)
 
 
 @pytest.fixture

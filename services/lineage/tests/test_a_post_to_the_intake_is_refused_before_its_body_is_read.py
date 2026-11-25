@@ -11,16 +11,15 @@ once, since the claim is about the door.
 
 import json
 import socket
-import threading
-import time
 from collections.abc import Iterator
 from typing import Any
+from urllib.parse import urlsplit
 
 import pytest
-import uvicorn
 
 from lineage import main
 from lineage.core.config import get_settings
+from tests.live_server import serve
 
 
 #: How long a client waits for an answer to its headers alone; a server waiting for the body sends none.
@@ -50,17 +49,10 @@ def lineage_port(dex_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[i
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
     monkeypatch.setattr(main.ProvenanceStore, "from_settings", lambda _settings: _Feed())
-    server = uvicorn.Server(uvicorn.Config(main.app, host="127.0.0.1", port=0, lifespan="on", log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started:
-        if not thread.is_alive() or time.monotonic() > deadline:
-            raise RuntimeError("lineage's uvicorn did not start")
-        time.sleep(0.01)
-    yield int(server.servers[0].sockets[0].getsockname()[1])
-    server.should_exit = True
-    thread.join(timeout=10)
+    with serve(main.app) as url:
+        port = urlsplit(url).port
+        assert port is not None, url
+        yield port
 
 
 def _answer_to_the_headers_alone(port: int, content_length: int) -> int | None:

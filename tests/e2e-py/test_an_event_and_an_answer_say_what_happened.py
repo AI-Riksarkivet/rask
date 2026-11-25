@@ -14,8 +14,8 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
-from byo_scenario import LINEAGE, SETTLE_SECONDS, lance_facet
-from scratch_tenant import CATALOG, DEX, Tenant, ok, provisioned
+from byo_scenario import CATALOG, DEX, LINEAGE, SETTLE_SECONDS, lance_facet, ok
+from scratch_tenant import Tenant, provisioned
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 

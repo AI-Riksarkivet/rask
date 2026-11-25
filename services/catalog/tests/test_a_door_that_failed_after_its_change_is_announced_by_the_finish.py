@@ -23,12 +23,13 @@ from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import NO_FIELDS, EmitFields
 from catalog.services import announcement_intents
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.events.control_events import CatalogControlEvent
+from lakehouse.naming import UUID_PROPERTY
+from tests.governed_catalog import ROWS
 
 
 ADMIN, MEMBER, RECLAIMER = "alice", "carol", "maintenance"
-_ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
 
 
 class _Stopped(Exception):
@@ -158,7 +159,7 @@ def _declared(catalog: Any) -> None:  # noqa: ANN401 — the conftest's Governed
 
 
 def _created(catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCatalog
-    made = catalog.client.post("/v1/table/lance_catalog$db$t/create", content=_ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    made = catalog.client.post("/v1/table/lance_catalog$db$t/create", content=ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE})
     assert made.status_code == 200, made.text
 
 
@@ -173,7 +174,7 @@ def _nested(catalog: Any) -> None:  # noqa: ANN401 — the conftest's GovernedCa
     made = catalog.client.post("/v1/namespace/lance_catalog$db$sub/create", json={}, headers=catalog.bearer(ADMIN))
     assert made.status_code == 200, made.text
     made = catalog.client.post(
-        "/v1/table/lance_catalog$db$sub$t/create", content=_ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE}
+        "/v1/table/lance_catalog$db$sub$t/create", content=ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE}
     )
     assert made.status_code == 200, made.text
 
@@ -192,7 +193,7 @@ def _in_a_warehouse(catalog: Any) -> None:  # noqa: ANN401 — the conftest's Go
     catalog.store.write(("project:acme", "project", "warehouse:wh-a"))
     made = catalog.client.post("/v1/namespace/wh-a$db/create", json={}, headers=catalog.bearer(ADMIN))
     assert made.status_code == 200, made.text
-    made = catalog.client.post("/v1/table/wh-a$db$t/create", content=_ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    made = catalog.client.post("/v1/table/wh-a$db$t/create", content=ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE})
     assert made.status_code == 200, made.text
 
 
@@ -387,7 +388,7 @@ def test_a_deregister_of_a_table_a_stale_trash_record_names_is_announced_and_kee
     catalog, lanes = estate
     _created(catalog)
     described = catalog.client.post("/v1/table/lance_catalog$db$t/describe", json={}, headers=catalog.bearer(ADMIN)).json()
-    uuid, location = described["properties"]["rask.uuid"], described["location"]
+    uuid, location = described["properties"][UUID_PROPERTY], described["location"]
     assert catalog.client.post("/v1/table/lance_catalog$db$t/drop", headers=catalog.bearer(ADMIN)).status_code == 200
     with monkeypatch.context() as during:
         during.setattr(trash, "clear", _ended)
@@ -465,7 +466,7 @@ def test_a_filing_whose_evidence_the_catalog_cannot_read_exactly_is_removed_unre
 
     catalog, lanes = estate
     _created(catalog)
-    uuid = catalog.client.post("/v1/table/lance_catalog$db$t/describe", json={}, headers=catalog.bearer(ADMIN)).json()["properties"]["rask.uuid"]
+    uuid = catalog.client.post("/v1/table/lance_catalog$db$t/describe", json={}, headers=catalog.bearer(ADMIN)).json()["properties"][UUID_PROPERTY]
     event = CatalogControlEvent(action="table_deregistered", object_type="table", object_id=f"table:{uuid}", object_name="lance_catalog$db$t")
     filed = Intent(
         door="deregister_table",
@@ -556,7 +557,7 @@ def test_a_recoverable_drop_that_stopped_is_announced_only_where_it_detached_the
     catalog, lanes = estate
     _created(catalog)
     described = catalog.client.post("/v1/table/lance_catalog$db$t/describe", json={}, headers=catalog.bearer(ADMIN)).json()
-    uuid, location = described["properties"]["rask.uuid"], described["location"]
+    uuid, location = described["properties"][UUID_PROPERTY], described["location"]
     lanes.markers.clear()
     lanes.events.clear()
     detach = native.call
@@ -647,7 +648,7 @@ def test_a_recoverable_drop_that_stalled_past_its_fence_acts_only_while_it_holds
     catalog, lanes = estate
     _created(catalog)
     described = catalog.client.post("/v1/table/lance_catalog$db$t/describe", json={}, headers=catalog.bearer(ADMIN)).json()
-    uuid, location = described["properties"]["rask.uuid"], described["location"]
+    uuid, location = described["properties"][UUID_PROPERTY], described["location"]
     lanes.events.clear()
     settings = get_settings()
     root, so = settings.registry_root, settings.storage_options()
@@ -751,11 +752,11 @@ def test_a_finish_pass_finishes_every_filing_behind_one_it_cannot_judge(
     uuids, locations = [], []
     for name in ("t", "u"):
         made = catalog.client.post(
-            f"/v1/table/lance_catalog$db${name}/create", content=_ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE}
+            f"/v1/table/lance_catalog$db${name}/create", content=ROWS, headers={**catalog.bearer(ADMIN), "Content-Type": ARROW_STREAM_MEDIA_TYPE}
         )
         assert made.status_code == 200, made.text
         described = catalog.client.post(f"/v1/table/lance_catalog$db${name}/describe", json={}, headers=catalog.bearer(ADMIN)).json()
-        uuids.append(described["properties"]["rask.uuid"])
+        uuids.append(described["properties"][UUID_PROPERTY])
         locations.append(described["location"])
         with monkeypatch.context() as during:
             during.setattr(trash, "stamp_detached", _ended)

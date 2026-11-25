@@ -34,6 +34,7 @@ import pytest
 from lance_namespace import LanceNamespace
 
 from catalog.services.idempotency_records import PREFIX, InFlightError, KeyBinding, KeyReusedError, Replay, TakenOver, claim, reclaim, record_outcome, release
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage import conditional_records
 from lakehouse.storage.errors import StoreUnansweredError
 from lakehouse.storage.options import StorageOptions
@@ -251,7 +252,7 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
     arrow = {**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE}
     assert catalog.client.post(f"{TABLE}/create", content=_rows(1), headers=arrow).status_code == 200
     assert catalog.client.post(f"{TABLE}/insert", params={"mode": "append"}, content=_rows(2), headers=arrow).status_code == 200
-    uuid = catalog.client.post(f"{TABLE}/describe", json={}, headers=alice).json()["properties"]["rask.uuid"]
+    uuid = catalog.client.post(f"{TABLE}/describe", json={}, headers=alice).json()["properties"][UUID_PROPERTY]
     table = "/v1/table/lance_catalog$db$fresh" if door == "create" else TABLE
 
     async def lost(*_args: object, **_kwargs: object) -> None:

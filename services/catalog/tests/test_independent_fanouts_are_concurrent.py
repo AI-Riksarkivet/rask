@@ -39,6 +39,7 @@ from lakehouse.events.control_events import ControlUuids
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import location_claims, protection, trash
 from lakehouse.storage.options import StorageOptions
+from tests.catalog_settings import catalog_settings
 
 
 class _Tracker:
@@ -62,14 +63,7 @@ class _Tracker:
 
 
 def _settings(tmp_path: Path) -> Settings:
-    return Settings.model_validate(
-        {
-            "root": f"file://{tmp_path}",
-            "registry_root": f"file://{tmp_path}",
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
+    return catalog_settings(root=f"file://{tmp_path}", registry_root=f"file://{tmp_path}")
 
 
 def _slow(tracker: _Tracker, result: Any = None):

@@ -19,11 +19,11 @@ from typing import Any
 
 import httpx2
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 from moto.sts import models as sts_models
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.storage import store_session
 from tests.app_state import app_of
@@ -31,18 +31,11 @@ from tests.app_state import app_of
 
 #: The account moto files every role and session under.
 ACCOUNT = "123456789012"
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 ROWS = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]})
 #: What the catalog asks for its own IO: an hour, so a session it renews at the half still has thirty minutes for a
 #: request already holding it.
 SESSION_SECONDS = 3600
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 class _Clock:
@@ -149,7 +142,7 @@ def _a_namespace_create(rig: _Rig) -> Callable[[], httpx2.Response]:
 def _a_table_create(rig: _Rig) -> Callable[[], httpx2.Response]:
     namespace = f"lance_catalog$ses{uuid.uuid4().hex[:10]}"
     assert rig.catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
-    return lambda: rig.catalog.post(f"/v1/table/{namespace}${uuid.uuid4().hex[:10]}/create", content=_ipc(ROWS), headers=ARROW)
+    return lambda: rig.catalog.post(f"/v1/table/{namespace}${uuid.uuid4().hex[:10]}/create", content=encode_arrow_stream(ROWS), headers=ARROW)
 
 
 def _a_bucket_it_provisions(rig: _Rig) -> Callable[[], httpx2.Response]:
@@ -193,7 +186,7 @@ def test_a_vend_is_a_session_of_its_own_named_for_the_caller(sessions: _Rig) -> 
     """What the session may reach is pinned per rung by `tests/integration/test_a_write_vend_reaches_only_what_its_rung_may_change.py`."""
     table = f"lance_catalog$ses{uuid.uuid4().hex[:10]}$t"
     assert sessions.catalog.post(f"/v1/namespace/{table.rpartition('$')[0]}/create", json={}).status_code == 200
-    assert sessions.catalog.post(f"/v1/table/{table}/create", content=_ipc(ROWS), headers=ARROW).status_code == 200
+    assert sessions.catalog.post(f"/v1/table/{table}/create", content=encode_arrow_stream(ROWS), headers=ARROW).status_code == 200
     from catalog.api.security import authenticate
 
     app_of(sessions.catalog).dependency_overrides[authenticate] = lambda: ServicePrincipal.for_account("system:serviceaccount:rask:rask-sa-maintenance")
@@ -232,7 +225,7 @@ def test_a_vend_may_use_the_configured_kms_key_and_no_other(sessions: _Rig, tier
     """
     table = f"lance_catalog$ses{uuid.uuid4().hex[:10]}$t"
     assert sessions.catalog.post(f"/v1/namespace/{table.rpartition('$')[0]}/create", json={}).status_code == 200
-    assert sessions.catalog.post(f"/v1/table/{table}/create", content=_ipc(ROWS), headers=ARROW).status_code == 200
+    assert sessions.catalog.post(f"/v1/table/{table}/create", content=encode_arrow_stream(ROWS), headers=ARROW).status_code == 200
 
     vended = sessions.catalog.post(f"/management/v1/table/{table}/credentials", params={"tier": tier})
 
@@ -256,7 +249,7 @@ def test_a_vend_whose_policy_sts_would_refuse_is_refused_naming_why(sessions: _R
 
     table = f"lance_catalog$ses{uuid.uuid4().hex[:10]}$t"
     assert sessions.catalog.post(f"/v1/namespace/{table.rpartition('$')[0]}/create", json={}).status_code == 200
-    assert sessions.catalog.post(f"/v1/table/{table}/create", content=_ipc(ROWS), headers=ARROW).status_code == 200
+    assert sessions.catalog.post(f"/v1/table/{table}/create", content=encode_arrow_stream(ROWS), headers=ARROW).status_code == 200
     exchanged = len(sessions.sessions())
     monkeypatch.setattr(vending, "SESSION_POLICY_LIMIT", 100)
 

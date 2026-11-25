@@ -4,7 +4,6 @@ A warehouse is the first segment of every identifier, so ``wh-a$bronze$clips`` i
 root and its own directory catalog. The control-plane doors (create, list, get) are ``test_warehouses.py``'s.
 """
 
-import io
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -14,22 +13,16 @@ import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, connect
-from moto.server import ThreadedMotoServer
 
 from catalog.core.identifiers import with_minted_uuid
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
 from tests.integration import store_requests
 
 
-ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
-
-
-def _arrow(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with pa.ipc.new_stream(sink, table.schema) as w:
-        w.write_table(table)
-    return sink.getvalue()
+ARROW_STREAM = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 
 @pytest.fixture
@@ -78,7 +71,7 @@ def _register_warehouse(registry: Path, warehouse_root: Path, *, wid: str = "wh-
 
 
 def _created(client: TestClient) -> int:
-    return client.post("/v1/table/wh-a$bronze$clips/create", content=_arrow(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM).status_code
+    return client.post("/v1/table/wh-a$bronze$clips/create", content=encode_arrow_stream(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM).status_code
 
 
 def _declared(client: TestClient) -> int:
@@ -107,7 +100,7 @@ def test_a_table_the_catalog_makes_lives_in_its_warehouse_root_under_its_uuid(
     described = client.post("/v1/table/wh-a$bronze$clips/describe", json={})
 
     assert described.status_code == 200, described.text
-    table_uuid = described.json()["properties"]["rask.uuid"]
+    table_uuid = described.json()["properties"][UUID_PROPERTY]
     assert Path(described.json()["location"].removeprefix("file://")) == warehouse_root / table_uuid, described.json()
     assert (_directories(warehouse_root), _directories(estate_root)) == ([table_uuid], [])
 
@@ -121,7 +114,7 @@ def test_two_warehouses_each_hold_the_same_names_and_no_binding_is_recorded(rout
     _register_warehouse(registry, warehouse_root)
     _register_warehouse(registry, other_root, wid="wh-b")
     for warehouse, rows in (("wh-a", [1]), ("wh-b", [1, 2])):
-        made = client.post(f"/v1/table/{warehouse}$bronze$t/create", content=_arrow(pa.table({"id": rows})), headers=ARROW_STREAM)
+        made = client.post(f"/v1/table/{warehouse}$bronze$t/create", content=encode_arrow_stream(pa.table({"id": rows})), headers=ARROW_STREAM)
         assert made.status_code == 200, made.text
 
     described = {warehouse: client.post(f"/v1/table/{warehouse}$bronze$t/describe", json={}).json() for warehouse in ("wh-a", "wh-b")}
@@ -141,7 +134,7 @@ def test_deactivate_quarantines_then_activate_restores(routing: tuple[TestClient
     def _create(name: str) -> int:
         return client.post(
             f"/v1/table/wh-a$bronze${name}/create?mode=overwrite",
-            content=_arrow(pa.table({"id": [1]})),
+            content=encode_arrow_stream(pa.table({"id": [1]})),
             headers=ARROW_STREAM,
         ).status_code
 
@@ -154,7 +147,7 @@ def test_deactivate_quarantines_then_activate_restores(routing: tuple[TestClient
     assert d.json()["status"] == "deactivated"
     blocked = client.post(
         "/v1/table/wh-a$bronze$t_during/create?mode=overwrite",
-        content=_arrow(pa.table({"id": [1]})),
+        content=encode_arrow_stream(pa.table({"id": [1]})),
         headers=ARROW_STREAM,
     )
     assert blocked.status_code == 403, blocked.text
@@ -178,7 +171,7 @@ def test_an_undropped_namespace_is_rebuilt_in_its_own_warehouse(routing_recovera
     own root: rebuilding there would be a tenant-isolation break with no error, so it is asserted physically."""
     client, estate_root, warehouse_root, registry = routing_recoverable
     _register_warehouse(registry, warehouse_root)
-    created = client.post("/v1/table/wh-a$bronze$clips/create?mode=overwrite", content=_arrow(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM)
+    created = client.post("/v1/table/wh-a$bronze$clips/create?mode=overwrite", content=encode_arrow_stream(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM)
     assert created.status_code == 200, created.text
     dropped = client.post("/v1/namespace/wh-a$bronze/drop", json={"behavior": "cascade"})
     assert dropped.status_code == 200, dropped.text
@@ -205,16 +198,11 @@ def test_a_table_registered_in_a_warehouse_is_then_described(routing: tuple[Test
 
 
 @pytest.fixture
-def registry_store() -> Iterator[store_requests.CountedStore]:
+def registry_store(moto_url: str) -> Iterator[store_requests.CountedStore]:
     """An S3 store holding the bucket ``registry``, behind a proxy counting what reaches it."""
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    url = f"http://{host}:{port}"
-    boto3.client("s3", endpoint_url=url, aws_access_key_id="x", aws_secret_access_key="x", region_name="us-east-1").create_bucket(Bucket="registry")
-    with store_requests.counted(url) as store:
+    boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="x", aws_secret_access_key="x", region_name="us-east-1").create_bucket(Bucket="registry")
+    with store_requests.counted(moto_url) as store:
         yield store
-    server.stop()
 
 
 @pytest.fixture
@@ -237,7 +225,7 @@ def test_a_listing_reads_its_warehouse_record_once(
     client, _estate_root, warehouse_root, registry = routing_on_a_store
     _register_warehouse(registry, warehouse_root, control="s3://registry", options=get_settings().storage_options())
     for name in ("a", "b", "c", "d"):
-        assert client.post(f"/v1/table/wh-a$bronze${name}/create", content=_arrow(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+        assert client.post(f"/v1/table/wh-a$bronze${name}/create", content=encode_arrow_stream(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
     registry_store.taken()
 
     listed = client.get("/v1/namespace/wh-a$bronze/table/list", params={"include_declared": "false"})

@@ -12,7 +12,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from catalog_settings import catalog_settings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import (
@@ -25,11 +24,10 @@ from catalog.api.authz import object_grants
 from catalog.api.dependencies import FgaClientDep, LineageEmitterDep, NamespaceDep, SettingsDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints import versions as version_door
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.storage.options import StorageOptions
+from tests.callers import person
+from tests.catalog_settings import catalog_settings
 
 
 lance = pytest.importorskip("lance")
@@ -43,9 +41,7 @@ def _app(ns: object, monkeypatch: pytest.MonkeyPatch) -> tuple[FastAPI, list[lis
     application.dependency_overrides[SettingsDep.__metadata__[0].dependency] = lambda: settings
     application.dependency_overrides[NamespaceDep.__metadata__[0].dependency] = lambda: ns
     application.dependency_overrides[StorageOptionsDep.__metadata__[0].dependency] = lambda: StorageOptions()
-    application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
-    )
+    application.dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: person("alice")
     application.dependency_overrides[LineageEmitterDep.__metadata__[0].dependency] = lambda: None
     application.dependency_overrides[FgaClientDep.__metadata__[0].dependency] = lambda: None
     seeded: list[list[str]] = []

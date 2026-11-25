@@ -14,13 +14,13 @@ two days on: the one double here.
 from datetime import datetime, timedelta
 from typing import Any
 
-import pyarrow as pa
 import pytest
 
 from catalog.core.config import get_settings as catalog_settings
 from catalog.services.idempotency_records import PREFIX
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.storage import conditional_records, stored_objects
+from tests.governed_catalog import ROWS
 from tests.integration.catalog_and_maintenance import TwoServices, catalog_and_maintenance, scanned
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 
@@ -40,7 +40,7 @@ def test_a_record_past_its_lifetime_is_gone_after_the_daily_scan(moto_url: str, 
         assert both.catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         created = both.catalog.post(
             "/v1/table/lance_catalog$db$t/create",
-            content=encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())})),
+            content=ROWS,
             headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE, "Idempotency-Key": KEY},
         )
         assert created.status_code == 200, created.text

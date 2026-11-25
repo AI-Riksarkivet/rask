@@ -27,7 +27,6 @@ pipeline did and saw while it ran, each commit with the version its write answer
 asserts it afterwards without driving again.
 """
 
-import io
 import json
 import os
 import time
@@ -36,14 +35,18 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
+import boto3
 import lance
 import lance_namespace
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import requests
+from botocore.config import Config
 from credentials import Credential, credential
 from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 from pydantic import BaseModel, Field
+
+from lakehouse.arrow_ipc import encode_arrow_stream
+from lakehouse.storage.options import ENDPOINT
 
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
@@ -61,7 +64,6 @@ SETTLE_SECONDS = float(os.environ.get("LANCE_E2E_SETTLE_SECONDS", "120"))
 #: How long a commit's pass may take to follow it: the first commit of a burst holds its table's pass the commit delay out
 #: (`maintenance.queue.commitPassDelaySeconds`, five minutes by default), then the queue and one pass.
 COMMIT_PASS_SECONDS = float(os.environ.get("LANCE_E2E_COMMIT_PASS_SECONDS", "600"))
-ARROW = "application/vnd.apache.arrow.stream"
 #: The branch the pipeline cuts from silver and commits on.
 STAGING = "staging"
 #: Every request a suite's client sends closes its connection, so no pooled connection is kept to go stale. Through
@@ -122,13 +124,6 @@ def rows_of(ids: range) -> pa.Table:
     return pa.table({"id": pa.array(list(ids), pa.int64()), "payload": pa.array([f"row-{i}" for i in ids])})
 
 
-def arrow_ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
-
-
 class Tenant:
     """The scratch tenant one session drives, and what it must take down again."""
 
@@ -184,6 +179,26 @@ class Tenant:
             if answer.status_code != 200:
                 failed.append(f"{what}: {answer.status_code} {answer.text[:200]}")
         return failed
+
+
+def vended_store(identity: Identity, table_id: list[str]) -> tuple[Any, str, str]:
+    """An S3 client on the credential the table's ``DescribeTable`` vends ``identity``, the table's bucket and its prefix.
+
+    A read-back holds the vended credential and never a root key pair, so what it reads is what that grant reaches.
+    """
+    described = identity.namespace().describe_table(lance_namespace.DescribeTableRequest(id=table_id))
+    vended = described.storage_options or {}
+    bucket, _, prefix = str(described.location).removeprefix("s3://").partition("/")
+    store = boto3.client(
+        "s3",
+        endpoint_url=vended[ENDPOINT],
+        aws_access_key_id=vended["aws_access_key_id"],
+        aws_secret_access_key=vended["aws_secret_access_key"],
+        aws_session_token=vended["aws_session_token"],
+        region_name=vended.get("region", "us-east-1"),
+        config=Config(s3={"addressing_style": "path"}),
+    )
+    return store, bucket, prefix
 
 
 def lance_facet(row: dict[str, Any]) -> dict[str, Any]:
@@ -336,7 +351,7 @@ def drive(tenant: Tenant) -> ScenarioRun:
     first_run = NamedRun(job="byo-silver", inputs=[{"table": bronze_id, "version": bronze_version}])
     silver_start = feed_start(pipeline)
     created = pipeline.namespace(**first_run.context()).create_table(
-        lance_namespace.CreateTableRequest(id=silver_id, mode="create"), arrow_ipc(rows_of(range(8)))
+        lance_namespace.CreateTableRequest(id=silver_id, mode="create"), encode_arrow_stream(rows_of(range(8)))
     )
     tenant.tables.append(silver_table)
     assert created.version is not None, f"silver's create answered version {created.version}"
@@ -346,7 +361,7 @@ def drive(tenant: Tenant) -> ScenarioRun:
     stock.create_table_tag(lance_namespace.CreateTableTagRequest(id=silver_id, tag=READY_TAG, version=created.version))
     second_run = first_run.model_copy(update={"run_id": str(uuid.uuid4())})
     inserted = pipeline.namespace(**second_run.context()).insert_into_table(
-        lance_namespace.InsertIntoTableRequest(id=silver_id, mode="append"), arrow_ipc(rows_of(range(8, 24)))
+        lance_namespace.InsertIntoTableRequest(id=silver_id, mode="append"), encode_arrow_stream(rows_of(range(8, 24)))
     )
     assert inserted.version is not None, f"silver's insert answered version {inserted.version}"
     commits += [

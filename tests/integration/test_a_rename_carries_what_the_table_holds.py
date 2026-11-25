@@ -20,13 +20,12 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
 
-import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 
 from catalog.api.dependencies import request_settings
-from catalog.core.config import get_settings
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import location_claims, maintenance_due, object_records
 from lakehouse.records.maintenance_due import CompactionDue, DueRecord
 from lakehouse.storage.options import StorageOptions
@@ -35,13 +34,14 @@ from maintenance.services.naming import policy_owners
 from maintenance.services.plan import resolve_plan
 from maintenance.services.table_pass import read_for
 from tests.app_state import app_of
+from tests.catalog_settings import governed_settings
+from tests.governed_catalog import ROWS
 from tests.integration.openfga_grants import TupleStore, act_as
 
 
-_ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 #: The control-root registries a table's own records live in.
 _RECORD_PREFIXES = ("_protection", "_policies", "_contracts", "_maintenance_due", "_erasure_obligations")
-#: A contract naming the one column `_ROWS` holds.
+#: A contract naming the one column `ROWS` holds.
 _CONTRACT = {
     "apiVersion": "v3.0.2",
     "kind": "DataContract",
@@ -56,16 +56,7 @@ _CONTRACT = {
 def governed(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Iterator[TupleStore]:
     """The real catalog with OIDC and FGA on, as the person `dex~alice`, over an in-memory tuple store, with one table ``db$src``."""
     app = app_of(real_ns_client)
-    settings = get_settings().model_copy(
-        update={
-            "oidc_enabled": True,
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "oidc_issuer": "https://idp.example",
-            "oidc_audience": "lance",
-            "fga_enabled": True,
-        }
-    )
+    settings = governed_settings()
     app.dependency_overrides[request_settings] = lambda: settings
     monkeypatch.setattr(app.state, "oidc", MagicMock())
     act_as(real_ns_client, "alice")
@@ -85,7 +76,7 @@ def _ok(client: TestClient, path: str, **kwargs: Any) -> dict[str, Any]:  # noqa
 def _create(client: TestClient, table: str, *, namespace: bool = False) -> None:
     if namespace:
         _ok(client, f"/v1/namespace/{table.rsplit('$', 1)[0]}/create", json={})
-    _ok(client, f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    _ok(client, f"/v1/table/{table}/create", content=ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
 
 
 def _protected(client: TestClient, table: str) -> bool:
@@ -98,8 +89,8 @@ def _described(client: TestClient, table: str) -> tuple[str, str]:
     """The table's uuid and location, as DescribeTable answers them."""
     described = _ok(client, f"/v1/table/{table}/describe", json={})
     properties = described.get("properties") or {}
-    assert "rask.uuid" in properties, f"{table} answers no uuid: {properties}"
-    return str(properties["rask.uuid"]), str(described["location"])
+    assert UUID_PROPERTY in properties, f"{table} answers no uuid: {properties}"
+    return str(properties[UUID_PROPERTY]), str(described["location"])
 
 
 def _record_keys(root: Path) -> set[str]:
@@ -138,7 +129,7 @@ def test_a_rename_keeps_the_tables_protection_policy_and_contract_and_writes_no_
     assert readings is not None, "maintenance cannot read what a pass on the renamed table reads"
     owners = policy_owners(readings.table_ids, "lance_catalog$db$dst", claims=claims)
     assert owners is not None, "maintenance reads no uuid for the renamed table"
-    namespace = _ok(real_ns_client, "/v1/namespace/lance_catalog$db/describe")["properties"]["rask.uuid"]
+    namespace = _ok(real_ns_client, "/v1/namespace/lance_catalog$db/describe")["properties"][UUID_PROPERTY]
     assert owners.namespace_uuids == [namespace], "a policy above the table is looked for under something other than its namespaces"
     plan = resolve_plan(location, context=readings.context, owners=owners)
     assert plan.policy is not None and plan.policy.uuid == minted, f"maintenance resolves another policy for the renamed table: {plan.policy}"

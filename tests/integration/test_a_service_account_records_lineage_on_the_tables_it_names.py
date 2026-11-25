@@ -42,7 +42,7 @@ from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.events.openlineage import SYMLINKS_FACET_SCHEMA_URL, author_facet
 from lakehouse.governed import fga_ids
 from lakehouse.governed.decider import MAX_OBJECTS_PER_QUESTION
-from lakehouse.naming import location_identifier
+from lakehouse.naming import UUID_PROPERTY, location_identifier
 from lakehouse.storage.options import StorageOptions
 from tests.integration.lineage_app import live_catalog, live_lineage, run_event
 from tests.integration.store_requests import CountedStore, counted
@@ -104,14 +104,14 @@ def estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_
         # alice owns the estate's own warehouse, as the catalog's declaration makes its admin, so she may create in it.
         openfga_store.write((fga_ids.user_object("dex~alice"), "owner", "warehouse:lance_catalog"))
         assert catalog.post("/v1/namespace/lance_catalog$acme/create", json={}).status_code == 200
-        namespace_uuid = catalog.post("/v1/namespace/lance_catalog$acme/describe", json={}).json()["properties"]["rask.uuid"]
+        namespace_uuid = catalog.post("/v1/namespace/lance_catalog$acme/describe", json={}).json()["properties"][UUID_PROPERTY]
         uuids: dict[str, str] = {}
         locations: dict[str, str] = {}
         for table in (_MINE, _READ, _THEIRS):
             created = catalog.post(f"/v1/table/{table}/create", content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
             assert created.status_code == 200, created.text
             described = catalog.post(f"/v1/table/{table}/describe", json={"vend_credentials": False}).json()
-            uuids[table], locations[table] = described["properties"]["rask.uuid"], described["location"]
+            uuids[table], locations[table] = described["properties"][UUID_PROPERTY], described["location"]
         openfga_store.write(
             (fga_ids.user_object(_LINEAGE), "decider", "estate:rask"),
             (fga_ids.user_object(_LINEAGE), "governance_prober", "estate:rask"),

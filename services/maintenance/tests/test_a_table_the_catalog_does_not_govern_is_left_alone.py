@@ -23,7 +23,6 @@ from fastapi.testclient import TestClient
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import credentials
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import DatasetPlan
 
@@ -33,9 +32,7 @@ CATALOG = "http://catalog.test"
 CLEANUP_EVERYTHING = DatasetPlan(older_than=timedelta(0), retain_versions=1)
 
 
-@pytest.fixture(autouse=True)
-def _identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(credentials, "service_headers", lambda _settings: {})
+pytestmark = pytest.mark.usefixtures("catalog_calls_carry_no_identity")
 
 
 def _execute(catalog: TestClient, maintain_one: Callable[..., DatasetResult], uri: str, **named: str) -> tuple[DatasetResult, list[tuple[int, object]]]:

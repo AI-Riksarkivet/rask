@@ -17,7 +17,7 @@ import pytest
 from lance_namespace import InvalidInputError
 
 from catalog.api.authz import hierarchy, objects
-from catalog.core.config import Settings
+from tests.catalog_settings import catalog_settings
 from tests.unit.named_resolver import NamedResolver
 
 
@@ -54,7 +54,7 @@ def test_the_guard_agrees_with_what_the_grant_path_would_have_done() -> None:
     `require_parent` refuses exactly the inputs for which `parent_object_of` returns None — that is the
     definition of an orphan, and the two deriving it separately is how they diverge later.
     """
-    settings = Settings.model_validate({"LANCE_S3_ACCESS_KEY_ID": "k", "LANCE_S3_SECRET_ACCESS_KEY": "s"})
+    settings = catalog_settings()
     for segments in (["orphan"], ["bronze", "pages"], ["acme", "silver", "features"]):
         would_orphan = asyncio.run(objects.parent_object_of(NamedResolver(), settings, "table", segments=segments)) is None
         refused = False

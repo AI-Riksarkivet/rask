@@ -21,6 +21,7 @@ from tables_by_name import open_by_name
 
 from catalog.services.tables.creation import create_table
 from catalog.services.tables.writes import insert_into_table
+from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.records import base_registry
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
@@ -30,13 +31,6 @@ from tests.door_tables import door_table
 TABLE_ID = ["wh", "busy"]
 #: Lance's own message, as the catalog logged it on the estate.
 _GAVE_UP = "Too many concurrent writers. Attempted 6 times, but failed on retry_timeout of 30.000 seconds., /home/runner/work/lance/lance/rust/lance/src/io/commit.rs:128:5"
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 def test_an_append_lance_gives_up_on_is_answered_as_a_conflict_to_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -64,7 +58,7 @@ def test_an_append_lance_gives_up_on_is_answered_as_a_conflict_to_retry(tmp_path
             table,
             StorageOptions(),
             InsertIntoTableRequest(id=TABLE_ID, mode="append"),
-            data=_ipc(pa.table({"id": pa.array([2], pa.int64())})),
+            data=encode_arrow_stream(pa.table({"id": pa.array([2], pa.int64())})),
             max_bytes=1 << 20,
             transaction_properties={},
         )

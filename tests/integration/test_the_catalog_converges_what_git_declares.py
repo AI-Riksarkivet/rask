@@ -17,7 +17,6 @@ import boto3
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import ServiceUnavailableError
-from moto.server import ThreadedMotoServer
 
 from catalog.api import declaration_converge
 from catalog.api.ticks import Tick
@@ -69,19 +68,10 @@ class Estate:
         return held.stored() if held is not None else None
 
 
-@pytest.fixture(scope="module")
-def store_url() -> Iterator[str]:
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
-
-
 @contextmanager
-def _catalog(store_url: str, declaration: Path, monkeypatch: pytest.MonkeyPatch, governed: dict[str, str]) -> Generator[TestClient]:
+def _catalog(moto_url: str, declaration: Path, monkeypatch: pytest.MonkeyPatch, governed: dict[str, str]) -> Generator[TestClient]:
     """The catalog over an emptied S3 store, ``declaration`` mounted (empty), under ``governed``'s auth settings."""
-    s3 = boto3.resource("s3", endpoint_url=store_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
+    s3 = boto3.resource("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
     for bucket in s3.buckets.all():
         bucket.objects.all().delete()
         bucket.delete()
@@ -90,7 +80,7 @@ def _catalog(store_url: str, declaration: Path, monkeypatch: pytest.MonkeyPatch,
     for key, value in {
         "LANCE_REST_IMPL": "dir",
         "LANCE_REST_ROOT": f"s3://{ESTATE_BUCKET}",
-        "LANCE_S3_ENDPOINT": store_url,
+        "LANCE_S3_ENDPOINT": moto_url,
         "LANCE_S3_ACCESS_KEY_ID": "test",
         "LANCE_S3_SECRET_ACCESS_KEY": "test",
         "LANCE_CONTROL_EMIT_ENABLED": "false",
@@ -109,7 +99,7 @@ def _catalog(store_url: str, declaration: Path, monkeypatch: pytest.MonkeyPatch,
 
 
 @pytest.fixture
-def estate(store_url: str, openfga_store: Any, dex_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Estate]:  # noqa: ANN401 — root conftest's fixtures
+def estate(moto_url: str, openfga_store: Any, dex_issuer: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Estate]:  # noqa: ANN401 — root conftest's fixtures
     """The catalog as deployed: every caller authenticated, authorization on a real OpenFGA store of the test's own."""
     governed = {
         "RASK_OIDC_ENABLED": "true",
@@ -124,15 +114,15 @@ def estate(store_url: str, openfga_store: Any, dex_issuer: Any, tmp_path: Path, 
         "LANCE_OWN_ACCOUNTS": json.dumps([MAINTENANCE]),
     }
     declaration = tmp_path / "declaration.json"
-    with _catalog(store_url, declaration, monkeypatch, governed) as client:
+    with _catalog(moto_url, declaration, monkeypatch, governed) as client:
         yield Estate(client, openfga_store, dex_issuer, declaration)
 
 
 @pytest.fixture
-def open_estate(store_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Estate]:
+def open_estate(moto_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Estate]:
     """The catalog on a stack that authenticates nobody: no caller, no authorization store."""
     declaration = tmp_path / "declaration.json"
-    with _catalog(store_url, declaration, monkeypatch, {"RASK_OIDC_ENABLED": "false", "RASK_FGA_ENABLED": "false"}) as client:
+    with _catalog(moto_url, declaration, monkeypatch, {"RASK_OIDC_ENABLED": "false", "RASK_FGA_ENABLED": "false"}) as client:
         yield Estate(client, None, None, declaration)
 
 

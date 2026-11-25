@@ -44,7 +44,9 @@ from lakehouse.events.openlineage import run_id_for
 from lakehouse.storage.options import StorageOptions
 from lineage.api import relay
 from lineage.core.config import LineageSettings
+from lineage.services.provenance import ProvenanceStore
 from tests.app_state import app_holding
+from tests.provenance_store_double import ProvenanceStoreDouble
 
 
 def _staged(uri: str, *, author: str, run: str, token: str) -> None:
@@ -65,29 +67,9 @@ def _staged(uri: str, *, author: str, run: str, token: str) -> None:
     outbox.stage_envelope(uri, StorageOptions(), lineage_envelope(event))
 
 
-class _Repo:
-    def __init__(self) -> None:
-        self.ingested: list[str] = []
-        self.refusals: list[dict[str, str | None]] = []
-
-    async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
-        """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
-        that cannot record one no longer stands in for the store. Captured rather than ignored:
-        several of these tests assert what the refusal path did, and a silent no-op would let a drain
-        that recorded nothing pass as one that did."""
-        self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
-
-    async def record(self, ev: Any, *, aliased: Collection[str]) -> None:  # noqa: ANN401 — the drain's own shape
-        self.ingested.append(ev.run.run_id)
-
-    async def events_recorded(self, keys: Collection[str]) -> set[str]:
-        """The park asks whether the feed holds the event's row first; it holds none."""
-        return set()
-
-
 def _drive(uri: str) -> Any:  # noqa: ANN401 — DrainOutcome
     app = app_holding()
-    return asyncio.run(relay._drain_outbox(app, cast("Any", _Repo()), _governed_settings(uri), opts=StorageOptions()))
+    return asyncio.run(relay._drain_outbox(app, cast(ProvenanceStore, ProvenanceStoreDouble()), _governed_settings(uri), opts=StorageOptions()))
 
 
 def _governed_settings(outbox_uri: str) -> LineageSettings:

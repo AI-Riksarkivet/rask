@@ -17,34 +17,26 @@ The races and the panic are driven where they happen: a competing ExistOk create
 declaration, and Lance panics inside the first write.
 """
 
-import io
 import re
 from collections.abc import Callable
 from typing import Any
 
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
 from catalog.services.tables import creation
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 T = "/v1/table/lance_catalog$g$t"
 _VECTOR: dict[str, Any] = {}
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
-
-
 def _rows(n: int = 3) -> bytes:
-    return _ipc(pa.table({"id": pa.array(range(n), pa.int64())}))
+    return encode_arrow_stream(pa.table({"id": pa.array(range(n), pa.int64())}))
 
 
 @pytest.fixture
@@ -57,7 +49,7 @@ def client(real_ns_client: TestClient) -> TestClient:
     return real_ns_client
 
 
-_LIST_VIEW = _ipc(pa.table({"x": pa.array([[1], [2]], pa.list_view(pa.int64()))}))
+_LIST_VIEW = encode_arrow_stream(pa.table({"x": pa.array([[1], [2]], pa.list_view(pa.int64()))}))
 _VIRTUAL = {"udf": "x", "udf_name": "f", "udf_version": "1", "input_columns": ["id"], "output_type": "int"}
 _ADD_COLUMNS_VIRTUAL = {
     "input_columns": ["id"],
@@ -170,7 +162,7 @@ def test_a_querys_probe_range_reaches_the_plan(client: TestClient) -> None:
     """`minimum_nprobes` and `maximum_nprobes` are the spec's (`lance_docs/ns_catalog/spec.yaml` QueryTableRequest), and
     the plan of a query over an IVF index names the range the caller asked for."""
     values = pa.array([float(i % 97) for i in range(512 * 4)], pa.float32())
-    rows = _ipc(pa.table({"id": pa.array(range(512), pa.int64()), "vec": pa.FixedSizeListArray.from_arrays(values, 4)}))
+    rows = encode_arrow_stream(pa.table({"id": pa.array(range(512), pa.int64()), "vec": pa.FixedSizeListArray.from_arrays(values, 4)}))
     assert client.post("/v1/table/lance_catalog$g$v/create", content=rows, headers=ARROW).status_code == 200
     location = client.post("/v1/table/lance_catalog$g$v/describe", json={}).json()["location"]
     lance.dataset(location).create_index("vec", "IVF_FLAT", num_partitions=4)

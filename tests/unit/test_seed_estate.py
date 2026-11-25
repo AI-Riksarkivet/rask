@@ -11,34 +11,24 @@ the ordering, the route CHOICE (a namespace is created inside its warehouse, thr
 convergence rule and the refusal handling are all assertable offline.
 """
 
-import importlib.util
 import json
-import sys
 import uuid
 from collections.abc import Callable
-from pathlib import Path
 from types import ModuleType
 from typing import Final
 
 import httpx
 import pytest
 
-
-_SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
-
-
-def _load(name: str) -> ModuleType:
-    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    # Registered BEFORE exec: @dataclass resolves stringified annotations through
-    # sys.modules[cls.__module__], and the decorator crashes on a module loaded from a bare path.
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+from lakehouse.naming import UUID_PROPERTY
+from tests.script_module import script
 
 
-seed_estate = _load("seed_estate")
+@pytest.fixture
+def seed_estate(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """`scripts/seed_estate.py`."""
+    return script("seed_estate", monkeypatch)
+
 
 #: A refusal rule: given a request, either a ``(status, problem body)`` to answer with, or None to let
 #: the fake catalog succeed. A callable rather than a path→response map because some layers share one route
@@ -123,7 +113,7 @@ def _fake_catalog(recorded: list[httpx.Request], refuse: Refusal | None = None) 
         if request.method == "GET" and request.url.path == "/management/v1/projects":
             return httpx.Response(200, json=_REGISTRY)
         if request.method == "POST" and (described := _describe(request.url.path)) is not None:
-            return httpx.Response(200, json={"properties": {"rask.uuid": _uuid(*described)}})
+            return httpx.Response(200, json={"properties": {UUID_PROPERTY: _uuid(*described)}})
         if request.method == "GET" and request.url.path.startswith("/management/v1/projects/") and request.url.path.endswith("/roles"):
             project = request.url.path.removeprefix("/management/v1/projects/").removesuffix("/roles")
             return httpx.Response(200, json={"roles": [{"id": _uuid("role", f"{project}/{name}"), "name": name} for name in _ROLES.get(project, [])]})
@@ -135,7 +125,7 @@ def _fake_catalog(recorded: list[httpx.Request], refuse: Refusal | None = None) 
     return httpx.MockTransport(handle)
 
 
-def _run(recorded: list[httpx.Request], refuse: Refusal | None = None, argv: list[str] | None = None) -> int:
+def _run(seed_estate: ModuleType, recorded: list[httpx.Request], refuse: Refusal | None = None, argv: list[str] | None = None) -> int:
     return seed_estate.main(argv or ["--catalog", "http://catalog"], transport=_fake_catalog(recorded, refuse))
 
 
@@ -148,9 +138,9 @@ def _index(recorded: list[httpx.Request], predicate: Callable[[httpx.Request], b
 # --------------------------------------------------------------------------- #
 
 
-def test_a_project_is_created_before_its_warehouse_before_its_namespace_before_its_table() -> None:
+def test_a_project_is_created_before_its_warehouse_before_its_namespace_before_its_table(seed_estate: ModuleType) -> None:
     recorded: list[httpx.Request] = []
-    assert _run(recorded) == 0
+    assert _run(seed_estate, recorded) == 0
 
     # A describe is a read sent as POST (the spec's route grammar), resolving a grant's object rather than writing one.
     writes = [request for request in recorded if request.method == "POST" and _describe(request.url.path) is None]
@@ -170,13 +160,13 @@ def test_a_project_is_created_before_its_warehouse_before_its_namespace_before_i
 # --------------------------------------------------------------------------- #
 
 
-def test_a_grant_on_a_table_names_the_table_this_run_actually_created() -> None:
+def test_a_grant_on_a_table_names_the_table_this_run_actually_created(seed_estate: ModuleType) -> None:
     """The one grant whose object is a TABLE: written on the uuid DescribeTable answers for the table this run
     declared (ADR 0173 §8), and after that declare. A grant written on a name, or before its table exists, names an
     object nobody created: the ghost the whole script is built to stop making, re-entering through the grant layer.
     """
     recorded: list[httpx.Request] = []
-    assert _run(recorded, argv=["--catalog", "http://catalog"]) == 0
+    assert _run(seed_estate, recorded, argv=["--catalog", "http://catalog"]) == 0
 
     declared = [request.url.path for request in recorded if _layer(request) == "table"]
     described = [described for request in recorded if (described := _describe(request.url.path)) is not None and described[0] == "table"]
@@ -192,13 +182,13 @@ def test_a_grant_on_a_table_names_the_table_this_run_actually_created() -> None:
     )
 
 
-def test_the_bearer_token_rides_every_call_and_is_absent_when_there_is_none() -> None:
+def test_the_bearer_token_rides_every_call_and_is_absent_when_there_is_none(seed_estate: ModuleType) -> None:
     recorded: list[httpx.Request] = []
-    assert _run(recorded, argv=["--catalog", "http://catalog", "--token", "id-token-abc"]) == 0
+    assert _run(seed_estate, recorded, argv=["--catalog", "http://catalog", "--token", "id-token-abc"]) == 0
     assert {request.headers.get("authorization") for request in recorded} == {"Bearer id-token-abc"}
 
     unauthenticated: list[httpx.Request] = []
-    assert _run(unauthenticated) == 0
+    assert _run(seed_estate, unauthenticated) == 0
     assert not [request for request in unauthenticated if "authorization" in request.headers]
 
 
@@ -207,14 +197,14 @@ def test_the_bearer_token_rides_every_call_and_is_absent_when_there_is_none() ->
 # --------------------------------------------------------------------------- #
 
 
-def test_an_already_exists_refusal_is_convergence_and_the_run_still_succeeds(capsys: pytest.CaptureFixture[str]) -> None:
+def test_an_already_exists_refusal_is_convergence_and_the_run_still_succeeds(capsys: pytest.CaptureFixture[str], seed_estate: ModuleType) -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         if _layer(request) in {"namespace", "table"}:
             return 409, _problem("NamespaceAlreadyExistsError", "namespace 'acme$gold' already exists", 2)
         return None
 
     recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 0
+    assert _run(seed_estate, recorded, refuse) == 0
 
     out = capsys.readouterr().out
     assert "already exists" in out
@@ -224,7 +214,7 @@ def test_an_already_exists_refusal_is_convergence_and_the_run_still_succeeds(cap
     assert [request.url.path for request in recorded if _layer(request) == "grant"]
 
 
-def test_a_warehouse_id_collision_is_a_failure_not_convergence() -> None:
+def test_a_warehouse_id_collision_is_a_failure_not_convergence(seed_estate: ModuleType) -> None:
     # 409 on warehouse-create is the cross-tenant takeover guard, not "already there" — the create is
     # idempotent server-side for the SAME project, so this 409 can only mean another project owns the id.
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
@@ -233,17 +223,17 @@ def test_a_warehouse_id_collision_is_a_failure_not_convergence() -> None:
         return None
 
     recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 1
+    assert _run(seed_estate, recorded, refuse) == 1
 
 
-def test_grants_are_skipped_not_failed_when_the_stack_runs_authorization_off(capsys: pytest.CaptureFixture[str]) -> None:
+def test_grants_are_skipped_not_failed_when_the_stack_runs_authorization_off(capsys: pytest.CaptureFixture[str], seed_estate: ModuleType) -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         if request.url.path == "/management/v1/access/tuples" or _layer(request) == "role":
             return 406, _problem("UnsupportedOperationError", "this door requires OpenFGA (this stack runs auth-off)", 0)
         return None
 
     recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 0
+    assert _run(seed_estate, recorded, refuse) == 0
     assert "authorization is off" in capsys.readouterr().out
 
 
@@ -252,7 +242,7 @@ def test_grants_are_skipped_not_failed_when_the_stack_runs_authorization_off(cap
 # --------------------------------------------------------------------------- #
 
 
-def test_a_grant_is_never_written_against_an_object_whose_create_failed() -> None:
+def test_a_grant_is_never_written_against_an_object_whose_create_failed(seed_estate: ModuleType) -> None:
     # THE ghost rule. OpenFGA stores a tuple whether or not its object exists, so writing the gold
     # namespace's classifier grant after that namespace failed to be created is exactly how the live
     # estate got three tenants the catalog had never heard of.
@@ -262,7 +252,7 @@ def test_a_grant_is_never_written_against_an_object_whose_create_failed() -> Non
         return None
 
     recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 1
+    assert _run(seed_estate, recorded, refuse) == 1
 
     grants = [_body(request) for request in recorded if request.url.path == "/management/v1/access/tuples"]
     assert not [grant for grant in grants if grant["object"] == _object("namespace", "acme$gold")]
@@ -270,32 +260,32 @@ def test_a_grant_is_never_written_against_an_object_whose_create_failed() -> Non
     assert {"demo~dave", "demo~carol", "demo~gina"} <= {str(grant["user"]) for grant in grants}
 
 
-def test_a_failed_create_blocks_only_its_own_descendants() -> None:
+def test_a_failed_create_blocks_only_its_own_descendants(seed_estate: ModuleType) -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         if _layer(request) == "project" and _body(request).get("id") == "beta":
             return 403, _problem("PermissionDeniedError", "can_create_project required on warehouse:lance_catalog", 15)
         return None
 
     recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 1
+    assert _run(seed_estate, recorded, refuse) == 1
 
     warehouses = [_body(request).get("id") for request in recorded if _layer(request) == "warehouse"]
     assert "beta" not in warehouses
     assert {"acme", "research"} <= set(warehouses)
 
 
-def test_an_estate_that_cannot_be_read_back_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str]) -> None:
+def test_an_estate_that_cannot_be_read_back_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str], seed_estate: ModuleType) -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         if request.method == "GET" and request.url.path == "/management/v1/projects":
             return 403, _problem("PermissionDeniedError", "can_list_all_projects required on warehouse:lance_catalog", 15)
         return None
 
     recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 1
+    assert _run(seed_estate, recorded, refuse) == 1
     assert "can_list_all_projects" in capsys.readouterr().err
 
 
-def test_a_transport_failure_is_reported_against_the_step_that_hit_it(capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_transport_failure_is_reported_against_the_step_that_hit_it(capsys: pytest.CaptureFixture[str], seed_estate: ModuleType) -> None:
     def handle(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("connection refused")
 
@@ -312,7 +302,7 @@ def test_a_transport_failure_is_reported_against_the_step_that_hit_it(capsys: py
 # --------------------------------------------------------------------------- #
 
 
-def test_an_estate_the_registry_does_not_hold_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str]) -> None:
+def test_an_estate_the_registry_does_not_hold_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str], seed_estate: ModuleType) -> None:
     # THE ghost, stated as a test: every write is accepted and the registry holds nothing. This is not a
     # hypothetical — it is the exact state the live estate was found in, and a seed whose summary just
     # renders the listing prints an empty estate under the words "every object above exists in the catalog".
@@ -320,35 +310,35 @@ def test_an_estate_the_registry_does_not_hold_is_not_reported_as_seeded(capsys: 
         return (200, []) if request.method == "GET" and request.url.path == "/management/v1/projects" else None
 
     recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 1
+    assert _run(seed_estate, recorded, refuse) == 1
     err = capsys.readouterr().err
     assert "project acme is absent" in err
     assert "project research is absent" in err
 
 
-def test_a_warehouse_the_project_does_not_hold_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_warehouse_the_project_does_not_hold_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str], seed_estate: ModuleType) -> None:
     thin = [dict(record, warehouses=[]) if record["project"] == "acme" else record for record in _REGISTRY]
 
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         return (200, thin) if request.method == "GET" and request.url.path == "/management/v1/projects" else None
 
     recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 1
+    assert _run(seed_estate, recorded, refuse) == 1
     assert "warehouse acme is absent from project acme" in capsys.readouterr().err
 
 
-def test_a_declared_table_the_namespace_does_not_list_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_declared_table_the_namespace_does_not_list_is_not_reported_as_seeded(capsys: pytest.CaptureFixture[str], seed_estate: ModuleType) -> None:
     # `declare` returning 200 says the call was accepted. Only the namespace's own listing says the table
     # is there — and the two disagreeing is the whole class of bug this script was written against.
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         return (200, {"tables": []}) if request.url.path == "/v1/namespace/acme$gold/table/list" else None
 
     recorded: list[httpx.Request] = []
-    assert _run(recorded, refuse) == 1
+    assert _run(seed_estate, recorded, refuse) == 1
     assert "table catalog is absent from namespace acme$gold" in capsys.readouterr().err
 
 
-def test_a_read_back_that_is_not_json_is_a_failure_and_never_a_crash(capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_read_back_that_is_not_json_is_a_failure_and_never_a_crash(capsys: pytest.CaptureFixture[str], seed_estate: ModuleType) -> None:
     # A proxy answering 200 with HTML instead of the catalog. Letting the decode raise would lose the
     # summary at the one moment it matters — right after the writes landed.
     def handle(request: httpx.Request) -> httpx.Response:
@@ -365,7 +355,7 @@ def test_a_read_back_that_is_not_json_is_a_failure_and_never_a_crash(capsys: pyt
 # --------------------------------------------------------------------------- #
 
 
-def test_a_demo_identity_is_seeded_as_its_principal_and_a_persona_under_the_demo_idp() -> None:
+def test_a_demo_identity_is_seeded_as_its_principal_and_a_persona_under_the_demo_idp(seed_estate: ModuleType) -> None:
     # A grant names a principal ([[LH-063]]), so the catalog refuses the literal `user:alice`. The development Dex's
     # identities are their principals; a persona with no IdP account is a principal of the `demo` idp id, which still
     # makes the graph worth reading and names an identity provider.

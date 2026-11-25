@@ -28,9 +28,9 @@ import lance
 import pyarrow as pa
 import pytest
 import respx
+from tests.vend_answers import vended
 
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import credentials
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import DatasetPlan
 
@@ -62,9 +62,7 @@ UNAUTHENTICATED = {"title": "UnauthenticatedError", "status": 401, "code": 16, "
 type VendAnswer = Callable[[str], httpx.Response]
 
 
-@pytest.fixture(autouse=True)
-def _identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(credentials, "service_headers", lambda _settings: {})
+pytestmark = pytest.mark.usefixtures("catalog_calls_carry_no_identity")
 
 
 def _indexed(tmp_path: Path) -> str:
@@ -82,8 +80,8 @@ def _indexed(tmp_path: Path) -> str:
 
 def _vended_at(location: str | None) -> VendAnswer:
     """A direct write credential the catalog says covers `location`; ``None`` covers the dataset itself."""
-    vended = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
-    return lambda uri: httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": vended}, "location": location or uri})
+    options = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
+    return lambda uri: httpx.Response(200, json=vended(options, location=location or uri))
 
 
 def _refused(status: int, body: dict[str, Any]) -> VendAnswer:
@@ -125,9 +123,9 @@ def test_a_vend_naming_no_location_is_no_answer_and_cleans_nothing(tmp_path: Pat
     """A credential the catalog does not place cannot be checked against the dataset it would sign for, so the pass
     stops as a failure the next one retries, as for any body that names no answer."""
     uri = _indexed(tmp_path)
-    vended = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
+    options = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
 
-    result = _execute(maintain_one, uri, vend=lambda _uri: httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": vended}}))
+    result = _execute(maintain_one, uri, vend=lambda _uri: httpx.Response(200, json=vended(options)))
 
     assert len(lance.dataset(uri).versions()) == 7, "a table whose vend names no location had its versions cleaned up"
     assert (result.refused_by, result.error_type) == (None, "VendUndecided"), (result.refused_by, result.error)

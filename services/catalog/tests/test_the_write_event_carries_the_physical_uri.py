@@ -26,9 +26,9 @@ from typing import Any, cast
 
 import pytest
 
-from catalog.core.lineage_emit import NO_FIELDS, EmitFields
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.storage.options import StorageOptions
+from tests.lineage_emitter_double import LineageEmitterDouble
 
 
 class _NoUuids:
@@ -39,22 +39,6 @@ class _NoUuids:
 
     async def branch_identifier(self, segments: list[str], branch: str) -> str | None:
         return None
-
-
-class _Recording:
-    """Structural double for `LineageEmitter` — the estate's fake-by-shape pattern."""
-
-    def __init__(self) -> None:
-        self.writes: list[dict[str, Any]] = []
-
-    async def project_for(self, warehouse_id: str) -> str | None:
-        return None
-
-    async def emit_create(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
-        self.writes.append({**required, **dict(fields)})
-
-    async def emit_write(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
-        self.writes.append({**required, **dict(fields)})
 
 
 def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
@@ -68,7 +52,7 @@ def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
 
     from catalog.api import lineage_deps
 
-    recorder = _Recording()
+    recorder = LineageEmitterDouble()
     monkey = pytest.MonkeyPatch()
     try:
         monkey.setattr(
@@ -107,7 +91,7 @@ def test_a_readback_that_could_not_open_the_dataset_stamps_no_uri(tmp_path: Path
 
     from catalog.api import lineage_deps
 
-    recorder = _Recording()
+    recorder = LineageEmitterDouble()
     asyncio.run(
         lineage_deps.emit_measured_write(
             cast(Any, recorder),

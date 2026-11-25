@@ -42,9 +42,11 @@ from principals import DEX_CLIENT, DEX_SCOPE, principal_of
 from refusals import assert_refused, described, namespace_uuid
 from topology import OUTSIDER, create_namespace, namespace_id
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.openlineage import RUN_EVENT_SCHEMA_URL, author_facet, run_id_for
 from lakehouse.governed import fga_ids
 from lakehouse.governed.principal import is_principal
+from lakehouse.naming import UUID_PROPERTY
 from lineage.models import author_sub_from_payload
 
 
@@ -58,7 +60,7 @@ DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 # The sign-in client is confidential in every Dex the suite meets (the Dex fixture and `.docker/dex.config.yaml`), so its
 # password grant carries the client's secret; the default is the dev Dex's.
 DEX_SECRET = credential(Credential.DEX_SECRET, "lance-catalog-secret")
-ARROW: Final = frozendict({"content-type": "application/vnd.apache.arrow.stream"})
+ARROW: Final = frozendict({"content-type": ARROW_STREAM_MEDIA_TYPE})
 
 pytestmark = pytest.mark.e2e
 
@@ -91,13 +93,6 @@ def _token(username: str) -> str:
 def _sub(token: str) -> str:
     """The principal the catalog keys this bearer on ([[LH-063]])."""
     return principal_of(SERVER, token)
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 def _get_json(url: str, headers: dict | None = None) -> dict:
@@ -144,24 +139,24 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     create_namespace(server, f"gov{os.getpid()}", ah)
     try:
         rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
-        create = requests.post(f"{server}/v1/table/{bronze}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30)
+        create = requests.post(f"{server}/v1/table/{bronze}/create", headers={**ah, **ARROW}, data=encode_arrow_stream(rows), timeout=30)
         assert create.status_code == 200, create.text
         # alice also creates the silver table she'll promote INTO — so she owns it (can_write_data +
         # can_get_metadata). The lineage ingest below is governed (enforce_output_authz needs can_write_data on
         # every output), so a promote whose output is a table alice doesn't own would 403.
-        sc = requests.post(f"{server}/v1/table/{silver}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30)
+        sc = requests.post(f"{server}/v1/table/{silver}/create", headers={**ah, **ARROW}, data=encode_arrow_stream(rows), timeout=30)
         assert sc.status_code == 200, sc.text
         # Each create seeded alice's `owner`, and the table its `parent` edge, on the uuid objects the catalog minted.
         ns_uuid = namespace_uuid(server, ns, ah)
         namespace_object = fga_ids.namespace_object(ns_uuid)
         standing = described(server, bronze, ah)
-        table_object = fga_ids.table_object(standing["properties"]["rask.uuid"])
+        table_object = fga_ids.table_object(standing["properties"][UUID_PROPERTY])
         alice_user = fga_ids.user_object(alice_sub)
         assert (alice_user, "owner") in _held(namespace_object)
         assert {(alice_user, "owner"), (namespace_object, "parent")} <= _held(table_object)
 
         # 3. owning bronze, alice writes it (owner cascades to writer)
-        appended = requests.post(f"{server}/v1/table/{bronze}/insert", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30)
+        appended = requests.post(f"{server}/v1/table/{bronze}/insert", headers={**ah, **ARROW}, data=encode_arrow_stream(rows), timeout=30)
         assert appended.status_code == 200, appended.text
 
         # 4. the outsider (no grant) is refused bronze's describe and its drop; alice still describes it, and the store holds
@@ -172,7 +167,7 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
                 status=403,
                 code=ErrorCode.PERMISSION_DENIED,
                 unchanged=lambda: (described(server, bronze, ah), tuples_on(table_object)),
-                foreign={alice_sub, standing["location"], standing["properties"]["rask.uuid"], ns_uuid},
+                foreign={alice_sub, standing["location"], standing["properties"][UUID_PROPERTY], ns_uuid},
             )
 
         # 5. lineage recorded alice as the VERIFIED author of bronze's create (emission is async -> poll).
@@ -248,7 +243,7 @@ def test_a_forced_rename_keeps_a_direct_grant_and_protection_and_writes_no_tuple
     source, dest = f"{ns}$src", f"{ns}$dst"
     try:
         rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
-        assert requests.post(f"{server}/v1/table/{source}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30).status_code == 200
+        assert requests.post(f"{server}/v1/table/{source}/create", headers={**ah, **ARROW}, data=encode_arrow_stream(rows), timeout=30).status_code == 200
         granted = requests.post(
             f"{server}/management/v1/table/{source}/access/grant", headers=ah, json={"user": _sub(outsider), "relation": "reader"}, timeout=10
         )
@@ -256,17 +251,17 @@ def test_a_forced_rename_keeps_a_direct_grant_and_protection_and_writes_no_tuple
         assert requests.post(f"{server}/v1/table/{source}/describe", headers=bh, timeout=10).status_code == 200, "precondition: the direct grant reads"
         assert requests.post(f"{server}/management/v1/table/{source}/protection", headers=ah, json={"protected": True}, timeout=10).status_code == 200
         first = described(server, source, ah)
-        held = tuples_on(fga_ids.table_object(first["properties"]["rask.uuid"]))
+        held = tuples_on(fga_ids.table_object(first["properties"][UUID_PROPERTY]))
 
         renamed = requests.post(f"{server}/v1/table/{source}/rename", headers=ah, params={"force": "true"}, json={"new_table_name": "dst"}, timeout=30)
 
         assert renamed.status_code == 200, renamed.text
-        assert tuples_on(fga_ids.table_object(first["properties"]["rask.uuid"])) == held, "the rename wrote or removed a tuple"
+        assert tuples_on(fga_ids.table_object(first["properties"][UUID_PROPERTY])) == held, "the rename wrote or removed a tuple"
         assert requests.post(f"{server}/v1/table/{dest}/describe", headers=bh, timeout=10).status_code == 200, "the direct reader lost the renamed table"
         assert requests.get(f"{server}/management/v1/table/{dest}/protection", headers=ah, timeout=10).json()["protected"] is True
         # A table created at the old name holds nothing the renamed one did: the renamed table's reader, who sees the
         # namespace through it, is answered as for an absent table ([[LH-236]]).
-        assert requests.post(f"{server}/v1/table/{source}/create", headers={**ah, **ARROW}, data=_ipc(rows), timeout=30).status_code == 200
+        assert requests.post(f"{server}/v1/table/{source}/create", headers={**ah, **ARROW}, data=encode_arrow_stream(rows), timeout=30).status_code == 200
         assert requests.get(f"{server}/management/v1/table/{source}/protection", headers=ah, timeout=10).json()["protected"] is False, (
             "a table created at the old id was born protected"
         )
@@ -275,12 +270,12 @@ def test_a_forced_rename_keeps_a_direct_grant_and_protection_and_writes_no_tuple
             lambda: requests.post(f"{server}/v1/table/{source}/describe", headers=bh, json={}, timeout=10),
             status=404,
             code=ErrorCode.TABLE_NOT_FOUND,
-            unchanged=lambda: tuples_on(fga_ids.table_object(again["properties"]["rask.uuid"])),
+            unchanged=lambda: tuples_on(fga_ids.table_object(again["properties"][UUID_PROPERTY])),
             foreign={
                 _sub(alice),
                 again["location"],
-                again["properties"]["rask.uuid"],
-                first["properties"]["rask.uuid"],
+                again["properties"][UUID_PROPERTY],
+                first["properties"][UUID_PROPERTY],
                 namespace_uuid(server, ns, ah),
             },
         )
@@ -316,7 +311,7 @@ def test_a_rename_across_a_managed_boundary_needs_grant_authority_and_moves_the_
         flagged = requests.post(f"{server}/management/v1/namespace/{managed}/managed-access/set", headers=ah, json={"enabled": True}, timeout=10)
         assert flagged.status_code == 200, flagged.text
         for table, maker in ((brought, mh), (taken, mh), (moved, ah)):
-            created = requests.post(f"{server}/v1/table/{table}/create", headers={**maker, **ARROW}, data=_ipc(rows), timeout=30)
+            created = requests.post(f"{server}/v1/table/{table}/create", headers={**maker, **ARROW}, data=encode_arrow_stream(rows), timeout=30)
             assert created.status_code == 200, created.text
         namespaces = {namespace: namespace_uuid(server, namespace, ah) for namespace in (free, managed)}
 
@@ -327,13 +322,13 @@ def test_a_rename_across_a_managed_boundary_needs_grant_authority_and_moves_the_
                 lambda table=table, into=into: _rename_into(server, table, into, mh),
                 status=403,
                 code=ErrorCode.PERMISSION_DENIED,
-                unchanged=lambda held=held: tuples_on(fga_ids.table_object(held["properties"]["rask.uuid"])),
-                foreign={_sub(alice), held["location"], held["properties"]["rask.uuid"], *namespaces.values()},
+                unchanged=lambda held=held: tuples_on(fga_ids.table_object(held["properties"][UUID_PROPERTY])),
+                foreign={_sub(alice), held["location"], held["properties"][UUID_PROPERTY], *namespaces.values()},
             )
             assert refused.json()["detail"] == refusal, f"{table} was refused on another rung: {refused.text}"
             assert described(server, table, ah)["location"] == held["location"], f"the refused rename moved {table}"
 
-        mine = fga_ids.table_object(described(server, moved, ah)["properties"]["rask.uuid"])
+        mine = fga_ids.table_object(described(server, moved, ah)["properties"][UUID_PROPERTY])
         across = _rename_into(server, moved, managed, ah)
 
         assert across.status_code == 200, across.text

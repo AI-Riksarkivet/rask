@@ -20,9 +20,10 @@ from typing import Any
 
 import pytest
 
-from catalog.core.lineage_emit import NO_FIELDS, EmitFields, InputRef, OriginatorBoundEmitter, _BaseLineageEmitter, emit_write_event
+from catalog.core.lineage_emit import EmitFields, InputRef, OriginatorBoundEmitter, _BaseLineageEmitter, emit_write_event
 from catalog.core.run_context import RunContext
 from lakehouse.events.lineage_events import DatasetUuids
+from tests.lineage_emitter_double import LineageEmitterDouble
 
 
 class _NoUuids:
@@ -33,22 +34,6 @@ class _NoUuids:
 
     async def branch_identifier(self, segments: list[str], branch: str) -> str | None:
         return None
-
-
-class _Recording:
-    """Structural double for `LineageEmitter` — the estate's fake-by-shape pattern."""
-
-    def __init__(self) -> None:
-        self.writes: list[dict[str, Any]] = []
-
-    async def project_for(self, warehouse_id: str) -> str | None:
-        return None
-
-    async def emit_create(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
-        self.writes.append({**required, **dict(fields)})
-
-    async def emit_write(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
-        self.writes.append({**required, **dict(fields)})
 
 
 def _emit(bound: Any) -> None:
@@ -67,7 +52,7 @@ def _emit(bound: Any) -> None:
 class TestTheBindingCannotCrossRequests:
     def test_two_bindings_over_one_emitter_do_not_see_each_other(self) -> None:
         """The exact hazard that rules out stashing the claim on the app-scoped emitter."""
-        inner = _Recording()
+        inner = LineageEmitterDouble()
         _emit(OriginatorBoundEmitter(inner=inner, originator="dex~alice"))
         _emit(OriginatorBoundEmitter(inner=inner, originator="dex~bob"))
         _emit(OriginatorBoundEmitter(inner=inner, originator=None))

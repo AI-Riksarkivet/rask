@@ -25,27 +25,10 @@ from openfga_sdk.client import OpenFgaClient
 
 from catalog.api.authz import route_guard, rungs
 from catalog.api.dependencies import Resolver
-from catalog.core.config import Settings
 from lakehouse.governed import fga_reads
 
 
 _CLIENT = cast("OpenFgaClient", object())
-
-
-def _settings() -> Settings:
-    return Settings.model_validate(
-        {
-            "oidc_enabled": True,
-            "oidc_issuer": "https://idp.example",
-            "oidc_audience": "lance",
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "fga_enabled": True,
-            "fga_api_url": "http://openfga:8080",
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
 
 
 class _EveryTableHolds(Resolver):

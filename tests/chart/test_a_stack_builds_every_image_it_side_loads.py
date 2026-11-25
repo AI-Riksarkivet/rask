@@ -17,24 +17,25 @@ carrying a registry path; `busybox`/`nats` are Docker Hub library images and car
 tags this filter keys on.
 """
 
-import importlib.util
-import pathlib
+from types import ModuleType
 
+import pytest
 
-REPO = pathlib.Path(__file__).resolve().parents[2]
+from tests.script_module import script
+
 
 #: THE SCRIPTS' OWN EXTRACTION, not a second implementation of it. This gate held its own walker over
 #: the parsed render while the stack scripts grepped their raw text for the same thing, and the two
 #: disagreed in the one dimension a text filter is blind to: every chart call site passes `rask.image`
 #: through `quote`, so the shell matched none of the fifteen `:dev` references the gate read happily —
 #: and the gate returned green on the SHAPE of a pipeline that found nothing. One function, imported.
-_SPEC = importlib.util.spec_from_file_location("side_loaded_images", REPO / "scripts" / "side_loaded_images.py")
-assert _SPEC and _SPEC.loader
-_SLI = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(_SLI)
+@pytest.fixture
+def side_loaded_images(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """`scripts/side_loaded_images.py`."""
+    return script("side_loaded_images", monkeypatch)
 
 
-def test_a_reference_the_chart_quotes_is_still_found() -> None:
+def test_a_reference_the_chart_quotes_is_still_found(side_loaded_images: ModuleType) -> None:
     """The defect in miniature: every `image:` in a real render is a QUOTED scalar.
 
     `chart/templates/*.yaml` pipe `rask.image` through `quote`, so `image: "gateway:dev"` is the only
@@ -43,10 +44,10 @@ def test_a_reference_the_chart_quotes_is_still_found() -> None:
     measured 2026-09-24, both live lanes died there before deploying anything.
     """
     render = 'spec:\n  containers:\n    - image: "gateway:dev"\n    - image: bare-stem:dev\n'
-    assert _SLI.side_loaded(render, "dev") == ["bare-stem:dev", "gateway:dev"]
+    assert side_loaded_images.side_loaded(render, "dev") == ["bare-stem:dev", "gateway:dev"]
 
 
-def test_a_workload_scaled_to_zero_asks_the_node_for_no_image() -> None:
+def test_a_workload_scaled_to_zero_asks_the_node_for_no_image(side_loaded_images: ModuleType) -> None:
     """`replicas: 0` schedules no pod, so its image is never pulled and the stack need not build it.
 
     A lane that turns a service off this way would otherwise spend a build on an image nothing runs. The
@@ -60,10 +61,10 @@ def test_a_workload_scaled_to_zero_asks_the_node_for_no_image() -> None:
         "---\nkind: Job\nspec:\n  template:\n    spec:\n      containers:\n"
         '        - image: "one-shot:dev"\n'
     )
-    assert _SLI.side_loaded(render, "dev") == ["lance-rest-catalog:dev", "one-shot:dev"]
+    assert side_loaded_images.side_loaded(render, "dev") == ["lance-rest-catalog:dev", "one-shot:dev"]
 
 
-def test_an_image_that_is_not_ours_is_left_alone() -> None:
+def test_an_image_that_is_not_ours_is_left_alone(side_loaded_images: ModuleType) -> None:
     """Bare is not the test — the TAG is. `busybox` and `nats` carry no registry path either, and
     handing either to `dagger-image.sh --name` would fail on a dockerfile that does not exist."""
     render = (
@@ -75,4 +76,4 @@ def test_an_image_that_is_not_ours_is_left_alone() -> None:
         '    - image: "ghcr.io/org/gateway:dev"\n'
         '    - image: "gateway@sha256:0000000000000000000000000000000000000000000000000000000000000000"\n'
     )
-    assert _SLI.side_loaded(render, "dev") == []
+    assert side_loaded_images.side_loaded(render, "dev") == []

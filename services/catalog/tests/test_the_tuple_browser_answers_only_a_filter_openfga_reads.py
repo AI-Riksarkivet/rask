@@ -24,7 +24,6 @@ import lance
 import pyarrow as pa
 import pytest
 
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga_ids
 
 
@@ -108,16 +107,6 @@ _WAREHOUSE = "warehouse:lance_catalog"
 _ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 
 
-def _ok(catalog: Any, path: str, caller: str = "alice", **kwargs: Any) -> dict[str, Any]:
-    answer = catalog.client.post(path, headers={**catalog.bearer(caller), **kwargs.pop("headers", {})}, **kwargs)
-    assert answer.status_code == 200, f"{path}: {answer.status_code} {answer.text}"
-    return answer.json()
-
-
-def _uuid(catalog: Any, kind: str, name: str) -> str:
-    return str(_ok(catalog, f"/v1/{kind}/{name}/describe", json={})["properties"]["rask.uuid"])
-
-
 @pytest.fixture
 def named(governed_catalog: Any, tmp_path: Path) -> Any:
     """alice's namespace ``lance_catalog$db`` holding ``lance_catalog$db$inner``, a table ``lance_catalog$db$t`` the catalog made and renamed ``lance_catalog$db$u``, and a table
@@ -126,21 +115,24 @@ def named(governed_catalog: Any, tmp_path: Path) -> Any:
     catalog = governed_catalog
     catalog.store.write(ROOT_OWNS_THE_ESTATE)
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
-    _ok(catalog, "/v1/namespace/lance_catalog$db$inner/create", json={})
-    _ok(catalog, "/v1/table/lance_catalog$db$t/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    catalog.ok("/v1/namespace/lance_catalog$db$inner/create", "alice", json={})
+    catalog.create_table("alice", "lance_catalog$db$t")
     lance.write_dataset(_ROWS, str(tmp_path / "ext" / "reg"), data_storage_version="2.2", enable_stable_row_ids=True)
-    _ok(catalog, "/v1/table/lance_catalog$db$reg/register", json={"location": "ext/reg"})
+    catalog.ok("/v1/table/lance_catalog$db$reg/register", "alice", json={"location": "ext/reg"})
     for door, user in (("post", "bob"), ("post", "carol"), ("delete", "carol")):
         grant = {"user": catalog.person(user), "relation": "reader", "object": "table:lance_catalog$db$t"}
         answered = catalog.client.request(door.upper(), TUPLES, json=grant, headers=catalog.bearer("root"))
         assert answered.status_code == 200, answered.text
-    _ok(catalog, "/v1/table/lance_catalog$db$t/rename", json={"new_table_name": "u"})
+    catalog.ok("/v1/table/lance_catalog$db$t/rename", "alice", json={"new_table_name": "u"})
     return catalog
 
 
 def test_the_browser_names_each_table_and_namespace_as_it_is_named_now_filters_by_name_and_revokes_a_tuple_as_answered(named: Any) -> None:
-    table, registered = f"table:{_uuid(named, 'table', 'lance_catalog$db$u')}", f"table:{_uuid(named, 'table', 'lance_catalog$db$reg')}"
-    namespace, inner = f"namespace:{_uuid(named, 'namespace', 'lance_catalog$db')}", f"namespace:{_uuid(named, 'namespace', 'lance_catalog$db$inner')}"
+    table, registered = f"table:{named.uuid('table', 'lance_catalog$db$u', 'alice')}", f"table:{named.uuid('table', 'lance_catalog$db$reg', 'alice')}"
+    namespace, inner = (
+        f"namespace:{named.uuid('namespace', 'lance_catalog$db', 'alice')}",
+        f"namespace:{named.uuid('namespace', 'lance_catalog$db$inner', 'alice')}",
+    )
 
     page = named.client.get(TUPLES, headers=named.bearer("root"))
 

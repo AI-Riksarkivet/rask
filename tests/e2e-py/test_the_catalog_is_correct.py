@@ -83,6 +83,8 @@ from lance_namespace_urllib3_client.exceptions import ApiException
 from pydantic import BaseModel, ConfigDict, Field
 from refusals import body_of, names_in, problem_code
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.options import ENDPOINT
 
 
@@ -247,7 +249,7 @@ class Scene:
         """Make the matrix namespace, grant each rung, and make the standing objects every refused call shares."""
         admin = self.tenant.admin
         created = scenario.ok(admin.http.post(f"{CATALOG}/v1/namespace/{self.namespace}/create", json={}, timeout=60))
-        self.namespace_uuid = str(created["properties"]["rask.uuid"])
+        self.namespace_uuid = str(created["properties"][UUID_PROPERTY])
         for role, relation in ((Role.OWNER, "owner"), (Role.WRITER, "writer"), (Role.READER, "reader")):
             grant = {"user": self.callers[role].principal, "relation": relation}
             scenario.ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.namespace}/access/grant", json=grant, timeout=60))
@@ -265,7 +267,7 @@ class Scene:
         self.make_namespace("keep")
         self.grant(self.keep, "reader")
         self.make_namespace("full")
-        self.owner.create_table(ln.CreateTableRequest(id=[*self.full, "t"]), scenario.arrow_ipc(scenario.rows_of(range(3))))
+        self.owner.create_table(ln.CreateTableRequest(id=[*self.full, "t"]), encode_arrow_stream(scenario.rows_of(range(3))))
         self.make_namespace("empty")
         for name in ("keep-drop", "keep-deregister", "keep-rename"):
             self.make_table(name)
@@ -423,11 +425,11 @@ class Scene:
 
     def make_table(self, name: str, ids: range = range(3)) -> list[str]:
         table = [*self.path, name]
-        self.owner.create_table(ln.CreateTableRequest(id=table), scenario.arrow_ipc(scenario.rows_of(ids)))
+        self.owner.create_table(ln.CreateTableRequest(id=table), encode_arrow_stream(scenario.rows_of(ids)))
         return table
 
     def append(self, table: list[str], ids: range) -> None:
-        self.owner.insert_into_table(ln.InsertIntoTableRequest(id=table), scenario.arrow_ipc(scenario.rows_of(ids)))
+        self.owner.insert_into_table(ln.InsertIntoTableRequest(id=table), encode_arrow_stream(scenario.rows_of(ids)))
 
     def add_column(self, table: list[str], name: str) -> None:
         self.owner.alter_table_add_columns(ln.AlterTableAddColumnsRequest(id=table, new_columns=[wire.AddColumnsEntry(name=name, expression="id")]))
@@ -721,7 +723,7 @@ SPEC_DOORS: tuple[Door, ...] = (
         rung=Rung.READER,
         aim=_at_namespace,
         send=lambda s, role, t: s.clients[role].describe_namespace(ln.DescribeNamespaceRequest(id=t.namespace)),
-        shows=lambda s, role, t, value, before: (value.properties, {"rask.uuid": s.namespace_uuid}),
+        shows=lambda s, role, t, value, before: (value.properties, {UUID_PROPERTY: s.namespace_uuid}),
     ),
     Door(
         operation="DropNamespace",
@@ -920,7 +922,7 @@ SPEC_DOORS: tuple[Door, ...] = (
         rung=Rung.WRITER,
         send=lambda s, role, t: s.clients[role].insert_into_table(
             ln.InsertIntoTableRequest(id=t.table),
-            scenario.arrow_ipc(scenario.rows_of(range(1000 + 10 * list(Role).index(role), 1002 + 10 * list(Role).index(role)))),
+            encode_arrow_stream(scenario.rows_of(range(1000 + 10 * list(Role).index(role), 1002 + 10 * list(Role).index(role)))),
         ),
         watch=_version_and_rows,
         shows=lambda s, role, t, value, before: ((value.num_inserted_rows, s.rows(t.table)), (2, before[1] + 2)),
@@ -930,7 +932,7 @@ SPEC_DOORS: tuple[Door, ...] = (
         rung=Rung.WRITER,
         send=lambda s, role, t: s.clients[role].merge_insert_into_table(
             ln.MergeInsertIntoTableRequest(id=t.table, on=["id"], when_matched_update_all=True, when_not_matched_insert_all=True),
-            scenario.arrow_ipc(pa.table({"id": pa.array([0, 2000 + list(Role).index(role)], pa.int64()), "payload": pa.array([f"merged by {role}"] * 2)})),
+            encode_arrow_stream(pa.table({"id": pa.array([0, 2000 + list(Role).index(role)], pa.int64()), "payload": pa.array([f"merged by {role}"] * 2)})),
         ),
         watch=_version_and_rows,
         shows=lambda s, role, t, value, before: ((value.num_updated_rows, value.num_inserted_rows), (1, 1)),
@@ -968,7 +970,7 @@ SPEC_DOORS: tuple[Door, ...] = (
         operation="CreateTable",
         rung=Rung.WRITER,
         aim=lambda s, role, allowed: Target(table=[*s.path, f"made-{role}"]),
-        send=lambda s, role, t: s.clients[role].create_table(ln.CreateTableRequest(id=t.table), scenario.arrow_ipc(scenario.rows_of(range(3)))),
+        send=lambda s, role, t: s.clients[role].create_table(ln.CreateTableRequest(id=t.table), encode_arrow_stream(scenario.rows_of(range(3)))),
         watch=lambda s, t: s.exists(t.table),
         shows=lambda s, role, t, value, before: (s.ids(t.table), [0, 1, 2]),
     ),
@@ -1343,8 +1345,8 @@ def _unapproved_blob_base(scene: Scene) -> requests.Response:
     return scene.http(Role.OWNER).post(
         f"{CATALOG}/v1/table/{scene.namespace}$blob-refused/create",
         params={"external_blob_base": "s3://c2-unapproved/blobs/"},
-        data=scenario.arrow_ipc(rows),
-        headers={"content-type": scenario.ARROW},
+        data=encode_arrow_stream(rows),
+        headers={"content-type": ARROW_STREAM_MEDIA_TYPE},
         timeout=120,
     )
 
@@ -1355,7 +1357,7 @@ def _unapproved_blob_base(scene: Scene) -> requests.Response:
 RULES: dict[str, Rule] = {
     "hierarchy-a-table-directly-in-a-warehouse": Rule(
         send=lambda s: s.tenant.admin.namespace().create_table(
-            ln.CreateTableRequest(id=[s.tenant.project, f"root-{s.suffix}"]), scenario.arrow_ipc(scenario.rows_of(range(1)))
+            ln.CreateTableRequest(id=[s.tenant.project, f"root-{s.suffix}"]), encode_arrow_stream(scenario.rows_of(range(1)))
         ),
         code=INVALID_INPUT,
     ),

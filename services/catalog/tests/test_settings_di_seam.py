@@ -25,6 +25,7 @@ the injection.
 from fastapi import FastAPI, Request
 
 from catalog.api import dependencies as deps
+from tests.catalog_settings import catalog_settings
 
 
 def test_an_override_actually_changes_what_the_dependency_sees() -> None:
@@ -42,13 +43,7 @@ def test_an_override_actually_changes_what_the_dependency_sees() -> None:
     seen: dict[str, object] = {}
 
     def _settings() -> Settings:
-        s = Settings.model_validate(
-            {
-                "LANCE_REST_IMPL": "dir",
-                "LANCE_S3_ACCESS_KEY_ID": "k",
-                "LANCE_S3_SECRET_ACCESS_KEY": "s",
-            }
-        )
+        s = catalog_settings(LANCE_REST_IMPL="dir")
         seen["settings"] = s
         return s
 

@@ -159,6 +159,22 @@ def respx_allows_unused_routes() -> Iterator[None]:
         respx.mock._assert_all_called = True
 
 
+@pytest.fixture(scope="module")
+def moto_url() -> Iterator[str]:
+    """A moto S3 server for one test module, for pylance and pyarrow: ``mock_aws()`` patches botocore, which their native
+    S3 clients never go through.
+
+    Its backends are process-global, so a second server would isolate nothing: a test names its buckets uniquely.
+    """
+    from moto.server import ThreadedMotoServer
+
+    server = ThreadedMotoServer(port=0)
+    server.start()
+    host, port = server.get_host_and_port()
+    yield f"http://{host}:{port}"
+    server.stop()
+
+
 @pytest.fixture(autouse=True)
 def _lance_reads_commit_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     """Run each test as a lakehouse process runs, with Lance's auto-migration off.

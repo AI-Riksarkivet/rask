@@ -44,29 +44,27 @@ from typing import Any, Final
 import httpx
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from lance.fragment import write_fragments
 from lance.namespace import DirectoryNamespace
 from lance_namespace import DescribeTableRequest, DescribeTableResponse, InternalError, PermissionDeniedError
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.bus_delivery import Outcome
 from lakehouse.lancekit import manifest_wire
 from lakehouse.lancekit.listing_floor import FLOOR_KEY
 from lakehouse.lancekit.manifest_names import committed_version
+from lakehouse.naming import UUID_PROPERTY
 from tests.integration.lineage_app import catalog_tick, joined_bus, live_catalog, live_lineage
 from tests.traces import trace_id_of
 
 
-_ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+_ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 
 def _rows(start: int, stop: int) -> bytes:
     table = pa.table({"id": pa.array(range(start, stop), pa.int64())})
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+    return encode_arrow_stream(table)
 
 
 def _follow(client: httpx.Client) -> list[dict[str, Any]]:
@@ -273,7 +271,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
             # The record the store kept holds main's mark below its version, so the next tick reads it and forgets it.
             settings = get_settings()
             control, control_so = settings.registry_root, settings.storage_options()
-            uuid_of_t = catalog.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["properties"]["rask.uuid"]
+            uuid_of_t = catalog.post("/v1/table/lance_catalog$db$t/describe", json={}).json()["properties"][UUID_PROPERTY]
             second = lance.dataset(catalog.post("/v1/table/lance_catalog$db$t/describe", json={"vend_credentials": False}).json()["location"]).read_transaction(
                 2
             )
@@ -370,7 +368,7 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
             assert _commits(_follow(lineage), "lance_catalog$db$registered") == [("lance_catalog$db$registered", "insert", "3", author)]
             # Lineage recorded every event above in the provenance namespace through the catalog's doors, and none of
             # those writes is announced, so none keeps an author record.
-            uuid_of_registered = catalog.post("/v1/table/lance_catalog$db$registered/describe", json={}).json()["properties"]["rask.uuid"]
+            uuid_of_registered = catalog.post("/v1/table/lance_catalog$db$registered/describe", json={}).json()["properties"][UUID_PROPERTY]
             assert {path.name for path in (Path(control) / commit_records.AUTHORS_PREFIX).iterdir()} == {uuid_of_t, uuid_of_registered}
 
             # A write whose writer's clock runs two days behind, past the horizon, its announcement lost: a version's age
@@ -455,7 +453,7 @@ def _filed_for() -> set[str]:
 
 
 def _uuid_of(catalog: httpx.Client, table: str) -> str:
-    return catalog.post(f"/v1/table/lance_catalog$db${table}/describe", json={}).json()["properties"]["rask.uuid"]
+    return catalog.post(f"/v1/table/lance_catalog$db${table}/describe", json={}).json()["properties"][UUID_PROPERTY]
 
 
 @contextmanager

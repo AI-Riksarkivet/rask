@@ -8,7 +8,6 @@ records and verifies. A stock client's commits through ``version/create`` are
 ``test_a_stock_client_commits_every_operation_through_version_create.py``'s claim.
 """
 
-import logging
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
@@ -20,33 +19,25 @@ import lance
 import lance_namespace
 import pyarrow as pa
 import pytest
-from fastapi import FastAPI
+from erasure_rig import PREDICATE, SUBJECT, erasure_doors, rows
 from fastapi.testclient import TestClient
 from lance_namespace import DescribeNamespaceRequest, LanceNamespace, NamespaceNotFoundError
 from tables_by_name import open_by_name
 
-from catalog.api.dependencies import get_clock, get_control_emitter, get_namespace, get_storage_options, request_settings
+from catalog.api.dependencies import get_clock, get_control_emitter
 from catalog.api.security import authenticate
-from catalog.api.v1.endpoints import erasure as door
-from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses
 from catalog.services.tables.creation import create_table
-from catalog.services.tables.writes import read_arrow_body
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.derived_tables import EDGES
-from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
-from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.storage.options import StorageOptions
+from tests.callers import person
+from tests.catalog_settings import catalog_settings
 from tests.control_emitter_double import ControlEmitterDouble
 
 
-_SUBJECT = "alice"
-_PREDICATE = f"pii = '{_SUBJECT}'"
 _TABLE_ID = ["lance_catalog", "db", "subjects"]
 
 
@@ -68,13 +59,8 @@ def _create(ns: LanceNamespace, root: str, table_id: list[str]) -> None:
 
     The create takes the table's claim on the control root, which mints the uuid every record kept for it is keyed by.
     """
-    rows = pa.table({"pii": pa.array(["bob", _SUBJECT])})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, rows.schema) as writer:
-        writer.write_table(rows)
-    body = read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=1 << 20)
     registry = BaseRegistry(control_root=str(_control(root)), storage_options={})
-    create_table(ns, StorageOptions(), table_id, table=body, root=root, mode="create", registry=registry, holder="$".join(table_id))
+    create_table(ns, StorageOptions(), table_id, table=rows("bob", SUBJECT), root=root, mode="create", registry=registry, holder="$".join(table_id))
     open_by_name(ns, StorageOptions(), table_id).create_scalar_index("pii", "BTREE")
 
 
@@ -89,18 +75,8 @@ def _subjects(root: Path) -> LanceNamespace:
 @contextmanager
 def _catalog(ns: LanceNamespace, control: Path, clock: _Clock, *, lane: ControlEmitterDouble | None = None) -> Generator[TestClient]:
     """The erasure doors, the owner ``dex~olivia`` signed in, authorization off; ``lane`` takes the control events."""
-    settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(control))
-    application = FastAPI()
-    install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(door.table_router)
-    application.include_router(door.obligations_router)
-    application.state.control_emitter = NoopControlEmitter()  # the lifespan's, with control emission off
-    application.dependency_overrides[request_settings] = lambda: settings
-    application.dependency_overrides[get_namespace] = lambda: ns
-    application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
-    application.dependency_overrides[authenticate] = lambda: PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="olivia"), claims=IDToken(iss="i", sub="olivia", aud="lance", exp=1, iat=1)
-    )
+    application = erasure_doors(ns, catalog_settings(LANCE_CONTROL_ROOT=str(control)))
+    application.dependency_overrides[authenticate] = lambda: person("olivia")
     application.dependency_overrides[get_clock] = lambda: clock
     if lane is not None:
         application.dependency_overrides[get_control_emitter] = lambda: lane
@@ -109,12 +85,12 @@ def _catalog(ns: LanceNamespace, control: Path, clock: _Clock, *, lane: ControlE
 
 
 def _record(client: TestClient, table: str = "lance_catalog$db$subjects") -> dict[str, Any]:
-    response = client.post(f"/management/v1/table/{table}/erasure", json={"predicate": _PREDICATE})
+    response = client.post(f"/management/v1/table/{table}/erasure", json={"predicate": PREDICATE})
     assert response.status_code == 202, response.text
     return response.json()
 
 
-def _verify(client: TestClient, obligation_id: str, predicate: str = _PREDICATE) -> Any:  # noqa: ANN401 — an httpx.Response
+def _verify(client: TestClient, obligation_id: str, predicate: str = PREDICATE) -> Any:  # noqa: ANN401 — an httpx.Response
     return client.post(f"/management/v1/table/lance_catalog$db$subjects/erasure/{obligation_id}/verify", json={"predicate": predicate})
 
 
@@ -136,9 +112,9 @@ def test_the_door_records_an_obligation_and_commits_nothing(tmp_path: Path) -> N
     expected = ("open", {"main": history[-1]}, "user:dex~olivia", [])
     assert (obligation["state"], obligation["refs"], obligation["requested_by"], obligation["open_surfaces"]) == expected
     after = lance.dataset(location)
-    assert ([entry["version"] for entry in after.versions()], after.count_rows(filter=_PREDICATE)) == (history, 1)
+    assert ([entry["version"] for entry in after.versions()], after.count_rows(filter=PREDICATE)) == (history, 1)
     recorded = (tmp_path / "control" / "_erasure_obligations" / f"{obligation['obligation_id']}.json").read_bytes()
-    assert _SUBJECT.encode() not in recorded
+    assert SUBJECT.encode() not in recorded
 
 
 @pytest.mark.parametrize(
@@ -157,7 +133,7 @@ def test_a_job_that_skips_a_surface_leaves_the_obligation_open_naming_it(tmp_pat
     location = open_by_name(ns, StorageOptions(), _TABLE_ID).uri
     with _catalog(ns, tmp_path / "control", _Clock()) as client:
         obligation = _record(client)
-        job = erasure_job(location, _PREDICATE)
+        job = erasure_job(location, PREDICATE)
         for step in steps:
             getattr(job, step)()
         verified = _verify(client, obligation["obligation_id"])
@@ -188,7 +164,7 @@ def _another_tables(client: TestClient, ns: LanceNamespace, erasure_job: Any) ->
 def _a_released_one(client: TestClient, ns: LanceNamespace, erasure_job: Any) -> tuple[str, _Refused]:  # noqa: ANN401 — conftest.ErasureJob
     """A released obligation's digest is gone, and nothing reopens it."""
     obligation = _record(client)["obligation_id"]
-    erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, _PREDICATE).run()
+    erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, PREDICATE).run()
     assert _verify(client, obligation).json()["obligation"]["state"] == "released"
     return obligation, lambda: _verify(client, obligation)
 
@@ -230,7 +206,7 @@ def test_each_tag_the_verification_drops_is_announced_on_the_control_lane(tmp_pa
     lane = ControlEmitterDouble()
     with _catalog(ns, tmp_path / "control", _Clock(), lane=lane) as client:
         obligation = _record(client)["obligation_id"]
-        erasure_job(location, _PREDICATE).run()
+        erasure_job(location, PREDICATE).run()
         verified = _verify(client, obligation)
 
     assert verified.status_code == 200, verified.text
@@ -251,7 +227,7 @@ def test_an_obligation_following_one_the_catalog_never_recorded_is_refused_and_n
     requester reads this table as followed, so the door refuses it before it disarms or records anything."""
     ns = _subjects(tmp_path / "data")
     with _catalog(ns, tmp_path / "control", _Clock()) as client:
-        response = client.post("/management/v1/table/lance_catalog$db$subjects/erasure", json={"predicate": _PREDICATE, "follows": "0" * 32})
+        response = client.post("/management/v1/table/lance_catalog$db$subjects/erasure", json={"predicate": PREDICATE, "follows": "0" * 32})
         listed = client.get("/management/v1/erasures").json()["obligations"]
 
     assert (response.status_code, response.json()["code"], listed) == (400, 13, []), response.text
@@ -301,16 +277,13 @@ def derived_estate(keeps_provenance: None, governed_catalog: Any, tmp_path: Path
     obligation's id and ``lance_catalog$db$derived``'s uuid."""
     alice, client = governed_catalog.bearer("alice"), governed_catalog.client
     assert governed_catalog.create_in_the_estate("alice", "db").status_code == 200
-    rows = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
+    body = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
     for table in ("source", "derived"):
-        created = client.post(f"/v1/table/lance_catalog$db${table}/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        created = client.post(f"/v1/table/lance_catalog$db${table}/create", content=body, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert created.status_code == 200, created.text
     granted = client.post("/management/v1/table/lance_catalog$db$source/access/grant", json={"user": "dex~bob", "relation": "maintainer"}, headers=alice)
     assert granted.status_code == 200, granted.text
-    uuid_of = {
-        table: client.post(f"/v1/table/lance_catalog$db${table}/describe", json={}, headers=alice).json()["properties"]["rask.uuid"]
-        for table in ("source", "derived")
-    }
+    uuid_of = {table: governed_catalog.uuid("table", f"lance_catalog$db${table}", "alice") for table in ("source", "derived")}
     _record_edge(tmp_path, uuid_of["source"], uuid_of["derived"])
     recorded = client.post("/management/v1/table/lance_catalog$db$source/erasure", json={"predicate": "id = 99"}, headers=alice)
     assert recorded.status_code == 202, recorded.text
@@ -376,4 +349,4 @@ def test_an_obligation_open_past_its_deadline_is_listed_overdue_and_nothing_acts
         listed = client.get("/management/v1/erasures").json()["obligations"]
 
     assert [(entry["state"], entry["overdue"]) for entry in listed] == [("open", True)]
-    assert lance.dataset(location).count_rows(filter=_PREDICATE) == 1
+    assert lance.dataset(location).count_rows(filter=PREDICATE) == 1

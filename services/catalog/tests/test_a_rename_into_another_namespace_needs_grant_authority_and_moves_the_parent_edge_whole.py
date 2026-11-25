@@ -46,11 +46,9 @@ from lance_namespace import LanceNamespace, ServiceUnavailableError
 from lance_namespace.errors import ErrorCode
 from openfga_sdk import OpenFgaClient
 
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.records import location_claims
-
-
-_ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
+from tests.governed_catalog import ROWS
 
 
 class _RivalBefore:
@@ -88,19 +86,13 @@ def _post(catalog: Any, path: str, caller: str, **kwargs: Any) -> Any:
     return catalog.client.post(path, headers={**catalog.bearer(caller), **kwargs.pop("headers", {})}, **kwargs)
 
 
-def _ok(catalog: Any, path: str, caller: str = "alice", **kwargs: Any) -> dict[str, Any]:
-    answer = _post(catalog, path, caller, **kwargs)
-    assert answer.status_code == 200, f"{path}: {answer.status_code} {answer.text}"
-    return answer.json()
-
-
 def _create_table(catalog: Any, table: str, caller: str = "alice") -> dict[str, Any]:
-    return _ok(catalog, f"/v1/table/{table}/create", caller, content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    return catalog.ok(f"/v1/table/{table}/create", caller, content=ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
 
 
 def _object(catalog: Any, kind: str, name: str) -> str:
     """The object ``name``'s grants are held by: ``<kind>:<its uuid>``."""
-    return f"{kind}:{_ok(catalog, f'/v1/{kind}/{name}/describe', json={})['properties']['rask.uuid']}"
+    return f"{kind}:{catalog.uuid(kind, name, 'alice')}"
 
 
 def _edges(child: str, parent: str) -> tuple[tuple[str, str, str], tuple[str, str, str]]:
@@ -121,10 +113,10 @@ def estate(governed_catalog: Any) -> Any:
     ``open`` and dave ``managed``."""
     for namespace in ("open", "managed"):
         assert governed_catalog.create_in_the_estate("alice", namespace).status_code == 200
-        _ok(governed_catalog, f"/management/v1/namespace/lance_catalog${namespace}/access/grant", json={"user": "dex~bob", "relation": "writer"})
-    _ok(governed_catalog, "/management/v1/namespace/lance_catalog$open/access/grant", json={"user": "dex~erin", "relation": "reader"})
-    _ok(governed_catalog, "/management/v1/namespace/lance_catalog$managed/access/grant", json={"user": "dex~dave", "relation": "reader"})
-    _ok(governed_catalog, "/management/v1/namespace/lance_catalog$managed/managed-access/set", json={"enabled": True})
+        governed_catalog.ok(f"/management/v1/namespace/lance_catalog${namespace}/access/grant", "alice", json={"user": "dex~bob", "relation": "writer"})
+    governed_catalog.ok("/management/v1/namespace/lance_catalog$open/access/grant", "alice", json={"user": "dex~erin", "relation": "reader"})
+    governed_catalog.ok("/management/v1/namespace/lance_catalog$managed/access/grant", "alice", json={"user": "dex~dave", "relation": "reader"})
+    governed_catalog.ok("/management/v1/namespace/lance_catalog$managed/managed-access/set", "alice", json={"enabled": True})
     return governed_catalog
 
 
@@ -153,12 +145,12 @@ def test_a_move_across_a_managed_boundary_is_refused_to_a_mover_without_grant_au
 
     assert (refused.status_code, refused.json()["code"], refused.json()["detail"]) == (403, ErrorCode.PERMISSION_DENIED.value, refusal), refused.text
     assert estate.store.tuples() == held, "the refused move wrote or removed a tuple"
-    _ok(estate, f"/v1/table/{source}$t/describe", "bob", json={})
+    estate.ok(f"/v1/table/{source}$t/describe", "bob", json={})
 
 
 def test_a_rename_within_its_namespace_asks_what_a_create_asks_there(estate: Any) -> None:
     _create_table(estate, "lance_catalog$open$t", caller="bob")
-    _ok(estate, "/management/v1/namespace/lance_catalog$open/access/revoke", json={"user": "dex~bob", "relation": "writer"})
+    estate.ok("/management/v1/namespace/lance_catalog$open/access/revoke", "alice", json={"user": "dex~bob", "relation": "writer"})
 
     refused = _post(estate, "/v1/table/lance_catalog$open$t/rename", "bob", json={"new_table_name": "u"})
 
@@ -167,7 +159,7 @@ def test_a_rename_within_its_namespace_asks_what_a_create_asks_there(estate: Any
         ErrorCode.PERMISSION_DENIED.value,
         "can_create_table required on namespace:lance_catalog$open",
     ), refused.text
-    _ok(estate, "/v1/table/lance_catalog$open$t/describe", "bob", json={})
+    estate.ok("/v1/table/lance_catalog$open$t/describe", "bob", json={})
 
 
 def test_a_rename_into_another_warehouse_is_refused_and_changes_nothing(estate: Any) -> None:
@@ -182,7 +174,7 @@ def test_a_rename_into_another_warehouse_is_refused_and_changes_nothing(estate: 
         ErrorCode.INVALID_INPUT.value,
     ), refused.text
     assert estate.store.tuples() == held, "the refused rename wrote or removed a tuple"
-    _ok(estate, "/v1/table/lance_catalog$open$t/describe", json={})
+    estate.ok("/v1/table/lance_catalog$open$t/describe", "alice", json={})
 
 
 class _Scene(NamedTuple):
@@ -216,7 +208,7 @@ def _land_before(scene: _Scene, method: str, rival: Callable[[], object]) -> Non
 
 
 def _the_destination_is_dropped_as_the_name_is_registered(scene: _Scene) -> None:
-    _land_before(scene, "register_table", lambda: _ok(scene.estate, "/v1/namespace/lance_catalog$managed/drop", json={}))
+    _land_before(scene, "register_table", lambda: scene.estate.ok("/v1/namespace/lance_catalog$managed/drop", "alice", json={}))
 
 
 def _the_backend_does_not_detach_the_source(scene: _Scene) -> None:
@@ -490,7 +482,7 @@ def _the_winners_own(scene: _Scene, _lacking: set[tuple[str, str, str]]) -> set[
     return {*_edges(won, scene.space("lance_catalog$open")), ("user:dex~alice", "owner", won)}
 
 
-_ARROW = {"content": _ROWS, "headers": {"Content-Type": ARROW_STREAM_MEDIA_TYPE}}
+_ARROW = {"content": ROWS, "headers": {"Content-Type": ARROW_STREAM_MEDIA_TYPE}}
 _REGISTERED_AGAIN = ("/v1/table/lance_catalog$open$t/register", {"json": {"location": "held"}}, (409, ErrorCode.TABLE_ALREADY_EXISTS.value))
 
 
@@ -546,8 +538,8 @@ def test_a_door_that_finds_a_table_standing_grants_nothing_and_a_refused_registr
     adds: Callable[[_Scene, set[tuple[str, str, str]]], set[tuple[str, str, str]]],
 ) -> None:
     # A registered table, since only a registered table's location can be registered again.
-    lance.write_dataset(pa.ipc.open_stream(_ROWS).read_all(), str(tmp_path / "held"), data_storage_version="2.2", enable_stable_row_ids=True)
-    _ok(estate, "/v1/table/lance_catalog$open$t/register", json={"location": "held"})
+    lance.write_dataset(pa.ipc.open_stream(ROWS).read_all(), str(tmp_path / "held"), data_storage_version="2.2", enable_stable_row_ids=True)
+    estate.ok("/v1/table/lance_catalog$open$t/register", "alice", json={"location": "held"})
     scene = _Scene(estate, monkeypatch, _object(estate, "table", "lance_catalog$open$t"))
     lacking = found(scene)
     held = estate.store.tuples()

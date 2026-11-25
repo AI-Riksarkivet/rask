@@ -32,18 +32,16 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
-from catalog_settings import catalog_settings
 from lance_namespace import DescribeTableResponse, TableBranchNotFoundError
-from pydantic import SecretStr
 
 from catalog.api.v1.endpoints.credentials import vend_credentials
 from catalog.core.config import Settings
-from catalog.core.vending import ReclaimScope, VendedSession
 from catalog.services.table_claims import DoorTable, ResolvedTable
 from lakehouse.lancekit.features import TableFileFormat
 from lakehouse.records import location_claims
 from lakehouse.records.location_claims import ClaimStore
-from lakehouse.storage.credential import S3KeyPair
+from tests.catalog_settings import catalog_settings
+from tests.vendor_double import RecordingVendor
 
 
 lance = pytest.importorskip("lance")
@@ -57,20 +55,6 @@ class _Namespace:
 
     def describe_table(self, request: Any) -> DescribeTableResponse:  # noqa: ANN401 — the door's own shape
         return DescribeTableResponse(location=self._location)
-
-
-class _Vendor:
-    """Records every vend it is asked for — the thing under test is whether it is asked at all."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-
-    def vend(self, **kwargs: Any) -> VendedSession:
-        self.calls.append(kwargs)
-        return VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)
-
-    def vend_reclaim(self, scope: ReclaimScope, *, session_name: str) -> VendedSession | None:
-        raise AssertionError("the table vend door vends no reclaim")
 
 
 def _settings() -> Settings:
@@ -100,8 +84,8 @@ def table(tmp_path: Path) -> str:
     return location
 
 
-def _vend(location: str, branch: str) -> tuple[Any, _Vendor]:
-    vendor = _Vendor()
+def _vend(location: str, branch: str) -> tuple[Any, RecordingVendor]:
+    vendor = RecordingVendor()
     response = asyncio.run(
         vend_credentials(
             id="ns$t",
@@ -123,7 +107,7 @@ def _vend(location: str, branch: str) -> tuple[Any, _Vendor]:
 def test_the_refusal_happens_BEFORE_a_credential_is_minted(table: str) -> None:
     """A door that refused after vending would have already handed out the grant. The vendor records
     every call, so an empty list is the assertion — the raise alone cannot tell the two apart."""
-    vendor = _Vendor()
+    vendor = RecordingVendor()
     with pytest.raises(TableBranchNotFoundError):
         asyncio.run(
             vend_credentials(

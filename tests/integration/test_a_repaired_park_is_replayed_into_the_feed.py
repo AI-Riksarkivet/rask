@@ -17,7 +17,6 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 from anyio.from_thread import BlockingPortal
 from fastapi.testclient import TestClient
@@ -29,7 +28,7 @@ from lakehouse.governed import fga_reads
 from lakehouse.governed.fga_ids import user_object
 from tests.app_state import app_of
 from tests.bus_double import BusDouble
-from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, relay_tick, run_event
+from tests.integration.lineage_app import SUBJECT_HEADER, declared, governed_lineage, live_catalog, relay_tick, run_event
 
 
 _TABLE = "lance_catalog$acme-silver$parked"
@@ -37,14 +36,6 @@ _RUN = "run-parked"
 _ADMIN = "dex~root"
 _AUTHOR = "dex~alice"
 _REPLAY = f"/admin/dlq/parked/{_RUN}/replay"
-
-
-def _declared(catalog_url: str, table: str) -> str:
-    namespace = table.rsplit("$", 1)[0]
-    with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
-        assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
-        assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200
-        return str(catalog.post(f"/v1/table/{table}/describe", json={}).json()["properties"]["rask.uuid"])
 
 
 def _event(state: str, table: str, *, outputs: bool) -> dict[str, Any]:
@@ -85,7 +76,7 @@ def _governed(monkeypatch: pytest.MonkeyPatch, table: str) -> None:
 @contextmanager
 def _estate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Generator[_Estate]:
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
-        table = f"table:{_declared(catalog_url, _TABLE)}"
+        table = f"table:{declared(catalog_url, _TABLE)[_TABLE]}"
         _governed(monkeypatch, table)
         from lineage.api.ingest_lane import IngestLane, lane
         from lineage.core.config import get_settings

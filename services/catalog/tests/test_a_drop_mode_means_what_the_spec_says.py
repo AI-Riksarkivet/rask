@@ -32,7 +32,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from catalog_settings import catalog_settings
 from lance_namespace import DescribeNamespaceResponse, DropNamespaceRequest, DropNamespaceResponse, InvalidInputError, NamespaceNotFoundError
 from unfiled_announcer import unfiled
 
@@ -42,6 +41,7 @@ from catalog.api.v1.endpoints import namespaces as ns_ep
 from catalog.core.modes import DropMode
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.naming import UUID_PROPERTY
+from tests.catalog_settings import catalog_settings
 from tests.unit.named_resolver import door_resolver
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 

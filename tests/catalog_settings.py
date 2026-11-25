@@ -23,6 +23,7 @@ _GOVERNED: Final[frozendict[str, Any]] = frozendict(
         "oidc_issuer": "https://idp.example",
         "oidc_audience": "lance",
         "oidc_idp_id": "dex",
+        "oidc_connectors": {"local": "dex"},
         "fga_enabled": True,
         "fga_api_url": "http://openfga:8080",
     }

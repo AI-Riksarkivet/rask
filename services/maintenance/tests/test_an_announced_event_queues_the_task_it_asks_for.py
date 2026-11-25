@@ -27,8 +27,8 @@ from uuid import uuid4
 
 import httpx
 import pytest
-from botocore.exceptions import ClientError
 from tests.secret_store_double import SecretStoreDouble
+from tests.store_answers import answered
 
 from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
@@ -200,9 +200,8 @@ async def test_a_claim_the_store_does_not_answer_for_is_a_failure_a_redelivery_c
     end the worker's process on every delivery of the announcement."""
 
     def refused(_claims: object, location: str) -> None:
-        answer: Any = {"Error": {"Code": "SlowDown", "Message": "reduce your request rate"}, "ResponseMetadata": {"HTTPStatusCode": 503}}
         with store_call(f"reading the claim on {location}"):
-            raise ClientError(answer, "GetObject")
+            raise answered(503, "SlowDown", operation="GetObject")
 
     monkeypatch.setattr(location_claims, "holder", refused)
     arrivals = Arrivals(MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(_RecordingQueue()))

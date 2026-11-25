@@ -17,26 +17,16 @@ from lance_namespace import CreateNamespaceRequest, InvalidInputError, connect
 from catalog.services.table_claims import DoorTable
 from catalog.services.tables.creation import create_table
 from catalog.services.tables.writes import coerce_insert_arrow
+from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
-from tests.door_tables import door_table
-
-
-#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
-_BODY_LIMIT = 256 * 1024 * 1024
+from tests.door_tables import BODY_LIMIT, door_table
 
 
 lance = pytest.importorskip("lance")
 
 TABLE_ID = ["db", "rows"]
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("s", pa.string())])
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 @pytest.fixture
@@ -65,4 +55,4 @@ def test_a_column_the_table_lacks_is_refused_by_name(table: DoorTable) -> None:
     payload = pa.table({"id": pa.array([2], pa.int64()), "s": pa.array(["b"]), "OOPS": pa.array(["gone"])})
 
     with pytest.raises(InvalidInputError, match="column\\(s\\) the table does not have: OOPS"):
-        coerce_insert_arrow(table, StorageOptions(), _ipc(payload), max_bytes=_BODY_LIMIT)
+        coerce_insert_arrow(table, StorageOptions(), encode_arrow_stream(payload), max_bytes=BODY_LIMIT)

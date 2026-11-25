@@ -5,71 +5,19 @@ and grants the job identity the relations a drill names on that namespace. The j
 deleted again at the end: the tables first, then the warehouse with its bucket, then the project.
 """
 
-import os
 import uuid
 from collections.abc import Callable, Iterator, Sequence
-from typing import Any
 
-import lance_namespace
 import requests
-from byo_scenario import CLOSE_EACH_REQUEST
-from credentials import Credential, credential
-from principals import DEX_CLIENT, DEX_SCOPE, principal_of
-
-
-CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
-DEX = os.environ.get("LANCE_E2E_DEX", "").rstrip("/")
-DEX_SECRET = credential(Credential.DEX_SECRET, "lance-catalog-secret")
-ADMIN_USER = os.environ.get("LANCE_E2E_USER", "alice@example.com")
-JOB_USER = os.environ.get("LANCE_E2E_PIPELINE_USER", "publisher@rask.internal")
-
-
-class Identity:
-    """One Dex user: its bearer, and the principal the estate's grants name ([[LH-063]]).
-
-    Every request it sends closes its connection (`byo_scenario.CLOSE_EACH_REQUEST`): the admin's session sits idle
-    while a drill runs, and a keep-alive connection the catalog closed meanwhile reaches the client through the lane's
-    port-forward only as the teardown's first request fails (`RemoteDisconnected`, three of four e2e-stack runs on
-    2026-10-18, each after 7-8.5 s idle).
-    """
-
-    def __init__(self, email: str) -> None:
-        answer = requests.post(
-            f"{DEX}/token",
-            data={
-                "grant_type": "password",
-                "client_id": DEX_CLIENT,
-                "client_secret": DEX_SECRET,
-                "username": email,
-                "password": "password",
-                "scope": DEX_SCOPE,
-            },
-            timeout=20,
-        )
-        answer.raise_for_status()
-        self.bearer = str(answer.json()["id_token"])
-        self.principal = principal_of(CATALOG, self.bearer)
-        self.http = requests.Session()
-        self.http.headers["authorization"] = f"Bearer {self.bearer}"
-        self.http.headers["connection"] = CLOSE_EACH_REQUEST
-
-    def namespace(self) -> lance_namespace.LanceNamespace:
-        """The stock client a job off the cluster gets."""
-        return lance_namespace.connect("rest", {"uri": CATALOG, "headers.Authorization": f"Bearer {self.bearer}", "headers.Connection": CLOSE_EACH_REQUEST})
-
-
-def ok(answer: requests.Response) -> dict[str, Any]:
-    """The JSON body of a 200 answer; any other status fails, naming the request."""
-    assert answer.status_code == 200, f"{answer.request.method} {answer.request.url} -> {answer.status_code}: {answer.text[:500]}"
-    return answer.json()
+from byo_scenario import ADMIN_USER, CATALOG, PIPELINE_USER, Identity, ok
 
 
 class Tenant:
     """The scratch tenant one run drives, and what it must take down again."""
 
     def __init__(self, purpose: str, grants: Sequence[str]) -> None:
-        self.admin = Identity(ADMIN_USER)
-        self.job = Identity(JOB_USER)
+        self.admin = Identity.person(ADMIN_USER)
+        self.job = Identity.person(PIPELINE_USER)
         self.project = f"{purpose}-{uuid.uuid4().hex[:8]}"
         #: The tenant's namespace, in its own warehouse (whose id is the project's), so no other tenant's names meet it.
         self.bronze = f"{self.project}$bronze"

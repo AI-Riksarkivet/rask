@@ -35,6 +35,7 @@ from catalog.core import native
 from catalog.core.config import get_settings
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga_writes
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import location_claims
 from tests.governed_catalog import StoreTuples
 from tests.integration.catalog_and_maintenance import audited, catalog_and_maintenance
@@ -63,7 +64,7 @@ class _Estate:
     def standing(self, table: str) -> str | None:
         """The object ``table`` is governed as while it stands, else ``None``."""
         answer = self.catalog.post(f"/v1/table/{table}/describe", json={})
-        return f"table:{answer.json()['properties']['rask.uuid']}" if answer.status_code == 200 else None
+        return f"table:{answer.json()['properties'][UUID_PROPERTY]}" if answer.status_code == 200 else None
 
 
 @pytest.fixture
@@ -212,7 +213,7 @@ def test_a_namespace_create_killed_between_its_two_writes_leaves_no_namespace_wi
     assert [held for held in left if held[1] == "child"] == [], f"the dead create names a child of a standing object: {left}"
     created = estate.catalog.post(f"/v1/namespace/{namespace}/create", json={})
     assert created.status_code == 200, f"{namespace} stands and no tuple names it, or its name is not free: {created.text}"
-    standing = f"namespace:{created.json()['properties']['rask.uuid']}"
+    standing = f"namespace:{created.json()['properties'][UUID_PROPERTY]}"
     assert left.isdisjoint(estate.store.naming([standing]).get(standing, set())), "the namespace created since holds the dead create's grants"
     # Its owner, its parent edge and its parent's child edge naming it.
     assert len(estate.store.naming([standing]).get(standing, set())) == 3, estate.store.naming([standing])
@@ -238,5 +239,5 @@ def test_a_namespace_whose_create_answer_was_lost_keeps_its_grants(estate: _Esta
     described = estate.catalog.post(f"/v1/namespace/{namespace}/describe", json={})
 
     assert described.status_code == 200, described.text
-    standing = f"namespace:{described.json()['properties']['rask.uuid']}"
+    standing = f"namespace:{described.json()['properties'][UUID_PROPERTY]}"
     assert {held[1] for held in estate.store.naming([standing]).get(standing, set())} == {"owner", "parent"}

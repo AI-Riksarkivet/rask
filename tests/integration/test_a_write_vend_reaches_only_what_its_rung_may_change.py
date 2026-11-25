@@ -28,7 +28,6 @@ applies IAM's wildcard semantics and an explicit Deny's precedence. The store's 
 
 import json
 import re
-import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator
@@ -42,15 +41,16 @@ import lance
 import lance_namespace
 import pyarrow as pa
 import pytest
-import uvicorn
 from lance_namespace import ErrorCode
-from moto.iam.access_control import IAMPolicy, PermissionResult
 from moto.sts.models import sts_backends
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import file_identities, history_fences, location_claims, trash
 from lakehouse.records.record_store import record_key
+from tests.iam_verdict import permits
 from tests.integration import store_requests
+from tests.live_server import serve
 
 
 _SCHEMA = pa.schema([("id", pa.int64()), lance.blob_field("payload")])
@@ -92,7 +92,7 @@ class _Estate:
     def table_uuid(self) -> str:
         described = self.client.post(f"/v1/table/{_TABLE}/describe", json={})
         assert described.status_code == 200, described.text
-        return str(described.json()["properties"]["rask.uuid"])
+        return str(described.json()["properties"][UUID_PROPERTY])
 
 
 @pytest.fixture
@@ -121,29 +121,9 @@ def estate(moto_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> It
     get_settings.cache_clear()
     from catalog.main import app
 
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 30
-    while not server.started:
-        if not thread.is_alive() or time.monotonic() > deadline:
-            raise RuntimeError("uvicorn did not start")
-        time.sleep(0.05)
-    with httpx.Client(base_url=f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}", timeout=120) as client:
+    with serve(app) as url, httpx.Client(base_url=url, timeout=120) as client:
         yield _Estate(client, s3, bucket)
-    server.should_exit = True
-    thread.join(timeout=30)
     get_settings.cache_clear()
-
-
-def _permits(policy: dict[str, Any], action: str, bucket: str, key: str) -> bool:
-    """IAM's verdict on ``action`` over ``bucket/key``, by moto's evaluator.
-
-    moto turns a Resource into a regex without escaping it, so the ``$`` a table directory carries would
-    read as an end anchor; it is swapped for a character IAM gives no meaning, on both sides alike.
-    """
-    document = json.dumps(policy).replace("$", "~")
-    return IAMPolicy(document).is_action_permitted(action, f"arn:aws:s3:::{bucket}/{key.replace('$', '~')}") == PermissionResult.PERMITTED
 
 
 def _within(location: str, bucket: str) -> str:
@@ -195,11 +175,11 @@ _Tier = Literal["read", "write", "maintain"]
 def test_a_vend_permits_only_what_its_tier_may_change(estate: _Estate, tier: _Tier, branch: str, action: str, relative: str, allowed: bool) -> None:
     _, policy = estate.vend(tier, branch)
 
-    assert _permits(policy, action, estate.bucket, f"{_within(estate.location, estate.bucket)}/{relative}") is allowed
+    assert permits(policy, action, estate.bucket, f"{_within(estate.location, estate.bucket)}/{relative}") is allowed
     # The prefix SIBLING (`<table>_secret/`): an IAM `*` matches across `/`, so a resource that dropped the
     # table's trailing delimiter would reach every key that merely starts with the table's directory name.
     sibling = f"{_within(estate.location, estate.bucket)}_secret/{relative}"
-    assert not _permits(policy, action, estate.bucket, sibling), "a prefix sibling of the table is never reached"
+    assert not permits(policy, action, estate.bucket, sibling), "a prefix sibling of the table is never reached"
 
 
 def test_a_maintain_vend_writes_only_its_own_tables_records_on_the_control_root(estate: _Estate) -> None:
@@ -218,7 +198,7 @@ def test_a_maintain_vend_writes_only_its_own_tables_records_on_the_control_root(
         "holds-no-other-fence": ("s3:PutObject", history_fences.fence_key(other)),
         "forgets-no-other-records": ("s3:DeleteObject", f"{file_identities.records_of(other)}/txn.json"),
     }
-    granted = {name: _permits(policy, action, estate.bucket, key) for name, (action, key) in asked.items()}
+    granted = {name: permits(policy, action, estate.bucket, key) for name, (action, key) in asked.items()}
     assert granted == {
         "holds-its-fence": True,
         "forgets-its-records": True,
@@ -309,7 +289,7 @@ def _dropped(estate: _Estate, monkeypatch: pytest.MonkeyPatch, *, grace_days: st
     assert described.status_code == 200, described.text
     dropped = estate.client.post(f"/v1/table/lance_catalog$db${name}/drop")
     assert dropped.status_code == 200, dropped.text
-    return str(described.json()["properties"]["rask.uuid"]), location
+    return str(described.json()["properties"][UUID_PROPERTY]), location
 
 
 def _record(estate: _Estate, uuid: str) -> trash.TrashRecord:
@@ -437,7 +417,7 @@ def test_a_reclaim_session_deletes_its_tables_bytes_and_nothing_else(estate: _Es
         "ends-no-erasure-input": ("s3:DeleteObject", record_key("_table_inputs", "table", uuid)),
         "deletes-no-other-table": ("s3:DeleteObject", f"{_within(estate.location, estate.bucket)}/data/f.lance"),
     }
-    granted = {name: _permits(policy, action, estate.bucket, key) for name, (action, key) in asked.items()}
+    granted = {name: permits(policy, action, estate.bucket, key) for name, (action, key) in asked.items()}
     assert granted == {
         "deletes-its-bytes": True,
         "puts-none-of-its-bytes": False,
@@ -479,7 +459,7 @@ def test_a_writer_lands_rows_with_only_what_its_vend_allows(estate: _Estate) -> 
     new = sorted(key for key in estate.keys() - before if key.startswith(f"{_within(estate.location, estate.bucket)}/"))
     finalized = [key for key in new if _FINAL_MANIFEST.search(key)]
     staged_by_the_writer = [key for key in new if key not in finalized]
-    assert finalized and not any(_permits(policy, "s3:PutObject", estate.bucket, key) for key in finalized), finalized
-    assert staged_by_the_writer and all(_permits(policy, "s3:PutObject", estate.bucket, key) for key in staged_by_the_writer), staged_by_the_writer
+    assert finalized and not any(permits(policy, "s3:PutObject", estate.bucket, key) for key in finalized), finalized
+    assert staged_by_the_writer and all(permits(policy, "s3:PutObject", estate.bucket, key) for key in staged_by_the_writer), staged_by_the_writer
     landed = lance.dataset(estate.location, storage_options=options)
     assert sorted(landed.to_table(columns=["id"]).column("id").to_pylist()) == [0, 1, 2]

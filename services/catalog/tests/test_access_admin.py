@@ -16,7 +16,6 @@ from functools import partial
 from typing import Any
 
 import pytest
-from catalog_settings import governed_settings
 from lance_namespace import (
     InvalidInputError,
     ServiceUnavailableError,
@@ -37,9 +36,8 @@ from catalog.schemas import (
 )
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.governed import fga_model, fga_provision, fga_reads, fga_writes
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
+from tests.callers import person
+from tests.catalog_settings import governed_settings
 from tests.control_emitter_double import ControlEmitterDouble
 
 
@@ -70,11 +68,6 @@ def _fga_client(stub: Any = None) -> Any:
     monkeypatches the module-level `ep.fga_reads.*` and `ep.fga_writes.*` functions, and the ones that do not never touch it.
     """
     return stub if stub is not None else object()
-
-
-def _token(name: str) -> PersonPrincipal:
-    """The person `name` as the door's verifier hands them over: the principal `dex~<name>`."""
-    return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss="i", sub=name, aud="lance", exp=1, iat=1))
 
 
 class _AuditRecorder:
@@ -109,7 +102,7 @@ def _read(monkeypatch: pytest.MonkeyPatch, **kwargs: Any) -> tuple[dict[str, Any
             resolver=_RESOLVER,
             settings=_settings(),
             client=_fga_client(),
-            token=_token("root_admin"),
+            token=person("root_admin"),
             **kwargs,
         )
     )
@@ -145,7 +138,7 @@ def _mutate(monkeypatch: pytest.MonkeyPatch, body: AccessTuple, *, write: bool, 
         handler(
             client=_fga_client(),
             announcer=unfiled(NoopControlEmitter()),
-            token=_token("root_admin"),
+            token=person("root_admin"),
             body=NamedAccessTuple.model_validate(body.model_dump()),
         )
     )
@@ -195,7 +188,7 @@ def _mutate_recording_emission(
     monkeypatch.setattr(ep.fga_writes, "write_tuples" if write else "delete_tuples", _fake_mutation)
     # The control emitter is INJECTED now (catalog-api-09) rather than dug out of `request.app.state`.
     handler = partial(ep.write_access_tuple if write else ep.delete_access_tuple, resolver=_RESOLVER)
-    asyncio.run(handler(client=_fga_client(), announcer=unfiled(emitter), token=_token("root_admin"), body=NamedAccessTuple.model_validate(body.model_dump())))
+    asyncio.run(handler(client=_fga_client(), announcer=unfiled(emitter), token=person("root_admin"), body=NamedAccessTuple.model_validate(body.model_dump())))
     return emitter
 
 
@@ -268,7 +261,7 @@ def test_check_probes_any_defined_relation_with_qualified_subject(
     body = AccessCheckBody(user=subject, relation="writer", object=NAMESPACE)
 
     response = _on(
-        openfga_store, lambda client: ep.check_access(resolver=_RESOLVER, settings=_settings(), client=client, token=_token("root_admin"), body=body)
+        openfga_store, lambda client: ep.check_access(resolver=_RESOLVER, settings=_settings(), client=client, token=person("root_admin"), body=body)
     )
 
     assert response.allowed is allowed
@@ -313,7 +306,7 @@ def test_list_objects_qualifies_a_bare_subject_and_says_when_openfga_cut_the_ans
         ep.list_access_objects(
             settings=_settings(),
             client=_fga_client(),
-            token=_token("root_admin"),
+            token=person("root_admin"),
             body=AccessListObjectsRequest(user="dex~alice", relation="can_read_data", type="table"),
         )
     )
@@ -360,7 +353,7 @@ def test_list_objects_outage_audits_failure_and_raises(rec: _AuditRecorder, monk
             ep.list_access_objects(
                 settings=_settings(),
                 client=_fga_client(),
-                token=_token("root_admin"),
+                token=person("root_admin"),
                 body=AccessListObjectsRequest(user="dex~alice", relation="can_read_data", type="table"),
             )
         )
@@ -380,7 +373,7 @@ def test_list_users_returns_qualified_subjects_and_flags_truncation(rec: _AuditR
             resolver=_RESOLVER,
             settings=_settings(),
             client=_fga_client(),
-            token=_token("root_admin"),
+            token=person("root_admin"),
             body=AccessListUsersRequest(object=TABLE, relation="can_read_data"),
         )
     )
@@ -449,7 +442,7 @@ def test_expand_returns_the_tree_and_records_the_depth(rec: _AuditRecorder, monk
             resolver=_RESOLVER,
             settings=_settings(),
             client=_fga_client(),
-            token=_token("root_admin"),
+            token=person("root_admin"),
             body=AccessExpandRequest(object=TABLE, relation="reader", depth=3),
         )
     )
@@ -494,7 +487,7 @@ def test_expand_outage_audits_failure_and_raises(rec: _AuditRecorder, monkeypatc
                 resolver=_RESOLVER,
                 settings=_settings(),
                 client=_fga_client(),
-                token=_token("root_admin"),
+                token=person("root_admin"),
                 body=AccessExpandRequest(object=TABLE, relation="reader"),
             )
         )
@@ -537,7 +530,7 @@ def test_simulate_returns_the_delta_not_just_the_verdict(
     body = AccessSimulateRequest(user="dex~alice", relation="can_read_data", object=TABLE, hypothetical=[hypothetical])
 
     response = _on(
-        openfga_store, lambda client: ep.simulate_access(resolver=_RESOLVER, settings=_settings(), client=client, token=_token("root_admin"), body=body)
+        openfga_store, lambda client: ep.simulate_access(resolver=_RESOLVER, settings=_settings(), client=client, token=person("root_admin"), body=body)
     )
 
     assert (response.baseline, response.allowed) == verdicts
@@ -581,7 +574,7 @@ def test_simulate_outage_audits_failure_and_raises(rec: _AuditRecorder, monkeypa
                 resolver=_RESOLVER,
                 settings=_settings(),
                 client=_fga_client(),
-                token=_token("root_admin"),
+                token=person("root_admin"),
                 body=AccessSimulateRequest(user="dex~alice", relation="reader", object=TABLE),
             )
         )
@@ -603,7 +596,7 @@ def _write_conditional(monkeypatch: pytest.MonkeyPatch, body: AccessTuple) -> li
             resolver=_RESOLVER,
             client=_fga_client(),
             announcer=unfiled(NoopControlEmitter()),
-            token=_token("root_admin"),
+            token=person("root_admin"),
             body=body,
         )
     )
@@ -705,7 +698,7 @@ def test_a_caller_supplied_clock_is_refused_on_a_write(rec: _AuditRecorder, monk
     with pytest.raises(InvalidInputError, match="cannot carry current_time on the tuple"):
         asyncio.run(
             ep.write_access_tuple(
-                resolver=_RESOLVER, client=_fga_client(), announcer=unfiled(NoopControlEmitter()), token=_token("root_admin"), body=_clock_pinned_grant()
+                resolver=_RESOLVER, client=_fga_client(), announcer=unfiled(NoopControlEmitter()), token=person("root_admin"), body=_clock_pinned_grant()
             )
         )
     assert written == []

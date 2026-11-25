@@ -8,63 +8,41 @@ subject too, which is its own surface ([[LH-263]]). The job here rewrites the so
 tag keeps the version the clone reads while the source's own history is reclaimed.
 """
 
-import logging
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
 import lance
 import lance_namespace
-import pyarrow as pa
 import pytest
-from fastapi import FastAPI
+from erasure_rig import PREDICATE, SUBJECT, erasure_doors, rows
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from tables_by_name import open_by_name
 
-from catalog.api.dependencies import get_namespace, get_storage_options, request_settings
-from catalog.api.v1.endpoints import erasure as door
-from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.tables.creation import create_table
-from catalog.services.tables.writes import read_arrow_body
-from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records import base_registry, clone_sources
 from lakehouse.storage.options import StorageOptions
-
-
-#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
-_BODY_LIMIT = 256 * 1024 * 1024
-
-
-_SUBJECT = "alice"
-_PREDICATE = "pii = 'alice'"
-
-
-def _rows(*names: str) -> pa.Table:
-    return pa.table({"pii": pa.array(list(names))})
+from tests.catalog_settings import catalog_settings
 
 
 @pytest.fixture
 def namespace(tmp_path: Path) -> LanceNamespace:
     """A table and, beside it, a shallow clone that resolves its files through the table's."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, _rows(_SUBJECT, "bob").schema) as writer:
-        writer.write_table(_rows(_SUBJECT, "bob"))
     ns.create_namespace(CreateNamespaceRequest(id=["db"], properties=with_minted_uuid(None)))
     create_table(
         ns,
         StorageOptions(),
         ["db", "subjects"],
-        table=read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
+        table=rows(SUBJECT, "bob"),
         root=str(tmp_path / "data"),
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control")),
         holder="db$subjects",
     )
-    open_by_name(ns, StorageOptions(), ["db", "subjects"]).insert(_rows("carol"))
+    open_by_name(ns, StorageOptions(), ["db", "subjects"]).insert(rows("carol"))
     source = open_by_name(ns, StorageOptions(), ["db", "subjects"])
     clone = str(tmp_path / "data" / "clone.lance")
     source.shallow_clone(clone, (None, None))
@@ -75,25 +53,16 @@ def namespace(tmp_path: Path) -> LanceNamespace:
 
 @pytest.fixture
 def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
-    settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
-    application = FastAPI()
-    install_problem_handlers(application, logging.getLogger(__name__))
-    application.include_router(door.table_router)
-    application.include_router(door.obligations_router)
-    application.state.control_emitter = NoopControlEmitter()  # the lifespan's, with control emission off
-    application.dependency_overrides[request_settings] = lambda: settings
-    application.dependency_overrides[get_namespace] = lambda: namespace
-    application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
-    with TestClient(application) as test_client:
+    with TestClient(erasure_doors(namespace, catalog_settings(LANCE_CONTROL_ROOT=str(tmp_path / "control")))) as test_client:
         yield test_client
 
 
 def test_the_door_leaves_a_clones_source_readable_through_the_clone(client: TestClient, namespace: LanceNamespace, tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
-    recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE})
+    recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": PREDICATE})
     assert recorded.status_code == 202, recorded.text
-    erasure_job(open_by_name(namespace, StorageOptions(), ["db", "subjects"]).uri, _PREDICATE).run()
+    erasure_job(open_by_name(namespace, StorageOptions(), ["db", "subjects"]).uri, PREDICATE).run()
 
-    response = client.post(f"/management/v1/table/db$subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": _PREDICATE})
+    response = client.post(f"/management/v1/table/db$subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": PREDICATE})
 
     assert response.status_code == 200, response.text
     verification = response.json()

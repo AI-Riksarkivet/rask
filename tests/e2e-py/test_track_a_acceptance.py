@@ -56,7 +56,6 @@ and a credentials directory whose `token` file holds a project-creating user's D
     uv run pytest tests/e2e-py/test_track_a_acceptance.py -v
 """
 
-import io
 import os
 import uuid
 from collections.abc import Iterator
@@ -64,13 +63,13 @@ from typing import Any
 
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 import requests
 from credentials import Credential, credential
 from liveness import skip_unless_live
 from store_identity import store_options
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.naming import CATALOG_DELIMITER
 
 
@@ -78,7 +77,6 @@ CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "").rstrip("/")
 TOKEN = credential(Credential.TOKEN)
 S3_ENDPOINT = os.environ.get("LANCE_E2E_S3_ENDPOINT", "")
 
-ARROW_STREAM = "application/vnd.apache.arrow.stream"
 
 pytestmark = [
     pytest.mark.e2e,
@@ -106,13 +104,6 @@ def _vended(uri: str) -> dict[str, str]:
     return dict(r.json()["storage_options"])
 
 
-def _arrow_ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
-
-
 class Estate:
     """One run's own tenant, and the four calls every test makes against it."""
 
@@ -128,8 +119,8 @@ class Estate:
         """Create a table through the catalog's Arrow-IPC door; returns its dataset URI."""
         r = requests.post(
             f"{CATALOG}/v1/table/{self.table_id(name)}/create",
-            data=_arrow_ipc(table),
-            headers={**_auth(), "content-type": ARROW_STREAM},
+            data=encode_arrow_stream(table),
+            headers={**_auth(), "content-type": ARROW_STREAM_MEDIA_TYPE},
             timeout=120,
         )
         assert r.status_code == 200, r.text
@@ -447,8 +438,8 @@ def _insert(estate: Estate, name: str, table: pa.Table, *, branch: str | None = 
     query = f"?branch={branch}" if branch else ""
     return requests.post(
         f"{CATALOG}/v1/table/{estate.table_id(name)}/insert{query}",
-        data=_arrow_ipc(table),
-        headers={**_auth(), "content-type": ARROW_STREAM},
+        data=encode_arrow_stream(table),
+        headers={**_auth(), "content-type": ARROW_STREAM_MEDIA_TYPE},
         timeout=120,
     )
 
@@ -492,8 +483,8 @@ def test_a_branch_scoped_merge_insert_applies_to_the_branch_and_not_to_main(esta
 
     response = requests.post(
         f"{CATALOG}/v1/table/{estate.table_id('merge_branch')}/merge_insert?on=id&when_matched_update_all=true&branch=work",
-        data=_arrow_ipc(_rowed(("a", "MERGED"))),
-        headers={**_auth(), "content-type": ARROW_STREAM},
+        data=encode_arrow_stream(_rowed(("a", "MERGED"))),
+        headers={**_auth(), "content-type": ARROW_STREAM_MEDIA_TYPE},
         timeout=120,
     )
     assert response.status_code == 200, response.text
@@ -540,8 +531,8 @@ def test_the_merge_key_index_built_after_a_branch_merge_lands_on_the_branch(esta
 
     response = requests.post(
         f"{CATALOG}/v1/table/{estate.table_id('index_branch')}/merge_insert?on=id&when_matched_update_all=true&branch=work",
-        data=_arrow_ipc(_rowed(("a", "MERGED"))),
-        headers={**_auth(), "content-type": ARROW_STREAM},
+        data=encode_arrow_stream(_rowed(("a", "MERGED"))),
+        headers={**_auth(), "content-type": ARROW_STREAM_MEDIA_TYPE},
         timeout=120,
     )
     assert response.status_code == 200, response.text

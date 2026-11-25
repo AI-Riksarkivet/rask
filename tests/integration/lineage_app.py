@@ -13,7 +13,6 @@ OpenFGA store instead.
 import asyncio
 import json
 import logging
-import threading
 import time
 from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Mapping
 from contextlib import asynccontextmanager, contextmanager
@@ -23,7 +22,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 import httpx
 import pytest
-import uvicorn
 from fastapi import Body, FastAPI, Header, Response
 from fastapi.testclient import TestClient
 from openfga_sdk import OpenFgaClient
@@ -37,9 +35,11 @@ from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.problems.ns_errors import install_problem_handlers
 from tests.bus_double import BusDouble, Sent, session_holding
 from tests.integration.openfga_grants import Grants
+from tests.live_server import loop_of, serve
 
 
 if TYPE_CHECKING:
@@ -49,8 +49,6 @@ if TYPE_CHECKING:
 
 #: The header a test names the caller's principal key in; lineage's `authenticate` is overridden to read it.
 SUBJECT_HEADER = "x-test-subject"
-#: The event loop each app :func:`serve` serves runs on, by the base URL it answers at.
-_SERVED_ON: dict[str, asyncio.AbstractEventLoop] = {}
 
 
 #: The topic the catalog announces on and lineage's consumer takes, each service's own default.
@@ -152,27 +150,6 @@ def live_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch) -> Generator
         get_settings.cache_clear()
 
 
-@contextmanager
-def serve(app: FastAPI) -> Generator[str]:
-    """``app`` under uvicorn on a thread, its lifespan run; yields its base URL once it accepts connections."""
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 150
-    while not server.started:
-        if not thread.is_alive() or time.monotonic() > deadline:
-            raise RuntimeError("uvicorn did not start")
-        time.sleep(0.05)
-    url = f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
-    _SERVED_ON[url] = server.servers[0].get_loop()
-    try:
-        yield url
-    finally:
-        del _SERVED_ON[url]
-        server.should_exit = True
-        thread.join(timeout=30)
-
-
 def catalog_tick[R](catalog_url: str, tick: Callable[[Tick], Awaitable[R]], *, timeout: float = 120, clock: Callable[[], datetime] | None = None) -> R:
     """One ``tick`` of the catalog :func:`live_catalog` serves at ``catalog_url``, run on that server's own event loop with
     the catalog's settings, as the catalog's timer runs it; answers what the tick reports. ``clock`` is the wall clock
@@ -184,7 +161,7 @@ def catalog_tick[R](catalog_url: str, tick: Callable[[Tick], Awaitable[R]], *, t
     async def run() -> R:
         return await tick(Tick(app, get_settings(), clock=clock) if clock is not None else Tick(app, get_settings()))
 
-    return asyncio.run_coroutine_threadsafe(run(), _SERVED_ON[catalog_url]).result(timeout=timeout)
+    return asyncio.run_coroutine_threadsafe(run(), loop_of(catalog_url)).result(timeout=timeout)
 
 
 class GraphBackend:
@@ -312,7 +289,7 @@ def served_relay_tick(lineage_url: str, *, timeout: float = 120) -> RelayReport:
     from lineage.core.config import get_settings
     from lineage.main import app
 
-    return asyncio.run_coroutine_threadsafe(relay.tick(app, get_settings()), _SERVED_ON[lineage_url]).result(timeout=timeout)
+    return asyncio.run_coroutine_threadsafe(relay.tick(app, get_settings()), loop_of(lineage_url)).result(timeout=timeout)
 
 
 def ensure_tables(store: ProvenanceStore, *, deadline_seconds: float = 30.0) -> None:
@@ -326,6 +303,21 @@ def ensure_tables(store: ProvenanceStore, *, deadline_seconds: float = 30.0) -> 
             if time.monotonic() > deadline:
                 raise
             time.sleep(0.1)
+
+
+def declared(catalog_url: str, *tables: str) -> dict[str, str]:
+    """Declare each of ``tables``, and its namespace, in the catalog at ``catalog_url``; answers the uuid the catalog minted
+    for each, the object its grants are held by.
+
+    Lineage's HTTP door resolves each name an event names to that uuid as the caller, and checks the grants on it
+    ([[LH-524]]), so a table must exist for any event naming it to be admitted.
+    """
+    with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
+        for namespace in dict.fromkeys(table.rsplit("$", 1)[0] for table in tables):
+            assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
+        for table in tables:
+            assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200
+        return {table: str(catalog.post(f"/v1/table/{table}/describe", json={}).json()["properties"][UUID_PROPERTY]) for table in tables}
 
 
 def run_event(run_id: str, state: str, at: str, *, outputs: list[str], inputs: tuple[str, ...] = (), facets: Mapping[str, Any] | None = None) -> dict[str, Any]:

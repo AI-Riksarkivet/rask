@@ -23,13 +23,13 @@ from fastapi.testclient import TestClient
 
 from catalog.api import security
 from catalog.api.dependencies import SettingsDep
-from catalog.core.config import Settings
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.process.correlation import FRAMEWORK_TELEMETRY_OFF
+from tests.catalog_settings import catalog_settings
 
 
 AUDIENCE = "lance-catalog"
@@ -46,17 +46,13 @@ def unreachable_issuer() -> Iterator[str]:
 
 def _client(verifier: IdpVerifier | None, issuer: str) -> TestClient:
     """The catalog's door behind the problem handlers `build_service_app` installs."""
-    settings = Settings.model_validate(
-        {
-            "LANCE_S3_ACCESS_KEY_ID": "x",
-            "LANCE_S3_SECRET_ACCESS_KEY": "y",
-            "RASK_OIDC_ENABLED": True,
-            "RASK_OIDC_ISSUER": issuer,
-            "RASK_OIDC_AUDIENCE": AUDIENCE,
-            "RASK_OIDC_ALLOW_INSECURE": True,
-            "RASK_OIDC_IDP_ID": "dex",
-            "RASK_OIDC_CONNECTORS": CONNECTORS,
-        }
+    settings = catalog_settings(
+        RASK_OIDC_ENABLED=True,
+        RASK_OIDC_ISSUER=issuer,
+        RASK_OIDC_AUDIENCE=AUDIENCE,
+        RASK_OIDC_ALLOW_INSECURE=True,
+        RASK_OIDC_IDP_ID="dex",
+        RASK_OIDC_CONNECTORS=CONNECTORS,
     )
     app = FastAPI(telemetry=FRAMEWORK_TELEMETRY_OFF)
     install_problem_handlers(app, logging.getLogger(__name__))

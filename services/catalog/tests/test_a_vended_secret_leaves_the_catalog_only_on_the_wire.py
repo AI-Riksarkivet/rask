@@ -25,7 +25,6 @@ from pydantic import SecretStr
 
 from catalog.api.dependencies import get_namespace, request_settings
 from catalog.api.v1.endpoints import credentials, tables
-from catalog.core.config import Settings
 from catalog.core.vending import EncryptionAtRest, VendFacts, WebIdentityVendor
 from catalog.services import table_claims
 from lakehouse.problems.ns_errors import install_problem_handlers
@@ -33,6 +32,7 @@ from lakehouse.process.log_handler import DiagnosticFormatter
 from lakehouse.records import location_claims
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.store_session import IssuedSession, WebIdentity
+from tests.catalog_settings import catalog_settings
 
 
 log = logging.getLogger(__name__)
@@ -105,11 +105,8 @@ def doors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClien
     application.state.vendor = _vendor()
     monkeypatch.setattr(tables, "dataset_facts", lambda location, storage_options: VendFacts(read_version=1))
     monkeypatch.setattr(credentials, "dataset_facts", lambda location, storage_options, branch="": VendFacts(read_version=1))
-    settings = Settings(
-        LANCE_S3_ENDPOINT="http://rustfs:9000",
-        s3_access_key_id="ROOTKEY",
-        s3_secret_access_key="ROOTSECRET",
-        LANCE_CONTROL_ROOT=str(tmp_path),
+    settings = catalog_settings(
+        LANCE_S3_ENDPOINT="http://rustfs:9000", s3_access_key_id="ROOTKEY", s3_secret_access_key="ROOTSECRET", LANCE_CONTROL_ROOT=str(tmp_path)
     )
     location_claims.take(
         table_claims.claim_store(settings), _LOCATION, "ns$t", segments=["ns", "t"], uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01", is_gone=lambda _claim: False

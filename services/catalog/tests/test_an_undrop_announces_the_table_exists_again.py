@@ -15,7 +15,6 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
-from catalog_settings import catalog_settings
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import LanceNamespace, connect
@@ -32,12 +31,11 @@ from catalog.core.vending import ModeBVendor
 from catalog.services import warehouses
 from catalog.services.tables.creation import create_table
 from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.storage.options import StorageOptions
+from tests.callers import person
+from tests.catalog_settings import catalog_settings
 
 
 pytest.importorskip("lance")
@@ -45,10 +43,7 @@ pytest.importorskip("lance")
 #: A person the dev Dex's password connector reports: `sub` is Dex's packing of its user id with the connector id,
 #: and the principal is the user id under the idp id `local` maps to.
 _SUB = "CiQwOGE4Njg0Yi1kYjg4LTRiNzMtOTBhOS0zY2QxNjYxZjU0NjY"
-_CALLER = PersonPrincipal(
-    principal=Principal(idp_id="dex", subject="08a8684b-db88-4b73-90a9-3cd1661f5466"),
-    claims=IDToken(iss="https://dex", sub=_SUB, aud="lance", exp=1, iat=1),
-)
+_CALLER = person("08a8684b-db88-4b73-90a9-3cd1661f5466", sub=_SUB)
 NS = "lance_catalog$zone"
 TABLES = (["lance_catalog", "zone", "alpha"], ["lance_catalog", "zone", "beta"])
 

@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 import pytest
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+
 
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
@@ -31,7 +33,7 @@ def _a_pool_of_its_own() -> pa.MemoryPool:
     return pool
 
 
-ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW_STREAM = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 INVALID_INPUT = 13
 
 

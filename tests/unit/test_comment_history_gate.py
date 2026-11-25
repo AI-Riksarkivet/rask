@@ -6,19 +6,17 @@ the third from the first two would be rejected on its first false positive, so t
 load-bearing here in exactly the way the reject case is.
 """
 
-import importlib.util
-import sys
-from pathlib import Path
+from types import ModuleType
 
 import pytest
 
+from tests.script_module import script
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
-_SPEC = importlib.util.spec_from_file_location("comment_history_gate", REPO_ROOT / "scripts" / "comment_history_gate.py")
-assert _SPEC is not None and _SPEC.loader is not None
-gate = importlib.util.module_from_spec(_SPEC)
-sys.modules["comment_history_gate"] = gate
-_SPEC.loader.exec_module(gate)
+
+@pytest.fixture
+def gate(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """`scripts/comment_history_gate.py`."""
+    return script("comment_history_gate", monkeypatch)
 
 
 # --- kind (3): HISTORY OF THE PROSE — must be REJECTED ------------------------------------------
@@ -30,12 +28,12 @@ HISTORY_SAMPLES = [
 
 
 @pytest.mark.parametrize("body", HISTORY_SAMPLES)
-def test_a_comment_whose_subject_is_a_previous_comment_is_rejected(body: str) -> None:
+def test_a_comment_whose_subject_is_a_previous_comment_is_rejected(body: str, gate: ModuleType) -> None:
     findings = gate.scan_source("services/example/src/example/mod.py", f"x = 1\n{body}")
     assert findings, f"kind-(3) history prose passed the gate: {body!r}"
 
 
-def test_a_history_phrase_wrapped_across_two_comment_lines_is_still_caught() -> None:
+def test_a_history_phrase_wrapped_across_two_comment_lines_is_still_caught(gate: ModuleType) -> None:
     """A comment reflowed at 160 columns must not buy an exemption."""
     source = "x = 1\n# The reader's docstring used to\n# promise a fallback that does not exist.\n"
     findings = gate.scan_source("services/example/src/example/mod.py", source)
@@ -53,7 +51,7 @@ RATIONALE_SAMPLES = [
 
 
 @pytest.mark.parametrize("body", RATIONALE_SAMPLES)
-def test_rationale_that_explains_a_past_shape_is_accepted(body: str) -> None:
+def test_rationale_that_explains_a_past_shape_is_accepted(body: str, gate: ModuleType) -> None:
     findings = gate.scan_source("services/example/src/example/mod.py", f"x = 1\n{body}")
     assert not findings, f"kind-(1) rationale was rejected: {[f.render() for f in findings]}"
 
@@ -67,7 +65,7 @@ PROVENANCE_SAMPLES = [
 
 
 @pytest.mark.parametrize("body", PROVENANCE_SAMPLES)
-def test_dated_measurements_and_named_pins_are_accepted(body: str) -> None:
+def test_dated_measurements_and_named_pins_are_accepted(body: str, gate: ModuleType) -> None:
     findings = gate.scan_source("services/example/src/example/mod.py", f"x = 1\n{body}")
     assert not findings, f"kind-(2) provenance was rejected: {[f.render() for f in findings]}"
 
@@ -75,13 +73,13 @@ def test_dated_measurements_and_named_pins_are_accepted(body: str) -> None:
 # --- the properties that make a FORWARD gate a forward gate --------------------------------------
 
 
-def test_the_gate_ignores_code_that_merely_contains_the_words() -> None:
+def test_the_gate_ignores_code_that_merely_contains_the_words(gate: ModuleType) -> None:
     """Only comment and docstring lines are read — a string literal or an identifier is not prose."""
     source = 'MESSAGE = "this docstring used to say the lookup was cached"\n'
     assert not gate.scan_source("services/example/src/example/mod.py", source)
 
 
-def test_only_added_lines_are_gated_so_existing_prose_is_untouched() -> None:
+def test_only_added_lines_are_gated_so_existing_prose_is_untouched(gate: ModuleType) -> None:
     """The ban is FORWARD ONLY: the same file gates on a new line and stays silent on an old one."""
     source = "x = 1\n# This docstring used to say the lookup was cached.\n"
     path = "services/example/src/example/mod.py"
@@ -89,7 +87,7 @@ def test_only_added_lines_are_gated_so_existing_prose_is_untouched() -> None:
     assert not gate.scan_source(path, source, only_lines={1}), "an untouched history line must NOT be gated"
 
 
-def test_markdown_is_out_of_scope_because_docs_keep_a_trail() -> None:
+def test_markdown_is_out_of_scope_because_docs_keep_a_trail(gate: ModuleType) -> None:
     assert not gate.is_gated("docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md")
     assert gate.is_gated("services/example/src/example/mod.py")
     assert gate.is_gated("frontend/console/src/lib/x.ts")

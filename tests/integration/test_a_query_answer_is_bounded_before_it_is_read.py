@@ -13,12 +13,13 @@ projected row width, so 4 KiB rows put it at about four thousand, and the row co
 """
 
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
-_ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+
+_ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 _DIM = 1024
 _U32_OVER = 2**32
 
@@ -26,10 +27,7 @@ _U32_OVER = 2**32
 def _wide_table(rows: int) -> bytes:
     values = pa.array([0.5] * (rows * _DIM), pa.float32())
     table = pa.table({"id": pa.array(range(rows), pa.int64()), "vec": pa.FixedSizeListArray.from_arrays(values, _DIM)})
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+    return encode_arrow_stream(table)
 
 
 @pytest.mark.parametrize(

@@ -16,31 +16,23 @@ Driven through the real catalog app on a real `dir` namespace, with the lineage 
 wire: the real `BusEmitter` builds it and publishes it on the bus double.
 """
 
-import io
-
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.lineage_emit import BusEmitter
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 from tests.app_state import app_of
 from tests.bus_double import BusDouble
 from tests.control_emitter_double import ControlEmitterDouble
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 TABLE = "lance_catalog$lh242$t"
 #: The two doors, by the query that puts each in Overwrite mode.
 DOORS = {"create": "create?mode=overwrite", "insert": "insert?mode=overwrite"}
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
 
 
 def _rows(*ids: int) -> pa.Table:
@@ -66,7 +58,7 @@ def bus(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> BusDoubl
 def protected(real_ns_client: TestClient) -> str:
     """`lh242$t` at version 1 with three rows, protected through the catalog's own door. Returns its location."""
     assert real_ns_client.post("/v1/namespace/lance_catalog$lh242/create", json={}).status_code == 200
-    created = real_ns_client.post(f"/v1/table/{TABLE}/create?mode=create", content=_ipc(_rows(1, 2, 3)), headers=ARROW)
+    created = real_ns_client.post(f"/v1/table/{TABLE}/create?mode=create", content=encode_arrow_stream(_rows(1, 2, 3)), headers=ARROW)
     assert created.status_code == 200, created.text
     armed = real_ns_client.post(f"/management/v1/table/{TABLE}/protection", json={"protected": True})
     assert armed.status_code == 200, armed.text
@@ -77,7 +69,7 @@ def protected(real_ns_client: TestClient) -> str:
 def test_protection_guards_a_tables_drop_and_not_an_overwrite_of_its_rows(real_ns_client: TestClient, protected: str, door: str) -> None:
     """Protection keeps the table, and an overwrite keeps it: one more version, every earlier one still read. What may
     write its rows is its grants' and its data contract's to say."""
-    answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS[door]}", content=_ipc(_rows(9)), headers=ARROW)
+    answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS[door]}", content=encode_arrow_stream(_rows(9)), headers=ARROW)
     dropped = real_ns_client.post(f"/v1/table/{TABLE}/drop", json={})
 
     assert answer.status_code == 200, f"{door}: {answer.text}"
@@ -91,8 +83,8 @@ def _uuid(client: TestClient) -> str:
     described = client.post(f"/v1/table/{TABLE}/describe", json={})
     assert described.status_code == 200, described.text
     properties = described.json().get("properties") or {}
-    assert "rask.uuid" in properties, f"{TABLE} answers no uuid: {properties}"
-    return str(properties["rask.uuid"])
+    assert UUID_PROPERTY in properties, f"{TABLE} answers no uuid: {properties}"
+    return str(properties[UUID_PROPERTY])
 
 
 @pytest.mark.parametrize("door", list(DOORS))
@@ -103,7 +95,7 @@ def test_an_overwrite_is_recorded_as_an_overwrite_of_the_same_table(
     control = ControlEmitterDouble()
     monkeypatch.setattr(app_of(real_ns_client).state, "control_emitter", control, raising=False)
 
-    answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS[door]}", content=_ipc(_rows(9)), headers=ARROW)
+    answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS[door]}", content=encode_arrow_stream(_rows(9)), headers=ARROW)
 
     assert answer.status_code == 200, f"{door}: {answer.text}"
     assert _uuid(real_ns_client) == minted, f"{door}: the overwritten table answers another uuid"
@@ -127,7 +119,7 @@ def test_an_overwrite_create_of_an_absent_table_is_announced_as_a_created_table(
     control = ControlEmitterDouble()
     monkeypatch.setattr(app_of(real_ns_client).state, "control_emitter", control, raising=False)
 
-    answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS['create']}", content=_ipc(_rows(1)), headers=ARROW)
+    answer = real_ns_client.post(f"/v1/table/{TABLE}/{DOORS['create']}", content=encode_arrow_stream(_rows(1)), headers=ARROW)
 
     assert answer.status_code == 200, answer.text
     assert [e.action for e in control.events] == ["table_created"], [e.action for e in control.events]

@@ -10,21 +10,21 @@ from collections.abc import Mapping
 from pathlib import Path
 
 import httpx2
-import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 
 from catalog.api.dependencies import get_control_emitter, get_namespace
 from catalog.core.config import get_settings
 from catalog.services import object_uuids, table_claims, warehouses
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.governed import fga_ids
 from tests import seeding
 from tests.app_state import app_of
 from tests.control_emitter_double import ControlEmitterDouble
-from tests.governed_catalog import GovernedCatalog
+from tests.governed_catalog import ROWS, GovernedCatalog
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 WAREHOUSE = "acme-bucket"
 PROJECT = "acme"
 SALES = f"{WAREHOUSE}$sales"
@@ -60,7 +60,7 @@ def estate(governed_catalog: GovernedCatalog, tmp_path: Path, monkeypatch: pytes
     catalog.act_as("alice")
     assert client.post(f"/v1/namespace/{SALES}/create", json={}).status_code == 200
     for table in (ORDERS, REFUNDS):
-        assert client.post(f"/v1/table/{table}/create?mode=create", content=_rows(), headers=ARROW).status_code == 200
+        assert client.post(f"/v1/table/{table}/create?mode=create", content=ROWS, headers=ARROW).status_code == 200
     orders, refunds = _object(client, "table", ORDERS), _object(client, "table", REFUNDS)
     catalog.store.write(
         (catalog.person("bob"), "owner", orders),
@@ -69,14 +69,6 @@ def estate(governed_catalog: GovernedCatalog, tmp_path: Path, monkeypatch: pytes
         (catalog.person("carol"), "member", project),
     )
     return catalog
-
-
-def _rows() -> bytes:
-    table = pa.table({"id": pa.array([1, 2], pa.int64())})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 def _object(client: TestClient, kind: str, name: str) -> str:

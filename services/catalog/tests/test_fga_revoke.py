@@ -11,7 +11,6 @@ import asyncio
 from typing import Any, cast
 
 import pytest
-from catalog_settings import catalog_settings, governed_settings
 from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
@@ -22,12 +21,8 @@ from catalog.api.authz import object_grants
 from catalog.api.authz.context import AuthzContext
 from catalog.core.config import Settings
 from lakehouse.governed import fga_ids, fga_writes
+from tests.catalog_settings import catalog_settings, governed_settings
 from tests.fga_answers import answer, tuple_json
-
-
-def _tuple(user: str, relation: str, obj: str) -> dict[str, Any]:
-    """A stored tuple as a ``Read`` answer lists it."""
-    return tuple_json(user, relation, obj)
 
 
 class _ReadDeleteClient:
@@ -71,9 +66,9 @@ class _PartialMissingClient:
         return answer(
             {
                 "tuples": [
-                    _tuple("user:a", "owner", "table:t"),
-                    _tuple("user:b", "reader", "table:t"),
-                    _tuple("user:c", "writer", "table:t"),
+                    tuple_json("user:a", "owner", "table:t"),
+                    tuple_json("user:b", "reader", "table:t"),
+                    tuple_json("user:c", "writer", "table:t"),
                 ],
                 "continuation_token": "",
             },
@@ -105,7 +100,7 @@ _TABLE = fga_ids.table_object("0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01")
 
 
 def test_revoke_ownership_noop_when_fga_disabled() -> None:
-    fake = _ReadDeleteClient([([_tuple("user:a", "owner", _TABLE)], "")])
+    fake = _ReadDeleteClient([([tuple_json("user:a", "owner", _TABLE)], "")])
     asyncio.run(
         object_grants.revoke_ownership(
             AuthzContext(client=_client(fake), settings=_settings(fga_enabled=False), token=None), obj=_TABLE, origin="lifecycle_delete"
@@ -124,7 +119,7 @@ def test_a_revoke_with_authorization_on_and_no_client_fails_closed() -> None:
 
 
 def test_revoke_ownership_deletes_every_tuple_for_the_object() -> None:
-    fake = _ReadDeleteClient([([_tuple("user:a", "owner", _TABLE), _tuple("user:b", "reader", _TABLE)], "")])
+    fake = _ReadDeleteClient([([tuple_json("user:a", "owner", _TABLE), tuple_json("user:b", "reader", _TABLE)], "")])
     asyncio.run(
         object_grants.revoke_ownership(
             AuthzContext(client=_client(fake), settings=_settings(fga_enabled=True), token=None), obj=_TABLE, origin="lifecycle_delete"

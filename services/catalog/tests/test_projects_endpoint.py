@@ -13,7 +13,6 @@ from typing import Any
 from unittest.mock import create_autospec
 
 import pytest
-from catalog_settings import catalog_settings, governed_settings
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 
@@ -21,10 +20,9 @@ from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import projects as ep
 from catalog.core.config import Settings
 from lakehouse.governed import fga_provision
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
 from lakehouse.records.warehouse_records import WarehouseRecord
+from tests.callers import person
+from tests.catalog_settings import catalog_settings, governed_settings
 
 
 def _settings(*, fga_enabled: bool = False, fga_root_object: str = "warehouse:lance_catalog") -> Settings:
@@ -46,7 +44,7 @@ def _patch_records(monkeypatch: pytest.MonkeyPatch, records: list[dict[str, str]
     monkeypatch.setattr(ep.warehouses, "list_warehouses", lambda _root, _so: [WarehouseRecord.model_validate(record) for record in records])
 
 
-_BOB = PersonPrincipal(principal=Principal(idp_id="dex", subject="bob"), claims=IDToken(iss="i", sub="bob", aud="lance", exp=1, iat=1))
+_BOB = person("bob")
 
 
 def _client() -> OpenFgaClient:

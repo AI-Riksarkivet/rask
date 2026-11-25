@@ -26,6 +26,7 @@ from catalog.core.config import Settings, get_settings
 from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
 from lakehouse.governed import fga_ids, fga_provision
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import maintenance_policies
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
@@ -91,7 +92,7 @@ def _booted(settings: Settings, store: Any) -> tuple[LanceNamespace, str]:  # no
 
     asyncio.run(boot())
     properties = ns.describe_namespace(DescribeNamespaceRequest(id=["lance_catalog", "provenance"])).properties or {}
-    return ns, properties["rask.uuid"]
+    return ns, properties[UUID_PROPERTY]
 
 
 def test_a_boot_takes_back_an_own_accounts_writer_it_no_longer_declares_and_keeps_every_grant_a_door_made(

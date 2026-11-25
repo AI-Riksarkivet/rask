@@ -12,17 +12,15 @@ from typing import Any, cast
 
 import pyarrow as pa
 import pytest
-from catalog_settings import catalog_settings
 from lance_namespace import CreateTableResponse
 
 from catalog.api.authz.context import AuthzContext
 from catalog.core.config import Settings
-from catalog.core.lineage_emit import NO_FIELDS, EmitFields
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
+from tests.callers import person
+from tests.catalog_settings import catalog_settings
+from tests.lineage_emitter_double import LineageEmitterDouble
 from tests.unit.named_resolver import NamedResolver
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
@@ -41,16 +39,6 @@ def _settings() -> Settings:
         provenance_namespace="",
         lineage_dataset_namespace=_DATASETS,
     )
-
-
-class _RecordingEmitter:
-    """Captures the create-emit kwargs (the lineage axis)."""
-
-    def __init__(self) -> None:
-        self.create: dict[str, Any] | None = None
-
-    async def emit_create(self, *, fields: EmitFields = NO_FIELDS, **required: Any) -> None:
-        self.create = {**required, **dict(fields)}
 
 
 def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -83,13 +71,13 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
     monkeypatch.setattr(table_create, "build_lineage_metadata", _build_meta)
     monkeypatch.setattr(table_create.creation, "create_table", _facade_create)
 
-    emitter = _RecordingEmitter()
+    emitter = LineageEmitterDouble()
     asyncio.run(
         data.create_table(
             context=AuthzContext(
                 client=cast(Any, object()),
                 settings=_settings(),
-                token=PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)),
+                token=person("alice"),
             ),
             id="alpha$bronze$images",
             keyed=KeyedDoor(registry_root="", storage_options={}, scope="anonymous", key=None),
@@ -109,10 +97,10 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
 
     canonical = "alpha$bronze$images"
     # Lineage axis: the emitted Dataset name + parent namespace.
-    assert emitter.create is not None
-    assert emitter.create["table_id"] == canonical
-    assert emitter.create["namespace"] == "alpha$bronze"
-    assert emitter.create["author"] == "dex~alice"
+    (create,) = emitter.writes
+    assert create["table_id"] == canonical
+    assert create["namespace"] == "alpha$bronze"
+    assert create["author"] == "dex~alice"
     # Data axis: the dataset namespace stamped into the Lance file's schema metadata (#21), the catalog's own, which the
     # emitter names every dataset under ([[LH-553]]).
     assert stamped["namespace"] == _DATASETS
@@ -121,4 +109,4 @@ def test_create_handler_keeps_both_name_axes_identical(monkeypatch: pytest.Monke
     metadata = written["table"].schema.metadata or {}
     assert metadata.get(b"lineage.namespace") == _DATASETS.encode()
     # The WROTE edge's schema facet is read off the table written.
-    assert [field["name"] for field in emitter.create["schema_fields"]] == ["id"]
+    assert [field["name"] for field in create["schema_fields"]] == ["id"]

@@ -24,7 +24,6 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -36,26 +35,13 @@ from lineage.api.v1.endpoints.events import targeting_view
 from lineage.core.metrics import Door
 from lineage.services.consumer import handle_cloud_event
 from tests.app_state import app_of
-from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, live_catalog, run_event
+from tests.integration.lineage_app import SUBJECT_HEADER, declared, governed_lineage, live_catalog, run_event
 from tests.open_gate import admits_everything
 
 
 _TABLE = "lance_catalog$acme-silver$pages"
 _ALICE = "dex~alice"
 _BOB = "dex~bob"
-
-
-def _declared(catalog_url: str, table: str) -> str:
-    """Declare ``table`` in the catalog at ``catalog_url`` and answer the uuid it minted, the object its grants are held by.
-
-    Lineage's HTTP door resolves each name an event names to that uuid as the caller, and checks the grants on it
-    ([[LH-524]]), so the table must exist for any event naming it to be admitted.
-    """
-    namespace = table.rsplit("$", 1)[0]
-    with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
-        assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
-        assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200
-        return str(catalog.post(f"/v1/table/{table}/describe", json={}).json()["properties"]["rask.uuid"])
 
 
 #: The catalog's signing identity, which signs its announcements for the person it authenticated.
@@ -65,7 +51,7 @@ _CATALOG = "service-catalog"
 @pytest.fixture
 def lineage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     with live_catalog(tmp_path / "catalog", monkeypatch) as url:
-        obj = f"table:{_declared(url, _TABLE)}"
+        obj = f"table:{declared(url, _TABLE)[_TABLE]}"
         granted = {(who, relation, obj) for who in (_ALICE, _BOB) for relation in ("can_write_data", "can_get_metadata")}
         with governed_lineage(url, monkeypatch, granted) as client:
             yield client

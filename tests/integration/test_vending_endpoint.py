@@ -21,6 +21,7 @@ from catalog.core.config import get_settings
 from catalog.core.vending import TableRecords, Tier, VendedSession
 from lakehouse.storage.credential import S3KeyPair
 from tests.app_state import app_of
+from tests.vendor_double import RecordingVendor
 
 
 def test_mode_b_returns_server_mediated(client: TestClient, claim_described: Callable[[str], str]) -> None:
@@ -104,30 +105,12 @@ def test_a_vend_whose_store_does_not_answer_the_open_is_refused_unavailable(
     get_settings.cache_clear()
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://lance-catalog/db$t")
     claim_described("lance_catalog$db$t")
-    asked: list[str] = []
-
-    class _RecordingVendor:
-        def vend(
-            self,
-            *,
-            table_location: str,
-            tier: Tier,
-            session_name: str,
-            bases: Sequence[str] = (),
-            data_directories: Sequence[str] = (),
-            branch: str = "",
-            records: TableRecords | None = None,
-        ) -> VendedSession:
-            asked.append(table_location)
-            return VendedSession(
-                key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1
-            )
-
-    app_of(client).dependency_overrides[get_vendor] = lambda: _RecordingVendor()
+    vendor = RecordingVendor()
+    app_of(client).dependency_overrides[get_vendor] = lambda: vendor
     resp = client.post("/management/v1/table/lance_catalog$db$t/credentials")
 
     assert (resp.status_code, resp.headers["content-type"], resp.json().get("code")) == (503, "application/problem+json", 17), resp.text
-    assert asked == []
+    assert vendor.calls == []
 
 
 def test_invalid_tier_is_rejected(client: TestClient) -> None:

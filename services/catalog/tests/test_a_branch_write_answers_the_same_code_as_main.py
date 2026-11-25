@@ -37,13 +37,10 @@ from catalog.core.namespace import open_resolved_dataset_unchecked
 from catalog.services.table_claims import DoorTable
 from catalog.services.tables.creation import create_table
 from catalog.services.tables.writes import merge_insert_into_table
+from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
-from tests.door_tables import door_table
-
-
-#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
-_BODY_LIMIT = 256 * 1024 * 1024
+from tests.door_tables import BODY_LIMIT, door_table
 
 
 lance = pytest.importorskip("lance")
@@ -52,13 +49,6 @@ lance = pytest.importorskip("lance")
 TABLE_ID = ["db", "rows"]
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("s", pa.string())])
 BRANCH = "work"
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 def _base() -> pa.Table:
@@ -84,7 +74,7 @@ def _code(table: DoorTable, *, branch: str | None, on: str, payload: pa.Table) -
     """Drive merge_insert and return the spec code it answered, or None if it did not fail."""
     request = MergeInsertIntoTableRequest(id=TABLE_ID, on=[on], when_matched_update_all=True, branch=branch)
     try:
-        merge_insert_into_table(table, StorageOptions(), request, data=_ipc(payload), max_bytes=_BODY_LIMIT, transaction_properties={})
+        merge_insert_into_table(table, StorageOptions(), request, data=encode_arrow_stream(payload), max_bytes=BODY_LIMIT, transaction_properties={})
     except Exception as exc:  # noqa: BLE001 — the CODE is the subject; the class is only how it carries one
         return getattr(exc, "code", None)
     return None

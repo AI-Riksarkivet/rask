@@ -24,9 +24,9 @@ import lance
 import pyarrow as pa
 import pytest
 import respx
+from tests.vend_answers import vended
 
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import credentials
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import DatasetPlan
 
@@ -37,9 +37,7 @@ CATALOG = "http://catalog.test"
 _ARMED: dict[str, str | None] = {"lance.auto_cleanup.interval": "1", "lance.auto_cleanup.older_than": "0s", "lance.auto_cleanup.retain_versions": "1"}
 
 
-@pytest.fixture(autouse=True)
-def _identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(credentials, "service_headers", lambda _settings: {})
+pytestmark = pytest.mark.usefixtures("catalog_calls_carry_no_identity")
 
 
 def _armed_table(tmp_path: Path) -> str:
@@ -57,8 +55,8 @@ def _auto_cleanup_keys(uri: str) -> dict[str, str]:
 
 def _vend_covering(uri: str) -> httpx.Response:
     """The catalog's maintain-tier vend for the table at ``uri``, which admits a pass's deletes ([[LH-219]])."""
-    vended = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
-    return httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": vended}, "location": uri})
+    options = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
+    return httpx.Response(200, json=vended(options, location=uri))
 
 
 def test_a_pass_has_the_catalog_disarm_an_armed_table_and_commits_nothing_itself(tmp_path: Path, maintain_one: Callable[..., DatasetResult]) -> None:

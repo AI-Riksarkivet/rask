@@ -8,7 +8,6 @@ size: the same values as one `id IN (...)` list answer normally. Each probe runs
 the unguarded door takes pytest down with it.
 """
 
-import io
 import json
 import os
 import subprocess
@@ -18,15 +17,15 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
-from pyarrow import ipc
+
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 _OR_CHAIN_TERMS = 150_000
 
 _DRIVER = r"""
-import io, json, os, sys
+import json, os, sys
 import pyarrow as pa
-from pyarrow import ipc
 
 root, door, shape = sys.argv[1], sys.argv[2], sys.argv[3]
 os.environ.update({"LANCE_REST_IMPL": "dir", "LANCE_REST_ROOT": root, "LANCE_S3_ACCESS_KEY_ID": "test", "LANCE_S3_SECRET_ACCESS_KEY": "test"})
@@ -35,18 +34,13 @@ from lance_namespace import connect
 from catalog.api.dependencies import get_namespace, get_storage_options
 from catalog.core.config import get_settings
 from catalog.main import app
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.storage.options import StorageOptions
 
 get_settings.cache_clear()
 ns = connect("dir", {"root": root})
 app.dependency_overrides[get_namespace] = lambda: ns
 app.dependency_overrides[get_storage_options] = lambda: StorageOptions()
-
-def arrow(table):
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
 
 rows = pa.table({"id": pa.array(range(10), pa.int64()), "v": pa.array([str(i) for i in range(10)])})
 if shape == "or":
@@ -56,7 +50,7 @@ else:
 query = {"k": 10, "filter": sql, "vector": {}}
 with TestClient(app) as client:
     assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
-    created = client.post("/v1/table/lance_catalog$db$t/create?mode=create", content=arrow(rows), headers={"content-type": "application/vnd.apache.arrow.stream"})
+    created = client.post("/v1/table/lance_catalog$db$t/create?mode=create", content=encode_arrow_stream(rows), headers={"content-type": ARROW_STREAM_MEDIA_TYPE})
     assert created.status_code == 200, created.text
     if door == "query":
         resp = client.post("/v1/table/lance_catalog$db$t/query", json=query)
@@ -75,8 +69,8 @@ with TestClient(app) as client:
         resp = client.post(
             "/v1/table/lance_catalog$db$t/merge_insert",
             params={"on": "id", **filters},
-            content=arrow(rows),
-            headers={"content-type": "application/vnd.apache.arrow.stream"},
+            content=encode_arrow_stream(rows),
+            headers={"content-type": ARROW_STREAM_MEDIA_TYPE},
         )
     body = resp.json() if resp.headers.get("content-type", "").endswith("json") else {}
     print(json.dumps({"status": resp.status_code, "code": body.get("code") if isinstance(body, dict) else None, "detail": str(body)[:300]}))
@@ -116,12 +110,9 @@ def test_merge_insert_refuses_a_chain_one_connective_past_the_bound(tmp_path: Pa
 
 def test_an_update_EXPRESSION_is_bounded_like_its_predicate(real_ns_client: TestClient) -> None:
     rows = pa.table({"id": pa.array(range(3), pa.int64()), "v": pa.array(["a", "b", "c"])})
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, rows.schema) as writer:
-        writer.write_table(rows)
     assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
     created = real_ns_client.post(
-        "/v1/table/lance_catalog$db$t/create?mode=create", content=sink.getvalue(), headers={"content-type": "application/vnd.apache.arrow.stream"}
+        "/v1/table/lance_catalog$db$t/create?mode=create", content=encode_arrow_stream(rows), headers={"content-type": ARROW_STREAM_MEDIA_TYPE}
     )
     assert created.status_code == 200, created.text
 

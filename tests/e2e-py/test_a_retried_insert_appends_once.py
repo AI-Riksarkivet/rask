@@ -20,7 +20,9 @@ import byo_scenario as scenario
 import pyarrow as pa
 import pytest
 import requests
-from byo_scenario import CATALOG, Tenant, arrow_ipc, ok, rows_of
+from byo_scenario import CATALOG, Tenant, ok, rows_of
+
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 pytestmark = [pytest.mark.e2e, pytest.mark.skipif(not scenario.LIVE, reason=scenario.REQUIRES)]
@@ -34,7 +36,7 @@ _ROWS = 20_000
 _GIVEN_UP_AFTER = 0.05
 #: How long the first send is given to commit on the estate after its caller gave up on it, in seconds.
 _LANDS_WITHIN = 60.0
-_ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+_ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 
 def _state(tenant: Tenant, table: str) -> tuple[int, int]:
@@ -47,11 +49,11 @@ def _state(tenant: Tenant, table: str) -> tuple[int, int]:
 
 def test_an_append_sent_again_under_its_key_after_its_caller_gave_up_lands_once(byo_tenant: Tenant) -> None:
     table = f"{byo_tenant.bronze}$retried-{uuid.uuid4().hex[:6]}"
-    ok(byo_tenant.pipeline.http.post(f"{_CATALOG}/v1/table/{table}/create", data=arrow_ipc(rows_of(range(3))), headers=_ARROW, timeout=60))
+    ok(byo_tenant.pipeline.http.post(f"{_CATALOG}/v1/table/{table}/create", data=encode_arrow_stream(rows_of(range(3))), headers=_ARROW, timeout=60))
     byo_tenant.tables.append(table)
     before = _state(byo_tenant, table)
     landed = (before[0] + 1, before[1] + _ROWS)
-    batch = arrow_ipc(pa.table({"id": pa.array(range(_ROWS), pa.int64()), "payload": pa.array([f"row-{i}" for i in range(_ROWS)])}))
+    batch = encode_arrow_stream(pa.table({"id": pa.array(range(_ROWS), pa.int64()), "payload": pa.array([f"row-{i}" for i in range(_ROWS)])}))
     keyed = {**_ARROW, "Idempotency-Key": str(uuid.uuid4())}
     insert = f"{_CATALOG}/v1/table/{table}/insert?mode=append"
 

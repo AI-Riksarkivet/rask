@@ -16,7 +16,6 @@ A client-written commit is judged at ``version/create``
 (``services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py``).
 """
 
-import io
 import threading
 from collections.abc import Callable
 from pathlib import Path
@@ -24,12 +23,13 @@ from pathlib import Path
 import httpx2
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 TABLE = "lance_catalog$lh243$t"
 _SCHEMA = pa.schema([pa.field("id", pa.int64(), nullable=False, metadata={"lance-schema:unenforced-primary-key": "true"}), pa.field("v", pa.string())])
 
@@ -40,25 +40,18 @@ def _rows(*ids: int) -> pa.Table:
     return pa.table({"id": pa.array(ids, pa.int64()), "v": [f"v{i}" for i in ids]}, schema=_SCHEMA)
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
-
-
 def _create(client: TestClient, *ids: int, mode: str = "Create") -> httpx2.Response:
-    return client.post(f"/v1/table/{TABLE}/create", params={"mode": mode}, content=_ipc(_rows(*ids)), headers=ARROW)
+    return client.post(f"/v1/table/{TABLE}/create", params={"mode": mode}, content=encode_arrow_stream(_rows(*ids)), headers=ARROW)
 
 
 def _insert(client: TestClient, *ids: int, context: dict[str, str] | None = None) -> httpx2.Response:
-    return client.post(f"/v1/table/{TABLE}/insert", content=_ipc(_rows(*ids)), headers={**ARROW, **(context or {})})
+    return client.post(f"/v1/table/{TABLE}/insert", content=encode_arrow_stream(_rows(*ids)), headers={**ARROW, **(context or {})})
 
 
 def _merge(client: TestClient, *ids: int, on: tuple[str, ...] = ("id",), v: str | None = None) -> httpx2.Response:
     params = {"on": list(on), "when_matched_update_all": "true", "when_not_matched_insert_all": "true"}
     rows = _rows(*ids) if v is None else pa.table({"id": pa.array(ids, pa.int64()), "v": [v] * len(ids)}, schema=_SCHEMA)
-    return client.post(f"/v1/table/{TABLE}/merge_insert", params=params, content=_ipc(rows), headers=ARROW)
+    return client.post(f"/v1/table/{TABLE}/merge_insert", params=params, content=encode_arrow_stream(rows), headers=ARROW)
 
 
 def _update(client: TestClient, predicate: str, column: str, value: str) -> httpx2.Response:
@@ -151,7 +144,7 @@ def test_a_merge_inserting_a_held_key_nested_in_a_struct_is_refused(real_ns_clie
     schema = pa.schema([pa.field("s", pa.struct([key]), nullable=False), pa.field("v", pa.string())])
 
     def rows(*pairs: tuple[int, str]) -> bytes:
-        return _ipc(pa.table({"s": [{"id": i} for i, _ in pairs], "v": [v for _, v in pairs]}, schema=schema))
+        return encode_arrow_stream(pa.table({"s": [{"id": i} for i, _ in pairs], "v": [v for _, v in pairs]}, schema=schema))
 
     assert real_ns_client.post("/v1/namespace/lance_catalog$lh243/create", json={}).status_code == 200
     created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=rows((1, "v1"), (2, "v2")), headers=ARROW)

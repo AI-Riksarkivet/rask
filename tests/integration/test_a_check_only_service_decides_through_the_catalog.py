@@ -21,24 +21,23 @@ through the namespace door and one table.
 
 import json
 import logging
-import threading
-import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
 import httpx
-import pyarrow as pa
 import pytest
-import uvicorn
 from lance_namespace import ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.governed.decider import CatalogDecider, TableDecision
 from lakehouse.governed.fga_ids import user_object
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records.warehouse_records import WarehouseRecord
+from tests.governed_catalog import ROWS
+from tests.live_server import serve
 
 
 #: The two tenants, each mapped to its warehouse and the namespace in it; each namespace holds one table, `<ns>$t`.
@@ -107,7 +106,7 @@ def _arrange(url: str, store: Any, dex_issuer: Any) -> dict[str, tuple[str, str]
         (user_object("dex~root"), "admin", "estate:rask"),
         *((user_object(_account(LINEAGE)), role, "estate:rask") for role in ("decider", "governance_prober")),
     )
-    settings, rows = get_settings(), encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
+    settings = get_settings()
     root = {"Authorization": f"Bearer {dex_issuer.mint('root', connector='local', audience='lance-catalog')}"}
     uuids: dict[str, tuple[str, str]] = {}
     with httpx.Client(base_url=url, headers=root, timeout=30) as client:
@@ -126,11 +125,11 @@ def _arrange(url: str, store: Any, dex_issuer: Any) -> dict[str, tuple[str, str]
             warehouses.ensure_catalog_row(connect("dir", {"root": settings.root}), warehouse)
             _ok(client.post(f"/v1/namespace/{namespace}/create", json={}))
             table = f"{namespace}$t"
-            _ok(client.post(f"/v1/table/{table}/create", content=rows, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE}))
+            _ok(client.post(f"/v1/table/{table}/create", content=ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE}))
             _ok(client.post(f"/management/v1/table/{table}/access/grant", json={"user": "dex~bob", "relation": "reader"}))
             described = _ok(client.post(f"/v1/table/{table}/describe", json={})).json()["properties"]
             enclosing = _ok(client.post(f"/v1/namespace/{namespace}/describe", json={})).json()["properties"]
-            uuids[table] = (described["rask.uuid"], enclosing["rask.uuid"])
+            uuids[table] = (described[UUID_PROPERTY], enclosing[UUID_PROPERTY])
         _ok(client.put(f"/management/v1/projects/{ACME}/members", json={"user": "dex~bob", "relation": "member"}))
         _ok(client.post("/management/v1/access/tuples", json={"user": user_object(_account(NOTIFIER)), "relation": "member_expander", "object": "estate:rask"}))
         _ok(client.post(f"/management/v1/projects/{ACME}/access/grant", json={"user": _account(ACME_SERVICE), "relation": "decider"}))
@@ -166,20 +165,10 @@ def estate(sa_issuer: Any, dex_issuer: Any, openfga_store: Any, tmp_path: Path, 
     get_settings.cache_clear()
     from catalog.main import app
 
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 30
-    while not server.started:
-        if not thread.is_alive() or time.monotonic() > deadline:
-            raise RuntimeError("uvicorn did not start")
-        time.sleep(0.05)
-    url = f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
     try:
-        yield Estate(url=url, uuids=_arrange(url, openfga_store, dex_issuer))
+        with serve(app) as url:
+            yield Estate(url=url, uuids=_arrange(url, openfga_store, dex_issuer))
     finally:
-        server.should_exit = True
-        thread.join(timeout=30)
         get_settings.cache_clear()
 
 

@@ -13,7 +13,6 @@ built by a helper that fills them in would assert nothing. The bus subscription 
 """
 
 import asyncio
-from collections.abc import Collection
 from typing import Any, cast
 
 from lakehouse.events import outbox
@@ -21,8 +20,11 @@ from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.storage.options import StorageOptions
 from lineage.api import relay
 from lineage.core.config import LineageSettings, Signing
+from lineage.models import RunEvent
+from lineage.services.provenance import ProvenanceStore
 from lineage.services.signature import store_published_keys
 from tests.app_state import app_holding
+from tests.provenance_store_double import ProvenanceStoreDouble
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -42,18 +44,6 @@ def _wire() -> dict[str, Any]:
     }
 
 
-class _Repo:
-    def __init__(self) -> None:
-        self.ingested: list[str] = []
-        self.refusals: list[str] = []
-
-    async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
-        self.refusals.append(reason)
-
-    async def record(self, event: Any, *, aliased: Collection[str]) -> None:  # noqa: ANN401 - the drain's own shape
-        self.ingested.append(event.run.run_id)
-
-
 def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_staged_bytes(
     tmp_path: Any, event_signer: Any, secret_store: SecretStoreDouble
 ) -> None:
@@ -62,11 +52,13 @@ def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_stag
     secret_store.hold(f"signing-public-{IDENTITY}", {"keys": signer.public})
     outbox.stage_envelope(uri, StorageOptions(), lineage_envelope(signer.sign(_wire())))
     settings = LineageSettings.model_validate({"outbox_uri": uri, "signing": Signing(signers=frozenset({IDENTITY}), delegators=frozenset())})
-    repo = _Repo()
+    repo = ProvenanceStoreDouble()
     app = app_holding(published_keys=store_published_keys())
 
-    outcome = asyncio.run(relay._drain_outbox(app, cast("Any", repo), settings, opts=StorageOptions(), publisher=None))
+    outcome = asyncio.run(relay._drain_outbox(app, cast(ProvenanceStore, repo), settings, opts=StorageOptions(), publisher=None))
 
-    assert (outcome.drained, outcome.refused) == (1, 0), f"the staged event never drained: {outcome}, refused for {repo.refusals}"
-    assert repo.ingested == [RUN_ID]
+    assert (outcome.drained, outcome.refused) == (1, 0), (
+        f"the staged event never drained: {outcome}, refused for {[refusal['reason'] for refusal in repo.refusals]}"
+    )
+    assert [event.run.run_id if isinstance(event, RunEvent) else event for event in repo.recorded] == [RUN_ID]
     assert list(outbox.list_events(uri, StorageOptions())) == [], "a drained event must not stay staged"

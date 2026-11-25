@@ -26,33 +26,15 @@ the only rung that opens ``can_vend_maintain``; a maintainer, a writer and a rea
 The caller is authenticated as the maintenance identity, and the vendor mints a fixed credential.
 """
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator
 
 import pytest
-from pydantic import SecretStr
 
-from catalog.core.vending import TableRecords, Tier, VendedSession
 from lakehouse.governed.fga_ids import user_object
 from lakehouse.governed.machine_identity import ServicePrincipal
-from lakehouse.storage.credential import S3KeyPair
 from tests.app_state import app_of
 from tests.governed_catalog import GovernedCatalog
-
-
-class _Vendor:
-    def vend(
-        self,
-        *,
-        table_location: str,
-        tier: Tier,
-        session_name: str,
-        bases: Sequence[str] = (),
-        data_directories: Sequence[str] = (),
-        branch: str = "",
-        records: TableRecords | None = None,
-    ) -> VendedSession:
-        key_pair = S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK"), session_token=SecretStr("ST"))
-        return VendedSession(key_pair=key_pair, endpoint=None, region="us-east-1", expires_at_millis=1)
+from tests.vendor_double import RecordingVendor
 
 
 #: The maintenance service's own principal, the caller every test here vends as.
@@ -71,7 +53,7 @@ def governed(governed_catalog: GovernedCatalog) -> Iterator[tuple[GovernedCatalo
     governed_catalog.create_table("bob", TABLE)
     table = f"table:{governed_catalog.uuid('table', TABLE, 'bob')}"
     app = app_of(governed_catalog.client)
-    app.dependency_overrides[get_vendor] = lambda: _Vendor()
+    app.dependency_overrides[get_vendor] = lambda: RecordingVendor()
     app.dependency_overrides[security.authenticate] = lambda: _MAINTENANCE
     yield governed_catalog, table
 

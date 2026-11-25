@@ -23,8 +23,6 @@ record is kept and the pass carries the refusal.
 import asyncio
 import json
 import re
-import threading
-import time
 import uuid
 from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import AbstractContextManager, contextmanager
@@ -39,7 +37,6 @@ import lance_namespace
 import pyarrow as pa
 import pytest
 import respx
-import uvicorn
 from lance import blob_array
 from pydantic import SecretStr
 
@@ -57,6 +54,8 @@ from maintenance.services.store_events import StoreEvents
 from maintenance.services.table_pass import TableTask
 from tests import seeding
 from tests.integration.maintenance_vend_doors import CATALOG_URL, MAINTAIN_TIER_DOOR, VENDED, described_by, maintain_tier_door
+from tests.live_server import serve
+from tests.vend_answers import vended
 
 
 _TABLE_ID: list[str] = ["lance_catalog", "db", "t"]
@@ -205,18 +204,8 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> Iterator[_Estate]:
     get_settings.cache_clear()
     from catalog.main import app
 
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 30
-    while not server.started:
-        if not thread.is_alive() or time.monotonic() > deadline:
-            raise RuntimeError("uvicorn did not start")
-        time.sleep(0.05)
-    with httpx.Client(base_url=f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}", timeout=120) as client:
+    with serve(app) as url, httpx.Client(base_url=url, timeout=120) as client:
         yield _Estate(moto_url, client, bucket)
-    server.should_exit = True
-    thread.join(timeout=30)
     get_settings.cache_clear()
 
 
@@ -404,7 +393,7 @@ def test_an_overwrite_is_reported_by_the_pass_its_store_event_holds(
 
 
 def _vended(location: str) -> httpx.Response:
-    return httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": VENDED}, "location": location})
+    return httpx.Response(200, json=vended(VENDED, location=location))
 
 
 def _refused(_location: str) -> httpx.Response:

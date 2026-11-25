@@ -3,7 +3,8 @@
 import json
 import sys
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,7 @@ from moto.iam.access_control import IAMRequestBase
 from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
 
+from catalog.services.erasure import ErasureReport, ref_heads
 from tests.governed_catalog import GovernedCatalog, governed_catalog_app
 
 
@@ -266,6 +268,27 @@ class ErasureJob:
 def erasure_job() -> type[ErasureJob]:
     """The job's stand-in, constructed per table: ``erasure_job(uri, predicate).run()``."""
     return ErasureJob
+
+
+@pytest.fixture
+def erasure_predicate() -> str:
+    """The predicate ``erase`` erases by: the erasure rig's subject, unless a module overrides it."""
+    from erasure_rig import PREDICATE
+
+    return PREDICATE
+
+
+@pytest.fixture
+def erase(erasure_job: type[ErasureJob], erasure_predicate: str) -> Callable[..., ErasureReport]:
+    """The job rewrites every ref, then the catalog verifies the heads the obligation recorded before it ran."""
+    from erasure_rig import NOW, verify_heads
+
+    def _erase(uri: str, retention: timedelta = NOW) -> ErasureReport:
+        recorded = ref_heads(lance.dataset(uri))
+        erasure_job(uri, erasure_predicate).run()
+        return verify_heads(uri, erasure_predicate, retention=retention, trusted=recorded)
+
+    return _erase
 
 
 @pytest.fixture

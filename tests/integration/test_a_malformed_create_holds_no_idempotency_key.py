@@ -15,14 +15,15 @@ import struct
 from typing import TYPE_CHECKING, Final
 
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
+
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
 
-ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW_STREAM = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 INVALID_INPUT = 13
 CREATE = "/v1/table/lance_catalog$db$t/create"
 KEY = "3f2b8c1a-7d4e-4f6a-9b0c-5e1d2a3b4c5d"
@@ -33,21 +34,14 @@ _RUN: Final = frozendict({"x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07
 _UNPARSEABLE_INT = "1" * 5000
 
 
-def _stream(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return bytes(sink.getvalue().to_pybytes())
-
-
 def _rows(n: int = 3) -> bytes:
-    return _stream(pa.table({"id": pa.array(range(n), pa.int64())}))
+    return encode_arrow_stream(pa.table({"id": pa.array(range(n), pa.int64())}))
 
 
 def _tampered(kind: pa.DataType, good: bytes, bad: bytes) -> bytes:
     """A two-row stream whose framing still parses after `good` is overwritten with `bad` in its buffers."""
     values = [b"hello", b"world"] if kind == pa.binary() else ["hello", "world"]
-    body = _stream(pa.table({"v": pa.array(values, kind)}))
+    body = encode_arrow_stream(pa.table({"v": pa.array(values, kind)}))
     assert body.count(good) == 1, "the bytes to tamper with are not unique in the stream"
     return body.replace(good, bad)
 
@@ -99,7 +93,7 @@ def test_a_keyed_shape_refusal_lets_the_corrected_retry_run(real_ns_client: Test
         # Reading runs the deserializer `import lance` registers for `lance.blob.v2`, which raises a plain
         # TypeError for a storage type it refuses (pylance 12.0.0).
         pytest.param(
-            _stream(
+            encode_arrow_stream(
                 pa.table(
                     [pa.array(range(3), pa.int64())],
                     schema=pa.schema([pa.field("id", pa.int64(), metadata={b"ARROW:extension:name": b"lance.blob.v2", b"ARROW:extension:metadata": b""})]),

@@ -14,6 +14,7 @@ from credentials import Credential, credential
 from liveness import skip_unless_live
 from topology import create_namespace
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.naming import CATALOG_DELIMITER
 
 
@@ -24,19 +25,12 @@ URL = os.environ.get("LANCE_REST_E2E_URL", "")
 #: auth-off bring-up, and then the header is simply omitted.
 TOKEN = credential(Credential.TOKEN)
 AUTH = {"Authorization": f"Bearer {TOKEN}"} if TOKEN else {}
-ARROW = {**AUTH, "content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {**AUTH, "content-type": ARROW_STREAM_MEDIA_TYPE}
 
 #: The suite's namespace in the suites' warehouse (`topology.WAREHOUSE`).
 NS = "e2e-ns"
 
 pytestmark = pytest.mark.e2e
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 def _fresh(namespace: str, stem: str) -> str:
@@ -72,12 +66,12 @@ def test_full_lifecycle(base: str, namespace: str) -> None:
     table = _fresh(namespace, "t")
 
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "name": ["a", "b", "c"]})
-    assert requests.post(f"{base}/v1/table/{table}/create?mode=overwrite", data=_ipc(rows), headers=ARROW).status_code == 200
+    assert requests.post(f"{base}/v1/table/{table}/create?mode=overwrite", data=encode_arrow_stream(rows), headers=ARROW).status_code == 200
 
     assert (
         requests.post(
             f"{base}/v1/table/{table}/insert?mode=append",
-            data=_ipc(pa.table({"id": pa.array([4], pa.int64()), "name": ["d"]})),
+            data=encode_arrow_stream(pa.table({"id": pa.array([4], pa.int64()), "name": ["d"]})),
             headers=ARROW,
         ).status_code
         == 200

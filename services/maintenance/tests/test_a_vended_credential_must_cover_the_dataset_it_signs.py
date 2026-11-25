@@ -30,6 +30,7 @@ import httpx
 import pytest
 import respx
 from pydantic import SecretStr
+from tests.vend_answers import vended
 
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
@@ -59,7 +60,7 @@ def door() -> Iterator[respx.MockRouter]:
 def _vends(door: respx.MockRouter, table_id: str, location: str | None) -> None:
     """The maintain-tier door answering ``table_id``'s vend with the scoped pair, at ``location``."""
     flat = {"aws_access_key_id": "SCOPED", "aws_secret_access_key": "scoped-secret"}
-    answer = {"mode": "direct", "credentials": {"storage_options": flat}, **({"location": location} if location is not None else {})}
+    answer = vended(flat, location=location)
     door.post(f"{CATALOG}/management/v1/table/{table_id}/credentials", params={"tier": "maintain"}).mock(return_value=httpx.Response(200, json=answer))
 
 

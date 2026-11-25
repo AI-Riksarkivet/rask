@@ -46,6 +46,7 @@ from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
 from tests.app_state import app_of
 from tests.bus_double import BusDouble
+from tests.catalog_settings import catalog_settings
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -79,7 +80,7 @@ def _blip() -> BusDouble:
 
 
 def _settings(control_uri: str, *, lineage_uri: str = "", **fields: Any) -> Settings:
-    return Settings(s3_access_key_id="k", s3_secret_access_key="s", control_outbox_uri=control_uri, lineage_outbox_uri=lineage_uri, **fields)
+    return catalog_settings(control_outbox_uri=control_uri, lineage_outbox_uri=lineage_uri, **fields)
 
 
 @pytest.fixture

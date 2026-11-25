@@ -20,67 +20,28 @@ how the format numbers refs, and a fake would restate the belief under test. The
 every ref first (the conftest's ``ErasureJob``, [[LH-493]]); the tag's fate is the verification's.
 """
 
-from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
-from typing import Any
 
 import lance
-import pyarrow as pa
 import pytest
+from erasure_rig import PREDICATE, SUBJECT, Erase, rows
 from lance.dataset import Tags
-
-from catalog.services.erasure import ErasureReport, ref_heads, verify
-from lakehouse.storage.options import StorageOptions
-
-
-_SUBJECT = "alice"
-_PREDICATE = "pii = 'alice'"
-_NOW = timedelta(seconds=0)
-
-
-def _rows(*names: str) -> pa.Table:
-    return pa.table({"pii": pa.array(list(names))})
-
-
-type _Erase = Callable[..., ErasureReport]
-
-
-@pytest.fixture
-def erase(erasure_job: Any) -> _Erase:  # noqa: ANN401 — conftest.ErasureJob
-    """The job rewrites every ref, then the catalog verifies."""
-
-    def _erase(uri: str, retention: timedelta = _NOW) -> ErasureReport:
-        recorded = ref_heads(lance.dataset(uri))
-        erasure_job(uri, _PREDICATE).run()
-        return verify(
-            lance.dataset(uri),
-            storage_options=StorageOptions(),
-            reopen=lambda: lance.dataset(uri),
-            table="acme-bronze$subjects",
-            predicate=_PREDICATE,
-            retention=retention,
-            trusted=recorded,
-            history=None,
-            derived=list,
-        )
-
-    return _erase
 
 
 def _holds_subject(uri: str, reference: str | tuple[str | None, int]) -> bool:
-    return bool(lance.dataset(uri).checkout_version(reference).count_rows(filter=_PREDICATE))
+    return bool(lance.dataset(uri).checkout_version(reference).count_rows(filter=PREDICATE))
 
 
-def test_a_BRANCH_tag_pinning_the_subject_is_not_kept_on_mains_evidence(tmp_path: Path, erase: _Erase) -> None:
+def test_a_BRANCH_tag_pinning_the_subject_is_not_kept_on_mains_evidence(tmp_path: Path, erase: Erase) -> None:
     """``work`` v3 holds the subject and main v3 does not; the tag names ``work`` v3."""
     uri = str(tmp_path / "subjects")
-    lance.write_dataset(_rows("bob"), uri)
-    lance.write_dataset(_rows("carol"), uri, mode="append")
+    lance.write_dataset(rows("bob"), uri)
+    lance.write_dataset(rows("carol"), uri, mode="append")
     branch = lance.dataset(uri).create_branch("work", 2)
-    lance.write_dataset(_rows(_SUBJECT), branch.uri, mode="append")
+    lance.write_dataset(rows(SUBJECT), branch.uri, mode="append")
     lance.dataset(uri).tags.create("pinned", ("work", 3))
-    lance.write_dataset(_rows("dan"), uri, mode="append")
+    lance.write_dataset(rows("dan"), uri, mode="append")
     assert _holds_subject(uri, ("work", 3)), "the tagged branch version must hold the subject for this to be the right test"
     assert not _holds_subject(uri, (None, 3)), "main's same-numbered version must be clean for this to be the right test"
 
@@ -98,19 +59,19 @@ def _clean_branch_tag_beside_a_pinning_branch(tmp_path: Path) -> str:
     after the erasure rewrites and reclaims every ref.
     """
     uri = str(tmp_path / "provenance")
-    lance.write_dataset(_rows("bob"), uri)
+    lance.write_dataset(rows("bob"), uri)
     clean = lance.dataset(uri).create_branch("clean", 1)
-    lance.write_dataset(_rows("eve"), clean.uri, mode="append")
+    lance.write_dataset(rows("eve"), clean.uri, mode="append")
     lance.dataset(uri).tags.create("trained", ("clean", 2))
-    lance.write_dataset(_rows(_SUBJECT, "carol"), uri, mode="append")
-    lance.dataset(uri).create_branch("work", 2).delete(_PREDICATE)
+    lance.write_dataset(rows(SUBJECT, "carol"), uri, mode="append")
+    lance.dataset(uri).create_branch("work", 2).delete(PREDICATE)
     lance.dataset(uri).tags.create("kept", ("work", 3))
     assert not _holds_subject(uri, ("clean", 2)), "the tagged branch version must be clean for this to be the right test"
     assert _holds_subject(uri, (None, 2)), "main's same-numbered version must hold the subject for this to be the right test"
     return uri
 
 
-def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path, erase: _Erase) -> None:
+def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path, erase: Erase) -> None:
     """A retained tag names a version of ITS branch, so ``trained`` on ``clean`` v2 pins nothing on main v2.
 
     Main v2 survives holding the subject because ``kept`` keeps work v3, which stands on its files; work v3
@@ -128,7 +89,7 @@ def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path, erase
 
 
 @pytest.mark.parametrize("names", [("work", "deeper"), ("alpha", "zulu")], ids=["child-sorts-first", "child-sorts-last"])
-def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path, names: tuple[str, str], erase: _Erase) -> None:
+def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path, names: tuple[str, str], erase: Erase) -> None:
     """The child stands on the parent's v3, not main v3; main v2 and v3 survive by the retention window alone.
 
     A fork point is a ``(parent branch, version)`` reference (``parent_branch`` in ``branches.list()``,
@@ -138,11 +99,11 @@ def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path
     """
     parent, child = names
     uri = str(tmp_path / "grandchild")
-    lance.write_dataset(_rows("bob"), uri)
-    lance.write_dataset(_rows(_SUBJECT), uri, mode="append")
-    lance.write_dataset(_rows("carol"), uri, mode="append")
-    lance.write_dataset(_rows("eve"), lance.dataset(uri).create_branch(parent, 1), mode="append")
-    lance.write_dataset(_rows("fred"), lance.dataset(uri).checkout_version((parent, None)), mode="append")
+    lance.write_dataset(rows("bob"), uri)
+    lance.write_dataset(rows(SUBJECT), uri, mode="append")
+    lance.write_dataset(rows("carol"), uri, mode="append")
+    lance.write_dataset(rows("eve"), lance.dataset(uri).create_branch(parent, 1), mode="append")
+    lance.write_dataset(rows("fred"), lance.dataset(uri).checkout_version((parent, None)), mode="append")
     lance.dataset(uri).create_branch(child, (parent, 3))
     fork = lance.dataset(uri).branches.list()[child]
     assert (fork["parent_branch"], fork["parent_version"]) == (parent, 3), f"the child must stand on the parent's v3 for this to be the right test: {fork}"
@@ -153,16 +114,16 @@ def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path
     assert (report.pinned_by, report.held_by_retention) == ([], ["main@2", "main@3"])
 
 
-def test_a_tag_whose_delete_FAILED_is_named_as_the_pin_on_its_own_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: _Erase) -> None:
+def test_a_tag_whose_delete_FAILED_is_named_as_the_pin_on_its_own_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: Erase) -> None:
     """``kept`` names main v2, the one version holding the subject, and step 2 cannot delete it.
 
     No branch stands on main v2, so the surviving tag alone keeps it from cleanup, and it is the whole
     of what an operator must delete to finish. Only ``tags.delete("kept")`` fails; the rest is real Lance.
     """
     uri = str(tmp_path / "stuck")
-    lance.write_dataset(_rows("bob"), uri)
-    lance.write_dataset(_rows(_SUBJECT), uri, mode="append")
-    lance.write_dataset(_rows("carol"), uri, mode="append")
+    lance.write_dataset(rows("bob"), uri)
+    lance.write_dataset(rows(SUBJECT), uri, mode="append")
+    lance.write_dataset(rows("carol"), uri, mode="append")
     lance.dataset(uri).tags.create("kept", 2)
     assert _holds_subject(uri, (None, 2)), "the tagged version must hold the subject for this to be the right test"
     delete = Tags.delete

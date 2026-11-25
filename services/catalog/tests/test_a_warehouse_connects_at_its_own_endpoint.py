@@ -15,12 +15,12 @@ from typing import Any
 
 import pytest
 from fastapi import Request
-from moto.server import ThreadedMotoServer
 
 from catalog.core import namespace as namespace_module
 from catalog.core.config import Settings
 from lakehouse.records.warehouse_records import WarehouseRecord
 from tests.app_state import request_on
+from tests.catalog_settings import catalog_settings
 
 
 _STORAGE = "storage."
@@ -29,12 +29,7 @@ _STORAGE = "storage."
 @pytest.fixture
 def settings() -> Settings:
     """An HTTPS estate default, so an http warehouse below is a genuine mixed pair."""
-    return Settings(
-        s3_access_key_id="k",
-        s3_secret_access_key="s",
-        LANCE_S3_ENDPOINT="https://estate.example:9000",
-        LANCE_REST_ROOT="s3://estate-root",
-    )
+    return catalog_settings(LANCE_S3_ENDPOINT="https://estate.example:9000", LANCE_REST_ROOT="s3://estate-root")
 
 
 @pytest.fixture
@@ -100,7 +95,7 @@ def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500() -> None:
     """
     from lance_namespace import ServiceUnavailableError
 
-    dead = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_S3_ENDPOINT="http://127.0.0.1:1", LANCE_REST_ROOT="s3://estate-root")
+    dead = catalog_settings(LANCE_S3_ENDPOINT="http://127.0.0.1:1", LANCE_REST_ROOT="s3://estate-root")
 
     with pytest.raises(ServiceUnavailableError) as caught:
         namespace_module.build_namespace_for_root(dead, "s3://tenant-bucket")
@@ -108,7 +103,7 @@ def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500() -> None:
     assert "http://127.0.0.1:1" in str(caught.value), f"the refusal does not name the store: {caught.value}"
 
 
-def test_a_store_that_ANSWERS_is_not_an_outage() -> None:
+def test_a_store_that_ANSWERS_is_not_an_outage(moto_url: str) -> None:
     """The control, and the reason the rule reads the error rather than catching it: a store that answered said
     something a retry will not change.
 
@@ -118,15 +113,9 @@ def test_a_store_that_ANSWERS_is_not_an_outage() -> None:
     """
     from lance_namespace import ServiceUnavailableError
 
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    try:
-        host, port = server.get_host_and_port()
-        store = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_S3_ENDPOINT=f"http://{host}:{port}", LANCE_REST_ROOT="s3://estate-root")
+    store = catalog_settings(LANCE_S3_ENDPOINT=moto_url, LANCE_REST_ROOT="s3://estate-root")
 
-        with pytest.raises(OSError, match="404 Not Found") as caught:
-            namespace_module.build_namespace_for_root(store, "s3://no-such-bucket")
-    finally:
-        server.stop()
+    with pytest.raises(OSError, match="404 Not Found") as caught:
+        namespace_module.build_namespace_for_root(store, "s3://no-such-bucket")
 
     assert not isinstance(caught.value, ServiceUnavailableError)

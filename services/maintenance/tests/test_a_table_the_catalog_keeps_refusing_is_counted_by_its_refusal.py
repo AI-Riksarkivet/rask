@@ -22,10 +22,10 @@ import lance
 import pyarrow as pa
 import pytest
 import respx
+from tests.vend_answers import vended
 
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import credentials
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.plan import DatasetPlan
 
@@ -40,9 +40,7 @@ type Recorded = list[tuple[int, dict[str, Any] | None]]
 type VendAnswer = Callable[[str], httpx.Response]
 
 
-@pytest.fixture(autouse=True)
-def _identity(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(credentials, "service_headers", lambda _settings: {})
+pytestmark = pytest.mark.usefixtures("catalog_calls_carry_no_identity")
 
 
 def _written(tmp_path: Path, *, fragments: int) -> str:
@@ -55,8 +53,8 @@ def _written(tmp_path: Path, *, fragments: int) -> str:
 
 def _vended_at(location: str | None) -> VendAnswer:
     """A direct write credential the catalog says covers `location`; ``None`` covers the dataset itself."""
-    vended = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
-    return lambda uri: httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": vended}, "location": location or uri})
+    options = {"aws_access_key_id": "VENDED", "aws_secret_access_key": "vended-secret"}
+    return lambda uri: httpx.Response(200, json=vended(options, location=location or uri))
 
 
 def _refused(status: int, body: dict[str, Any]) -> VendAnswer:

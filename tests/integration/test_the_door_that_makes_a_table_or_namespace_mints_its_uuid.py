@@ -26,9 +26,11 @@ from catalog.core.config import Settings
 from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
 from tests.app_state import app_of
+from tests.catalog_settings import catalog_settings
 
 
 WAREHOUSE = "acme-bucket"
@@ -42,7 +44,7 @@ type Door = Callable[[TestClient, Settings], str]
 @pytest.fixture
 def estate(real_ns_client: TestClient, tmp_path: Path) -> tuple[TestClient, Settings]:
     """The catalog with warehouse ``WAREHOUSE`` at its root, its row there, and the namespace ``acme`` in it."""
-    settings = Settings.model_validate({"root": str(tmp_path), "s3_access_key_id": "x", "s3_secret_access_key": "x"})
+    settings = catalog_settings(root=str(tmp_path))
     app_of(real_ns_client).dependency_overrides[request_settings] = lambda: settings
     seeding.put_warehouse(
         str(tmp_path),
@@ -111,7 +113,7 @@ def test_the_door_that_makes_a_table_or_namespace_mints_its_uuid(estate: tuple[T
     answers = [client.post(describe, json={}) for _ in range(2)]
 
     assert [answer.status_code for answer in answers] == [200, 200], [answer.text for answer in answers]
-    first, second = [(answer.json().get("properties") or {}).get("rask.uuid") for answer in answers]
+    first, second = [(answer.json().get("properties") or {}).get(UUID_PROPERTY) for answer in answers]
     assert first is not None, f"{describe} answers no rask.uuid: {answers[0].json()}"
     minted = uuid.UUID(first)
     assert (str(minted), minted.version) == (first, 4), f"{first!r} is not a canonical random uuid"

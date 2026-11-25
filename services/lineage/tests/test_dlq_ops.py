@@ -12,7 +12,6 @@ import asyncio
 import json
 import logging
 import uuid
-from collections.abc import Collection, Iterator
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,15 +28,16 @@ from lineage_lane import decided
 from lakehouse.events import outbox
 from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.governed import fga_ids
-from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
+from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.decider import OpenFgaDecider
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
 from lineage.api.fga_deps import DatasetFilter
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, storage_options
+from lineage.models import RunEvent
+from lineage.services.provenance import ProvenanceStore
 from tests.app_state import request_on
+from tests.callers import person
+from tests.provenance_store_double import ProvenanceStoreDouble
 
 
 _FULL_AUTH = {
@@ -83,39 +83,8 @@ def _event_json(
     )
 
 
-class _Repo:
-    def __init__(self) -> None:
-        self.ingested: list[Any] = []
-        self.refusals: list[dict[str, str | None]] = []
-
-    async def record_refusal(self, *, outbox_key: str, run_id: str | None, author: str | None, reason: str, event_json: str) -> None:
-        """[[LH-182]] The drain now RECORDS a settled refusal before retiring the object, so a double
-        that cannot record one no longer stands in for the store. Captured rather than ignored:
-        several of these tests assert what the refusal path did, and a silent no-op would let a drain
-        that recorded nothing pass as one that did."""
-        self.refusals.append({"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event_json": event_json})
-
-    async def record(self, event: Any, *, aliased: Collection[str]) -> None:
-        # One call records the edges and the feed row — a replay has one call to make, not two.
-        self.ingested.append(event)
-
-    async def run_author(self, run_id: str) -> str | None:
-        """The feed holds no run, so a replayed event founds its own."""
-        del run_id
-        return None
-
-    async def recorded_event(self, key: str) -> dict[str, Any] | None:
-        """No row of the feed, so a refused event is never the replay of one recorded."""
-        del key
-        return None
-
-
 def _request(**state: object) -> Request:
     return request_on(**state)
-
-
-def _token(name: str = "alice") -> PersonPrincipal:
-    return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss="i", sub=name, aud="lance", exp=0, iat=0))
 
 
 def _held(store: Any, *rungs: tuple[str, str, str]) -> Any:  # noqa: ANN401 — the root conftest's OpenFgaStore
@@ -182,7 +151,7 @@ def test_list_filters_events_to_visible_datasets(tmp_path: Path, openfga_store: 
     s = _settings(tmp_path, **_FULL_AUTH)
     _stage(s, "r1", _event_json("r1", outputs=(("bronze", "mine"),)))
     _stage(s, "r2", _event_json("r2", outputs=(("bronze", "hidden"),)))
-    token = _token()
+    token = person()
 
     async def listed(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the door's answer
         return await dlq.list_dlq(settings=s, token=token, datasets=_filter(_request(decider=decider), s, token), limit=100)
@@ -197,22 +166,23 @@ def test_list_filters_events_to_visible_datasets(tmp_path: Path, openfga_store: 
 # --------------------------------------------------------------------------- #
 
 
-def _replay(s: LineageSettings, run_id: str, repo: Any, token: Any = None, decider: Any = None) -> Any:  # noqa: ANN401 — a decider, or none with FGA off
+def _replay(s: LineageSettings, run_id: str, repo: ProvenanceStoreDouble, token: Any = None, decider: Any = None) -> Any:  # noqa: ANN401 — a decider, or none with FGA off
     decider = decider if decider is not None else OpenFgaDecider(cast("Any", object()))
     flt = _filter(_request(decider=decider), s, token)
+    store = cast(ProvenanceStore, repo)
     # The door's feed is the one lineage's lifespan wires on its app, which the run-author check reads.
     return dlq.replay_dlq(
-        run_id=run_id, request=_request(decider=decider, provenance=repo), provenance=repo, settings=s, token=token, datasets=flt, publisher=None
+        run_id=run_id, request=_request(decider=decider, provenance=store), provenance=store, settings=s, token=token, datasets=flt, publisher=None
     )
 
 
 def test_replay_reingests_and_drops(tmp_path: Path) -> None:
     s = _settings(tmp_path)
     _stage(s, "r1", _event_json("r1"))
-    repo = _Repo()
+    repo = ProvenanceStoreDouble()
     out = asyncio.run(_replay(s, "r1", repo))
     assert out.status == "replayed" and out.run_id == "r1"
-    assert len(repo.ingested) == 1 and repo.ingested[0].run.run_id == "r1"
+    assert len(repo.recorded) == 1 and isinstance(repo.recorded[0], RunEvent) and repo.recorded[0].run.run_id == "r1"
     # the staged object is gone (drop only runs on success)
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "r1") is None
 
@@ -220,7 +190,7 @@ def test_replay_reingests_and_drops(tmp_path: Path) -> None:
 def test_replay_missing_run_is_404(tmp_path: Path) -> None:
     s = _settings(tmp_path)
     with pytest.raises(TransactionNotFoundError):
-        asyncio.run(_replay(s, "nope", _Repo()))
+        asyncio.run(_replay(s, "nope", ProvenanceStoreDouble()))
 
 
 def test_replay_poison_is_unsupported_and_not_dropped_dev(tmp_path: Path) -> None:
@@ -228,7 +198,7 @@ def test_replay_poison_is_unsupported_and_not_dropped_dev(tmp_path: Path) -> Non
     s = _settings(tmp_path)
     _stage(s, "bad", "{not valid json")
     with pytest.raises(UnsupportedOperationError):
-        asyncio.run(_replay(s, "bad", _Repo()))
+        asyncio.run(_replay(s, "bad", ProvenanceStoreDouble()))
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "bad") is not None
 
 
@@ -239,7 +209,7 @@ def test_replay_poison_is_404_under_fga_no_oracle(tmp_path: Path, openfga_store:
     _stage(s, "bad", "{not valid json")
     store = _held(openfga_store, *(("alice", "reader", name) for name in ("mine", "hidden", "bronze$secret", "bronze$x")))
     with pytest.raises(TransactionNotFoundError):
-        decided(store, lambda decider: _replay(s, "bad", _Repo(), _token(), decider))
+        decided(store, lambda decider: _replay(s, "bad", ProvenanceStoreDouble(), person(), decider))
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "bad") is not None
 
 
@@ -248,10 +218,10 @@ def test_replay_hidden_event_is_404_not_a_name_disclosing_403(tmp_path: Path, op
     # echoes 'bronze$secret' — the disclosure gap list_dlq closes, now closed on replay too.
     s = _settings(tmp_path, **_FULL_AUTH)
     _stage(s, "r1", _event_json("r1", outputs=(("bronze", "bronze$secret"),)))
-    repo = _Repo()
+    repo = ProvenanceStoreDouble()
     with pytest.raises(TransactionNotFoundError):
-        decided(_held(openfga_store), lambda decider: _replay(s, "r1", repo, _token(), decider))
-    assert repo.ingested == []
+        decided(_held(openfga_store), lambda decider: _replay(s, "r1", repo, person(), decider))
+    assert repo.recorded == []
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "r1") is not None
 
 
@@ -260,10 +230,10 @@ def test_replay_seen_but_not_writable_is_403(tmp_path: Path, openfga_store: Any)
     # the name is one they can already see, so no new disclosure. Nothing ingested/dropped.
     s = _settings(tmp_path, **_FULL_AUTH)
     _stage(s, "r1", _event_json("r1", outputs=(("bronze", "bronze$x"),), author="dex~alice"))
-    repo = _Repo()
+    repo = ProvenanceStoreDouble()
     with pytest.raises(PermissionDeniedError, match=r"can_write_data required on outputs: bronze\$x"):
-        decided(_held(openfga_store, ("alice", "reader", "bronze$x")), lambda decider: _replay(s, "r1", repo, _token(), decider))
-    assert repo.ingested == []
+        decided(_held(openfga_store, ("alice", "reader", "bronze$x")), lambda decider: _replay(s, "r1", repo, person(), decider))
+    assert repo.recorded == []
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "r1") is not None
 
 
@@ -277,35 +247,14 @@ def list_dlq_off(settings: LineageSettings) -> Any:
 # --------------------------------------------------------------------------- #
 
 
-class _CaptureAudit(logging.Handler):
-    def __init__(self) -> None:
-        super().__init__()
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
-
-
-@pytest.fixture
-def audit_records() -> Iterator[list[logging.LogRecord]]:
-    """Capture the dedicated ``lance.audit`` stream with the trail enabled (as the lifespan configures)."""
-    handler = _CaptureAudit()
-    logger = logging.getLogger(AUDIT_LOGGER)
-    configure_audit(enabled=True)
-    logger.addHandler(handler)
-    try:
-        yield handler.records
-    finally:
-        logger.removeHandler(handler)
-        configure_audit(enabled=True)  # leave the stream on for the rest of the suite
-
-
-def test_replay_audits_success_with_the_actor(tmp_path: Path, audit_records: list[logging.LogRecord]) -> None:
+def test_replay_audits_success_with_the_actor(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     # House vocabulary: a COMPLETED action records `success` (ALLOW/DENY belong to authz decisions) — an
     # authenticated governed replay must never surface as outcome=allow (the inverted pre-fix record).
     s = _settings(tmp_path)
     _stage(s, "r1", _event_json("r1"))
-    asyncio.run(_replay(s, "r1", _Repo(), _token()))
+    with caplog.at_level(logging.INFO, logger=AUDIT_LOGGER):
+        asyncio.run(_replay(s, "r1", ProvenanceStoreDouble(), person()))
+    audit_records = [record for record in caplog.records if record.name == AUDIT_LOGGER]
     assert len(audit_records) == 1
     fields = {k: v for k, v in audit_records[0].__dict__.items() if k.startswith("audit.")}
     assert fields == {

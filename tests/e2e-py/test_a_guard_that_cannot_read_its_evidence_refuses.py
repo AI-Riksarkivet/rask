@@ -25,12 +25,14 @@ from collections.abc import Iterator
 
 import pyarrow as pa
 import pytest
+from byo_scenario import CATALOG, DEX, ok
 from lance_namespace import ErrorCode
 from plant import planted
 from refusals import assert_refused
-from scratch_tenant import CATALOG, DEX, Tenant, ok, provisioned, tuples_on
+from scratch_tenant import Tenant, provisioned, tuples_on
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 
 
 #: Lance's manifest naming for a table written with V2 manifest paths: version ``v`` is ``_versions/{U64_MAX - v}.manifest``
@@ -77,7 +79,7 @@ def _classified_table(tenant: Tenant, label: str) -> tuple[str, str, str]:
     ok(answer)
     described = ok(admin.post(f"{CATALOG}/v1/table/{table}/describe", json={"load_detailed_metadata": True}, timeout=60))
     manifest = f"{str(described['location']).rstrip('/')}/_versions/{U64_MAX - int(described['version'])}.manifest"
-    return table, str(described["properties"]["rask.uuid"]), manifest
+    return table, str(described["properties"][UUID_PROPERTY]), manifest
 
 
 def test_a_classified_table_whose_open_fails_is_vended_to_no_one(tenant: Tenant, label: str) -> None:

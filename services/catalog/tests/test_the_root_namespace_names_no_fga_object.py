@@ -43,7 +43,6 @@ from typing import Any, cast
 import lance
 import pyarrow as pa
 import pytest
-from catalog_settings import governed_settings
 from fastapi import Request
 from fastapi.testclient import TestClient
 from lance_namespace import InvalidInputError, PermissionDeniedError
@@ -51,13 +50,12 @@ from lance_namespace import InvalidInputError, PermissionDeniedError
 from catalog.api.authz import route_guard
 from catalog.api.authz.context import AuthzContext
 from lakehouse.governed import fga_provision
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
+from tests.callers import person
+from tests.catalog_settings import governed_settings
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
-_CALLER = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1))
+_CALLER = person("alice")
 
 
 def _request(path: str, object_id: str) -> Request:

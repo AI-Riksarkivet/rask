@@ -25,7 +25,8 @@ import lance
 import lance_namespace as ln
 import pyarrow as pa
 import pytest
-from scratch_tenant import CATALOG, DEX, Tenant, ok, provisioned
+from byo_scenario import CATALOG, DEX, ok
+from scratch_tenant import Tenant, provisioned
 
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.naming import CATALOG_DELIMITER

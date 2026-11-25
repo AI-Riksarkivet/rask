@@ -30,7 +30,6 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
-from botocore.exceptions import ClientError
 from pydantic import SecretStr
 
 import lakehouse.storage.client as storage_client
@@ -38,6 +37,7 @@ from catalog.services import warehouses
 from lakehouse.storage import conditional_records
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import ENDPOINT, StorageOptions
+from tests.store_answers import answered
 
 
 #: The pair a registry on S3 signs with, as every one the catalog reaches one with carries.
@@ -46,33 +46,6 @@ _PAIR = S3KeyPair(access_key_id="k", secret_access_key=SecretStr("s"))
 
 def _root(tmp_path: Any) -> str:
     return f"file://{tmp_path}"
-
-
-def _client_error(code: str, status: int) -> ClientError:
-    """A ClientError shaped like botocore's own — EVERY `ResponseMetadata` key, not just the one read.
-
-    `_ResponseMetadataTypeDef` is a total TypedDict and botocore always populates all five; a partial
-    one is a fake no real call can produce, and the `.get()` chains in `records` would swallow the
-    difference until a consumer grew a `RetryAttempts` read and KeyError'd in production.
-
-    Duplicated from `test_registry_cas.py` rather than shared: pytest here runs with
-    `--import-mode=importlib`, so test modules are not importable from one another, and the
-    alternative — hoisting fifteen lines into `services/catalog/tests/conftest.py` — would put a boto3-shaped
-    fixture in front of every test in the catalog's suite to save one copy.
-    """
-    return ClientError(
-        {
-            "Error": {"Code": code, "Message": code},
-            "ResponseMetadata": {
-                "RequestId": "req-test",
-                "HostId": "host-test",
-                "HTTPStatusCode": status,
-                "HTTPHeaders": {},
-                "RetryAttempts": 0,
-            },
-        },
-        "PutObject",
-    )
 
 
 def _seed(tmp_path: Path, warehouse_id: str = "acme-wh", **fields: str) -> dict[str, str]:
@@ -152,7 +125,7 @@ def test_s3_replace_sends_if_match_and_maps_a_refused_condition_to_a_lost_race(m
         "ETag": '"abc123"',
         "LastModified": datetime(2026, 11, 12, tzinfo=UTC),
     }
-    client.put_object.side_effect = _client_error(code, status)
+    client.put_object.side_effect = answered(status, code)
     monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
 
     with pytest.raises(conditional_records.RecordChangedError):
@@ -172,7 +145,7 @@ def test_s3_read_surfaces_a_non_404_error_instead_of_reporting_absent(monkeypatc
     """An outage must not be laundered into "no such record" — that would turn a 503 into a silent
     404 and, one level up, into a create that overwrites a record it could not read."""
     client = MagicMock()
-    client.get_object.side_effect = _client_error("AccessDenied", 403)
+    client.get_object.side_effect = answered(403, "AccessDenied")
     monkeypatch.setattr(storage_client, "s3_client", lambda *_a, **_kw: client)
     with pytest.raises(Exception, match="AccessDenied"):
         conditional_records.read_json("s3://ctl/root", StorageOptions(key_pair=_PAIR, options={ENDPOINT: "http://store.test:9000"}), "_warehouses/w.json")

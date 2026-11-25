@@ -23,6 +23,7 @@ from lance_namespace import PermissionDeniedError
 from starlette.types import Message
 
 from catalog.api.authz import grant_authority
+from lakehouse.naming import UUID_PROPERTY
 from tests.unit.named_resolver import NamedResolver
 
 
@@ -128,7 +129,7 @@ def test_a_grant_is_gated_on_the_rung_in_its_body_and_never_raises_its_callers_o
     catalog = governed_catalog
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
     described = catalog.client.post(f"/v1/namespace/{_GRANTED_ON}/describe", json={}, headers=catalog.bearer("alice"))
-    namespace = f"namespace:{described.json()['properties']['rask.uuid']}"
+    namespace = f"namespace:{described.json()['properties'][UUID_PROPERTY]}"
     if held:
         catalog.store.write(*((catalog.person(caller), relation, obj or namespace) for relation, obj in held))
     before = catalog.store.tuples()

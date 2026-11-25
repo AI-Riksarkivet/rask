@@ -30,8 +30,9 @@ import pyarrow as pa
 import pytest
 from botocore.client import Config
 from botocore.exceptions import ClientError
+from byo_scenario import CATALOG, DEX, Identity, ok
 from pydantic import BaseModel
-from scratch_tenant import CATALOG, DEX, Identity, Tenant, ok, provisioned
+from scratch_tenant import Tenant, provisioned
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.storage.options import ENDPOINT

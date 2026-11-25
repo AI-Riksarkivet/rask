@@ -10,18 +10,16 @@ The table is 2,000 rows of 4 KiB, so the catalog's ceiling is about 4,000 rows a
 (64 rows, then about 1,000 at its measured width) take three answers to cover it.
 """
 
-import threading
-import time
 from collections.abc import Iterator
 from pathlib import Path
 
 import httpx
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
-import uvicorn
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport
+from tests.live_server import serve
 
 
 _ROWS, _DIM = 2_000, 1024
@@ -43,33 +41,21 @@ def catalog_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str
     get_settings.cache_clear()
     from catalog.main import app
 
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 30
-    while not server.started:
-        if not thread.is_alive() or time.monotonic() > deadline:
-            raise RuntimeError("uvicorn did not start")
-        time.sleep(0.05)
-    yield f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
-    server.should_exit = True
-    thread.join(timeout=30)
+    with serve(app) as url:
+        yield url
     get_settings.cache_clear()
 
 
 def _wide_rows() -> bytes:
     values = pa.array([0.25] * (_ROWS * _DIM), pa.float32())
     table = pa.table({"id": pa.array(range(_ROWS), pa.int64()), "vec": pa.FixedSizeListArray.from_arrays(values, _DIM)})
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+    return encode_arrow_stream(table)
 
 
 def test_an_unlimited_read_returns_every_row(catalog_url: str) -> None:
     with httpx.Client(base_url=catalog_url, timeout=60) as client:
         assert client.post("/v1/namespace/lance_catalog$paged/create", json={}).status_code == 200
-        created = client.post("/v1/table/lance_catalog$paged$t/create", content=_wide_rows(), headers={"content-type": "application/vnd.apache.arrow.stream"})
+        created = client.post("/v1/table/lance_catalog$paged$t/create", content=_wide_rows(), headers={"content-type": ARROW_STREAM_MEDIA_TYPE})
         assert created.status_code == 200, created.text
 
     table = CatalogTableReader(RestCatalogTransport(catalog_url), ["lance_catalog", "paged", "t"]).to_table(columns=["id", "vec"])

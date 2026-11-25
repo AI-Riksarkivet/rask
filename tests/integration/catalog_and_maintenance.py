@@ -28,6 +28,7 @@ from lakehouse.storage.client import S3Client
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.runtime import standing
 from tests.bus_double import BusDouble
+from tests.catalog_settings import governed_settings
 from tests.governed_catalog import GovernedCatalog, StoreTuples
 from tests.integration.openfga_grants import TupleStore, act_as
 
@@ -123,16 +124,7 @@ def catalog_and_maintenance(
                 yield TwoServices(catalog, maintenance, StoreTuples(openfga_store), s3)
                 return
             store = TupleStore()
-            governed = catalog_settings().model_copy(
-                update={
-                    "oidc_enabled": True,
-                    "oidc_idp_id": "dex",
-                    "oidc_connectors": {"local": "dex"},
-                    "oidc_issuer": "https://idp.example",
-                    "oidc_audience": "lance",
-                    "fga_enabled": True,
-                }
-            )
+            governed = governed_settings()
             catalog_app.dependency_overrides[catalog_settings] = lambda: governed
             monkeypatch.setattr(catalog_app.state, "oidc", MagicMock())
             act_as(catalog, "alice")

@@ -29,19 +29,15 @@ from typing import TYPE_CHECKING, Any
 
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from lance_namespace import CreateNamespaceRequest, InsertIntoTableRequest, InvalidInputError, connect
 
 from catalog.services.tables.creation import create_table
 from catalog.services.tables.writes import insert_into_table
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
-from tests.door_tables import door_table
-
-
-#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
-_BODY_LIMIT = 256 * 1024 * 1024
+from tests.door_tables import BODY_LIMIT, door_table
 
 
 if TYPE_CHECKING:
@@ -50,7 +46,7 @@ if TYPE_CHECKING:
     from fastapi.testclient import TestClient
     from httpx2 import Response
 
-ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW_STREAM = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 INVALID_INPUT = 13
 UNSUPPORTED = 0
 
@@ -61,10 +57,7 @@ def _id_table(n: int = 3) -> pa.Table:
 
 def _rows(n: int = 3) -> bytes:
     table = _id_table(n)
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return bytes(sink.getvalue().to_pybytes())
+    return encode_arrow_stream(table)
 
 
 def _refused(response: Response, value: str) -> dict[str, Any]:
@@ -208,7 +201,7 @@ def test_the_data_plane_refuses_it_without_the_door(tmp_path: Path, branch: str 
             StorageOptions(),
             InsertIntoTableRequest(id=["db", "t"], mode="Appnd", branch=branch),
             data=_rows(5),
-            max_bytes=_BODY_LIMIT,
+            max_bytes=BODY_LIMIT,
             transaction_properties={},
         )
 

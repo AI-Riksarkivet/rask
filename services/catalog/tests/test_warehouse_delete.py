@@ -45,6 +45,7 @@ from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
 from tests.app_state import request_on
+from tests.catalog_settings import catalog_settings, governed_settings
 from tests.unit.no_uuids import NO_OBJECT_UUIDS
 
 
@@ -53,21 +54,7 @@ def _root(tmp_path: Any) -> str:
 
 
 def _settings(tmp_path: Any, *, fga_enabled: bool = False) -> Settings:
-    data: dict[str, object] = {
-        "control_root": _root(tmp_path),
-        "s3_access_key_id": "x",
-        "s3_secret_access_key": "x",
-    }
-    if fga_enabled:
-        data |= {
-            "fga_enabled": True,
-            "oidc_enabled": True,
-            "oidc_issuer": "https://idp",
-            "oidc_audience": "lance",
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-        }
-    return Settings.model_validate(data)
+    return (governed_settings if fga_enabled else catalog_settings)(control_root=_root(tmp_path))
 
 
 class _FakeNamespace:

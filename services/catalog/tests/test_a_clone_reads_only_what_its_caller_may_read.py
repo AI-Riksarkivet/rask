@@ -20,6 +20,7 @@ import pytest
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga_ids
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import location_claims
 
 
@@ -63,7 +64,7 @@ def cloned(governed_catalog: Any, tmp_path: Path) -> Any:  # noqa: ANN401 — th
         granted = catalog.client.post(f"/management/v1/namespace/{namespace}/access/grant", json={"user": f"dex~{user}", "relation": relation}, headers=alice)
         assert granted.status_code == 200, granted.text
     described = catalog.client.post("/v1/table/lance_catalog$db$src/describe", json={}, headers=alice)
-    catalog.store.write((catalog.person("dave"), "tagger", fga_ids.table_object(described.json()["properties"]["rask.uuid"])))
+    catalog.store.write((catalog.person("dave"), "tagger", fga_ids.table_object(described.json()["properties"][UUID_PROPERTY])))
     return catalog
 
 

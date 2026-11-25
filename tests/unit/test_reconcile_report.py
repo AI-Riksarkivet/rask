@@ -12,7 +12,6 @@ snapshots the control root before and after a run and drives it with stores whos
 
 import asyncio
 import hashlib
-import io
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +23,7 @@ from lance_namespace import CreateNamespaceRequest, CreateTableRequest, ServiceU
 from pydantic import SecretStr
 
 from catalog.services import warehouses as wh_svc
+from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.governed import fga_reads
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
@@ -154,11 +154,7 @@ class _Estate:
         if not dataset:
             ns.create_namespace(CreateNamespaceRequest(id=[name]))
             return
-        sink = io.BytesIO()
-        arrow = pa.table({"a": pa.array([1])})
-        with pa.ipc.new_stream(sink, arrow.schema) as writer:
-            writer.write_table(arrow)
-        ns.create_table(CreateTableRequest(id=[name]), sink.getvalue())
+        ns.create_table(CreateTableRequest(id=[name]), encode_arrow_stream(pa.table({"a": pa.array([1])})))
 
     def run(self, monkeypatch: pytest.MonkeyPatch) -> mod.ReconcileReport:
         return asyncio.run(

@@ -25,7 +25,6 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import cast, override
 
-import httpx
 import pytest
 from fastapi.testclient import TestClient
 
@@ -38,24 +37,11 @@ from lineage import main
 from lineage.api import relay
 from lineage.core.config import get_settings
 from tests.bus_double import BusDouble, session_holding
-from tests.integration.lineage_app import SUBJECT_HEADER, governed_lineage, graph_backend, live_catalog, relay_tick, run_event
+from tests.integration.lineage_app import SUBJECT_HEADER, declared, governed_lineage, graph_backend, live_catalog, relay_tick, run_event
 from tests.traces import trace_id_of
 
 
 _TABLE = "lance_catalog$acme-silver$pages"
-
-
-def _declared(catalog_url: str, table: str) -> str:
-    """Declare ``table`` in the catalog at ``catalog_url`` and answer the uuid it minted, the object its grants are held by.
-
-    Lineage's HTTP door resolves each name an event names to that uuid as the caller, and checks the grants on it
-    ([[LH-524]]), so the table must exist for any event naming it to be admitted.
-    """
-    namespace = table.rsplit("$", 1)[0]
-    with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
-        assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
-        assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200
-        return str(catalog.post(f"/v1/table/{table}/describe", json={}).json()["properties"]["rask.uuid"])
 
 
 def test_a_tick_forwards_the_feed_and_reports_every_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -65,7 +51,7 @@ def test_a_tick_forwards_the_feed_and_reports_every_count(tmp_path: Path, monkey
     with graph_backend() as (graph, url):
         monkeypatch.setenv("LINEAGE_FORWARD_URL", url)
         with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
-            granted = {("dex~alice", "can_write_data", f"table:{_declared(catalog_url, _TABLE)}")}
+            granted = {("dex~alice", "can_write_data", f"table:{declared(catalog_url, _TABLE)[_TABLE]}")}
             with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
                 assert lineage.post("/api/v1/lineage", json=run, headers={SUBJECT_HEADER: "dex~alice"}).status_code == 201
                 tick = relay_tick(lineage)

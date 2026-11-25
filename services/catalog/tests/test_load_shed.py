@@ -19,9 +19,10 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from catalog.api import load_shed
 from catalog.api.load_shed import WriteConcurrencyLimitMiddleware
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 
 
-_ARROW = b"application/vnd.apache.arrow.stream"
+_ARROW = ARROW_STREAM_MEDIA_TYPE.encode()
 
 
 def _scope(method: str, path: str, content_type: bytes | None = None) -> Scope:

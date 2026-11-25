@@ -24,12 +24,12 @@ from urllib.parse import urlsplit
 
 import pyarrow as pa
 import pytest
-from byo_scenario import LINEAGE
+from byo_scenario import CATALOG, DEX, LINEAGE, ok
 from chaos import CATALOG as CATALOG_DEPLOYMENT
 from chaos import kubectl
 from lance_namespace import ErrorCode
 from refusals import assert_refused, namespace_uuid
-from scratch_tenant import CATALOG, DEX, Tenant, ok, provisioned, tuples_on
+from scratch_tenant import Tenant, provisioned, tuples_on
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 

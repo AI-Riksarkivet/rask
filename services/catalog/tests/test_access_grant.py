@@ -11,7 +11,6 @@ import logging
 from typing import Any, cast
 
 import pytest
-from catalog_settings import catalog_settings, governed_settings
 from lance_namespace import InvalidInputError, ServiceUnavailableError
 from lance_namespace.errors import ErrorCode
 from openfga_sdk.client import OpenFgaClient
@@ -20,16 +19,12 @@ from unfiled_announcer import unfiled
 from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import access
 from lakehouse.events.control_emit import NoopControlEmitter
-from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome, configure_audit
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
+from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.problems.ns_errors import status_for
+from tests.callers import person
+from tests.catalog_settings import catalog_settings, governed_settings
 from tests.unit.named_resolver import NamedResolver, uuid_of
-
-
-def _person(name: str) -> PersonPrincipal:
-    return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss="i", sub=name, aud="lance", exp=1, iat=1))
 
 
 def _run(
@@ -61,7 +56,7 @@ def _run(
     # digs either out of `request.app.state`, so the drive hands them over directly.
     client = cast(OpenFgaClient, object())
     settings = governed_settings()
-    token = _person("alice")
+    token = person("alice")
     body = access.AccessGrantRequest(user=user, relation=relation)
     resp = asyncio.run(
         access._grant_access(
@@ -72,17 +67,6 @@ def _run(
         )
     )
     return resp, captured
-
-
-class _AuditCapture(logging.Handler):
-    """Collect audit records off the dedicated audit logger (independent of the OTLP root handler)."""
-
-    def __init__(self) -> None:
-        super().__init__()
-        self.records: list[logging.LogRecord] = []
-
-    def emit(self, record: logging.LogRecord) -> None:
-        self.records.append(record)
 
 
 def test_grantable_relations_are_the_base_rungs_only() -> None:
@@ -139,7 +123,7 @@ def test_a_grant_writes_its_grantee_as_named_and_a_revoke_deletes_the_tuple(gove
     catalog, alice = governed_catalog, governed_catalog.bearer("alice")
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
     door = "/management/v1/namespace/lance_catalog$db/access"
-    namespace = f"namespace:{catalog.client.post('/v1/namespace/lance_catalog$db/describe', json={}, headers=alice).json()['properties']['rask.uuid']}"
+    namespace = f"namespace:{catalog.client.post('/v1/namespace/lance_catalog$db/describe', json={}, headers=alice).json()['properties'][UUID_PROPERTY]}"
     before = catalog.store.tuples()
 
     for user, relation in (("role:project_admin#assignee", "reader"), ("dex~bob", "writer")):
@@ -175,7 +159,7 @@ def test_check_with_an_unknown_relation_is_a_400(monkeypatch: pytest.MonkeyPatch
     # The injected OpenFGA client is never used: the check refuses before any call.
     client = cast(OpenFgaClient, object())
     settings = governed_settings()
-    token = _person("alice")
+    token = person("alice")
     with pytest.raises(InvalidInputError) as exc:
         asyncio.run(
             access._access_check(
@@ -191,7 +175,7 @@ def test_the_auth_off_answer_stays_unsupported() -> None:
     the feature."""
     client = cast(OpenFgaClient, object())
     settings = catalog_settings()
-    token = _person("alice")
+    token = person("alice")
     body = access.AccessCheckRequest(user="dex~gina", relation="can_read_data")
     with pytest.raises(Exception) as exc:
         asyncio.run(
@@ -221,7 +205,7 @@ def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(access.fga_reads, "read_object_tuples", fake_read)
     client = cast(OpenFgaClient, object())
     settings = governed_settings()
-    token = _person("alice")
+    token = person("alice")
     resp = asyncio.run(
         access._access_graph(AuthzContext(client=client, settings=settings, token=token), resolver=NamedResolver(), fga_type="table", id="db1$t")
     )
@@ -241,7 +225,7 @@ def test_access_graph_builds_nodes_and_edges(monkeypatch: pytest.MonkeyPatch) ->
 # --------------------------------------------------------------------------- #
 
 
-def test_the_grant_audit_row_carries_full_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_grant_audit_row_carries_full_provenance(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """An OpenFGA tuple cannot carry its grantor, and `read_changes` cannot attribute an actor — so
     "who granted this?" is unanswerable from the authz store alone. That is a real OpenFGA limitation
     nobody has solved inside it, so the answer has to come from audit events.
@@ -256,16 +240,10 @@ def test_the_grant_audit_row_carries_full_provenance(monkeypatch: pytest.MonkeyP
     `.claude/skills/openfga/references/grant-provenance.md`, and a procedure resting on field names
     that nothing pins is one refactor away from being fiction.
     """
-    handler = _AuditCapture()
-    logger = logging.getLogger(AUDIT_LOGGER)
-    logger.addHandler(handler)
-    configure_audit(enabled=True)
-    try:
+    with caplog.at_level(logging.INFO, logger=AUDIT_LOGGER):
         _run(monkeypatch, user="dex~bob", relation="writer", ident="db1$users")
-    finally:
-        logger.removeHandler(handler)
 
-    rows = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in handler.records if r.__dict__.get("audit.action") == "access_grant"]
+    rows = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in caplog.records if r.__dict__.get("audit.action") == "access_grant"]
     assert rows, "the grant door emitted no access_grant audit row — provenance is unrecoverable"
     row = rows[-1]
     assert row["audit.subject"] == "dex~alice", "the GRANTOR is missing — this is the field the tuple cannot carry"
@@ -275,20 +253,13 @@ def test_the_grant_audit_row_carries_full_provenance(monkeypatch: pytest.MonkeyP
     assert row["audit.outcome"] == AuditOutcome.SUCCESS
 
 
-def test_a_failed_grant_is_audited_too_so_attempts_are_reviewable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_failed_grant_is_audited_too_so_attempts_are_reviewable(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """An access review that only sees successes cannot distinguish "never attempted" from "attempted
     and refused by an outage" — and the second is the one worth asking about."""
-    handler = _AuditCapture()
-    logger = logging.getLogger(AUDIT_LOGGER)
-    logger.addHandler(handler)
-    configure_audit(enabled=True)
-    try:
-        with pytest.raises(ServiceUnavailableError):
-            _run(monkeypatch, user="dex~bob", relation="writer", outage=True)
-    finally:
-        logger.removeHandler(handler)
+    with caplog.at_level(logging.INFO, logger=AUDIT_LOGGER), pytest.raises(ServiceUnavailableError):
+        _run(monkeypatch, user="dex~bob", relation="writer", outage=True)
 
-    rows = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in handler.records if r.__dict__.get("audit.action") == "access_grant"]
+    rows = [{k: v for k, v in r.__dict__.items() if k.startswith("audit.")} for r in caplog.records if r.__dict__.get("audit.action") == "access_grant"]
     assert rows and rows[-1]["audit.outcome"] == AuditOutcome.FAILURE
     assert rows[-1]["audit.subject"] == "dex~alice" and rows[-1]["audit.grantee"] == "user:dex~bob"
 

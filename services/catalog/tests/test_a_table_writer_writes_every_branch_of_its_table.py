@@ -18,23 +18,11 @@ import pyarrow as pa
 import pytest
 
 from catalog.api.dependencies import get_vendor
-from catalog.core.vending import VendedSession
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.storage.credential import S3KeyPair
+from tests.vendor_double import RecordingVendor
 
 
 TABLE = "lance_catalog$db$t"
-
-
-class _Vendor:
-    """Records each vend it is asked for, and mints nothing: the claim is whom the door admits to it."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-
-    def vend(self, **kwargs: Any) -> VendedSession:  # noqa: ANN401 — the vendor protocol's keyword arguments
-        self.calls.append(kwargs)
-        return VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key="SK"), endpoint=None, region="us-east-1", expires_at_millis=1)
 
 
 def _rows(*ids: int) -> bytes:
@@ -42,10 +30,10 @@ def _rows(*ids: int) -> bytes:
 
 
 @pytest.fixture
-def estate(governed_catalog: Any) -> Iterator[tuple[Any, _Vendor]]:  # noqa: ANN401 — the conftest's GovernedCatalog
+def estate(governed_catalog: Any) -> Iterator[tuple[Any, RecordingVendor]]:  # noqa: ANN401 — the conftest's GovernedCatalog
     """alice's `lance_catalog$db$t` holding row 1, its branch `exp`, bob a writer on the table alone, and the recording vendor."""
     catalog, alice = governed_catalog, governed_catalog.bearer("alice")
-    vendor = _Vendor()
+    vendor = RecordingVendor()
     catalog.client.app.dependency_overrides[get_vendor] = lambda: vendor
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
     created = catalog.client.post(f"/v1/table/{TABLE}/create", content=_rows(1), headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
@@ -72,7 +60,7 @@ def _ids(catalog: Any, ref: str | None) -> list[int]:  # noqa: ANN401
         pytest.param("merge_insert", {"branch": "exp", "on": "id", "when_not_matched_insert_all": "true"}, id="merge-insert"),
     ],
 )
-def test_a_table_writer_writes_rows_on_a_branch(estate: tuple[Any, _Vendor], door: str, params: dict[str, str]) -> None:
+def test_a_table_writer_writes_rows_on_a_branch(estate: tuple[Any, RecordingVendor], door: str, params: dict[str, str]) -> None:
     catalog, _ = estate
 
     written = catalog.client.post(
@@ -83,7 +71,7 @@ def test_a_table_writer_writes_rows_on_a_branch(estate: tuple[Any, _Vendor], doo
     assert (_ids(catalog, "exp"), _ids(catalog, None)) == ([1, 2], [1])
 
 
-def test_a_table_writer_is_vended_a_write_credential_for_a_branch(estate: tuple[Any, _Vendor]) -> None:
+def test_a_table_writer_is_vended_a_write_credential_for_a_branch(estate: tuple[Any, RecordingVendor]) -> None:
     catalog, vendor = estate
 
     vended = catalog.client.post(f"/management/v1/table/{TABLE}/credentials", params={"tier": "write", "branch": "exp"}, headers=catalog.bearer("bob"))

@@ -19,22 +19,21 @@ import uuid
 from collections.abc import Iterator
 from typing import Any
 
-import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings as catalog_settings
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.governed.fga_ids import user_object
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import trash
-from tests.governed_catalog import StoreTuples
+from tests.governed_catalog import ROWS, StoreTuples
 from tests.integration.catalog_and_maintenance import audited, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 from tests.integration.openfga_grants import principal_key
 
 
 PROJECT = "acme"
-_ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 
 
 class _Estate:
@@ -54,14 +53,14 @@ class _Estate:
         return name
 
     def create_table(self, table: str) -> None:
-        answer = self.catalog.post(f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        answer = self.catalog.post(f"/v1/table/{table}/create", content=ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert answer.status_code == 200, answer.text
 
     def uuid_of(self, table: str) -> str:
         """The uuid the catalog minted for ``table``, which DescribeTable answers as ``rask.uuid``."""
         answer = self.catalog.post(f"/v1/table/{table}/describe", json={})
         assert answer.status_code == 200, answer.text
-        return str(answer.json()["properties"]["rask.uuid"])
+        return str(answer.json()["properties"][UUID_PROPERTY])
 
     def drop_table(self, table: str) -> None:
         answer = self.catalog.post(f"/v1/table/{table}/drop", json={})

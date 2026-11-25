@@ -33,8 +33,9 @@ import pytest
 from fastapi.testclient import TestClient
 from lance.optimize import Compaction
 
-from lakehouse.arrow_ipc import decode_arrow_response
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, decode_arrow_response, encode_arrow_stream
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
+from lakehouse.naming import UUID_PROPERTY
 from lineage.models import parse_event
 from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport
 from lineage.services.catalog_writer import RestCatalogWriteTransport
@@ -49,7 +50,7 @@ if TYPE_CHECKING:
 
 #: The pipeline reading the feed, under its own service account.
 _PIPELINE = "kubernetes~system:serviceaccount:etl:etl-runner"
-_ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+_ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 #: The tables the pipeline may see. `acme-silver$hidden` and `globex-silver$orders` are someone else's.
 _VISIBLE = ("lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog", "lance_catalog$acme-gold$index")
@@ -63,10 +64,7 @@ async def _bounds(store: ProvenanceStore) -> tuple[int, int] | None:
 
 def _rows(start: int, stop: int) -> bytes:
     table = pa.table({"id": pa.array(range(start, stop), pa.int64())})
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+    return encode_arrow_stream(table)
 
 
 def _follow(client: httpx.Client | httpx2.Client, headers: Mapping[str, str] | None = None, **filters: str) -> list[dict[str, Any]]:
@@ -139,7 +137,7 @@ def _declared(catalog_url: str, tables: tuple[str, ...]) -> dict[str, DatasetUui
     with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
 
         def minted(kind: str, name: str) -> str:
-            return str(catalog.post(f"/v1/{kind}/{name}/describe", json={}).json()["properties"]["rask.uuid"])
+            return str(catalog.post(f"/v1/{kind}/{name}/describe", json={}).json()["properties"][UUID_PROPERTY])
 
         namespaces = list(dict.fromkeys(table.rsplit("$", 1)[0] for table in tables))
         for namespace in namespaces:

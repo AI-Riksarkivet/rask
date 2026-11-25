@@ -20,7 +20,6 @@ exists to report, so the pod half may rely on nothing but the stdlib.
 """
 
 import copy
-import importlib.util
 import io
 import json
 import os
@@ -39,6 +38,7 @@ from pydantic import BaseModel
 
 from lakehouse.governed.auth.write_model import model_document
 from lakehouse.governed.fga_provision import MODEL_PAGE_SIZE
+from tests.script_module import script
 
 
 _ROOT = Path(__file__).resolve().parents[2]
@@ -177,16 +177,8 @@ def test_fga_store_check_passes_on_this_checkouts_model_held_below_the_newest(op
 
 @pytest.fixture
 def store_check(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """`scripts/_fga_store_check.py`, imported the way `python scripts/_fga_store_check.py` resolves its sibling."""
-    monkeypatch.syspath_prepend(str(_SCRIPTS))
-    spec = importlib.util.spec_from_file_location("_fga_store_check", _SCRIPTS / "_fga_store_check.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    # Registered before exec, as Python registers a script: pydantic resolves the models' postponed
-    # annotations through `sys.modules[cls.__module__]`.
-    monkeypatch.setitem(sys.modules, spec.name, module)
-    spec.loader.exec_module(module)
-    return module
+    """`scripts/_fga_store_check.py`."""
+    return script("_fga_store_check", monkeypatch)
 
 
 def _run(module: ModuleType, monkeypatch: pytest.MonkeyPatch, argv: list[str], stdin: str) -> int:

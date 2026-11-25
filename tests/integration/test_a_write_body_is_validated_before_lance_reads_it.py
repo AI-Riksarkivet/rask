@@ -27,20 +27,15 @@ import pyarrow as pa
 import pyarrow.ipc as ipc
 import pytest
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+
 
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
 
-ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW_STREAM = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 INVALID_INPUT = 13
 TABLE = "lance_catalog$db$t"
-
-
-def _stream(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return bytes(sink.getvalue().to_pybytes())
 
 
 def _table(ids: list[int], blobs: list[bytes], texts: list[str]) -> pa.Table:
@@ -49,7 +44,7 @@ def _table(ids: list[int], blobs: list[bytes], texts: list[str]) -> pa.Table:
 
 def _tampered(good: bytes, bad: bytes) -> bytes:
     """Two new rows whose stream still frames and reads after `good` is overwritten with `bad`."""
-    body = _stream(_table([10, 11], [b"hello", b"world"], ["qq", "zz"]))
+    body = encode_arrow_stream(_table([10, 11], [b"hello", b"world"], ["qq", "zz"]))
     assert body.count(good) == 1, "the bytes to tamper with are not unique in the stream"
     return body.replace(good, bad)
 
@@ -63,8 +58,8 @@ def _messages(body: bytes) -> list[bytes]:
 
 def _a_dictionary_batch_whose_id_names_no_field() -> bytes:
     """A one-dictionary schema followed by the dictionary batch another stream wrote for its id 1."""
-    one = _messages(_stream(pa.table({"id": pa.array([10], pa.int64()), "d": pa.array(["cat"]).dictionary_encode()})))
-    two = _messages(_stream(pa.table({"a": pa.array(["cat"]).dictionary_encode(), "b": pa.array(["dog"]).dictionary_encode()})))
+    one = _messages(encode_arrow_stream(pa.table({"id": pa.array([10], pa.int64()), "d": pa.array(["cat"]).dictionary_encode()})))
+    two = _messages(encode_arrow_stream(pa.table({"a": pa.array(["cat"]).dictionary_encode(), "b": pa.array(["dog"]).dictionary_encode()})))
     return b"".join([one[0], two[2], *one[1:], _END_OF_STREAM])
 
 
@@ -84,7 +79,9 @@ _BINARY_OFFSETS = struct.pack("<iii", 0, 5, 10)
 
 def _seeded(client: TestClient, branch: str | None) -> None:
     assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
-    created = client.post(f"/v1/table/{TABLE}/create", content=_stream(_table([1, 2, 3], [b"a", b"b", b"c"], ["x", "y", "z"])), headers=ARROW_STREAM)
+    created = client.post(
+        f"/v1/table/{TABLE}/create", content=encode_arrow_stream(_table([1, 2, 3], [b"a", b"b", b"c"], ["x", "y", "z"])), headers=ARROW_STREAM
+    )
     assert created.status_code == 200, created.text
     if branch is not None:
         made = client.post(f"/v1/table/{TABLE}/branches/create", json={"name": branch})
@@ -140,7 +137,7 @@ def test_a_valid_body_still_writes(real_ns_client: TestClient, door: str, branch
     query = f"{separator}branch={branch}" if branch else ""
 
     written = real_ns_client.post(
-        f"/v1/table/{TABLE}/{door}{query}", content=_stream(_table([10, 11], [b"hello", b"world"], ["qq", "zz"])), headers=ARROW_STREAM
+        f"/v1/table/{TABLE}/{door}{query}", content=encode_arrow_stream(_table([10, 11], [b"hello", b"world"], ["qq", "zz"])), headers=ARROW_STREAM
     )
 
     assert written.status_code == 200, written.text
@@ -154,7 +151,7 @@ _DECIMAL_AFTER_INT8 = pa.table({"a": pa.array([1, 2, 3], pa.int8()), "d": pa.arr
 def test_a_valid_body_that_ipc_leaves_unaligned_for_lance_writes_on_every_arm(real_ns_client: TestClient) -> None:
     """Create and the branch arms write the decoded table in-process, where pylance panics on a buffer
     below its type's alignment (pylance 12.0.0); main hands the bytes to the native reader."""
-    body = _stream(_DECIMAL_AFTER_INT8)
+    body = encode_arrow_stream(_DECIMAL_AFTER_INT8)
     assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
 
     created = real_ns_client.post("/v1/table/lance_catalog$db$d/create", content=body, headers=ARROW_STREAM)

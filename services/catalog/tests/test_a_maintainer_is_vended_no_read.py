@@ -19,41 +19,27 @@ discarded is still a grant at the store.
 from collections.abc import Iterator
 from typing import Any
 
-import pyarrow as pa
 import pytest
-from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
-from catalog.core.vending import VendedSession
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.storage.credential import S3KeyPair
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+from tests.governed_catalog import ROWS
+from tests.vendor_double import RecordingVendor
 
 
 #: The Lance Namespace spec's PermissionDenied code (`spec.yaml`).
 PERMISSION_DENIED = 15
 
 
-class _Vendor:
-    """Records every credential it is asked for: the claim is that it is never asked."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-
-    def vend(self, **kwargs: Any) -> VendedSession:  # noqa: ANN401 — the vendor protocol's keyword arguments
-        self.calls.append(kwargs)
-        return VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)
-
-
 @pytest.fixture
-def maintained(governed_catalog: Any) -> Iterator[tuple[Any, _Vendor]]:  # noqa: ANN401 — the conftest's GovernedCatalog
+def maintained(governed_catalog: Any) -> Iterator[tuple[Any, RecordingVendor]]:  # noqa: ANN401 — the conftest's GovernedCatalog
     """alice's ``lance_catalog$db$t``, bob a maintainer on it and nothing else, and the recording vendor."""
     catalog = governed_catalog
-    vendor = _Vendor()
+    vendor = RecordingVendor()
     catalog.client.app.dependency_overrides[get_vendor] = lambda: vendor
     alice = catalog.bearer("alice")
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
-    rows = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
-    created = catalog.client.post("/v1/table/lance_catalog$db$t/create", content=rows, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
+    created = catalog.client.post("/v1/table/lance_catalog$db$t/create", content=ROWS, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE})
     assert created.status_code == 200, created.text
     granted = catalog.client.post("/management/v1/table/lance_catalog$db$t/access/grant", json={"user": "dex~bob", "relation": "maintainer"}, headers=alice)
     assert granted.status_code == 200, granted.text
@@ -61,7 +47,7 @@ def maintained(governed_catalog: Any) -> Iterator[tuple[Any, _Vendor]]:  # noqa:
     catalog.client.app.dependency_overrides.pop(get_vendor, None)
 
 
-def test_a_maintainer_holding_no_reader_grant_is_refused_a_read_vend(maintained: tuple[Any, _Vendor]) -> None:
+def test_a_maintainer_holding_no_reader_grant_is_refused_a_read_vend(maintained: tuple[Any, RecordingVendor]) -> None:
     catalog, vendor = maintained
 
     refused = catalog.client.post("/management/v1/table/lance_catalog$db$t/credentials", headers=catalog.bearer("bob"))
@@ -70,7 +56,7 @@ def test_a_maintainer_holding_no_reader_grant_is_refused_a_read_vend(maintained:
     assert vendor.calls == []
 
 
-def test_the_maintainer_doors_answer_a_maintainer_and_refuse_a_writer(maintained: tuple[Any, _Vendor]) -> None:
+def test_the_maintainer_doors_answer_a_maintainer_and_refuse_a_writer(maintained: tuple[Any, RecordingVendor]) -> None:
     catalog, _ = maintained
     granted = catalog.client.post(
         "/management/v1/table/lance_catalog$db$t/access/grant", json={"user": "dex~carol", "relation": "writer"}, headers=catalog.bearer("alice")

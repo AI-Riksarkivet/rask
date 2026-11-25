@@ -30,6 +30,7 @@ import lance
 import pyarrow as pa
 import pytest
 import respx
+from tests.vend_answers import vended
 
 from lakehouse.process.log_handler import DiagnosticFormatter
 from maintenance.core.config import MaintenanceSettings
@@ -54,7 +55,7 @@ _SCOPED = {
     "aws_endpoint": "https://s3.public.example",
     "allow_http": "false",
 }
-_VEND = {"mode": "direct", "credentials": {"storage_options": _SCOPED}, "location": _URI}
+_VEND = vended(_SCOPED, location=_URI)
 
 
 def _settings(catalog_url: str = CATALOG) -> MaintenanceSettings:
@@ -138,12 +139,12 @@ def test_a_deployment_with_no_vending_door_refuses_every_rewrite_before_asking(r
         pytest.param(httpx.Response(404, json={"code": 0, "detail": "Not Found"}), VendingNotDirect, id="no-door-at-the-path"),
         pytest.param(httpx.Response(200, json={"mode": "direct", "credentials": {}}), VendUndecided, id="no-options"),
         pytest.param(
-            httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": {**_SCOPED, "aws_secret_access_key": ""}}}),
+            httpx.Response(200, json=vended({**_SCOPED, "aws_secret_access_key": ""})),
             VendUndecided,
             id="half-a-credential",
         ),
         pytest.param(
-            httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": {"aws_endpoint": "https://s3.public.example"}}}),
+            httpx.Response(200, json=vended({"aws_endpoint": "https://s3.public.example"})),
             VendUndecided,
             id="no-key-pair",
         ),

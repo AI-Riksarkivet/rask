@@ -32,7 +32,6 @@ from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, DescribeTableRequest, RegisterTableRequest
-from moto.server import ThreadedMotoServer
 from pydantic import BaseModel, SecretStr
 
 from catalog.services.warehouses import ensure_catalog_row
@@ -63,15 +62,6 @@ LOCATION = "c0ffee00_db$events"
 DAY = timedelta(days=1)
 #: The retention every table here is kept under (`MAINTENANCE_OLDER_THAN_DAYS`).
 RETENTION = timedelta(days=3)
-
-
-@pytest.fixture(scope="module")
-def moto_url() -> Iterator[str]:
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
 
 
 def _s3(moto_url: str) -> Any:  # noqa: ANN401 — boto3's client is untyped

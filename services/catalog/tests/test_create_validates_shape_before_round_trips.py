@@ -23,10 +23,11 @@ from catalog.api.idempotency import KeyedDoor
 from catalog.api.v1.endpoints import data as ep
 from catalog.core.config import Settings
 from lakehouse.arrow_ipc import encode_arrow_stream
+from tests.catalog_settings import catalog_settings
 
 
 def _settings() -> Settings:
-    return Settings.model_validate({"s3_access_key_id": "x", "s3_secret_access_key": "x", "multibase_data_bases": "s3://approved"})
+    return catalog_settings(multibase_data_bases="s3://approved")
 
 
 @pytest.fixture

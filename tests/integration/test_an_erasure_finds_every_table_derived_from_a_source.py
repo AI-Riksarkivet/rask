@@ -35,15 +35,16 @@ import httpx
 import lance
 import lance_namespace
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
+from lakehouse.naming import UUID_PROPERTY
 from tests.app_state import app_of
-from tests.integration.lineage_app import SUBJECT_HEADER, catalog_tick, governed_lineage, joined_bus, live_catalog, live_lineage, run_event
+from tests.integration.lineage_app import SUBJECT_HEADER, catalog_tick, declared, governed_lineage, joined_bus, live_catalog, live_lineage, run_event
 
 
-_ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+_ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 #: A subject no table holds a row of (`_rows` writes ids 0 to 2), as the erasure job leaves every table it rewrote: the
 #: claims below are about what the derived tables hold the obligation to, not about any table's bytes.
@@ -52,10 +53,7 @@ _GONE = "id = 99"
 
 def _rows() -> bytes:
     table = pa.table({"id": pa.array(range(3), pa.int64())})
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
+    return encode_arrow_stream(table)
 
 
 def _run(label: str, *inputs: str) -> dict[str, str]:
@@ -63,15 +61,6 @@ def _run(label: str, *inputs: str) -> dict[str, str]:
     named = [{"table": name.split("$"), "version": 1} for name in inputs]
     run = {"x-rask-run-id": str(uuid.uuid5(uuid.NAMESPACE_URL, label)), "x-rask-job-namespace": "pipelines", "x-rask-job": "daily"}
     return {**_ARROW, **run, **({"x-rask-inputs": json.dumps(named)} if named else {})}
-
-
-def _declared(catalog: httpx.Client, *tables: str) -> dict[str, str]:
-    """Declare each of ``tables`` (and its namespace) in the catalog, and answer the uuid the catalog minted for each."""
-    for namespace in dict.fromkeys(table.rsplit("$", 1)[0] for table in tables):
-        assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
-    for table in tables:
-        assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200
-    return {table: catalog.post(f"/v1/table/{table}/describe", json={}).json()["properties"]["rask.uuid"] for table in tables}
 
 
 def _stamped(event: dict[str, object], uuid_of: dict[str, str]) -> dict[str, object]:
@@ -108,7 +97,7 @@ def test_a_walk_from_a_source_reaches_every_table_built_from_it_and_nothing_an_o
 
         answer = lineage.get("/tables/lance_catalog$acme-bronze$events/derived")
         uuid_of = {
-            name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"]["rask.uuid"]
+            name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"][UUID_PROPERTY]
             for name in ("lance_catalog$acme-bronze$events", "lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog")
         }
 
@@ -183,7 +172,7 @@ def test_an_erasure_is_held_until_every_table_derived_from_its_source_has_an_obl
             created = catalog.post(f"/v1/table/{table}/create", content=_rows(), headers=headers)
             assert created.status_code == 200, created.text
         uuid_of = {
-            name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"]["rask.uuid"]
+            name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"][UUID_PROPERTY]
             for name in ("lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog")
         }
         source = _obligation(catalog, "lance_catalog$acme-bronze$events")
@@ -261,7 +250,7 @@ def test_a_table_written_from_the_source_while_lineage_is_down_holds_the_erasure
             assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
         assert catalog.post("/v1/table/lance_catalog$acme-bronze$events/create", content=_rows(), headers=_ARROW).status_code == 200
         write(catalog, catalog_url)
-        silver = catalog.post("/v1/table/lance_catalog$acme-silver$pages/describe", json={}).json()["properties"]["rask.uuid"]
+        silver = catalog.post("/v1/table/lance_catalog$acme-silver$pages/describe", json={}).json()["properties"][UUID_PROPERTY]
         source = _obligation(catalog, "lance_catalog$acme-bronze$events")
 
         verified = catalog.post(f"/management/v1/table/lance_catalog$acme-bronze$events/erasure/{source}/verify", json={"predicate": _GONE})
@@ -302,9 +291,9 @@ def test_a_table_lineage_records_after_the_release_from_a_run_before_it_is_liste
         assert catalog.post("/v1/namespace/lance_catalog$acme-bronze/create", json={}).status_code == 200
         assert catalog.post("/v1/table/lance_catalog$acme-bronze$events/create", content=_rows(), headers=_ARROW).status_code == 200
         uuid_of = {
-            "lance_catalog$acme-bronze$events": catalog.post("/v1/table/lance_catalog$acme-bronze$events/describe", json={}).json()["properties"]["rask.uuid"]
+            "lance_catalog$acme-bronze$events": catalog.post("/v1/table/lance_catalog$acme-bronze$events/describe", json={}).json()["properties"][UUID_PROPERTY]
         }
-        uuid_of |= _declared(catalog, "lance_catalog$acme-silver$late")
+        uuid_of |= declared(catalog_url, "lance_catalog$acme-silver$late")
         source = _obligation(catalog, "lance_catalog$acme-bronze$events")
         released = catalog.post(f"/management/v1/table/lance_catalog$acme-bronze$events/erasure/{source}/verify", json={"predicate": _GONE})
         assert released.json()["obligation"]["state"] == "released", released.text
@@ -328,8 +317,7 @@ def test_an_answer_that_hides_a_derived_table_says_it_is_incomplete(tmp_path: Pa
     from lineage.models import parse_event
 
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
-        with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
-            uuid_of = _declared(catalog, "lance_catalog$acme-bronze$events", "lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog")
+        uuid_of = declared(catalog_url, "lance_catalog$acme-bronze$events", "lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog")
         granted = {("dex~eraser", "reader", f"table:{uuid_of[name]}") for name in ("lance_catalog$acme-bronze$events", "lance_catalog$acme-silver$pages")}
         chain = [
             run_event(
@@ -381,7 +369,7 @@ def test_a_renamed_source_answers_what_it_fed_under_both_names(tmp_path: Path, m
                 == 200
             )
         uuid_of = {
-            name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"]["rask.uuid"]
+            name: catalog.post(f"/v1/table/{name}/describe", json={}).json()["properties"][UUID_PROPERTY]
             for name in ("lance_catalog$acme-bronze$u", "lance_catalog$acme-silver$x", "lance_catalog$acme-silver$y")
         }
         granted = {("dex~owner", "can_get_metadata", f"table:{table_uuid}") for table_uuid in uuid_of.values()}

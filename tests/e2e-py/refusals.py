@@ -18,6 +18,8 @@ from typing import Any
 import requests
 from lance_namespace import ErrorCode
 
+from lakehouse.naming import UUID_PROPERTY
+
 
 def body_of(answer: requests.Response) -> str:
     """``answer``'s body as the spec writes it: JSON is UTF-8 (RFC 8259), which `requests` does not assume for
@@ -56,7 +58,7 @@ def namespace_uuid(catalog: str, namespace: str, headers: Mapping[str, str]) -> 
     """The uuid the catalog minted for ``namespace`` ([[LH-519]]), as its describe answers ``headers``' bearer."""
     answer = requests.post(f"{catalog}/v1/namespace/{namespace}/describe", headers=headers, json={}, timeout=30)
     assert answer.status_code == 200, f"describe {namespace} -> {answer.status_code}: {body_of(answer)[:500]}"
-    return str(answer.json()["properties"]["rask.uuid"])
+    return str(answer.json()["properties"][UUID_PROPERTY])
 
 
 def assert_refused(

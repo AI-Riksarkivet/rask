@@ -35,37 +35,17 @@ from openfga_sdk.models.check_error import CheckError
 from starlette.concurrency import run_in_threadpool
 
 from catalog.api.dependencies import get_namespace, get_resolver, request_settings, warehouse_object
-from catalog.core.config import Settings
 from catalog.services import object_uuids, table_claims
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.governed import fga_ids, fga_reads, fga_writes
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
 from lakehouse.naming import UUID_PROPERTY
 from tests.app_state import app_of
+from tests.callers import person
+from tests.catalog_settings import governed_settings
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
 #: The create door reads its body before anything it orchestrates, so the stubbed write still needs a real stream.
-
-
-def _auth_settings() -> Settings:
-    # model_validate (not Settings(...)) so field-name keys validate cleanly: the
-    # fields carry LANCE_* aliases and populate_by_name accepts the names at runtime.
-    return Settings.model_validate(
-        {
-            "oidc_enabled": True,
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "oidc_issuer": "https://idp.example",
-            "oidc_audience": "lance",
-            "fga_enabled": True,
-            "fga_api_url": "http://openfga:8080",
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
 
 
 def _table(name: str) -> str:
@@ -94,7 +74,7 @@ class _DoubleResolver(NamedResolver):
 
     @override
     async def table(self, segments: list[str], *, ns: LanceNamespace | None = None) -> ResolvedTable:
-        return await run_in_threadpool(table_claims.resolve, self._ns, table_claims.claim_store(_auth_settings()), list(segments))
+        return await run_in_threadpool(table_claims.resolve, self._ns, table_claims.claim_store(governed_settings()), list(segments))
 
     @override
     async def namespace_uuid(self, segments: list[str], *, ns: LanceNamespace | None = None) -> str | None:
@@ -104,7 +84,7 @@ class _DoubleResolver(NamedResolver):
     async def object(self, kind: str, segments: list[str]) -> str | None:
         if kind != "table":
             if len(segments) == 1:
-                return warehouse_object(_auth_settings(), segments[0])
+                return warehouse_object(governed_settings(), segments[0])
             uuid = await self.namespace_uuid(segments)
             return None if uuid is None else fga_ids.namespace_object(uuid)
         resolved = await self.table(segments)
@@ -119,14 +99,12 @@ def _wire(client: TestClient) -> MagicMock:
     The verifier proves the person ``dex~alice``; the FGA client is a sentinel that the faked
     ``fga.*`` functions ignore. Returns the sentinel so a test can drop it (fail-closed).
     """
-    app_of(client).dependency_overrides[request_settings] = _auth_settings
+    app_of(client).dependency_overrides[request_settings] = lambda: governed_settings()
     double = app_of(client).dependency_overrides[get_namespace]()
     double.describe_namespace.side_effect = _described_namespace
     app_of(client).dependency_overrides[get_resolver] = lambda: _DoubleResolver(double)
     verifier = MagicMock()
-    verifier.verify.return_value = PersonPrincipal(
-        principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1)
-    )
+    verifier.verify.return_value = person()
     app_of(client).state.oidc = verifier
     fga_client = MagicMock()  # sentinel; the faked fga.* functions below ignore it
     fga_client.close = AsyncMock()  # closed by the lifespan on shutdown
@@ -310,33 +288,24 @@ def test_list_tables_unfiltered_when_fga_disabled(client: TestClient, fake_ns: M
     assert resp.json()["tables"] == ["lance_catalog$db$orders", "lance_catalog$db$users"]
 
 
-def test_authz_decision_emits_an_audit_event(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
+def test_authz_decision_emits_an_audit_event(
+    client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str], caplog: pytest.LogCaptureFixture
+) -> None:
     # #41: every authz decision (not just denials) lands on the dedicated audit stream with who/what/outcome.
     import logging
 
-    from lakehouse.governed.audit import AUDIT_LOGGER, configure_audit
+    from lakehouse.governed.audit import AUDIT_LOGGER
 
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
     minted = claim_described("lance_catalog$db1$users")
     _wire(client)
     monkeypatch.setattr(fga_reads, "check", _fake_check([], allow=True))
 
-    records: list[logging.LogRecord] = []
-
-    class _Capture(logging.Handler):
-        def emit(self, record: logging.LogRecord) -> None:
-            records.append(record)
-
-    handler = _Capture()
-    logging.getLogger(AUDIT_LOGGER).addHandler(handler)
-    configure_audit(enabled=True)
-    try:
+    with caplog.at_level(logging.INFO, logger=AUDIT_LOGGER):
         resp = client.post("/v1/table/lance_catalog$db1$users/describe", headers={"Authorization": "Bearer t"})
-    finally:
-        logging.getLogger(AUDIT_LOGGER).removeHandler(handler)
 
     assert resp.status_code == 200
-    events = [r.__dict__ for r in records if r.__dict__.get("audit.action") == "authz" and r.__dict__.get("audit.relation") == "can_get_metadata"]
+    events = [r.__dict__ for r in caplog.records if r.__dict__.get("audit.action") == "authz" and r.__dict__.get("audit.relation") == "can_get_metadata"]
     assert events, "the authz gate emitted no audit event"
     assert events[0]["audit.outcome"] == "allow"
     assert events[0]["audit.subject"] == "dex~alice"

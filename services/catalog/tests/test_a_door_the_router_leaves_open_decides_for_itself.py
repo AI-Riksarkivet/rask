@@ -30,7 +30,6 @@ from typing import Any
 
 import httpx2
 import lance_namespace
-import pyarrow as pa
 import pytest
 import router_walk
 from fastapi.testclient import TestClient
@@ -41,11 +40,13 @@ from catalog.api.dependencies import get_fga_client
 from catalog.api.security import authenticate
 from catalog.core.config import get_settings
 from catalog.services import warehouses
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import maintenance_due
 from lakehouse.records.maintenance_due import CompactionDue, DueRecord
 from lakehouse.records.warehouse_records import WarehouseRecord
+from tests.governed_catalog import ROWS
 from tests.traces import trace_named, traceparent_named
 
 
@@ -59,7 +60,6 @@ STRANGER, READER = "mallory", "bob"
 #: A refusal's status and the spec code a stock client reads (`lance_docs/ns_catalog/spec.yaml`): PermissionDenied, and
 #: the TableNotFound a door answers in its place where a 403 would tell its caller an id exists.
 _FORBIDDEN, _NOT_FOUND = (403, 15), (404, 4)
-_ROWS = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
 
 
 class _Answered(BaseModel):
@@ -305,11 +305,11 @@ def estate(request: pytest.FixtureRequest) -> Any:
     for namespace in (NAMESPACE, SIDE):
         _ok(client.post(f"/v1/namespace/{namespace}/create", json={}, headers=alice))
     _ok(client.post(f"/management/v1/namespace/{SIDE}/access/grant", json={"user": f"dex~{READER}", "relation": "reader"}, headers=alice))
-    _ok(client.post(f"/v1/table/{TABLE}/create", content=_ROWS, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE}))
+    _ok(client.post(f"/v1/table/{TABLE}/create", content=ROWS, headers={**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE}))
     obliged = client.post(f"/management/v1/table/{TABLE}/erasure", json={"predicate": "id = 1"}, headers=alice)
     assert obliged.status_code == 202, obliged.text
     described = _ok(client.post(f"/v1/table/{TABLE}/describe", json={}, headers=alice)).json()
-    uuid, location = described["properties"]["rask.uuid"], described["location"]
+    uuid, location = described["properties"][UUID_PROPERTY], described["location"]
     compaction = CompactionDue(fragments=4, candidate_fragments=4, tasks=1)
     maintenance_due.write_due(root, so, DueRecord(table=TABLE, uuid=uuid, location=location, version=1, compaction=compaction, evaluated_at=now))
     return catalog

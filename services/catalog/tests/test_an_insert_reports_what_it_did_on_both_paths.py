@@ -27,14 +27,11 @@ from tables_by_name import open_by_name
 from catalog.services.table_claims import DoorTable
 from catalog.services.tables.creation import create_table
 from catalog.services.tables.writes import insert_into_table
+from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.records import base_registry
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
-from tests.door_tables import door_table
-
-
-#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
-_BODY_LIMIT = 256 * 1024 * 1024
+from tests.door_tables import BODY_LIMIT, door_table
 
 
 lance = pytest.importorskip("lance")
@@ -42,13 +39,6 @@ lance = pytest.importorskip("lance")
 TABLE_ID = ["db", "rows"]
 SCHEMA = pa.schema([pa.field("id", pa.int64()), pa.field("s", pa.string())])
 BRANCH = "work"
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 def _rows(start: int) -> pa.Table:
@@ -81,14 +71,19 @@ def test_both_paths_report_the_same_shape_for_the_same_payload(table: DoorTable)
     below carry which side was wrong, which is the only thing the extra test bought.
     """
     main = insert_into_table(
-        table, StorageOptions(), InsertIntoTableRequest(id=TABLE_ID, mode="append"), data=_ipc(_rows(20)), max_bytes=_BODY_LIMIT, transaction_properties={}
+        table,
+        StorageOptions(),
+        InsertIntoTableRequest(id=TABLE_ID, mode="append"),
+        data=encode_arrow_stream(_rows(20)),
+        max_bytes=BODY_LIMIT,
+        transaction_properties={},
     )
     branched = insert_into_table(
         table,
         StorageOptions(),
         InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH),
-        data=_ipc(_rows(30)),
-        max_bytes=_BODY_LIMIT,
+        data=encode_arrow_stream(_rows(30)),
+        max_bytes=BODY_LIMIT,
         transaction_properties={},
     )
 

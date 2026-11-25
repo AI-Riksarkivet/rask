@@ -22,10 +22,7 @@ correct recovery is to be empty, and a future reader "completing" the prefix lis
 silently.
 """
 
-import importlib.util
 import json
-import sys
-from pathlib import Path
 from types import ModuleType
 from typing import Any, Final, cast
 
@@ -34,23 +31,22 @@ from botocore.exceptions import ClientError
 
 from lakehouse.records.control_prefixes import CONTROL_PREFIXES, RECORD_PREFIXES
 from lakehouse.storage.errors import BucketNotFoundError
+from tests.script_module import script
 
 
-REPO_ROOT = Path(__file__).resolve().parents[2]
+@pytest.fixture
+def backup_store(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """`scripts/_backup_store.py`, the sibling the backup tool imports."""
+    return script("_backup_store", monkeypatch)
 
 
-def _load(name: str) -> ModuleType:
-    """``scripts/<name>.py`` under its own name, so the tool resolves its sibling as `python scripts/...` does."""
-    spec = importlib.util.spec_from_file_location(name, REPO_ROOT / "scripts" / f"{name}.py")
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
+@pytest.fixture
+def crb(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """`scripts/control_root_backup.py`, its sibling `_backup_store` loaded first, so the tool's import of it is undone
+    with the test too."""
+    script("_backup_store", monkeypatch)
+    return script("control_root_backup", monkeypatch)
 
-
-backup_store = _load("_backup_store")
-crb = _load("control_root_backup")
 
 BUCKET = "lance-catalog"
 ROOT = f"s3://{BUCKET}"
@@ -128,7 +124,7 @@ def s3() -> Any:  # noqa: ANN401 — boto3 client has no public stub
         yield _ConditionalCopies(client)
 
 
-def test_a_backup_captures_every_RECORD_prefix(s3: Any) -> None:
+def test_a_backup_captures_every_RECORD_prefix(s3: Any, crb: ModuleType) -> None:
     result = crb.do_backup(s3, root=ROOT, dest=None, stamp="20260914T000000Z")
 
     manifest = crb.read_manifest(s3, result["backup"])
@@ -141,7 +137,7 @@ def test_a_backup_captures_every_RECORD_prefix(s3: Any) -> None:
     assert result["raced"] == [], result
 
 
-def test_a_RESTORE_puts_the_bytes_back_and_proves_it(s3: Any) -> None:
+def test_a_RESTORE_puts_the_bytes_back_and_proves_it(s3: Any, crb: ModuleType) -> None:
     """THE ROW'S ACTUAL ASK. A backup that runs is not a backup that restores."""
     backup = crb.do_backup(s3, root=ROOT, dest=None, stamp="20260914T000000Z")["backup"]
 
@@ -156,7 +152,7 @@ def test_a_RESTORE_puts_the_bytes_back_and_proves_it(s3: Any) -> None:
         assert got == body, f"{key} came back with different bytes"
 
 
-def test_a_restore_over_the_LIVE_root_is_refused_without_force(s3: Any) -> None:
+def test_a_restore_over_the_LIVE_root_is_refused_without_force(s3: Any, crb: ModuleType) -> None:
     """A restore is the one operation that can destroy what it exists to protect: run it at the wrong
     target, or against a root that has moved on, and current governance is replaced by old governance.
     The rehearsal form is the default and the destructive one is opt-in — which is also what makes this
@@ -169,7 +165,7 @@ def test_a_restore_over_the_LIVE_root_is_refused_without_force(s3: Any) -> None:
     assert "--force" in str(excinfo.value), excinfo.value
 
 
-def test_verify_detects_a_backup_that_has_ROTTED(s3: Any) -> None:
+def test_verify_detects_a_backup_that_has_ROTTED(s3: Any, crb: ModuleType) -> None:
     """`verify` answers "is this backup intact" BEFORE an incident. A check that passed on a corrupted
     backup would be worse than no check, so the corruption is introduced and the check must catch it."""
     backup = crb.do_backup(s3, root=ROOT, dest=None, stamp="20260914T000000Z")["backup"]
@@ -183,7 +179,7 @@ def test_verify_detects_a_backup_that_has_ROTTED(s3: Any) -> None:
     assert "_projects/acme.json" in report["changed"], report
 
 
-def test_a_record_written_DURING_the_backup_is_captured_as_copied_and_REPORTED(s3: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_record_written_DURING_the_backup_is_captured_as_copied_and_REPORTED(s3: Any, monkeypatch: pytest.MonkeyPatch, crb: ModuleType) -> None:
     """A live control root is written while it is being read, and the manifest must describe the bytes
     the backup HAS — not the version the listing happened to see.
 
@@ -210,7 +206,7 @@ def test_a_record_written_DURING_the_backup_is_captured_as_copied_and_REPORTED(s
     assert restored["verified"], restored
 
 
-def test_the_backup_states_which_failure_it_protects_against(s3: Any) -> None:
+def test_the_backup_states_which_failure_it_protects_against(s3: Any, crb: ModuleType) -> None:
     """A same-bucket backup survives a bad write and not a lost bucket, and whoever finds it during an
     incident must not have to read the tool to learn which. It is written into the manifest."""
     same = crb.do_backup(s3, root=ROOT, dest=None, stamp="20260914T000000Z")
@@ -223,7 +219,7 @@ def test_the_backup_states_which_failure_it_protects_against(s3: Any) -> None:
     assert json.loads(s3.get_object(Bucket="offsite", Key="control/20260914T000001Z/MANIFEST.json")["Body"].read())["objects"]
 
 
-def test_retention_prunes_the_oldest_backups_and_keeps_the_newest(s3: Any) -> None:
+def test_retention_prunes_the_oldest_backups_and_keeps_the_newest(s3: Any, crb: ModuleType) -> None:
     """[[LH-110]]'s stated residual: the tool backs up and prunes nothing, so `_backups/control/` grows
     without bound.
 
@@ -244,7 +240,7 @@ def test_retention_prunes_the_oldest_backups_and_keeps_the_newest(s3: Any) -> No
     assert crb.do_verify(s3, backup=newest)["intact"] is True
 
 
-def test_retention_keeps_everything_when_it_is_not_asked_for(s3: Any) -> None:
+def test_retention_keeps_everything_when_it_is_not_asked_for(s3: Any, crb: ModuleType) -> None:
     """`keep=0` is the default and means unbounded, matching the chart's `gt 0` gate. A tool that
     silently began deleting backups on upgrade is a worse failure than the unbounded growth."""
     for stamp in ("20260914T000000Z", "20260915T000000Z"):
@@ -256,7 +252,7 @@ def test_retention_keeps_everything_when_it_is_not_asked_for(s3: Any) -> None:
     assert len(result["kept"]) == 2
 
 
-def test_the_listing_of_a_missing_bucket_raises_storages_own_error() -> None:
+def test_the_listing_of_a_missing_bucket_raises_storages_own_error(backup_store: ModuleType) -> None:
     """The backups' key listing answers in storage's own taxonomy: a missing bucket reaches the tool as
     `BucketNotFoundError`, not a raw botocore `ClientError` it cannot name (PS-02)."""
     from moto import mock_aws

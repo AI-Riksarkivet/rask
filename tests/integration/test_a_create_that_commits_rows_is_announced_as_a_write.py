@@ -20,16 +20,14 @@ import httpx
 import lance
 import lance_namespace
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from tests.callers import person
 from tests.integration.lineage_app import joined_bus, live_catalog, live_lineage
 
 
-_ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+_ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 _NAMESPACE = "lance_catalog$acme-silver"
 _TABLE = f"{_NAMESPACE}$pages"
 
@@ -39,10 +37,7 @@ def _rows(count: int) -> pa.Table:
 
 
 def _through_the_create_door(catalog_url: str, rows: pa.Table) -> None:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, rows.schema) as writer:
-        writer.write_table(rows)
-    created = httpx.post(f"{catalog_url}/v1/table/{_TABLE}/create", content=sink.getvalue().to_pybytes(), headers=_ARROW, timeout=60)
+    created = httpx.post(f"{catalog_url}/v1/table/{_TABLE}/create", content=encode_arrow_stream(rows), headers=_ARROW, timeout=60)
     assert created.status_code == 200, created.text
 
 
@@ -57,14 +52,13 @@ DOORS: dict[str, Callable[[str, pa.Table], None]] = {"create": _through_the_crea
 
 
 @contextmanager
-def _signed_in(key: str) -> Generator[None]:
-    """Every request to the catalog authenticated as the person whose principal key is ``key``."""
+def _signed_in(name: str) -> Generator[None]:
+    """Every request to the catalog authenticated as ``name``, signed in through Dex."""
     from catalog.api.security import authenticate
     from catalog.main import app
 
-    principal = Principal.parse(key)
-    claims = IDToken(iss="https://idp.invalid/dex", sub=principal.subject, aud="rask", exp=4102444800, iat=0)
-    app.dependency_overrides[authenticate] = lambda: PersonPrincipal(principal=principal, claims=claims)
+    caller = person(name)
+    app.dependency_overrides[authenticate] = lambda: caller
     try:
         yield
     finally:
@@ -96,7 +90,7 @@ def test_a_create_that_commits_rows_is_announced_as_a_write(tmp_path: Path, monk
     with (
         live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
         live_lineage(catalog_url, monkeypatch) as lineage_url,
-        _signed_in("dex~alice"),
+        _signed_in("alice"),
     ):
         assert httpx.post(f"{catalog_url}/v1/namespace/{_NAMESPACE}/create", json={}, timeout=60).status_code == 200
         DOORS[door](catalog_url, _rows(count))

@@ -1,4 +1,4 @@
-"""Shared fixtures for the maintenance suite: the catalog's own app, one dataset's pass, an S3 store, and recorders for the counters."""
+"""Shared fixtures for the maintenance suite: the catalog's own app, one dataset's pass, and recorders for the counters."""
 
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
@@ -9,7 +9,6 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import connect
-from moto.server import ThreadedMotoServer
 
 from lakehouse.lancekit.base_refs import normalise
 from lakehouse.naming import CATALOG_DELIMITER
@@ -17,23 +16,10 @@ from lakehouse.records import location_claims
 from lakehouse.storage.options import StorageOptions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services import table_pass
+from maintenance.services import credentials, table_pass
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.naming import TableIds, policy_owners
 from maintenance.services.plan import DatasetPlan, PlanContext
-
-
-@pytest.fixture(scope="module")
-def moto_url() -> Iterator[str]:
-    """A moto S3 server for one test module: S3 has buckets and key prefixes where a local filesystem has directories.
-
-    Its backends are process-global, so a test names its buckets uniquely.
-    """
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
 
 
 @pytest.fixture
@@ -108,6 +94,13 @@ def parked_added(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, dict[str, A
     seen: list[tuple[int, dict[str, Any] | None]] = []
     monkeypatch.setattr(metrics._tables_parked, "add", lambda amount, attributes=None, **_: seen.append((amount, attributes)))
     return seen
+
+
+@pytest.fixture
+def catalog_calls_carry_no_identity(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Maintenance's calls to the catalog carry no `Authorization` header, for a test whose catalog (a respx route or the
+    app with authorization off) judges no caller; a test of the header itself requests `catalog_identity_token`."""
+    monkeypatch.setattr(credentials, "service_headers", lambda _settings: {})
 
 
 @pytest.fixture

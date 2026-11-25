@@ -12,7 +12,6 @@ import asyncio
 from typing import Any
 
 import pytest
-from catalog_settings import catalog_settings, governed_settings
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 
 from catalog.api.authz.context import AuthzContext
@@ -22,6 +21,8 @@ from lakehouse.governed import fga_resilience
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
+from tests.callers import person
+from tests.catalog_settings import catalog_settings, governed_settings
 
 
 def _settings(*, fga_enabled: bool = False) -> Settings:
@@ -31,6 +32,8 @@ def _settings(*, fga_enabled: bool = False) -> Settings:
 
 
 def _token(**claims: Any) -> PersonPrincipal:
+    """alice holding a token whose OIDC ``name`` claim is one of ``claims``, which `tests.callers.person` cannot carry:
+    its own ``name`` parameter is the person's subject."""
     return PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=1, iat=1, **claims))
 
 
@@ -134,7 +137,7 @@ def test_estate_check_outage_degrades_to_false(monkeypatch: pytest.MonkeyPatch) 
     # Fail-safe: a broken authz layer must never paint admin surfaces — and never 5xx the self-describe
     # (the real gates on /management/v1/events / /management/v1/projects still fail closed on their own).
     _wire(monkeypatch, estate=ServiceUnavailableError("down"), lists={"can_administer": ["project:acme"]})
-    result = _me(_settings(fga_enabled=True), token=_token(), client=object())
+    result = _me(_settings(fga_enabled=True), token=person("alice"), client=object())
     assert result.estate_admin is False
     assert [(p.project, p.role) for p in result.projects] == [("acme", "admin")]
 
@@ -145,7 +148,7 @@ def test_one_relation_outage_degrades_only_that_list(monkeypatch: pytest.MonkeyP
         monkeypatch,
         lists={"can_administer": ["project:acme"], "member": ServiceUnavailableError("down")},
     )
-    result = _me(_settings(fga_enabled=True), token=_token(), client=object())
+    result = _me(_settings(fga_enabled=True), token=person("alice"), client=object())
     assert [(p.project, p.role) for p in result.projects] == [("acme", "admin")]
 
 
@@ -164,7 +167,7 @@ def test_slow_fga_degrades_on_the_shared_budget(monkeypatch: pytest.MonkeyPatch)
 
     monkeypatch.setattr(ep.fga_reads, "check", _slow_check)
     monkeypatch.setattr(ep.fga_reads, "list_objects", _slow_list)
-    result = _me(_settings(fga_enabled=True), token=_token(), client=object())
+    result = _me(_settings(fga_enabled=True), token=person("alice"), client=object())
     assert result.estate_admin is False and result.projects == []  # degraded, response still whole
 
 

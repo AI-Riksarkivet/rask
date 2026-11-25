@@ -28,9 +28,8 @@ from pydantic import ValidationError
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.governed.decider import OpenFgaDecider
-from lakehouse.governed.idp_identity import IdpVerifier, PersonPrincipal
-from lakehouse.governed.oidc import IDToken, OIDCVerifier
-from lakehouse.governed.principal import Principal
+from lakehouse.governed.idp_identity import IdpVerifier
+from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
 from lineage.api import fga_deps, security
 from lineage.core.config import LineageSettings
@@ -38,6 +37,7 @@ from lineage.models import RunEvent
 from lineage.schemas import EventRecord
 from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore
+from tests.callers import person
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 
@@ -72,10 +72,6 @@ class _Names:
 def _settings(**values: Any) -> LineageSettings:
     """Build settings from field names (``model_validate`` runs the fail-closed validator)."""
     return LineageSettings.model_validate(values)
-
-
-def _token(name: str = "alice") -> PersonPrincipal:
-    return PersonPrincipal(principal=Principal(idp_id="dex", subject=name), claims=IDToken(iss=_ISSUER, sub=name, aud="lance", exp=0, iat=0))
 
 
 def _request(**state: object) -> Request:
@@ -147,7 +143,7 @@ def test_authenticate_enabled_verifies_token(dex_issuer: Any) -> None:  # noqa: 
 def test_gate_unwired_client_fails_closed() -> None:
     with pytest.raises(ServiceUnavailableError):
         asyncio.run(
-            fga_deps.require_metadata_access("a$b", request=_request(), settings=_settings(**_FULL_AUTH), token=_token(), names=NO_CATALOG_NAMES, bearer=None)
+            fga_deps.require_metadata_access("a$b", request=_request(), settings=_settings(**_FULL_AUTH), token=person(), names=NO_CATALOG_NAMES, bearer=None)
         )
 
 
@@ -172,7 +168,7 @@ def test_gate_denies_without_permission(openfga_store: Any) -> None:  # noqa: AN
 
     def gate(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the gate's coroutine
         return fga_deps.require_metadata_access(
-            "a$b", request=_request(decider=decider), settings=_settings(**_FULL_AUTH), token=_token(), names=cast(CatalogNames, names), bearer="tok"
+            "a$b", request=_request(decider=decider), settings=_settings(**_FULL_AUTH), token=person(), names=cast(CatalogNames, names), bearer="tok"
         )
 
     openfga_store.write((fga_ids.user_object("dex~bob"), "owner", _object("a$b")))
@@ -268,7 +264,7 @@ def test_get_events_hides_dataset_less_events_when_governed(openfga_store: Any) 
     repo.events = [EventRecord(seq=1, outputs=[], inputs=[], event={"run": {"runId": "secret"}})]
 
     def read(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the door's coroutine
-        flt = fga_deps.DatasetFilter(_request(decider=decider), settings, _token())
+        flt = fga_deps.DatasetFilter(_request(decider=decider), settings, person())
         return get_events(provenance=cast(ProvenanceStore, repo), datasets=flt, settings=settings, names=NO_CATALOG_NAMES, bearer=None)
 
     result = decided(openfga_store, read)
@@ -364,7 +360,7 @@ def test_a_sparse_page_reads_its_window_in_three_reads_at_most_the_next_beside_a
 
     monkeypatch.setattr(fga_reads, "batch_check", judged_after_a_yield)
     repo.events = [EventRecord(seq=seq, outputs=["t"], inputs=[], table_uuids=[_uuid(table(seq))], event={}) for seq in range(200, 0, -1)]
-    flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, _token())
+    flt = fga_deps.DatasetFilter(_request(decider=OpenFgaDecider(cast(OpenFgaClient, object()))), settings, person())
 
     page = asyncio.run(get_events(provenance=cast(ProvenanceStore, repo), datasets=flt, settings=settings, limit=limit, names=NO_CATALOG_NAMES, bearer=None))
 
@@ -411,7 +407,7 @@ def test_ingest_handler_binds_verified_author() -> None:
             request=_request(),
             provenance=cast(ProvenanceStore, repo),
             settings=_settings(),
-            token=_token("real-user"),
+            token=person("real-user"),
             names=NO_CATALOG_NAMES,
             bearer=None,
             decider=None,
@@ -448,7 +444,7 @@ def test_ingest_handler_keeps_body_author_when_oidc_off() -> None:
 
 def test_output_authz_unwired_client_fails_closed() -> None:
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(fga_deps.enforce_output_authz(_event(outputs=["a$b"]), _request().app, _settings(**_FULL_AUTH), token=_token()))
+        asyncio.run(fga_deps.enforce_output_authz(_event(outputs=["a$b"]), _request().app, _settings(**_FULL_AUTH), token=person()))
 
 
 def test_output_authz_output_less_still_requires_auth() -> None:

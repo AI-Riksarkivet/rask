@@ -22,7 +22,6 @@ DRIVEN THROUGH THE ENDPOINT rather than compared as source text: the property is
 answer the same exception with the same outcome, and only running them shows that.
 """
 
-from collections.abc import Collection
 from typing import Any, cast
 
 import pytest
@@ -33,6 +32,7 @@ from lineage.core.config import LineageSettings
 from lineage.core.metrics import Door, Outcome
 from lineage.core.refusals import UnauthoredRunError, UngovernedOutputError
 from lineage.services.provenance import ProvenanceStore
+from tests.provenance_store_double import ProvenanceStoreDouble
 from tests.unit.no_uuids import NO_CATALOG_NAMES
 
 
@@ -116,10 +116,6 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
     def _record(outcome: Outcome, *, door: Door) -> None:
         recorded.append((outcome, door))
 
-    class _Store:
-        async def record(self, _event: Any, *, aliased: Collection[str]) -> None:
-            return None
-
     monkeypatch.setattr(ingest, "enforce_author", lambda *_a, **_k: None)
 
     async def _allow(*_args: Any, **_kw: Any) -> frozenset[str]:
@@ -131,7 +127,7 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
     answer = await ingest.ingest_event(
         body=_RUN_BODY,
         request=_request(),
-        provenance=cast("ProvenanceStore", _Store()),
+        provenance=cast("ProvenanceStore", ProvenanceStoreDouble()),
         settings=LineageSettings.model_validate({}),
         token=None,
         names=NO_CATALOG_NAMES,

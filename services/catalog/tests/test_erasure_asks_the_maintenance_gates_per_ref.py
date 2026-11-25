@@ -16,51 +16,37 @@ from typing import Any
 
 import lance
 import lance_namespace
-import pyarrow as pa
 import pytest
-from fastapi import FastAPI
+from erasure_rig import PREDICATE, SUBJECT, erasure_doors, rows
 from fastapi.testclient import TestClient
 
-from catalog.api.dependencies import get_namespace, get_storage_options, request_settings
+from catalog.api.dependencies import get_storage_options
 from catalog.api.v1.endpoints import erasure as door
-from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.erasure import ErasureReport, ref_heads, verify
 from catalog.services.tables.creation import create_table
-from catalog.services.tables.writes import read_arrow_body
-from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.records import base_registry
 from lakehouse.records.history_fences import HistoryWork, TableHistory
 from lakehouse.storage.options import StorageOptions
-
-
-#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
-_BODY_LIMIT = 256 * 1024 * 1024
-
-
-_PREDICATE = "pii = 'alice'"
-
-
-def _rows(*names: str) -> pa.Table:
-    return pa.table({"pii": pa.array(list(names))})
+from tests.catalog_settings import catalog_settings
 
 
 def test_a_table_mixing_file_versions_is_not_reclaimed_on_any_ref(tmp_path: Path, erasure_job: Any) -> None:  # noqa: ANN401 — conftest.ErasureJob
     """pylance 12 stamps reader flag 256 on an append at another file version, and no operation removes it, so
     every maintenance gate refuses the table: no reclaim here has been checked against that layout."""
     uri = str(tmp_path / "mixed")
-    lance.write_dataset(_rows("alice", "bob", "carol", "dan"), uri, data_storage_version="2.1", enable_stable_row_ids=True, max_rows_per_file=2)
-    lance.write_dataset(_rows("eve"), uri, mode="append", data_storage_version="2.2")
+    lance.write_dataset(rows("alice", "bob", "carol", "dan"), uri, data_storage_version="2.1", enable_stable_row_ids=True, max_rows_per_file=2)
+    lance.write_dataset(rows("eve"), uri, mode="append", data_storage_version="2.2")
     lance.dataset(uri).create_branch("work")
     recorded = ref_heads(lance.dataset(uri))
-    erasure_job(uri, _PREDICATE).run()
+    erasure_job(uri, PREDICATE).run()
 
     report = verify(
         lance.dataset(uri),
         storage_options=StorageOptions(),
         reopen=lambda: lance.dataset(uri),
         table="t",
-        predicate=_PREDICATE,
+        predicate=PREDICATE,
         retention=timedelta(0),
         trusted=recorded,
         history=None,
@@ -82,10 +68,10 @@ def test_no_ref_is_reclaimed_while_a_ref_write_holds_the_tables_history(tmp_path
     """Lance reads the refs once per reclaim, so a tag or branch written meanwhile could pin a version it deletes; the
     verification reclaims no ref, says so per ref, and leaves the obligation open for the next verification."""
     uri = str(tmp_path / "subjects")
-    lance.write_dataset(_rows("alice", "bob"), uri, data_storage_version="2.2", enable_stable_row_ids=True)
+    lance.write_dataset(rows("alice", "bob"), uri, data_storage_version="2.2", enable_stable_row_ids=True)
     lance.dataset(uri).create_branch("work")
     recorded = ref_heads(lance.dataset(uri))
-    erasure_job(uri, _PREDICATE).run()
+    erasure_job(uri, PREDICATE).run()
     versions = _versions(uri)
     history = TableHistory(control_root=str(tmp_path / "control"), storage_options={}, table_uuid="0b5d8a8c-2f6e-4d1a-9c3b-7e1f0a2d4c6b")
     history.take(HistoryWork.REFS)
@@ -95,7 +81,7 @@ def test_no_ref_is_reclaimed_while_a_ref_write_holds_the_tables_history(tmp_path
         storage_options=StorageOptions(),
         reopen=lambda: lance.dataset(uri),
         table="t",
-        predicate=_PREDICATE,
+        predicate=PREDICATE,
         retention=timedelta(0),
         trusted=recorded,
         history=history,
@@ -112,15 +98,12 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     """Every hop the verification door takes to the store carries the request's storage options: the verification
     and its reopen. Without them an `s3://` table is read as a local path, and the reopen fails."""
     ns = lance_namespace.connect("dir", {"root": str(tmp_path / "data")})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, _rows("alice").schema) as writer:
-        writer.write_table(_rows("alice"))
     ns.create_namespace(lance_namespace.CreateNamespaceRequest(id=["db"], properties=with_minted_uuid(None)))
     create_table(
         ns,
         StorageOptions(),
         ["db", "subjects"],
-        table=read_arrow_body(sink.getvalue().to_pybytes(), max_bytes=_BODY_LIMIT),
+        table=rows(SUBJECT),
         root=str(tmp_path / "data"),
         mode="create",
         registry=base_registry.BaseRegistry(control_root=str(tmp_path / "control"), storage_options={}),
@@ -131,21 +114,15 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
 
     def _record(dataset: Any, **kwargs: Any) -> ErasureReport:
         seen.update(kwargs)
-        return ErasureReport(table="db$subjects", predicate=_PREDICATE)
+        return ErasureReport(table="db$subjects", predicate=PREDICATE)
 
     monkeypatch.setattr(door.erasure, "verify", _record)
-    application = FastAPI()
-    application.include_router(door.table_router)
-    application.include_router(door.obligations_router)
-    application.state.control_emitter = NoopControlEmitter()  # the lifespan's, with control emission off
-    settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
-    application.dependency_overrides[request_settings] = lambda: settings
-    application.dependency_overrides[get_namespace] = lambda: ns
+    application = erasure_doors(ns, catalog_settings(LANCE_CONTROL_ROOT=str(tmp_path / "control")))
     application.dependency_overrides[get_storage_options] = lambda: so
     with TestClient(application) as client:
-        recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": _PREDICATE})
+        recorded = client.post("/management/v1/table/db$subjects/erasure", json={"predicate": PREDICATE})
         assert recorded.status_code == 202, recorded.text
-        response = client.post(f"/management/v1/table/db$subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": _PREDICATE})
+        response = client.post(f"/management/v1/table/db$subjects/erasure/{recorded.json()['obligation_id']}/verify", json={"predicate": PREDICATE})
 
     assert response.status_code == 200, response.text
     assert seen["storage_options"] == so

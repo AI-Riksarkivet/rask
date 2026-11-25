@@ -19,7 +19,6 @@ Driven through the real catalog app on real pylance, and the event is captured o
 ``BusEmitter`` builds and publishes it, and the bus double stands in for the bus.
 """
 
-import io
 import json
 import threading
 from collections.abc import Callable
@@ -30,7 +29,6 @@ from typing import Any, Final
 import httpx2
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 from lance.dataset import Branches
@@ -38,28 +36,24 @@ from lance_namespace import connect
 
 from catalog.core.lineage_emit import make_emitter
 from catalog.services.tables import versions
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.options import StorageOptions
 from lineage.models import parse_event
 from lineage.services.provenance import edges_of
 from tests.app_state import app_of
 from tests.bus_double import BusDouble
+from tests.callers import person
 from tests.control_emitter_double import ControlEmitterDouble
 from tests.door_tables import door_table
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 TABLE = "lance_catalog$lh214$t"
 BRANCH = "dev"
 #: The tenants the emitter's resolver answers, keyed by the warehouse a name begins with ([[LH-593]],
 #: `catalog.services.warehouses.project_of`), never by a namespace.
 TENANTS: Final = frozendict({"lance_catalog": "acme"})
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
 
 
 def _rows(*ids: int) -> pa.Table:
@@ -89,7 +83,7 @@ def bus(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> BusDoubl
 @pytest.fixture
 def location(real_ns_client: TestClient) -> str:
     assert real_ns_client.post("/v1/namespace/lance_catalog$lh214/create", json={}).status_code == 200
-    created = real_ns_client.post(f"/v1/table/{TABLE}/create?mode=overwrite", content=_ipc(_rows(1, 2, 3)), headers=ARROW)
+    created = real_ns_client.post(f"/v1/table/{TABLE}/create?mode=overwrite", content=encode_arrow_stream(_rows(1, 2, 3)), headers=ARROW)
     assert created.status_code == 200, created.text
     return str(real_ns_client.post(f"/v1/table/{TABLE}/describe", json={}).json()["table_uri"])
 
@@ -131,7 +125,7 @@ def test_concurrent_appends_each_emit_the_version_that_carries_their_own_rows(re
 
     def _append(marker: int) -> None:
         start.wait()
-        response = real_ns_client.post(f"/v1/table/{TABLE}/insert", content=_ipc(_rows(marker)), headers=ARROW)
+        response = real_ns_client.post(f"/v1/table/{TABLE}/insert", content=encode_arrow_stream(_rows(marker)), headers=ARROW)
         assert response.status_code == 200, response.text
         answered[marker] = int(response.json()["version"])
 
@@ -156,16 +150,13 @@ def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_cli
     rather than a coincidentally equal one.
     """
     from catalog.api.security import CurrentToken
-    from lakehouse.governed.idp_identity import PersonPrincipal
-    from lakehouse.governed.oidc import IDToken
-    from lakehouse.governed.principal import Principal
 
-    caller = PersonPrincipal(principal=Principal(idp_id="dex", subject="alice"), claims=IDToken(iss="i", sub="alice", aud="lance", exp=4102444800, iat=1))
+    caller = person(exp=4102444800)
     app_of(real_ns_client).dependency_overrides[CurrentToken.__metadata__[0].dependency] = lambda: caller
     client = real_ns_client
     assert client.post(f"/v1/table/{TABLE}/branches/create", json={"name": BRANCH}).status_code == 200
     for ids in ((4,), (5,), (6,)):
-        assert client.post(f"/v1/table/{TABLE}/insert", content=_ipc(_rows(*ids)), headers=ARROW).status_code == 200
+        assert client.post(f"/v1/table/{TABLE}/insert", content=encode_arrow_stream(_rows(*ids)), headers=ARROW).status_code == 200
     restore_to = _head(location).version
     expected_ref = {"ref": BRANCH, "branchIdentifier": _identifier(location)}
 
@@ -173,13 +164,13 @@ def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_cli
         return None
 
     doors: list[tuple[str, Callable[[], None], Callable[[], httpx2.Response]]] = [
-        ("insert", _nothing, lambda: client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=_ipc(_rows(10)), headers=ARROW)),
+        ("insert", _nothing, lambda: client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=encode_arrow_stream(_rows(10)), headers=ARROW)),
         (
             "merge_insert",
             _nothing,
             lambda: client.post(
                 f"/v1/table/{TABLE}/merge_insert?branch={BRANCH}&on=id&when_matched_update_all=true&when_not_matched_insert_all=true&use_index=false",
-                content=_ipc(_rows(10, 11)),
+                content=encode_arrow_stream(_rows(10, 11)),
                 headers=ARROW,
             ),
         ),
@@ -244,7 +235,7 @@ def test_a_recreated_branch_emits_a_different_identifier_for_the_same_version(
     def _write_once() -> dict[str, Any]:
         assert client.post(f"/v1/table/{TABLE}/branches/create", json={"name": BRANCH}).status_code == 200
         before = len(bus.events)
-        assert client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=_ipc(_rows(9)), headers=ARROW).status_code == 200
+        assert client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=encode_arrow_stream(_rows(9)), headers=ARROW).status_code == 200
         return _lance(bus.events[before]) | {"version": _version(bus.events[before])}
 
     first = _write_once()
@@ -271,7 +262,7 @@ def test_a_branch_lookup_that_walks_past_the_branch_point_finds_nothing_and_rais
     ``read_transaction`` (pylance 12.0.0). The lookup runs after a committed restore, so it must answer
     "unknown" rather than raise into a 500 that skips the door's idempotency record."""
     assert real_ns_client.post(f"/v1/table/{TABLE}/branches/create", json={"name": BRANCH}).status_code == 200
-    assert real_ns_client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=_ipc(_rows(9)), headers=ARROW).status_code == 200
+    assert real_ns_client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=encode_arrow_stream(_rows(9)), headers=ARROW).status_code == 200
     ns = connect("dir", {"root": str(tmp_path)})
 
     from catalog.core.config import get_settings
@@ -294,15 +285,15 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(real_ns_cl
     control = ControlEmitterDouble()
     monkeypatch.setattr(app_of(client).state, "control_emitter", control, raising=False)
     assert client.post("/v1/namespace/lance_catalog$lh522/create", json={}).status_code == 200
-    assert client.post("/v1/table/lance_catalog$lh522$t/create", content=_ipc(_rows(1)), headers=ARROW).status_code == 200
+    assert client.post("/v1/table/lance_catalog$lh522$t/create", content=encode_arrow_stream(_rows(1)), headers=ARROW).status_code == 200
     described = client.post("/v1/table/lance_catalog$lh522$t/describe", json={}).json()
-    table_uuid = described["properties"]["rask.uuid"]
-    namespace_uuid = client.post("/v1/namespace/lance_catalog$lh522/describe", json={}).json()["properties"]["rask.uuid"]
+    table_uuid = described["properties"][UUID_PROPERTY]
+    namespace_uuid = client.post("/v1/namespace/lance_catalog$lh522/describe", json={}).json()["properties"][UUID_PROPERTY]
     stamped = (lance.dataset(described["location"]).schema.metadata or {}).get(b"lineage.dataset_id")
     for call in (
-        lambda: client.post("/v1/table/lance_catalog$lh522$t/insert", content=_ipc(_rows(2)), headers=ARROW),
+        lambda: client.post("/v1/table/lance_catalog$lh522$t/insert", content=encode_arrow_stream(_rows(2)), headers=ARROW),
         lambda: client.post("/v1/table/lance_catalog$lh522$t/rename", json={"new_table_name": "u"}),
-        lambda: client.post("/v1/table/lance_catalog$lh522$u/insert", content=_ipc(_rows(3)), headers=ARROW),
+        lambda: client.post("/v1/table/lance_catalog$lh522$u/insert", content=encode_arrow_stream(_rows(3)), headers=ARROW),
         lambda: client.post("/v1/table/lance_catalog$lh522$u/add_columns", json={"new_columns": [{"name": "w", "expression": "id + 1"}]}),
         lambda: client.post("/v1/table/lance_catalog$lh522$u/drop", json={}),
     ):
@@ -344,7 +335,7 @@ def test_a_tables_create_names_the_tenant_of_its_warehouse_at_any_depth(real_ns_
     for namespace in ("lance_catalog$lh214", "lance_catalog$lh214$raw"):
         assert real_ns_client.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
 
-    created = real_ns_client.post("/v1/table/lance_catalog$lh214$raw$t/create", content=_ipc(_rows(1)), headers=ARROW)
+    created = real_ns_client.post("/v1/table/lance_catalog$lh214$raw$t/create", content=encode_arrow_stream(_rows(1)), headers=ARROW)
 
     assert created.status_code == 200, created.text
     assert [(_lance(event)["operation"], _lance(event).get("project")) for event in bus.events] == [("create_table", "acme")]
@@ -398,7 +389,7 @@ def test_an_edge_names_the_incarnation_of_each_branch_it_joins(real_ns_client: T
     """[[LH-413]] An edge reads ``src@feed`` into ``t@dev``; each ref is named with its incarnation, since a branch deleted
     and created again under the name restarts its numbering. The event the catalog emits is the one lineage records."""
     client = real_ns_client
-    created = client.post("/v1/table/lance_catalog$lh214$src/create?mode=create", content=_ipc(_rows(7)), headers=ARROW)
+    created = client.post("/v1/table/lance_catalog$lh214$src/create?mode=create", content=encode_arrow_stream(_rows(7)), headers=ARROW)
     assert created.status_code == 200, created.text
     for table, branch in (("lance_catalog$lh214$src", "feed"), (TABLE, BRANCH)):
         assert client.post(f"/v1/table/{table}/branches/create", json={"name": branch}).status_code == 200
@@ -410,7 +401,7 @@ def test_an_edge_names_the_incarnation_of_each_branch_it_joins(real_ns_client: T
     }
     before = len(bus.events)
 
-    answer = client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=_ipc(_rows(9)), headers={**ARROW, **run})
+    answer = client.post(f"/v1/table/{TABLE}/insert?branch={BRANCH}", content=encode_arrow_stream(_rows(9)), headers={**ARROW, **run})
 
     assert answer.status_code == 200, answer.text
     (written,) = bus.events[before:]

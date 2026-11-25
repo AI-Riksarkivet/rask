@@ -20,21 +20,15 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.store_session import IssuedSession
 from tests.app_state import app_of
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 ROWS = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]})
 REPLACED = pa.table({"id": pa.array([7, 8], pa.int64()), "v": ["x", "y"]})
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 def _rows(content: bytes) -> list[tuple[int, str]]:
@@ -65,9 +59,9 @@ def test_every_door_serves_a_table_whose_fragments_sit_on_a_data_base(
     two_store_catalog: TestClient, second_base: str, door: str, body: dict[str, object] | None, expected: object
 ) -> None:
     table = f"lance_catalog$mb${uuid.uuid4().hex[:12]}"
-    created = two_store_catalog.post(f"/v1/table/{table}/create?data_base={second_base}", content=_ipc(ROWS), headers=ARROW)
+    created = two_store_catalog.post(f"/v1/table/{table}/create?data_base={second_base}", content=encode_arrow_stream(ROWS), headers=ARROW)
     assert created.status_code == 200, created.text
-    replaced = two_store_catalog.post(f"/v1/table/{table}/create?mode=overwrite&data_base={second_base}", content=_ipc(REPLACED), headers=ARROW)
+    replaced = two_store_catalog.post(f"/v1/table/{table}/create?mode=overwrite&data_base={second_base}", content=encode_arrow_stream(REPLACED), headers=ARROW)
     assert replaced.status_code == 200, replaced.text
     # The one call that would reach the store: a vend that minted answers `direct` with these.
     app_of(two_store_catalog).state.vendor._exchange = lambda *_a, **_kw: IssuedSession(  # noqa: SLF001

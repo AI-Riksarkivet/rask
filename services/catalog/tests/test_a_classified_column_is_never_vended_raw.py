@@ -23,12 +23,10 @@ from typing import Any
 
 import pyarrow as pa
 import pytest
-from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
-from catalog.core.vending import VendedSession
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.storage.credential import S3KeyPair
+from tests.vendor_double import RecordingVendor
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`spec.yaml`).
@@ -37,22 +35,11 @@ TABLE = "/v1/table/lance_catalog$db$t"
 PII = {"rask.classification": "pii"}
 
 
-class _Vendor:
-    """Records every credential it is asked for: the claim is that it is never asked."""
-
-    def __init__(self) -> None:
-        self.calls: list[dict[str, Any]] = []
-
-    def vend(self, **kwargs: Any) -> VendedSession:  # noqa: ANN401 — the vendor protocol's keyword arguments
-        self.calls.append(kwargs)
-        return VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)
-
-
 @pytest.fixture
-def table(governed_catalog: Any) -> Iterator[tuple[Any, _Vendor]]:  # noqa: ANN401 — the conftest's GovernedCatalog
+def table(governed_catalog: Any) -> Iterator[tuple[Any, RecordingVendor]]:  # noqa: ANN401 — the conftest's GovernedCatalog
     """alice's ``lance_catalog$db$t`` (``id``, ``secret``, ``payload.ssn``), bob a writer on ``lance_catalog$db``, and the recording vendor."""
     catalog = governed_catalog
-    vendor = _Vendor()
+    vendor = RecordingVendor()
     catalog.client.app.dependency_overrides[get_vendor] = lambda: vendor
     catalog.store.write((catalog.person("alice"), "apply", "classification:pii"))
     alice = catalog.bearer("alice")
@@ -128,7 +115,7 @@ def _vends_raw(catalog: Any) -> list[str]:  # noqa: ANN401
     ],
 )
 def test_a_classified_table_stays_unvendable_raw_whatever_a_writer_does(
-    table: tuple[Any, _Vendor],
+    table: tuple[Any, RecordingVendor],
     label: str,
     branch: str | None,
     laundering: list[tuple[str, dict[str, Any]]],
@@ -154,7 +141,7 @@ def test_a_classified_table_stays_unvendable_raw_whatever_a_writer_does(
     ],
 )
 def test_a_classified_table_whose_open_fails_is_vended_to_no_one(
-    table: tuple[Any, _Vendor], door: str, body: dict[str, Any] | None, caplog: pytest.LogCaptureFixture
+    table: tuple[Any, RecordingVendor], door: str, body: dict[str, Any] | None, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The labels are read off the table's open, so an open that fails says nothing about them ([[LH-572]]): a table
     holding a committed version that does not open is refused, never vended as though it held no label. A 500's body is
@@ -181,7 +168,7 @@ def test_a_classified_table_whose_open_fails_is_vended_to_no_one(
     ],
 )
 def test_a_table_whose_branches_cannot_be_listed_is_vended_no_credential(
-    table: tuple[Any, _Vendor], door: str, answered_as: tuple[int, str | None, int | None]
+    table: tuple[Any, RecordingVendor], door: str, answered_as: tuple[int, str | None, int | None]
 ) -> None:
     """A label on any ref holds the table back, so a branch set that cannot be listed says nothing about the labels:
     main is served through the catalog, and a vend for a branch, which cannot be told to exist, is refused
@@ -199,7 +186,7 @@ def test_a_table_whose_branches_cannot_be_listed_is_vended_no_credential(
     assert vendor.calls == []
 
 
-def test_the_maintenance_identity_is_vended_the_maintain_tier_of_a_classified_table(table: tuple[Any, _Vendor]) -> None:
+def test_the_maintenance_identity_is_vended_the_maintain_tier_of_a_classified_table(table: tuple[Any, RecordingVendor]) -> None:
     """[[LH-219]] The maintain tier opens to the maintenance identity alone, whose own session reads every byte, and the
     cleanup it signs is root-scoped. Answered server-mediated there, a classified table would never have a version
     reclaimed, since maintenance signs a rewrite with this vend or not at all."""
@@ -213,7 +200,7 @@ def test_the_maintenance_identity_is_vended_the_maintain_tier_of_a_classified_ta
     assert [call["tier"] for call in vendor.calls] == ["maintain"]
 
 
-def test_a_writer_cannot_create_a_table_carrying_a_label(table: tuple[Any, _Vendor]) -> None:
+def test_a_writer_cannot_create_a_table_carrying_a_label(table: tuple[Any, RecordingVendor]) -> None:
     # A label decides how a table's bytes leave the store, so setting one at create asks what setting one later asks.
     catalog, _ = table
     field = pa.field("secret", pa.string(), metadata={b"rask.classification": b"pii"})

@@ -11,29 +11,21 @@ imagined the transaction log has, and the shape is exactly the thing worth verif
 was scoped from a probe rather than from the docs.
 """
 
-import io
-
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 
 def _seed(client: TestClient) -> None:
     """create → delete → update, so the log has one row of each interesting shape."""
     assert client.post("/v1/namespace/lance_catalog$h1/create", json={}).status_code == 200
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "v": ["a", "b", "c"]})
-    created = client.post("/v1/table/lance_catalog$h1$t/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
+    created = client.post("/v1/table/lance_catalog$h1$t/create?mode=overwrite", content=encode_arrow_stream(rows), headers=ARROW)
     assert created.status_code == 200, created.text
     deleted = client.post("/v1/table/lance_catalog$h1$t/delete", json={"predicate": "id = 2"})
     assert deleted.status_code == 200, deleted.text

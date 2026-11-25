@@ -27,14 +27,13 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids, fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
+from lakehouse.naming import UUID_PROPERTY
 from lineage.api.fga_deps import enforce_bus_authz, enforce_output_authz
 from lineage.core.config import LineageSettings, Signing
 from lineage.models import RunEvent, parse_event
 from lineage.services.names import CatalogNames, stamp_resolved_uuids
 from lineage.services.signature import store_published_keys
+from tests.callers import person
 from tests.integration.lineage_app import live_catalog
 from tests.secret_store_double import SecretStoreDouble
 
@@ -91,7 +90,7 @@ def renamed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Renamed:
             assert created.status_code == 200, created.text
             moved = catalog.post(f"/v1/table/lance_catalog$acme${table}/rename", json={"new_table_name": renamed_to})
             assert moved.status_code == 200, moved.text
-        uuid = {name: catalog.post(f"/v1/table/lance_catalog$acme${name}/describe", json={}).json()["properties"]["rask.uuid"] for name in ("u", "src2")}
+        uuid = {name: catalog.post(f"/v1/table/lance_catalog$acme${name}/describe", json={}).json()["properties"][UUID_PROPERTY] for name in ("u", "src2")}
     return Renamed(table=uuid["u"], source=uuid["src2"])
 
 
@@ -153,7 +152,7 @@ async def test_a_renamed_tables_writes_pass_lineages_checks(
         "fga_enabled": True,
     }
     settings = LineageSettings.model_validate(auth)
-    caller = PersonPrincipal(principal=Principal(idp_id="dex", subject="pipeline"), claims=IDToken(iss="i", sub="pipeline", aud="lance", exp=1, iat=1))
+    caller = person("pipeline")
     write = _write(
         outputs=[_dataset("lance_catalog$acme$u", renamed.table)],
         inputs=[_dataset("lance_catalog$acme$src", renamed.source)],

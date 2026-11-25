@@ -19,7 +19,6 @@ import pytest
 from fastapi import Request
 from lance_namespace import InternalError, InvalidInputError, LanceNamespace, PermissionDeniedError, ServiceUnavailableError, TableNotFoundError
 from moto import mock_aws
-from moto.server import ThreadedMotoServer
 from openfga_sdk.client import OpenFgaClient
 from pydantic import SecretStr
 from unfiled_announcer import unfiled
@@ -33,15 +32,14 @@ from catalog.core.vending import ModeBVendor
 from catalog.services import projects as proj_svc
 from catalog.services import warehouses
 from lakehouse.governed import fga_ids, fga_model, fga_provision, fga_reads, fga_writes
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.errors import StoreRefusedError
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions
 from tests import seeding
 from tests.app_state import request_on
+from tests.callers import person
+from tests.catalog_settings import catalog_settings, governed_settings
 from tests.integration.store_requests import counted
 
 
@@ -115,27 +113,6 @@ def test_a_purge_deletes_every_object_and_then_the_bucket_and_counts_the_objects
 # --------------------------------------------------------------------------- #
 
 
-def _fga_settings(control_root: str | None = None) -> Settings:
-    data: dict[str, object] = {
-        "fga_enabled": True,
-        "oidc_enabled": True,
-        "oidc_issuer": "https://idp",
-        "oidc_audience": "lance",
-        "oidc_idp_id": "dex",
-        "oidc_connectors": {"local": "dex"},
-        "s3_access_key_id": "x",
-        "s3_secret_access_key": "x",
-    }
-    if control_root is not None:
-        data["control_root"] = control_root
-    return Settings.model_validate(data)
-
-
-def _caller(key: str) -> PersonPrincipal:
-    principal = Principal.parse(key)
-    return PersonPrincipal(principal=principal, claims=IDToken(iss="i", sub=principal.subject, aud="lance", exp=1, iat=1))
-
-
 def test_gate_fails_closed_on_outage(monkeypatch: pytest.MonkeyPatch) -> None:
     """An OpenFGA outage is a 503, never a fall-through: no decision is not a denial."""
 
@@ -144,10 +121,10 @@ def test_gate_fails_closed_on_outage(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(fga_reads, "check", outage)
     with pytest.raises(ServiceUnavailableError):
-        asyncio.run(door_gates.require_can_create_warehouse(AuthzContext(client=MagicMock(), settings=_fga_settings(), token=_TOKEN), project="acme"))
+        asyncio.run(door_gates.require_can_create_warehouse(AuthzContext(client=MagicMock(), settings=governed_settings(), token=_TOKEN), project="acme"))
 
 
-_TOKEN = _caller("dex~alice")
+_TOKEN = person("alice")
 
 
 def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -165,8 +142,10 @@ def test_the_ownership_seeds_write_only_relations_the_model_defines(monkeypatch:
     # Drive BOTH seeds: together they are the full tuple surface this feature writes — seed_warehouse
     # (owner + the project edge, from warehouse-create) and seed_project_admin (the tenant's admin,
     # minted by POST /management/v1/projects since the bootstrap exception died).
-    asyncio.run(warehouse_grants.seed_warehouse(AuthzContext(client=MagicMock(), settings=_fga_settings(), token=_TOKEN), warehouse_id="wh-a", project="acme"))
-    granted = asyncio.run(object_grants.seed_project_admin(MagicMock(), _fga_settings(), _TOKEN.subject, project="acme", admin="dex~alice"))
+    asyncio.run(
+        warehouse_grants.seed_warehouse(AuthzContext(client=MagicMock(), settings=governed_settings(), token=_TOKEN), warehouse_id="wh-a", project="acme")
+    )
+    granted = asyncio.run(object_grants.seed_project_admin(MagicMock(), governed_settings(), _TOKEN.subject, project="acme", admin="dex~alice"))
     assert granted is True  # reported, so create_project only audits a grant that really happened
     assert captured, "the seeds wrote no tuples"
     model = {t["type"]: set(t.get("relations") or {}) for t in fga_model.load_model()["type_definitions"]}
@@ -215,22 +194,6 @@ def _request(settings: Settings) -> Request:
     return request_on(connections=_BucketCatalogs(Path(settings.registry_root.removeprefix("file://"))))
 
 
-def _governed_settings(tmp_path: Any) -> Settings:
-    return Settings.model_validate(
-        {
-            "control_root": _root(tmp_path),
-            "fga_enabled": True,
-            "oidc_enabled": True,
-            "oidc_issuer": "https://idp",
-            "oidc_audience": "lance",
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
-
-
 #: The ESTATE ROOT every estate-admin gate (/management/v1/events, /management/v1/access, project creation) checks against,
 #: read from the setting: a literal that falls behind `fga_root_object` would seed a grant on an object no gate asks about.
 _ROOT_OBJECT = str(Settings.model_fields["fga_root_object"].default)
@@ -246,14 +209,14 @@ def _on(store: Any, call: Callable[[OpenFgaClient], Awaitable[Any]]) -> Any:  # 
     return asyncio.run(_run())
 
 
-def _create_as(settings: Settings, sub: str, body: Any, store: Any) -> Any:  # noqa: ANN401 — the root conftest's OpenFgaStore
+def _create_as(settings: Settings, name: str, body: Any, store: Any) -> Any:  # noqa: ANN401 — the root conftest's OpenFgaStore
     from catalog.api.v1.endpoints import warehouses as wh_ep
     from lakehouse.events.control_emit import NoopControlEmitter
 
     return _on(
         store,
         lambda client: wh_ep.create_warehouse(
-            context=AuthzContext(client=client, settings=settings, token=_caller(sub)),
+            context=AuthzContext(client=client, settings=settings, token=person(name)),
             request=_request(settings),
             control=NoopControlEmitter(),
             vendor=ModeBVendor(),  # the default `get_vendor` falls back to: no direct credentials, so the probe skips
@@ -278,7 +241,7 @@ def test_require_project_exists_refuses_an_unknown_tenant(tmp_path: Path) -> Non
     """The guard that REPLACED the bootstrap exception: an unknown project is a 404 (spec code 4,
     problem body) whose detail names the fix — POST /management/v1/projects. Existence comes from the registry,
     identically for every caller, which is why it runs before authz."""
-    settings = _fga_settings(control_root=f"file://{tmp_path}")
+    settings = governed_settings(control_root=f"file://{tmp_path}")
     with pytest.raises(TableNotFoundError) as exc:
         asyncio.run(hierarchy.require_project_exists(settings, "ghost"))
     assert "POST /management/v1/projects" in str(exc.value)
@@ -298,21 +261,21 @@ def test_estate_admin_creates_a_project_and_the_project_then_governs_itself(tmp_
     estate_admin = ("user:dex~alice", "admin", _ROOT_OBJECT)
     openfga_store.write(estate_admin, ("user:dex~bob", "owner", _ROOT_OBJECT))
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: None)
-    settings = _governed_settings(tmp_path)
+    settings = governed_settings(control_root=_root(tmp_path))
 
     with pytest.raises(PermissionDeniedError):
-        _create_project_as(settings, _caller("dex~bob"), proj_ep.CreateProjectRequest(id="acme"), openfga_store)
-    minted = _create_project_as(settings, _caller("dex~alice"), proj_ep.CreateProjectRequest(id="acme"), openfga_store)
+        _create_project_as(settings, person("bob"), proj_ep.CreateProjectRequest(id="acme"), openfga_store)
+    minted = _create_project_as(settings, person("alice"), proj_ep.CreateProjectRequest(id="acme"), openfga_store)
     assert ("user:dex~alice", "admin", "project:acme") in openfga_store.tuples()
     assert minted.admins == ["dex~alice"]  # existence and permission born together, and the response shows it
 
     openfga_store.delete(estate_admin)
     openfga_store.write(("user:dex~carol", "member", "project:acme"))
     for warehouse_id in ("acme-wh", "acme-two"):
-        assert _create_as(settings, "dex~alice", CreateWarehouseRequest(id=warehouse_id, project="acme"), openfga_store).id == warehouse_id
+        assert _create_as(settings, "alice", CreateWarehouseRequest(id=warehouse_id, project="acme"), openfga_store).id == warehouse_id
         assert ("user:dex~alice", "owner", f"warehouse:{warehouse_id}") in openfga_store.tuples()
     with pytest.raises(PermissionDeniedError):
-        _create_as(settings, "dex~carol", CreateWarehouseRequest(id="acme-carol", project="acme"), openfga_store)
+        _create_as(settings, "carol", CreateWarehouseRequest(id="acme-carol", project="acme"), openfga_store)
     assert warehouses.get_warehouse(settings.registry_root, StorageOptions(), "acme-carol") is None
 
 
@@ -325,7 +288,7 @@ def test_a_machine_that_mints_a_project_names_its_person_admin_and_holds_nothing
 
     provisioner = fga_ids.user_object("kubernetes~system:serviceaccount:ops:provisioner")
     openfga_store.write((provisioner, "admin", _ROOT_OBJECT))
-    settings = _governed_settings(tmp_path)
+    settings = governed_settings(control_root=_root(tmp_path))
     machine = ServicePrincipal.for_account("system:serviceaccount:ops:provisioner")
 
     # A service account's subject, the provisioner's own or another release's, is a machine whatever its namespace.
@@ -352,12 +315,12 @@ def test_an_ordinary_user_cannot_mint_a_tenant_through_any_door(tmp_path: Any, m
     openfga_store.write(("user:dex~alice", "admin", _ROOT_OBJECT))
     provisioned: list[str] = []
     monkeypatch.setattr(warehouses, "provision_bucket", lambda bucket, so: provisioned.append(bucket))
-    settings = _governed_settings(tmp_path)
+    settings = governed_settings(control_root=_root(tmp_path))
 
     with pytest.raises(PermissionDeniedError):
-        _create_project_as(settings, _caller("dex~mallory"), proj_ep.CreateProjectRequest(id="evil"), openfga_store)
+        _create_project_as(settings, person("mallory"), proj_ep.CreateProjectRequest(id="evil"), openfga_store)
     with pytest.raises(TableNotFoundError):
-        _create_as(settings, "dex~mallory", CreateWarehouseRequest(id="evil-wh", project="evil"), openfga_store)
+        _create_as(settings, "mallory", CreateWarehouseRequest(id="evil-wh", project="evil"), openfga_store)
     assert provisioned == []
     assert proj_svc.list_projects(settings.registry_root, StorageOptions()) == []
     assert warehouses.list_warehouses(settings.registry_root, StorageOptions()) == []
@@ -377,7 +340,7 @@ def test_a_first_segment_no_record_names_is_served_from_the_estate_root(monkeypa
     # A name under no warehouse is read in the estate's own catalog, where it is absent: the caller is answered as for
     # any absent name, and learns nothing about which warehouses exist.
     monkeypatch.setattr(warehouses, "get_warehouse", lambda *_a, **_k: None)
-    assert asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "wh-a")) is None
+    assert asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), governed_settings(), "wh-a")) is None
 
 
 @pytest.mark.parametrize(
@@ -400,7 +363,7 @@ def test_a_warehouse_record_that_cannot_be_read_is_never_read_as_no_warehouse(
 
     monkeypatch.setattr(warehouses, "get_warehouse", boom)
     with pytest.raises(refusal):
-        asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), _fga_settings(), "wh-a"))
+        asyncio.run(dependencies._resolve_warehouse_root(_bare_request(), governed_settings(), "wh-a"))
 
 
 # --------------------------------------------------------------------------- #
@@ -412,15 +375,11 @@ def test_reserved_bucket_set_folds_in_the_control_and_multibase_buckets() -> Non
     # The set must cover the shared root, the registry/control bucket and every approved multi-base data
     # bucket, plus the named medallion zone buckets. A warehouse over any of them would hand one project
     # governance of platform (or every tenant's) data there.
-    s = Settings.model_validate(
-        {
-            "root": "s3://lance-catalog",
-            "control_root": "s3://lance-control/registry",
-            "multibase_data_bases": "s3://lance-data-1, s3://lance-data-2/prefix",
-            "reserved_buckets": "lance-source",
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
+    s = catalog_settings(
+        root="s3://lance-catalog",
+        control_root="s3://lance-control/registry",
+        multibase_data_bases="s3://lance-data-1, s3://lance-data-2/prefix",
+        reserved_buckets="lance-source",
     )
     assert s.reserved_bucket_set == frozenset({"lance-catalog", "lance-control", "lance-data-1", "lance-data-2", "lance-source"})
 
@@ -428,30 +387,23 @@ def test_reserved_bucket_set_folds_in_the_control_and_multibase_buckets() -> Non
 def test_reserved_bucket_set_defaults_collapse_to_the_root_bucket() -> None:
     # Defaults: the control root is the catalog root and multibase is off, so nothing extra is reserved,
     # byte-identical to the single-bucket posture. file:// roots contribute no bucket at all.
-    s = Settings.model_validate({"s3_access_key_id": "x", "s3_secret_access_key": "x"})
+    s = catalog_settings()
     assert s.reserved_bucket_set == frozenset({"lance-catalog"})
-    local = Settings.model_validate({"root": "file:///tmp/cat", "s3_access_key_id": "x", "s3_secret_access_key": "x"})
+    local = catalog_settings(root="file:///tmp/cat")
     assert local.reserved_bucket_set == frozenset()
 
 
-def test_a_warehouse_record_the_store_does_not_serve_is_an_outage_never_a_record_to_skip() -> None:
+def test_a_warehouse_record_the_store_does_not_serve_is_an_outage_never_a_record_to_skip(moto_url: str) -> None:
     """A record the store did not answer says nothing about the record, so the reader raises the outage (503, code 17),
     tolerant listing or strict, where it skips one that is there and cannot be read as one ([[LH-572]]): skipped, it
     would read as a corrupt record no retry mends. Over a real S3 server, whose GET of the record answers 503."""
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    try:
-        host, port = server.get_host_and_port()
-        moto = f"http://{host}:{port}"
-        bucket = f"reg-{uuid4().hex[:8]}"
-        boto3.client("s3", endpoint_url=moto, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=bucket)
-        with counted(moto) as store:
-            so = lance_storage_options(store.url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
-            seeding.put_warehouse(f"s3://{bucket}", so, {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"})
-            with (
-                store.answering_unavailable(lambda request: request.method == "GET" and request.path.endswith("/_warehouses/wh-a.json")),
-                pytest.raises(ServiceUnavailableError, match="did not answer"),
-            ):
-                warehouses.list_warehouses(f"s3://{bucket}", so)
-    finally:
-        server.stop()
+    bucket = f"reg-{uuid4().hex[:8]}"
+    boto3.client("s3", endpoint_url=moto_url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1").create_bucket(Bucket=bucket)
+    with counted(moto_url) as store:
+        so = lance_storage_options(store.url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
+        seeding.put_warehouse(f"s3://{bucket}", so, {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"})
+        with (
+            store.answering_unavailable(lambda request: request.method == "GET" and request.path.endswith("/_warehouses/wh-a.json")),
+            pytest.raises(ServiceUnavailableError, match="did not answer"),
+        ):
+            warehouses.list_warehouses(f"s3://{bucket}", so)

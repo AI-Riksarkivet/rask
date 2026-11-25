@@ -18,9 +18,10 @@ from urllib.parse import quote
 import httpx2
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from lance import blob_field
+
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 
 
 if TYPE_CHECKING:
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 
     from fastapi.testclient import TestClient
 
-ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW_STREAM = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 INVALID_INPUT = 13
 TABLE = "/v1/table/lance_catalog$db$t"
 PREFIX = b"lance-encoding:"
@@ -51,11 +52,8 @@ LEAVES = {"id", "score", "half", "flag", "name", "tags.item", "point.x", "point.
 
 
 def _create(client: TestClient, properties: dict[str, str], schema: pa.Schema = SCHEMA) -> httpx2.Response:
-    sink = pa.BufferOutputStream()
-    with ipc.new_stream(sink, schema) as writer:
-        writer.write_table(schema.empty_table())
     query = f"?properties={quote(json.dumps(properties))}" if properties else ""
-    return client.post(f"{TABLE}/create{query}", content=sink.getvalue().to_pybytes(), headers=ARROW_STREAM)
+    return client.post(f"{TABLE}/create{query}", content=encode_arrow_stream(schema.empty_table()), headers=ARROW_STREAM)
 
 
 def _fields(fields: Iterable[pa.Field], prefix: str = "") -> Iterator[tuple[str, dict[bytes, bytes]]]:

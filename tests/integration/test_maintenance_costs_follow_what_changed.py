@@ -30,41 +30,30 @@ before that commit.
 
 import uuid
 from collections import Counter
-from collections.abc import Iterator
 from datetime import datetime
 from typing import Any, cast
 
-import pyarrow as pa
 import pytest
-from moto.server import ThreadedMotoServer
 
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import file_identities
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.services.audit import run_audit
 from maintenance.services.queue import Task, TaskQueue
 from maintenance.services.table_pass import TableTask, run_table_pass
+from tests.governed_catalog import ROWS
 from tests.integration.catalog_and_maintenance import TwoServices, catalog_and_maintenance
 from tests.integration.maintenance_vend_doors import CATALOG_URL, catalog_doors
 from tests.integration.store_requests import CountedStore, StoreRequest, counted
 
 
-_ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 #: The most a pass may cost: what one table's datasets, its records and its bucket's manifest need, with headroom for a
 #: pylance that reads a little differently. A pass that read every table would cost a multiple of the estate.
 _PASS_CEILING = 80
 #: The most a pass of a table of 25 versions may cost: one open of the dataset before its expiry and one after, and one
 #: count of its reclaimable versions, which reads every retained manifest; a second count would cost 25 reads more.
 _PASS_AT_25_VERSIONS = 160
-
-
-@pytest.fixture(scope="module")
-def moto_url() -> Iterator[str]:
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
 
 
 class _IdleQueue:
@@ -113,7 +102,7 @@ class _Estate:
             for door in ("create", "insert", "insert"):
                 self._commit(table, door)
             described = self.both.catalog.post(f"/v1/table/{table}/describe", json={}).json()
-            self.tables.append(TableTask(uuid=str(described["properties"]["rask.uuid"]), location=str(described["location"])))
+            self.tables.append(TableTask(uuid=str(described["properties"][UUID_PROPERTY]), location=str(described["location"])))
 
     def crowd(self, warehouses: int, *, spared: set[int]) -> None:
         """``warehouses`` more warehouses of the project, and a policy set on every table but those ``spared``."""
@@ -143,7 +132,7 @@ class _Estate:
         return sum(1 for request in seen if request.method == "GET" and held in request.path)
 
     def _commit(self, table: str, door: str) -> None:
-        answer = self.both.catalog.post(f"/v1/table/{table}/{door}", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        answer = self.both.catalog.post(f"/v1/table/{table}/{door}", content=ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert answer.status_code == 200, answer.text
 
     def _pass(self, table: int) -> None:

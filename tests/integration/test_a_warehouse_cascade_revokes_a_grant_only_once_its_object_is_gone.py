@@ -27,7 +27,6 @@ from uuid import uuid4 as _uuid4
 import boto3
 import httpx2
 import lance
-import pyarrow as pa
 import pytest
 from botocore.exceptions import ClientError
 from fastapi.testclient import TestClient
@@ -39,7 +38,7 @@ from catalog.core import native
 from catalog.core.config import get_settings
 from catalog.core.lineage_emit import BusEmitter
 from catalog.services import clone_ending_records
-from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import base_registry, clone_sources, data_directories, location_claims, maintenance_policies, object_records, trash
@@ -47,12 +46,11 @@ from lakehouse.records.trash import TrashKind
 from lakehouse.storage.client import S3Client
 from lakehouse.storage.options import StorageOptions
 from tests.bus_double import BusDouble
-from tests.governed_catalog import GovernedCatalog, StoreTuples
+from tests.governed_catalog import ROWS, GovernedCatalog, StoreTuples
 
 
 PROJECT = "acme"
 WAREHOUSE = "acme-wh"
-_ROWS = pa.table({"id": pa.array([1, 2], pa.int64())})
 
 
 class _Outage:
@@ -107,7 +105,7 @@ class _Tenant:
     def _minted(self, kind: str, name: str) -> None:
         answer = self.client.post(f"/v1/{kind}/{name}/describe", json={})
         assert answer.status_code == 200, answer.text
-        self.objects[f"{kind}:{name}"] = f"{kind}:{answer.json()['properties']['rask.uuid']}"
+        self.objects[f"{kind}:{name}"] = f"{kind}:{answer.json()['properties'][UUID_PROPERTY]}"
 
     def fga(self, named: list[str]) -> list[str]:
         """The FGA objects ``named`` (each ``<kind>:<name>``) are governed as."""
@@ -132,7 +130,7 @@ class _Tenant:
         self._minted("namespace", namespace)
 
     def create_table(self, table: str) -> None:
-        answer = self.client.post(f"/v1/table/{table}/create", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
+        answer = self.client.post(f"/v1/table/{table}/create", content=ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
         assert answer.status_code == 200, answer.text
         self._minted("table", table)
 
@@ -444,7 +442,7 @@ def test_a_cascade_that_cannot_delete_a_clones_tag_keeps_the_clones_location_unt
     as maintenance's audit asks it, releases the tag and the location, records on the audit trail which clone it ended
     and which sources it released, and the warehouse is then purged with its source."""
     source, clone, key = _registered_clone(tenant, moto_url)
-    clone_uuid = str(tenant.client.post("/v1/table/acme-wh$bronze$silver/describe", json={}).json()["properties"]["rask.uuid"])
+    clone_uuid = str(tenant.client.post("/v1/table/acme-wh$bronze$silver/describe", json={}).json()["properties"][UUID_PROPERTY])
     settings = get_settings()
     registry = base_registry.BaseRegistry(control_root=settings.registry_root, storage_options=settings.storage_options())
     sources = base_registry.clone_source_locations(base_registry.read_base_record(registry, clone))

@@ -21,6 +21,7 @@ from catalog.api.dependencies import request_settings
 from catalog.core.config import get_settings
 from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records.warehouse_records import WarehouseRecord
 
 
@@ -39,7 +40,7 @@ def _table(catalog: Any, name: str) -> str:  # noqa: ANN401 — the conftest's G
     """``name`` created with one row; the uuid the catalog minted for it."""
     body = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
     _ok(catalog, "POST", f"/v1/table/{name}/create", content=body, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE})
-    return str(_ok(catalog, "POST", f"/v1/table/{name}/describe", json={}).json()["properties"]["rask.uuid"])
+    return str(_ok(catalog, "POST", f"/v1/table/{name}/describe", json={}).json()["properties"][UUID_PROPERTY])
 
 
 @pytest.fixture
@@ -73,7 +74,7 @@ def estate(monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> t
         name: _table(catalog, f"{warehouse}${name}")
         for warehouse, name in ((HERE, "sales$mine"), (HERE, "sales$shared"), (HERE, "gone$t"), (ELSEWHERE, "far$t"))
     }
-    uuids["gone"] = str(_ok(catalog, "POST", f"/v1/namespace/{HERE}$gone/describe", json={}).json()["properties"]["rask.uuid"])
+    uuids["gone"] = str(_ok(catalog, "POST", f"/v1/namespace/{HERE}$gone/describe", json={}).json()["properties"][UUID_PROPERTY])
     _ok(catalog, "POST", f"/management/v1/table/{HERE}$sales$shared/access/grant", json={"user": catalog.person(READER), "relation": "reader"})
     for name in (f"{HERE}$sales$mine", f"{HERE}$sales$shared", f"{ELSEWHERE}$far$t"):
         _ok(catalog, "POST", f"/v1/table/{name}/drop", json={})

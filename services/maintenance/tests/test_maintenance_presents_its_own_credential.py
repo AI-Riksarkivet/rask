@@ -13,6 +13,7 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
+from tests.vend_answers import vended
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
@@ -30,7 +31,7 @@ def _settings() -> MaintenanceSettings:
 
 
 def _vend_door() -> respx.Route:
-    payload = {"mode": "direct", "credentials": {"storage_options": _SCOPED}, "location": _URI}
+    payload = vended(_SCOPED, location=_URI)
     return respx.post(_VEND, params={"tier": "maintain"}).mock(return_value=httpx.Response(200, json=payload))
 
 

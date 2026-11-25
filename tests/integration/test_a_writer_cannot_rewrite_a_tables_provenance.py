@@ -15,18 +15,19 @@ Driven through the real catalog app on a real `dir` namespace, and each case rea
 disk, because a 400 that still committed the change would be the worst answer of all.
 """
 
-import io
 import json
 from typing import Any, Final
 
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.naming import UUID_PROPERTY
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 PK = {"lance-schema:unenforced-primary-key": "true"}
 DECLARED: Final = frozendict({b"lineage.dataset_id": b"m$t"})
 FORGED_UUID = "00000000-0000-4000-8000-000000000000"
@@ -43,13 +44,6 @@ SCHEMA = pa.schema(
 )
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
-
-
 def _rows(metadata: dict[bytes, bytes] | None = None) -> pa.Table:
     table = pa.table(
         {"id": [1, 2], "payload": ["a", "b"], "st": [{"k": 1}, {"k": 2}]},
@@ -63,7 +57,7 @@ def tier(real_ns_client: TestClient) -> tuple[TestClient, str]:
     """`m$t` created through the catalog, with the platform's own `lineage.dataset_id` written the way
     the cascade writes it: by pylance, not through a door."""
     assert real_ns_client.post("/v1/namespace/lance_catalog$m/create", json={}).status_code == 200
-    created = real_ns_client.post("/v1/table/lance_catalog$m$t/create?mode=create", content=_ipc(_rows()), headers=ARROW)
+    created = real_ns_client.post("/v1/table/lance_catalog$m$t/create?mode=create", content=encode_arrow_stream(_rows()), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
     lance.dataset(location).update_schema_metadata({k.decode(): v.decode() for k, v in DECLARED.items()})
@@ -82,8 +76,8 @@ CASES: dict[str, tuple[str, Any]] = {
     "rask.* in a create payload": ("create", _rows({b"rask.blob.external_base": b"s3://other/"})),
     "lineage.* in create properties": ("create?properties=" + json.dumps({"lineage.dataset_id": "lance_catalog$victim$payroll"}), _rows()),
     # [[LH-519]] The catalog mints a table's uuid and answers it as `rask.uuid`; no door takes one from a caller.
-    "rask.* in declare properties": ("/v1/table/lance_catalog$m$u/declare", {"properties": {"rask.uuid": FORGED_UUID}}),
-    "rask.* in register properties": ("/v1/table/lance_catalog$m$u/register", {"location": "elsewhere", "properties": {"rask.uuid": FORGED_UUID}}),
+    "rask.* in declare properties": ("/v1/table/lance_catalog$m$u/declare", {"properties": {UUID_PROPERTY: FORGED_UUID}}),
+    "rask.* in register properties": ("/v1/table/lance_catalog$m$u/register", {"location": "elsewhere", "properties": {UUID_PROPERTY: FORGED_UUID}}),
     "lineage.* in an insert overwrite payload": ("/v1/table/lance_catalog$m$t/insert?mode=overwrite", _rows({b"lineage.dataset_id": b"victim$payroll"})),
     # [[LH-242]] A create overwrite of an existing table is a new version of it, so it keeps the table's key.
     "a create overwrite without the primary key": ("/v1/table/lance_catalog$m$t/create?mode=overwrite", _rows().drop_columns(["id"])),
@@ -105,9 +99,9 @@ def test_a_writer_cannot_rewrite_a_tables_provenance(tier: tuple[TestClient, str
     before = lance.dataset(location)
 
     if door.startswith("create"):
-        response = client.post(f"/v1/table/lance_catalog$m$u/{door}", content=_ipc(body), headers=ARROW)
+        response = client.post(f"/v1/table/lance_catalog$m$u/{door}", content=encode_arrow_stream(body), headers=ARROW)
     elif isinstance(body, pa.Table):
-        response = client.post(door, content=_ipc(body), headers=ARROW)
+        response = client.post(door, content=encode_arrow_stream(body), headers=ARROW)
     else:
         response = client.post(door, json=body)
 
@@ -150,7 +144,7 @@ def test_an_overwrite_keeps_the_tables_provenance(tier: tuple[TestClient, str], 
         payload = payload.set_column(0, pa.field("id", pa.float64(), nullable=False), pa.array([1.0, 2.0]))
     before = _ref(location, branch).schema
 
-    response = client.post(f"/v1/table/lance_catalog$m$t/{door}?{query}", content=_ipc(payload), headers=ARROW)
+    response = client.post(f"/v1/table/lance_catalog$m$t/{door}?{query}", content=encode_arrow_stream(payload), headers=ARROW)
 
     assert response.status_code == 200, response.text
     after = _ref(location, branch)

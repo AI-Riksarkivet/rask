@@ -29,7 +29,6 @@ import pyarrow as pa
 import pytest
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest, DescribeTableRequest, RegisterTableRequest
-from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
 from lakehouse.lancekit.versions import committed_at
@@ -54,15 +53,6 @@ WAREHOUSE = "lance_catalog"
 TABLE = f"{WAREHOUSE}$db$räksmörgås"
 LOCATION = f"c0ffee00_{TABLE}"
 THRESHOLD = 3
-
-
-@pytest.fixture(scope="module")
-def moto_url() -> Iterator[str]:
-    server = ThreadedMotoServer(port=0)
-    server.start()
-    host, port = server.get_host_and_port()
-    yield f"http://{host}:{port}"
-    server.stop()
 
 
 @pytest.fixture

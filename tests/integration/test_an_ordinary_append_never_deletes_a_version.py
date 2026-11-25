@@ -16,21 +16,20 @@ table no door commits on, asked by maintenance's own client on main and on a bra
 naming the ref and the answer it reads are the catalog's own.
 """
 
-import io
 from typing import Literal
 
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials
 from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 TABLE = "lance_catalog$lh245$t"
 _SCHEMA = pa.schema([("id", pa.int64())])
 #: What an armed table carries: ``interval`` arms the hook, and ``older_than=0s`` with ``retain_versions=1``
@@ -42,15 +41,8 @@ def _rows(*ids: int) -> pa.Table:
     return pa.table({"id": pa.array(ids, pa.int64())}, schema=_SCHEMA)
 
 
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
-
-
 def _append(client: TestClient, marker: int) -> None:
-    response = client.post(f"/v1/table/{TABLE}/insert", content=_ipc(_rows(marker)), headers=ARROW)
+    response = client.post(f"/v1/table/{TABLE}/insert", content=encode_arrow_stream(_rows(marker)), headers=ARROW)
     assert response.status_code == 200, response.text
 
 
@@ -59,7 +51,7 @@ def test_door_commits_on_an_armed_table_keep_every_version(
     real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch, door: Literal["insert", "erasure", "maintenance/disarm"]
 ) -> None:
     assert real_ns_client.post("/v1/namespace/lance_catalog$lh245/create", json={}).status_code == 200
-    created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=_ipc(_rows(1)), headers=ARROW)
+    created = real_ns_client.post(f"/v1/table/{TABLE}/create", content=encode_arrow_stream(_rows(1)), headers=ARROW)
     assert created.status_code == 200, created.text
     location = str(created.json()["location"])
     _append(real_ns_client, 2)

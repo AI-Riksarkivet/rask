@@ -18,15 +18,13 @@ import asyncio
 from typing import Any, cast
 
 import pytest
-from catalog_settings import catalog_settings, governed_settings
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError, UnsupportedOperationError
 from openfga_sdk.client import OpenFgaClient
 
 from catalog.api.authz.context import AuthzContext
 from catalog.api.v1.endpoints import access
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
+from tests.callers import person
+from tests.catalog_settings import catalog_settings, governed_settings
 from tests.unit.named_resolver import NamedResolver, uuid_of
 
 
@@ -54,9 +52,7 @@ def _run(
     monkeypatch.setattr(access.fga_reads, "check_fga_user", fake_check)
     client = cast("OpenFgaClient", object())  # injected now (catalog-api-09); the fga.* module functions are faked below
     settings = governed_settings() if fga_enabled else catalog_settings()
-    token = (
-        PersonPrincipal(principal=Principal(idp_id="dex", subject=sub), claims=IDToken(iss="i", sub=sub, aud="lance", exp=1, iat=1)) if token_present else None
-    )
+    token = person(sub) if token_present else None
     resp = asyncio.run(
         access._my_permissions(AuthzContext(client=client, settings=settings, token=token), resolver=NamedResolver(), fga_type=fga_type, id=ident)
     )

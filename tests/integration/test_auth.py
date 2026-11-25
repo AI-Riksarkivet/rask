@@ -12,26 +12,25 @@ from lance_namespace import ListTablesResponse, UnauthenticatedError
 
 from catalog.api.dependencies import request_settings
 from catalog.core.config import Settings
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.oidc import IDToken
-from lakehouse.governed.principal import Principal
+from lakehouse.governed.idp_identity import IdpVerifier
+from lakehouse.governed.oidc import OIDCVerifier
 from tests.app_state import app_of
+from tests.callers import person
+from tests.catalog_settings import governed_settings
 
 
 def _enabled_settings() -> Settings:
-    # model_validate (not Settings(...)) so field-name keys validate cleanly: the
-    # fields carry LANCE_* aliases and populate_by_name accepts the names at runtime.
-    return Settings.model_validate(
-        {
-            "oidc_enabled": True,
-            "oidc_idp_id": "dex",
-            "oidc_connectors": {"local": "dex"},
-            "oidc_issuer": "https://idp.example",
-            "oidc_audience": "lance",
-            "s3_access_key_id": "x",
-            "s3_secret_access_key": "x",
-        }
-    )
+    """OIDC on and FGA off: what is under test is the authentication gate alone."""
+    return governed_settings(fga_enabled=False)
+
+
+def _verifier() -> IdpVerifier:
+    """The person verifier the catalog's lifespan builds from :func:`_enabled_settings`; it fetches no key until it is
+    asked to verify a token, which the tests holding it never do."""
+    settings = _enabled_settings()
+    providers = settings.oidc_person_providers
+    assert settings.oidc_audience is not None
+    return IdpVerifier(OIDCVerifier([provider.issuer for provider in providers], settings.oidc_audience, settings.oidc_cache_ttl), providers)
 
 
 @pytest.mark.parametrize(
@@ -45,7 +44,7 @@ def _enabled_settings() -> Settings:
 )
 def test_oidc_enabled_missing_token_is_401_problem_json(client: TestClient, method: str, path: str, body: bytes | None) -> None:
     app_of(client).dependency_overrides[request_settings] = _enabled_settings
-    app_of(client).state.oidc = MagicMock()  # a verifier is present
+    app_of(client).state.oidc = _verifier()
     resp = client.request(method, path, content=body, headers={"Content-Type": "application/json"} if body else {})
     assert resp.status_code == 401, resp.text
     assert resp.headers["content-type"].startswith("application/problem+json")
@@ -55,7 +54,7 @@ def test_oidc_enabled_missing_token_is_401_problem_json(client: TestClient, meth
 def test_oidc_enabled_valid_token_passes_through(client: TestClient, fake_ns: MagicMock) -> None:
     fake_ns.list_all_tables.return_value = ListTablesResponse(tables=[])
     verifier = MagicMock()
-    verifier.verify.return_value = PersonPrincipal(principal=Principal(idp_id="dex", subject="s"), claims=IDToken(iss="i", sub="s", aud="lance", exp=1, iat=1))
+    verifier.verify.return_value = person("s")
     app_of(client).dependency_overrides[request_settings] = _enabled_settings
     app_of(client).state.oidc = verifier
 
@@ -97,7 +96,7 @@ def test_oidc_verifier_failure_maps_to_401_problem_json(client: TestClient) -> N
 def test_oidc_enabled_empty_bearer_is_401(client: TestClient) -> None:
     """CONTRACT: an ``Authorization: Bearer`` header with no token value is unauthenticated."""
     app_of(client).dependency_overrides[request_settings] = _enabled_settings
-    app_of(client).state.oidc = MagicMock()
+    app_of(client).state.oidc = _verifier()
     resp = client.get("/v1/table", headers={"Authorization": "Bearer "})
     assert resp.status_code == 401
     assert resp.json()["code"] == 16

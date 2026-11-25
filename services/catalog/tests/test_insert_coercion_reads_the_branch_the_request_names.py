@@ -34,14 +34,11 @@ from tables_by_name import open_by_name
 from catalog.services.table_claims import DoorTable
 from catalog.services.tables.creation import create_table
 from catalog.services.tables.writes import coerce_insert_arrow, insert_into_table
+from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.records import base_registry
 from lakehouse.records.location_claims import ClaimStore
 from lakehouse.storage.options import StorageOptions
-from tests.door_tables import door_table
-
-
-#: The catalog's default body cap (LANCE_MAX_BODY_BYTES), far above every body here.
-_BODY_LIMIT = 256 * 1024 * 1024
+from tests.door_tables import BODY_LIMIT, door_table
 
 
 lance = pytest.importorskip("lance")
@@ -53,13 +50,6 @@ BRANCH = "work"
 
 #: The column that exists ONLY on the branch. The whole defect is whether a payload naming it survives.
 BRANCH_ONLY = "note"
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue().to_pybytes()
 
 
 @pytest.fixture
@@ -98,10 +88,10 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
 def test_a_branch_insert_lands_the_branch_only_column(ns, table: DoorTable) -> None:  # noqa: ANN001
     """The same defect seen end to end, so the fix is not a coercion-shaped local truth."""
     payload = pa.table({"id": pa.array([2], pa.int64()), "s": pa.array(["b"]), BRANCH_ONLY: pa.array(["keep me"])})
-    data = coerce_insert_arrow(table, StorageOptions(), _ipc(payload), branch=BRANCH, max_bytes=_BODY_LIMIT)
+    data = coerce_insert_arrow(table, StorageOptions(), encode_arrow_stream(payload), branch=BRANCH, max_bytes=BODY_LIMIT)
 
     insert_into_table(
-        table, StorageOptions(), InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), data=data, max_bytes=_BODY_LIMIT, transaction_properties={}
+        table, StorageOptions(), InsertIntoTableRequest(id=TABLE_ID, mode="append", branch=BRANCH), data=data, max_bytes=BODY_LIMIT, transaction_properties={}
     )
 
     written = open_by_name(ns, StorageOptions(), TABLE_ID, branch=BRANCH).to_table().to_pydict()

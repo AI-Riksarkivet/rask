@@ -24,26 +24,23 @@ import pytest
 
 from lineage.services.provenance import ProvenanceStore
 from tests.app_state import app_of
-from tests.integration.lineage_app import SUBJECT_HEADER, GraphBackend, ensure_tables, governed_lineage, graph_backend, live_catalog, relay_tick, run_event
+from tests.integration.lineage_app import (
+    SUBJECT_HEADER,
+    GraphBackend,
+    declared,
+    ensure_tables,
+    governed_lineage,
+    graph_backend,
+    live_catalog,
+    relay_tick,
+    run_event,
+)
 
 
 _TABLE = "lance_catalog$acme-silver$pages"
 _ALICE = "dex~alice"
 #: A client holding `event_reader`, which reads the event feed under its own service account.
 _READER = "kubernetes~system:serviceaccount:rask:rask-sa-a-notifier"
-
-
-def _declared(catalog_url: str, table: str) -> str:
-    """Declare ``table`` in the catalog at ``catalog_url`` and answer the uuid it minted, the object its grants are held by.
-
-    Lineage's HTTP door resolves each name an event names to that uuid as the caller, and checks the grants on it
-    ([[LH-524]]), so the table must exist for any event naming it to be admitted.
-    """
-    namespace = table.rsplit("$", 1)[0]
-    with httpx.Client(base_url=catalog_url, timeout=60) as catalog:
-        assert catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
-        assert catalog.post(f"/v1/table/{table}/declare", json={}).status_code == 200
-        return str(catalog.post(f"/v1/table/{table}/describe", json={}).json()["properties"]["rask.uuid"])
 
 
 class _EightDaysAgo(datetime):
@@ -68,7 +65,7 @@ def test_a_run_reaches_the_backend_once_across_an_outage_longer_than_the_feeds_r
     monkeypatch.setenv("LINEAGE_FORWARD_URL", url)
     run = run_event("1d3c5a07-0000-4000-8000-000000000592", "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=[_TABLE])
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
-        granted = {(_ALICE, "can_write_data", f"table:{_declared(catalog_url, _TABLE)}"), (_READER, "can_read_event_feed", "estate:rask")}
+        granted = {(_ALICE, "can_write_data", f"table:{declared(catalog_url, _TABLE)[_TABLE]}"), (_READER, "can_read_event_feed", "estate:rask")}
         with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
             with monkeypatch.context() as clock:
                 clock.setattr("lineage.services.provenance.datetime", _EightDaysAgo)
@@ -120,7 +117,7 @@ def test_a_feed_created_again_is_forwarded_from_its_first_row(tmp_path: Path, mo
     monkeypatch.setenv("LINEAGE_FORWARD_URL", url)
     first, as_many, more, refilled = _runs(0, 2), _runs(100, 2), _runs(200, 3), _runs(300, 1)
     with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url:
-        granted = {(_ALICE, "can_write_data", f"table:{_declared(catalog_url, _TABLE)}")}
+        granted = {(_ALICE, "can_write_data", f"table:{declared(catalog_url, _TABLE)[_TABLE]}")}
         with governed_lineage(catalog_url, monkeypatch, granted) as lineage:
 
             def post(runs: list[dict[str, Any]]) -> None:

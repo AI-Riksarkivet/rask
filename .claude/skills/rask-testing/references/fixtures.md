@@ -93,7 +93,8 @@ and 3.08 s with a 1 s cap).
 
 ## The catalog with authorization on
 
-Copy `services/catalog/tests/conftest.py::governed_catalog`. The app's own lifespan builds the deployed verifier
+Request `services/catalog/tests/conftest.py::governed_catalog` in a catalog test, or build one with
+`tests.governed_catalog.governed_catalog_app` beneath another conftest (`tests/integration/conftest.py`). The app's own lifespan builds the deployed verifier
 against the root conftest's `dex_issuer` and the deployed OpenFGA client against `openfga_store`
 (`RASK_FGA_STORE_ID` names it; the catalog finds its own model there), so nothing is overridden. `bearer("alice")` signs alice in
 through the `local` connector, mapped to idp `dex`, and `person("alice")` is the OpenFGA user her tuples name. Arrange
@@ -125,15 +126,15 @@ and `test_an_absent_object_is_not_found_rather_than_forbidden.py` are the exampl
 
 ## A moto server that pylance can reach
 
-Copy `tests/integration/test_moto_s3.py::moto_endpoint`. `moto.server.ThreadedMotoServer(port=0)`
-serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3://<bucket>` and
-`LANCE_S3_ENDPOINT=<url>` (the module's `_client` helper also pins `RASK_OIDC_ENABLED=false` and
+Request the root conftest's `moto_url`: a `moto.server.ThreadedMotoServer(port=0)` serving S3 over HTTP, one per
+module. The catalog is pointed at it with `LANCE_REST_ROOT=s3://<bucket>` and `LANCE_S3_ENDPOINT=<url>`
+(`tests/integration/test_moto_s3.py`, whose `_client` helper also pins `RASK_OIDC_ENABLED=false` and
 `RASK_FGA_ENABLED=false`).
 
 - `mock_aws()` is not enough here. It patches botocore, and Lance's and Arrow's native S3 clients
   never go through botocore.
-- The fixture is `scope="module"`: one server and one bucket per module. Each test isolates itself by
-  namespace name, not by bucket.
+- The fixture is `scope="module"`, and a second server would isolate nothing: moto's backends are process-global. A
+  module names its buckets uniquely, and each test isolates itself by namespace name.
 - Plain `lakehouse.storage`/boto3 code does not need the server. `with mock_aws():` plus a boto3 client that
   seeds the bucket is enough (`packages/lakehouse/tests/test_storage.py`).
 - To count what a door asks the store (how many listings of a table's `_versions/` an open costs), put
@@ -150,9 +151,9 @@ serves S3 over HTTP, and the catalog is pointed at it with `LANCE_REST_ROOT=s3:/
 
 ## A live uvicorn socket
 
-Use one when the claim is about the wire. The rask example is
-`tests/integration/test_a_catalog_reader_reads_a_whole_table_in_bounded_pages.py` (`uvicorn.Config(app, port=0, lifespan="on")` on a
-thread, with a bounded wait for `server.started`). Why it matters here: a query-model binding can pass under `TestClient` while a live uvicorn answers 422 on every
+Use one when the claim is about the wire: `tests.live_server.serve(app)` runs `app` under uvicorn on a thread, its
+lifespan run, and yields its base URL once it accepts connections; `loop_of(url)` is that server's event loop, for a
+coroutine run on the app's own loop (`tests/integration/lineage_app.py`'s ticks). Why it matters here: a query-model binding can pass under `TestClient` while a live uvicorn answers 422 on every
 call (measured on fastapi 0.140.13).
 
 ## NATS, locally, through Dagger

@@ -28,10 +28,10 @@ import pyarrow.fs as pafs
 import pytest
 from pydantic import SecretStr
 
-from catalog.core.config import Settings as CatalogSettings
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import s3_filesystem
+from tests.catalog_settings import catalog_settings
 
 
 def _lance(endpoint: str) -> str:
@@ -39,7 +39,7 @@ def _lance(endpoint: str) -> str:
 
 
 def _catalog(endpoint: str) -> str:
-    return CatalogSettings(LANCE_S3_ENDPOINT=endpoint, s3_access_key_id="k").namespace_properties()["storage.allow_http"]
+    return catalog_settings(LANCE_S3_ENDPOINT=endpoint).namespace_properties()["storage.allow_http"]
 
 
 _BUILDERS: dict[str, Callable[[str], str]] = {

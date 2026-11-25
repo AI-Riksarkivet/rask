@@ -36,7 +36,6 @@ from typing import Any, Final
 import httpx
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import (
@@ -49,6 +48,7 @@ from lance_namespace import (
     connect,
 )
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events import outbox
 from lakehouse.events.control_events import CONTROL_TOPIC
 from lakehouse.events.signing import SIGNATURE_FACET, RefusalReason, SignatureError, verify_control_signature, verify_signature
@@ -73,7 +73,7 @@ CATALOG_USER = "user:kubernetes~system%3Aserviceaccount%3Adefault%3Arask-sa-cata
 PERSON = "dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
 #: The OpenFGA user that person is.
 PERSON_USER = "user:dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
-ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW_STREAM = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 LINEAGE_TOPIC = "lineage.events.v1"
 #: The namespace the catalog keeps lineage's tables in, as the chart names it (`services.lineage.provenanceNamespace`).
 PROVENANCE = "lance_catalog$provenance"
@@ -99,11 +99,7 @@ class _Published:
 
 
 def _rows(count: int = 3) -> bytes:
-    sink = pa.BufferOutputStream()
-    table = pa.table({"id": pa.array(range(count), pa.int64())})
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return bytes(sink.getvalue().to_pybytes())
+    return encode_arrow_stream(pa.table({"id": pa.array(range(count), pa.int64())}))
 
 
 def _on(bus: BusDouble, topic: str) -> list[dict[str, Any]]:

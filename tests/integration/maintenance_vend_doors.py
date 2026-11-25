@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 from lakehouse.records import trash
 from lakehouse.records.trash import TrashKind
 from lakehouse.storage.options import StorageOptions
+from tests.vend_answers import vended
 
 
 #: Where maintenance is told the catalog's door is (`MAINTENANCE_CATALOG_URL`).
@@ -71,7 +72,7 @@ def maintain_tier_door(location_of: Callable[[str], str], *, catalog: TestClient
 
     def _vend(_request: httpx.Request, table: str) -> httpx.Response:
         location = location_of(unquote(table))
-        return httpx.Response(200, json={"mode": "direct", "credentials": {"storage_options": VENDED}, "location": location})
+        return httpx.Response(200, json=vended(VENDED, location=location))
 
     with respx.mock(assert_all_called=False) as router:
         router.post(url__regex=MAINTAIN_TIER_DOOR, params={"tier": "maintain"}, name="vend").mock(side_effect=_vend)
@@ -84,7 +85,7 @@ def maintain_tier_door(location_of: Callable[[str], str], *, catalog: TestClient
 #: A trash door's path, its record's kind and uuid named: `/management/v1/trash/{kind}/{uuid}[/<act>]`.
 _TRASH_DOOR = rf"^{CATALOG_URL}/management/v1/trash/(?P<kind>table|namespace)/(?P<uuid>[^/?]+)"
 #: The reclaim session's answer: the vend's pair, which deletes the record's bytes on moto.
-_RECLAIM_SESSION = {"mode": "direct", "credentials": {"storage_options": VENDED}}
+_RECLAIM_SESSION = vended(VENDED)
 
 
 def _kind(value: str) -> TrashKind:

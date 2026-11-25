@@ -10,32 +10,24 @@ The contract, in one line: **upsert, with ``null`` meaning DELETE this key** —
 that would drop the #21 ``lineage.*`` coordinates the caller never sees.
 """
 
-import io
-
 import lance
 import pyarrow as pa
-import pyarrow.ipc as ipc
 from fastapi.testclient import TestClient
 
 from catalog.core.lineage_metadata import build_lineage_metadata
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.lancekit.features import DATA_STORAGE_VERSION_KEY, STABLE_ROW_IDS_KEY
+from lakehouse.naming import UUID_PROPERTY
 
 
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
-
-
-def _ipc(table: pa.Table) -> bytes:
-    sink = io.BytesIO()
-    with ipc.new_stream(sink, table.schema) as writer:
-        writer.write_table(table)
-    return sink.getvalue()
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
 
 def _create(client: TestClient, table: str, *, stamp_lineage: bool = False) -> None:
     """Create ``m1$<table>`` through the catalog's own Arrow create path."""
     client.post("/v1/namespace/lance_catalog$m1/create", json={})
     rows = pa.table({"id": pa.array([1, 2], pa.int64())})
-    created = client.post(f"/v1/table/lance_catalog$m1${table}/create?mode=overwrite", content=_ipc(rows), headers=ARROW)
+    created = client.post(f"/v1/table/lance_catalog$m1${table}/create?mode=overwrite", content=encode_arrow_stream(rows), headers=ARROW)
     assert created.status_code == 200, created.text
     if stamp_lineage:
         # The SAME keys the create endpoint stamps when lineage emission is on (it is off by default in
@@ -99,7 +91,7 @@ def test_delete_does_not_drop_lineage_coordinates(real_ns_client: TestClient) ->
     assert resp.json() == {}  # the echo is filtered the same way the read twin is; direct map since A2
 
     on_disk = lance.dataset(_location(real_ns_client, "t3")).schema.metadata or {}
-    table_uuid = real_ns_client.post("/v1/table/lance_catalog$m1$t3/describe", json={}).json()["properties"]["rask.uuid"]
+    table_uuid = real_ns_client.post("/v1/table/lance_catalog$m1$t3/describe", json={}).json()["properties"][UUID_PROPERTY]
     assert on_disk.get(b"lineage.dataset_id") == table_uuid.encode(), on_disk
     assert on_disk.get(b"lineage.namespace") == b"m1", on_disk
 
@@ -110,7 +102,7 @@ def test_a_field_metadata_update_replaces_only_the_entries_that_ask(real_ns_clie
     and deletes the one it names with a null ([[LH-573]])."""
     real_ns_client.post("/v1/namespace/lance_catalog$m1/create", json={})
     rows = pa.table({"id": pa.array([1], pa.int64()), "v": ["a"]})
-    assert real_ns_client.post("/v1/table/lance_catalog$m1$t4/create", content=_ipc(rows), headers=ARROW).status_code == 200
+    assert real_ns_client.post("/v1/table/lance_catalog$m1$t4/create", content=encode_arrow_stream(rows), headers=ARROW).status_code == 200
     seeded = real_ns_client.post(
         "/v1/table/lance_catalog$m1$t4/update_field_metadata",
         json={"updates": [{"path": "id", "metadata": {"unit": "n", "note": "x"}}, {"path": "v", "metadata": {"desc": "text", "note": "x"}}]},

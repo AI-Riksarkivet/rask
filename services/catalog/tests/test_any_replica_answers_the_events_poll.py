@@ -23,9 +23,10 @@ from fastapi.testclient import TestClient
 from catalog.api.control_lane import TOPIC
 from catalog.api.control_relay import attach_published_keys
 from catalog.api.dependencies import request_settings
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import get_settings
 from lakehouse.governed.signing_key import signing_public_secret
 from tests.bus_double import BusDouble
+from tests.catalog_settings import catalog_settings
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -76,17 +77,13 @@ def estate(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: Sec
     monkeypatch.setenv("RASK_BUS_USER", "catalog")
     get_settings.cache_clear()
     signer = event_signer(CATALOG)
-    settings = Settings.model_validate(
-        {
-            "LANCE_S3_ACCESS_KEY_ID": "k",
-            "LANCE_S3_SECRET_ACCESS_KEY": "s",
-            "LANCE_CONTROL_EMIT_ENABLED": "true",
-            "LANCE_CONTROL_PAGE_SIZE": 4,
-            "RASK_SIGNATURE_DOORS": "enforce",
-            "RASK_EVENT_SIGNERS": [CATALOG],
-            "RASK_EVENT_DELEGATORS": [CATALOG],
-            "RASK_CONTROL_SIGNER_ROLES": {"catalog": [CATALOG]},
-        }
+    settings = catalog_settings(
+        LANCE_CONTROL_EMIT_ENABLED="true",
+        LANCE_CONTROL_PAGE_SIZE=4,
+        RASK_SIGNATURE_DOORS="enforce",
+        RASK_EVENT_SIGNERS=[CATALOG],
+        RASK_EVENT_DELEGATORS=[CATALOG],
+        RASK_CONTROL_SIGNER_ROLES={"catalog": [CATALOG]},
     )
     secret_store.hold(signing_public_secret(signer.identity), {"keys": signer.public})
     from catalog.api.v1.endpoints import events

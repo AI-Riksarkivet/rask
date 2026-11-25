@@ -6,13 +6,13 @@ in `docs/`, where decisions are recorded, and in a vendored upstream file is not
 lint leaves it out.
 """
 
-import importlib.util
-import sys
 from pathlib import Path
 from types import ModuleType
 from typing import Final
 
 import pytest
+
+from tests.script_module import script
 
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
@@ -31,14 +31,8 @@ _PLANTED: Final = frozendict(
 
 @pytest.fixture
 def lint(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    """`scripts/the_lakehouse_runs_no_dapr.py`, imported the way `python scripts/...` resolves its sibling `_files_under`."""
-    monkeypatch.syspath_prepend(str(_SCRIPTS))
-    spec = importlib.util.spec_from_file_location("the_lakehouse_runs_no_dapr", _SCRIPTS / "the_lakehouse_runs_no_dapr.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, spec.name, module)
-    spec.loader.exec_module(module)
-    return module
+    """`scripts/the_lakehouse_runs_no_dapr.py`."""
+    return script("the_lakehouse_runs_no_dapr", monkeypatch)
 
 
 def test_the_lint_reports_each_place_code_outside_its_guards_names_dapr(lint: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

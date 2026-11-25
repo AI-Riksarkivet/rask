@@ -35,13 +35,15 @@ from liveness import skip_unless_live
 from principals import DEX_CLIENT, DEX_SCOPE
 from topology import namespace_id
 
+from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+
 
 CATALOG = os.environ.get("LANCE_E2E_CATALOG_URL", "")
 LINEAGE = os.environ.get("LANCE_E2E_LINEAGE_URL", "")
 GREPTIME = os.environ.get("LANCE_E2E_GREPTIME_URL", "")
 DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 DEX_SECRET = credential(Credential.DEX_SECRET, "lance-catalog-secret")
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 #: The topic the catalog announces each commit on and lineage takes it from (`pubsub.topic`).
 LINEAGE_TOPIC = "lineage.events.v1"
 
@@ -130,12 +132,9 @@ def _create_table(table_id: str, namespace: str, auth: dict[str, str], trace_id:
     created = requests.post(f"{CATALOG}/v1/namespace/{namespace}/create", json={}, headers=auth, timeout=30)
     assert created.status_code == 200, created.text
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
-    sink = pa.BufferOutputStream()
-    with pa.ipc.new_stream(sink, rows.schema) as writer:
-        writer.write_table(rows)
     resp = requests.post(
         f"{CATALOG}/v1/table/{table_id}/create?mode=overwrite",
-        data=sink.getvalue().to_pybytes(),
+        data=encode_arrow_stream(rows),
         headers=ARROW | auth | {"traceparent": f"00-{trace_id}-{uuid.uuid4().hex[:16]}-01"},
         timeout=60,
     )
