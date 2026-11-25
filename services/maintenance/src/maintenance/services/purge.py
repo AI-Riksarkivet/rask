@@ -75,6 +75,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from lakehouse.events.control_emit import ControlEmitter, NoopControlEmitter, emit_control
 from lakehouse.events.control_events import ControlAction, ControlObjectType, ControlUuids
 from lakehouse.lancekit.base_refs import decoded_path, decoded_segments, location_within, names_a_location, store_of
+from lakehouse.lancekit.filters import lance_filter
 from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.records import trash, warehouse_records
 from lakehouse.records.base_registry import BaseRegistry, RecordedBase, UnreadableBaseRecordError
@@ -341,8 +342,8 @@ def manifest_rows_named(root: str, storage_options: StorageOptions, object_ids: 
     holds (one at 10, 50 and 150 tables) and builds no index on it, so the read costs the same few requests on any estate,
     and the filter keeps the rows decoded to those asked for.
     """
-    literals = ", ".join("'" + object_id.replace("'", "''") + "'" for object_id in object_ids)
-    return _manifest_rows(root, storage_options, where=f"object_id IN ({literals})")
+    ids = list(object_ids)
+    return _manifest_rows(root, storage_options, where=lance_filter(t"object_id IN ({ids})"))
 
 
 def _manifest_rows(root: str, storage_options: StorageOptions, *, where: str | None) -> list[dict[str, Any]] | None:

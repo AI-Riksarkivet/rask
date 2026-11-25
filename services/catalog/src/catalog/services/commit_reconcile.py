@@ -50,7 +50,7 @@ from lakehouse.governed import fga_ids
 from lakehouse.lancekit import auto_cleanup
 from lakehouse.lancekit.base_refs import decoded_path, key_uri, store_of
 from lakehouse.lancekit.features import flags_from_open_error
-from lakehouse.lancekit.filters import sql_literal
+from lakehouse.lancekit.filters import lance_filter
 from lakehouse.lancekit.lance_session import fresh_session, open_dataset
 from lakehouse.lancekit.manifest_names import committed_version
 from lakehouse.lancekit.transactions import read_transaction
@@ -161,8 +161,9 @@ class FeedReading:
     def _read(self, table_uuid: str | None) -> dict[str, frozenset[tuple[str, int]]]:
         """The commits the feed's rows inside the window announce, by table: of every table, or of ``table_uuid`` alone."""
         feed = open_dataset(self._location, storage_options=self._so.in_clear() or None, session=fresh_session())
-        received = f"received_at >= TIMESTAMP {sql_literal(self._since.strftime('%Y-%m-%d %H:%M:%S'))}"
-        rows = received if table_uuid is None else f"array_has(table_uuids, {sql_literal(table_uuid)}) AND {received}"
+        since = self._since.strftime("%Y-%m-%d %H:%M:%S")
+        received = t"received_at >= TIMESTAMP {since}"
+        rows = lance_filter(received if table_uuid is None else t"array_has(table_uuids, {table_uuid}) AND " + received)
         commits: defaultdict[str, set[tuple[str, int]]] = defaultdict(set)
         for batch in feed.to_batches(columns=["event", "table_uuids"], filter=rows):
             for text, named_tables in zip(batch.column("event").to_pylist(), batch.column("table_uuids").to_pylist(), strict=True):

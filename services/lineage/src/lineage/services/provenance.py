@@ -61,7 +61,7 @@ from lakehouse.events.lineage_events import LANCE_FACET, dataset_uuids
 from lakehouse.events.openlineage import BRANCH_IDENTIFIER, TERMINAL_STATES, ParentRunFacet
 from lakehouse.events.signing import SIGNATURE_FACET
 from lakehouse.governed.machine_identity import read_identity_token
-from lakehouse.lancekit.filters import in_lists, sql_literal
+from lakehouse.lancekit.filters import in_lists, lance_filter
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
 from lakehouse.process.own_threads import on_own_threads
 from lineage.core.config import LineageSettings
@@ -705,7 +705,7 @@ class ProvenanceStore:
 
     async def parked(self, run_id: str | None = None) -> list[ParkedDelivery]:
         """Each event a park kept, the ingest lane's or the outbox drain's ([[LH-148]]), of ``run_id`` or of every run."""
-        where = f"starts_with(outbox_key, {sql_literal(PARKED_KEY_PREFIX)})" + (f" AND run_id = {sql_literal(run_id)}" if run_id is not None else "")
+        where = lance_filter(t"starts_with(outbox_key, {PARKED_KEY_PREFIX})" + (t" AND run_id = {run_id}" if run_id is not None else t""))
         rows = await self._run(lambda: self._reader(REFUSALS).to_table(columns=["outbox_key", "run_id", "event"], filter=where))
         return [parked_delivery(row["outbox_key"], row["run_id"], json.loads(row["event"])) for row in rows.to_pylist()]
 
@@ -742,10 +742,12 @@ class ProvenanceStore:
         id plus one, and Lance evaluates a ``_rowid`` predicate in a delete as in a scan (measured on pylance 13.0.0).
         """
         cutoff = datetime.now(UTC) - timedelta(days=retention_days)
-        predicate = f"received_at < arrow_cast({sql_literal(cutoff.isoformat(timespec='microseconds'))}, 'Timestamp(Microsecond, Some(\"UTC\"))')"
+        received = cutoff.isoformat(timespec="microseconds")
+        predicate = t"received_at < arrow_cast({received}, 'Timestamp(Microsecond, Some(\"UTC\"))')"
         if delivered_through is not None:
-            predicate = f"{predicate} AND _rowid < {int(delivered_through)}"
-        return await self._run(lambda: self._prune(predicate))
+            predicate += t" AND _rowid < {delivered_through}"
+        where = lance_filter(predicate)
+        return await self._run(lambda: self._prune(where))
 
     def _prune(self, predicate: str) -> int:
         doomed = self._reader(FEED).count_rows(predicate)
@@ -773,7 +775,7 @@ class ProvenanceStore:
 
     async def recorded_event(self, key: str) -> dict[str, Any] | None:
         """The payload the feed holds under the row key ``key`` (:func:`feed_key`); ``None`` when it holds none."""
-        rows = await self._run(lambda: self._reader(FEED).to_table(columns=["event"], filter=f"event_key = {sql_literal(key)}"))
+        rows = await self._run(lambda: self._reader(FEED).to_table(columns=["event"], filter=lance_filter(t"event_key = {key}")))
         first = next(iter(rows.column("event").to_pylist()), None)
         stored = json.loads(first) if first else None
         return stored if isinstance(stored, dict) else None
@@ -806,7 +808,7 @@ class ProvenanceStore:
 
     async def cursor(self, follower: str) -> int:
         """The seq of the last feed row ``follower`` handled; 0 before its first."""
-        rows = await self._run(lambda: self._reader(CURSORS).to_table(columns=["seq"], filter=f"follower = {sql_literal(follower)}"))
+        rows = await self._run(lambda: self._reader(CURSORS).to_table(columns=["seq"], filter=lance_filter(t"follower = {follower}")))
         return max(rows.column("seq").to_pylist(), default=0)
 
     async def advance_cursor(self, follower: str, seq: int) -> None:
@@ -852,7 +854,7 @@ class ProvenanceStore:
 
     async def run_author(self, run_id: str) -> str | None:
         """The verified author sub the run is bound to, or ``None`` when no event of it was recorded or its first named none."""
-        rows = await self._run(lambda: self._reader(RUNS).to_table(columns=["author"], filter=f"run_id = {sql_literal(run_id)}"))
+        rows = await self._run(lambda: self._reader(RUNS).to_table(columns=["author"], filter=lance_filter(t"run_id = {run_id}")))
         return next((author for author in rows.column("author").to_pylist() if author), None)
 
 
@@ -990,7 +992,7 @@ class FeedWindow:
 
     def _held_outside(self, lo: int, hi: int) -> bool:
         """Whether the feed holds a row outside ``[lo, hi]``: a count on row ids alone, which reads no data file."""
-        return bool(self._reader.count_rows(f"_rowid < {lo} OR _rowid > {hi}", version=self._version))
+        return bool(self._reader.count_rows(lance_filter(t"_rowid < {lo} OR _rowid > {hi}"), version=self._version))
 
     def _take(self, n: int) -> list[EventRecord]:
         width = n - len(self._buffer)
@@ -1002,7 +1004,7 @@ class FeedWindow:
                 lo, hi = max(self._low, self._high - width + 1), self._high
                 self._high = lo - 1
             rows = self._reader.to_table(
-                columns=self._columns, filter=f"_rowid >= {lo} AND _rowid <= {hi}", limit=hi - lo + 1, with_row_id=True, version=self._version
+                columns=self._columns, filter=lance_filter(t"_rowid >= {lo} AND _rowid <= {hi}"), limit=hi - lo + 1, with_row_id=True, version=self._version
             )
             records = sorted((_record_of(row, summary=self._summary) for row in rows.to_pylist()), key=lambda record: record.seq, reverse=not self._forward)
             self._buffer.extend(records)
