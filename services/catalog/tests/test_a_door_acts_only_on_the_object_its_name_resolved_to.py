@@ -27,7 +27,7 @@ Every decision is the real model's, on a store of this test's own ([[LH-235]]); 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import lance
 import pyarrow as pa
@@ -114,7 +114,7 @@ _DOORS = [
 #: The rivals beside a destroying drop and a create landing after authorization, which every door is driven against: two
 #: that leave a table at the location the door resolved, each on a door acting through a handle there and on a native
 #: read, and a drop and a create landing as the door makes its native write, on one door making one.
-_RIVALS = {"recoverable-drop": {"insert", "query"}, "re-register": {"insert", "list-versions"}, "drop-at-the-native-write": {"drop-index"}}
+_RIVALS: Final = frozendict({"recoverable-drop": {"insert", "query"}, "re-register": {"insert", "list-versions"}, "drop-at-the-native-write": {"drop-index"}})
 
 #: Where the estate registers `lance_catalog$db$t` for the re-register rival, beneath the namespace root.
 _HELD = "held"

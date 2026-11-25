@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import Final
 
 import httpx
 import pyarrow as pa
@@ -143,12 +144,14 @@ def _rows() -> bytes:
 
 
 #: The run a write under the rule names (ADR 0156 C2): an input the writer may read, at a version.
-_RUN = {
-    "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
-    "x-rask-job-namespace": "pipelines",
-    "x-rask-job": "nightly",
-    "x-rask-inputs": json.dumps([{"table": [WAREHOUSE, "src", "a"], "version": 1}]),
-}
+_RUN: Final = frozendict(
+    {
+        "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07",
+        "x-rask-job-namespace": "pipelines",
+        "x-rask-job": "nightly",
+        "x-rask-inputs": json.dumps([{"table": [WAREHOUSE, "src", "a"], "version": 1}]),
+    }
+)
 
 
 def test_a_write_names_its_run_where_a_namespace_above_it_requires_one(grants: GovernedCatalog, caplog: pytest.LogCaptureFixture) -> None:

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import StrEnum
+from typing import Final
 
 import pytest
 from lance_namespace import ErrorCode, InvalidInputError
@@ -22,13 +23,15 @@ from catalog.core.modes import CreateMode, DropBehavior, DropMode, InsertMode, R
 
 #: Each closed vocabulary with its parser. A map rather than ``vocabulary.parse`` because ``StrEnum``
 #: itself declares no ``parse``, and the typed callable is what lets one test body serve every set.
-_PARSERS: dict[type[StrEnum], Callable[[str | None], StrEnum]] = {
-    CreateMode: CreateMode.parse,
-    RegisterMode: RegisterMode.parse,
-    InsertMode: InsertMode.parse,
-    DropMode: DropMode.parse,
-    DropBehavior: DropBehavior.parse,
-}
+_PARSERS: Final[frozendict[type[StrEnum], Callable[[str | None], StrEnum]]] = frozendict(
+    {
+        CreateMode: CreateMode.parse,
+        RegisterMode: RegisterMode.parse,
+        InsertMode: InsertMode.parse,
+        DropMode: DropMode.parse,
+        DropBehavior: DropBehavior.parse,
+    }
+)
 
 
 def _pascal(member: StrEnum) -> str:

@@ -94,10 +94,12 @@ _WRITES = ("kv put ", "kv metadata delete ", "auth ", "write ", "delete ", "poli
 
 #: What ESO's Password generators write, one Secret each (templates/external-secrets.yaml, `lance.devCredentials`), and the
 #: store secret each lands in: the store's root at a path of its own, which no service's store policy names (ADR 0168).
-_GENERATED = {
-    "object-store-secret-key": ("secret/object-store-root", "object-store-secret-key"),
-    "postgres-password": ("secret/postgres", "password"),
-}
+_GENERATED: Final = frozendict(
+    {
+        "object-store-secret-key": ("secret/object-store-root", "object-store-secret-key"),
+        "postgres-password": ("secret/postgres", "password"),
+    }
+)
 
 #: What the stand-in store answers an init with, and the administrator token id the fixture generates: none may reach an
 #: argument list or an output stream.

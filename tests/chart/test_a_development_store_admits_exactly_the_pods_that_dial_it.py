@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import re
+from typing import Final
 
 import pytest
 from pydantic import BaseModel, ConfigDict
@@ -35,7 +36,9 @@ _DEPLOYED: tuple[str, ...] = (
 #: The fixtures a development estate installs into the release's namespace, each with the values that run all its pods
 #: (the bus in operator mode runs its stand-in signer): their pods are governed by the chart's policies as the release's
 #: own are.
-_NAMESPACE_FIXTURES: dict[str, tuple[str, ...]] = {"dex": (), "marquez": (), "nats": ("--set", "nats.auth.server=true"), "openbao": (), "rustfs": ()}
+_NAMESPACE_FIXTURES: Final[frozendict[str, tuple[str, ...]]] = frozendict(
+    {"dex": (), "marquez": (), "nats": ("--set", "nats.auth.server=true"), "openbao": (), "rustfs": ()}
+)
 
 #: The cluster-routes port of the bus fixture's servers (the upstream nats chart's default).
 _CLUSTER_PORT = 6222

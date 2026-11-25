@@ -12,12 +12,13 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
 import yaml
 from chart_render import PROD_ARGS, REPO, containers, render_chart_text
 
 
-DIGESTS = {"lance-rest-catalog": "sha256:" + "ab" * 32, "web-console": "sha256:" + "cd" * 32}
+DIGESTS: Final = frozendict({"lance-rest-catalog": "sha256:" + "ab" * 32, "web-console": "sha256:" + "cd" * 32})
 REGISTRY = "ghcr.io/ai-riksarkivet"
 
 

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from typing import Final
 
 import pytest
 
@@ -18,7 +19,7 @@ from tests.chart.chart_render import REPO, containers, env_of, render, render_ch
 
 
 _BASE = ("--set", "image.localImages=true")
-_LEASE_UNIT_SECONDS = {"s": 1, "m": 60, "h": 3600}
+_LEASE_UNIT_SECONDS: Final = frozendict({"s": 1, "m": 60, "h": 3600})
 
 
 def test_the_default_lane_outlasts_the_lease_and_the_key_re_read() -> None:

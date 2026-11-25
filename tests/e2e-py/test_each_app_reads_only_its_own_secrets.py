@@ -29,17 +29,21 @@ pytestmark = pytest.mark.e2e
 #: app -> (a secret its own login reads, a field of it, a secret it may not read). No app holds a store pair (ADR 0170): a
 #: signer's own read is its signing key, and lineage, which signs nothing, reads the key it verifies the catalog by and
 #: is refused the catalog's private one.
-OWN_READS: Final[dict[str, tuple[str, str, str]]] = {
-    "catalog": ("signing-key-rask-sa-catalog", "seed", "signing-key-rask-sa-maintenance"),
-    "lineage": ("signing-public-rask-sa-catalog", "keys", "signing-key-rask-sa-catalog"),
-    "maintenance": ("signing-key-rask-sa-maintenance", "seed", "signing-key-rask-sa-catalog"),
-}
+OWN_READS: Final[frozendict[str, tuple[str, str, str]]] = frozendict(
+    {
+        "catalog": ("signing-key-rask-sa-catalog", "seed", "signing-key-rask-sa-maintenance"),
+        "lineage": ("signing-public-rask-sa-catalog", "keys", "signing-key-rask-sa-catalog"),
+        "maintenance": ("signing-key-rask-sa-maintenance", "seed", "signing-key-rask-sa-catalog"),
+    }
+)
 
 #: The apps that sign, each the only reader of its own signing key in the store.
 SIGNERS: Final = ("catalog", "maintenance")
 
 #: app -> the release's Deployment that runs its process. Maintenance's one process is its worker.
-DEPLOYMENTS: Final = {"catalog": f"{chaos.RELEASE}-catalog", "lineage": f"{chaos.RELEASE}-lineage", "maintenance": f"{chaos.RELEASE}-maintenance-worker"}
+DEPLOYMENTS: Final = frozendict(
+    {"catalog": f"{chaos.RELEASE}-catalog", "lineage": f"{chaos.RELEASE}-lineage", "maintenance": f"{chaos.RELEASE}-maintenance-worker"}
+)
 
 #: Reads each named secret as the pod's own process does, and prints, per secret, the FIELD NAMES the store gave it.
 _READ_AS_THE_APP: Final = """\

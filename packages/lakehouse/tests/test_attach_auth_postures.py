@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, Final
 
 import pytest
 from fastapi import FastAPI
@@ -40,17 +40,19 @@ class _ServiceSettings(GovernedAuthSettings, BaseSettings):
 
 
 #: A person issuer reached in-cluster at its own discovery URL, and the OpenFGA the store is looked up on.
-_GOVERNED: dict[str, Any] = {
-    "oidc_enabled": True,
-    "oidc_issuer": "https://issuer.test",
-    "oidc_audience": "rask",
-    "oidc_discovery_url": "http://dex.internal/dex",
-    "oidc_leeway": 30,
-    "oidc_idp_id": "dex",
-    "oidc_connectors": {"local": "dex"},
-    "fga_enabled": True,
-    "fga_api_url": "http://fga.test:8080",
-}
+_GOVERNED: Final[frozendict[str, Any]] = frozendict(
+    {
+        "oidc_enabled": True,
+        "oidc_issuer": "https://issuer.test",
+        "oidc_audience": "rask",
+        "oidc_discovery_url": "http://dex.internal/dex",
+        "oidc_leeway": 30,
+        "oidc_idp_id": "dex",
+        "oidc_connectors": {"local": "dex"},
+        "fga_enabled": True,
+        "fga_api_url": "http://fga.test:8080",
+    }
+)
 
 
 def _settings(**fields: Any) -> _ServiceSettings:

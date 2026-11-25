@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Final
 
 import boto3
 import pytest
@@ -48,7 +49,7 @@ def test_a_listing_names_every_object_beneath_its_location(location: str, listed
 
 
 #: The per-key error the failing store answers a batch delete that names the key.
-_PER_KEY_ERRORS = {b"busy": b"SlowDown", b"denied": b"AccessDenied"}
+_PER_KEY_ERRORS: Final = frozendict({b"busy": b"SlowDown", b"denied": b"AccessDenied"})
 
 
 class _FailingStore(BaseHTTPRequestHandler):

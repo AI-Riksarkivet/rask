@@ -29,6 +29,7 @@ from collections.abc import Awaitable, Callable, Iterator
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Final
 
 import jwt
 import pytest
@@ -82,10 +83,12 @@ async def _lineage(request: Request, issuer: str, bearer: str) -> object:
     return lineage_security.authenticate(request, settings, _credentials(bearer))
 
 
-DOORS: dict[str, _Door] = {
-    "catalog-authenticate": _catalog,
-    "lineage-authenticate": _lineage,
-}
+DOORS: Final[frozendict[str, _Door]] = frozendict(
+    {
+        "catalog-authenticate": _catalog,
+        "lineage-authenticate": _lineage,
+    }
+)
 
 
 class _Fault(StrEnum):
@@ -96,10 +99,12 @@ class _Fault(StrEnum):
 
 
 #: The warning each fault's raise site logs.
-LOGGED_AS: dict[_Fault, str] = {
-    _Fault.DISCOVERY_UNREACHABLE: "oidc_discovery_unreachable",
-    _Fault.KEY_SET_UNREACHABLE: "oidc_jwks_unreachable",
-}
+LOGGED_AS: Final[frozendict[_Fault, str]] = frozendict(
+    {
+        _Fault.DISCOVERY_UNREACHABLE: "oidc_discovery_unreachable",
+        _Fault.KEY_SET_UNREACHABLE: "oidc_jwks_unreachable",
+    }
+)
 
 
 class _BrokenProvider(BaseModel):

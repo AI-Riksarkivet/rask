@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Final
 
 import lance_namespace
 import pytest
@@ -130,94 +130,104 @@ class Door(BaseModel):
     setup: str | None = None
 
 
-_SETUPS: dict[str, Callable[[Estate, pytest.MonkeyPatch], None]] = {"drop_table": _drop_table, "drop_sub": _drop_sub, "tag": _tag, "project": _project}
+_SETUPS: Final[frozendict[str, Callable[[Estate, pytest.MonkeyPatch], None]]] = frozendict(
+    {"drop_table": _drop_table, "drop_sub": _drop_sub, "tag": _tag, "project": _project}
+)
 
-_DOORS = {
-    "describe-is-a-reader-read": Door(path=f"/v1/table/{TABLE}/describe", body={"vend_credentials": False}, rung="reader", below=None),
-    # Past the gate, the blob door refuses a column that holds no blobs: the answer of a reader, not of a refused caller.
-    "a-blob-read-is-a-data-read": Door(
-        method="get", path=f"/management/v1/table/{TABLE}/blobs", params={"column": "id", "row": 0}, rung="reader", below=None, answers=400
-    ),
-    "update-is-a-writer-write": Door(path=f"/v1/table/{TABLE}/update", body={"predicate": "id = 1", "updates": [["id", "3"]]}, rung="writer", below="reader"),
-    "rename-is-the-owners": Door(path=f"/v1/table/{TABLE}/rename", body={"new_table_name": "u2"}, rung="owner", below="writer", also=(("writer", NS),)),
-    "drop-is-the-owners": Door(path=f"/v1/table/{TABLE}/drop", body={}, rung="owner", below="writer"),
-    "deregister-is-the-owners": Door(path=f"/v1/table/{TABLE}/deregister", body={}, rung="owner", below="writer"),
-    "restore-is-the-owners": Door(path=f"/v1/table/{TABLE}/restore", body={"version": 1}, rung="owner", below="writer"),
-    "a-branch-is-the-owners": Door(path=f"/v1/table/{TABLE}/branches/create", body={"name": "exp"}, rung="owner", below="writer"),
-    # A tag is a named pointer, so its owner or a tagger moves it (`can_create_tag: owner_effective or tagger_effective`):
-    # the tagger rung, which nothing below the owner implies, opens it and a writer is refused.
-    "a-tag-is-a-taggers": Door(path=f"/v1/table/{TABLE}/tags/create", body={"tag": "v1", "version": 1}, rung="tagger", below="writer"),
-    "a-tag-moved-is-a-taggers": Door(path=f"/v1/table/{TABLE}/tags/update", body={"tag": "v1", "version": 1}, rung="tagger", below="writer", setup="tag"),
-    "an-encoded-hash-keeps-the-drop-the-owners": Door(path="/v1/table/lance_catalog$db1$us%23ers/drop", body={}, rung="owner", below="writer", on=(HASHED,)),
-    "an-encoded-hash-keeps-the-deregister-the-owners": Door(
-        path="/v1/table/lance_catalog$db1$us%23ers/deregister", body={}, rung="owner", below="writer", on=(HASHED,)
-    ),
-    "an-encoded-question-mark-keeps-the-drop-the-owners": Door(
-        path="/v1/table/lance_catalog$db1$us%3Fers/drop", body={}, rung="owner", below="writer", on=(QUESTIONED,)
-    ),
-    "an-encoded-question-mark-keeps-the-deregister-the-owners": Door(
-        path="/v1/table/lance_catalog$db1$us%3Fers/deregister", body={}, rung="owner", below="writer", on=(QUESTIONED,)
-    ),
-    "a-table-policy-is-the-owners": Door(path=f"/management/v1/table/{TABLE}/policy/set", body={"retention_days": 7}, rung="owner", below="writer"),
-    "a-table-policy-is-read-by-a-reader": Door(path=f"/management/v1/table/{TABLE}/policy/describe", rung="reader", below=None),
-    "a-table-review-is-the-owners": Door(path=f"/management/v1/table/{TABLE}/access/list", rung="owner", below="writer"),
-    "a-table-deadline-is-a-metadata-read": Door(method="get", path=f"/management/v1/table/{TABLE}/tasks", rung="reader", below=None),
-    "a-table-undrop-is-the-drops-rung": Door(path=f"/management/v1/table/{TABLE}/undrop", rung="owner", below="writer", setup="drop_table"),
-    "a-namespace-drop-is-the-owners": Door(path=f"/v1/namespace/{SUB}/drop", body={}, rung="owner", below="writer", on=(SUB,)),
-    "a-namespace-policy-is-the-owners": Door(
-        path=f"/management/v1/namespace/{SUB}/policy/set", body={"retain_versions": 5}, rung="owner", below="writer", on=(SUB,)
-    ),
-    "a-namespace-review-is-the-owners": Door(path=f"/management/v1/namespace/{SUB}/access/list", rung="owner", below="writer", on=(SUB,)),
-    "a-namespace-deadline-is-a-metadata-read": Door(method="get", path=f"/management/v1/namespace/{SUB}/tasks", rung="reader", below=None, on=(SUB,)),
-    "a-namespace-undrop-is-the-drops-rung": Door(path=f"/management/v1/namespace/{SUB}/undrop", rung="owner", below="writer", on=(SUB,), setup="drop_sub"),
-    "a-create-is-judged-on-its-parent": Door(path="/v1/table/lance_catalog$db1$fresh/create", arrow=True, rung="writer", below="reader", on=(NS,)),
-    "a-declare-is-judged-on-its-parent": Door(path="/v1/table/lance_catalog$db1$fresh/declare", body={}, rung="writer", below="reader", on=(NS,)),
-    "an-overwrite-of-a-standing-table-is-its-owners": Door(
-        path=f"/v1/table/{TABLE}/create", params={"mode": "overwrite"}, arrow=True, rung="owner", below="writer", also=(("writer", NS),)
-    ),
-    "a-view-is-judged-on-its-parent": Door(
-        path="/v1/materialized_view/lance_catalog$db1$mv/create",
-        body={"kind": "query", "source_query": "select 1", "output_schema": "{}"},
-        rung="writer",
-        below="reader",
-        on=(NS,),
-        answers=406,
-    ),
-    "a-view-refresh-is-its-refreshers": Door(
-        path="/v1/materialized_view/lance_catalog$db1$mv/refresh", rung="refresher", below="reader", on=(VIEW,), answers=406
-    ),
-    "a-batch-commit-judges-every-table-it-names": Door(
-        path="/v1/table/batch-commit",
-        body={"operations": [{"create_table_version": {"id": t.split("$"), "version": 2, "manifest_path": "_versions/2.manifest"}} for t in (TABLE, OTHER)]},
-        rung="writer",
-        below="reader",
-        on=(OTHER,),
-        also=(("writer", TABLE),),
-        answers=406,
-    ),
-    "a-batch-deregister-is-its-doors-owner-rung": Door(
-        path="/v1/table/batch-commit", body={"operations": [{"deregister_table": {"id": TABLE.split("$")}}]}, rung="owner", below="writer", answers=406
-    ),
-    "a-batch-of-versions-is-a-writer-write": Door(
-        path="/v1/table/version/batch-create",
-        body={"entries": [{"id": TABLE.split("$"), "version": 2, "manifest_path": "_versions/2.manifest"}]},
-        rung="writer",
-        below="reader",
-        answers=406,
-    ),
-    "a-project-policy-is-its-admins": Door(
-        path="/management/v1/project/acme/policy/set", body={"retention_days": 90}, rung="admin", below="member", on=(PROJECT,), setup="project"
-    ),
-    "a-project-policy-is-read-by-its-admins": Door(
-        path="/management/v1/project/acme/policy/describe", rung="admin", below="member", on=(PROJECT,), setup="project"
-    ),
-    "a-project-policy-is-ended-by-its-admins": Door(
-        path="/management/v1/project/acme/policy/delete", rung="admin", below="member", on=(PROJECT,), setup="project"
-    ),
-    "a-projects-policies-are-listed-to-its-admins": Door(
-        method="get", path="/management/v1/projects/acme/policies", rung="admin", below="member", on=(PROJECT,), setup="project"
-    ),
-}
+_DOORS: Final = frozendict(
+    {
+        "describe-is-a-reader-read": Door(path=f"/v1/table/{TABLE}/describe", body={"vend_credentials": False}, rung="reader", below=None),
+        # Past the gate, the blob door refuses a column that holds no blobs: the answer of a reader, not of a refused caller.
+        "a-blob-read-is-a-data-read": Door(
+            method="get", path=f"/management/v1/table/{TABLE}/blobs", params={"column": "id", "row": 0}, rung="reader", below=None, answers=400
+        ),
+        "update-is-a-writer-write": Door(
+            path=f"/v1/table/{TABLE}/update", body={"predicate": "id = 1", "updates": [["id", "3"]]}, rung="writer", below="reader"
+        ),
+        "rename-is-the-owners": Door(path=f"/v1/table/{TABLE}/rename", body={"new_table_name": "u2"}, rung="owner", below="writer", also=(("writer", NS),)),
+        "drop-is-the-owners": Door(path=f"/v1/table/{TABLE}/drop", body={}, rung="owner", below="writer"),
+        "deregister-is-the-owners": Door(path=f"/v1/table/{TABLE}/deregister", body={}, rung="owner", below="writer"),
+        "restore-is-the-owners": Door(path=f"/v1/table/{TABLE}/restore", body={"version": 1}, rung="owner", below="writer"),
+        "a-branch-is-the-owners": Door(path=f"/v1/table/{TABLE}/branches/create", body={"name": "exp"}, rung="owner", below="writer"),
+        # A tag is a named pointer, so its owner or a tagger moves it (`can_create_tag: owner_effective or tagger_effective`):
+        # the tagger rung, which nothing below the owner implies, opens it and a writer is refused.
+        "a-tag-is-a-taggers": Door(path=f"/v1/table/{TABLE}/tags/create", body={"tag": "v1", "version": 1}, rung="tagger", below="writer"),
+        "a-tag-moved-is-a-taggers": Door(path=f"/v1/table/{TABLE}/tags/update", body={"tag": "v1", "version": 1}, rung="tagger", below="writer", setup="tag"),
+        "an-encoded-hash-keeps-the-drop-the-owners": Door(
+            path="/v1/table/lance_catalog$db1$us%23ers/drop", body={}, rung="owner", below="writer", on=(HASHED,)
+        ),
+        "an-encoded-hash-keeps-the-deregister-the-owners": Door(
+            path="/v1/table/lance_catalog$db1$us%23ers/deregister", body={}, rung="owner", below="writer", on=(HASHED,)
+        ),
+        "an-encoded-question-mark-keeps-the-drop-the-owners": Door(
+            path="/v1/table/lance_catalog$db1$us%3Fers/drop", body={}, rung="owner", below="writer", on=(QUESTIONED,)
+        ),
+        "an-encoded-question-mark-keeps-the-deregister-the-owners": Door(
+            path="/v1/table/lance_catalog$db1$us%3Fers/deregister", body={}, rung="owner", below="writer", on=(QUESTIONED,)
+        ),
+        "a-table-policy-is-the-owners": Door(path=f"/management/v1/table/{TABLE}/policy/set", body={"retention_days": 7}, rung="owner", below="writer"),
+        "a-table-policy-is-read-by-a-reader": Door(path=f"/management/v1/table/{TABLE}/policy/describe", rung="reader", below=None),
+        "a-table-review-is-the-owners": Door(path=f"/management/v1/table/{TABLE}/access/list", rung="owner", below="writer"),
+        "a-table-deadline-is-a-metadata-read": Door(method="get", path=f"/management/v1/table/{TABLE}/tasks", rung="reader", below=None),
+        "a-table-undrop-is-the-drops-rung": Door(path=f"/management/v1/table/{TABLE}/undrop", rung="owner", below="writer", setup="drop_table"),
+        "a-namespace-drop-is-the-owners": Door(path=f"/v1/namespace/{SUB}/drop", body={}, rung="owner", below="writer", on=(SUB,)),
+        "a-namespace-policy-is-the-owners": Door(
+            path=f"/management/v1/namespace/{SUB}/policy/set", body={"retain_versions": 5}, rung="owner", below="writer", on=(SUB,)
+        ),
+        "a-namespace-review-is-the-owners": Door(path=f"/management/v1/namespace/{SUB}/access/list", rung="owner", below="writer", on=(SUB,)),
+        "a-namespace-deadline-is-a-metadata-read": Door(method="get", path=f"/management/v1/namespace/{SUB}/tasks", rung="reader", below=None, on=(SUB,)),
+        "a-namespace-undrop-is-the-drops-rung": Door(path=f"/management/v1/namespace/{SUB}/undrop", rung="owner", below="writer", on=(SUB,), setup="drop_sub"),
+        "a-create-is-judged-on-its-parent": Door(path="/v1/table/lance_catalog$db1$fresh/create", arrow=True, rung="writer", below="reader", on=(NS,)),
+        "a-declare-is-judged-on-its-parent": Door(path="/v1/table/lance_catalog$db1$fresh/declare", body={}, rung="writer", below="reader", on=(NS,)),
+        "an-overwrite-of-a-standing-table-is-its-owners": Door(
+            path=f"/v1/table/{TABLE}/create", params={"mode": "overwrite"}, arrow=True, rung="owner", below="writer", also=(("writer", NS),)
+        ),
+        "a-view-is-judged-on-its-parent": Door(
+            path="/v1/materialized_view/lance_catalog$db1$mv/create",
+            body={"kind": "query", "source_query": "select 1", "output_schema": "{}"},
+            rung="writer",
+            below="reader",
+            on=(NS,),
+            answers=406,
+        ),
+        "a-view-refresh-is-its-refreshers": Door(
+            path="/v1/materialized_view/lance_catalog$db1$mv/refresh", rung="refresher", below="reader", on=(VIEW,), answers=406
+        ),
+        "a-batch-commit-judges-every-table-it-names": Door(
+            path="/v1/table/batch-commit",
+            body={
+                "operations": [{"create_table_version": {"id": t.split("$"), "version": 2, "manifest_path": "_versions/2.manifest"}} for t in (TABLE, OTHER)]
+            },
+            rung="writer",
+            below="reader",
+            on=(OTHER,),
+            also=(("writer", TABLE),),
+            answers=406,
+        ),
+        "a-batch-deregister-is-its-doors-owner-rung": Door(
+            path="/v1/table/batch-commit", body={"operations": [{"deregister_table": {"id": TABLE.split("$")}}]}, rung="owner", below="writer", answers=406
+        ),
+        "a-batch-of-versions-is-a-writer-write": Door(
+            path="/v1/table/version/batch-create",
+            body={"entries": [{"id": TABLE.split("$"), "version": 2, "manifest_path": "_versions/2.manifest"}]},
+            rung="writer",
+            below="reader",
+            answers=406,
+        ),
+        "a-project-policy-is-its-admins": Door(
+            path="/management/v1/project/acme/policy/set", body={"retention_days": 90}, rung="admin", below="member", on=(PROJECT,), setup="project"
+        ),
+        "a-project-policy-is-read-by-its-admins": Door(
+            path="/management/v1/project/acme/policy/describe", rung="admin", below="member", on=(PROJECT,), setup="project"
+        ),
+        "a-project-policy-is-ended-by-its-admins": Door(
+            path="/management/v1/project/acme/policy/delete", rung="admin", below="member", on=(PROJECT,), setup="project"
+        ),
+        "a-projects-policies-are-listed-to-its-admins": Door(
+            method="get", path="/management/v1/projects/acme/policies", rung="admin", below="member", on=(PROJECT,), setup="project"
+        ),
+    }
+)
 
 
 def _send(estate: Estate, door: Door) -> Any:  # noqa: ANN401 — the door's httpx response

@@ -27,7 +27,7 @@ import importlib
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 from unittest import mock
 
 import pytest
@@ -49,10 +49,12 @@ _SETTINGS: list[tuple[str, str, str]] = [
 _IDS = [f"{m.split('.')[0]}.{c}" for _, m, c in _SETTINGS]
 
 #: Fields with no default need a value before the class will construct at all.
-_REQUIRED: dict[str, str] = {
-    "LANCE_S3_ACCESS_KEY_ID": "x",
-    "LANCE_S3_SECRET_ACCESS_KEY": "x",
-}
+_REQUIRED: Final[frozendict[str, str]] = frozendict(
+    {
+        "LANCE_S3_ACCESS_KEY_ID": "x",
+        "LANCE_S3_SECRET_ACCESS_KEY": "x",
+    }
+)
 
 _SENTINEL = "sentinel-value-no-field-would-default-to"
 

@@ -36,6 +36,7 @@ import argparse
 import re
 import sys
 from collections.abc import Iterable, Iterator
+from typing import Final
 
 import yaml
 
@@ -44,7 +45,7 @@ import yaml
 _BARE = re.compile(r"^[a-z0-9][a-z0-9-]*:[A-Za-z0-9][A-Za-z0-9._-]*$")
 
 #: The rendered image names whose dockerfile stem is another name.
-_STEMS = {"lance-rest-catalog": "rest-catalog", "web-console": "frontend"}
+_STEMS: Final = frozendict({"lance-rest-catalog": "rest-catalog", "web-console": "frontend"})
 
 
 def dockerfile_stem(image: str) -> str:

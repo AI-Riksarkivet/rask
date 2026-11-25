@@ -31,7 +31,7 @@ A refused grant leaves dave refused; an admitted one lets him read.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import lance_namespace
 import pytest
@@ -42,10 +42,12 @@ from tests import seeding
 
 
 #: Each target's grant door and the door dave reads it through: a namespace's describe, a warehouse's own self-view.
-DOORS = {
-    "namespace": ("/management/v1/namespace/{name}/access/grant", "/v1/namespace/{name}/describe"),
-    "warehouse": ("/management/v1/warehouse/house/access/grant", "/management/v1/warehouse/house/access/my-permissions"),
-}
+DOORS: Final = frozendict(
+    {
+        "namespace": ("/management/v1/namespace/{name}/access/grant", "/v1/namespace/{name}/describe"),
+        "warehouse": ("/management/v1/warehouse/house/access/grant", "/management/v1/warehouse/house/access/my-permissions"),
+    }
+)
 
 
 @pytest.mark.parametrize(

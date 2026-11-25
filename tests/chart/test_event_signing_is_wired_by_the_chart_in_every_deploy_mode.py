@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from typing import Final
 
 import pytest
 
@@ -126,7 +127,7 @@ def _identities_running(docs: tuple[dict, ...], app: str) -> list[str]:
 
 #: What a deployer attests of the platform's services, one refusal each: the signing keys, the bus users, and the object
 #: store's change events.
-_ATTESTED = {"signing": "signing.provisioned=true", "nats": "nats.auth.provisioned=true", "events": "objectStore.events.provisioned=true"}
+_ATTESTED: Final = frozendict({"signing": "signing.provisioned=true", "nats": "nats.auth.provisioned=true", "events": "objectStore.events.provisioned=true"})
 
 
 def _refusal_without(attestation: str) -> str:

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import struct
 from collections.abc import Callable
-from typing import cast
+from typing import Final, cast
 
 import pyarrow as pa
 import pytest
@@ -148,7 +148,7 @@ def test_a_buffer_left_uncompressed_in_a_compressed_body_is_read() -> None:
 
 
 #: The writer each framing is built with.
-_FRAMED: dict[str, Callable[[pa.Table, str | None], bytes]] = {"stream": _stream, "file": _file}
+_FRAMED: Final[frozendict[str, Callable[[pa.Table, str | None], bytes]]] = frozendict({"stream": _stream, "file": _file})
 
 _BOOLEANS = pa.array([True, False] * 50_000)
 

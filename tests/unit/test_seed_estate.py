@@ -20,6 +20,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
+from typing import Final
 
 import httpx
 import pytest
@@ -48,7 +49,7 @@ Refusal = Callable[[httpx.Request], "tuple[int, object] | None"]
 
 #: The layer each POST route belongs to, in hierarchy order. A seeded estate is only reachable if these
 #: happen in this sequence.
-_ORDER = {"project": 0, "warehouse": 1, "namespace": 2, "table": 3, "role": 4, "grant": 5}
+_ORDER: Final = frozendict({"project": 0, "warehouse": 1, "namespace": 2, "table": 3, "role": 4, "grant": 5})
 
 
 def _body(request: httpx.Request) -> dict[str, object]:
@@ -89,9 +90,9 @@ _REGISTRY = [
 #: that ignored the namespace let a read-back "verify" a table the plan never declared there.
 #: `beta$locked` is the managed-access scope's stage — its table is what makes the C4 fixture a real
 #: object rather than a tuple about nothing.
-_TABLES = {"acme$bronze": [], "acme$silver": ["features", "undeclared"], "acme$gold": ["catalog"], "beta$locked": ["records"]}
+_TABLES: Final = frozendict({"acme$bronze": [], "acme$silver": ["features", "undeclared"], "acme$gold": ["catalog"], "beta$locked": ["records"]})
 #: The roles each project's role door lists after a clean seed, each with the uuid the fake minted for it.
-_ROLES = {"acme": ["admins", "stewards"], "research": ["admins"], "beta": ["admins"]}
+_ROLES: Final = frozendict({"acme": ["admins", "stewards"], "research": ["admins"], "beta": ["admins"]})
 
 
 def _uuid(kind: str, name: str) -> str:

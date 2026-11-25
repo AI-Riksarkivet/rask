@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from hashlib import blake2s
-from typing import Any
+from typing import Any, Final
 
 import pyarrow.fs as pafs
 import pytest
@@ -39,11 +39,13 @@ PROJECT = "acme"
 ADMIN, CO_ADMIN, MEMBER, ESTATE_OWNER, RECLAIMER = "alice", "dave", "carol", "erin", "maintenance"
 #: What a retry of an unfinished delete asks on the estate root, by who retries: the admin who started it is authorized by
 #: the delete's own record and asks nothing there.
-ESTATE_ASKED = {
-    CO_ADMIN: set(),
-    ESTATE_OWNER: {(AuditOutcome.ALLOW, "can_finish_project_delete")},
-    MEMBER: {(AuditOutcome.DENY, "can_finish_project_delete")},
-}
+ESTATE_ASKED: Final = frozendict(
+    {
+        CO_ADMIN: set(),
+        ESTATE_OWNER: {(AuditOutcome.ALLOW, "can_finish_project_delete")},
+        MEMBER: {(AuditOutcome.DENY, "can_finish_project_delete")},
+    }
+)
 #: What a refused request is answered: its status, media type, spec code (`lance_docs/ns_catalog/namespace/operations/errors.md`)
 #: and detail. A caller who may not administer acme is answered exactly what a missing project is.
 NOT_FOUND = (404, "application/problem+json", 4, f"project not found: {PROJECT}")

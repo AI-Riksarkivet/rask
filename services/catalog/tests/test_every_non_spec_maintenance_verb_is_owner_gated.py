@@ -25,6 +25,8 @@ next still meets the owner bar.
 
 from __future__ import annotations
 
+from typing import Final
+
 import pytest
 import router_walk
 
@@ -33,7 +35,7 @@ from catalog.api.authz.rungs import action_relation
 
 OWNER_RELATION = "can_drop"
 #: The maintainer doors: neither destroys history, rewrites a fragment nor replaces an index.
-MAINTAINER_DOORS = {"maintenance/disarm": "can_maintain", "maintenance/floor": "can_maintain"}
+MAINTAINER_DOORS: Final = frozendict({"maintenance/disarm": "can_maintain", "maintenance/floor": "can_maintain"})
 
 
 def _maintenance_suffixes() -> list[str]:

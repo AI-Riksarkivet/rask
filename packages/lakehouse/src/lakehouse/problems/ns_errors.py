@@ -280,45 +280,59 @@ def install_problem_handlers(app: FastAPI, log: logging.Logger) -> None:
 
 
 #: How the published schema names each error status a spec operation lists (``spec.yaml``'s own response names).
-_SPEC_ERROR_DESCRIPTIONS: Final = {
-    "400": "Bad Request",
-    "401": "Unauthorized",
-    "403": "Forbidden",
-    "404": "Not Found",
-    "406": "Unsupported Operation",
-    "409": "Conflict",
-    "503": "Service Unavailable",
-    "5XX": "Server Error",
-}
+_SPEC_ERROR_DESCRIPTIONS: Final = frozendict(
+    {
+        "400": "Bad Request",
+        "401": "Unauthorized",
+        "403": "Forbidden",
+        "404": "Not Found",
+        "406": "Unsupported Operation",
+        "409": "Conflict",
+        "503": "Service Unavailable",
+        "5XX": "Server Error",
+    }
+)
 
 #: The problem body every refusal carries (:func:`lakehouse.problems.envelope.problem_body`): RFC 9457's keys, the spec's
 #: ``ErrorResponse`` ``code`` and ``error``, the optional ``instance`` (the request's trace id, while a span is active), and
 #: the ``errors`` a rask-only door's validation failure lists.
-_PROBLEM_SCHEMA: Final = {
-    "type": "object",
-    "required": ["type", "title", "status", "detail", "code", "error"],
-    "properties": {
-        "type": {"type": "string"},
-        "title": {"type": "string"},
-        "status": {"type": "integer"},
-        "detail": {"type": "string"},
-        "code": {"type": "integer", "description": "The spec's error code, which a client dispatches on"},
-        "error": {"type": "string"},
-        "instance": {"type": "string", "description": "The W3C trace id of the request, which finds the error's log line"},
-        "errors": {
-            "type": "array",
-            "description": "Each field a request failed validation on",
-            "items": {
-                "type": "object",
-                "required": ["field", "message", "type"],
-                "properties": {"field": {"type": "string"}, "message": {"type": "string"}, "type": {"type": "string"}},
-            },
-        },
-    },
-}
+_PROBLEM_SCHEMA: Final = frozendict(
+    {
+        "type": "object",
+        "required": ["type", "title", "status", "detail", "code", "error"],
+        "properties": frozendict(
+            {
+                "type": frozendict({"type": "string"}),
+                "title": frozendict({"type": "string"}),
+                "status": frozendict({"type": "integer"}),
+                "detail": frozendict({"type": "string"}),
+                "code": frozendict({"type": "integer", "description": "The spec's error code, which a client dispatches on"}),
+                "error": frozendict({"type": "string"}),
+                "instance": frozendict({"type": "string", "description": "The W3C trace id of the request, which finds the error's log line"}),
+                "errors": frozendict(
+                    {
+                        "type": "array",
+                        "description": "Each field a request failed validation on",
+                        "items": frozendict(
+                            {
+                                "type": "object",
+                                "required": ["field", "message", "type"],
+                                "properties": frozendict(
+                                    {"field": frozendict({"type": "string"}), "message": frozendict({"type": "string"}), "type": frozendict({"type": "string"})}
+                                ),
+                            }
+                        ),
+                    }
+                ),
+            }
+        ),
+    }
+)
 
 _PROBLEM_RESPONSE_SCHEMA_NAME: Final = "ProblemDetails"
-_PROBLEM_CONTENT: Final = {"application/problem+json": {"schema": {"$ref": f"#/components/schemas/{_PROBLEM_RESPONSE_SCHEMA_NAME}"}}}
+_PROBLEM_CONTENT: Final = frozendict(
+    {"application/problem+json": frozendict({"schema": frozendict({"$ref": f"#/components/schemas/{_PROBLEM_RESPONSE_SCHEMA_NAME}"})})}
+)
 #: FastAPI's own validation schemas, which no operation names once every 422 names the problem body.
 _FRAMEWORK_VALIDATION_SCHEMAS: Final = ("HTTPValidationError", "ValidationError")
 

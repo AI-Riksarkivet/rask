@@ -30,6 +30,7 @@ import os
 import sys
 import time
 from collections.abc import Callable
+from typing import Final
 
 import pyarrow as pa
 import requests
@@ -43,7 +44,7 @@ DEX = os.environ.get("DEX_URL", "http://localhost:5556/dex").rstrip("/")
 DEX_CLIENT_SECRET = os.environ.get("DEX_CLIENT_SECRET", "lance-catalog-secret")
 #: Every name's first segment is its warehouse; the estate's own is the id of the catalog's RASK_FGA_DEFAULT_WAREHOUSE_OBJECT.
 ESTATE_WAREHOUSE = os.environ.get("ESTATE_WAREHOUSE", "lance_catalog")
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW: Final = frozendict({"content-type": "application/vnd.apache.arrow.stream"})
 GREEN, RED, BOLD, RESET = "\033[32m", "\033[31m", "\033[1m", "\033[0m"
 
 _failures = 0

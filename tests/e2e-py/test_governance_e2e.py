@@ -31,7 +31,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Final
 
 import pyarrow as pa
 import pytest
@@ -60,7 +60,7 @@ DEX = os.environ.get("LANCE_E2E_DEX", "http://localhost:5556/dex")
 # The sign-in client is confidential in every Dex the suite meets (the Dex fixture and `.docker/dex.config.yaml`), so its
 # password grant carries the client's secret; the default is the dev Dex's.
 DEX_SECRET = credential(Credential.DEX_SECRET, "lance-catalog-secret")
-ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
+ARROW: Final = frozendict({"content-type": "application/vnd.apache.arrow.stream"})
 
 pytestmark = pytest.mark.e2e
 

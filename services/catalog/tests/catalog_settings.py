@@ -8,7 +8,7 @@ reads the environment for the rest, as it does in the pod.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Final
 
 from catalog.core.config import Settings
 
@@ -16,17 +16,19 @@ from catalog.core.config import Settings
 __all__ = ["catalog_settings", "governed_settings"]
 
 #: A key pair the local-directory backend ignores and the class requires.
-_STORE_KEYS: dict[str, Any] = {"s3_access_key_id": "k", "s3_secret_access_key": "s"}
+_STORE_KEYS: Final[frozendict[str, Any]] = frozendict({"s3_access_key_id": "k", "s3_secret_access_key": "s"})
 
 #: What FGA on demands besides itself: a verified subject, from an issuer whose people are named.
-_GOVERNED: dict[str, Any] = {
-    "oidc_enabled": True,
-    "oidc_issuer": "https://idp.example",
-    "oidc_audience": "lance",
-    "oidc_idp_id": "dex",
-    "fga_enabled": True,
-    "fga_api_url": "http://openfga:8080",
-}
+_GOVERNED: Final[frozendict[str, Any]] = frozendict(
+    {
+        "oidc_enabled": True,
+        "oidc_issuer": "https://idp.example",
+        "oidc_audience": "lance",
+        "oidc_idp_id": "dex",
+        "fga_enabled": True,
+        "fga_api_url": "http://openfga:8080",
+    }
+)
 
 
 def catalog_settings(**fields: Any) -> Settings:  # noqa: ANN401 — any field of Settings, validated by it

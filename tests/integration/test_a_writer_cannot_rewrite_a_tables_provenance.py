@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import io
 import json
-from typing import Any
+from typing import Any, Final
 
 import lance
 import pyarrow as pa
@@ -30,7 +30,7 @@ from fastapi.testclient import TestClient
 
 ARROW = {"content-type": "application/vnd.apache.arrow.stream"}
 PK = {"lance-schema:unenforced-primary-key": "true"}
-DECLARED = {b"lineage.dataset_id": b"m$t"}
+DECLARED: Final = frozendict({b"lineage.dataset_id": b"m$t"})
 FORGED_UUID = "00000000-0000-4000-8000-000000000000"
 
 #: A governed table's shape: the key, top level and nested, so ancestors are exercised, and a payload column.

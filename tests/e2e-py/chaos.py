@@ -28,7 +28,7 @@ import subprocess
 import time
 from collections.abc import Callable, Generator, Iterable
 from contextlib import contextmanager
-from typing import Literal
+from typing import Final, Literal
 
 import bus
 import requests
@@ -67,7 +67,7 @@ CATALOG_PORT = int(os.environ.get("LANCE_E2E_CATALOG_PORT", "2333"))
 #: The ConfigMap the chart renders each service's secret store role into (`chart/templates/secret-store-identities.yaml`).
 STORE_IDENTITIES = f"{RELEASE}-secret-store-identities"
 #: The units a store login's lease is written in (`openbao.identity.tokenTtl`: `<n>s`, `<n>m` or `<n>h`).
-_LEASE_UNIT_SECONDS = {"s": 1.0, "m": 60.0, "h": 3600.0}
+_LEASE_UNIT_SECONDS: Final = frozendict({"s": 1.0, "m": 60.0, "h": 3600.0})
 #: How long a service's own NATS client goes on reconnecting before it closes for good and the service opens another:
 #: `lakehouse.events.bus` sets 10 attempts at the server, 2 s apart, each connect bounded at 2 s.
 RECONNECT_WINDOW_SECONDS = 40.0

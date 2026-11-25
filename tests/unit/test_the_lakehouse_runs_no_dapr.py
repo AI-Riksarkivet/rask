@@ -12,20 +12,23 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Final
 
 import pytest
 
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
-_PLANTED = {
-    "deploy/fixtures/nats/chart/templates/bus.yaml": '    dapr.io/enabled: "true"\n',
-    ".dagger/engine.go": "// DAPR control plane for the lane\n",
-    "pyproject.toml": '"dapr".msg = "banned"\n',
-    "docs/adr/0207-the-lakehouse-runs-no-dapr.md": "The lakehouse runs no Dapr.\n",
-    "deploy/fixtures/nats/chart/charts/nats/values.yaml": "# dapr\n",
-    "Makefile": "\tuv run python scripts/the_lakehouse_runs_no_dapr.py\n",
-}
+_PLANTED: Final = frozendict(
+    {
+        "deploy/fixtures/nats/chart/templates/bus.yaml": '    dapr.io/enabled: "true"\n',
+        ".dagger/engine.go": "// DAPR control plane for the lane\n",
+        "pyproject.toml": '"dapr".msg = "banned"\n',
+        "docs/adr/0207-the-lakehouse-runs-no-dapr.md": "The lakehouse runs no Dapr.\n",
+        "deploy/fixtures/nats/chart/charts/nats/values.yaml": "# dapr\n",
+        "Makefile": "\tuv run python scripts/the_lakehouse_runs_no_dapr.py\n",
+    }
+)
 
 
 @pytest.fixture

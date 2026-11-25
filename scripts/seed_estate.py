@@ -85,7 +85,7 @@ import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
-from types import MappingProxyType
+from typing import Final
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
@@ -103,7 +103,7 @@ CATALOG_TOKEN = os.environ.get("SEED_CATALOG_TOKEN", "")
 #: The development Dex's two static demo identities as the principals they are: `dex~` and the userID the Dex fixture
 #: declares (deploy/fixtures/dex/chart/values.yaml, `scripts/dex_principal.py`): a seed that drifted from them would
 #: grant a principal nobody can sign in as.
-DEX_PRINCIPALS: Mapping[str, str] = MappingProxyType(
+DEX_PRINCIPALS: Final = frozendict(
     {
         "alice": "dex~08a8684b-db88-4b73-90a9-3cd1661f5466",
         "bob": "dex~1b6e2f5a-7c4d-4e9b-9f1a-2d3c4b5a6e7f",
@@ -119,13 +119,13 @@ DEMO_IDP = "demo"
 #: ONLY the creates the server does not already make idempotent carry this. A 409 from
 #: ``POST /management/v1/warehouses`` is a cross-tenant id/bucket collision — the guard's whole purpose — and
 #: swallowing it as "already there" would hide exactly the takeover it just refused.
-CONVERGED: Mapping[int, tuple[str, str]] = MappingProxyType({409: ("converged", "already exists")})
+CONVERGED: Final = frozendict({409: ("converged", "already exists")})
 #: An FGA-backed door (``/management/v1/access``, a project's roles) answers 406 ``Unsupported`` when the stack runs
 #: auth-off (``lakehouse.problems.ns_errors``): there is no tuple store to seed, which is a legitimate local configuration, not a
 #: failure. Loud, never silent — the estate is then unguarded. What hangs off a skipped step is skipped with it.
-FGA_OFF: Mapping[int, tuple[str, str]] = MappingProxyType({406: ("skipped", "authorization is off — no tuple store to seed")})
+FGA_OFF: Final = frozendict({406: ("skipped", "authorization is off — no tuple store to seed")})
 #: A role's create: converged when the project already holds the name, skipped when authorization is off.
-ROLE_CREATE: Mapping[int, tuple[str, str]] = MappingProxyType({**CONVERGED, **FGA_OFF})
+ROLE_CREATE: Final = CONVERGED | FGA_OFF
 
 
 # --------------------------------------------------------------------------- #

@@ -46,7 +46,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from enum import StrEnum
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Annotated
+from typing import Annotated, Final
 
 import jwt
 import pytest
@@ -647,16 +647,18 @@ def test_a_key_set_the_idp_drops_mid_answer_is_ours(fault: _Fault, idp: _IdP, rs
 
 #: Key-set bodies the provider could serve, none of which the token has any part in: one per exception family that
 #: reaches `_key_set`'s catch-all on PyJWT 2.15.1, so narrowing it to a tuple that leaves a family out answers 500.
-UNUSABLE_KEY_SETS = {
-    # `json.JSONDecodeError`, a `ValueError`.
-    "not-json": SIGN_IN_PAGE,
-    # `PyJWKSetError`, a `PyJWTError`.
-    "no-keys": json.dumps({"keys": []}).encode(),
-    # `TypeError`: PyJWK looks the `alg` up in a dict.
-    "alg-not-a-string": json.dumps({"keys": [{"kty": "RSA", "kid": KID, "use": "sig", "alg": ["RS256"], "n": "AQAB", "e": "AQAB"}]}).encode(),
-    # `RecursionError`.
-    "nested-past-the-parsers-depth": b"[" * 100_000 + b"]" * 100_000,
-}
+UNUSABLE_KEY_SETS: Final = frozendict(
+    {
+        # `json.JSONDecodeError`, a `ValueError`.
+        "not-json": SIGN_IN_PAGE,
+        # `PyJWKSetError`, a `PyJWTError`.
+        "no-keys": json.dumps({"keys": []}).encode(),
+        # `TypeError`: PyJWK looks the `alg` up in a dict.
+        "alg-not-a-string": json.dumps({"keys": [{"kty": "RSA", "kid": KID, "use": "sig", "alg": ["RS256"], "n": "AQAB", "e": "AQAB"}]}).encode(),
+        # `RecursionError`.
+        "nested-past-the-parsers-depth": b"[" * 100_000 + b"]" * 100_000,
+    }
+)
 
 
 @pytest.mark.parametrize("key_set", UNUSABLE_KEY_SETS.values(), ids=UNUSABLE_KEY_SETS.keys())

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import functools
 import re
+from typing import Final
 
 import pytest
 import yaml
@@ -71,11 +72,13 @@ _INTERIOR = frozenset({"nodes/proxy", "pods/exec", "pods/attach", "pods/portforw
 _BORROWED_IDENTITY = frozenset({"pods", "serviceaccounts/token", "impersonate", "bind", "escalate"})
 
 #: The kinds that carry a pod template, by API group.
-_POD_TEMPLATE_KINDS: dict[str, frozenset[str]] = {
-    "": frozenset({"replicationcontrollers"}),
-    "apps": frozenset({"deployments", "statefulsets", "daemonsets", "replicasets"}),
-    "batch": frozenset({"jobs", "cronjobs"}),
-}
+_POD_TEMPLATE_KINDS: Final[frozendict[str, frozenset[str]]] = frozendict(
+    {
+        "": frozenset({"replicationcontrollers"}),
+        "apps": frozenset({"deployments", "statefulsets", "daemonsets", "replicasets"}),
+        "batch": frozenset({"jobs", "cronjobs"}),
+    }
+)
 
 #: Built-in roles a binding may reference without the chart rendering them, and what each grants of
 #: the capabilities this gate is about. An unlisted external role fails the gate: it cannot judge it.

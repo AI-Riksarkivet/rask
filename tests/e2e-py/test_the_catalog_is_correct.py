@@ -65,7 +65,7 @@ import uuid
 from collections.abc import Callable, Iterator
 from enum import IntEnum, StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import byo_scenario as scenario
 import correctness
@@ -134,14 +134,16 @@ class Role(StrEnum):
 
 #: The rung each principal holds on the matrix namespace and on everything in it, and the matching rung of the matrix
 #: label's ladder, as the scene grants them.
-HOLDS: dict[Role, Rung] = {
-    Role.OWNER: Rung.OWNER,
-    Role.WRITER: Rung.WRITER,
-    Role.READER: Rung.READER,
-    Role.OUTSIDER: Rung.NONE,
-    Role.TENANT_B_ADMIN: Rung.NONE,
-    Role.SERVICE: Rung.NONE,
-}
+HOLDS: Final[frozendict[Role, Rung]] = frozendict(
+    {
+        Role.OWNER: Rung.OWNER,
+        Role.WRITER: Rung.WRITER,
+        Role.READER: Rung.READER,
+        Role.OUTSIDER: Rung.NONE,
+        Role.TENANT_B_ADMIN: Rung.NONE,
+        Role.SERVICE: Rung.NONE,
+    }
+)
 
 
 class Target(BaseModel):
@@ -1234,7 +1236,7 @@ MANAGEMENT_DOORS: tuple[Door, ...] = (
     ),
 )
 
-DOORS: dict[str, Door] = {door.operation: door for door in (*SPEC_DOORS, *MANAGEMENT_DOORS)}
+DOORS: Final[frozendict[str, Door]] = frozendict({door.operation: door for door in (*SPEC_DOORS, *MANAGEMENT_DOORS)})
 
 #: Every operation the spec defines, in its order: each is a row of the matrix, and one without a door is a red row.
 OPERATIONS: list[str] = [

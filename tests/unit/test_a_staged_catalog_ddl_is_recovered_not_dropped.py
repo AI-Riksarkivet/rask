@@ -23,7 +23,7 @@ import os
 import uuid
 from collections.abc import Awaitable, Callable, Collection
 from pathlib import Path
-from typing import Any, cast, override
+from typing import Any, Final, cast, override
 
 import pytest
 from fastapi import Request
@@ -69,7 +69,7 @@ def _uuids(table: str) -> DatasetUuids:
 
 #: Bytes that are valid JSON text and no envelope: an integer past what the parser holds. Any stager holding the outbox
 #: credential can write them.
-_HOSTILE = {"bigint": '{"eventType": ' + "1" * 5000 + "}", "deep": "[" * 100_000 + "]" * 100_000}
+_HOSTILE: Final = frozendict({"bigint": '{"eventType": ' + "1" * 5000 + "}", "deep": "[" * 100_000 + "]" * 100_000})
 
 
 class _Repo:

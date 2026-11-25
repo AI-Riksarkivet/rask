@@ -27,6 +27,7 @@ import json
 import re
 import subprocess
 from collections.abc import Callable
+from typing import Final
 
 import pytest
 import yaml
@@ -47,10 +48,12 @@ _OVERLAYS: dict[str, tuple[str, ...]] = {
 _FIRST_PARTY_SOURCE = "rask/templates/"
 
 #: Every list of egress rules the render takes from values, by the overlay that renders the policy reading it.
-_STATED_RULES: dict[str, tuple[str, ...]] = {
-    "default": ("networkPolicy.apiServerEgress", "networkPolicy.extraEgress", "observability.export.egress"),
-    "prod": ("auth.fgaEgress", "openbao.egress", "objectStore.egress", "nats.egress", "auth.oidc.egress", "services.lineage.forward.egress"),
-}
+_STATED_RULES: Final[frozendict[str, tuple[str, ...]]] = frozendict(
+    {
+        "default": ("networkPolicy.apiServerEgress", "networkPolicy.extraEgress", "observability.export.egress"),
+        "prod": ("auth.fgaEgress", "openbao.egress", "objectStore.egress", "nats.egress", "auth.oidc.egress", "services.lineage.forward.egress"),
+    }
+)
 
 #: The egress a real deployment states for the platform's store, bus and IdP, by what each reaches ([[XC-202]]).
 _UNSTATED_ON_A_REAL_DEPLOYMENT = ("objectStore.egress", "nats.egress", "auth.oidc.egress")
@@ -71,13 +74,15 @@ class _Pod(BaseModel):
 
 #: Whether a pod dials each platform endpoint, read off its own spec: a token the API server accepts, the store's or the
 #: IdP's address in its env, and for the bus a container that names the bus (each service, the stream Job).
-_DIALS: dict[str, Callable[[_Pod], bool]] = {
-    "api server": lambda pod: pod.holds_an_api_credential,
-    "object store": lambda pod: chart_render.OBJECT_STORE_URL in pod.env,
-    "issuer": lambda pod: chart_render.ISSUER_URL in pod.env,
-    "bus": lambda pod: chart_render.NATS_URL in pod.env or chart_render.NATS_URL in pod.commands,
-    "graph backend": lambda pod: chart_render.GRAPH_URL in pod.env,
-}
+_DIALS: Final[frozendict[str, Callable[[_Pod], bool]]] = frozendict(
+    {
+        "api server": lambda pod: pod.holds_an_api_credential,
+        "object store": lambda pod: chart_render.OBJECT_STORE_URL in pod.env,
+        "issuer": lambda pod: chart_render.ISSUER_URL in pod.env,
+        "bus": lambda pod: chart_render.NATS_URL in pod.env or chart_render.NATS_URL in pod.commands,
+        "graph backend": lambda pod: chart_render.GRAPH_URL in pod.env,
+    }
+)
 
 
 class _Endpoint(BaseModel):
@@ -92,13 +97,15 @@ class _Endpoint(BaseModel):
     known_caller: str
 
 
-_ENDPOINTS: dict[str, _Endpoint] = {
-    "api server": _Endpoint(cidr=chart_render.API_SERVER_CIDR, overlays=("default", "prod"), known_caller="Deployment/rask-catalog"),
-    "object store": _Endpoint(cidr=chart_render.OBJECT_STORE_CIDR, overlays=("prod",), known_caller="Deployment/rask-catalog"),
-    "bus": _Endpoint(cidr=chart_render.BUS_CIDR, overlays=("prod",), known_caller="Job/rask-nats-stream-r1"),
-    "issuer": _Endpoint(cidr=chart_render.ISSUER_CIDR, overlays=("prod",), known_caller="Deployment/rask-catalog"),
-    "graph backend": _Endpoint(cidr=chart_render.GRAPH_CIDR, overlays=("prod",), known_caller="Deployment/rask-lineage"),
-}
+_ENDPOINTS: Final[frozendict[str, _Endpoint]] = frozendict(
+    {
+        "api server": _Endpoint(cidr=chart_render.API_SERVER_CIDR, overlays=("default", "prod"), known_caller="Deployment/rask-catalog"),
+        "object store": _Endpoint(cidr=chart_render.OBJECT_STORE_CIDR, overlays=("prod",), known_caller="Deployment/rask-catalog"),
+        "bus": _Endpoint(cidr=chart_render.BUS_CIDR, overlays=("prod",), known_caller="Job/rask-nats-stream-r1"),
+        "issuer": _Endpoint(cidr=chart_render.ISSUER_CIDR, overlays=("prod",), known_caller="Deployment/rask-catalog"),
+        "graph backend": _Endpoint(cidr=chart_render.GRAPH_CIDR, overlays=("prod",), known_caller="Deployment/rask-lineage"),
+    }
+)
 
 
 def _documents(*args: str) -> list[tuple[str, dict]]:

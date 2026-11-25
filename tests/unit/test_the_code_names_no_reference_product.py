@@ -12,19 +12,22 @@ import importlib.util
 import sys
 from pathlib import Path
 from types import ModuleType
+from typing import Final
 
 import pytest
 
 
 _SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
-_PLANTED = {
-    "services/catalog/src/catalog/doors.py": "LIMIT = 1000  # the ceiling Lakekeeper's batch check uses\n",
-    "tests/unit/test_doors.py": "# LAKEKEEPER parity\n",
-    "docs/research.md": "Lakekeeper's console keeps its notifications in the browser.\n",
-    "deploy/fixtures/nats/chart/charts/nats/values.yaml": "# vendored upstream: lakekeeper\n",
-    "frontend/console/node_modules/pkg/index.js": "// lakekeeper\n",
-}
+_PLANTED: Final = frozendict(
+    {
+        "services/catalog/src/catalog/doors.py": "LIMIT = 1000  # the ceiling Lakekeeper's batch check uses\n",
+        "tests/unit/test_doors.py": "# LAKEKEEPER parity\n",
+        "docs/research.md": "Lakekeeper's console keeps its notifications in the browser.\n",
+        "deploy/fixtures/nats/chart/charts/nats/values.yaml": "# vendored upstream: lakekeeper\n",
+        "frontend/console/node_modules/pkg/index.js": "// lakekeeper\n",
+    }
+)
 
 
 @pytest.fixture

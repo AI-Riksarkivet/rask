@@ -30,6 +30,7 @@ reported was a false positive of its own making.
 from __future__ import annotations
 
 import re
+from typing import Final
 
 import pytest
 import yaml
@@ -108,17 +109,19 @@ def _first_party_workloads() -> list[tuple[str, str, dict]]:
 #: `could not load schema` as every non-root uid tried (65532, 1000, 65534; nats-box 0.14.5 and
 #: 0.19.7; 65532 on 0.20.2, natscli 0.5.1, 2026-11-09), so that container takes the other four keys and stays listed for exactly the two it cannot.
 #: An all-or-nothing list would have recorded it as untouched and hidden the four that landed.
-_UNHARDENED_TODAY: dict[str, dict[str, tuple[str, ...]]] = {
-    # Long-lived third-party servers the chart templates itself. `readOnlyRootFilesystem` is the key
-    # that breaks each: every one writes under its own root unless given a mount, so each comes off
-    # with its pod observed running rather than by adding a line here.
-    # The nats CLI answers `could not load schema` as EVERY non-root uid tried — 65532, 1000 and 65534,
-    # on nats-box 0.14.5 and 0.19.7, and 65532 on 0.20.2 — while the same command as root succeeds. Bisected key by key:
-    # `readOnlyRootFilesystem` alone is fine. So it takes the other three and is listed for this one.
-    "Job/nats-stream/nats": {"containers": ("runAsNonRoot",)},
-    # The stream Job's second phase: the same image running the same CLI, after the sync.
-    "Job/nats-stream-retire/nats": {"containers": ("runAsNonRoot",)},
-}
+_UNHARDENED_TODAY: Final[frozendict[str, dict[str, tuple[str, ...]]]] = frozendict(
+    {
+        # Long-lived third-party servers the chart templates itself. `readOnlyRootFilesystem` is the key
+        # that breaks each: every one writes under its own root unless given a mount, so each comes off
+        # with its pod observed running rather than by adding a line here.
+        # The nats CLI answers `could not load schema` as EVERY non-root uid tried — 65532, 1000 and 65534,
+        # on nats-box 0.14.5 and 0.19.7, and 65532 on 0.20.2 — while the same command as root succeeds. Bisected key by key:
+        # `readOnlyRootFilesystem` alone is fine. So it takes the other three and is listed for this one.
+        "Job/nats-stream/nats": {"containers": ("runAsNonRoot",)},
+        # The stream Job's second phase: the same image running the same CLI, after the sync.
+        "Job/nats-stream-retire/nats": {"containers": ("runAsNonRoot",)},
+    }
+)
 
 
 def _key(kind: str, name: str, container: str) -> str:

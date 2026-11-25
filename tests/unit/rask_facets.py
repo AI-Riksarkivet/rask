@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
@@ -20,10 +20,12 @@ _REPO = Path(__file__).resolve().parents[2]
 _OPENLINEAGE: dict[str, Any] = json.loads((_REPO / "tests" / "data" / "openlineage-2-0-2.json").read_text())
 REGISTRY: Registry[Any] = Registry().with_resource(_OPENLINEAGE["$id"], Resource.from_contents(_OPENLINEAGE, default_specification=DRAFT202012))
 #: rask's custom facets, by the key each rides under, with the schema each facet's `_schemaURL` names.
-SCHEMAS: dict[str, dict[str, Any]] = {
-    "rask_lance": json.loads((_REPO / "spec" / "facets" / "rask" / "RaskLanceFacet.json").read_text()),
-    "rask_author": json.loads((_REPO / "spec" / "facets" / "rask" / "RaskAuthorFacet.json").read_text()),
-}
+SCHEMAS: Final[frozendict[str, dict[str, Any]]] = frozendict(
+    {
+        "rask_lance": json.loads((_REPO / "spec" / "facets" / "rask" / "RaskLanceFacet.json").read_text()),
+        "rask_author": json.loads((_REPO / "spec" / "facets" / "rask" / "RaskAuthorFacet.json").read_text()),
+    }
+)
 
 
 def rask_facet_errors(event: dict[str, Any]) -> list[str]:

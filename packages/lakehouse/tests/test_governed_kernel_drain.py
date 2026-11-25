@@ -125,12 +125,14 @@ def _leaf_node(name: str, *, computed: str | None = None, users: list[str] | Non
 class _DiamondClient:
     """`can_read` reaches `owner` through BOTH `writer` and `reader` — a diamond, not a loop."""
 
-    _TREE: ClassVar[dict[str, Any]] = {
-        "can_read": None,  # union, built below
-        "writer": _leaf_node("table:t#writer", computed="table:t#owner"),
-        "reader": _leaf_node("table:t#reader", computed="table:t#owner"),
-        "owner": _leaf_node("table:t#owner", users=["user:alice"]),
-    }
+    _TREE: ClassVar[frozendict[str, Any]] = frozendict(
+        {
+            "can_read": None,  # union, built below
+            "writer": _leaf_node("table:t#writer", computed="table:t#owner"),
+            "reader": _leaf_node("table:t#reader", computed="table:t#owner"),
+            "owner": _leaf_node("table:t#owner", users=["user:alice"]),
+        }
+    )
 
     async def expand(self, body: Any, *_a: object, **_k: object) -> object:
         relation = body.relation

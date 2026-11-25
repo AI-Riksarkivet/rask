@@ -24,7 +24,7 @@ read's timeout. The secret store is the suite's double, and the signatures are b
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Final
 
 import httpx
 import pytest
@@ -49,12 +49,14 @@ RETRIED, REFUSED, RECORDED = "retried", "refused", "recorded"
 REDELIVERY_SECONDS = LineageSettings.model_fields["delivery_retry_seconds"].default
 
 PRIMER = "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5e"
-RUN_IDS = {
-    "old": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5f",
-    "new": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a60",
-    "unpublished": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a61",
-    "unpublished-too": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a62",
-}
+RUN_IDS: Final = frozendict(
+    {
+        "old": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5f",
+        "new": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a60",
+        "unpublished": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a61",
+        "unpublished-too": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a62",
+    }
+)
 
 
 class _Clock:

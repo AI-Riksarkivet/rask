@@ -73,7 +73,7 @@ from collections.abc import AsyncGenerator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from itertools import pairwise
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import nats
 import pytest
@@ -216,15 +216,17 @@ def _control_emitters(values: Path) -> frozenset[str]:
     return frozenset({"maintenance"}) if on else frozenset()
 
 
-PUBLISHERS: dict[str, frozenset[str]] = {
-    LINEAGE_TOPIC: frozenset({"catalog", "lineage", "maintenance"}),
-    CONTROL_TOPIC: frozenset({"catalog", *_control_emitters(_values())}),
-    "dlq.lineage.events": frozenset(),
-    "maintenance.task.probe": frozenset({"maintenance-worker"}),
-    "maintenance.schedule.probe": frozenset({"maintenance-worker"}),
-    "$KV.MAINTENANCE_CLAIMS.probe": frozenset({"maintenance-worker"}),
-    "store.events": frozenset({"object-store"}),
-}
+PUBLISHERS: Final[frozendict[str, frozenset[str]]] = frozendict(
+    {
+        LINEAGE_TOPIC: frozenset({"catalog", "lineage", "maintenance"}),
+        CONTROL_TOPIC: frozenset({"catalog", *_control_emitters(_values())}),
+        "dlq.lineage.events": frozenset(),
+        "maintenance.task.probe": frozenset({"maintenance-worker"}),
+        "maintenance.schedule.probe": frozenset({"maintenance-worker"}),
+        "$KV.MAINTENANCE_CLAIMS.probe": frozenset({"maintenance-worker"}),
+        "store.events": frozenset({"object-store"}),
+    }
+)
 #: The clients beside the services the table must also name: the stream Job, nats-box, maintenance's worker and the dev
 #: store.
 OTHER_CLIENTS = frozenset({"admin", "monitor", "maintenance-worker", "object-store"})
@@ -235,24 +237,26 @@ SESSION_USERS = frozenset({"admin", "catalog", "lineage", "maintenance", "mainte
 DRIVEN = frozenset({"admin", "monitor", "catalog", "lineage", "maintenance", "object-store"})
 #: Calls outside a service's row, each of which the broker must refuse: another service's consumer pulled, a consumer
 #: created, edited or deleted, a durable consumer where only a connection's own may be made, and one on another stream.
-REFUSED_CALLS: dict[str, tuple[str, ...]] = {
-    "lineage": (
-        "$JS.API.CONSUMER.MSG.NEXT.MAINTENANCE_TASKS.maintenance-worker",
-        "$JS.API.CONSUMER.MSG.NEXT.LINEAGE.lane-stranger",
-        f"$JS.API.CONSUMER.CREATE.LINEAGE.lane-own.{LINEAGE_TOPIC}",
-        f"$JS.API.CONSUMER.CREATE.LINEAGE.{INGEST_CONSUMER}.{LINEAGE_TOPIC}",
-        "$JS.API.CONSUMER.DURABLE.CREATE.LINEAGE.lane-own",
-        "$JS.API.CONSUMER.CREATE.LINEAGE",
-        f"$JS.API.CONSUMER.DELETE.LINEAGE.{INGEST_CONSUMER}",
-    ),
-    "catalog": (
-        f"$JS.API.CONSUMER.CREATE.{CONTROL_STREAM}",
-        f"$JS.API.CONSUMER.CREATE.{CONTROL_STREAM}.lane-own.{CONTROL_TOPIC}",
-        f"$JS.API.CONSUMER.DURABLE.CREATE.{CONTROL_STREAM}.lane-own",
-        "$JS.API.CONSUMER.CREATE.LINEAGE",
-        "$JS.API.CONSUMER.CREATE.DLQ",
-    ),
-}
+REFUSED_CALLS: Final[frozendict[str, tuple[str, ...]]] = frozendict(
+    {
+        "lineage": (
+            "$JS.API.CONSUMER.MSG.NEXT.MAINTENANCE_TASKS.maintenance-worker",
+            "$JS.API.CONSUMER.MSG.NEXT.LINEAGE.lane-stranger",
+            f"$JS.API.CONSUMER.CREATE.LINEAGE.lane-own.{LINEAGE_TOPIC}",
+            f"$JS.API.CONSUMER.CREATE.LINEAGE.{INGEST_CONSUMER}.{LINEAGE_TOPIC}",
+            "$JS.API.CONSUMER.DURABLE.CREATE.LINEAGE.lane-own",
+            "$JS.API.CONSUMER.CREATE.LINEAGE",
+            f"$JS.API.CONSUMER.DELETE.LINEAGE.{INGEST_CONSUMER}",
+        ),
+        "catalog": (
+            f"$JS.API.CONSUMER.CREATE.{CONTROL_STREAM}",
+            f"$JS.API.CONSUMER.CREATE.{CONTROL_STREAM}.lane-own.{CONTROL_TOPIC}",
+            f"$JS.API.CONSUMER.DURABLE.CREATE.{CONTROL_STREAM}.lane-own",
+            "$JS.API.CONSUMER.CREATE.LINEAGE",
+            "$JS.API.CONSUMER.CREATE.DLQ",
+        ),
+    }
+)
 #: JetStream's answer to a publish on a subject already holding the one message its stream keeps.
 _ONE_PER_SUBJECT = 10077
 

@@ -17,7 +17,7 @@ import struct
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pyarrow as pa
 import pytest
@@ -127,7 +127,9 @@ def test_a_field_name_under_a_registered_extension_type_is_decoded(_labelled_reg
 
 #: What a registered library's deserializer raises for extension metadata it refuses, by the metadata
 #: key the type below writes; `json.loads` on bad metadata is the ValueError.
-_DESERIALIZER_RAISES: dict[bytes, type[Exception]] = {b"value": ValueError, b"key": KeyError, b"type": TypeError, b"runtime": RuntimeError}
+_DESERIALIZER_RAISES: Final[frozendict[bytes, type[Exception]]] = frozendict(
+    {b"value": ValueError, b"key": KeyError, b"type": TypeError, b"runtime": RuntimeError}
+)
 
 
 class _RefusesItsMetadata(pa.ExtensionType):

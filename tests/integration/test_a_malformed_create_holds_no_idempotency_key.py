@@ -14,7 +14,7 @@ the same key, so the second status is read where a retrying client reads it.
 from __future__ import annotations
 
 import struct
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import pyarrow as pa
 import pyarrow.ipc as ipc
@@ -29,7 +29,7 @@ INVALID_INPUT = 13
 CREATE = "/v1/table/lance_catalog$db$t/create"
 KEY = "3f2b8c1a-7d4e-4f6a-9b0c-5e1d2a3b4c5d"
 #: A run the spec Context names whole: its id, a UUID, and its job's namespace and name.
-_RUN = {"x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", "x-rask-job-namespace": "pipelines", "x-rask-job": "nightly"}
+_RUN: Final = frozendict({"x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", "x-rask-job-namespace": "pipelines", "x-rask-job": "nightly"})
 #: Past CPython's int-string conversion limit, so `json.loads` raises a bare `ValueError` rather than
 #: `JSONDecodeError` — valid JSON Python will not parse.
 _UNPARSEABLE_INT = "1" * 5000

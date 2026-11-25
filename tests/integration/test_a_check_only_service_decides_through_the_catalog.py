@@ -28,7 +28,7 @@ import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import httpx
 import pyarrow as pa
@@ -45,7 +45,7 @@ from lakehouse.records.warehouse_records import WarehouseRecord
 
 #: The two tenants, each mapped to its warehouse and the namespace in it; each namespace holds one table, `<ns>$t`.
 ACME, BETA = "acme", "beta"
-_TENANTS = {ACME: ("wh-acme", "wh-acme$lake"), BETA: ("wh-beta", "wh-beta$far")}
+_TENANTS: Final = frozendict({ACME: ("wh-acme", "wh-acme$lake"), BETA: ("wh-beta", "wh-beta$far")})
 LAKE, FAR = "wh-acme$lake$t", "wh-beta$far$t"
 #: The accounts that ask: lineage, a service of acme's and a notifier.
 LINEAGE, ACME_SERVICE, NOTIFIER = "rask-sa-lineage", "rask-sa-acme-service", "rask-sa-a-notifier"

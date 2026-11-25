@@ -27,7 +27,7 @@ import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import httpx
 import lance
@@ -53,7 +53,7 @@ TABLE = "lance_catalog$lh214$t"
 BRANCH = "dev"
 #: The tenants the emitter's resolver answers, keyed by the warehouse a name begins with ([[LH-593]],
 #: `catalog.services.warehouses.project_of`), never by a namespace.
-TENANTS = {"lance_catalog": "acme"}
+TENANTS: Final = frozendict({"lance_catalog": "acme"})
 
 
 def _ipc(table: pa.Table) -> bytes:
