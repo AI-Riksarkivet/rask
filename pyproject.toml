@@ -48,7 +48,9 @@ dev = [
     "ty",
     "pylance>=14.0.3",
     "lancedb>=0.41.0",
-    # pylance's bf16 extension array (lance._arrow.bf16) imports pandas; a test that reads a bf16 column needs it.
+    # Test-only, for a pylance defect: pylance 14.0.3's `lance/arrow.py` imports `PandasBFloat16Array`, which
+    # `lance/_arrow/bf16.py` defines only when pandas imports, so `lance.arrow` fails without pandas. A test builds a
+    # bfloat16 column through it; no lakehouse code uses pandas. Drop this once pylance imports that name optionally.
     "pandas>=3.0",
     # pytest-timeout — the only tool that can DIAGNOSE a hung suite in Dagger, which is where this
     # suite hangs and a developer box does not. Two dead ends were paid for before it was added, and
