@@ -2,7 +2,7 @@
 name = "catalog"
 version = "0.1.0"
 description = "Lance Namespace REST catalog — namespaces/tables/branches/tags over native Lance, plus STS credential vending."
-requires-python = ">=3.13"
+requires-python = ">=3.15"
 license = "Apache-2.0"
 dependencies = [
     # The lakehouse's library: the storage internals, the auth plane, the control lane and the events this service runs

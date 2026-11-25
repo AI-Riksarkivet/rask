@@ -245,7 +245,7 @@ def _edge_list(settings: CatalogLineageSettings, ns: LanceNamespace | None, so: 
         return None
     try:
         described = native.call(ns, "describe_table", DescribeTableRequest(id=[*parse_identifier(settings.provenance_namespace), derived_tables.EDGES]))
-    except (NamespaceNotFoundError, TableNotFoundError):
+    except NamespaceNotFoundError, TableNotFoundError:
         return None
     return open_dataset(str(described.location), storage_options=so.in_clear() or None, session=fresh_session())
 

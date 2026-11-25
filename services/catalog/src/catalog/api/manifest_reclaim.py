@@ -62,7 +62,7 @@ async def tick(ctx: Tick) -> ManifestReclaimTick:
         try:
             done = await run_in_threadpool(partial(manifest_reclaim.reclaim, root, settings.storage_options(), older_than=older_than))
         # pylance raises each Lance error as one of these three (`python/src/error.rs` at v13.0.0).
-        except (OSError, ValueError, RuntimeError):
+        except OSError, ValueError, RuntimeError:
             log.warning("manifest_reclaim_failed", extra={"root": root}, exc_info=True)
             _failed.add(1)
             done_this_tick.failed += 1

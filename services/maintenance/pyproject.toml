@@ -2,7 +2,7 @@
 name = "maintenance"
 version = "0.1.0"
 description = "Lance table maintenance — compaction, index optimization, old-version cleanup and cross-store drift reconciliation, as one ordered pass per dataset."
-requires-python = ">=3.13"
+requires-python = ">=3.15"
 license = "Apache-2.0"
 dependencies = [
     # The lakehouse's library, which also signs the lineage events the sweep publishes ([[LH-064]]); the verifier in

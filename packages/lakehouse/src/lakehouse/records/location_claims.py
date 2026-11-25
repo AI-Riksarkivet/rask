@@ -398,7 +398,7 @@ def _write_over(store: ClaimStore, location: str, read_as: ClaimRead | None, *, 
             conditional_records.create_json(store.control_root, store.storage_options, key, record=body)
         else:
             conditional_records.replace_json(store.control_root, store.storage_options, key, record=body, etag=read_as.etag)
-    except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
+    except conditional_records.RecordExistsError, conditional_records.RecordChangedError:
         raise ClaimChangedError(f"the claim on {decoded_path(location)!r} changed since it was read") from None
 
 
@@ -485,7 +485,7 @@ def lift_fence(store: ClaimStore, location: str, token: str) -> None:
 
     try:
         conditional_records.mutate_json(store.control_root, store.storage_options, claim_key(location), mutate=_lifted)
-    except (conditional_records.RecordMissingError, _NotHeldError):
+    except conditional_records.RecordMissingError, _NotHeldError:
         return
 
 

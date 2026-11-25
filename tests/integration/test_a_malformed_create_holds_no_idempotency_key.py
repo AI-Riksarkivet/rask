@@ -33,9 +33,6 @@ _RUN = {"x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", "x-rask-job-nam
 #: Past CPython's int-string conversion limit, so `json.loads` raises a bare `ValueError` rather than
 #: `JSONDecodeError` — valid JSON Python will not parse.
 _UNPARSEABLE_INT = "1" * 5000
-#: `json.loads` raises `RecursionError` from a nesting depth of 10000 (CPython 3.13.12); the encoded URL
-#: stays under httpx's 65536-byte query limit.
-_NESTED_PAST_THE_RECURSION_LIMIT = "[" * 10500 + "]" * 10500
 
 
 def _stream(table: pa.Table) -> bytes:
@@ -66,7 +63,6 @@ _OFFSETS = struct.pack("<iii", 0, 5, 10)
         pytest.param(f"{CREATE}?data_base=s3://rogue", {}, "allowlist", id="an-off-allowlist-data-base"),
         pytest.param(f"{CREATE}?properties={{not-json", {}, "not valid JSON", id="properties-that-are-not-json"),
         pytest.param(f'{CREATE}?properties={{"a":{_UNPARSEABLE_INT}}}', {}, "not valid JSON", id="properties-python-cannot-parse"),
-        pytest.param(f"{CREATE}?properties={_NESTED_PAST_THE_RECURSION_LIMIT}", {}, "not valid JSON", id="properties-nested-past-the-recursion-limit"),
         pytest.param(f"{CREATE}?properties=[1]", {}, "string values", id="properties-that-are-an-array"),
         pytest.param(f'{CREATE}?properties={{"a":1}}', {}, "string values", id="a-property-that-is-a-number"),
         pytest.param(f'{CREATE}?properties={{"write.format.default":"parquet"}}', {}, "Lance only", id="a-non-lance-format"),

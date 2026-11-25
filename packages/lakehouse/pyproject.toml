@@ -2,7 +2,7 @@
 name = "lakehouse"
 version = "0.1.0"
 description = "The lakehouse's library: everything the catalog, lineage and maintenance run on. The storage internals, the auth plane, the control lane and the events, the OpenLineage emission and its signing, and the app factory the three services boot from."
-requires-python = ">=3.13"
+requires-python = ">=3.15"
 license = "Apache-2.0"
 dependencies = [
     "fastapi>=0.115",

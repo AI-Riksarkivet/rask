@@ -365,7 +365,7 @@ def _finalize_attempt(
     """Finalize the planted attempt under its turn: whether it landed, and the turn the next attempt plans under."""
     try:
         commit.table.finalize_version(planted.request, turn=attempt.turn)
-    except (table_claims.TableChangedError, table_claims.TurnWaitRefusedError):
+    except table_claims.TableChangedError, table_claims.TurnWaitRefusedError:
         if commit.author is not None:
             _forget_unlanded_author(commit.table, commit.so, attempt.stamped.uuid, location=attempt.location, version=attempt.version, judged=planted.judged)
         raise

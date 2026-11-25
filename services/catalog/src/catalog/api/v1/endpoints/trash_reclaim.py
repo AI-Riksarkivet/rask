@@ -235,7 +235,7 @@ async def _standing_refusal(resolver: Resolver, record: TrashRecord, claim: Loca
         return None
     try:
         standing = await resolver.namespace_uuid(segments) if kind == "namespace" else (await resolver.table(segments)).uuid
-    except (TableNotFoundError, NamespaceNotFoundError):
+    except TableNotFoundError, NamespaceNotFoundError:
         return None
     if standing != uuid:
         return None
@@ -248,7 +248,7 @@ async def _place_held(resolver: Resolver, claim: LocationClaim) -> str | None:
         return None
     try:
         resolved = await resolver.table(claim.segments)
-    except (TableNotFoundError, NamespaceNotFoundError):
+    except TableNotFoundError, NamespaceNotFoundError:
         return None
     if resolved.location is None or decoded_path(resolved.location) != decoded_path(claim.location):
         return None

@@ -345,10 +345,12 @@ def _signer_problems(docs: tuple[dict, ...], signer: dict[str, str], root: dict[
     assert len(claim["signing_keys"]) == 1 and signer.get("issuer_seed", "").startswith("SA"), (
         f"AUTH signs with {claim['signing_keys']}, and the signer holds no seed"
     )
-    sentinel = _claim(root.get("default_sentinel", "eyJ.e30"))
-    assert sentinel.get("iss") == auth and sentinel["nats"].get("bearer_token") and sentinel["nats"]["pub"] == sentinel["nats"]["sub"] == {"deny": [">"]}, (
-        f"the server's default sentinel is {sentinel}, not AUTH's bearer user denied every subject"
-    )
+    sentinel_claim = _claim(root.get("default_sentinel", "eyJ.e30"))
+    assert (
+        sentinel_claim.get("iss") == auth
+        and sentinel_claim["nats"].get("bearer_token")
+        and sentinel_claim["nats"]["pub"] == sentinel_claim["nats"]["sub"] == {"deny": [">"]}
+    ), f"the server's default sentinel is {sentinel_claim}, not AUTH's bearer user denied every subject"
 
 
 @pytest.mark.parametrize(

@@ -103,7 +103,7 @@ def is_canonical_uuid(value: str) -> bool:
     client chooses its own transaction's uuid, and a record's key is built from it."""
     try:
         return str(uuid.UUID(value)) == value
-    except (ValueError, TypeError, AttributeError):
+    except ValueError, TypeError, AttributeError:
         return False
 
 

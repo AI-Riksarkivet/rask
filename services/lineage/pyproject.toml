@@ -2,7 +2,7 @@
 name = "lineage"
 version = "0.1.0"
 description = "Lineage service — the authenticated OpenLineage intake, the commit feed and the table-level edge list as Lance tables the catalog governs, and a forwarder to a bring-your-own graph backend."
-requires-python = ">=3.13"
+requires-python = ">=3.15"
 license = "Apache-2.0"
 dependencies = [
     # The lakehouse's library: the spec's REST client the feed is read and written through (the catalog's own `query` and

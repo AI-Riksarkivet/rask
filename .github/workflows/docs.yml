@@ -31,7 +31,7 @@ jobs:
       # Build Zensical docs (with mkdocstrings for auto-generated API reference)
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
         with:
-          python-version: "3.13"
+          python-version: "3.15"
       # Every package by version and hash (.github/docs-requirements.txt): this job publishes with a write token.
       - run: pip install --require-hashes -r .github/docs-requirements.txt
       - run: zensical build --clean

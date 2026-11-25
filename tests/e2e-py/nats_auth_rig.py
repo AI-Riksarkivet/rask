@@ -429,7 +429,7 @@ def mint(nsc: Path, static: dict[str, Permissions], sessions: dict[str, Permissi
     issuer_seed.chmod(0o600)
     _nsc(nsc, home, "edit", "account", "--name", _AUTH, "--sk", issuer_public)
     callout = _issue(nsc, home, _AUTH, "callout", [])
-    sentinel = _issue(nsc, home, _AUTH, "sentinel", ["--bearer", "--deny-pubsub", ">"])
+    sentinel_user = _issue(nsc, home, _AUTH, "sentinel", ["--bearer", "--deny-pubsub", ">"])
     app_account = json.loads(_nsc(nsc, home, "describe", "account", _ACCOUNT, "--json"))["sub"]
     auth_account = json.loads(_nsc(nsc, home, "describe", "account", _AUTH, "--json"))["sub"]
     _nsc(nsc, home, "edit", "authcallout", "--account", _AUTH, "--auth-user", callout.public_key, "--allowed-account", app_account)
@@ -442,7 +442,7 @@ def mint(nsc: Path, static: dict[str, Permissions], sessions: dict[str, Permissi
         callout=callout.creds_file,
         issuer_seed=issuer_seed,
         keys=keys,
-        sentinel=sentinel.jwt,
+        sentinel=sentinel_user.jwt,
         app_account=app_account,
         auth_account=auth_account,
         scoped=scoped,
@@ -1006,7 +1006,7 @@ class Link:
             async with asyncio.timeout(_HANDSHAKE_SECONDS):
                 await broker_writer.start_tls(self._pki.trust(), server_hostname="127.0.0.1")
                 await client_writer.start_tls(self._pki.serving())
-        except (ConnectionError, OSError, ssl.SSLError, TimeoutError):
+        except ConnectionError, OSError, ssl.SSLError, TimeoutError:
             for writer in (client_writer, broker_writer):
                 writer.close()
                 self._writers.discard(writer)
@@ -1020,7 +1020,7 @@ class Link:
             try:
                 while frame := await self._client_frame(client_reader):
                     sent.put_nowait((loop.time(), frame))
-            except (ConnectionError, OSError, ssl.SSLError, asyncio.IncompleteReadError):
+            except ConnectionError, OSError, ssl.SSLError, asyncio.IncompleteReadError:
                 pass
             finally:
                 sent.put_nowait((loop.time(), b""))
@@ -1031,7 +1031,7 @@ class Link:
                     await asyncio.sleep(max(0.0, frame[0] + self._lag - loop.time()))
                     broker_writer.write(frame[1])
                     await broker_writer.drain()
-            except (ConnectionError, OSError, ssl.SSLError):
+            except ConnectionError, OSError, ssl.SSLError:
                 pass
             finally:
                 broker_writer.close()
@@ -1042,7 +1042,7 @@ class Link:
                 while chunk := await broker_reader.read(65536):
                     client_writer.write(chunk)
                     await client_writer.drain()
-            except (ConnectionError, OSError, ssl.SSLError):
+            except ConnectionError, OSError, ssl.SSLError:
                 pass
             finally:
                 client_writer.close()
@@ -1167,7 +1167,7 @@ class Client:
         """A JetStream API request; None when no answer came (a refused request is never answered)."""
         try:
             reply = await self.nc.request(subject, json.dumps(body or {}).encode(), timeout=self._answer_within)
-        except (TimeoutError, NoRespondersError):
+        except TimeoutError, NoRespondersError:
             return None
         return json.loads(reply.data)
 

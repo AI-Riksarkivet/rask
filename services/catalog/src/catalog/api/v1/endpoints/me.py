@@ -76,7 +76,7 @@ async def _estate_standing(client: OpenFgaClient, settings: FgaSettings, sub: st
     try:
         async with asyncio.timeout_at(deadline):
             return await fga_reads.check(client, user=sub, relation=relation, obj=settings.fga_root_object, retry=fga_resilience.ONE_ATTEMPT)
-    except (ServiceUnavailableError, TimeoutError):
+    except ServiceUnavailableError, TimeoutError:
         log.warning("me_estate_standing_unavailable", extra={"relation": relation})
         return False
 
@@ -90,7 +90,7 @@ async def _project_ids(client: OpenFgaClient, sub: str, relation: str, *, deadli
     try:
         async with asyncio.timeout_at(deadline):
             objects = (await fga_reads.list_objects(client, user=sub, relation=relation, object_type="project", retry=fga_resilience.ONE_ATTEMPT)).objects
-    except (ServiceUnavailableError, TimeoutError):
+    except ServiceUnavailableError, TimeoutError:
         log.warning("me_projects_unavailable", extra={"relation": relation})
         return []
     return sorted(o.removeprefix("project:") for o in objects)

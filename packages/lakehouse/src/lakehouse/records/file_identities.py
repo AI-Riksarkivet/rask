@@ -180,7 +180,7 @@ def _write_copy(control_root: str, storage_options: StorageOptions, table_uuid: 
             replace_json(control_root, storage_options, key, record=copy.model_dump(mode="json"), etag=over)
             return
         create_json(control_root, storage_options, key, record=copy.model_dump(mode="json"))
-    except (RecordChangedError, RecordExistsError):
+    except RecordChangedError, RecordExistsError:
         log.info("file_identities_copy_moved", extra={"table_uuid": table_uuid})
         return
     if copy.records and not listed_records(control_root, storage_options, table_uuid):

@@ -150,7 +150,7 @@ async def _live_tables(request: Request, settings: Settings, claims: list[Locati
         try:
             ns = await namespace_for_table(request, settings, claim.segments)
             described = await run_in_threadpool(native.call, ns, "describe_table", DescribeTableRequest(id=claim.segments))
-        except (TableNotFoundError, NamespaceNotFoundError):
+        except TableNotFoundError, NamespaceNotFoundError:
             continue
         except PermissionDeniedError:
             # The table's warehouse is deactivated (the resolver's quarantine): no door commits to it, so nothing is owed
@@ -209,7 +209,7 @@ def _feed_location(settings: CatalogLineageSettings, ns: LanceNamespace) -> str 
         return None
     try:
         described = native.call(ns, "describe_table", DescribeTableRequest(id=[*parse_identifier(settings.provenance_namespace), "events"]))
-    except (TableNotFoundError, NamespaceNotFoundError):
+    except TableNotFoundError, NamespaceNotFoundError:
         return None
     return str(described.location or "") or None
 

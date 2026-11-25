@@ -368,7 +368,7 @@ def _version(root: Path, table: list[str]) -> int | None:
     """
     try:
         return connect("dir", {"root": str(root)}).describe_table(DescribeTableRequest(id=table, load_detailed_metadata=True)).version
-    except (TableNotFoundError, NamespaceNotFoundError):
+    except TableNotFoundError, NamespaceNotFoundError:
         return None
 
 

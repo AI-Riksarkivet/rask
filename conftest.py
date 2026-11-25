@@ -245,7 +245,7 @@ class ServiceAccountIssuer:
     reaches it has carried both the fetch credential and the CA, as it must in the cluster.
     """
 
-    def __init__(self, directory: "pathlib.Path") -> None:
+    def __init__(self, directory: pathlib.Path) -> None:
         import datetime
         import http.server
         import ipaddress

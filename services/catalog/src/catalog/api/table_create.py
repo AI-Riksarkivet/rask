@@ -331,7 +331,7 @@ async def _write_the_table(
             # Not a race lost to another create of the name: the table an ExistOk would keep is in a namespace this
             # caller was not judged on ([[LH-585]]).
             raise
-        except (TableAlreadyExistsError, ConcurrentModificationError):
+        except TableAlreadyExistsError, ConcurrentModificationError:
             # AN ExistOk THAT LOST THE RACE KEEPS THE WINNER'S TABLE. Two ExistOk creates in one pod both find no table
             # at the probe, and the backend's put-if-not-exists answers the loser's add as a conflict; ExistOk asks for
             # the table to exist, so the loser answers it as kept, and as kept it writes nothing and keeps no grant. A

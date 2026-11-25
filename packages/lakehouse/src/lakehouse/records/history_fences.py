@@ -171,7 +171,7 @@ class TableHistory(BaseModel):
                     conditional_records.create_json(self.control_root, self.storage_options, self.key, record=fence)
                 else:
                     conditional_records.replace_json(self.control_root, self.storage_options, self.key, record=fence, etag=read.stored.etag)
-            except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
+            except conditional_records.RecordExistsError, conditional_records.RecordChangedError:
                 continue
             return mine.token
         raise HistoryFencedError(f"{_ATTEMPTS} attempts to hold this table's history for a {work} each lost to another writer; retry")

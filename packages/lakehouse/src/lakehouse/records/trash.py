@@ -384,7 +384,7 @@ def stamp_detached(control_root: str, storage_options: StorageOptions, record: T
         if kept is None or kept.detached:
             return kept is not None
         replace_json(control_root, storage_options, at, record=kept.model_copy(update={"detached": True}).stored(), etag=found[1])
-    except (RecordChangedError, RecordExistsError):
+    except RecordChangedError, RecordExistsError:
         return False
     return True
 

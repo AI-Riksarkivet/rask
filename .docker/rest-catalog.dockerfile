@@ -11,7 +11,7 @@
 # Build context = repo root:  scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
 
 # ── builder: two-step uv sync against the ROOT uv.lock ───────────────────────
-FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim@sha256:6ff812e34a0e14b4b8bc9ddf25e77b3e16bac6e0c4d9b67641f40366fa382d4c AS builder
+FROM ghcr.io/astral-sh/uv:python3.15-trixie-slim@sha256:3ee10471b12b57f6f86d03f68c44fbd4bb8d5540efa25ab3b89159e1216b1a70 AS builder
 
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \
@@ -48,7 +48,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 
 # ── final: minimum runtime surface ───────────────────────────────────────────
-FROM python:3.13-slim-trixie@sha256:09a17cad02668ae61ece136b4fd36ac3849e14f670ebedb637ea3e15580525bc AS final
+FROM python:3.15-slim-trixie@sha256:63bb298d2b7b88f176f51b5189f54ce6535c997682ea70885d2132f5d473a8a5 AS final
 
 ARG BUILD_DATE
 ARG VCS_REF

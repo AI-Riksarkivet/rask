@@ -68,7 +68,7 @@ def resolve_datasource() -> str | None:
             env=env,
             check=False,
         )
-    except (OSError, subprocess.SubprocessError):
+    except OSError, subprocess.SubprocessError:
         return None
     ip = out.stdout.strip()
     return f"http://{ip}:4000" if ip and out.returncode == 0 else None
@@ -96,7 +96,7 @@ def evaluate(base: str, expr: str) -> tuple[bool, str]:
         detail = ""
         try:
             detail = exc.read().decode(errors="replace")[:200]
-        except (OSError, http.client.HTTPException):  # the body is best-effort diagnostics
+        except OSError, http.client.HTTPException:  # the body is best-effort diagnostics
             detail = ""
         return False, f"HTTP {exc.code} {detail}"
     except (OSError, http.client.HTTPException, ValueError) as exc:  # a transport failure or a body not JSON is a non-evaluation

@@ -761,7 +761,7 @@ def holder_stands(ns: LanceNamespace, store: ClaimStore, claim: LocationClaim) -
         return True
     try:
         described = native.call(ns, "describe_table", DescribeTableRequest(id=claim.segments))
-    except (TableNotFoundError, NamespaceNotFoundError):
+    except TableNotFoundError, NamespaceNotFoundError:
         return False
     return decoded_path(str(described.location or "")) == claim.location
 

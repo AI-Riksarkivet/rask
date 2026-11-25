@@ -116,7 +116,7 @@ def _signing_key() -> SigningKey | None:
         ]
         try:
             seed = subprocess.run(read_seed, capture_output=True, text=True, check=True, timeout=60).stdout.strip()  # noqa: S603
-        except (OSError, subprocess.SubprocessError):
+        except OSError, subprocess.SubprocessError:
             return None
     return SigningKey.from_seed(seed) if seed else None
 

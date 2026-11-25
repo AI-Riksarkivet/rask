@@ -222,7 +222,7 @@ def _prose_lines_by_tokenize(source: str) -> set[int] | None:
     marked: set[int] = set()
     try:
         tokens = list(tokenize.generate_tokens(io.StringIO(source).readline))
-    except (tokenize.TokenError, SyntaxError, IndentationError, ValueError):
+    except tokenize.TokenError, SyntaxError, IndentationError, ValueError:
         return None
     previous = token.INDENT  # start of file: a leading string is the module docstring
     for tok in tokens:

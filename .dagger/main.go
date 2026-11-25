@@ -15,7 +15,7 @@ import (
 
 type Rask struct{}
 
-// UvPythonImage carries Python 3.13 + uv preinstalled. Same Python version as
+// UvPythonImage carries Python 3.15 + uv preinstalled. Same Python version as
 // the workspace `.python-version`; uv path is `/usr/local/bin/uv`. Trixie, NOT
 // bookworm: `lance-graph` ships a single manylinux_2_39 wheel (glibc >= 2.39),
 // so on bookworm (glibc 2.36) uv falls back to its sdist and dies in a
@@ -26,7 +26,7 @@ type Rask struct{}
 // are trixie. `dagger call scan-image --name=gateway` is what caught it — the report is headed
 // `/img.tar (debian 12.14)`, which is bookworm. The gate container being trixie is correct and
 // load-bearing for the reason above; the deployables simply do not follow it.
-const UvPythonImage = "ghcr.io/astral-sh/uv:python3.13-trixie-slim"
+const UvPythonImage = "ghcr.io/astral-sh/uv:python3.15-trixie-slim"
 
 // Echo returns whatever string you pass it (smoke-test for the module).
 func (m *Rask) Echo(ctx context.Context, msg string) (string, error) {

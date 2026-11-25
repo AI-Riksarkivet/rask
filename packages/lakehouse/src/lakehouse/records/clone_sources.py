@@ -223,7 +223,7 @@ def delete_tag(source_location: str, tag: str, *, storage_options: StorageOption
     """
     try:
         dataset = _open(source_location, storage_options)
-    except (OSError, ValueError):
+    except OSError, ValueError:
         if objectfs.is_lance_dataset_root(_dataset_key(source_location), storage_options):
             raise
         log.warning("clone_source_gone", extra={"source": source_location, "tag": tag})

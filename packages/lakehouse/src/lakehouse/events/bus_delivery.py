@@ -125,7 +125,7 @@ def envelope_of(body: bytes) -> dict[str, Any] | None:
     """
     try:
         parsed = json.loads(body)
-    except (ValueError, RecursionError):
+    except ValueError, RecursionError:
         return None
     return parsed if isinstance(parsed, dict) and _nests_within(parsed, MAX_ENVELOPE_DEPTH) else None
 

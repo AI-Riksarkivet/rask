@@ -99,7 +99,7 @@ def arm_drain_on_sigterm(app: FastAPI) -> Callable[[], None]:
 
     try:
         loop.add_signal_handler(signal.SIGTERM, _flip)
-    except (NotImplementedError, RuntimeError, ValueError):
+    except NotImplementedError, RuntimeError, ValueError:
         log.warning("could not arm the drain on SIGTERM; the flag flips at lifespan shutdown", exc_info=True)
         return lambda: None
     _holder = app
@@ -111,11 +111,11 @@ def arm_drain_on_sigterm(app: FastAPI) -> Callable[[], None]:
         # drain, or not back to the handler it displaced, so the next signal may not stop the process as it should.
         try:
             loop.remove_signal_handler(signal.SIGTERM)
-        except (RuntimeError, ValueError, OSError):
+        except RuntimeError, ValueError, OSError:
             log.warning("drain_restore_failed", extra={"step": "remove_signal_handler"}, exc_info=True)
         try:
             signal.signal(signal.SIGTERM, previous)
-        except (RuntimeError, ValueError, OSError):
+        except RuntimeError, ValueError, OSError:
             log.warning("drain_restore_failed", extra={"step": "signal"}, exc_info=True)
 
     return _restore

@@ -154,7 +154,7 @@ async def ensure_provenance_namespace(ns: LanceNamespace, settings: Settings, cl
     try:
         await run_in_threadpool(native.call, ns, "create_namespace", CreateNamespaceRequest(id=segments, properties=with_minted_uuid(None)))
         kept = False
-    except (NamespaceAlreadyExistsError, ConcurrentModificationError):
+    except NamespaceAlreadyExistsError, ConcurrentModificationError:
         kept = True
     namespace_uuid = await run_in_threadpool(object_uuids.require_namespace_uuid, ns, segments)
     await run_in_threadpool(

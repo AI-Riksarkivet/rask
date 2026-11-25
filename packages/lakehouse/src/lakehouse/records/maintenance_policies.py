@@ -234,7 +234,7 @@ def set_policy(
             else:
                 record = compose(read(stored.record, at=full_key))
                 conditional_records.replace_json(control_root, storage_options, full_key, record=record.stored(), etag=stored.etag)
-        except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
+        except conditional_records.RecordExistsError, conditional_records.RecordChangedError:
             continue
         return record
     raise conditional_records.RecordChangedError(f"the {kind} policy {key} kept changing across {_SET_ATTEMPTS} attempts")

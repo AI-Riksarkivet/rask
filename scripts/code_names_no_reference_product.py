@@ -55,7 +55,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for name in code_files(args.root):
         try:
             text = (args.root / name).read_text(encoding="utf-8")
-        except (UnicodeDecodeError, FileNotFoundError):
+        except UnicodeDecodeError, FileNotFoundError:
             continue
         hits += [f"{name}:{n}: {m.group(0)!r}" for n, line in enumerate(text.splitlines(), 1) for m in found.finditer(line)]
     for hit in hits:

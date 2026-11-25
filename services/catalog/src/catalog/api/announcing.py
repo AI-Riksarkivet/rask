@@ -453,7 +453,7 @@ class Announcer:
             fencing = partial(location_claims.fence, store, record.location, claim, table=table, segments=segments, token=fenced.token, is_gone=lambda _: False)
             try:
                 await self._read(fencing)
-            except (location_claims.LocationHeldError, location_claims.ClaimChangedError):
+            except location_claims.LocationHeldError, location_claims.ClaimChangedError:
                 raise DropAtWorkError(f"the claim of table {record.uuid} changed while it was judged") from None
         try:
             withdrawn = await self._read(partial(trash.withdraw, store.control_root, store.storage_options, record, claims=store, token=fenced.token))

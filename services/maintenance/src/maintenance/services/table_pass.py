@@ -975,7 +975,7 @@ def _rss_bytes() -> int:
             for line in handle:
                 if line.startswith("VmRSS:"):
                     return int(line.split()[1]) << 10
-    except (OSError, IndexError, ValueError):  # pragma: no cover - a platform without procfs
+    except OSError, IndexError, ValueError:  # pragma: no cover - a platform without procfs
         return -1
     return -1
 
@@ -993,6 +993,6 @@ def _session_occupancy() -> dict[str, int]:
     try:
         # CALLED, not read: `Session.size_bytes` is a method on pylance 11.0.0.
         size = int(shared_lance_session().size_bytes())
-    except (AttributeError, TypeError, ValueError):  # pragma: no cover - a pylance that moved the accessor
+    except AttributeError, TypeError, ValueError:  # pragma: no cover - a pylance that moved the accessor
         size = -1
     return {"lance_session_bytes": size, "lance_session_cap_bytes": metadata + index}

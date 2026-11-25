@@ -439,7 +439,7 @@ class TableTurns(BaseModel):
                     conditional_records.create_json(self.control_root, self.storage_options, self.key, record=held)
                 else:
                     conditional_records.replace_json(self.control_root, self.storage_options, self.key, record=held, etag=read.stored.etag)
-            except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
+            except conditional_records.RecordExistsError, conditional_records.RecordChangedError:
                 continue
             _SHARED_READS.forget(self._shared)
             return token

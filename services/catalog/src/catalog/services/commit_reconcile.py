@@ -168,7 +168,7 @@ class FeedReading:
             for text, named_tables in zip(batch.column("event").to_pylist(), batch.column("table_uuids").to_pylist(), strict=True):
                 try:
                     event = json.loads(text)
-                except (TypeError, ValueError):
+                except TypeError, ValueError:
                     continue
                 if self._signer is not None and _signed_by(event) != self._signer:
                     continue

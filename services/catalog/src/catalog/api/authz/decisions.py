@@ -331,7 +331,7 @@ async def refused_read_as_absent(
             return
     except ServiceUnavailableError:
         return  # the authz layer is down; the 403 the caller already has is the fail-closed answer
-    except (OSError, ValueError):
+    except OSError, ValueError:
         log.warning("refused_read_trash_unreadable", extra={"object": fga_ids.canonical_object_id(segments)}, exc_info=True)
         return
     ident = fga_ids.canonical_object_id(segments)

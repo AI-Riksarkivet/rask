@@ -265,7 +265,7 @@ class Timer:
                 conditional_records.create_json(self._root, options, key, record=claim)
             else:
                 conditional_records.replace_json(self._root, options, key, record=claim, etag=read.stored.etag)
-        except (conditional_records.RecordExistsError, conditional_records.RecordChangedError):
+        except conditional_records.RecordExistsError, conditional_records.RecordChangedError:
             if denied is not None:
                 # The record exists and this identity may not read it: a fault to say, never another replica's window.
                 raise denied from None

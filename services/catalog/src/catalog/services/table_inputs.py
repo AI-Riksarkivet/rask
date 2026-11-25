@@ -100,7 +100,7 @@ def record(control_root: str, storage_options: StorageOptions, table_uuid: str, 
                 create_json(control_root, storage_options, key, record=updated)
             else:
                 replace_json(control_root, storage_options, key, record=updated, etag=read.stored.etag)
-        except (RecordExistsError, RecordChangedError):
+        except RecordExistsError, RecordChangedError:
             continue
         return
     raise InternalError(f"the input record of table {table_uuid} kept changing across {_ATTEMPTS} attempts; the commit is not made")

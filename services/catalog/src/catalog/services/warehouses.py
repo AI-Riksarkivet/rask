@@ -182,7 +182,7 @@ def set_warehouse_protection(
     key = _warehouse_key(warehouse_id)
     try:
         return _record(mutate_json(control_root, storage_options, key, mutate=protect), path=key)
-    except (RecordMissingError, WarehouseProjectConflict):
+    except RecordMissingError, WarehouseProjectConflict:
         return None
 
 

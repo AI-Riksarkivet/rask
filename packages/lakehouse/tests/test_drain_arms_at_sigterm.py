@@ -37,7 +37,7 @@ async def _settle() -> None:
 
 
 @pytest.fixture
-def sentinel() -> Iterator[list[int]]:
+def handed() -> Iterator[list[int]]:
     """A Python-level SIGTERM handler recording each signal it is handed, restored afterwards."""
     received: list[int] = []
 
@@ -58,7 +58,7 @@ def _app() -> FastAPI:
 
 
 @pytest.mark.asyncio
-async def test_a_SECOND_signal_is_harmless_and_handed_on_too(sentinel: list[int]) -> None:
+async def test_a_SECOND_signal_is_harmless_and_handed_on_too(handed: list[int]) -> None:
     """An impatient operator sends two. A signal handler that raised would be unhandleable, and the
     displaced handler decides what a second one means (uvicorn's escalates only on SIGINT)."""
     app = _app()
@@ -70,13 +70,13 @@ async def test_a_SECOND_signal_is_harmless_and_handed_on_too(sentinel: list[int]
         await _settle()
 
         assert app.state.shutting_down is True
-        assert sentinel == [signal.SIGTERM, signal.SIGTERM], sentinel
+        assert handed == [signal.SIGTERM, signal.SIGTERM], handed
     finally:
         disarm()
 
 
 @pytest.mark.asyncio
-async def test_a_SECOND_arm_is_REFUSED_while_the_first_holds_SIGTERM(sentinel: list[int]) -> None:
+async def test_a_SECOND_arm_is_REFUSED_while_the_first_holds_SIGTERM(handed: list[int]) -> None:
     """A process has one SIGTERM disposition, so a second app cannot arm over the first. The refusal comes before
     the loop is touched, so the first still hands the signal on exactly once, and once it is disarmed the next
     app may arm."""
@@ -88,7 +88,7 @@ async def test_a_SECOND_arm_is_REFUSED_while_the_first_holds_SIGTERM(sentinel: l
         signal.raise_signal(signal.SIGTERM)
         await _settle()
 
-        assert sentinel == [signal.SIGTERM], f"the first arm no longer hands SIGTERM on once: {sentinel}"
+        assert handed == [signal.SIGTERM], f"the first arm no longer hands SIGTERM on once: {handed}"
         assert (first.state.shutting_down, second.state.shutting_down) == (True, False)
     finally:
         disarm()
@@ -128,7 +128,7 @@ async def test_a_handler_NOT_INSTALLED_FROM_PYTHON_is_not_armed_over(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_DISARMING_stops_a_dead_app_from_being_flipped(sentinel: list[int]) -> None:
+async def test_DISARMING_stops_a_dead_app_from_being_flipped(handed: list[int]) -> None:
     """Why the helper returns a restore callable and the lifespan must call it: a handler installed
     per app and never removed leaks across a suite that builds many apps in one process -- and would
     leave a DEAD app's flag being flipped by a live process's signal.
@@ -138,22 +138,22 @@ async def test_DISARMING_stops_a_dead_app_from_being_flipped(sentinel: list[int]
     in place, that `_flip` still runs off the wakeup fd and hands the signal on a second time."""
     dead = _app()
     arm_drain_on_sigterm(dead)()
-    assert callable(signal.getsignal(signal.SIGTERM)), "the restore did not put the sentinel back, and raising SIGTERM now would end pytest"
+    assert callable(signal.getsignal(signal.SIGTERM)), "the restore did not put the recording handler back, and raising SIGTERM now would end pytest"
 
     signal.raise_signal(signal.SIGTERM)
     await _settle()
 
     assert dead.state.shutting_down is False, "a disarmed app was still flipped"
-    assert sentinel == [signal.SIGTERM], f"the restored handler must receive SIGTERM exactly once: {sentinel}"
+    assert handed == [signal.SIGTERM], f"the restored handler must receive SIGTERM exactly once: {handed}"
 
 
 @pytest.mark.asyncio
 async def test_a_restore_step_that_fails_is_said_and_the_other_is_still_taken(
-    sentinel: list[int], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    handed: list[int], monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """A restore step that fails leaves SIGTERM routed where the process no longer means it to go, so it is logged at
     WARNING with its traceback, and the other step is taken all the same."""
-    del sentinel
+    del handed
     loop = asyncio.get_running_loop()
     remove = loop.remove_signal_handler
     restore = arm_drain_on_sigterm(_app())

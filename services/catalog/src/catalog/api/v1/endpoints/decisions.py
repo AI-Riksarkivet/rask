@@ -159,7 +159,7 @@ async def _named_table(resolver: Resolver, name: str) -> tuple[str, str | None] 
         if resolved.location is None:
             return None
         return resolved.require_uuid(), await resolver.namespace_uuid(segments[:-1])
-    except (InvalidInputError, PermissionDeniedError):
+    except InvalidInputError, PermissionDeniedError:
         return None
     except UnidentifiedObjectError:
         log.error("decision_left_out_unidentified_object", extra={"table": name})

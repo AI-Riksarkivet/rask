@@ -577,7 +577,7 @@ def _raw_public_key_named(listed: Iterable[str], kid: str) -> bytes | None:
     for entry in listed:
         try:
             raw = _decode_nkey(entry, prefix=_PUBLIC_PREFIX, text_length=_PUBLIC_TEXT_LENGTH, what="NKEY public key")
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             continue
         if _kid_of(raw) == kid:
             return raw

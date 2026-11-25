@@ -142,7 +142,7 @@ async def _admins_for(client: OpenFgaClient | None, settings: FgaSettings, proje
     try:
         async with asyncio.timeout(_ADMINS_TIMEOUT_SECONDS):
             return await fga_reads.list_users(client, relation="can_administer", obj=f"project:{project}", retry=fga_resilience.ONE_ATTEMPT)
-    except (ServiceUnavailableError, TimeoutError):
+    except ServiceUnavailableError, TimeoutError:
         log.warning("project_admins_unavailable", extra={"project": project})
         return []
 

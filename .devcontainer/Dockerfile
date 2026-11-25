@@ -1,4 +1,4 @@
-FROM ghcr.io/astral-sh/uv:python3.13-trixie-slim
+FROM ghcr.io/astral-sh/uv:python3.15-trixie-slim
 
 ENV UV_LINK_MODE=copy \
     UV_COMPILE_BYTECODE=1 \

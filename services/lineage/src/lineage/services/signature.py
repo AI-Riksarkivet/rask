@@ -119,5 +119,5 @@ async def staged_signature(arrived: Mapping[str, Any], app: FastAPI, settings: L
     keys: PublishedKeys = app.state.published_keys
     try:
         return await run_in_threadpool(verify_signature, arrived, source=keys.for_event(claim.kid), signers=signing.signers, delegators=signing.delegators)
-    except (SignatureError, KeySourceUnavailableError):
+    except SignatureError, KeySourceUnavailableError:
         return None

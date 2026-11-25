@@ -203,7 +203,7 @@ def delivery_feed_key(cloud_event: Mapping[str, Any]) -> str | None:
     """The feed row a delivered CloudEvent would write, or ``None`` when no event parses out of it."""
     try:
         return feed_key(parse_event(cloud_event.get("data")))
-    except (ValidationError, TypeError, ValueError):
+    except ValidationError, TypeError, ValueError:
         return None
 
 
@@ -303,7 +303,7 @@ def _writer_run(event: RunEvent) -> str | None:
     ([[LH-554]]); ``None`` when the event names none or names one the spec does not admit."""
     try:
         return ParentRunFacet.model_validate(event.run.facets["parent"]).run.run_id
-    except (KeyError, ValidationError):
+    except KeyError, ValidationError:
         return None
 
 

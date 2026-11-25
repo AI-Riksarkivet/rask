@@ -614,14 +614,14 @@ def classified_in_any_ref(dataset: Any, *, branch: str = "") -> tuple[str, ...]:
         main = dataset if not branch else dataset.checkout_version(("main", None))
         found = set(classified_columns(main))
         branches = list(dataset.branches.list())
-    except (AttributeError, ValueError, OSError, RuntimeError):
+    except AttributeError, ValueError, OSError, RuntimeError:
         # RuntimeError: a branch file Lance cannot parse fails the listing so (measured on pylance 13.0.0, 2026-11-12).
         log.warning("vend_refs_unreadable", exc_info=True)
         return ("<refs unreadable>",)
     for name in branches:
         try:
             found.update(f"{name}:{path}" for path in classified_columns(dataset.checkout_version((name, None))))
-        except (AttributeError, ValueError, OSError):
+        except AttributeError, ValueError, OSError:
             log.warning("vend_branch_schema_unreadable", extra={"branch": name}, exc_info=True)
             found.add(f"{name}:<unreadable>")
     return tuple(sorted(found))

@@ -168,7 +168,7 @@ def _action_of(event_json: str) -> str | None:
     """
     try:
         parsed = json.loads(event_json)
-    except (ValueError, RecursionError):
+    except ValueError, RecursionError:
         return None
     event = parsed.get("data") if isinstance(parsed, dict) else None
     action = event.get("action") if isinstance(event, dict) else None

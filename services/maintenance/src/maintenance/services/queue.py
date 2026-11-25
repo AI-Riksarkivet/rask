@@ -330,7 +330,7 @@ async def _standing(claims: KeyValue, key: str, token: str) -> int | None:
     """The revision of the claim standing on ``key`` when it holds ``token``; None when it is another's, or none stands."""
     try:
         entry = await claims.get(key)
-    except (KeyNotFoundError, KeyDeletedError):
+    except KeyNotFoundError, KeyDeletedError:
         return None
     return entry.revision if entry.value == token.encode() else None
 
@@ -487,7 +487,7 @@ class TaskQueue:
         """
         try:
             await self._client.request(msg.reply, said, timeout=within)
-        except (NatsError, TimeoutError):
+        except NatsError, TimeoutError:
             return False
         return True
 
@@ -522,7 +522,7 @@ class TaskQueue:
             await asyncio.wait_for(self._js.stream_info(f"KV_{CLAIMS_BUCKET}"), _API_TIMEOUT)
         except NotFoundError as exc:
             raise ClaimsBucketMissingError(f"the bus holds no {CLAIMS_BUCKET} bucket; the chart's stream Job declares it") from exc
-        except (NatsError, TimeoutError):
+        except NatsError, TimeoutError:
             return
 
     async def renew(self, key: str, token: str, revision: int, *, within: float) -> int | None:

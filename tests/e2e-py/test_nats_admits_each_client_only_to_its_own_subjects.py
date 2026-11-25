@@ -1453,7 +1453,7 @@ async def _published_until_taken(session: Bus, event: CloudEvent, within: float)
         publishes += 1
         try:
             await publish_event(session, event, topic=LINEAGE_TOPIC, timeout_seconds=5)
-        except (BusUnavailableError, TimeoutError):
+        except BusUnavailableError, TimeoutError:
             await asyncio.sleep(0.2)
             continue
         return _Delivered(event_id=event.id, asked=asked, acknowledged=clock(), publishes=publishes)
@@ -1535,7 +1535,7 @@ async def _a_session_it_cannot_renew_is_opened_again(bus: Rig, rig: Client, capl
                     event = _lane_event(leg=f"staged-at-the-{stretch}", n=str(len(staged)))
                     try:
                         await publish_event(session, event, topic=LINEAGE_TOPIC, timeout_seconds=5)
-                    except (BusUnavailableError, TimeoutError):
+                    except BusUnavailableError, TimeoutError:
                         staged.append(event)
                     await asyncio.sleep(0.5)
                 if await _up(session):

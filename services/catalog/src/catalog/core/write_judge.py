@@ -175,7 +175,7 @@ async def judge(
     required = await _requires_run_for(namespace, op.table)
     try:
         await _judge_under_the_run_rule(op, required=required, inputs=inputs, namespace=namespace)
-    except (InvalidInputError, UnsupportedOperationError):
+    except InvalidInputError, UnsupportedOperationError:
         # The rung's own denial is audited where it is asked; this is the rule's, or an input the committer may not read.
         audit(AuditAction.WRITE_JUDGE, AuditOutcome.DENY, subject=caller, resource=op.obj, op=op.op, requires_run=str(required).lower())
         raise

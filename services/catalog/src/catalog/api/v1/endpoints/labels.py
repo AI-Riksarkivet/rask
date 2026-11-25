@@ -119,7 +119,7 @@ async def _uuid_now(ns: LanceNamespace, settings: CatalogStore, kind: LabelScope
     """The uuid of the object the name holds now, ``None`` when it holds none."""
     try:
         return (await objects.standing(ns, settings, kind, segments=list(segments))).uuid
-    except (TableNotFoundError, NamespaceNotFoundError):
+    except TableNotFoundError, NamespaceNotFoundError:
         return None
 
 
