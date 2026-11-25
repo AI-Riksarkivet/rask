@@ -981,8 +981,9 @@ def _rss_bytes() -> int:
 
 
 def _python_heap_blocks() -> int:
-    """Blocks held by CPython's allocator. `sys.getallocatedblocks()` and not `len(gc.get_objects())`, which is blind
-    to untracked atomic dicts (measured on CPython 3.13.12: 50,000 of them moved it by -188)."""
+    """Blocks held by CPython's allocator. `sys.getallocatedblocks()` and not `len(gc.get_objects())`, which counts only
+    what the collector tracks, and that changes between versions: on CPython 3.13.12 a dict of atomic keys and values is
+    untracked (50,000 of them moved it by -188), on 3.15.2 it is tracked. A block is counted either way."""
     return sys.getallocatedblocks()
 
 

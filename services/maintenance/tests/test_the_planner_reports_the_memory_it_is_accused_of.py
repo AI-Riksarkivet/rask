@@ -56,10 +56,10 @@ def test_two_readings_move_with_the_heap() -> None:
     """The reading must RESPOND, or it cannot separate retention from native allocation.
 
     `python_blocks` is `sys.getallocatedblocks()`, a count of blocks rather than bytes: tracking RSS
-    means Python retention, flat while RSS climbs means native allocation. `len(gc.get_objects())` cannot
-    answer that: measured on CPython 3.13.12, `gc.is_tracked({"n": 1})` is False (a dict of atomic keys
-    and values is untracked), so holding 50,000 of them moved `gc.get_objects()` by -188 while
-    `getallocatedblocks()` moved by +149,728 and returned to baseline on release. A reading that stays
+    means Python retention, flat while RSS climbs means native allocation. `len(gc.get_objects())` answers
+    only for what the collector tracks, which changes between versions: on CPython 3.13.12 `gc.is_tracked({"n": 1})`
+    is False, so holding 50,000 such dicts moved `gc.get_objects()` by -188 while `getallocatedblocks()` moved by
+    +149,728 and returned to baseline on release; on 3.15.2 it is True. A reading that stays
     flat reads as "native", a confident wrong answer to the only question this instrument settles.
     """
     # The allocation below triggers collections, which free cyclic garbage earlier tests left and can outweigh the 50,000

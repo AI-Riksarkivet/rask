@@ -5,7 +5,7 @@ all of it: the toolchain, the clone, and the k3s estate installed from empty.
 
 ## Prerequisites
 
-- **[uv](https://docs.astral.sh/uv/)** — Python 3.13 toolchain and workspace manager.
+- **[uv](https://docs.astral.sh/uv/)** — Python 3.15 toolchain and workspace manager.
 - **[Bun](https://bun.sh)** — the only JavaScript runtime/package manager used
   (`npm`/`npx`/`pnpm` are intentionally not on PATH).
 - **[Dagger](https://dagger.io)** — builds every image; docker is never used.

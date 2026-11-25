@@ -61,7 +61,7 @@ its one member, `workspaces = ["console"]` in `frontend/package.json`.
 
 ## Toolchain
 
-- **Python** via [uv](https://docs.astral.sh/uv/) (3.13), linted/formatted with **Ruff** (line length 160) and
+- **Python** via [uv](https://docs.astral.sh/uv/) (3.15), linted/formatted with **Ruff** (line length 160) and
   type-checked with **ty** (`uv run ty check`).
 - **JS/TS** via **Bun** exclusively — `npm`/`npx`/`pnpm` are not on PATH. **oxlint** + **oxfmt** (tabs, single quotes,
   `printWidth: 100`) with `@rsvelte/fmt` for `.svelte`, plus `svelte-check`, each a plain bun script run from

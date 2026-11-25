@@ -6,7 +6,7 @@ bytes in, a governed table out, lineage emitted. The lakehouse runs no compute a
 every write, from whatever engine the user brings, comes in through the catalog's Lance Namespace doors.
 
 It is a polyglot monorepo — **Python + Svelte/TypeScript**, managed with
-[uv](https://docs.astral.sh/uv/) (Python 3.13) and [Bun](https://bun.sh) — split
+[uv](https://docs.astral.sh/uv/) (Python 3.15) and [Bun](https://bun.sh) — split
 into two language-pure planes: the Python plane (reusable **`packages/`**
 libraries plus runnable **`services/`**) and the JS/TS plane under
 **`frontend/`**, its own Bun workspace root, which holds the console. Deployables build from

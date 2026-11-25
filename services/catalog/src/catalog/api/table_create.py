@@ -106,7 +106,8 @@ def _parse_properties(raw: str | None) -> dict[str, str] | None:
         parsed = json.loads(raw)
     except (ValueError, RecursionError) as exc:
         # ValueError covers JSONDecodeError and the bare one CPython raises for an integer past its
-        # 4300-digit conversion limit; RecursionError a deeply nested value. All three are the caller's.
+        # 4300-digit conversion limit; RecursionError a value nested past the parser's depth, stack-bound from 3.14
+        # (65,207 lists on CPython 3.15.2, aarch64). All three are the caller's.
         raise InvalidInputError(f"table properties is not valid JSON: {exc}") from exc
     if not isinstance(parsed, dict):
         raise InvalidInputError(f"table properties must be a JSON object of string values, got {type(parsed).__name__}")
