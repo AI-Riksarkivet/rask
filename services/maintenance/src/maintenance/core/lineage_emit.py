@@ -269,14 +269,15 @@ class BusMaintenanceEmitter:
         self._storage_options = storage_options
 
     async def emit_maintenance(self, *, table_id: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
-        # uuid4 ON PURPOSE: each tick that reclaims versions is a distinct successful run (§4 decided —
-        # do NOT make COMPLETE deterministic; only the FAIL path below needs the flood guard).
+        # A FRESH id ON PURPOSE: each tick that reclaims versions is a distinct successful run (§4 decided —
+        # do NOT make COMPLETE deterministic; only the FAIL path below needs the flood guard). Time-ordered (UUIDv7), as
+        # the OpenLineage client mints a run id.
         event = build_maintenance_event(
             table_id=table_id,
             namespace=self._dataset_namespace,
             location=location,
             job_namespace=self._job_namespace,
-            run_id=str(uuid.uuid4()),
+            run_id=str(uuid.uuid7()),
             event_time=datetime.now(UTC).isoformat(),
             author=self._author,
             uuids=uuids,

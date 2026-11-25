@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any, Literal, assert_never
-from uuid import uuid4
+from uuid import uuid7
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -134,8 +134,9 @@ class CatalogControlEvent(BaseModel):
     envelope parse alike.
     """
 
-    #: Client-side dedupe key (a redelivery carries the same id).
-    event_id: str = Field(default_factory=lambda: uuid4().hex)
+    #: Client-side dedupe key (a redelivery carries the same id). Time-ordered (UUIDv7), so the outbox that stages an
+    #: event under it lists events of one moment in the order they were made.
+    event_id: str = Field(default_factory=lambda: uuid7().hex)
     #: When the mutation happened (UTC).
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     action: ControlAction

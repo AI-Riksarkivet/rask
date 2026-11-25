@@ -32,7 +32,7 @@ import re
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Annotated, Literal
-from uuid import uuid4
+from uuid import uuid7
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -270,7 +270,8 @@ def file(control_root: str, storage_options: StorageOptions, *, door: str, targe
     Raises:
         OSError: The store refused the write or did not answer; the door has changed nothing yet.
     """
-    key = f"{_directory(target)}/{uuid4().hex}.json"
+    # Time-ordered (UUIDv7): the filings `standing` lists oldest first by the store's stamp break a tie in filing order.
+    key = f"{_directory(target)}/{uuid7().hex}.json"
     conditional_records.create_json(
         control_root, storage_options, key, record=Intent(door=door, target=target, announcements=list(announcements)).model_dump(mode="json")
     )

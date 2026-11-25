@@ -823,7 +823,8 @@ class _BaseLineageEmitter:
         if version is None and table_uuid and event_time and operation in LIFECYCLE_MARKERS:
             return lifecycle_run_id((self._commit_ids or UnkeyedCommitIds()).key(), table_uuid=table_uuid, operation=operation, announced_at=event_time)
         if version is None or not table_uuid:
-            return str(uuid.uuid4())
+            # Time-ordered (UUIDv7), as the OpenLineage client mints a run id.
+            return str(uuid.uuid7())
         key = (self._commit_ids or UnkeyedCommitIds()).key()
         return commit_run_id(key, table_uuid=table_uuid, branch=fields.branch, branch_identifier=fields.branch_identifier, version=version)
 
