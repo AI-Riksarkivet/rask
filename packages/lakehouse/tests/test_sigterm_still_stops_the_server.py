@@ -153,7 +153,8 @@ class _Server:
         self.proc = proc
         self.port = port
         self.lines: list[str] = []
-        threading.Thread(target=self._pump, daemon=True).start()
+        self._pumping = threading.Thread(target=self._pump, daemon=True)
+        self._pumping.start()
 
     def _pump(self) -> None:
         assert self.proc.stdout is not None
@@ -179,6 +180,9 @@ class _Server:
             self.proc.wait(timeout=seconds)
         except subprocess.TimeoutExpired:
             return False
+        # The lines it printed before it exited are all read only once its stdout has ended: read before then, on a
+        # loaded host, `lines` lacks the last of them though the process printed them.
+        self._pumping.join(timeout=seconds)
         return True
 
 
