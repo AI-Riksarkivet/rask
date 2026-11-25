@@ -50,6 +50,15 @@ cleanup() {
         kubectl logs "$p" --all-containers --tail=40 2>/dev/null | head -40 || true ;;
       esac
     done
+    # A test can fail against a stack whose every pod is ready: a door answered 503 because something it called did
+    # not answer in time. The reason is the record the service wrote at that moment, so every running pod's warnings
+    # and errors are printed as well, from every container, whichever component wrote them.
+    for p in $(kubectl get pods --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'); do
+      records=$(kubectl logs "$p" --all-containers --prefix 2>/dev/null \
+        | grep -E ' (WARNING|ERROR|CRITICAL) |"level":"(warn|warning|error|fatal)"|level=(warn|warning|error|fatal)|Traceback|panic:' \
+        | tail -40 || true)
+      [ -n "$records" ] && { echo "--- WARNINGS AND ERRORS (last 40): $p"; echo "$records"; }
+    done
     kubectl get jobs -o wide || true   # the OpenFGA migration is a post-install HOOK job — surface its state
     # A failed hook Job's pod is gone by now, so the not-ready loop above never prints its log, and that log is the only
     # account of why it failed: the install recorded it.
