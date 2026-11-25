@@ -23,8 +23,8 @@ import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 
-from catalog.api.dependencies import get_namespace
-from catalog.core.config import Settings, get_settings
+from catalog.api.dependencies import get_namespace, request_settings
+from catalog.core.config import Settings
 from catalog.services import warehouses
 from catalog.services.provenance_namespace import ensure_provenance_namespace
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
@@ -44,7 +44,7 @@ type Door = Callable[[TestClient, Settings], str]
 def estate(real_ns_client: TestClient, tmp_path: Path) -> tuple[TestClient, Settings]:
     """The catalog with warehouse ``WAREHOUSE`` at its root, its row there, and the namespace ``acme`` in it."""
     settings = Settings.model_validate({"root": str(tmp_path), "s3_access_key_id": "x", "s3_secret_access_key": "x"})
-    real_ns_client.app.dependency_overrides[get_settings] = lambda: settings
+    real_ns_client.app.dependency_overrides[request_settings] = lambda: settings
     seeding.put_warehouse(
         str(tmp_path),
         StorageOptions(),

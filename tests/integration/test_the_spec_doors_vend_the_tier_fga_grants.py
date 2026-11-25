@@ -32,7 +32,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import DeclareTableResponse, DescribeNamespaceResponse
 from pydantic import SecretStr
 
-from catalog.api.dependencies import get_resolver, get_vendor
+from catalog.api.dependencies import get_resolver, get_vendor, request_settings
 from catalog.core.config import Settings, get_settings
 from catalog.core.vending import VendedSession
 from catalog.services import table_claims
@@ -70,7 +70,7 @@ def vendor(client: TestClient, fake_ns: MagicMock, claim_described: Callable[[st
     table resolves to the location ``fake_ns`` describes, whose claim records its uuid, which its credential is scoped
     by (ADR 0173 §6).
     """
-    client.app.dependency_overrides[get_settings] = _auth_settings
+    client.app.dependency_overrides[request_settings] = _auth_settings
     claims = table_claims.claim_store(_auth_settings())
     client.app.dependency_overrides[get_resolver] = lambda: NamedResolver(tables=lambda segments: table_claims.resolve(fake_ns, claims, segments))
     claim_described("lance_catalog$db$t")

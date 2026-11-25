@@ -38,7 +38,7 @@ _BEARER: Final = HTTPBearer(auto_error=False)
 def caller_judge[S: OidcSettings](
     *,
     gate: Callable[..., object],
-    settings: Callable[[], S],
+    settings: Callable[[], S | Awaitable[S]],
     authenticated: Callable[[Request, S, str | None], object],
 ) -> Judge:
     """The judge for a service whose doors depend on ``gate``: with OIDC on, ``authenticated`` run on the request's
@@ -46,14 +46,16 @@ def caller_judge[S: OidcSettings](
 
     The judge stands in for ``gate`` ahead of the body, so it resolves both as FastAPI resolves them for the route,
     through the app's ``dependency_overrides``: an override of ``settings`` is the settings the gate is given, and an
-    override of ``gate`` is the gate the route runs, which then judges the request itself.
+    override of ``gate`` is the gate the route runs, which then judges the request itself. ``settings`` is the settings
+    dependency the gate declares, and it or its override may be sync or async, as FastAPI accepts either.
     """
 
     async def judge(request: Request) -> None:
         overrides = request.app.dependency_overrides
         if gate in overrides:
             return
-        resolved: S = overrides.get(settings, settings)()
+        provided = overrides.get(settings, settings)()
+        resolved = await provided if isinstance(provided, Awaitable) else provided
         if not resolved.oidc_enabled:
             return
         credentials = await _BEARER(request)

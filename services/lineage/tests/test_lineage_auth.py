@@ -416,6 +416,7 @@ def test_ingest_handler_binds_verified_author() -> None:
             token=_token("real-user"),
             names=NO_CATALOG_NAMES,
             bearer=None,
+            decider=None,
         )
     )
     assert repo.recorded is not None and repo.recorded.author == "dex~real-user"  # body claim overridden
@@ -435,6 +436,7 @@ def test_ingest_handler_keeps_body_author_when_oidc_off() -> None:
             token=None,
             names=NO_CATALOG_NAMES,
             bearer=None,
+            decider=None,
         )
     )
     assert repo.recorded is not None and repo.recorded.author == "claimed"

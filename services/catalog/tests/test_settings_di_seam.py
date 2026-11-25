@@ -4,7 +4,7 @@ open_fastapi-audit — "`get_settings()` is called directly inside a dependency 
 so `app.dependency_overrides` silently is not the seam".
 
 `get_namespace` took only `request` and then called `get_settings()` in its body. FastAPI's override
-map is keyed on the DEPENDENCY CALLABLE, so overriding `get_settings` reached every route that
+map is keyed on the DEPENDENCY CALLABLE, so overriding `request_settings` reached every route that
 declared `SettingsDep` — and not this one, which read the real env-derived settings regardless. A test
 that overrode settings and exercised a warehouse-routed path would have been silently green against
 the wrong configuration.
@@ -18,7 +18,7 @@ victim. No catalog test exercises `get_namespace` under an override today, so no
 unexecuted branch right now. This is a latent DI-seam defect — the kind that is cheap now and
 expensive the first time someone trusts the override.
 
-FastAPI caches `get_settings` per request, so a route already declaring `SettingsDep` pays nothing for
+FastAPI caches `request_settings` per request, so a route already declaring `SettingsDep` pays nothing for
 the injection.
 """
 
@@ -62,7 +62,7 @@ def test_an_override_actually_changes_what_the_dependency_sees() -> None:
         def connection(self, _settings: Settings, **_: object) -> object:
             return object()
 
-    app.dependency_overrides[deps.get_settings] = _settings
+    app.dependency_overrides[deps.request_settings] = _settings
     app.state.connections = _Connections()
 
     response = TestClient(app).get("/probe/lance_catalog$thing")

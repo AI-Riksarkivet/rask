@@ -70,7 +70,7 @@ from catalog.api.authz import decisions, door_gates, hierarchy, object_grants
 from catalog.api.authz.context import AuthzContextDep
 from catalog.api.declared import Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import ControlEmitterDep, SettingsDep
-from catalog.api.security import ANONYMOUS_SUBJECT, CurrentToken, current_subject
+from catalog.api.security import ANONYMOUS_SUBJECT, CurrentToken, subject_of
 from catalog.core.config import CatalogStore, Settings
 from catalog.schemas import (
     CreateProjectRequest,
@@ -440,7 +440,7 @@ async def project_to_delete(project_id: str, context: AuthzContextDep) -> Projec
     if record is None:
         raise TableNotFoundError(f"project not found: {project_id}")
     starter = record.deleting_by
-    if starter is not None and starter == current_subject(context.token):
+    if starter is not None and starter == subject_of(context.token):
         audit(AuditAction.AUTHZ, AuditOutcome.ALLOW, relation=project_registry.DELETING_BY, subject=starter, resource=f"project:{project_id}")
         return record
     doors = [("can_administer", f"project:{project_id}")]
@@ -556,7 +556,7 @@ async def _start_delete(project_id: str, record: ProjectRecord, settings: Catalo
             holds=held,
         )
     # Recorded before the first destructive step, so whichever step fails, the retry finds the delete and who started it.
-    if await run_in_threadpool(project_registry.mark_deleting, settings.registry_root, so, project_id, by=current_subject(token)) is None:
+    if await run_in_threadpool(project_registry.mark_deleting, settings.registry_root, so, project_id, by=subject_of(token)) is None:
         raise TableNotFoundError(f"project not found: {project_id}")
 
 

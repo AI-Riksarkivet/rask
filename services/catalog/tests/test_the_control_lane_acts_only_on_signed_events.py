@@ -29,6 +29,7 @@ from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from catalog.api import control_lane
 from catalog.api.control_lane import TOPIC, ControlLane, KeysUnavailableError
 from catalog.api.control_relay import attach_published_keys
+from catalog.api.dependencies import request_settings
 from catalog.core.config import Settings, get_settings
 from lakehouse.events.bus_delivery import Delivery
 from lakehouse.governed.signing_key import signing_public_secret
@@ -132,7 +133,7 @@ def lane(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: Secre
     meter = MeterProvider(metric_readers=[reader]).get_meter("lance.catalog")
     monkeypatch.setattr(control_lane, "_signature_refused", meter.create_counter("catalog.signature.refused"))
     app = FastAPI()
-    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[request_settings] = lambda: settings
     attach_published_keys(app)
     for signer in (catalog, maintenance):
         secret_store.hold(signing_public_secret(signer.identity), {"keys": signer.public})

@@ -236,6 +236,7 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
     evidence cannot be read. A drop whose stamp the store fails answers all the same, and its warning says whether the
     store refused the stamp or did not answer it."""
     from catalog.api import idempotency as keyed_doors
+    from catalog.api.dependencies import request_settings
     from catalog.core import native
     from catalog.core.config import get_settings
     from catalog.services import idempotency_records, table_claims
@@ -246,7 +247,7 @@ def test_a_keyed_resend_is_answered_as_its_door_declares_its_takeover(
 
     catalog = governed_catalog
     settings = get_settings().model_copy(update={"trash_grace_days": 1.0})
-    catalog.client.app.dependency_overrides[get_settings] = lambda: settings
+    catalog.client.app.dependency_overrides[request_settings] = lambda: settings
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
     alice = catalog.bearer("alice")
     arrow = {**alice, "Content-Type": ARROW_STREAM_MEDIA_TYPE}

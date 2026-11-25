@@ -25,7 +25,7 @@ from fastapi.testclient import TestClient
 from lance_namespace import DescribeNamespaceResponse, DescribeTableResponse
 from pydantic import SecretStr
 
-from catalog.api.dependencies import get_namespace, get_settings
+from catalog.api.dependencies import get_namespace, request_settings
 from catalog.api.v1.endpoints import credentials, tables
 from catalog.core.config import Settings
 from catalog.core.vending import EncryptionAtRest, VendFacts, WebIdentityVendor
@@ -116,7 +116,7 @@ def doors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClien
     location_claims.take(
         table_claims.claim_store(settings), _LOCATION, "ns$t", segments=["ns", "t"], uuid="0b6f8a52-4c1e-4f7a-9d3e-2a1c5b7e9f01", is_gone=lambda _claim: False
     )
-    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[request_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = _Namespace
     with TestClient(application) as client:
         yield client

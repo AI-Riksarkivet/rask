@@ -28,7 +28,7 @@ from fastapi.exceptions import RequestValidationError
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ValidationError
 
-from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
+from lineage.api.dependencies import BearerDep, DeciderDep, NamesDep, ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import enforce_author, enforce_output_authz
 from lineage.api.security import CurrentToken
 from lineage.core.metrics import Door, Outcome, record_ingest_duration, record_outcome, refusal_outcome
@@ -120,6 +120,7 @@ async def ingest_event(
     token: CurrentToken,
     names: NamesDep,
     bearer: BearerDep,
+    decider: DeciderDep,
 ) -> IngestAck:
     """Ingest one OpenLineage event — a ``RunEvent``, or a ``DatasetEvent`` for a change no job performed.
 
@@ -177,8 +178,7 @@ async def ingest_event(
     # who may see none of it costs the catalog one question, never a describe per name.
     try:
         enforce_author(event, token)
-        decider = getattr(request.app.state, "decider", None) if settings.fga_enabled else None
-        await stamp_resolved_uuids(event, names, bearer=bearer, decider=decider, subject=token.subject if token else None)
+        await stamp_resolved_uuids(event, names, bearer=bearer, decider=decider if settings.fga_enabled else None, subject=token.subject if token else None)
         # What the catalog answered the event's locations and symlinks name scopes its feed row for every reader ([[LH-598]]).
         aliased = await enforce_output_authz(event, request.app, settings, token=token)
         started = time.perf_counter()

@@ -82,6 +82,7 @@ def unauthenticated_app(monkeypatch: pytest.MonkeyPatch) -> Iterator[tuple[FastA
     repo = _Repo()
     app.state.provenance = repo
     app.state.names = NO_CATALOG_NAMES
+    app.state.decider = None
     yield app, repo
     get_settings.cache_clear()
 

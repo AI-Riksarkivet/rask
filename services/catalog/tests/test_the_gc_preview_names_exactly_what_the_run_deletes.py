@@ -39,10 +39,10 @@ from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from tables_by_name import open_by_name
 
-from catalog.api.dependencies import get_namespace, get_storage_options
+from catalog.api.dependencies import get_namespace, get_storage_options, request_settings
 from catalog.api.v1.endpoints import maintenance as door
 from catalog.core import version_retention
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import Settings
 from catalog.services.tables.creation import create_table
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records import base_registry
@@ -91,7 +91,7 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.table_router)
     application.include_router(door.due_router)
-    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[request_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: namespace
     application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     with TestClient(application) as test_client:

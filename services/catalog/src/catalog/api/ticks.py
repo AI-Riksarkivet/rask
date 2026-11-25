@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 
 from fastapi import FastAPI, Request
 
-from catalog.api.dependencies import ObjectUuids, get_control_emitter
+from catalog.api.dependencies import ObjectUuids, control_emitter_of
 from catalog.core.config import Settings
 from lakehouse.events.control_emit import ControlEmitter
 from lakehouse.storage.options import StorageOptions
@@ -39,7 +39,7 @@ class Tick:
         self.settings = settings
         self.clock = clock
         self.request = Request({"type": "http", "app": app, "method": "POST", "path": "/", "headers": [], "query_string": b"", "path_params": {}, "state": {}})
-        self.control = control if control is not None else get_control_emitter(self.request, ObjectUuids(self.request, settings))
+        self.control = control if control is not None else control_emitter_of(self.request, ObjectUuids(self.request, settings))
 
     @property
     def storage_options(self) -> StorageOptions:

@@ -26,8 +26,8 @@ from typing import Annotated, cast
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from catalog.api.dependencies import SettingsDep
-from catalog.core.config import Settings, get_settings
+from catalog.api.dependencies import SettingsDep, request_settings
+from catalog.core.config import Settings
 from lakehouse.governed.admission import admitted_caller, caller_judge
 from lakehouse.governed.door_caller import caller_of
 from lakehouse.governed.idp_identity import PersonPrincipal
@@ -77,12 +77,17 @@ def _authenticated(request: Request, settings: Settings, bearer: str | None) -> 
 CurrentToken = Annotated[Caller | None, Depends(authenticate)]
 #: Every door that depends on `authenticate` judges its caller from the headers before its body is read
 #: (`lakehouse.governed.admission`), so no caller without a token makes this service buffer one.
-judge = caller_judge(gate=authenticate, settings=get_settings, authenticated=_authenticated)
+judge = caller_judge(gate=authenticate, settings=request_settings, authenticated=_authenticated)
 
 
-def current_subject(token: CurrentToken) -> str:
+def subject_of(token: Caller | None) -> str:
     """The verified caller as the estate's subject id: its principal key, or ``anon`` with OIDC off."""
     return token.subject if token is not None else ANONYMOUS_SUBJECT
+
+
+async def current_subject(token: CurrentToken) -> str:
+    """:func:`subject_of` the request's caller, as a dependency."""
+    return subject_of(token)
 
 
 CurrentSubject = Annotated[str, Depends(current_subject)]

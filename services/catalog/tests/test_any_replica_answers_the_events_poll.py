@@ -24,6 +24,7 @@ from fastapi.testclient import TestClient
 
 from catalog.api.control_lane import TOPIC
 from catalog.api.control_relay import attach_published_keys
+from catalog.api.dependencies import request_settings
 from catalog.core.config import Settings, get_settings
 from lakehouse.governed.signing_key import signing_public_secret
 from tests.bus_double import BusDouble
@@ -97,7 +98,7 @@ def estate(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: Sec
     for _ in range(2):
         app = FastAPI()
         app.include_router(events.management_router)
-        app.dependency_overrides[get_settings] = lambda: settings
+        app.dependency_overrides[request_settings] = lambda: settings
         app.state.bus = bus
         attach_published_keys(app)
         apps.append(app)

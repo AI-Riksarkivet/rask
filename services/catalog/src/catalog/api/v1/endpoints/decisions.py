@@ -126,7 +126,7 @@ async def require_can_probe_governance(context: AuthzContextDep) -> None:
     await _require(context, permission="can_probe_governance")
 
 
-def _wired_client(client: FgaClientDep) -> OpenFgaClient:
+async def _wired_client(client: FgaClientDep) -> OpenFgaClient:
     """The client the gate has already proved wired; typed non-optional for the handlers."""
     return decisions.require_wired(client)
 

@@ -44,7 +44,15 @@ from lakehouse.storage.options import StorageOptions
 
 log = logging.getLogger(__name__)
 
-SettingsDep = Annotated[Settings, Depends(get_settings)]
+
+async def request_settings() -> Settings:
+    """The process's settings as a request's dependency: async, so reading the cached settings takes no thread from the
+    pool the blocking doors share. ``get_settings`` stays the cached loader every other caller reads; a test hands the
+    app its own settings by overriding this function."""
+    return get_settings()
+
+
+SettingsDep = Annotated[Settings, Depends(request_settings)]
 
 
 #: What ``getattr`` answers for a wire the lifespan never set, told apart from the ``None`` a lifespan sets for "off".
@@ -543,7 +551,7 @@ async def get_fga_client(request: Request) -> OpenFgaClient | None:
 FgaClientDep = Annotated[OpenFgaClient | None, Depends(get_fga_client)]
 
 
-def get_storage_options(settings: SettingsDep) -> StorageOptions:
+async def get_storage_options(settings: SettingsDep) -> StorageOptions:
     """Object-store options (S3 credentials, region) for direct pylance access, under the DATA plane's bounds.
 
     Every door opens its pylance handle with these and reads or writes rows through it, and a handle's
@@ -702,9 +710,15 @@ class UuidNamingControlEmitter:
         await self._inner.emit(event)
 
 
-def get_control_emitter(request: Request, uuids: ObjectUuidsDep) -> ControlEmitter:
-    """The control-plane change-event emitter built in the app lifespan, the no-op one where emission is off."""
+def control_emitter_of(request: Request, uuids: ObjectUuids) -> ControlEmitter:
+    """The control-plane change-event emitter built in the app lifespan, the no-op one where emission is off, naming each
+    object it announces by its uuid."""
     return UuidNamingControlEmitter(app_wire(request, "control_emitter", ControlEmitter), uuids)
+
+
+async def get_control_emitter(request: Request, uuids: ObjectUuidsDep) -> ControlEmitter:
+    """:func:`control_emitter_of` the request, as a dependency."""
+    return control_emitter_of(request, uuids)
 
 
 ControlEmitterDep = Annotated[ControlEmitter, Depends(get_control_emitter)]

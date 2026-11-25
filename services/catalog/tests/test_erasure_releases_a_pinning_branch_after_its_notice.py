@@ -34,11 +34,11 @@ from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from tables_by_name import open_by_name
 
 from catalog.api import erasure_release as release_tick
-from catalog.api.dependencies import get_clock, get_control_emitter, get_namespace, get_storage_options
+from catalog.api.dependencies import get_clock, get_control_emitter, get_namespace, get_storage_options, request_settings
 from catalog.api.security import authenticate
 from catalog.api.ticks import Tick
 from catalog.api.v1.endpoints import erasure as door
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import erasure_release, table_claims
 from catalog.services.erasure import Pin
@@ -140,7 +140,7 @@ def _catalog(ns: LanceNamespace, tmp_path: Path, *, grace_days: int, emitter: _R
         # The owners of the table's uuid, which its grants are held by (ADR 0173 §8); any other object has none.
         return ["user:dex~olivia", "user:dex~alice%40corp"] if obj == table else []
 
-    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[request_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
     application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     application.dependency_overrides[authenticate] = lambda: PersonPrincipal(

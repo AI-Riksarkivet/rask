@@ -35,10 +35,10 @@ from starlette.types import Message
 
 from catalog.api.authz import decisions, grant_authority, route_guard, rungs
 from catalog.api.authz.context import AuthzContext
-from catalog.api.dependencies import Resolver, get_fga_client
+from catalog.api.dependencies import Resolver, get_fga_client, request_settings
 from catalog.api.security import authenticate
 from catalog.core import write_judge
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import Settings
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.governed import fga_reads
 from lakehouse.governed.audit import AUDIT_LOGGER, AuditOutcome
@@ -207,7 +207,7 @@ def test_an_undeclared_door_answers_the_specs_internal_error_on_the_wire(asked: 
     app = FastAPI()
     app.include_router(router)
     install_problem_handlers(app, logging.getLogger(__name__))
-    app.dependency_overrides[get_settings] = _settings
+    app.dependency_overrides[request_settings] = _settings
     app.dependency_overrides[get_fga_client] = lambda: _CLIENT
     app.dependency_overrides[authenticate] = _token
 

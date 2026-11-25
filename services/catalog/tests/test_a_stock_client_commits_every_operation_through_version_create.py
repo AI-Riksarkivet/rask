@@ -238,6 +238,7 @@ def _serve(served: Served, env: dict[str, str], monkeypatch: pytest.MonkeyPatch)
         monkeypatch.setattr(fga_writes, "grant_before_arrival", AsyncMock())
         monkeypatch.setattr(fga_writes, "name_child", AsyncMock())
         monkeypatch.setattr(fga_writes, "revoke_object_tuples", AsyncMock(return_value=[]))
+    from catalog.api.dependencies import request_settings
     from catalog.core.config import Settings, get_settings
 
     get_settings.cache_clear()
@@ -277,7 +278,7 @@ def _serve(served: Served, env: dict[str, str], monkeypatch: pytest.MonkeyPatch)
         fga_client = MagicMock()
         fga_client.close = AsyncMock()
         app.state.fga = fga_client
-    app.dependency_overrides[get_settings] = lambda: signed_in
+    app.dependency_overrides[request_settings] = lambda: signed_in
     served.url = f"http://127.0.0.1:{server.servers[0].sockets[0].getsockname()[1]}"
     yield served
     server.should_exit = True

@@ -12,7 +12,8 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import ListTablesResponse, UnauthenticatedError
 
-from catalog.core.config import Settings, get_settings
+from catalog.api.dependencies import request_settings
+from catalog.core.config import Settings
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.oidc import IDToken
 from lakehouse.governed.principal import Principal
@@ -34,11 +35,20 @@ def _enabled_settings() -> Settings:
     )
 
 
-def test_oidc_enabled_missing_token_is_401_problem_json(client: TestClient) -> None:
-    client.app.dependency_overrides[get_settings] = _enabled_settings
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        pytest.param("GET", "/v1/table", None, id="a-read"),
+        # The caller is judged before the body is read (ADR 0203), under the settings the gate is given: malformed JSON
+        # from a caller with no bearer is answered as unauthenticated, never as a body FastAPI parsed first.
+        pytest.param("POST", "/v1/namespace/ns/create", b"{not json", id="a-body-it-never-reads"),
+    ],
+)
+def test_oidc_enabled_missing_token_is_401_problem_json(client: TestClient, method: str, path: str, body: bytes | None) -> None:
+    client.app.dependency_overrides[request_settings] = _enabled_settings
     client.app.state.oidc = MagicMock()  # a verifier is present
-    resp = client.get("/v1/table")
-    assert resp.status_code == 401
+    resp = client.request(method, path, content=body, headers={"Content-Type": "application/json"} if body else {})
+    assert resp.status_code == 401, resp.text
     assert resp.headers["content-type"].startswith("application/problem+json")
     assert resp.json()["code"] == 16  # UNAUTHENTICATED
 
@@ -47,7 +57,7 @@ def test_oidc_enabled_valid_token_passes_through(client: TestClient, fake_ns: Ma
     fake_ns.list_all_tables.return_value = ListTablesResponse(tables=[])
     verifier = MagicMock()
     verifier.verify.return_value = PersonPrincipal(principal=Principal(idp_id="dex", subject="s"), claims=IDToken(iss="i", sub="s", aud="lance", exp=1, iat=1))
-    client.app.dependency_overrides[get_settings] = _enabled_settings
+    client.app.dependency_overrides[request_settings] = _enabled_settings
     client.app.state.oidc = verifier
 
     resp = client.get("/v1/table", headers={"Authorization": "Bearer tok"})
@@ -75,7 +85,7 @@ def test_oidc_verifier_failure_maps_to_401_problem_json(client: TestClient) -> N
     is rendered by our error handler as a 401 problem+json, never leaking the cause."""
     verifier = MagicMock()
     verifier.verify.side_effect = UnauthenticatedError("Invalid or expired token")
-    client.app.dependency_overrides[get_settings] = _enabled_settings
+    client.app.dependency_overrides[request_settings] = _enabled_settings
     client.app.state.oidc = verifier
 
     resp = client.get("/v1/table", headers={"Authorization": "Bearer expired-or-forged"})
@@ -87,7 +97,7 @@ def test_oidc_verifier_failure_maps_to_401_problem_json(client: TestClient) -> N
 
 def test_oidc_enabled_empty_bearer_is_401(client: TestClient) -> None:
     """CONTRACT: an ``Authorization: Bearer`` header with no token value is unauthenticated."""
-    client.app.dependency_overrides[get_settings] = _enabled_settings
+    client.app.dependency_overrides[request_settings] = _enabled_settings
     client.app.state.oidc = MagicMock()
     resp = client.get("/v1/table", headers={"Authorization": "Bearer "})
     assert resp.status_code == 401

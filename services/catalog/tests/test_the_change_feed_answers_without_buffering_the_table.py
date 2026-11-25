@@ -20,7 +20,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
 
-from catalog.api.dependencies import get_namespace, get_settings, get_storage_options
+from catalog.api.dependencies import get_namespace, get_storage_options, request_settings
 from catalog.api.v1.endpoints import data as door
 from catalog.core.config import Settings
 from catalog.services.tables.creation import create_table
@@ -49,7 +49,7 @@ def client(namespace: LanceNamespace, tmp_path: Path) -> Iterator[TestClient]:
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.management_router)
 
-    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[request_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: namespace
     application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     with TestClient(application) as test_client:

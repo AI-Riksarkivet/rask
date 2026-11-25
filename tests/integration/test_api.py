@@ -940,10 +940,10 @@ def _project_policy_settings(tmp_path: object):
 def test_project_policy_crud_round_trips(client: TestClient, tmp_path: object) -> None:
     # CONTRACT (#84): set resolves the project's ACTIVE warehouse buckets from the registry at set time
     # and persists them on the record; describe returns it; delete is idempotent, then describe answers that none is set.
-    from catalog.core.config import get_settings
+    from catalog.api.dependencies import request_settings
 
     s = _project_policy_settings(tmp_path)
-    client.app.dependency_overrides[get_settings] = lambda: s
+    client.app.dependency_overrides[request_settings] = lambda: s
     so = s.storage_options()
     seeding.put_project(s.registry_root, so, {"id": "acme", "created_at": "t", "created_by": "seed"})
     seeding.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
@@ -967,9 +967,9 @@ def test_project_policy_crud_round_trips(client: TestClient, tmp_path: object) -
 def test_project_policy_describe_of_a_project_with_no_record_is_not_found(client: TestClient, tmp_path: object) -> None:
     # [[LH-589]]: a project exists when its registry record does, so a policy read of one without a record answers
     # the missing project's 404 code 4, never that it holds no policy.
-    from catalog.core.config import get_settings
+    from catalog.api.dependencies import request_settings
 
-    client.app.dependency_overrides[get_settings] = lambda: _project_policy_settings(tmp_path)
+    client.app.dependency_overrides[request_settings] = lambda: _project_policy_settings(tmp_path)
 
     resp = client.post("/management/v1/project/ghost/policy/describe")
 
@@ -978,9 +978,9 @@ def test_project_policy_describe_of_a_project_with_no_record_is_not_found(client
 
 def test_project_policy_set_refused_without_an_active_warehouse(client: TestClient, tmp_path: object) -> None:
     # A policy that could never match anything must fail loudly at set time, not lie dormant.
-    from catalog.core.config import get_settings
+    from catalog.api.dependencies import request_settings
 
-    client.app.dependency_overrides[get_settings] = lambda: _project_policy_settings(tmp_path)
+    client.app.dependency_overrides[request_settings] = lambda: _project_policy_settings(tmp_path)
     resp = client.post("/management/v1/project/ghost/policy/set", json={"retention_days": 90})
     assert resp.status_code == 400
     assert "no active warehouse" in resp.json()["error"]
@@ -991,10 +991,10 @@ def test_project_policy_set_refused_on_a_cross_claimed_bucket(client: TestClient
     # create_warehouse guards (records written straight into the registry here), a policy set that would
     # resolve a bucket another project's warehouse also claims must be refused — never a retention policy
     # over the other tenant's data.
-    from catalog.core.config import get_settings
+    from catalog.api.dependencies import request_settings
 
     s = _project_policy_settings(tmp_path)
-    client.app.dependency_overrides[get_settings] = lambda: s
+    client.app.dependency_overrides[request_settings] = lambda: s
     so = s.storage_options()
     seeding.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "shared-bkt", "project": "acme", "status": "active"})
     seeding.put_warehouse(s.registry_root, so, {"id": "wh-evil", "bucket": "shared-bkt", "project": "evil", "status": "active"})
@@ -1007,10 +1007,10 @@ def test_project_policy_set_is_refused_while_a_registry_record_cannot_be_read(cl
     # defaults, or another project's claim on a bucket it would govern ([[LH-572]]): the set refuses and writes nothing.
     from pathlib import Path
 
-    from catalog.core.config import get_settings
+    from catalog.api.dependencies import request_settings
 
     s = _project_policy_settings(tmp_path)
-    client.app.dependency_overrides[get_settings] = lambda: s
+    client.app.dependency_overrides[request_settings] = lambda: s
     seeding.put_warehouse(
         s.registry_root,
         s.storage_options(),
@@ -1025,9 +1025,9 @@ def test_project_policy_set_is_refused_while_a_registry_record_cannot_be_read(cl
 
 
 def test_project_policy_rejects_a_malformed_project_id(client: TestClient, tmp_path: object) -> None:
-    from catalog.core.config import get_settings
+    from catalog.api.dependencies import request_settings
 
-    client.app.dependency_overrides[get_settings] = lambda: _project_policy_settings(tmp_path)
+    client.app.dependency_overrides[request_settings] = lambda: _project_policy_settings(tmp_path)
     resp = client.post("/management/v1/project/Bad_Name/policy/set", json={"retention_days": 90})
     assert resp.status_code == 400
 
@@ -1053,12 +1053,12 @@ def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestCl
     # CONTRACT (#65): a tenant's policy view carries the tenant's records and NOTHING else, each table's under the
     # name the table holds now ([[LH-523]]). Two warehouses, a table policy in each — the rival's record must never
     # cross, and acme's table, renamed since its policy was set, is listed as `wh-a$db$u`.
-    from catalog.core.config import get_settings
+    from catalog.api.dependencies import request_settings
     from catalog.services import table_claims
     from lakehouse.records import location_claims
 
     s = _project_policy_settings(tmp_path)
-    client.app.dependency_overrides[get_settings] = lambda: s
+    client.app.dependency_overrides[request_settings] = lambda: s
     so = s.storage_options()
     seeding.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
     seeding.put_warehouse(s.registry_root, so, {"id": "wh-z", "bucket": "other-wh", "project": "other", "status": "active"})
@@ -1076,10 +1076,10 @@ def test_project_policies_list_scopes_to_the_projects_own_buckets(client: TestCl
 def test_project_policies_list_finds_a_namespace_policy_by_its_warehouse(client: TestClient, tmp_path: object) -> None:
     # THE decisive one: a namespace's record names no bucket, only the namespace, so the listing finds it
     # through the warehouse its name begins with.
-    from catalog.core.config import get_settings
+    from catalog.api.dependencies import request_settings
 
     s = _project_policy_settings(tmp_path)
-    client.app.dependency_overrides[get_settings] = lambda: s
+    client.app.dependency_overrides[request_settings] = lambda: s
     so = s.storage_options()
     seeding.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
     # What set_namespace_policy writes: keyed by the namespace's uuid, with the name it had kept under `id`.
@@ -1095,12 +1095,12 @@ def test_project_policies_list_includes_a_deactivated_warehouses_bucket(client: 
     # policy over a dead bucket could never match, but a deactivated warehouse's data — and any policy
     # still governing it — is still the tenant's. Narrowing here would hide the retention record an
     # operator is looking for at exactly the moment they are offboarding.
-    from catalog.core.config import get_settings
+    from catalog.api.dependencies import request_settings
     from catalog.services import table_claims
     from lakehouse.records import location_claims
 
     s = _project_policy_settings(tmp_path)
-    client.app.dependency_overrides[get_settings] = lambda: s
+    client.app.dependency_overrides[request_settings] = lambda: s
     so = s.storage_options()
     seeding.put_warehouse(s.registry_root, so, {"id": "wh-old", "bucket": "acme-old", "project": "acme", "status": "deactivated"})
     table_uuid, location = str(uuid4()), f"s3://acme-old/{uuid4()}"
@@ -1118,10 +1118,10 @@ def test_project_policies_list_returns_only_its_own_project_record(client: TestC
     # A project record matches by ID and by nothing else. The rival record here claims acme's own bucket —
     # the contested-registry state `set_project_policy` refuses at write time — so a bucket match would
     # surface another tenant's project policy inside acme's view.
-    from catalog.core.config import get_settings
+    from catalog.api.dependencies import request_settings
 
     s = _project_policy_settings(tmp_path)
-    client.app.dependency_overrides[get_settings] = lambda: s
+    client.app.dependency_overrides[request_settings] = lambda: s
     so = s.storage_options()
     seeding.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
     seeding.put_policy(s.registry_root, so, {"kind": "project", "id": "acme", "buckets": ["acme-wh"], "retention_days": 90})

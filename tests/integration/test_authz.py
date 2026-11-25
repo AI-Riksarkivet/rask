@@ -36,8 +36,8 @@ from openfga_sdk.client.models.batch_check_single_response import ClientBatchChe
 from openfga_sdk.models.check_error import CheckError
 from starlette.concurrency import run_in_threadpool
 
-from catalog.api.dependencies import get_namespace, get_resolver, warehouse_object
-from catalog.core.config import Settings, get_settings
+from catalog.api.dependencies import get_namespace, get_resolver, request_settings, warehouse_object
+from catalog.core.config import Settings
 from catalog.services import object_uuids, table_claims
 from catalog.services.table_claims import ResolvedTable
 from lakehouse.governed import fga_ids, fga_reads, fga_writes
@@ -120,7 +120,7 @@ def _wire(client: TestClient) -> MagicMock:
     The verifier proves the person ``dex~alice``; the FGA client is a sentinel that the faked
     ``fga.*`` functions ignore. Returns the sentinel so a test can drop it (fail-closed).
     """
-    client.app.dependency_overrides[get_settings] = _auth_settings
+    client.app.dependency_overrides[request_settings] = _auth_settings
     double = client.app.dependency_overrides[get_namespace]()
     double.describe_namespace.side_effect = _described_namespace
     client.app.dependency_overrides[get_resolver] = lambda: _DoubleResolver(double)

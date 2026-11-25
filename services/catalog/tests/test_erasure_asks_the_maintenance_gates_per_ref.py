@@ -23,9 +23,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from catalog.api.dependencies import get_namespace, get_storage_options
+from catalog.api.dependencies import get_namespace, get_storage_options, request_settings
 from catalog.api.v1.endpoints import erasure as door
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services.erasure import ErasureReport, ref_heads, verify
 from catalog.services.tables.creation import create_table
@@ -141,7 +141,7 @@ def test_the_door_reads_the_store_the_table_lives_in_with_the_requests_options(t
     application.include_router(door.obligations_router)
     application.state.control_emitter = NoopControlEmitter()  # the lifespan's, with control emission off
     settings = Settings(s3_access_key_id="k", s3_secret_access_key="s", LANCE_CONTROL_ROOT=str(tmp_path / "control"))
-    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[request_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
     application.dependency_overrides[get_storage_options] = lambda: so
     with TestClient(application) as client:

@@ -31,8 +31,8 @@ from lakehouse.governed.admission import admitted_caller, caller_judge
 from lakehouse.governed.door_caller import caller_of
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
-from lineage.api.dependencies import SettingsDep
-from lineage.core.config import LineageSettings, get_settings
+from lineage.api.dependencies import SettingsDep, request_settings
+from lineage.core.config import LineageSettings
 
 
 # auto_error=False: we raise UnauthenticatedError ourselves so 401s render as problem+json.
@@ -77,6 +77,6 @@ def _authenticated(request: Request, settings: LineageSettings, bearer: str | No
 CurrentToken = Annotated[Caller | None, Depends(authenticate)]
 #: Every door that depends on `authenticate` judges its caller from the headers before its body is read
 #: (`lakehouse.governed.admission`): the intake's JSON body is never read, let alone parsed, for a caller with no token.
-judge = caller_judge(gate=authenticate, settings=get_settings, authenticated=_authenticated)
+judge = caller_judge(gate=authenticate, settings=request_settings, authenticated=_authenticated)
 
 __all__ = ["Caller", "CurrentToken", "PersonPrincipal", "ServicePrincipal", "authenticate"]

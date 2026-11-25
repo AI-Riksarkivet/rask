@@ -40,7 +40,7 @@ from catalog.api.announcing import AnnouncerDep
 from catalog.api.authz import decisions, door_gates, grant_authority
 from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.dependencies import ControlEmitterDep
-from catalog.api.security import current_subject
+from catalog.api.security import subject_of
 from catalog.api.v1.endpoints.members import ProjectId
 from catalog.core.identifiers import require_names
 from catalog.schemas import AssigneeRequest, Role, RoleCreateRequest, RoleDeleted, RoleList, RoleRecord
@@ -122,7 +122,7 @@ async def create_role(
     """
     require_names([body.name])
     wired = await _project_gate(context=context, project_id=project_id, relation="can_create_role")
-    actor = current_subject(context.token)
+    actor = subject_of(context.token)
     record = RoleRecord(id=uuid.uuid4(), project=project_id, name=body.name, description=body.description, created_at=datetime.now(UTC), created_by=actor)
     obj = roles.role_object(record.id)
     edge = fga_writes.ClientTuple(user=f"project:{project_id}", relation="project", object=obj)
@@ -183,7 +183,7 @@ async def delete_role(
         ConcurrentModificationError: Ending it would strand a project.
     """
     wired, role = await _role_gate(context=context, project_id=project_id, role_id=role_id, relation="can_delete")
-    actor, announced = current_subject(context.token), _announced_actor(context.token)
+    actor, announced = subject_of(context.token), _announced_actor(context.token)
     ending = await announcing.role_ending(wired, role, actor=announced, reason="role_deleted")
     async with announcer.announcing(door="delete_role", target=roles.role_object(role.id), announcements=ending.announcements()) as filing:
         removed = await role_grants.end_role(
@@ -256,7 +256,7 @@ async def assign_role(
     obj = roles.role_object(role.id)
     if context.token is not None:
         await grant_authority.refuse_self_elevation(wired, user=context.token.subject, grantee=user, relation=roles.ASSIGNEE, obj=obj)
-    actor = current_subject(context.token)
+    actor = subject_of(context.token)
     tup = fga_writes.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
     told = announcing.grant_announcement(tup, action="grant_added", actor=_announced_actor(context.token))
     permit = _admin_grant(context=context, role=role)
@@ -289,7 +289,7 @@ async def unassign_role(
     wired, role = await _role_gate(context=context, project_id=project_id, role_id=role_id, relation="can_manage_assignees")
     user = fga_ids.grantee_object(body.user)
     obj = roles.role_object(role.id)
-    actor = current_subject(context.token)
+    actor = subject_of(context.token)
     tup = fga_writes.ClientTuple(user=user, relation=roles.ASSIGNEE, object=obj)
     told = announcing.grant_announcement(tup, action="grant_revoked", actor=_announced_actor(context.token))
     permit = _admin_grant(context=context, role=role)

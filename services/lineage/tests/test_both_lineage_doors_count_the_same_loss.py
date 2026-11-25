@@ -100,6 +100,7 @@ async def test_the_http_door_counts_a_refusal_the_way_the_subscriber_does(error:
             token=None,
             names=NO_CATALOG_NAMES,
             bearer=None,
+            decider=None,
         )
 
     assert recorded == [(expected, Door.HTTP)], (
@@ -137,6 +138,7 @@ async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest
         token=None,
         names=NO_CATALOG_NAMES,
         bearer=None,
+        decider=None,
     )
 
     assert recorded == [(Outcome.INGESTED, Door.HTTP)]

@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, Request
 from lance_namespace import InternalError
 
 from lakehouse.events.bus import Bus
+from lakehouse.governed.decider import AccessDecider
 from lineage.core.config import LineageSettings, get_settings
 from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore
@@ -16,7 +17,15 @@ from lineage.services.provenance import ProvenanceStore
 
 log = logging.getLogger(__name__)
 
-SettingsDep = Annotated[LineageSettings, Depends(get_settings)]
+
+async def request_settings() -> LineageSettings:
+    """The process's settings as a request's dependency: async, so reading the cached settings takes no thread from the
+    pool the blocking doors share. ``get_settings`` stays the cached loader every other caller reads; a test hands the
+    app its own settings by overriding this function."""
+    return get_settings()
+
+
+SettingsDep = Annotated[LineageSettings, Depends(request_settings)]
 
 #: What ``getattr`` answers for a wire the lifespan never set, told apart from the ``None`` a lifespan sets for "off".
 _UNSET: Final = object()
@@ -52,7 +61,7 @@ def app_wire[T](app: FastAPI, name: str, kind: type[T], *, none_is_off: bool = F
     return cast("T | None", wire)
 
 
-def get_provenance(request: Request) -> ProvenanceStore:
+async def get_provenance(request: Request) -> ProvenanceStore:
     """The provenance store — the feed and the edge list the catalog keeps — built once in the lifespan."""
     return app_wire(request.app, "provenance", ProvenanceStore)
 
@@ -60,7 +69,7 @@ def get_provenance(request: Request) -> ProvenanceStore:
 ProvenanceDep = Annotated[ProvenanceStore, Depends(get_provenance)]
 
 
-def get_names(request: Request) -> CatalogNames:
+async def get_names(request: Request) -> CatalogNames:
     """The catalog's names resolved to uuids as the caller sees them, built once in the lifespan."""
     return app_wire(request.app, "names", CatalogNames)
 
@@ -68,7 +77,7 @@ def get_names(request: Request) -> CatalogNames:
 NamesDep = Annotated[CatalogNames, Depends(get_names)]
 
 
-def get_bearer(request: Request) -> str | None:
+async def get_bearer(request: Request) -> str | None:
     """The caller's own bearer, which a name is resolved with (:mod:`lineage.services.names`); ``None`` when it sent none."""
     scheme, _, token = (request.headers.get("authorization") or "").partition(" ")
     return (token.strip() or None) if scheme.lower() == "bearer" else None
@@ -77,7 +86,7 @@ def get_bearer(request: Request) -> str | None:
 BearerDep = Annotated[str | None, Depends(get_bearer)]
 
 
-def get_publisher(request: Request) -> Bus | None:
+async def get_publisher(request: Request) -> Bus | None:
     """This process's connection to the bus, which re-announces a recovered outbox event, or ``None`` without the outbox.
 
     ``None`` is a real answer, not a missing dependency: the publisher exists only to re-publish what the
@@ -90,3 +99,12 @@ def get_publisher(request: Request) -> Bus | None:
 
 
 PublisherDep = Annotated[Bus | None, Depends(get_publisher)]
+
+
+async def get_decider(request: Request) -> AccessDecider | None:
+    """The catalog's decider the lifespan built, which a door asks what a caller may see, or ``None`` where authorization
+    is off."""
+    return app_wire(request.app, "decider", AccessDecider, none_is_off=True)
+
+
+DeciderDep = Annotated[AccessDecider | None, Depends(get_decider)]

@@ -16,6 +16,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from catalog.api.dependencies import request_settings
 from catalog.core.config import Settings, get_settings
 from catalog.core.identifiers import parse_identifier
 from catalog.services import table_claims
@@ -46,7 +47,7 @@ def _governed(client: TestClient, tmp_path: Path) -> tuple[Settings, Grants]:
             "s3_secret_access_key": "x",
         }
     )
-    client.app.dependency_overrides[get_settings] = lambda: settings
+    client.app.dependency_overrides[request_settings] = lambda: settings
     client.app.state.oidc = MagicMock()
     grants = Grants()
     client.app.state.fga = grants

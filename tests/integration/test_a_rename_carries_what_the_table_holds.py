@@ -26,6 +26,7 @@ import pyarrow as pa
 import pytest
 from fastapi.testclient import TestClient
 
+from catalog.api.dependencies import request_settings
 from catalog.core.config import get_settings
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.records import location_claims, maintenance_due, object_records
@@ -66,7 +67,7 @@ def governed(real_ns_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> Ite
             "fga_enabled": True,
         }
     )
-    app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[request_settings] = lambda: settings
     monkeypatch.setattr(app.state, "oidc", MagicMock())
     act_as(real_ns_client, "alice")
     store = TupleStore()

@@ -19,6 +19,7 @@ import lance_namespace
 import pyarrow as pa
 import pytest
 
+from catalog.api.dependencies import request_settings
 from catalog.core.config import get_settings
 from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
@@ -125,7 +126,7 @@ def test_the_trash_lists_exactly_the_drops_its_caller_holds_a_grant_on(
     catalog, uuids = estate
     if not authorized:
         ungoverned = get_settings().model_copy(update={"fga_enabled": False})
-        catalog.client.app.dependency_overrides[get_settings] = lambda: ungoverned
+        catalog.client.app.dependency_overrides[request_settings] = lambda: ungoverned
 
     listed = _listed(catalog, caller, namespace)
 

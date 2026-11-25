@@ -27,10 +27,10 @@ from fastapi.testclient import TestClient
 from lance_namespace import DescribeNamespaceRequest, LanceNamespace, NamespaceNotFoundError
 from tables_by_name import open_by_name
 
-from catalog.api.dependencies import get_clock, get_control_emitter, get_namespace, get_storage_options
+from catalog.api.dependencies import get_clock, get_control_emitter, get_namespace, get_storage_options, request_settings
 from catalog.api.security import authenticate
 from catalog.api.v1.endpoints import erasure as door
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import Settings
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses
 from catalog.services.tables.creation import create_table
@@ -107,7 +107,7 @@ def _catalog(ns: LanceNamespace, control: Path, clock: _Clock, *, lane: _Control
     application.include_router(door.table_router)
     application.include_router(door.obligations_router)
     application.state.control_emitter = NoopControlEmitter()  # the lifespan's, with control emission off
-    application.dependency_overrides[get_settings] = lambda: settings
+    application.dependency_overrides[request_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: ns
     application.dependency_overrides[get_storage_options] = lambda: StorageOptions()
     application.dependency_overrides[authenticate] = lambda: PersonPrincipal(

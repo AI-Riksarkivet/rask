@@ -21,9 +21,9 @@ from lance_namespace import DescribeNamespaceRequest, LanceNamespace, ListNamesp
 from moto.server import ThreadedMotoServer
 from pydantic import SecretStr
 
-from catalog.api.dependencies import get_vendor
+from catalog.api.dependencies import get_vendor, request_settings
 from catalog.api.v1.endpoints import warehouses as wh_ep
-from catalog.core.config import Settings, get_settings
+from catalog.core.config import Settings
 from catalog.core.vending import EncryptionAtRest, SessionTier, VendedSession, build_session_policy, split_s3_location
 from catalog.services import warehouses as wh_svc
 from lakehouse.naming import UUID_PROPERTY
@@ -75,7 +75,7 @@ def _mk_projects(client: TestClient, *project_ids: str) -> None:
 
 def test_create_list_get_warehouse(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
     s = _settings(tmp_path, store)
-    client.app.dependency_overrides[get_settings] = lambda: s
+    client.app.dependency_overrides[request_settings] = lambda: s
     _mk_projects(client, "acme")
 
     # A new warehouse declared primary is primary from its first write, as its project's routing reads it ([[LH-548]]);
@@ -104,7 +104,7 @@ def test_a_project_holding_warehouses_refuses_its_delete_naming_each_one(
 ) -> None:
     """Deletes are bottom-up: a project holding warehouses refuses 409 and names
     each one with the door that empties it, never another tenant's, and the refusal removes nothing."""
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme", "globex")
     for warehouse, project in (("wh-b", "acme"), ("wh-a", "acme"), ("wh-g", "globex")):
         made = client.post("/management/v1/warehouses", json={"id": warehouse, "project": project})
@@ -121,7 +121,7 @@ def test_a_project_holding_warehouses_refuses_its_delete_naming_each_one(
 def test_an_empty_project_is_retired_with_no_grant_to_revoke(client: TestClient, tmp_path: Any, store: str) -> None:
     """With authorization off the delete revokes nothing and answers so: a count of grants it never revoked would be a
     record of a revocation that did not happen."""
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme")
 
     retired = client.delete("/management/v1/projects/acme")
@@ -282,7 +282,7 @@ def test_a_warehouse_is_routable_only_on_a_store_that_passes_the_storage_probe(
     check."""
     vending = _VendingStore(ignores=ignores)
     monkeypatch.setattr(wh_ep.storage_probe, "s3_client", lambda *a, **k: vending.signed_as(k["key_pair"].access_key_id))
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     client.app.dependency_overrides[get_vendor] = lambda: _ScopedVendor(vending, unreachable=unreachable, encrypts_with=encrypts_with)
     _mk_projects(client, "acme")
 
@@ -301,7 +301,7 @@ def test_create_warehouse_cross_project_collision_409(client: TestClient, tmp_pa
     # Cross-tenant takeover guard (audit F1): an admin of a DIFFERENT project must NOT re-register an
     # existing warehouse id under their project (which would ADD their project's read-cascade over the
     # victim's tables). A same-project re-create stays idempotent for the partial-failure retry path.
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme", "evil")
     assert client.post("/management/v1/warehouses", json={"id": "wh-x", "project": "acme"}).status_code == 200
     r = client.post("/management/v1/warehouses", json={"id": "wh-x", "project": "evil"})
@@ -315,7 +315,7 @@ def test_create_warehouse_bucket_claimed_by_another_project_409(client: TestClie
     # then set a project policy governing (and destroying version history in) the victim's data. The
     # bucket-claim scan mirrors the warehouse-id guard: a DIFFERENT project's claim → 409; the same
     # project re-claiming its own bucket under another warehouse id stays allowed.
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme", "evil")
     assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme", "bucket": "acme-wh"}).status_code == 200
     r = client.post("/management/v1/warehouses", json={"id": "wh-evil", "project": "evil", "bucket": "acme-wh"})
@@ -329,7 +329,7 @@ def test_a_bucket_claim_nobody_can_read_refuses_the_create_as_a_fault_no_retry_c
 ) -> None:
     """The claim is there and is no claim: the bucket is not free, and only a write to the record changes that, so the
     answer is the spec's Internal (18) and not the ServiceUnavailable (17) that asks a caller to try again."""
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme", "evil")
     assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme", "bucket": "acme-wh"}).status_code == 200
     (held,) = Path(tmp_path).glob("**/bucket-claims/acme-wh.json")
@@ -348,7 +348,7 @@ def test_create_warehouse_reserved_bucket_refused(client: TestClient, tmp_path: 
     # project may register a warehouse over them.
     provisioned: list[str] = []
     monkeypatch.setattr(wh_svc, "provision_bucket", lambda bucket, so: provisioned.append(bucket))
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store, reserved="lance-source")
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store, reserved="lance-source")
     _mk_projects(client, "evil")
     for bucket in ("lance-catalog", "lance-source"):  # the shared root + a configured zone bucket
         r = client.post("/management/v1/warehouses", json={"id": "wh-evil", "project": "evil", "bucket": bucket})
@@ -359,7 +359,7 @@ def test_create_warehouse_reserved_bucket_refused(client: TestClient, tmp_path: 
 def test_list_warehouses_tolerates_a_corrupt_record(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
     # One corrupt registry object must not 500 the listing (nor void the project-policy resolution that
     # consumes the same list) — skip-with-warning, keep the readable records.
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme")
     assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"}).status_code == 200
     (tmp_path / "_warehouses" / "zzz-corrupt.json").write_text("{truncated")
@@ -370,7 +370,7 @@ def test_list_warehouses_tolerates_a_corrupt_record(client: TestClient, tmp_path
 
 
 def test_explicit_bucket_name(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme")
     resp = client.post("/management/v1/warehouses", json={"id": "wh-b", "project": "acme", "bucket": "tenant-b-data"})
     assert resp.status_code == 200, resp.text
@@ -378,7 +378,7 @@ def test_explicit_bucket_name(client: TestClient, tmp_path: Any, store: str, mon
 
 
 def test_invalid_id_rejected_400(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme")
     # Uppercase + underscore is not a DNS-safe bucket fragment → 400 (never a malformed bucket create).
     assert client.post("/management/v1/warehouses", json={"id": "Bad_Name", "project": "acme"}).status_code == 400
@@ -389,7 +389,7 @@ def test_recreate_does_not_reactivate_a_deactivated_warehouse(client: TestClient
     # mutable lifecycle fields (status, created_at) are carried forward on a same-project re-create;
     # reactivation goes ONLY through /activate.
     s = _settings(tmp_path, store)
-    client.app.dependency_overrides[get_settings] = lambda: s
+    client.app.dependency_overrides[request_settings] = lambda: s
     _mk_projects(client, "acme")
     created = client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"})
     assert created.status_code == 200
@@ -416,7 +416,7 @@ def test_a_re_create_applies_the_protection_it_names_and_carries_it_when_it_name
     """[[LH-548]] The create door is a declaration a reconciler re-POSTs, so it converges on the protection it names
     either way, and a re-POST naming none leaves it as it stands: absent carried forward, never read as `false`."""
     s = _settings(tmp_path, store)
-    client.app.dependency_overrides[get_settings] = lambda: s
+    client.app.dependency_overrides[request_settings] = lambda: s
     _mk_projects(client, "acme")
     assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme", "protected": armed}).status_code == 200
 
@@ -431,7 +431,7 @@ def test_a_warehouse_declared_protected_refuses_its_delete(client: TestClient, t
     purged: list[str] = []
     monkeypatch.setattr(wh_svc, "purge_bucket", lambda bucket, so: purged.append(bucket) or 0)
     s = _settings(tmp_path, store)
-    client.app.dependency_overrides[get_settings] = lambda: s
+    client.app.dependency_overrides[request_settings] = lambda: s
     _mk_projects(client, "acme")
     assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme", "protected": True}).status_code == 200
 
@@ -451,7 +451,7 @@ def test_a_purged_buckets_claim_goes_with_its_last_warehouse(client: TestClient,
     """A warehouse delete that purged its bucket releases the bucket's claim, so another project may register the bucket
     once its bytes are gone; a delete keeping the bytes keeps the claim, so no other project adopts what the bucket holds."""
     monkeypatch.setattr(wh_svc, "purge_bucket", lambda bucket, so: 0)
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme", "globex")
     for warehouse, bucket in (("wh-kept", "kept-bkt"), ("wh-purged", "purged-bkt")):
         assert client.post("/management/v1/warehouses", json={"id": warehouse, "project": "acme", "bucket": bucket}).status_code == 200
@@ -471,7 +471,7 @@ def test_a_replayed_delete_answers_the_first_one_and_leaves_a_warehouse_register
     warehouse registered under the id since is another warehouse, which the replay would otherwise purge."""
     purged: list[str] = []
     monkeypatch.setattr(wh_svc, "purge_bucket", lambda bucket, so: purged.append(bucket) or 0)
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme")
     keyed = {"Idempotency-Key": "6a1c9d5e-0f3b-4c2a-8e7d-1b2c3d4e5f70"}
     assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"}).status_code == 200
@@ -496,7 +496,7 @@ def test_a_purge_that_fails_is_finished_by_the_same_call_again(client: TestClien
         return 3
 
     monkeypatch.setattr(wh_svc, "purge_bucket", _a_store_that_fails_once)
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme")
     assert client.post("/management/v1/warehouses", json={"id": "wh-a", "project": "acme"}).status_code == 200
 
@@ -510,7 +510,7 @@ def test_a_purge_that_fails_is_finished_by_the_same_call_again(client: TestClien
 
 
 def test_deactivate_missing_warehouse_404(client: TestClient, tmp_path: Any, store: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     assert client.post("/management/v1/warehouses/ghost/deactivate").status_code == 404
 
 
@@ -524,7 +524,7 @@ def test_create_warehouse_lost_race_cannot_take_over(client: TestClient, tmp_pat
     # record lands (simulated by a first read that returns None), so the guard passes for BOTH
     # creates — only store arbitration can refuse the second. Before F1 this ended in a silent
     # last-writer-wins overwrite: evil's record replaced acme's, with both projects' FGA edges live.
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme", "evil")
     assert client.post("/management/v1/warehouses", json={"id": "wh-race", "project": "acme"}).status_code == 200
 
@@ -567,7 +567,7 @@ def test_create_warehouse_lost_race_same_project_converges(client: TestClient, t
     # sequential idempotent path — 200, and the winner's mutable lifecycle fields carried forward.
     # The quarantine rule is the load-bearing half: the loser's rebuilt record must NOT resurrect a
     # deactivated warehouse (the F4 interleaving, closed on the racing-create path by the re-read).
-    client.app.dependency_overrides[get_settings] = lambda: _settings(tmp_path, store)
+    client.app.dependency_overrides[request_settings] = lambda: _settings(tmp_path, store)
     _mk_projects(client, "acme")
     assert client.post("/management/v1/warehouses", json={"id": "wh-conv", "project": "acme"}).status_code == 200
     root = f"file://{tmp_path}"
