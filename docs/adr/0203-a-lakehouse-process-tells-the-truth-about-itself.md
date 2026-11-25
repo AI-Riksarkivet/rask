@@ -124,8 +124,10 @@ another date is given:
   OpenFGA outage.
 - A door past its deadline holds its thread and memory until it ends, as it did without a deadline; its caller is told
   the outcome is unknown and reads before retrying.
-- The admission wrap and the refusal answered in the read rest on FastAPI 0.140.13's dispatch and body read, both
-  measured above. A FastAPI upgrade that moves either is caught by the tests that drive them over a socket and through
+- The admission wrap and the refusal answered in the read rest on FastAPI's dispatch and body read, both measured
+  above on 0.140.13 and read again on 0.165.0 (XC-224, 2026-11-24): the body is still read before the dependencies are
+  solved, every dispatch path still calls the route's `handle`, and an included route's handler is now built once for
+  each place its router is included rather than per request, which the wrap does not depend on. A FastAPI upgrade that moves either is caught by the tests that drive them over a socket and through
   the apps: `services/lineage/tests/test_a_post_to_the_intake_is_refused_before_its_body_is_read.py`,
   `tests/integration/test_one_lance_service_assembly.py`, `services/catalog/tests/test_load_shed.py` and
   `packages/lakehouse/tests/test_shared_body_cap.py`.
