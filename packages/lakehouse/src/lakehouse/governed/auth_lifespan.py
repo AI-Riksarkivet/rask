@@ -55,6 +55,7 @@ if TYPE_CHECKING:
     from openfga_sdk import OpenFgaClient
 
     from lakehouse.governed.decider import AccessDecider
+    from lakehouse.governed.idp_identity import IdpVerifier
     from lakehouse.governed.settings import FgaSettings, GovernedAuthSettings, OidcProvider
     from lakehouse.process.supervision import Supervisor
 
@@ -197,16 +198,16 @@ async def attach_auth(
         app.state.decider = OpenFgaDecider(client)
 
 
-async def _attach_person_verifier(app: FastAPI, settings: GovernedAuthSettings, *, providers: Sequence[OidcProvider], service: str, loops: Supervisor) -> None:
-    """Put ``app.state.oidc`` in place over the person issuers ``providers`` names when an audience is set, keys kept fresh."""
-    audience = settings.oidc_audience
-    if not audience:
-        return
+def person_verifier(settings: GovernedAuthSettings, providers: Sequence[OidcProvider], audience: str) -> IdpVerifier:
+    """The verifier of a person's token for ``audience`` over the issuers ``providers`` names. It performs no I/O until
+    it verifies a token or is warmed.
+
+    A caller is the principal its issuer's naming rule reads from the verified token ([[XC-214]], ADR 0208), so one
+    verifier over every issuer is wrapped with each issuer's rule rather than handed to the doors on its own.
+    """
     from lakehouse.governed import idp_identity, oidc
 
-    # A caller is the principal its issuer's naming rule reads from the verified token ([[XC-214]], ADR 0208), so
-    # one verifier over every issuer is wrapped with each issuer's rule rather than handed to the doors on its own.
-    app.state.oidc = idp_identity.IdpVerifier(
+    return idp_identity.IdpVerifier(
         oidc.OIDCVerifier(
             [provider.issuer for provider in providers],
             audience,
@@ -220,6 +221,14 @@ async def _attach_person_verifier(app: FastAPI, settings: GovernedAuthSettings, 
         ),
         providers,
     )
+
+
+async def _attach_person_verifier(app: FastAPI, settings: GovernedAuthSettings, *, providers: Sequence[OidcProvider], service: str, loops: Supervisor) -> None:
+    """Put ``app.state.oidc`` in place over the person issuers ``providers`` names when an audience is set, keys kept fresh."""
+    audience = settings.oidc_audience
+    if not audience:
+        return
+    app.state.oidc = person_verifier(settings, providers, audience)
     # PROVED, not asserted. The constructor above performs no I/O, so until this call the
     # log line "verifier ready" said only that a Python object existed. `warm` resolves every
     # configured issuer, which puts a wrong issuer, a wrong split-horizon override or an
@@ -295,4 +304,5 @@ __all__ = [
     "attach_auth",
     "build_catalog_decider",
     "build_fga_client",
+    "person_verifier",
 ]

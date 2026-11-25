@@ -1,22 +1,29 @@
-"""OIDC authentication wiring tests (our logic only — no PyJWT/network).
+"""OIDC authentication at the catalog's door: off → open, on + no token → 401 problem+json, on + a token the issuer
+signed → admitted, on + one it no longer vouches for → 401 problem+json.
 
-The verifier is faked, so these assert our dependency's behavior: off → open,
-on + no token → 401 problem+json, on + token → delegates to the verifier.
+The person verifier is the one the catalog's lifespan builds, and the issuer is a real one on loopback (the root
+conftest's `dex_issuer`), so a token is verified as the estate verifies it. Every way a verifier can fail a token is
+`packages/lakehouse/tests/test_every_verifier_failure_is_a_401_or_a_503.py`'s.
 """
 
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from lance_namespace import ListTablesResponse, UnauthenticatedError
+from lance_namespace import ListTablesResponse
 
 from catalog.api.dependencies import request_settings
 from catalog.core.config import Settings
+from lakehouse.governed.auth_lifespan import person_verifier
 from lakehouse.governed.idp_identity import IdpVerifier
-from lakehouse.governed.oidc import OIDCVerifier
 from tests.app_state import app_of
-from tests.callers import person
 from tests.catalog_settings import governed_settings
+
+
+#: The audience the loopback issuer's tokens are minted for, and the connector its people sign in through.
+_AUDIENCE = "lance-catalog"
+_CONNECTOR = "local"
 
 
 def _enabled_settings() -> Settings:
@@ -24,13 +31,16 @@ def _enabled_settings() -> Settings:
     return governed_settings(fga_enabled=False)
 
 
-def _verifier() -> IdpVerifier:
-    """The person verifier the catalog's lifespan builds from :func:`_enabled_settings`; it fetches no key until it is
-    asked to verify a token, which the tests holding it never do."""
-    settings = _enabled_settings()
-    providers = settings.oidc_person_providers
+def _issued_by(issuer: str) -> Settings:
+    """:func:`_enabled_settings` trusting ``issuer``, a loopback one, for :data:`_AUDIENCE`."""
+    return governed_settings(fga_enabled=False, oidc_issuer=issuer, oidc_audience=_AUDIENCE, oidc_allow_insecure=True)
+
+
+def _verifier(settings: Settings) -> IdpVerifier:
+    """The person verifier the catalog's lifespan builds from ``settings``; it fetches no key until it is asked to
+    verify a token."""
     assert settings.oidc_audience is not None
-    return IdpVerifier(OIDCVerifier([provider.issuer for provider in providers], settings.oidc_audience, settings.oidc_cache_ttl), providers)
+    return person_verifier(settings, settings.oidc_person_providers, settings.oidc_audience)
 
 
 @pytest.mark.parametrize(
@@ -44,23 +54,22 @@ def _verifier() -> IdpVerifier:
 )
 def test_oidc_enabled_missing_token_is_401_problem_json(client: TestClient, method: str, path: str, body: bytes | None) -> None:
     app_of(client).dependency_overrides[request_settings] = _enabled_settings
-    app_of(client).state.oidc = _verifier()
+    app_of(client).state.oidc = _verifier(_enabled_settings())
     resp = client.request(method, path, content=body, headers={"Content-Type": "application/json"} if body else {})
     assert resp.status_code == 401, resp.text
     assert resp.headers["content-type"].startswith("application/problem+json")
     assert resp.json()["code"] == 16  # UNAUTHENTICATED
 
 
-def test_oidc_enabled_valid_token_passes_through(client: TestClient, fake_ns: MagicMock) -> None:
+def test_a_token_the_issuer_signed_is_admitted(client: TestClient, fake_ns: MagicMock, dex_issuer: Any) -> None:  # noqa: ANN401 — the root conftest's DexIssuer
     fake_ns.list_all_tables.return_value = ListTablesResponse(tables=[])
-    verifier = MagicMock()
-    verifier.verify.return_value = person("s")
-    app_of(client).dependency_overrides[request_settings] = _enabled_settings
-    app_of(client).state.oidc = verifier
+    settings = _issued_by(dex_issuer.issuer)
+    app_of(client).dependency_overrides[request_settings] = lambda: settings
+    app_of(client).state.oidc = _verifier(settings)
 
-    resp = client.get("/v1/table", headers={"Authorization": "Bearer tok"})
-    assert resp.status_code == 200
-    verifier.verify.assert_called_once_with("tok")
+    resp = client.get("/v1/table", headers={"Authorization": f"Bearer {dex_issuer.mint('alice', connector=_CONNECTOR, audience=_AUDIENCE)}"})
+
+    assert resp.status_code == 200, resp.text
 
 
 @pytest.mark.parametrize("missing", ["issuer", "audience"])
@@ -77,26 +86,23 @@ def test_settings_rejects_fga_without_oidc() -> None:
         Settings.model_validate({"fga_enabled": True, "s3_access_key_id": "x", "s3_secret_access_key": "x"})
 
 
-def test_oidc_verifier_failure_maps_to_401_problem_json(client: TestClient) -> None:
-    """CONTRACT: a verifier that raises ``UnauthenticatedError`` (expired / bad-sig / wrong
-    issuer / disallowed alg — all the cases unit-tested in packages/lakehouse/tests/test_oidc_verify.py)
-    is rendered by our error handler as a 401 problem+json, never leaking the cause."""
-    verifier = MagicMock()
-    verifier.verify.side_effect = UnauthenticatedError("Invalid or expired token")
-    app_of(client).dependency_overrides[request_settings] = _enabled_settings
-    app_of(client).state.oidc = verifier
+def test_a_token_the_issuer_no_longer_vouches_for_is_401_problem_json(client: TestClient, dex_issuer: Any) -> None:  # noqa: ANN401 — the root conftest's DexIssuer
+    """A token the verifier refuses, here one that expired an hour ago, is rendered by the catalog's error handler as a
+    401 problem+json."""
+    settings = _issued_by(dex_issuer.issuer)
+    app_of(client).dependency_overrides[request_settings] = lambda: settings
+    app_of(client).state.oidc = _verifier(settings)
+    expired = dex_issuer.mint("alice", connector=_CONNECTOR, audience=_AUDIENCE, ttl=-3600)
 
-    resp = client.get("/v1/table", headers={"Authorization": "Bearer expired-or-forged"})
-    assert resp.status_code == 401
-    assert resp.headers["content-type"].startswith("application/problem+json")
-    assert resp.json()["code"] == 16  # UNAUTHENTICATED
-    verifier.verify.assert_called_once_with("expired-or-forged")
+    resp = client.get("/v1/table", headers={"Authorization": f"Bearer {expired}"})
+
+    assert (resp.status_code, resp.headers["content-type"].split(";")[0], resp.json()["code"]) == (401, "application/problem+json", 16), resp.text
 
 
 def test_oidc_enabled_empty_bearer_is_401(client: TestClient) -> None:
     """CONTRACT: an ``Authorization: Bearer`` header with no token value is unauthenticated."""
     app_of(client).dependency_overrides[request_settings] = _enabled_settings
-    app_of(client).state.oidc = _verifier()
+    app_of(client).state.oidc = _verifier(_enabled_settings())
     resp = client.get("/v1/table", headers={"Authorization": "Bearer "})
     assert resp.status_code == 401
     assert resp.json()["code"] == 16
