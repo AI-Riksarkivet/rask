@@ -11,7 +11,7 @@ from typing import Final
 from lance_namespace import PermissionDeniedError
 from pydantic import BaseModel, ConfigDict
 
-from catalog.api.security import ANONYMOUS_SUBJECT, Caller
+from catalog.api.security import ANONYMOUS_SUBJECT, Caller, actor_of
 from catalog.services.control_records import GIT
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 
@@ -23,7 +23,7 @@ class Author(BaseModel):
 
     #: The writer recorded on a tuple it writes and on a record it creates.
     subject: str
-    #: The actor its control events name.
+    #: The actor its control events and records name: a caller's OpenFGA user (`catalog.api.security.actor_of`).
     actor: str
 
 
@@ -33,7 +33,7 @@ DECLARATION: Final = Author(subject="system:declaration", actor="system:declarat
 
 def author_of(token: Caller | None) -> Author | None:
     """The author a signed-in caller is, or ``None`` on a stack that authenticates nobody."""
-    return None if token is None else Author(subject=token.subject, actor=f"user:{token.subject}")
+    return None if token is None else Author(subject=token.subject, actor=actor_of(token))
 
 
 def refuse_what_git_declares(manager: str | None, *, obj: str, token: Caller | None) -> None:

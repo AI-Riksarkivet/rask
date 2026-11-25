@@ -5673,11 +5673,11 @@ export interface components {
          * CatalogControlEvent
          * @description One control-plane mutation notice, published AFTER the mutation it announces succeeds.
          *
-         *     `actor` is the person the emitting service authenticated (`user:<principal>`), or a service principal or None when a
-         *     service acts for itself. Several services publish on this topic (`control_signer_role` names the one that signs
-         *     each action), so to a consumer the actor is a claim until the envelope's `rask_signature` proves who stamped it
-         *     (`lakehouse.events.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
-         *     envelope parse alike.
+         *     `actor` is the caller the emitting service authenticated, as the OpenFGA user its grants name (`user:` and the
+         *     principal key, percent-encoded), or a service's own name or None when a service acts for itself. Several services
+         *     publish on this topic (`control_signer_role` names the one that signs each action), so to a consumer the actor is a
+         *     claim until the envelope's `rask_signature` proves who stamped it (`lakehouse.events.signing.verify_control_signature`).
+         *     The model ignores that member, so a signed and an unsigned envelope parse alike.
          */
         CatalogControlEvent: {
             action: components["schemas"]["ControlAction"];
@@ -7368,7 +7368,7 @@ export interface components {
             requested_at: string;
             /**
              * Requested By
-             * @description Who asked for the erasure: `user:` and the principal key their token proved.
+             * @description Who asked for the erasure: the OpenFGA user their token proved, as every grant naming them holds it (`user:` and the principal key, percent-encoded).
              */
             requested_by: string | null;
             /**

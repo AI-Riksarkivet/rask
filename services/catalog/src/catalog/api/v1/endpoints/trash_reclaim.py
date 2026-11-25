@@ -23,7 +23,7 @@ from catalog.api.announcing import AnnouncerDep, Filing
 from catalog.api.authz import decisions, door_gates, object_grants
 from catalog.api.authz.context import AuthzContextDep
 from catalog.api.dependencies import ClockDep, Resolver, ResolverDep, SettingsDep, VendorDep
-from catalog.api.security import Caller, CurrentSubject, CurrentToken
+from catalog.api.security import Caller, CurrentSubject, CurrentToken, actor_of
 from catalog.core.config import CatalogStore
 from catalog.core.identifiers import parse_identifier
 from catalog.core.vending import reclaim_or_refuse, role_session_name
@@ -79,7 +79,9 @@ async def release_trash(
             raise await _noted(context.settings, kind=kind, uuid=uuid, reason=reason)
         obj = fga_ids.object_of(kind, uuid)
         held = await fga_reads.read_object_tuples(wired, obj) if (wired := decisions.wired(context.settings, context.client)) is not None else []
-        told = {(t.object, t.relation, t.user): _revoked(t, record, uuid=uuid, actor=_actor(context.token)) for t in held if fga_ids.names_someone(str(t.user))}
+        told = {
+            (t.object, t.relation, t.user): _revoked(t, record, uuid=uuid, actor=actor_of(context.token)) for t in held if fga_ids.names_someone(str(t.user))
+        }
         async with announcer.announcing(door="trash_release", target=obj, announcements=list(told.values())) as filing:
             removed = await object_grants.revoke_expired_object(context, obj)
             await _tell_who_lost_a_grant(filing, removed, told, record=record, uuid=uuid, token=context.token)
@@ -105,7 +107,7 @@ async def _tell_who_lost_a_grant(
     # on seeing it would. Structural edges name objects, not people, and are not announced.
     for t in removed:
         if fga_ids.names_someone(str(t.user)):
-            await filing.send(told.get((t.object, t.relation, t.user)) or _revoked(t, record, uuid=uuid, actor=_actor(token)))
+            await filing.send(told.get((t.object, t.relation, t.user)) or _revoked(t, record, uuid=uuid, actor=actor_of(token)))
 
 
 @management_router.post("/{kind}/{uuid}/credentials", response_model_exclude_none=True)
@@ -253,7 +255,7 @@ async def _place_held(resolver: Resolver, claim: LocationClaim) -> str | None:
     return f"the live table {fga_ids.canonical_object_id(claim.segments)!r} holds the record's place, so its bytes are not the trash's"
 
 
-def _revoked(t: fga_writes.ClientTuple, record: TrashRecord, *, uuid: str, actor: str) -> Announcement:
+def _revoked(t: fga_writes.ClientTuple, record: TrashRecord, *, uuid: str, actor: str | None) -> Announcement:
     """The ``grant_revoked`` a release announces for ``t``, naming the released object by its name and uuids."""
     namespace_uuid = record.namespace_uuid
     return announcing.grant_announcement(
@@ -265,8 +267,3 @@ def _revoked(t: fga_writes.ClientTuple, record: TrashRecord, *, uuid: str, actor
         namespace_uuid=namespace_uuid if isinstance(namespace_uuid, str) else None,
         extra={"reason": "trash_expired"},
     )
-
-
-def _actor(token: Caller | None) -> str:
-    """Who acted: the verified caller, or the catalog itself on a stack with authentication off."""
-    return token.subject if token is not None else "system:catalog"

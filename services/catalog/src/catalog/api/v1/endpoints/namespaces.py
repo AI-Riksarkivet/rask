@@ -47,7 +47,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.pagination import ListLimit
 from catalog.api.rask_params import RaskFlag
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import Caller, CurrentToken, actor_of, record_actor_of
 from catalog.core import native, table_objects, write_judge
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.formats import reject_unsupported_properties
@@ -155,7 +155,7 @@ async def create_namespace(
         object_type="namespace",
         object_id=fga_ids.namespace_object(minted),
         object_name=fga_ids.canonical_object_id(segments),
-        actor=f"user:{context.token.subject}" if context.token else None,
+        actor=actor_of(context.token),
         extra={"mode": req.mode, "properties": req.properties},
     )
     await converge.remember(200, response)
@@ -634,7 +634,7 @@ async def _plan_the_drop(drop: _IdentifiedDrop, *, uuids: ObjectUuids, settings:
         object_name=fga_ids.canonical_object_id(drop.target.segments),
         object_uuid=own.object_uuid,
         namespace_uuid=own.namespace_uuid,
-        actor=f"user:{token.subject}" if token else None,
+        actor=actor_of(token),
         extra={"cascade": drop.target.cascade, "recoverable": recoverable, "descendants_revoked": 0 if recoverable else len(drop.descendants)},
     )
     dropped_namespace = Announcement(
@@ -668,7 +668,7 @@ async def _trash_the_cascade(ns: LanceNamespace, plan: _DropPlan, *, settings: S
     detached = await namespace_subtrees.trash_subtree(
         ns,
         settings,
-        dropped_by=f"user:{token.subject}" if token is not None else None,
+        dropped_by=record_actor_of(token),
         segments=drop.target.segments,
         descendants=drop.descendants,
         own=ControlUuids(object_uuid=drop.dropped.uuid, namespace_uuid=plan.own.namespace_uuid),
@@ -695,7 +695,7 @@ async def _destroy_announcing_each_table(ns: LanceNamespace, plan: _DropPlan, *,
         claims=table_claims.claim_store(settings),
         storage_options=settings.storage_options(),
         estate_roots=(settings.registry_root, settings.root),
-        dropped_by=f"user:{token.subject}" if token is not None else None,
+        dropped_by=record_actor_of(token),
     ):
         removed_tables.add(tuple(table))
         await filing.send(plan.dropped_tables[tuple(table)])
@@ -837,7 +837,7 @@ async def undrop_namespace(
                 object_name=canonical,
                 object_uuid=root_uuid,
                 namespace_uuid=record.namespace_uuid,
-                actor=f"user:{token.subject}" if token is not None else None,
+                actor=actor_of(token),
                 extra={"namespaces": len(namespace_records), "tables": len(table_records) - declared_only, "declared_only_skipped": declared_only},
             )
         ),
@@ -995,9 +995,7 @@ async def set_namespace_protection(
     await hierarchy.require_namespace_as_identified(ns, namespace)
     so = settings.storage_options()
     if body.protected:
-        record = ProtectionRecord(
-            kind="namespace", id=canonical, uuid=namespace.uuid, protected=True, set_by=f"user:{token.subject}" if token is not None else "anonymous"
-        )
+        record = ProtectionRecord(kind="namespace", id=canonical, uuid=namespace.uuid, protected=True, set_by=record_actor_of(token))
         await run_in_threadpool(protection.set_protection, settings.registry_root, so, record)
     else:
         await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "namespace", uuid=namespace.uuid)
@@ -1007,7 +1005,7 @@ async def set_namespace_protection(
         object_type="namespace",
         object_id=namespace.fga_object(),
         object_name=canonical,
-        actor=f"user:{token.subject}" if token is not None else None,
+        actor=actor_of(token),
         extra={},
     )
     return ProtectionResponse(id=canonical, protected=body.protected)

@@ -62,7 +62,8 @@ class ProtectionChange(BaseModel):
 
     Attributes:
         protected: Arm the protection when true, clear it when false.
-        by: The principal making the change, ``user:<subject>``, recorded as ``protected_by`` when it arms.
+        by: Who makes the change, the OpenFGA user they are (``system:declaration`` for the declaration, ``anonymous``
+            where no caller was verified), recorded as ``protected_by`` when it arms.
     """
 
     model_config = ConfigDict(frozen=True)

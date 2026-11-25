@@ -233,6 +233,15 @@ percent-encoded, which `fga_ids.subject_of` decodes, or a userset):
 | `erasure_release_scheduled` | one event per person the release costs (the erasure's requester and each table owner), with the deadline in `extra.due_at` |
 | `principal_deleted` | the principal the estate admin offboarded: nobody is left to tell, so a notifier erases what it keeps for them |
 
+An event's `actor` is who made the change, spelled as `extra.subject` is: the OpenFGA user of the caller the catalog
+authenticated, which every grant naming that caller holds, so an actor, a subject and a grant name one person by one
+string ([[LH-608]]). The doors answer who acted on a record the same way: a trash entry's `dropped_by`, a protection's
+`set_by` and `protected_by`, an erasure obligation's `requested_by`, a contract's `set_by` and a label definition's
+`defined_by`. A service acting for itself names itself (`system:declaration`, `service:maintenance`) or no actor, and a
+stack that authenticates nobody names no actor (a trash entry and a protection say `anonymous`). The actor is who
+acted, never whom to tell: a notifier targets `extra.subject`. A role's `created_by` and an offboarding record's
+`deleted_by` name the principal key itself, as the audit trail does, and so does lineage's run feed (§ Whom a run names).
+
 ### What a notifier asks
 
 A notifier holds no OpenFGA credential. It asks the catalog's decision door as its own identity, on roles granted to

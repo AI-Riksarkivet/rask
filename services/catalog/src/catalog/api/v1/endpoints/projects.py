@@ -68,7 +68,7 @@ from catalog.api.authz import decisions, door_gates, hierarchy, object_grants
 from catalog.api.authz.context import AuthzContextDep
 from catalog.api.declared import Author, author_of, refuse_what_git_declares
 from catalog.api.dependencies import ControlEmitterDep, SettingsDep
-from catalog.api.security import ANONYMOUS_SUBJECT, CurrentToken, subject_of
+from catalog.api.security import CurrentToken, actor_of, record_actor_of, subject_of
 from catalog.core.config import CatalogStore, Settings
 from catalog.schemas import (
     CreateProjectRequest,
@@ -501,8 +501,8 @@ async def set_project_protection(
     Raises:
         TableNotFoundError: The project is absent, its caller does not administer it, or it was deleted before the write.
     """
-    actor = f"user:{token.subject}" if token is not None else None
-    change = ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
+    actor = actor_of(token)
+    change = ProtectionChange(protected=body.protected, by=record_actor_of(token))
     await protect_project(settings, control, project_id, change=change, actor=actor)
     return ProtectionResponse(id=project_id, protected=body.protected)
 
@@ -630,7 +630,7 @@ async def delete_project(
     # audit trail and the revoked tuples' writer name, and the actor its control events name. `system:catalog` is the
     # honest writer on an auth-off stack, where there genuinely is no principal, never a stand-in for one we failed to thread.
     writer = context.token.subject if context.token is not None else "system:catalog"
-    announced = f"user:{context.token.subject}" if context.token is not None else None
+    announced = actor_of(context.token)
     obj = f"project:{project_id}"
     retiring = _Retiring(project_id=project_id, settings=context.settings, so=so, authz=authz, writer=writer, announced=announced)
     # Whom the revoke reaches is read and filed before it reaches them, so a failure after it still tells them ([[LH-576]]).

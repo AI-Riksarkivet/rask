@@ -55,7 +55,7 @@ from pydantic import BaseModel, ConfigDict, SkipValidation
 from catalog.api.authz import door_gates, hierarchy, object_grants, write_doors
 from catalog.api.authz.context import AuthzContext
 from catalog.api.dependencies import Resolver, door_commit_filer, governed_storage
-from catalog.api.security import Caller
+from catalog.api.security import Caller, actor_of
 from catalog.core import encoding, native, provenance_guard, run_context
 from catalog.core.config import Settings
 from catalog.core.formats import reject_unsupported_properties
@@ -427,7 +427,7 @@ async def _announce_the_create_on_the_control_lane(created: _Created, *, control
             object_type="table",
             object_id=fga_ids.table_object(table_uuid),
             object_name=table_id,
-            actor=f"user:{token.subject}" if token is not None else None,
+            actor=actor_of(token),
             extra={
                 "namespace": namespace,
                 "version": response.version or 1,

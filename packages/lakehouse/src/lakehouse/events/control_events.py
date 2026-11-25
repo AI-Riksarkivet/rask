@@ -125,11 +125,11 @@ type ControlObjectType = Literal["project", "grant", "warehouse", "policy", "nam
 class CatalogControlEvent(BaseModel):
     """One control-plane mutation notice, published AFTER the mutation it announces succeeds.
 
-    `actor` is the person the emitting service authenticated (`user:<principal>`), or a service principal or None when a
-    service acts for itself. Several services publish on this topic (`control_signer_role` names the one that signs
-    each action), so to a consumer the actor is a claim until the envelope's `rask_signature` proves who stamped it
-    (`lakehouse.events.signing.verify_control_signature`). The model ignores that member, so a signed and an unsigned
-    envelope parse alike.
+    `actor` is the caller the emitting service authenticated, as the OpenFGA user its grants name (`user:` and the
+    principal key, percent-encoded), or a service's own name or None when a service acts for itself. Several services
+    publish on this topic (`control_signer_role` names the one that signs each action), so to a consumer the actor is a
+    claim until the envelope's `rask_signature` proves who stamped it (`lakehouse.events.signing.verify_control_signature`).
+    The model ignores that member, so a signed and an unsigned envelope parse alike.
     """
 
     #: Client-side dedupe key (a redelivery carries the same id). Time-ordered (UUIDv7), so the outbox that stages an
@@ -152,8 +152,10 @@ class CatalogControlEvent(BaseModel):
     object_uuid: str | None = None
     #: The uuid of the namespace that table or namespace is in; `None` for a top-level namespace.
     namespace_uuid: str | None = None
-    #: The verified principal that made the change, `user:` and its key (`user:dex~<user id>`, [[LH-063]]), or `None`
-    #: on a service/unauthenticated mutation (auth-off dev).
+    #: The verified principal that made the change as the OpenFGA user every tuple naming it holds (`fga_ids.user_object`:
+    #: `user:` and the principal key, percent-encoded, as a `subject` below is; `user:dex~<user id>`, [[LH-063]],
+    #: [[LH-608]]); a service's own name (`system:declaration`) or `None` when a service acts for itself; `None` on an
+    #: unauthenticated mutation (auth-off dev).
     actor: str | None = None
     #: Action-specific detail — kept small (claim-check: pointers, never data). E.g. a grant's
     #: `{relation, subject}`, a rename's `{from, to}`, a warehouse bind's `{namespace}`. A `subject` is the OpenFGA

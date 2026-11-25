@@ -73,7 +73,8 @@ class ProtectionRecord(BaseModel):
     #: The object's uuid, which keys the record (ADR 0173 §8).
     uuid: str = Field(min_length=1)
     protected: bool
-    #: Who armed it, ``user:<subject>``; ``None`` where the record does not say.
+    #: Who armed it: the OpenFGA user they are, or ``anonymous`` where no caller was verified; ``None`` where the record
+    #: does not say.
     set_by: str | None = None
 
     @field_validator("protected", mode="before")

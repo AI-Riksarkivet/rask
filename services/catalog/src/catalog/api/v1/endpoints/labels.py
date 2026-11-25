@@ -35,7 +35,7 @@ from lance_namespace import (
 from catalog.api.authz import decisions, door_gates, hierarchy, objects, visible_pages
 from catalog.api.authz.context import AuthzContextDep
 from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, ResolvedTableDep, Resolver, ResolverDep, SettingsDep
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import Caller, CurrentToken, actor_of
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import (
@@ -63,10 +63,6 @@ log = logging.getLogger(__name__)
 table_router = APIRouter(prefix="/management/v1/table", tags=["labels"])
 namespace_router = APIRouter(prefix="/management/v1/namespace", tags=["labels"])
 projects_router = APIRouter(prefix="/management/v1/projects", tags=["labels"])
-
-
-def _actor(token: Caller | None) -> str | None:
-    return f"user:{token.subject}" if token is not None else None
 
 
 def _object(kind: LabelScope, uuid: str) -> str:
@@ -148,7 +144,7 @@ async def _set(
         raise InvalidInputError(f"project {project!r} defines no label {body.name!r}; its admin defines it first")
     value = object_labels.judged_value(defined, kind=kind, value=body.value)
     canonical = fga_ids.canonical_object_id(list(segments))
-    base = Attachment(kind=kind, uuid=uuid, id=canonical, project=project, location=location, labels={}, set_by=_actor(token))
+    base = Attachment(kind=kind, uuid=uuid, id=canonical, project=project, location=location, labels={}, set_by=actor_of(token))
     try:
         await run_in_threadpool(object_labels.attach, settings.registry_root, so, base, defined=defined, value=value)
     except conditional_records.RecordChangedError as exc:
@@ -162,7 +158,7 @@ async def _set(
         object_type=kind,
         object_id=_object(kind, uuid),
         object_name=canonical,
-        actor=_actor(token),
+        actor=actor_of(token),
         extra={"label": defined.name, **({"value": value} if value is not None else {})},
     )
     return await _describe(settings, kind=kind, segments=segments, uuid=uuid)
@@ -175,7 +171,7 @@ async def _remove(
     canonical = fga_ids.canonical_object_id(list(segments))
     try:
         removed = await run_in_threadpool(
-            object_labels.detach, settings.registry_root, settings.storage_options(), kind, object_uuid=uuid, name=body.name, actor=_actor(token)
+            object_labels.detach, settings.registry_root, settings.storage_options(), kind, object_uuid=uuid, name=body.name, actor=actor_of(token)
         )
     except conditional_records.RecordChangedError as exc:
         raise ConcurrentModificationError(f"the labels of {canonical} kept changing; remove the label again") from exc
@@ -186,7 +182,7 @@ async def _remove(
             object_type=kind,
             object_id=_object(kind, uuid),
             object_name=canonical,
-            actor=_actor(token),
+            actor=actor_of(token),
             extra={"label": body.name},
         )
     return await _describe(settings, kind=kind, segments=segments, uuid=uuid)
@@ -327,7 +323,7 @@ async def define_label(*, id: str, body: LabelDefinitionRequest, context: AuthzC
         scope=body.scope,
         kind=body.kind,
         allowed_values=body.allowed_values,
-        actor=_actor(context.token),
+        actor=actor_of(context.token),
     )
     try:
         defined, changed = await run_in_threadpool(object_labels.define, context.settings.registry_root, context.settings.storage_options(), asked)
@@ -340,7 +336,7 @@ async def define_label(*, id: str, body: LabelDefinitionRequest, context: AuthzC
         action="label_defined",
         object_type="label",
         object_id=object_labels.label_object(defined.uuid),
-        actor=_actor(context.token),
+        actor=actor_of(context.token),
         extra={"project": project, "name": defined.name},
     )
     return defined
@@ -365,7 +361,7 @@ async def delete_label_definition(*, id: str, name: str, context: AuthzContextDe
         action="label_deleted",
         object_type="label",
         object_id=object_labels.label_object(deleted.uuid),
-        actor=_actor(context.token),
+        actor=actor_of(context.token),
         extra={"project": project, "name": deleted.name},
     )
     return deleted

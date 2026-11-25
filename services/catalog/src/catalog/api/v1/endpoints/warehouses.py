@@ -57,7 +57,7 @@ from catalog.api.dependencies import (
     namespace_for_root,
 )
 from catalog.api.pagination import ListLimit
-from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken
+from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken, actor_of, record_actor_of
 from catalog.core import native
 from catalog.core.config import CatalogStorageSettings, CatalogStore, Settings
 from catalog.core.identifiers import parse_identifier
@@ -89,7 +89,7 @@ from catalog.services.vend_probe import (
 from lakehouse.events.control_emit import ControlEmitter, emit_control
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids, fga_writes
-from lakehouse.naming import CATALOG_DELIMITER, CONTROL_ID_RE
+from lakehouse.naming import ANONYMOUS_ACTOR, CATALOG_DELIMITER, CONTROL_ID_RE
 from lakehouse.problems.ns_errors import PartiallyAppliedError, status_for
 from lakehouse.records.trash import TrashRecord
 from lakehouse.records.warehouse_records import WarehouseRecord
@@ -220,7 +220,7 @@ async def establish_warehouse(
     await run_in_threadpool(warehouses.provision_bucket, bucket, context.settings.storage_options())
     await _require_a_conforming_store(context.settings, vendor, root_uri, warehouse_id=warehouse_id, author=author)
     actor = author.actor if author is not None else None
-    protection = None if body.protected is None else ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
+    protection = None if body.protected is None else ProtectionChange(protected=body.protected, by=actor or ANONYMOUS_ACTOR)
     record = _record_for(body, existing, warehouse_id=warehouse_id, project=project, bucket=bucket, protection=protection)
     replaced, record = await _write_record(context.settings, body, record, existing=existing, protection=protection)
     # ITS OWN ROW IN ITS OWN CATALOG ([[LH-593]]): every name beneath a warehouse begins with its id, and the directory
@@ -546,9 +546,7 @@ async def _set_warehouse_status(
         # admin of the warehouse's own project still passes; anyone else sees exactly a missing-warehouse 404.
         raise TableNotFoundError(f"warehouse not found: {warehouse_id}") from exc
     refuse_what_git_declares(record.managed_by, obj=f"warehouse:{warehouse_id}", token=context.token)
-    updated = await change_warehouse_status(
-        context.settings, control, warehouse_id, status=status, actor=f"user:{context.token.subject}" if context.token else None
-    )
+    updated = await change_warehouse_status(context.settings, control, warehouse_id, status=status, actor=actor_of(context.token))
     return WarehouseResponse.model_validate(updated.stored())
 
 
@@ -692,8 +690,8 @@ async def set_warehouse_protection(
         TableNotFoundError: The warehouse is absent, its caller does not administer its project, or it moved to
             another project before the write.
     """
-    actor = f"user:{token.subject}" if token is not None else None
-    change = ProtectionChange(protected=body.protected, by=actor or f"user:{ANONYMOUS_SUBJECT}")
+    actor = actor_of(token)
+    change = ProtectionChange(protected=body.protected, by=record_actor_of(token))
     await protect_warehouse(settings, control, warehouse_id, project=record.project, change=change, actor=actor)
     return ProtectionResponse(id=warehouse_id, protected=body.protected)
 
@@ -1059,7 +1057,7 @@ async def _what_the_delete_announces(delete: _WarehouseDelete, *, announcer: Ann
         action="warehouse_deleted",
         object_type="warehouse",
         object_id=f"warehouse:{delete.warehouse_id}",
-        actor=f"user:{token.subject}" if token else None,
+        actor=actor_of(token),
         extra={
             "project": delete.project,
             "bucket": delete.bucket,

@@ -19,7 +19,7 @@ idp id. A service-account token never falls
 through to the IdP, no header names the caller, and OpenFGA alone decides what the principal may do.
 """
 
-from typing import Annotated, cast
+from typing import Annotated, cast, overload
 
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -30,6 +30,7 @@ from lakehouse.governed.admission import admitted_caller, caller_judge
 from lakehouse.governed.door_caller import caller_of
 from lakehouse.governed.idp_identity import PersonPrincipal
 from lakehouse.governed.machine_identity import ServicePrincipal
+from lakehouse.naming import ANONYMOUS_ACTOR
 
 
 #: The subject a door names when OIDC is disabled. Named rather than inlined so a grep for who can act
@@ -81,6 +82,26 @@ judge = caller_judge(gate=authenticate, settings=request_settings, authenticated
 def subject_of(token: Caller | None) -> str:
     """The verified caller as the estate's subject id: its principal key, or ``anon`` with OIDC off."""
     return token.subject if token is not None else ANONYMOUS_SUBJECT
+
+
+@overload
+def actor_of(token: Caller) -> str: ...
+@overload
+def actor_of(token: Caller | None) -> str | None: ...
+def actor_of(token: Caller | None) -> str | None:
+    """The verified caller as the actor an event or a record names, or ``None`` with OIDC off.
+
+    The OpenFGA user its principal is (`Principal.fga_user`: `user:` and the key, percent-encoded), which every tuple
+    naming the caller holds, so a client joining an actor to the grants finds the same person ([[LH-608]]). The audit
+    trail and a tuple's writer name the caller by its subject (:func:`subject_of`).
+    """
+    return token.principal.fga_user if token is not None else None
+
+
+def record_actor_of(token: Caller | None) -> str:
+    """The verified caller as a record that always says who acted names it: :func:`actor_of`, or ``anonymous`` with
+    OIDC off (`lakehouse.naming.ANONYMOUS_ACTOR`), as a trash entry and a deletion protection do."""
+    return actor_of(token) or ANONYMOUS_ACTOR
 
 
 async def current_subject(token: CurrentToken) -> str:

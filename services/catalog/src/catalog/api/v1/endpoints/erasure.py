@@ -37,7 +37,7 @@ from fastapi.concurrency import run_in_threadpool
 from catalog.api.authz import decisions, visible_pages
 from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, FgaClientDep, ProvenanceNamespaceDep, SettingsDep, StorageOptionsDep
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, actor_of
 from catalog.core.config import CatalogMaintenanceSettings, Settings
 from catalog.core.identifiers import parse_identifier
 from catalog.core.namespace import disarm_every_ref
@@ -136,7 +136,7 @@ async def erase_subject(
         predicate_digest=erasure_obligations.digest(body.predicate),
         retain_days=body.retain_days,
         refs=await run_in_threadpool(erasure.ref_heads, dataset),
-        requested_by=f"user:{token.subject}" if token is not None else None,
+        requested_by=actor_of(token),
         requested_at=now,
         deadline=now + timedelta(days=settings.erasure_deadline_days),
         follows=body.follows,
@@ -255,7 +255,7 @@ async def verify_erasure(
             object_type="table",
             object_id=fga_ids.table_object(table_uuid),
             object_name=canonical,
-            actor=f"user:{context.token.subject}" if context.token is not None else None,
+            actor=actor_of(context.token),
             extra={"tag": dropped.tag, **pinned, "obligation_id": obligation_id},
         )
     if report.settled and report.pinned_by:
@@ -354,9 +354,9 @@ async def _schedule_release(
         )
         holders = []
     requester = obligation.requested_by
-    # `requested_by` is the notice's actor, `user:` and the principal key as the door verified it; a notice names its
-    # subject as the OpenFGA user, the form the owners are listed in, so the requester is encoded to be told ([[LH-063]]).
-    told = [fga_ids.user_object(requester.removeprefix("user:"))] if requester else []
+    # `requested_by` is the requester's OpenFGA user, the form the owners are listed in and a notice names its subject in,
+    # so the requester is told as recorded and named once when they also own the table ([[LH-608]]).
+    told = [requester] if requester else []
     notified = list(dict.fromkeys([*told, *sorted(holders)]))
     record = erasure_release.new_release(
         report.pinned_by,

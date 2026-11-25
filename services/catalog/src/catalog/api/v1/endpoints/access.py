@@ -37,6 +37,7 @@ from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.authz import decisions, door_gates, grant_authority
 from catalog.api.authz.context import AuthzContext, AuthzContextDep
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
+from catalog.api.security import actor_of
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import (
     AccessCheckRequest,
@@ -536,7 +537,7 @@ async def _change_access(
         await grant_authority.refuse_a_cross_tenant_role_grant(client, grantee, fga_type=fga_type, segments=segments, settings=context.settings)
     tup = fga_writes.ClientTuple(user=grantee, relation=body.relation, object=obj)
     event = change.event
-    told = announcing.grant_announcement(tup, action=change.action, actor=f"user:{context.token.subject}" if context.token else None, object_name=name)
+    told = announcing.grant_announcement(tup, action=change.action, actor=actor_of(context.token), object_name=name)
     async with announcer.announcing(door=change.door, target=obj, announcements=[told]) as filing:
         try:
             await store(client, [tup], actor=actor, origin="grant_api")
@@ -844,9 +845,7 @@ async def _set_managed_access(
     actor = context.token.subject if context.token else "system:catalog"
     tup = fga_writes.ClientTuple(user=_MANAGED_ACCESS_SUBJECT, relation="managed_access", object=obj)
 
-    told = announcing.grant_announcement(
-        tup, action="grant_added" if enabled else "grant_revoked", actor=f"user:{context.token.subject}" if context.token else None, object_name=name
-    )
+    told = announcing.grant_announcement(tup, action="grant_added" if enabled else "grant_revoked", actor=actor_of(context.token), object_name=name)
     async with announcer.announcing(door="managed_access_set", target=obj, announcements=[told]) as filing:
         already = any(t.object == obj and t.relation == "managed_access" for t in await fga_reads.read_object_tuples(client, obj))
         if enabled and not already:

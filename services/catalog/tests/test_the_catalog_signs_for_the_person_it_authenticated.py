@@ -3,8 +3,8 @@
 [[LH-064]], [[XC-078]]. Every catalog event is authored by the signed-in PERSON, and the service holds no credential of
 theirs, so it signs as ITSELF and DECLARES the subject it acts for: an attestation ("the catalog authenticated this person
 and says so"), never a claim that the person signed. A create that commits no rows is a DatasetEvent and an insert a RunEvent,
-and both carry the author, so both are signed. The control events the same writes publish name the person as their actor (`user:<sub>`) and
-are signed the same way. A write nobody authenticated has no author, and a signature on a lineage event with none could
+and both carry the author, so both are signed. The control events the same writes publish name the person as their actor (the OpenFGA
+user they are) and are signed the same way. A write nobody authenticated has no author, and a signature on a lineage event with none could
 never verify, so that event goes out unsigned; its control events name no actor, which is the catalog acting for itself,
 so they are signed with no delegation.
 
@@ -67,8 +67,12 @@ from tests.traces import trace_id_of
 #: The catalog's own service account, whose principal it signs as on the estate (`lance.saSubject`).
 CATALOG_ACCOUNT = "system:serviceaccount:default:rask-sa-catalog"
 CATALOG = f"kubernetes~{CATALOG_ACCOUNT}"
+#: The OpenFGA user that principal is, which a control event names as its actor: a user id holds one `:` only.
+CATALOG_USER = "user:kubernetes~system%3Aserviceaccount%3Adefault%3Arask-sa-catalog"
 #: The principal of a person the dev Dex's password connector reports, under the idp id `local` maps to.
 PERSON = "dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
+#: The OpenFGA user that person is.
+PERSON_USER = "user:dex~08a8684b-db88-4b73-90a9-3cd1661f5466"
 ARROW_STREAM = {"content-type": "application/vnd.apache.arrow.stream"}
 LINEAGE_TOPIC = "lineage.events.v1"
 #: The namespace the catalog keeps lineage's tables in, as the chart names it (`services.lineage.provenanceNamespace`).
@@ -200,16 +204,15 @@ def _write_a_table_and_a_row(client: TestClient) -> None:
 
 
 @pytest.mark.parametrize(
-    ("caller", "on_behalf_of"),
+    ("caller", "on_behalf_of", "actor"),
     [
-        pytest.param(_person(PERSON), PERSON, id="a-person-the-catalog-authenticated"),
-        pytest.param(ServicePrincipal.for_account(CATALOG_ACCOUNT), None, id="the-catalog-itself"),
+        pytest.param(_person(PERSON), PERSON, PERSON_USER, id="a-person-the-catalog-authenticated"),
+        pytest.param(ServicePrincipal.for_account(CATALOG_ACCOUNT), None, CATALOG_USER, id="the-catalog-itself"),
     ],
 )
 def test_every_event_a_write_causes_is_signed_as_the_catalog_for_the_subject_it_authenticated(
-    boot: Boot, bus: BusDouble, event_signer: Any, caller: PersonPrincipal | ServicePrincipal, on_behalf_of: str | None
+    boot: Boot, bus: BusDouble, event_signer: Any, caller: PersonPrincipal | ServicePrincipal, on_behalf_of: str | None, actor: str
 ) -> None:
-    subject = caller.subject
     pair = event_signer(CATALOG)
     client = boot(SecretStoreDouble.held({"seed": pair.seed}), SecretStoreDouble.held({"keys": pair.public}), caller)
 
@@ -220,10 +223,10 @@ def test_every_event_a_write_causes_is_signed_as_the_catalog_for_the_subject_it_
     verified = [verify_signature(event, source=_Published(pair.public), signers=frozenset({CATALOG}), delegators=frozenset({CATALOG})) for event in lineage]
     assert shapes == {"DatasetEvent", "RunEvent"}, f"the writes did not announce both event shapes: {sorted(shapes)}"
     assert {(v.identity, v.on_behalf_of) for v in verified} == {(CATALOG, on_behalf_of)}
-    # A control event's actor is always the `user:` principal the door resolved, so the catalog declares it even for itself.
+    # A control event's actor is the OpenFGA user of the principal the door resolved, so the catalog declares it even for itself.
     assert {event["action"]: _control_verdict(event, pair.public) for event in _on(bus, CONTROL_TOPIC)} == {
-        "namespace_created": (CATALOG, f"user:{subject}"),
-        "table_created": (CATALOG, f"user:{subject}"),
+        "namespace_created": (CATALOG, actor),
+        "table_created": (CATALOG, actor),
     }
 
 
@@ -310,7 +313,7 @@ def test_a_control_event_the_bus_did_not_take_is_delivered_by_the_relay_as_the_c
     assert client.portal is not None, "the catalog's lifespan is not running, so its relay has nothing to tick with"
     tick = client.portal.call(control_relay.tick, Tick(main.app, get_settings()))
 
-    assert [(event["action"], _control_verdict(event, pair.public)) for event in staged] == [("namespace_created", (CATALOG, f"user:{PERSON}"))]
+    assert [(event["action"], _control_verdict(event, pair.public)) for event in staged] == [("namespace_created", (CATALOG, PERSON_USER))]
     assert [(sent.topic, sent.message_id, sent.event) for sent in bus.sent] == [(CONTROL_TOPIC, staged[0]["event_id"], staged[0])]
     assert (tick.republished, list(outbox.list_events(control_outbox, StorageOptions()))) == (1, []), tick
     # Staged and delivered in the trace of the request that made it, not in the relay tick's own ([[XC-048]], ADR 0209).

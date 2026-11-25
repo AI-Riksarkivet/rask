@@ -50,9 +50,12 @@ from fastapi.testclient import TestClient
 from lance_namespace import connect
 from lance_namespace_urllib3_client.models import CreateNamespaceRequest
 
+from catalog.api.dependencies import get_control_emitter
 from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.naming import UUID_PROPERTY
+from tests.app_state import app_of
+from tests.control_emitter_double import ControlEmitterDouble
 
 
 #: A pipeline's own account in a namespace the release knows nothing about.
@@ -68,6 +71,9 @@ _PERSON_USER = f"user:corp~{_PERSON_ID}"
 #: An upstream user id carrying `#`, and the one user it is.
 _HASHED_ID = "corp#7"
 _HASHED_USER = "user:corp~corp%237"
+#: An upstream user id carrying `|`, as Auth0 names its people, and the one user it is.
+_PIPED_ID = "auth0|5f7c8ec7c33c6c004bbafe82"
+_PIPED_USER = "user:corp~auth0%7C5f7c8ec7c33c6c004bbafe82"
 #: A pipeline outside Kubernetes, signed in as its own Dex client, and the one user that client is.
 _CLIENT_ID = "nightly-etl"
 _CLIENT_USER = f"user:dex-client~{_CLIENT_ID}"
@@ -89,6 +95,7 @@ _GRANTED = (
     _PIPELINE_USER,
     _PERSON_USER,
     _HASHED_USER,
+    _PIPED_USER,
     _CLIENT_USER,
     _OIDC_PERSON_USER,
     _OIDC_CLIENT_USER,
@@ -131,8 +138,9 @@ def _catalog(person_issuer: dict[str, str], sa_issuer: Any, store: Any, tmp_path
     get_settings.cache_clear()
     from catalog.main import app
 
-    # The namespace the request reads, a reader's on it for the pipeline's account, the person, the user id carrying `#`
-    # and each client and person below; and the root object the access-admin door's gate checks, owned by the person.
+    # The namespace the request reads, a reader's on it for the pipeline's account, the person, the user ids carrying `#`
+    # and `|` and each client and person below; and the root object the access-admin door's gate checks, owned by the
+    # person.
     store.write(
         *((user, "reader", db) for user in _GRANTED),
         (_PERSON_USER, "owner", "estate:rask"),
@@ -329,6 +337,29 @@ def test_a_dex_client_is_a_machine_so_a_table_it_creates_is_owned_by_its_project
     assert created.status_code == 200, created.text
     owners = [user for user, relation, obj in store.tuples() if relation == "owner" and obj.startswith("table:")]
     assert owners == ([owner] if owner else []), f"owner tuples written: {owners}"
+
+
+def test_the_actor_a_door_announces_is_the_one_user_its_callers_grants_name(catalog: tuple[TestClient, Any], dex_issuer: Any) -> None:
+    """A person is one string across events, records and grants ([[LH-608]]): the actor an event names is the OpenFGA
+    user every tuple naming them holds, so a client joining an event to the grants finds the person. Driven by an
+    upstream user id carrying `|`, which an OpenFGA user id holds encoded."""
+    client, store = catalog
+    announced = ControlEmitterDouble()
+    app_of(client).dependency_overrides[get_control_emitter] = lambda: announced
+    token = dex_issuer.mint(_PIPED_ID, connector="corp", audience="lance-catalog")
+    # The creator writes in the namespace it reads, the object its describe names.
+    db = f"namespace:{_describe(client, token).json()['properties'][UUID_PROPERTY]}"
+    store.write((_PIPED_USER, "writer", db))
+    rows = encode_arrow_stream(pa.table({"id": pa.array([1], pa.int64())}))
+
+    created = client.post(
+        "/v1/table/lance_catalog$db$t/create", content=rows, headers={"Authorization": f"Bearer {token}", "Content-Type": ARROW_STREAM_MEDIA_TYPE}
+    )
+
+    assert created.status_code == 200, created.text
+    owners = {user for user, relation, obj in store.tuples() if relation == "owner" and obj.startswith("table:")}
+    actors = {event.actor for event in announced.events if event.action == "table_created"}
+    assert (actors, owners) == ({_PIPED_USER}, {_PIPED_USER})
 
 
 #: The object a raw tuple names: a table's uuid's (ADR 0173 §8).

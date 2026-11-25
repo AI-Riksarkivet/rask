@@ -1,6 +1,7 @@
 """Estate-wide naming: the delimiter governed ids join names with, the prefix of the keys the platform alone writes, the
-property a table's uuid is held under and the shape a control-plane id has; and the lineage half, how a table's location
-and its OpenLineage dataset name map to each other and which dataset namespaces name the world outside the catalog."""
+property a table's uuid is held under, the shape a control-plane id has and the name a record gives who acted when no
+caller was verified; and the lineage half, how a table's location and its OpenLineage dataset name map to each other
+and which dataset namespaces name the world outside the catalog."""
 
 import re
 from collections.abc import Mapping
@@ -34,6 +35,12 @@ def uuid_of(properties: object) -> str | None:
     """The uuid ``properties`` keeps under :data:`UUID_PROPERTY`, or ``None`` when it keeps no non-empty string there."""
     value = properties.get(UUID_PROPERTY) if isinstance(properties, Mapping) else None
     return value if isinstance(value, str) and value else None
+
+
+#: Who a record that always says who acted names where no caller was verified (a stack that authenticates nobody): a
+#: trash entry's ``dropped_by``, a deletion protection's armer. A caller is named by the OpenFGA user it is ([[LH-608]]),
+#: and this names no user.
+ANONYMOUS_ACTOR: Final = "anonymous"
 
 
 #: The shape a control-plane id (project, warehouse, bucket) must have: DNS-safe — lowercase

@@ -129,7 +129,7 @@ await emit_control(  # best-effort; never raises into a committed mutation
     action="grant_revoked",  # a ControlAction member
     object_type="grant",
     object_id=f"project:{project_id}",
-    actor=f"user:{token.subject}",  # the VERIFIED principal that made the change, `user:` and its key
+    actor=actor_of(token),  # the VERIFIED caller that made the change, as its OpenFGA user (`catalog.api.security`)
     extra={"relation": relation, "subject": fga_ids.user_object(principal)},  # WHO this is about, as the OpenFGA user it is
 )
 ```
@@ -146,9 +146,11 @@ whose act ends or moves the object reads them first and passes them.
 
 **`extra.subject` is the entire targeting**, and it is the OpenFGA user the change names: `fga_ids.user_object` (`user:` and
 the principal key percent-encoded), or a userset. A notifier decodes it with `fga_ids.subject_of` and keeps only a person
-(`is_person_subject`), expanding a userset through the decision door's `list-users`. A raw `f"user:{key}"` in
-`extra.subject` is the defect, though the `actor` keeps that form: it names another principal whenever the key carries a
-character the encoding escapes. A missing subject, a bare `user:`, `*` and a service account's principal name nobody.
+(`is_person_subject`), expanding a userset through the decision door's `list-users`. A raw `f"user:{key}"` anywhere is
+the defect: it names another principal whenever the key carries a character the encoding escapes (`|`, `@`, a service
+account's `:`). So the `actor`, and every record naming who acted, is the same OpenFGA user, spelled by
+`catalog.api.security.actor_of` ([[LH-608]]), and an actor joins to `extra.subject` and to the grants as written. A
+missing subject, a bare `user:`, `*` and a service account's principal name nobody.
 
 **The emitter signs, and `make_control_emitter(sign=...)` has no default** ([[XC-078]]). A producer passes
 `attach_control_signature` over its own `SigningKeyHolder` (the catalog's, `catalog/core/control_signing.py`, declares
@@ -163,7 +165,7 @@ signed by the catalog's own identity and retires anything else as poison.
 **A notifier that enforces signatures hears an action only from the role that emits it.**
 `lakehouse.events.control_events.control_signer_role(action)` names that role; a notifier's door verifies the envelope's
 top-level `rask_signature` against that role's identities, so a valid signature from another service is refused. A
-person actor (`user:<sub>`) verifies only under a delegation from a delegator, `onBehalfOf` equal to the whole actor. No
+person actor (a `user:` OpenFGA user) verifies only under a delegation from a delegator, `onBehalfOf` equal to the whole actor. No
 action is exempt, so the lane carries only the lakehouse's own signed events (ADR 0171).
 
 **One action erases rather than tells: `principal_deleted`** (CTL-022). The catalog's offboarding door ([[LH-233]])

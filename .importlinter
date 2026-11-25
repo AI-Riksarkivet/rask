@@ -255,6 +255,7 @@ ignore_imports =
     lakehouse.records.record_store -> lakehouse.storage.options
     lakehouse.records.record_store -> lakehouse.storage.stored_objects
     lakehouse.records.record_store -> lakehouse.storage.uri
+    lakehouse.records.trash -> lakehouse.naming
     lakehouse.records.trash -> lakehouse.storage.conditional_records
     lakehouse.records.trash -> lakehouse.storage.objectfs
     lakehouse.records.trash -> lakehouse.storage.options

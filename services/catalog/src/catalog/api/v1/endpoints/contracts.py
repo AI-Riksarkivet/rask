@@ -20,7 +20,7 @@ from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ConcurrentModificationError, InvalidTableStateError
 
 from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, SettingsDep, StorageOptionsDep
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import CurrentToken, actor_of
 from catalog.core.config import CatalogStore
 from catalog.schemas import ContractResponse
 from catalog.services import contracts
@@ -32,10 +32,6 @@ from lakehouse.storage.options import StorageOptions
 
 
 management_router = APIRouter(prefix="/management/v1/table", tags=["contract"])
-
-
-def _actor(token: Caller | None) -> str | None:
-    return f"user:{token.subject}" if token is not None else None
 
 
 def _answer(table: DoorTable, record: contracts.ContractRecord | None) -> ContractResponse:
@@ -108,7 +104,7 @@ async def set_table_contract(
     root, control_so = settings.registry_root, settings.storage_options()
     replaced = await run_in_threadpool(_standing, settings, table)
     try:
-        record = await run_in_threadpool(partial(contracts.keep, root, control_so, uuid, contract=contract, document=document, actor=_actor(token)))
+        record = await run_in_threadpool(partial(contracts.keep, root, control_so, uuid, contract=contract, document=document, actor=actor_of(token)))
     except (conditional_records.RecordChangedError, conditional_records.RecordMissingError) as exc:
         raise ConcurrentModificationError(f"the contract of {fga_ids.canonical_object_id(table.segments)} kept changing; set it again") from exc
     try:
@@ -125,7 +121,7 @@ async def set_table_contract(
         object_type="table",
         object_id=fga_ids.table_object(uuid),
         object_name=fga_ids.canonical_object_id(table.segments),
-        actor=_actor(token),
+        actor=actor_of(token),
         extra={"contract": contract.id, "version": contract.version},
     )
     return _answer(table, record)
@@ -144,7 +140,7 @@ async def delete_table_contract(*, id: str, table: DoorTableDep, settings: Setti
             object_type="table",
             object_id=fga_ids.table_object(uuid),
             object_name=fga_ids.canonical_object_id(table.segments),
-            actor=_actor(token),
+            actor=actor_of(token),
             extra={"contract": standing.contract().id, "version": standing.contract().version},
         )
     return _answer(table, None)

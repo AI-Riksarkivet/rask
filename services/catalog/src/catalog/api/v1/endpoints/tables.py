@@ -67,7 +67,7 @@ from catalog.api.dependencies import (
 )
 from catalog.api.pagination import ListLimit
 from catalog.api.rask_params import RaskFlag
-from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken
+from catalog.api.security import ANONYMOUS_SUBJECT, Caller, CurrentToken, actor_of, record_actor_of
 from catalog.core import json_arrow, native, provenance_guard, table_objects
 from catalog.core.config import Settings
 from catalog.core.formats import refuse_properties_kept_nowhere, reject_unsupported_properties
@@ -514,7 +514,7 @@ def _table_event(
         object_name=name,
         object_uuid=named_by.table_uuid if named_by is not None else None,
         namespace_uuid=named_by.namespace_uuid if named_by is not None else None,
-        actor=f"user:{token.subject}" if token is not None else None,
+        actor=actor_of(token),
         extra=extra,
     )
     return Announcement(evidence=evidence, message=ControlMessage(event=event))
@@ -874,7 +874,7 @@ async def drop_table(
             table_uuid=table_uuid,
             known=known,
             grace=grace,
-            dropped_by=f"user:{context.token.subject}" if context.token is not None else None,
+            dropped_by=record_actor_of(context.token),
             so=so,
             drop=drop,
         )
@@ -987,7 +987,7 @@ async def _deregister_unidentified(
         object_type="table",
         object_id=f"table:{canonical}",
         object_name=canonical,
-        actor=f"user:{token.subject}" if token is not None else None,
+        actor=actor_of(token),
         extra={},
     )
     return response
@@ -1470,9 +1470,7 @@ async def set_table_protection(
     table_uuid = table.require_uuid()
     so = settings.storage_options()
     if body.protected:
-        record = ProtectionRecord(
-            kind="table", id=canonical, uuid=table_uuid, protected=True, set_by=f"user:{token.subject}" if token is not None else "anonymous"
-        )
+        record = ProtectionRecord(kind="table", id=canonical, uuid=table_uuid, protected=True, set_by=record_actor_of(token))
         await run_in_threadpool(protection.set_protection, settings.registry_root, so, record)
     else:
         await run_in_threadpool(protection.clear_protection, settings.registry_root, so, "table", uuid=table_uuid)
@@ -1482,7 +1480,7 @@ async def set_table_protection(
         object_type="table",
         object_id=fga_ids.table_object(table_uuid),
         object_name=canonical,
-        actor=f"user:{token.subject}" if token is not None else None,
+        actor=actor_of(token),
         extra={},
     )
     return ProtectionResponse(id=canonical, protected=body.protected)

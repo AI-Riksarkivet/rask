@@ -202,9 +202,10 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/event
   the catalog, the sole entry in `LINEAGE_DELEGATORS`, which signs for the person it authenticated.
 - **Control events.** A `CatalogControlEvent` on `catalog.control.v1` is a flat envelope with no facet bag, so the same
   facet rides as its top-level `rask_signature` member, and the signed bytes are canon-1 of the whole envelope with only
-  `rask_signature.signature` removed. The envelope's `actor` plays the author: a `user:<sub>` actor verifies only under a
-  delegation (`onBehalfOf` equal to the whole actor) declared by a delegator, and an absent or non-`user:` actor is a
-  service acting for itself, signed with no delegation. The emitting service signs at emit, before the event is staged
+  `rask_signature.signature` removed. The envelope's `actor` plays the author: a `user:` actor, the OpenFGA user of a
+  caller the catalog authenticated, verifies only under a delegation (`onBehalfOf` equal to the whole actor) declared by
+  a delegator, and an absent or non-`user:` actor is a service acting for itself, signed with no delegation. The
+  emitting service signs at emit, before the event is staged
   (`lakehouse.events.control_emit`, its signer injected). Who signs which action is
   `lakehouse.events.control_events.control_signer_role`: the catalog signs every action it emits, for the person it
   authenticated; maintenance signs `table_purged` and `namespace_purged` as itself. No action is exempt: the lane carries only the

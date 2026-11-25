@@ -36,7 +36,7 @@ from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.authz import decisions, door_gates
 from catalog.api.authz.context import AuthzContextDep
 from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import Caller, CurrentToken, actor_of
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.identifiers import is_spelled_as_a_uuid, parse_identifier
 from catalog.schemas import (
@@ -430,7 +430,7 @@ async def _change_tuple(
     told = announcing.grant_announcement(
         tup,
         action=change.action,
-        actor=f"user:{token.subject}" if token else None,
+        actor=actor_of(token),
         extra={"condition": condition.name} if condition is not None else None,
     )
     async with announcer.announcing(door=change.door, target=tup.object, announcements=[told]) as filing:
@@ -764,7 +764,7 @@ async def delete_principal(
         action="principal_deleted",
         object_type="principal",
         object_id=user,
-        actor=f"user:{token.subject}" if token else None,
+        actor=actor_of(token),
         extra={"subject": user, "revoked": len(naming)},
     )
     told = Announcement(evidence=RecordHeld(key=principals.record_key(key)), message=ControlMessage(event=deleted))

@@ -188,7 +188,7 @@ def test_a_settled_erasure_tells_each_person_then_releases_its_pin_at_the_deadli
         notices = [event for event in emitter.events if event.action == _NOTICE]
         table = f"table:{_table_uuid(ns, tmp_path)}"
         assert [(e.object_id, e.object_name, e.actor, e.extra["subject"], e.extra["refs"], datetime.fromisoformat(e.extra["due_at"])) for e in notices] == [
-            (table, "db$subjects", "user:dex~alice@corp", subject, refs, due) for subject in ("user:dex~alice%40corp", "user:dex~olivia")
+            (table, "db$subjects", "user:dex~alice%40corp", subject, refs, due) for subject in ("user:dex~alice%40corp", "user:dex~olivia")
         ]
 
         clock.now = due - timedelta(seconds=1)

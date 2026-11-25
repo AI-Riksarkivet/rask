@@ -40,7 +40,7 @@ from lance_namespace import (
 from catalog.api.authz import door_gates, hierarchy, objects
 from catalog.api.authz.context import AuthzContextDep
 from catalog.api.dependencies import ControlEmitterDep, NamespaceDep, ResolvedTableDep, Resolver, ResolverDep, SettingsDep
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import Caller, CurrentToken, actor_of
 from catalog.core.config import CatalogStore
 from catalog.core.identifiers import parse_identifier
 from catalog.schemas import PolicyDeleteResponse, PolicyKind, PolicyRequest, PolicyResponse, PolicyUnset, ProjectPoliciesResponse
@@ -156,7 +156,7 @@ async def _delete(settings: CatalogStore, control: ControlEmitter, token: Caller
         # A table's or namespace's key is its uuid, the object its grants are held by; a project's is its id.
         object_id=f"{kind}:{key}",
         object_name=canonical if kind in ("table", "namespace") else None,
-        actor=f"user:{token.subject}" if token else None,
+        actor=actor_of(token),
         extra={"kind": kind},
     )
     return PolicyDeleteResponse(status="deleted", kind=kind, id=canonical)
@@ -186,7 +186,7 @@ async def set_table_policy(
         object_type="policy",
         object_id=fga_ids.table_object(table_uuid),
         object_name=canonical,
-        actor=f"user:{token.subject}" if token else None,
+        actor=actor_of(token),
         extra={"kind": "table"},
     )
     return _response(record)
@@ -226,7 +226,7 @@ async def set_namespace_policy(
         object_type="policy",
         object_id=fga_ids.namespace_object(namespace.uuid),
         object_name=canonical,
-        actor=f"user:{token.subject}" if token else None,
+        actor=actor_of(token),
         extra={"kind": "namespace"},
     )
     return _response(record)
@@ -315,7 +315,7 @@ async def set_project_policy(
         action="policy_set",
         object_type="policy",
         object_id=f"project:{project}",
-        actor=f"user:{context.token.subject}" if context.token else None,
+        actor=actor_of(context.token),
         extra={"kind": "project", "buckets": buckets},
     )
     return _response(record)

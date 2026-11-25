@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.api.dependencies import ClockDep, ControlEmitterDep, DoorTableDep, SettingsDep, StorageOptionsDep
 from catalog.api.pagination import ListLimit
 from catalog.api.rask_params import RaskFlag
-from catalog.api.security import Caller, CurrentToken
+from catalog.api.security import Caller, CurrentToken, actor_of, record_actor_of
 from catalog.core.config import Settings
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services import erasure_obligations, erasure_release, warehouses
@@ -88,7 +88,7 @@ async def create_table_branch(
         object_type="table",
         object_id=fga_ids.table_object(table.resolved.require_uuid()),
         object_name=fga_ids.canonical_object_id(segments),
-        actor=f"user:{token.subject}" if token is not None else None,
+        actor=actor_of(token),
         # `name`, not `branch` — that is the field `CreateTableBranchRequest` declares. "Branched from
         # what" is the question a consumer asks next, and it is answered from the DATASET rather than
         # from the request: a branch taken from main sends no `from_version` and records main's current
@@ -168,7 +168,7 @@ async def delete_table_branch(
     segments = parse_identifier(id)
     body.id = reconcile_body_id(segments, body.id)
     # `purge=true` is the caller saying "gone now", as on a table's drop: nothing is kept ([[LH-604]]).
-    hiding = None if purge else await _hiding(settings, table, segments, by=token.subject if token is not None else "anonymous", now=clock())
+    hiding = None if purge else await _hiding(settings, table, segments, by=record_actor_of(token), now=clock())
     try:
         removed = await run_in_threadpool(partial(refs.delete_branch, table, so, body, hiding=hiding))
     except (refs.BranchDeleteStoppedError, refs.BranchHideStoppedError) as stopped:
@@ -217,7 +217,7 @@ async def _announce_removed(control: ControlEmitter, table: DoorTable, segments:
             object_type="table",
             object_id=fga_ids.table_object(table.resolved.require_uuid()),
             object_name=fga_ids.canonical_object_id(segments),
-            actor=f"user:{token.subject}" if token is not None else None,
+            actor=actor_of(token),
             extra={"branch": branch.name, **({versions.BRANCH_IDENTIFIER_KEY: branch.identifier} if branch.identifier is not None else {})},
         )
 
@@ -265,7 +265,7 @@ async def restore_table_branch(
             object_type="table",
             object_id=fga_ids.table_object(table.resolved.require_uuid()),
             object_name=fga_ids.canonical_object_id(segments),
-            actor=f"user:{token.subject}" if token is not None else None,
+            actor=actor_of(token),
             extra={"branch": branch.name, "restored": True, **({versions.BRANCH_IDENTIFIER_KEY: branch.identifier} if branch.identifier is not None else {})},
         )
     return RestoreTableBranchResponse(restored=[branch.name for branch in restored])

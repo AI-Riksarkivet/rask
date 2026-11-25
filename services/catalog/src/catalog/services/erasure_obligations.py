@@ -65,7 +65,10 @@ class ErasureObligationView(BaseModel):
         )
     )
     retain_days: int = Field(description="The version history the requester keeps, in days: each verification reclaims everything older.")
-    requested_by: str | None = Field(description="Who asked for the erasure: `user:` and the principal key their token proved.")
+    requested_by: str | None = Field(
+        description="Who asked for the erasure: the OpenFGA user their token proved, as every grant naming them holds it (`user:` and the "
+        "principal key, percent-encoded)."
+    )
     requested_at: datetime = Field(description="When the obligation was recorded.")
     deadline: datetime = Field(description="When the erasure is due. Nothing extends it, and nothing acts on it when it passes.")
     follows: str | None = Field(

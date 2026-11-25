@@ -750,8 +750,8 @@ class WarehouseResponse(BaseModel):
     # #123: the delete-door safety, finally OBSERVABLE — records carry "true" (string), coerced here.
     # None on unprotected/pre-protection records (exclude_none keeps them byte-identical on the wire).
     protected: bool | None = None
-    #: Who armed the protection (`user:<principal>`), so a refused delete can be traced to its armer ([[LH-548]]); None
-    #: while unprotected.
+    #: Who armed the protection (the OpenFGA user they are, `system:declaration`, or `anonymous` where no caller was
+    #: verified), so a refused delete can be traced to its armer ([[LH-548]]); None while unprotected.
     protected_by: str | None = None
     # Which warehouse the project marked primary, made OBSERVABLE: an operator has to be able to read back which
     # record they marked. None on unmarked records (exclude_none keeps them byte-identical on the wire).
@@ -955,8 +955,9 @@ class SetProtectionRequest(RequestBody):
 class ProtectionResponse(BaseModel):
     id: str
     protected: bool
-    # Who armed it (`user:<principal>`), from the record — None on an unprotected object and on the SET
-    # response (the caller knows who they are). A refused drop can then NAME the armer (#123).
+    # Who armed it (the OpenFGA user they are, or `anonymous` where no caller was verified), from the record — None on
+    # an unprotected object and on the SET response (the caller knows who they are). A refused drop can then NAME the
+    # armer (#123).
     set_by: str | None = None
 
 
@@ -1228,7 +1229,8 @@ class ProjectResponse(BaseModel):
     #: Whether the project's delete is refused without `force=true` ([[LH-549]]), set and cleared through
     #: `POST /management/v1/projects/{project_id}/protection`; a tenant no registry record names is never protected.
     protected: bool = False
-    #: Who armed the protection (`user:<principal>`); None while the project is unprotected.
+    #: Who armed the protection (the OpenFGA user they are, `system:declaration`, or `anonymous` where no caller was
+    #: verified); None while the project is unprotected.
     protected_by: str | None = None
     #: `git` while git declares the project ([[XC-213]]): its doors then refuse a change to its protection and its
     #: delete, which the declaration owns. `self` for a project its own doors manage.

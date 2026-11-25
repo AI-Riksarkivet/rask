@@ -18,7 +18,7 @@ from lance_namespace import (
 
 from catalog.api.dependencies import ControlEmitterDep, DoorTableDep, StorageOptionsDep
 from catalog.api.pagination import ListLimit
-from catalog.api.security import CurrentToken
+from catalog.api.security import CurrentToken, actor_of
 from catalog.core.identifiers import parse_identifier, reconcile_body_id
 from catalog.services.tables import refs, versions
 from lakehouse.events.control_emit import emit_control
@@ -86,7 +86,7 @@ async def create_table_tag(
         object_type="table",
         object_id=fga_ids.table_object(table.resolved.require_uuid()),
         object_name=fga_ids.canonical_object_id(segments),
-        actor=f"user:{token.subject}" if token is not None else None,
+        actor=actor_of(token),
         extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, branch=body.branch)},
     )
     return response
@@ -126,7 +126,7 @@ async def update_table_tag(
         object_type="table",
         object_id=fga_ids.table_object(table.resolved.require_uuid()),
         object_name=fga_ids.canonical_object_id(segments),
-        actor=f"user:{token.subject}" if token is not None else None,
+        actor=actor_of(token),
         extra={"tag": body.tag, "version": body.version, **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, branch=body.branch)},
     )
     return response
@@ -162,7 +162,7 @@ async def delete_table_tag(
         object_type="table",
         object_id=fga_ids.table_object(table.resolved.require_uuid()),
         object_name=fga_ids.canonical_object_id(segments),
-        actor=f"user:{token.subject}" if token is not None else None,
+        actor=actor_of(token),
         extra={
             "tag": body.tag,
             **await run_in_threadpool(versions.tag_event_ref, table.location, so, segments, branch=pinned.branch if pinned is not None else None),

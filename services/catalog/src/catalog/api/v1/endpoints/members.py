@@ -28,6 +28,7 @@ from catalog.api import announcing
 from catalog.api.announcing import AnnouncerDep
 from catalog.api.authz import decisions, door_gates, grant_authority
 from catalog.api.authz.context import AuthzContextDep
+from catalog.api.security import actor_of
 from catalog.schemas import GRANTABLE, GrantRequest, Member, MemberList
 from catalog.services import project_admins
 from lakehouse.governed import fga_ids, fga_reads, fga_writes
@@ -136,7 +137,7 @@ async def grant_member(
     # TELL THE PERSON, filed before the write so a door failing after it still does ([[LH-576]]). Only a grant that
     # changes the store is announced: a re-grant is a no-op there, and an announcement of an unchanged state would put a
     # row in someone's inbox for something that did not happen.
-    told = announcing.grant_announcement(tup, action="grant_added", actor=f"user:{context.token.subject}" if context.token else None)
+    told = announcing.grant_announcement(tup, action="grant_added", actor=actor_of(context.token))
     async with announcer.announcing(door="member_grant", target=obj, announcements=[told]) as filing:
         if payload.relation in ADMINISTRATIVE:
             if not await project_admins.confer(wired, tup, actor=actor, origin="grant_api"):
@@ -183,7 +184,7 @@ async def revoke_member(
     # why being NAMED is the targeting. Unannounced, losing tenant access is discovered as a 403 in the
     # middle of work, the failure this lane exists to end; so it is filed before the revoke, and a door that
     # fails after the revoke still tells them ([[LH-576]]). A no-op revoke announces nothing.
-    told = announcing.grant_announcement(tup, action="grant_revoked", actor=f"user:{context.token.subject}" if context.token else None)
+    told = announcing.grant_announcement(tup, action="grant_revoked", actor=actor_of(context.token))
     async with announcer.announcing(door="member_revoke", target=obj, announcements=[told]) as filing:
         if payload.relation in ADMINISTRATIVE:
             if not await project_admins.withdraw(wired, [tup], actor=actor, origin="grant_api"):
