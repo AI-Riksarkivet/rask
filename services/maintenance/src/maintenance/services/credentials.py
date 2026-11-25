@@ -51,6 +51,20 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from lakehouse.governed import fga_reads
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
 from lakehouse.lancekit.base_refs import decoded_path, normalise
+from lakehouse.maintenance_doors import (
+    CleanupDisarmed,
+    CloneEndingEntry,
+    CloneEndingFinishResponse,
+    CloneEndingsResponse,
+    FloorRaised,
+    GhostRevokeResponse,
+    GrantCensusResponse,
+    IdempotencyKeysReclaimResponse,
+    TenancyRebuildResponse,
+    TrashEndResponse,
+    TrashRefusalResponse,
+    TrashReleaseResponse,
+)
 from lakehouse.records.trash import TrashKind
 from lakehouse.storage.options import StorageOptions
 
@@ -413,55 +427,6 @@ class Door(BaseModel):
     denial: str
 
 
-class TrashReleased(BaseModel):
-    """What the catalog's release of a trash record did: the grants it revoked, and whether it stamped the record."""
-
-    tuples_revoked: int
-    stamped: bool
-
-
-class _TrashEnded(BaseModel):
-    tuples_revoked: int
-
-
-class _GrantCensusAnswer(BaseModel):
-    enabled: bool
-    counts_by_type: dict[str, dict[str, int]] = Field(default_factory=dict)
-
-
-class GhostsRevoked(BaseModel):
-    """What the catalog revoked of the ghosts maintenance named, each object's tuple count, and what it refused, with why."""
-
-    revoked: dict[str, int] = Field(default_factory=dict)
-    refused: dict[str, str] = Field(default_factory=dict)
-
-
-class TenancyRebuilt(BaseModel):
-    """The tenancy edges the catalog wrote, and the warehouses whose record justifies none, with why."""
-
-    written: list[str] = Field(default_factory=list)
-    unjustified: dict[str, str] = Field(default_factory=dict)
-
-
-class _TrashNoted(BaseModel):
-    attempts: int | None = None
-
-
-class Disarmed(BaseModel):
-    """What the catalog's disarm of a ref's commit-path cleanup did: the ref's version after it, and the keys it removed."""
-
-    version: int
-    disarmed: list[str] = Field(default_factory=list)
-
-
-class FloorRaised(BaseModel):
-    """What the catalog's raise of a table's listing floor committed: its version and the epoch its stamp names, neither
-    on a dry run."""
-
-    version: int | None = None
-    raised_at: float | None = None
-
-
 def reclaim_options_for(kind: TrashKind, uuid: str, settings: MaintenanceSettings) -> StorageOptions:
     """The session that deletes the bytes of the trashed table ``uuid`` names: the catalog's vend for that record, and
     nothing else ([[XC-084]]). It lists and deletes at the table's location, in both spellings, and in its own data
@@ -478,7 +443,7 @@ def reclaim_options_for(kind: TrashKind, uuid: str, settings: MaintenanceSetting
     return _at_own_store(_vended_from(_answered(settings, door), asked_for=door.asked_for).storage_options, settings)
 
 
-def release_trash(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor) -> TrashReleased:
+def release_trash(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor) -> TrashReleaseResponse:
     """Have the catalog release the trash record of the ``kind`` object ``uuid`` names: revoke the object's grants, tell
     each person who lost one, and stamp the record released.
 
@@ -491,7 +456,7 @@ def release_trash(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor) 
         VendUndecided: The door could not be asked or decided nothing.
     """
     door = _trash_door(kind, uuid, settings, act="/release", answer="a release")
-    return _parsed(_answered(settings, door), TrashReleased, asked_for=door.asked_for)
+    return _parsed(_answered(settings, door), TrashReleaseResponse, asked_for=door.asked_for)
 
 
 def end_trash(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor) -> int:
@@ -506,7 +471,7 @@ def end_trash(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor) -> i
         VendUndecided: The door could not be asked or decided nothing.
     """
     door = _trash_door(kind, uuid, settings, act="", answer="the end of the record", method="DELETE")
-    return _parsed(_answered(settings, door), _TrashEnded, asked_for=door.asked_for).tuples_revoked
+    return _parsed(_answered(settings, door), TrashEndResponse, asked_for=door.asked_for).tuples_revoked
 
 
 def note_trash_refusal(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor, *, reason: str) -> int | None:
@@ -519,10 +484,10 @@ def note_trash_refusal(kind: TrashKind, uuid: str, settings: MaintenanceCatalogD
         VendUndecided: The door could not be asked or decided nothing.
     """
     door = _trash_door(kind, uuid, settings, act="/refusals", answer="a note of its refusal", body={"reason": reason})
-    return _parsed(_answered(settings, door), _TrashNoted, asked_for=door.asked_for).attempts
+    return _parsed(_answered(settings, door), TrashRefusalResponse, asked_for=door.asked_for).attempts
 
 
-def disarm_cleanup(table_id: str, settings: MaintenanceCatalogDoor, *, branch: str | None) -> Disarmed:
+def disarm_cleanup(table_id: str, settings: MaintenanceCatalogDoor, *, branch: str | None) -> CleanupDisarmed:
     """Have the catalog remove every ``lance.auto_cleanup.*`` key from the ref ``branch`` (``None`` = main) of ``table_id``,
     under its own credential: maintenance's vend puts nothing of a table ([[LH-575]]).
 
@@ -534,7 +499,7 @@ def disarm_cleanup(table_id: str, settings: MaintenanceCatalogDoor, *, branch: s
         VendUndecided: The door could not be asked or decided nothing.
     """
     door = _maintainer_door(table_id, settings, act="disarm", answer="a disarm of its commit-path cleanup", params={"branch": branch} if branch else {})
-    return _parsed(_answered(settings, door), Disarmed, asked_for=door.asked_for)
+    return _parsed(_answered(settings, door), CleanupDisarmed, asked_for=door.asked_for)
 
 
 def raise_floor(table_id: str, settings: MaintenanceCatalogDoor, *, dry_run: bool) -> FloorRaised:
@@ -552,30 +517,7 @@ def raise_floor(table_id: str, settings: MaintenanceCatalogDoor, *, dry_run: boo
     return _parsed(_answered(settings, door), FloorRaised, asked_for=door.asked_for)
 
 
-class CloneEndingListed(BaseModel):
-    """One clone's ending as the catalog lists it: its location's digest and the request that filed it."""
-
-    digest: str
-    filing: str
-
-    @property
-    def id(self) -> str:
-        return f"{self.digest}/{self.filing}"
-
-
-class _CloneEndings(BaseModel):
-    endings: list[CloneEndingListed]
-
-
-class CloneEndingFinished(BaseModel):
-    """What the catalog's finish of a clone's ending did: the source tags it released, or that the clone stands for good
-    and keeps them."""
-
-    tags_released: int
-    kept: bool
-
-
-def list_clone_endings(settings: MaintenanceCatalogDoor) -> list[CloneEndingListed]:
+def list_clone_endings(settings: MaintenanceCatalogDoor) -> list[CloneEndingEntry]:
     """Every registered clone's ending its door did not remove (ADR 0198 §1), oldest first.
 
     Raises:
@@ -584,10 +526,10 @@ def list_clone_endings(settings: MaintenanceCatalogDoor) -> list[CloneEndingList
         VendUndecided: The door could not be asked or decided nothing.
     """
     door = _clone_endings_door(settings, act="", answer="the clones' endings", method="GET")
-    return _parsed(_answered(settings, door), _CloneEndings, asked_for=door.asked_for).endings
+    return _parsed(_answered(settings, door), CloneEndingsResponse, asked_for=door.asked_for).endings
 
 
-def finish_clone_ending(ending: CloneEndingListed, settings: MaintenanceCatalogDoor) -> CloneEndingFinished:
+def finish_clone_ending(ending: CloneEndingEntry, settings: MaintenanceCatalogDoor) -> CloneEndingFinishResponse:
     """Have the catalog finish ``ending``: release the clone's tag on each source its door named, and its location's
     claim, and remove the ending. Maintenance's store policy writes no source's tags; the catalog does.
 
@@ -599,20 +541,10 @@ def finish_clone_ending(ending: CloneEndingListed, settings: MaintenanceCatalogD
         VendUndecided: The door could not be asked or decided nothing.
     """
     door = _clone_endings_door(settings, act=f"/{ending.id}/finish", answer="the finish of a clone's ending")
-    return _parsed(_answered(settings, door), CloneEndingFinished, asked_for=door.asked_for)
+    return _parsed(_answered(settings, door), CloneEndingFinishResponse, asked_for=door.asked_for)
 
 
-class IdempotencyKeysReclaimed(BaseModel):
-    """What one reclaim of expired `Idempotency-Key` records did, as the catalog answers it."""
-
-    reclaimed: int
-    kept: int
-    #: Expired records past the call's limit, which a further call reclaims.
-    left: int
-    unreadable: int
-
-
-def reclaim_idempotency_keys(settings: MaintenanceCatalogDoor) -> IdempotencyKeysReclaimed:
+def reclaim_idempotency_keys(settings: MaintenanceCatalogDoor) -> IdempotencyKeysReclaimResponse:
     """Have the catalog delete the `Idempotency-Key` records nothing has written for their lifetime ([[LH-576]]).
 
     Maintenance's store policy writes nothing of the control root, so the delete is the catalog's, on its own reads.
@@ -628,7 +560,7 @@ def reclaim_idempotency_keys(settings: MaintenanceCatalogDoor) -> IdempotencyKey
         asked_for="the expired idempotency records",
         denial=reclaim_denial_remedy(identity=settings.catalog_service_identity),
     )
-    return _parsed(_answered(settings, door), IdempotencyKeysReclaimed, asked_for=door.asked_for)
+    return _parsed(_answered(settings, door), IdempotencyKeysReclaimResponse, asked_for=door.asked_for)
 
 
 class AnnouncementIntentsFinished(BaseModel):
@@ -674,11 +606,11 @@ def grant_census(settings: MaintenanceCatalogDoor) -> fga_reads.GrantCensus | No
         VendUndecided: The door could not be asked or decided nothing.
     """
     door = _grants_door(settings, act="/census", answer="a grant census", method="GET")
-    answer = _parsed(_answered(settings, door), _GrantCensusAnswer, asked_for=door.asked_for)
+    answer = _parsed(_answered(settings, door), GrantCensusResponse, asked_for=door.asked_for)
     return fga_reads.GrantCensus(counts_by_type=answer.counts_by_type) if answer.enabled else None
 
 
-def revoke_ghosts(settings: MaintenanceCatalogDoor, objects: list[str]) -> GhostsRevoked:
+def revoke_ghosts(settings: MaintenanceCatalogDoor, objects: list[str]) -> GhostRevokeResponse:
     """Have the catalog revoke every grant on each of ``objects``, which the drift report found no registry naming.
 
     Raises:
@@ -687,10 +619,10 @@ def revoke_ghosts(settings: MaintenanceCatalogDoor, objects: list[str]) -> Ghost
         VendUndecided: The door could not be asked or decided nothing.
     """
     door = _grants_door(settings, act="/ghosts/revoke", answer="a ghost's revoke", body={"objects": objects})
-    return _parsed(_answered(settings, door), GhostsRevoked, asked_for=door.asked_for)
+    return _parsed(_answered(settings, door), GhostRevokeResponse, asked_for=door.asked_for)
 
 
-def rebuild_tenancy(settings: MaintenanceCatalogDoor, warehouses: list[str]) -> TenancyRebuilt:
+def rebuild_tenancy(settings: MaintenanceCatalogDoor, warehouses: list[str]) -> TenancyRebuildResponse:
     """Have the catalog write the tenancy edge each of ``warehouses``' registry record justifies.
 
     Raises:
@@ -699,7 +631,7 @@ def rebuild_tenancy(settings: MaintenanceCatalogDoor, warehouses: list[str]) -> 
         VendUndecided: The door could not be asked or decided nothing.
     """
     door = _grants_door(settings, act="/tenancy/rebuild", answer="a tenancy rebuild", body={"warehouses": warehouses})
-    return _parsed(_answered(settings, door), TenancyRebuilt, asked_for=door.asked_for)
+    return _parsed(_answered(settings, door), TenancyRebuildResponse, asked_for=door.asked_for)
 
 
 def _maintain_door(table_id: str, settings: MaintenanceCatalogDoor) -> Door:

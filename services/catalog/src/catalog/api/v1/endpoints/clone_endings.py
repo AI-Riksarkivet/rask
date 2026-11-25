@@ -22,10 +22,10 @@ from lance_namespace import LanceNamespaceError
 from catalog.api.dependencies import NamespaceDep, SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.trash_reclaim import require_can_reclaim_trash
-from catalog.schemas import CloneEndingEntry, CloneEndingFinishResponse, CloneEndingsResponse
 from catalog.services import clone_endings
 from lakehouse.governed.audit import AuditAction, AuditOutcome, about_table, audit
 from lakehouse.governed.door_caller import caller_subject
+from lakehouse.maintenance_doors import CloneEndingEntry, CloneEndingFinishResponse, CloneEndingsResponse
 
 
 management_router = APIRouter(prefix="/management/v1/clone-endings", tags=["trash-reclaim"], dependencies=[Depends(require_can_reclaim_trash)])

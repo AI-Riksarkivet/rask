@@ -27,13 +27,14 @@ from catalog.api.security import Caller, CurrentSubject, CurrentToken, actor_of
 from catalog.core.config import CatalogStore
 from catalog.core.identifiers import parse_identifier
 from catalog.core.vending import reclaim_or_refuse, role_session_name
-from catalog.schemas import CredentialResponse, TrashEndResponse, TrashRefusalRequest, TrashRefusalResponse, TrashReleaseResponse, VendedCredentials
+from catalog.schemas import CredentialResponse, TrashRefusalRequest, VendedCredentials
 from catalog.services import announcement_intents, trash_reclaim
 from catalog.services.announcement_intents import Announcement
 from lakehouse.governed import fga_ids, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.door_caller import caller_subject
 from lakehouse.lancekit.base_refs import decoded_path
+from lakehouse.maintenance_doors import TrashEndResponse, TrashRefusalResponse, TrashReleaseResponse
 from lakehouse.problems.outage import store_refusal
 from lakehouse.records import trash
 from lakehouse.records.location_claims import LocationClaim

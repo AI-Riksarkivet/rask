@@ -20,10 +20,10 @@ from fastapi.concurrency import run_in_threadpool
 from catalog.api.dependencies import SettingsDep
 from catalog.api.security import CurrentToken
 from catalog.api.v1.endpoints.trash_reclaim import require_can_reclaim_trash
-from catalog.schemas import IdempotencyKeysReclaimResponse
 from catalog.services import idempotency_records
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.door_caller import caller_subject
+from lakehouse.maintenance_doors import IdempotencyKeysReclaimResponse
 
 
 management_router = APIRouter(prefix="/management/v1/idempotency-keys", tags=["idempotency-keys"], dependencies=[Depends(require_can_reclaim_trash)])
