@@ -395,7 +395,7 @@ def test_no_env_var_is_rendered_twice_on_any_workload() -> None:
     assert offenders == [], f"duplicated env names make the release unupgradable: {offenders}"
 
 
-def test_the_object_store_carries_NO_credential_in_its_environment() -> None:
+def test_the_object_store_carries_no_credential_in_its_environment() -> None:
     """The store pod reads every credential from a mounted file; its environment carries none.
 
     The root pair signs every request as root and every STS session token the store issues, so it is the
@@ -605,7 +605,7 @@ def _app_containers(docs: list[dict]) -> dict[str, dict]:
     return found
 
 
-def test_the_chart_TURNS_DOCS_OFF_by_default_and_ON_when_asked() -> None:
+def test_the_chart_turns_docs_off_by_default_and_on_when_asked() -> None:
     """Interactive docs must be a deployment decision, and the deployment must actually make it.
 
     open_fastapi-audit — "/docs and /openapi.json are on in production for every served app".
@@ -672,7 +672,7 @@ def _first_party_deployments(docs: list[dict]) -> list[dict]:
     return [doc for doc in docs if doc.get("kind") == "Deployment" and not any(skip in doc["metadata"]["name"] for skip in _UNCOVERED_DEPLOYMENTS)]
 
 
-def test_a_read_only_rootfs_is_SURVIVABLE_on_every_first_party_pod() -> None:
+def test_a_read_only_rootfs_is_survivable_on_every_first_party_pod() -> None:
     """Hardening that breaks the pod is not hardening, it is a rollback waiting to happen.
 
     `readOnlyRootFilesystem: true` is the chart default, and these images write to /tmp for OTel and
@@ -764,7 +764,7 @@ def _secret_refs(doc: object) -> list[str]:
     return found
 
 
-def test_the_catalog_STAGES_its_write_announcement_into_the_prefix_the_relay_DRAINS() -> None:
+def test_the_catalog_stages_its_write_announcement_into_the_prefix_the_relay_drains() -> None:
     """The catalog's lineage outbox must be rendered, and must name the prefix the lineage relay reads.
 
     `LANCE_LINEAGE_OUTBOX_URI` exists in `catalog/core/config.py` and is threaded all the way to

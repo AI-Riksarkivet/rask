@@ -87,7 +87,7 @@ def test_an_identical_model_is_not_rewritten() -> None:
     assert not needs_write(stored, _model(warehouse=["reader", "owner"])), "relation ORDER made two identical models look different"
 
 
-def test_a_MISSING_RELATION_on_an_existing_type_is_a_difference() -> None:
+def test_a_missing_relation_on_an_existing_type_is_a_difference() -> None:
     """The drift this hook was built for: all nine missing relations were on types that already
     existed, so a comparison keyed on type NAMES alone would have reported no change forever."""
     stored = _model(warehouse=["owner", "reader"])
@@ -110,7 +110,7 @@ def test_a_MISSING_RELATION_on_an_existing_type_is_a_difference() -> None:
         ),
     ],
 )
-def test_a_changed_RULE_under_an_unchanged_name_is_a_difference(stored: dict[str, Any], desired: dict[str, Any]) -> None:
+def test_a_changed_rule_under_an_unchanged_name_is_a_difference(stored: dict[str, Any], desired: dict[str, Any]) -> None:
     """Same types, same relation names, one rule different — the edit a name comparison reports as
     "already current". A tightened `can_read_data` left unwritten keeps granting through `pass_grants`
     a path the repo has removed, and nothing downstream can tell: every check still answers."""
@@ -118,13 +118,13 @@ def test_a_changed_RULE_under_an_unchanged_name_is_a_difference(stored: dict[str
     assert needs_write(stored, desired), "a rule edit under an unchanged relation name was reported as already written"
 
 
-def test_the_shipped_model_AS_THE_STORE_SERVES_IT_is_not_rewritten() -> None:
+def test_the_shipped_model_as_the_store_serves_it_is_not_rewritten() -> None:
     """THE NO-OP A BODY COMPARISON MUST KEEP. It is only sound if the store's default fills and its
     `id` compare as nothing — otherwise every upgrade writes and the store grows a model per release."""
     assert not needs_write(_as_openfga_serves_it(model_document()), model_document())
 
 
-def test_the_shipped_model_with_one_rule_TIGHTENED_is_a_write() -> None:
+def test_the_shipped_model_with_one_rule_tightened_is_a_write() -> None:
     """The body drift over the real model and the served shape together, not only a fixture: keep the
     first branch of the shipped model's first union and compare it against the store's copy of the
     original."""

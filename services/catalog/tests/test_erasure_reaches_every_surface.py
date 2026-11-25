@@ -156,7 +156,7 @@ def test_a_tag_the_erasure_already_removed_is_not_named(pinned: str, erase: Eras
     assert [pin.ref for pin in report.pinned_by] == ["tag:trained"]
 
 
-def test_a_tag_that_never_held_the_subject_is_RETAINED(tmp_path: Path, erase: Erase) -> None:
+def test_a_tag_that_never_held_the_subject_is_retained(tmp_path: Path, erase: Erase) -> None:
     """A TAG IS A REPRODUCIBILITY POINTER, and erasing one is not part of erasing a person.
 
     A tagged version is exempt from cleanup by design, which is how a training run records the exact
@@ -189,7 +189,7 @@ def test_an_unreadable_tag_is_dropped_rather_than_assumed_clean(table: str, monk
     assert any(s.surface == "tag:pinned" and s.outcome == "untagged" for s in report.surfaces)
 
 
-def test_a_RETAINED_tag_does_not_break_reclamation(tmp_path: Path, erase: Erase) -> None:
+def test_a_retained_tag_does_not_break_reclamation(tmp_path: Path, erase: Erase) -> None:
     """FOUND BY DRIVING THE DEPLOYED DOOR, not by a unit test.
 
     Keeping a tag over a clean version (the step above) made `cleanup_old_versions` refuse the ENTIRE
@@ -210,7 +210,7 @@ def test_a_RETAINED_tag_does_not_break_reclamation(tmp_path: Path, erase: Erase)
     assert report.complete is True, [(s.surface, s.outcome, s.detail) for s in report.surfaces]
 
 
-def test_erasure_reclaims_a_subjects_BLOB_SIDECAR_with_its_version(tmp_path: Path, erase: Erase) -> None:
+def test_erasure_reclaims_a_subjects_blob_sidecar_with_its_version(tmp_path: Path, erase: Erase) -> None:
     # A row delete leaves the payload bytes in `data/<stem>/*.blob`. Measured on pylance 11.0.0:
     # `cleanup_old_versions` takes the sidecar with its data file, so step 3 reclaims them once the job's
     # rewrite has left them unreferenced — reclaiming only the .lance would leave the payload on storage.

@@ -155,7 +155,7 @@ def app_with(openfga_store: Any) -> AppWith:  # noqa: ANN401 — the root confte
 
 
 @pytest.mark.anyio
-async def test_a_GOVERNED_input_the_caller_cannot_see_is_STILL_refused(settings: LineageSettings, app_with: AppWith) -> None:
+async def test_a_governed_input_the_caller_cannot_see_is_still_refused(settings: LineageSettings, app_with: AppWith) -> None:
     """The half the fix must not cost. This is the forgery the guard exists to stop: an authenticated
     caller recording `I read gold$catalog` into the feed. Seeing the table is not reading it ([[LH-570]]): a describer
     of it is refused as a caller holding nothing is, and a reader is admitted."""
@@ -170,7 +170,7 @@ async def test_a_GOVERNED_input_the_caller_cannot_see_is_STILL_refused(settings:
 
 
 @pytest.mark.anyio
-async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settings: LineageSettings, app_with: AppWith) -> None:
+async def test_a_forged_external_namespace_cannot_launder_a_governed_name(settings: LineageSettings, app_with: AppWith) -> None:
     """The attack the exemption invites, and why it does not land.
 
     A caller could name `gold$catalog` under an `s3://` namespace to skip the check. It skips — and buys
@@ -192,7 +192,7 @@ async def test_a_FORGED_external_namespace_cannot_launder_a_governed_name(settin
 
 
 @pytest.mark.anyio
-async def test_OUTPUTS_are_never_exempted(settings: LineageSettings, app_with: AppWith) -> None:
+async def test_outputs_are_never_exempted(settings: LineageSettings, app_with: AppWith) -> None:
     """Writing is the direction that mutates the estate. An output under an external namespace is a
     producer claiming to have written the outside world — not a case to make permissive, and the
     asymmetry is deliberate rather than an oversight in the filter. Beside it here, a governed table's location the
@@ -206,7 +206,7 @@ async def test_OUTPUTS_are_never_exempted(settings: LineageSettings, app_with: A
 
 
 @pytest.mark.anyio
-async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_external_one(settings: LineageSettings, app_with: AppWith) -> None:
+async def test_a_mixed_event_authorizes_the_governed_input_and_skips_the_external_one(settings: LineageSettings, app_with: AppWith) -> None:
     """A run that reads a raw source AND a governed table must be judged on the governed half only."""
     event = _event(inputs=[_dataset(EXTERNAL_NS, EXTERNAL_NAME), _table("bind86-bronze", GOVERNED)])
 
@@ -233,7 +233,7 @@ async def test_a_MIXED_event_authorizes_the_governed_input_and_skips_the_externa
         ("lance-namespace://other.example.org/api/catalog", "bronze$pages", True),
     ],
 )
-def test_the_discriminator_is_a_URI_SCHEME_OR_A_DECLARED_NAMESPACE(namespace: str, name: str, external: bool) -> None:
+def test_the_discriminator_is_a_uri_scheme_or_a_declared_namespace(namespace: str, name: str, external: bool) -> None:
     """TWO forms, because the estate's producers mint both, and the scheme alone missed two of three.
 
     A store URI carrying a scheme is external by shape. A bare identifier is exactly what a catalog
@@ -357,7 +357,7 @@ def _event_with_column_upstream(output: dict[str, Any], up_ns: str, up_name: str
 
 
 @pytest.mark.anyio
-async def test_a_GOVERNED_column_upstream_is_AUTHORIZED_not_written_blind(settings: LineageSettings, app_with: AppWith) -> None:
+async def test_a_governed_column_upstream_is_authorized_not_written_blind(settings: LineageSettings, app_with: AppWith) -> None:
     """The defect: the caller may write `mine$table` and holds nothing on `gold$catalog`, yet naming it
     as a column upstream would record and forward a derivation from it."""
     event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "gold", GOVERNED)
@@ -368,7 +368,7 @@ async def test_a_GOVERNED_column_upstream_is_AUTHORIZED_not_written_blind(settin
 
 
 @pytest.mark.anyio
-async def test_a_column_upstream_the_caller_CAN_see_passes(settings: LineageSettings, app_with: AppWith) -> None:
+async def test_a_column_upstream_the_caller_can_see_passes(settings: LineageSettings, app_with: AppWith) -> None:
     """The mirror — the check must not refuse a legitimate cross-table derivation, which is the whole
     point of column lineage."""
     event = _event_with_column_upstream(_table_payload("mine", "mine$table"), "gold", GOVERNED, inputs=[_table_payload("gold", GOVERNED)])
@@ -378,7 +378,7 @@ async def test_a_column_upstream_the_caller_CAN_see_passes(settings: LineageSett
 
 
 @pytest.mark.anyio
-async def test_an_EXTERNAL_column_upstream_stays_exempt(settings: LineageSettings, app_with: AppWith) -> None:
+async def test_an_external_column_upstream_stays_exempt(settings: LineageSettings, app_with: AppWith) -> None:
     """Same rule as inputs, and for the same reason: an external source has no `table:` object, so
     authorizing it is unsatisfiable rather than strict. Its identity is namespace-qualified, so it cannot
     name a governed table either way."""

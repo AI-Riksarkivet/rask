@@ -66,7 +66,7 @@ def _event(*, inputs: list[dict[str, Any]] | None = None, **run_facets: Any) -> 
     )
 
 
-def test_a_DATA_write_demands_the_writer_rung() -> None:
+def test_a_data_write_demands_the_writer_rung() -> None:
     """An insert changes what the table says, so nothing weaker than `can_write_data` may record it."""
     assert relations_for_operation("insert") == ("can_write_data",)
     assert relations_for_operation(None) == ("can_write_data",), "an operation-less event must not fall to the weaker rung"
@@ -151,7 +151,7 @@ class _Feed:
         return None
 
 
-def test_a_BYTE_IDENTICAL_redelivery_is_not_a_new_assertion(store: Any) -> None:  # noqa: ANN401
+def test_a_byte_identical_redelivery_is_not_a_new_assertion(store: Any) -> None:  # noqa: ANN401
     """A lineage restart re-presents the ENTIRE retained stream — the consumer is ephemeral with
     `deliverPolicy: all`, which is the estate's own recovery story. Measured 2026-09-09: a restart
     replayed all 2 161 retained messages and left the durable feed flat at 3 248 rows, because every one
@@ -163,7 +163,7 @@ def test_a_BYTE_IDENTICAL_redelivery_is_not_a_new_assertion(store: Any) -> None:
     _gate(store, event, stored, event.model_dump(by_alias=True))
 
 
-def test_a_replay_that_DIFFERS_IN_ANY_FIELD_is_still_refused(store: Any) -> None:  # noqa: ANN401
+def test_a_replay_that_differs_in_any_field_is_still_refused(store: Any) -> None:  # noqa: ANN401
     """THE HOLE THIS AVOIDS, and it is the reason the check is byte-identical rather than a key match.
 
     Exempting anything whose `(run_id, event_type)` merely EXISTS would let a forger take a known run id,
@@ -176,7 +176,7 @@ def test_a_replay_that_DIFFERS_IN_ANY_FIELD_is_still_refused(store: Any) -> None
         _gate(store, event, stored, event.model_dump(by_alias=True))
 
 
-def test_an_UNAUTHORED_replay_is_still_exempt_but_an_unauthored_NEW_event_is_not(store: Any) -> None:  # noqa: ANN401
+def test_an_unauthored_replay_is_still_exempt_but_an_unauthored_new_event_is_not(store: Any) -> None:  # noqa: ANN401
     """The unauthored refusal takes the same path, and must: the 518 unauthored compactions in the
     retained stream predate the producer fix and replay on every restart. An unauthored event the feed
     has never seen is a new assertion with nothing to authorize, and stays refused."""

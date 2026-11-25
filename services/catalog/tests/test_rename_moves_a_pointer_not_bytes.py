@@ -60,7 +60,7 @@ def _written(ns, segments: list[str], *, appends: int = 2) -> str:  # noqa: ANN0
     return location
 
 
-def test_renaming_ACROSS_namespaces_still_moves_no_bytes(tmp_path: Path) -> None:
+def test_renaming_across_namespaces_still_moves_no_bytes(tmp_path: Path) -> None:
     """The spec allows a rename to change namespace, and under `<hash>_<object_id>` naming the
     namespace is part of the object_id — so this is the case that would most look like it needs a
     relocation, and does not."""
@@ -82,7 +82,7 @@ def test_renaming_ACROSS_namespaces_still_moves_no_bytes(tmp_path: Path) -> None
     assert location == source
 
 
-def test_a_V1_ROOT_table_is_REFUSED_rather_than_copied(tmp_path: Path) -> None:
+def test_a_v1_root_table_is_refused_rather_than_copied(tmp_path: Path) -> None:
     """Compatibility mode stores a root table at `<name>.lance`, where location IS the name, and the
     spec's rule is that renaming it "transitions to the V2 hash-based path naming" — a relocation.
 
@@ -105,7 +105,7 @@ def test_a_V1_ROOT_table_is_REFUSED_rather_than_copied(tmp_path: Path) -> None:
         )
 
 
-def test_a_FAILED_registration_puts_the_source_back(tmp_path: Path) -> None:
+def test_a_failed_registration_puts_the_source_back(tmp_path: Path) -> None:
     """Retiring the source first means a failure after it must restore it, or a legitimate rename that
     trips on its destination leaves the table reachable by NO id — bytes intact and invisible, which is
     the worse half of the trade this ordering makes.
@@ -144,7 +144,7 @@ def test_a_FAILED_registration_puts_the_source_back(tmp_path: Path) -> None:
     assert ns.describe_table(DescribeTableRequest(id=["ns1", "keepme"])).location == source, "a failed rename left the table reachable by no id at all"
 
 
-def test_a_BRANCHED_table_renames_because_nothing_moves(tmp_path: Path) -> None:
+def test_a_branched_table_renames_because_nothing_moves(tmp_path: Path) -> None:
     """The refusal this door used to make, and why it is gone.
 
     A branch is a shallow clone that references its source root by ABSOLUTE path, so the BYTE-COPY

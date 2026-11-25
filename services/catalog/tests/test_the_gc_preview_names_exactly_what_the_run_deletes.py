@@ -141,7 +141,7 @@ def test_the_preview_offers_exactly_the_versions_the_run_deletes(
 
 
 @pytest.mark.parametrize(("branch", "expected"), [(None, {"release": 4}), (BRANCH, {"pinned": 3})], ids=["main", "branch"])
-def test_the_preview_names_only_the_tags_that_pin_THIS_ref(client: TestClient, branch: str | None, expected: dict[str, int]) -> None:
+def test_the_preview_names_only_the_tags_that_pin_this_ref(client: TestClient, branch: str | None, expected: dict[str, int]) -> None:
     """A tag on another ref protects nothing here, so naming it as protection is the same misinformation
     as withholding the version it does not pin."""
     preview = _call(client, "preview", branch=branch, retain_versions=1)

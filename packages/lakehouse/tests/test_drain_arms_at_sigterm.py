@@ -56,7 +56,7 @@ def _app() -> FastAPI:
 
 
 @pytest.mark.asyncio
-async def test_a_SECOND_signal_is_harmless_and_handed_on_too(handed: list[int]) -> None:
+async def test_a_second_signal_is_harmless_and_handed_on_too(handed: list[int]) -> None:
     """An impatient operator sends two. A signal handler that raised would be unhandleable, and the
     displaced handler decides what a second one means (uvicorn's escalates only on SIGINT)."""
     app = _app()
@@ -74,7 +74,7 @@ async def test_a_SECOND_signal_is_harmless_and_handed_on_too(handed: list[int]) 
 
 
 @pytest.mark.asyncio
-async def test_a_SECOND_arm_is_REFUSED_while_the_first_holds_SIGTERM(handed: list[int]) -> None:
+async def test_a_second_arm_is_refused_while_the_first_holds_sigterm(handed: list[int]) -> None:
     """A process has one SIGTERM disposition, so a second app cannot arm over the first. The refusal comes before
     the loop is touched, so the first still hands the signal on exactly once, and once it is disarmed the next
     app may arm."""
@@ -95,7 +95,7 @@ async def test_a_SECOND_arm_is_REFUSED_while_the_first_holds_SIGTERM(handed: lis
 
 
 @pytest.mark.asyncio
-async def test_an_IGNORED_SIGTERM_stays_ignored_and_is_restored_as_ignored() -> None:
+async def test_an_ignored_sigterm_stays_ignored_and_is_restored_as_ignored() -> None:
     """`SIG_IGN` is not callable, so it is the case a `callable()` check drops on the way back."""
     original = signal.signal(signal.SIGTERM, signal.SIG_IGN)
     try:
@@ -112,7 +112,7 @@ async def test_an_IGNORED_SIGTERM_stays_ignored_and_is_restored_as_ignored() -> 
 
 
 @pytest.mark.asyncio
-async def test_a_handler_NOT_INSTALLED_FROM_PYTHON_is_not_armed_over(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_handler_not_installed_from_python_is_not_armed_over(monkeypatch: pytest.MonkeyPatch) -> None:
     """`getsignal` answers None for a handler installed outside Python. It can be neither called nor
     restored, so displacing it would take SIGTERM's meaning away for good."""
     installed: list[Any] = []
@@ -126,7 +126,7 @@ async def test_a_handler_NOT_INSTALLED_FROM_PYTHON_is_not_armed_over(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_DISARMING_stops_a_dead_app_from_being_flipped(handed: list[int]) -> None:
+async def test_disarming_stops_a_dead_app_from_being_flipped(handed: list[int]) -> None:
     """Why the helper returns a restore callable and the lifespan must call it: a handler installed
     per app and never removed leaks across a suite that builds many apps in one process -- and would
     leave a DEAD app's flag being flipped by a live process's signal.
@@ -172,7 +172,7 @@ async def test_a_restore_step_that_fails_is_said_and_the_other_is_still_taken(
 
 
 @pytest.mark.asyncio
-async def test_a_loop_that_cannot_take_a_handler_does_not_fail_the_START(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_loop_that_cannot_take_a_handler_does_not_fail_the_start(monkeypatch: pytest.MonkeyPatch) -> None:
     """Best-effort by construction. `add_signal_handler` raises on Windows and off the main thread,
     and neither is a reason to refuse to boot a service -- the flag then flips at lifespan shutdown."""
     app = _app()

@@ -88,7 +88,7 @@ async def _drain(destroying: AsyncIterator[list[str]]) -> list[list[str]]:
     return [item async for item in destroying]
 
 
-def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to(tmp_path: Path) -> None:
+def test_the_cascade_destroys_bottom_up_and_never_asks_the_backend_to(tmp_path: Path) -> None:
     """The dir backend refuses `behavior=Cascade` for every casing, so this door must do the work:
     tables first, then namespaces deepest-first, then the root — each drop hitting an EMPTY object."""
     from catalog.services.namespace_subtrees import destroy_subtree
@@ -124,7 +124,7 @@ def test_the_cascade_destroys_BOTTOM_UP_and_never_asks_the_backend_to(tmp_path: 
     assert not any(c.endswith(":cascade") for c in ns.calls), "the unimplementable native cascade was called"
 
 
-def test_an_already_absent_child_is_DRIFT_not_an_error(tmp_path: Path) -> None:
+def test_an_already_absent_child_is_drift_not_an_error(tmp_path: Path) -> None:
     """A half-finished earlier delete must not make the subtree undeletable forever: a table removed before the
     cascade's deregister reached it answers TableNotFound there and no longer describes, and that is drift, never
     bytes reported left. The cascade did not remove it, so it lifts the fence it held the table's claim by."""

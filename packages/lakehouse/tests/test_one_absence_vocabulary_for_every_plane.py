@@ -57,12 +57,12 @@ UNREADABLE = [
 
 
 @pytest.mark.parametrize("message", ABSENT)
-def test_a_message_that_PROVES_the_target_is_gone_reads_as_absent(message: str) -> None:
+def test_a_message_that_proves_the_target_is_gone_reads_as_absent(message: str) -> None:
     assert reads_as_absent(OSError(message)), f"{message!r} proves absence and was not recognized"
 
 
 @pytest.mark.parametrize("message", UNREADABLE)
-def test_a_message_that_proves_only_that_we_could_not_LOOK_does_not(message: str) -> None:
+def test_a_message_that_proves_only_that_we_could_not_look_does_not(message: str) -> None:
     assert not reads_as_absent(ValueError(message)), f"{message!r} does not prove absence and was read as absent"
 
 

@@ -107,7 +107,7 @@ async def test_the_http_door_counts_a_refusal_the_way_the_subscriber_does(error:
 
 
 @pytest.mark.asyncio
-async def test_a_SUCCESSFUL_ingest_still_counts_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_successful_ingest_still_counts_exactly_once(monkeypatch: pytest.MonkeyPatch) -> None:
     """The guard against paying for the above with a double count on the path that works."""
     from lineage.api.v1.endpoints import ingest
 

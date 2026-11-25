@@ -282,7 +282,7 @@ def test_rename_treats_a_declared_only_destination_as_taken(tmp_path: Path) -> N
     assert _open(ns, ["media", "src"]).read_blobs("payload", indices=[0])[0][1] == b"x"  # source intact
 
 
-def test_a_failed_source_claim_leaves_the_rename_UNDONE(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_failed_source_claim_leaves_the_rename_undone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The pointer move is two calls, so there is a window — and what is in it is the whole safety case.
 
     The location's claim is handed to the destination first ([[LH-204]]) and the SOURCE is retired

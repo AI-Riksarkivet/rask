@@ -106,7 +106,7 @@ def test_run_gc_passes_bounds_and_reports_stats() -> None:
     assert ds.cleaned["retain_versions"] == 1
 
 
-def test_the_flag_16_refusal_is_FAIL_CLOSED_when_the_bases_cannot_be_read() -> None:
+def test_the_flag_16_refusal_is_fail_closed_when_the_bases_cannot_be_read() -> None:
     """The compaction gate `version/create` asks of a Rewrite weighs EVIDENCE about the bases, and this
     dataset offers none: it sets flag 16 and cannot say where it lives, so no base can be probed. Unknown
     resolves to refusal."""
@@ -117,7 +117,7 @@ def test_the_flag_16_refusal_is_FAIL_CLOSED_when_the_bases_cannot_be_read() -> N
         maintenance.require_compactable(ds, table_location="", storage_options=StorageOptions())
 
 
-def test_run_gc_REFUSES_an_unknown_flag() -> None:
+def test_run_gc_refuses_an_unknown_flag() -> None:
     """Flag 64 (data overlays) is unknown to every gate here — the root-scoped allowance covers
     `base_paths` and nothing else."""
     from lance_namespace import UnsupportedOperationError
@@ -137,7 +137,7 @@ def _rows(n: int = 20) -> Any:
     return pa.table({"id": pa.array(range(n), pa.int64())})
 
 
-def test_run_gc_PERMITS_a_clone_the_SWEEP_reclaims_on_EVERY_TICK(tmp_path: Any) -> None:
+def test_run_gc_permits_a_clone_the_sweep_reclaims_on_every_tick(tmp_path: Any) -> None:
     """The other half of row 13, and the reason the divergence was closed rather than documented as
     deliberate: version reclamation is ROOT-SCOPED, the sweep's gate (`describe_gc_unsupported_flags`)
     tolerates `base_paths`, and the cron runs it unattended against this same dataset every tick. A

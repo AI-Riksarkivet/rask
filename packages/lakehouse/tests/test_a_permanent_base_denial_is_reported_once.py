@@ -76,7 +76,7 @@ def _gather(monkeypatch: pytest.MonkeyPatch, probe, *, base: str = "s3://lance-c
     return features.gather_compaction_bases(cast("features.FragmentCarrier", _Carrier()), probe)
 
 
-def test_a_denial_is_reported_ONCE_however_many_datasets_declare_it(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_a_denial_is_reported_once_however_many_datasets_declare_it(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """THE DEFECT: 134 datasets declaring one unreadable base produced 134 stack traces."""
     with caplog.at_level(logging.WARNING, logger=features.__name__):
         for _ in range(5):
@@ -86,7 +86,7 @@ def test_a_denial_is_reported_ONCE_however_many_datasets_declare_it(monkeypatch:
     assert len(denials) == 1, f"a permanent denial was reported {len(denials)} times: {[r.message for r in denials]}"
 
 
-def test_a_TRANSIENT_failure_keeps_its_traceback_and_repeats(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_a_transient_failure_keeps_its_traceback_and_repeats(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """The half that makes the silence safe: only the denial is de-duplicated.
 
     A store outage or a probe bug is exactly where the stack matters, and it is NOT deterministic for
@@ -100,7 +100,7 @@ def test_a_TRANSIENT_failure_keeps_its_traceback_and_repeats(monkeypatch: pytest
     assert len(failures) == 3, f"a transient probe failure was silenced or de-duplicated: {len(failures)}"
 
 
-def test_the_REFUSAL_is_unchanged_by_any_of_this(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_refusal_is_unchanged_by_any_of_this(monkeypatch: pytest.MonkeyPatch) -> None:
     """Logging is all that moved. `unknown resolves to refusal` is the guard, and it still holds.
 
     Pinned because a de-duplication bug that also dropped the evidence would silently PERMIT the
@@ -112,7 +112,7 @@ def test_the_REFUSAL_is_unchanged_by_any_of_this(monkeypatch: pytest.MonkeyPatch
     assert [b.probe_denied for b in gathered.bases] == [True], "the denial evidence was lost"
 
 
-def test_two_DIFFERENT_bases_are_each_reported(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_two_different_bases_are_each_reported(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Per BASE, not one line for the whole process — a second unreadable prefix is its own news."""
     with caplog.at_level(logging.WARNING, logger=features.__name__):
         _gather(monkeypatch, _probe_denied, base="s3://lance-catalog/models/")

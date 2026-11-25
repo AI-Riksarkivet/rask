@@ -129,7 +129,7 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
     assert steps == ["record", "drop"], f"the refusal path ran {steps}: the object must be retired only after its verdict is recorded"
 
 
-def test_a_TRANSIENT_failure_still_strands(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_transient_failure_still_strands(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     """The other half of the split, and the one that keeps `stranded` meaningful. A store outage or an
     expired credential IS a failed tick, retried next time, and must not be laundered into the settled
     class — otherwise the new number absorbs the old one and nothing is distinguishable again."""

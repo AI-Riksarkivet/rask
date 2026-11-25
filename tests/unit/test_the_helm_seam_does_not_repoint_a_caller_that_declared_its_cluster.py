@@ -84,7 +84,7 @@ def test_a_declared_caller_keeps_its_own_kubeconfig(tmp_path: Path) -> None:
     assert seen == str(kube), f"the seam repointed a declared caller at {seen!r} instead of its own kubeconfig"
 
 
-def test_a_declared_caller_with_NO_kubeconfig_is_not_handed_the_live_estates(tmp_path: Path) -> None:
+def test_a_declared_caller_with_no_kubeconfig_is_not_handed_the_live_estates(tmp_path: Path) -> None:
     """A declared caller that set nothing must fall through to kubectl's own default, never to the
     live estate — that path is how a kind lane ends up aimed at production."""
     done, seen = _run(tmp_path, "upgrade", "rask", "./chart", env_extra={"RASK_EXPECT_CONTEXT": "kind-rask", "STUB_CONTEXT": "kind-rask"})
@@ -134,7 +134,7 @@ def test_a_read_only_subcommand_still_bypasses_everything(tmp_path: Path, subcom
     assert done.returncode == 0, done.stderr
 
 
-def test_a_caller_declaring_the_context_the_DEFAULT_serves_still_gets_it(tmp_path: Path) -> None:
+def test_a_caller_declaring_the_context_the_default_serves_still_gets_it(tmp_path: Path) -> None:
     """The regression the narrow fix nearly shipped.
 
     Seven scripts declare `RASK_EXPECT_CONTEXT=default`, MEAN the live estate and set no KUBECONFIG of
@@ -166,7 +166,7 @@ def test_a_caller_declaring_the_context_the_DEFAULT_serves_still_gets_it(tmp_pat
     assert seen == str(k3s), f"a caller declaring {context!r} — the context the default serves — was not given it: {seen!r}"
 
 
-def test_a_caller_that_SET_a_kubeconfig_keeps_it_even_when_the_default_would_serve(tmp_path: Path) -> None:
+def test_a_caller_that_set_a_kubeconfig_keeps_it_even_when_the_default_would_serve(tmp_path: Path) -> None:
     """An explicit KUBECONFIG is an instruction, not a hint.
 
     Without this leg the guard's first condition is untestable: every other case has the inner probe

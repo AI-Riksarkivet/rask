@@ -654,7 +654,7 @@ def test_one_control_event_per_purged_record(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_a_SECOND_refusal_counts_up_rather_than_looking_like_the_first(tmp_path: Path) -> None:
+def test_a_second_refusal_counts_up_rather_than_looking_like_the_first(tmp_path: Path) -> None:
     """The whole point of the row: two refusals must be distinguishable from one.
 
     `attempts` accumulates and `last_refusal` is replaced, so the record answers both "how long has
@@ -738,7 +738,7 @@ def test_one_records_failure_is_its_refusal_and_the_run_goes_on(
 # --------------------------------------------------------------------------- #
 
 
-def test_a_dry_run_names_what_it_WOULD_purge_and_deletes_nothing(tmp_path: Path) -> None:
+def test_a_dry_run_names_what_it_would_purge_and_deletes_nothing(tmp_path: Path) -> None:
     """CONTRACT: with the dry run on and the purge OFF, the tick reports its plan and mutates nothing.
 
     The estate's rule is that a reclaimer earns its delete permission by first proving its report runs
@@ -768,7 +768,7 @@ def test_a_dry_run_names_what_it_WOULD_purge_and_deletes_nothing(tmp_path: Path)
     assert estate.record(canonical) is not None, "the dry run cleared the trash record"
 
 
-def test_a_dry_run_does_not_write_the_refusal_MEMORY_either(tmp_path: Path) -> None:
+def test_a_dry_run_does_not_write_the_refusal_memory_either(tmp_path: Path) -> None:
     """The subtlest way a dry run stops being dry: the refusal annotation.
 
     A refusal persists `attempts` and `last_refusal` onto the trash record, which is a WRITE. A preview
@@ -788,7 +788,7 @@ def test_a_dry_run_does_not_write_the_refusal_MEMORY_either(tmp_path: Path) -> N
     assert "attempts" not in record, f"the dry run wrote the refusal memory: {record}"
 
 
-def test_the_dry_run_reports_the_SAME_gate_that_would_block_a_real_purge(tmp_path: Path) -> None:
+def test_the_dry_run_reports_the_same_gate_that_would_block_a_real_purge(tmp_path: Path) -> None:
     """A preview that ignores the gates would promise reclamation the real purge refuses to perform.
 
     `report_is_clean` is the permission: on a drifting estate the purge does nothing, and that is the
@@ -809,7 +809,7 @@ def test_the_dry_run_reports_the_SAME_gate_that_would_block_a_real_purge(tmp_pat
     assert out.would_purge == []
 
 
-def test_the_dry_run_NEVER_widens_a_real_purge(tmp_path: Path) -> None:
+def test_the_dry_run_never_widens_a_real_purge(tmp_path: Path) -> None:
     """Both flags on must still be a real purge — the dry run may only ever SUBTRACT capability.
 
     Stated as a gate because the opposite wiring is an easy mistake with a severe cost: a deployment
@@ -827,7 +827,7 @@ def test_the_dry_run_NEVER_widens_a_real_purge(tmp_path: Path) -> None:
     assert Path(location.removeprefix("file://")).is_dir(), "the dry run deleted the bytes"
 
 
-def test_a_dry_run_tick_is_DISTINGUISHABLE_on_the_reclamation_counters(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_dry_run_tick_is_distinguishable_on_the_reclamation_counters(monkeypatch: pytest.MonkeyPatch) -> None:
     """CONTRACT: every reclamation counter point says whether the tick that produced it was a preview.
 
     Two failures ride on this, and both are silent. A dry run still counts its refusals, so without a
@@ -859,7 +859,7 @@ def test_a_dry_run_tick_is_DISTINGUISHABLE_on_the_reclamation_counters(monkeypat
     assert any(v == 3 for v, _a in seen), f"the planned count never reached a counter: {seen}"
 
 
-def test_the_purge_blocker_names_only_the_categories_that_actually_BLOCK() -> None:
+def test_the_purge_blocker_names_only_the_categories_that_actually_block() -> None:
     """CONTRACT: the reason names the categories inside `report.total`, never the non-gating ones.
 
     `report.total` deliberately excludes `NON_GATING_CATEGORIES` — `unreachable_namespaces` among them — because it
@@ -890,7 +890,7 @@ def test_the_purge_blocker_names_only_the_categories_that_actually_BLOCK() -> No
     assert "unreachable_namespaces" not in reason, f"the blocker names a non-gating category: {reason}"
 
 
-def test_a_table_recovered_AFTER_the_liveness_snapshot_is_still_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_table_recovered_after_the_liveness_snapshot_is_still_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE RACE the neighbouring test does not drive, and the one the docstring promises to close.
 
     `test_a_recovered_id_is_REFUSED` registers the table BEFORE the tick, so the once-per-tick

@@ -344,7 +344,7 @@ def test_a_commit_lands_while_insert_appends_in_a_tight_loop_and_every_append_la
     assert took < 10, f"the change landed after {took:.1f} s"
 
 
-def test_a_column_named_concurrent_is_still_a_MISSING_COLUMN(table: DoorTable) -> None:
+def test_a_column_named_concurrent_is_still_a_missing_column(table: DoorTable) -> None:
     """The ordering guard, and it is not hypothetical.
 
     `_COMMIT_CONFLICT_MARKERS` carries the bare word `concurrent`, so testing it before the

@@ -17,7 +17,7 @@ from lance_namespace import InternalError
 from catalog.api.authz.rungs import action_relation, route_suffix
 
 
-def test_erasure_clears_the_OWNER_rung() -> None:
+def test_erasure_clears_the_owner_rung() -> None:
     """It removes a subject from every ref, drops the tags pinning the versions that held them, and
     reclaims history. `can_drop` is the highest rung there is."""
     assert action_relation("table", "erasure", method="POST") == "can_drop"

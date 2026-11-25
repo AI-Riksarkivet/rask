@@ -160,7 +160,7 @@ put-if-not-exists and a lost commit's outcome
 (`services/catalog/tests/test_a_stock_client_commits_every_operation_through_version_create.py`,
 `test_a_lost_commit_race_is_retryable_not_a_server_fault.py`), flag 16 on a shallow clone
 (`packages/lakehouse/tests/test_maintenance_features.py::test_a_shallow_clone_sets_the_base_paths_flag`), `tracked_files` over old
-versions (`services/maintenance/tests/test_orphan_files.py::test_files_only_an_OLD_version_references_are_not_orphans`) and the
+versions (`services/maintenance/tests/test_orphan_files.py::test_files_only_an_old_version_references_are_not_orphans`) and the
 maintenance index readers (`services/maintenance/tests/test_index_health.py`). `explain_cleanup_old_versions` counts the versions a
 cleanup at the same age would remove and leaves a tagged one out (measured: 4 of 6 with one tagged). Flag 64 (data
 overlay files) is set by no release build, so nothing writes it to measure.

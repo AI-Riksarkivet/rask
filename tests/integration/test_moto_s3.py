@@ -392,7 +392,7 @@ def test_describe_honours_a_version_pin_sent_in_the_spec_body(moto_client: TestC
         ("register", lambda c: c.post("/v1/table/lance_catalog$ghostns$t9/register", json={"location": "nope.lance"})),
     ],
 )
-def test_no_create_door_admits_a_table_whose_NAMESPACE_does_not_exist(moto_client: TestClient, door: str, post: Any) -> None:
+def test_no_create_door_admits_a_table_whose_namespace_does_not_exist(moto_client: TestClient, door: str, post: Any) -> None:
     """Parametrized over the doors ON PURPOSE. The guard existed for three of four and the Arrow one
     wrote real datasets into namespaces that were never created (#118) — a hole that survived because
     the guard's tests drove the helper directly and never a door. These drive the HTTP surface, so
@@ -405,7 +405,7 @@ def test_no_create_door_admits_a_table_whose_NAMESPACE_does_not_exist(moto_clien
     assert moto_client.post("/v1/table/lance_catalog$ghostns$t9/describe", json={}).status_code == 404
 
 
-def test_the_rename_DESTINATION_must_have_a_real_namespace_too(moto_client: TestClient) -> None:
+def test_the_rename_destination_must_have_a_real_namespace_too(moto_client: TestClient) -> None:
     """Rename is a create at the destination — moving a table into a namespace that does not exist
     orphans it exactly as creating it there would."""
     rows = pa.table({"id": pa.array([1], pa.int64())})

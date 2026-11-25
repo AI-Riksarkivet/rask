@@ -59,7 +59,7 @@ def test_a_data_write_is_still_a_run_event(operation: str) -> None:
     assert event["eventType"] == "COMPLETE"
 
 
-def test_a_DDL_change_that_DERIVED_the_table_keeps_its_run() -> None:
+def test_a_ddl_change_that_derived_the_table_keeps_its_run() -> None:
     """A `DatasetEvent` has only `dataset` — no `inputs` — and every `DERIVED_FROM` edge is built from a
     run's inputs. A create whose run names an input derived the table from it, so moving it would sever the
     edge the input declares. Not a phantom either: something did derive one table from another."""

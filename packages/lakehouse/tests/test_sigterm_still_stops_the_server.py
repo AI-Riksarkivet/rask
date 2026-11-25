@@ -234,7 +234,7 @@ def _uvicorn(tmp_path: Path, loop: str, source: str = _APP) -> Generator[_Server
 
 
 @_EVERY_LOOP
-def test_an_external_SIGTERM_drains_the_in_flight_request_and_then_EXITS(tmp_path: Path, loop: str) -> None:
+def test_an_external_sigterm_drains_the_in_flight_request_and_then_exits(tmp_path: Path, loop: str) -> None:
     """The kubelet's SIGTERM. The request in flight is answered, answered as draining, and the process
     leaves within uvicorn's graceful bound with its lifespan teardown run."""
     with _uvicorn(tmp_path, loop) as server:
@@ -253,7 +253,7 @@ def test_an_external_SIGTERM_drains_the_in_flight_request_and_then_EXITS(tmp_pat
 
 
 @pytest.mark.parametrize("loop", ["uvloop"])
-def test_SIGTERM_TO_SELF_acks_the_request_that_sent_it_and_then_EXITS(tmp_path: Path, loop: str) -> None:
+def test_sigterm_to_self_acks_the_request_that_sent_it_and_then_exits(tmp_path: Path, loop: str) -> None:
     """The recycle's shape: a handler signals its own process. The response carrying the ack must
     arrive, and then the process must actually leave for Kubernetes to replace it."""
     with _uvicorn(tmp_path, loop) as server:
@@ -266,7 +266,7 @@ def test_SIGTERM_TO_SELF_acks_the_request_that_sent_it_and_then_EXITS(tmp_path: 
 
 
 @pytest.mark.parametrize("loop", ["uvloop"])
-def test_a_SECOND_arm_in_one_process_is_REFUSED_and_SIGTERM_still_stops_the_server(tmp_path: Path, loop: str) -> None:
+def test_a_second_arm_in_one_process_is_refused_and_sigterm_still_stops_the_server(tmp_path: Path, loop: str) -> None:
     """A process has one SIGTERM disposition. A second arm would displace the first with a handler whose
     `previous` is the loop's own no-op trampoline, so SIGTERM would be handed to nothing: swallowed, and the
     process up and draining until SIGKILL. The second arm is refused, and the first still hands SIGTERM on."""
@@ -279,7 +279,7 @@ def test_a_SECOND_arm_in_one_process_is_REFUSED_and_SIGTERM_still_stops_the_serv
         assert server.printed("TEARDOWN draining=True"), f"the lifespan teardown never ran: {server.lines}"
 
 
-def test_an_ASYNC_request_that_OUTLIVES_the_bound_is_cancelled_and_the_teardown_runs(tmp_path: Path) -> None:
+def test_an_async_request_that_outlives_the_bound_is_cancelled_and_the_teardown_runs(tmp_path: Path) -> None:
     """The chart renders `--timeout-graceful-shutdown` so the lifespan teardown runs before the kubelet's
     SIGKILL (`tests/chart/test_uvicorn_drains_inside_its_pods_grace_period.py`). That holds only if uvicorn
     still applies its bound once the drain has handed it SIGTERM: at the bound it cancels the async request
@@ -335,7 +335,7 @@ _NO_SERVER = textwrap.dedent(
 )
 
 
-def test_with_NO_handler_to_hand_on_to_SIGTERM_keeps_its_default_action() -> None:
+def test_with_no_handler_to_hand_on_to_sigterm_keeps_its_default_action() -> None:
     """Nothing installed a Python handler, so SIGTERM's disposition was the default: terminate. Arming
     the drain must not turn that into "ignore"."""
     env = {key: value for key, value in os.environ.items() if not key.startswith(("RASK_", "OTEL_"))}

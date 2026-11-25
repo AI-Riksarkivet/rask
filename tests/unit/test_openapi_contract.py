@@ -57,7 +57,7 @@ def _string_enums(spec: dict) -> dict[str, list[str]]:
 _SPECS = [("catalog.main", "catalog-openapi.json", "catalog.ts"), ("lineage.main", "lineage-openapi.json", "lineage.ts")]
 
 
-def test_committed_openapi_contract_covers_every_live_ENUM_MEMBER() -> None:
+def test_committed_openapi_contract_covers_every_live_enum_member() -> None:
     """A schema keeps its name while its enum gains a member, which no comparison of schema names can see.
 
     That is not hypothetical: the five ref-plane ``ControlAction`` members landed on the bus while

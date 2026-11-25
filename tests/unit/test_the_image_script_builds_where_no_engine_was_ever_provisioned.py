@@ -74,7 +74,7 @@ def test_a_load_build_succeeds_with_no_engine_and_no_cache_volume(tmp_path: Path
     assert "image --name=gateway" in calls, f"the build never reached dagger: {calls!r}"
 
 
-def test_a_load_build_is_refused_when_the_cache_volume_is_RIGHT_THERE(tmp_path: Path) -> None:
+def test_a_load_build_is_refused_when_the_cache_volume_is_right_there(tmp_path: Path) -> None:
     """The dev-host shape: `make dagger-engine` has run and the engine is merely stopped. Building
     now would provision a second engine and read cold past a warm cache, which is the whole reason
     the guard exists."""

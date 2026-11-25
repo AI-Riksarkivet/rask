@@ -219,7 +219,7 @@ def _a_store_answering_a_missing_bucket_as_an_absent_path() -> pafs.FileSystem:
         pytest.param(lambda _root: (_a_store_answering_a_missing_bucket_as_an_absent_path(), "no-such-bucket/data"), id="an-s3-prefix"),
     ],
 )
-def test_a_MISSING_BUCKET_still_raises(tmp_path: Path, missing: Callable[[Path], tuple[pafs.FileSystem, str]]) -> None:
+def test_a_missing_bucket_still_raises(tmp_path: Path, missing: Callable[[Path], tuple[pafs.FileSystem, str]]) -> None:
     """The other side of it, and the reason the tolerance is scoped to nested prefixes and to a prefix of a bucket that
     exists: a bucket that does not exist must stay distinguishable from an empty one. Both callers rely on the raise —
     swallowing it would report "no datasets here" for a tenant bucket nobody can read, which is the
@@ -252,7 +252,7 @@ def test_a_configured_prefix_no_object_sits_under_yet_holds_no_dataset_and_is_no
 # --------------------------------------------------------------------------- #
 
 
-def test_a_directory_of_FILES_at_the_bound_is_not_a_coverage_gap(tmp_path: Path) -> None:
+def test_a_directory_of_files_at_the_bound_is_not_a_coverage_gap(tmp_path: Path) -> None:
     """The walk can tell "no dataset here" from "did not look deep enough" — for the case it can prove.
 
     A Lance dataset IS a directory with a `_versions/` child (`objectfs.is_lance_dataset_root`, the
@@ -280,7 +280,7 @@ def test_a_directory_of_FILES_at_the_bound_is_not_a_coverage_gap(tmp_path: Path)
     assert not result.truncated, f"a directory of files was reported as an unscanned subtree: {result.truncated}"
 
 
-def test_a_distributed_runs_STAGING_set_is_not_discovered_as_a_governed_dataset(tmp_path: Path) -> None:
+def test_a_distributed_runs_staging_set_is_not_discovered_as_a_governed_dataset(tmp_path: Path) -> None:
     """CONTRACT: `_staging` is a control prefix — the walk never reports a run's scratch as a dataset.
 
     A distributed stage lands its output in `<destination>/_staging/<idempotency-key>` before one merge

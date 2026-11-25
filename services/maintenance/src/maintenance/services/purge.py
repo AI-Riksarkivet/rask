@@ -731,7 +731,7 @@ async def _recovered_since_the_snapshot(
     The SAME ladder, so an unreadable manifest refuses here exactly as it does above rather than
     degrading to "purge anyway".
 
-    Pinned by `test_a_table_recovered_AFTER_the_liveness_snapshot_is_still_refused`, which drives the
+    Pinned by `test_a_table_recovered_after_the_liveness_snapshot_is_still_refused`, which drives the
     window deterministically (re-registering from inside the estate pre-pass, which runs between the
     snapshot and the loop) rather than by timing — and which measured, before this existed, a live
     table losing 867 bytes across 4 files to a purge that answered success.

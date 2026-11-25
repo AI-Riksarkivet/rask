@@ -366,7 +366,7 @@ async def test_an_object_the_store_will_not_delete_stays_staged_and_holds_nothin
     assert [key for key, _ in outbox.list_events(uri, StorageOptions())] == [head]
 
 
-def test_pointing_the_control_outbox_at_the_LINEAGE_prefix_is_REFUSED_at_boot() -> None:
+def test_pointing_the_control_outbox_at_the_lineage_prefix_is_refused_at_boot() -> None:
     """The lineage relay DELETES what it cannot parse as a RunEvent, so sharing one prefix is not
     "two lanes, one relay" — it is the control lane's durable copy being destroyed by a drain that
     calls it poison. A misconfiguration that looks like extra safety must fail loudly at boot."""

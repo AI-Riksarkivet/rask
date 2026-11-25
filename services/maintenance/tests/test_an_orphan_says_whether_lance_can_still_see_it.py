@@ -54,7 +54,7 @@ def _dataset_with_orphan(offset_s: float, rel: str = "_transactions/99-aaaaaaaa-
     return str(uri), str(uri)
 
 
-def test_a_data_file_ABOVE_the_floor_is_still_lance_s_to_reclaim() -> None:
+def test_a_data_file_above_the_floor_is_still_lance_s_to_reclaim() -> None:
     """lance #8944: `data/` is listed past the floor, so time alone clears an unreferenced data file.
 
     The scan's answer is checked against Lance itself: the same file is removed by a cleanup that

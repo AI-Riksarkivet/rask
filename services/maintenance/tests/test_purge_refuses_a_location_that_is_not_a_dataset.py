@@ -64,7 +64,7 @@ def test_a_real_dataset_is_deleted(tmp_path: Path) -> None:
         pytest.param("t%20x", id="a-foreign-object-under-its-spelling"),
     ],
 )
-def test_a_directory_that_is_NOT_a_dataset_is_refused(tmp_path: Path, spelled: str) -> None:
+def test_a_directory_that_is_not_a_dataset_is_refused(tmp_path: Path, spelled: str) -> None:
     """The headline: a location with no `_versions/` is not a dataset, and a recursive delete of it is
     not a purge — it is data loss with a trash record for an alibi."""
     _dataset(tmp_path / "t x")

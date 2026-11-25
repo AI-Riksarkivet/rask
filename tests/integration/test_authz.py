@@ -125,7 +125,7 @@ def _fake_check(captured: list[dict], *, allow: bool):
 # --------------------------------------------------------------------------- #
 
 
-def test_an_AUTHORIZED_batch_commit_answers_406_and_seeds_nothing(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
+def test_an_authorized_batch_commit_answers_406_and_seeds_nothing(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
     """CONTRACT ([[LH-206]]): past the batch gate, ``/v1/table/batch-commit`` answers the spec's 406 while
     the catalog does not manage table versions. A ``declare_table`` sub-op creates no table and seeds no
     tuple, and the backend is never reached."""

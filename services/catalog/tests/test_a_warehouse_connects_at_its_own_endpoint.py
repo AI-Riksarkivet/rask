@@ -45,7 +45,7 @@ def captured(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, str]]:
     return seen
 
 
-def test_a_warehouse_with_NO_endpoint_uses_the_estate_default(settings: Settings, captured: list[dict[str, str]]) -> None:
+def test_a_warehouse_with_no_endpoint_uses_the_estate_default(settings: Settings, captured: list[dict[str, str]]) -> None:
     """The control. Without it, a builder that ignored the override entirely would pass below."""
     namespace_module.build_namespace_for_root(settings, "s3://tenant-bucket")
 
@@ -63,7 +63,7 @@ def _req() -> Request:
     ("record_endpoint", "expected"),
     [("http://tenant.store:9000", "http://tenant.store:9000"), ("", None)],
 )
-async def test_the_resolver_carries_the_RECORDS_endpoint(
+async def test_the_resolver_carries_the_records_endpoint(
     settings: Settings, monkeypatch: pytest.MonkeyPatch, record_endpoint: str | None, expected: str | None
 ) -> None:
     """The wiring leg. The builder honouring an endpoint proves nothing if the record's never reaches it.
@@ -84,7 +84,7 @@ async def test_the_resolver_carries_the_RECORDS_endpoint(
     assert resolved == dependencies.ServedWarehouse(root_uri="s3://tenant-bucket", endpoint=expected)
 
 
-def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500() -> None:
+def test_an_unreachable_store_is_503_naming_it_not_a_500() -> None:
     """A store that will not answer is an OUTAGE, and a 500 says the catalog is broken when it is fine.
 
     Measured live 2026-09-20 on the deployed catalog: a warehouse pointed at `http://127.0.0.1:1` answered `500
@@ -103,7 +103,7 @@ def test_an_UNREACHABLE_store_is_503_naming_it_not_a_500() -> None:
     assert "http://127.0.0.1:1" in str(caught.value), f"the refusal does not name the store: {caught.value}"
 
 
-def test_a_store_that_ANSWERS_is_not_an_outage(moto_url: str) -> None:
+def test_a_store_that_answers_is_not_an_outage(moto_url: str) -> None:
     """The control, and the reason the rule reads the error rather than catching it: a store that answered said
     something a retry will not change.
 

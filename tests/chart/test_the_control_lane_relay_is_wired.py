@@ -42,7 +42,7 @@ def _catalog_env(docs: list[dict]) -> dict[str, str]:
     return {}
 
 
-def test_the_catalog_stages_control_events_into_a_prefix_its_OWN_relay_drains() -> None:
+def test_the_catalog_stages_control_events_into_a_prefix_its_own_relay_drains() -> None:
     """Staged, and staged somewhere the control relay reads — never the lineage prefix."""
     env = _catalog_env(_render())
     assert env, "no catalog Deployment rendered"
@@ -61,7 +61,7 @@ def test_the_catalog_stages_control_events_into_a_prefix_its_OWN_relay_drains() 
     )
 
 
-def test_staging_and_the_relay_are_ONE_switch() -> None:
+def test_staging_and_the_relay_are_one_switch() -> None:
     """Half of this mechanism is worse than neither half: staging with no relay accumulates a durable
     copy nothing reads, and a relay with no staging drains an empty prefix forever."""
     on, off = _catalog_env(_render()), _catalog_env(_render("catalog.controlOutbox.enabled=false"))

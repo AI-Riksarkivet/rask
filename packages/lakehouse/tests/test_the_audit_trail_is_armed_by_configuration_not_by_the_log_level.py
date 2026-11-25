@@ -61,7 +61,7 @@ def _lakehouse_app(*, audit_enabled: bool) -> FastAPI:
     )
 
 
-def test_the_flag_can_turn_the_trail_OFF_even_at_INFO() -> None:
+def test_the_flag_can_turn_the_trail_off_even_at_info() -> None:
     """A deployment that says no must get no trail — the flag, not the log level, decides."""
     logging.getLogger().setLevel(logging.INFO)
     _lakehouse_app(audit_enabled=False)
@@ -70,7 +70,7 @@ def test_the_flag_can_turn_the_trail_OFF_even_at_INFO() -> None:
     )
 
 
-def test_the_trail_SURVIVES_a_quieter_app_log_level() -> None:
+def test_the_trail_survives_a_quieter_app_log_level() -> None:
     """The volume lever must not be a compliance lever — this is the direction that loses evidence."""
     _lakehouse_app(audit_enabled=True)
     logging.getLogger().setLevel(logging.WARNING)

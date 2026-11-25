@@ -52,7 +52,7 @@ def _seed(control_root: str, **overrides: str) -> dict[str, str]:
     return record
 
 
-def test_a_deactivate_that_lands_INSIDE_the_write_window_is_not_overwritten(control_root: str, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_deactivate_that_lands_inside_the_write_window_is_not_overwritten(control_root: str, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE ACCEPTANCE CRITERION. Final status MUST be `deactivated`.
 
     The deactivate is injected AT THE READ→WRITE SEAM, not merely before the call, and that detail is

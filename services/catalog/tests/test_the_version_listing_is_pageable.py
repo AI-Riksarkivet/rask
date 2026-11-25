@@ -64,7 +64,7 @@ def test_descending_pages_downward_and_its_cursor_follows() -> None:
     assert nxt == [3, 2], "a descending cursor that filtered upward would serve the same rows again"
 
 
-def test_paging_twice_over_a_REAL_table_gets_different_rows() -> None:
+def test_paging_twice_over_a_real_table_gets_different_rows() -> None:
     """THE GATE, and the test this row asked for. Driven against the `dir` backend, not a double."""
     table = _table_with(7)
 

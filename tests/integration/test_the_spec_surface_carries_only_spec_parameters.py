@@ -114,7 +114,7 @@ _RECORDED_HEADER_EXCEPTIONS = frozenset(
 )
 
 
-def test_no_UNRECORDED_header_appears_on_a_spec_route(client: TestClient) -> None:
+def test_no_unrecorded_header_appears_on_a_spec_route(client: TestClient) -> None:
     """The ruling is a bound, not a licence: a FOURTH non-spec header is a new decision, not a precedent.
 
     Deliberately not the same shape as the query-parameter gate above. That one drives the count to

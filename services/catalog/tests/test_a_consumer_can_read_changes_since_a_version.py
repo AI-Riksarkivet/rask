@@ -28,13 +28,13 @@ from lance_namespace import InvalidInputError
 from catalog.services import changes
 
 
-def test_the_INSERTED_predicate_is_the_documented_one() -> None:
+def test_the_inserted_predicate_is_the_documented_one() -> None:
     """Verbatim from `lance_docs/lance/format/table/row_id_lineage.md:437`. A bound that is off by one either replays a version or skips
     one, and a consumer cannot tell which from the rows it receives."""
     assert changes.change_filter(begin_version=7, end_version=9, kind="inserted") == ("_row_created_at_version > 7 AND _row_created_at_version <= 9")
 
 
-def test_the_UPDATED_predicate_excludes_rows_that_were_INSERTED_in_the_window() -> None:
+def test_the_updated_predicate_excludes_rows_that_were_inserted_in_the_window() -> None:
     """`lance_docs/lance/format/table/row_id_lineage.md:449`, and its reason (`:454`): "This query excludes newly inserted rows by requiring
     `_row_created_at_version <= begin_version`". Without that clause an insert is reported twice — once
     as inserted and once as updated — and a consumer applying both double-counts it."""
@@ -44,14 +44,14 @@ def test_the_UPDATED_predicate_excludes_rows_that_were_INSERTED_in_the_window() 
     assert "_row_last_updated_at_version <= 9" in got
 
 
-def test_an_OPEN_end_means_everything_since() -> None:
+def test_an_open_end_means_everything_since() -> None:
     """The common subscription: "what changed since I last read". An absent end must not become a bound
     at 0 or at the begin version, either of which answers an empty feed forever."""
     got = changes.change_filter(begin_version=7, end_version=None, kind="inserted")
     assert got == "_row_created_at_version > 7", f"an open-ended feed was bounded: {got!r}"
 
 
-def test_a_BEGIN_AFTER_END_is_refused_AS_A_CLIENT_ERROR() -> None:
+def test_a_begin_after_end_is_refused_as_a_client_error() -> None:
     """An inverted window answers empty, which reads as "nothing changed" — the one answer a consumer
     must never receive when its request was malformed.
 
@@ -64,13 +64,13 @@ def test_a_BEGIN_AFTER_END_is_refused_AS_A_CLIENT_ERROR() -> None:
         changes.change_filter(begin_version=9, end_version=7, kind="inserted")
 
 
-def test_a_NEGATIVE_begin_is_refused_AS_A_CLIENT_ERROR() -> None:
+def test_a_negative_begin_is_refused_as_a_client_error() -> None:
     """Version 0 is the empty dataset, so "since -1" is not a wider window, it is a malformed one."""
     with pytest.raises(InvalidInputError):
         changes.change_filter(begin_version=-1, end_version=None, kind="inserted")
 
 
-def test_the_feed_PROJECTS_the_version_columns_so_a_consumer_can_CHECKPOINT() -> None:
+def test_the_feed_projects_the_version_columns_so_a_consumer_can_checkpoint() -> None:
     """`lance_docs/lance/format/table/row_id_lineage.md:441`: the query returns the changed rows "including the version metadata columns
     `_row_created_at_version`, `_row_last_updated_at_version`, and `_rowid`".
 
@@ -87,7 +87,7 @@ def test_the_feed_PROJECTS_the_version_columns_so_a_consumer_can_CHECKPOINT() ->
         assert column in got, f"a consumer cannot checkpoint without {column}"
 
 
-def test_a_CALLERS_column_list_still_gets_the_version_columns() -> None:
+def test_a_callers_column_list_still_gets_the_version_columns() -> None:
     """Narrowing the payload is the ordinary case for a wide table, and it must not cost the ability to
     advance — the version columns ride along with whatever was asked for."""
     got = changes.feed_projection(["id"], data_columns=["id", "payload"])
@@ -96,7 +96,7 @@ def test_a_CALLERS_column_list_still_gets_the_version_columns() -> None:
     assert "_row_created_at_version" in got
 
 
-def test_a_CALLER_who_names_a_version_column_gets_it_ONCE() -> None:
+def test_a_caller_who_names_a_version_column_gets_it_once() -> None:
     """Lance rejects a duplicated name in a projection, so a consumer that asks for the column the door
     adds anyway would have its request refused for asking correctly."""
     got = changes.feed_projection(["_rowid", "id"], data_columns=["id"])
@@ -108,7 +108,7 @@ def test_a_CALLER_who_names_a_version_column_gets_it_ONCE() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_a_DELETED_row_is_not_expressible_as_a_SCAN_PREDICATE() -> None:
+def test_a_deleted_row_is_not_expressible_as_a_scan_predicate() -> None:
     """CONTRACT: `change_filter` refuses `deleted`, and says why rather than inventing a predicate.
 
     The two version columns describe rows the table STILL HAS. A deleted row is gone from the scan, so

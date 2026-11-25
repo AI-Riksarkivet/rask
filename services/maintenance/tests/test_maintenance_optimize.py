@@ -86,7 +86,7 @@ def test_a_shallow_clone_is_not_due_for_compaction_and_its_versions_are_still_ex
     assert result.old_versions_removed > 0, "the clone got no version reclamation"
 
 
-def test_a_table_with_an_external_blob_base_IS_due_for_compaction(tmp_path: Path) -> None:
+def test_a_table_with_an_external_blob_base_is_due_for_compaction(tmp_path: Path) -> None:
     """The over-refusal this test exists to kill. A table registering ONE external blob base through `initial_bases`
     sets flag 16 exactly as a shallow clone does, and a flags-only gate refused it, so such tiers accumulated
     fragments forever (`fragments_removed_total=0` over 785 ticks on the live estate). Its own data files are under its
@@ -123,7 +123,7 @@ def test_a_table_with_an_external_blob_base_IS_due_for_compaction(tmp_path: Path
     assert (due.fragments, due.candidate_fragments) == (4, 4), due
 
 
-def test_a_registered_base_that_IS_A_LANCE_DATASET_ROOT_is_not_due_for_compaction(tmp_path: Path) -> None:
+def test_a_registered_base_that_is_a_lance_dataset_root_is_not_due_for_compaction(tmp_path: Path) -> None:
     """Why the gate PROBES object storage instead of trusting the manifest's self-report.
 
     `add_bases` pointed at another dataset's root produces `BasePath(is_dataset_root=False)` —
@@ -149,7 +149,7 @@ def test_a_registered_base_that_IS_A_LANCE_DATASET_ROOT_is_not_due_for_compactio
     assert _compaction_due(uri) is None, "a table registered against a live Lance root was listed for compaction"
 
 
-def test_an_UNKNOWN_flag_still_refuses_everything(tmp_path: Path) -> None:
+def test_an_unknown_flag_still_refuses_everything(tmp_path: Path) -> None:
     """Splitting the gate must not weaken it. `SUPPORTED_FOR_GC` adds base_paths and nothing else, so
     data overlays (flag 64) and any future unknown flag still refuse the whole pass — the narrow gate
     is a per-operation exception, not a general relaxation."""

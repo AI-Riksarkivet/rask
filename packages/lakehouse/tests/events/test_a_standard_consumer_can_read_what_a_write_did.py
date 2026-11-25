@@ -57,7 +57,7 @@ def test_a_data_operation_claims_no_lifecycle_change(operation: str) -> None:
     assert lifecycle_facet("p", operation) == {}
 
 
-def test_every_value_this_maps_to_is_in_the_SPECS_enum() -> None:
+def test_every_value_this_maps_to_is_in_the_specs_enum() -> None:
     """The map is hand-written, so the one way it can be wrong is inventing a value the spec rejects."""
     # `str(...)`: the builder returns `dict[str, object]` because a facet payload is arbitrary JSON,
     # so the value is `object` until something narrows it — and a set of `object` cannot be sorted.

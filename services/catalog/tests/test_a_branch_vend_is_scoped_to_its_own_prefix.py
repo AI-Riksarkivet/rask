@@ -74,7 +74,7 @@ def _may_delete(policy: dict[str, object], key: str) -> bool:
         pytest.param("tree/a/b/_versions/1.manifest", False, id="nested-branch"),
     ],
 )
-def test_a_branch_MAINTAIN_may_delete_only_that_branchs_own_files(key: str, allowed: bool) -> None:
+def test_a_branch_maintain_may_delete_only_that_branchs_own_files(key: str, allowed: bool) -> None:
     """The maintain tier names the branch's file directories, where its cleanup deletes; that it puts nothing, and the
     write tier's `data/`-only grant, are pinned in `tests/integration/test_a_write_vend_reaches_only_what_its_rung_may_change.py`
     ([[LH-202]], [[LH-575]])."""
@@ -83,7 +83,7 @@ def test_a_branch_MAINTAIN_may_delete_only_that_branchs_own_files(key: str, allo
     assert _may_delete(policy, key) is allowed
 
 
-def test_a_branch_name_that_CLIMBS_OUT_is_refused_AS_A_CLIENT_ERROR() -> None:
+def test_a_branch_name_that_climbs_out_is_refused_as_a_client_error() -> None:
     """The one thing a session policy must never let a caller do: leave the table's own scope.
 
     TYPED, NOT A BARE ValueError, because the branch is CALLER input and the estate has one rule for
@@ -99,7 +99,7 @@ def test_a_branch_name_that_CLIMBS_OUT_is_refused_AS_A_CLIENT_ERROR() -> None:
 
 
 @pytest.mark.parametrize("branch", [pytest.param("feat*", id="a-wildcard"), pytest.param("feat${aws:username}", id="a-policy-variable")])
-def test_a_branch_name_carrying_an_IAM_METACHAR_is_refused_AS_A_CLIENT_ERROR(branch: str) -> None:
+def test_a_branch_name_carrying_an_iam_metachar_is_refused_as_a_client_error(branch: str) -> None:
     """Same rule the prefix and the bases already carry: a `*` in a resource widens the grant, and a `${` opens a policy
     variable IAM substitutes ([[LH-526]]).
 
@@ -110,7 +110,7 @@ def test_a_branch_name_carrying_an_IAM_METACHAR_is_refused_AS_A_CLIENT_ERROR(bra
         build_session_policy(BUCKET, PREFIX, "write", branch=branch)
 
 
-def test_a_branch_READ_needs_no_second_statement() -> None:
+def test_a_branch_read_needs_no_second_statement() -> None:
     """A read tier is already read-everywhere-in-scope; splitting it would add a statement that grants
     nothing new, and every extra statement is one more thing to get wrong."""
     policy = build_session_policy(BUCKET, PREFIX, "read", branch="feature-a")

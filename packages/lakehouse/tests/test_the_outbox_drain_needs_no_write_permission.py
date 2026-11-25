@@ -50,7 +50,7 @@ class _RecordingS3:
         return {}
 
 
-def test_dropping_an_s3_event_issues_ONLY_a_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_dropping_an_s3_event_issues_only_a_delete(monkeypatch: pytest.MonkeyPatch) -> None:
     """The whole contract: one DeleteObject, addressed at the event, and no write of any kind."""
     client = _RecordingS3()
     monkeypatch.setattr("lakehouse.storage.client.s3_client", lambda *_a, **_kw: client)
@@ -80,7 +80,7 @@ def test_an_absent_object_is_idempotent_success(monkeypatch: pytest.MonkeyPatch)
     outbox.drop_event("s3://lance-catalog/_lineage_outbox", StorageOptions.from_flat(_KEYED), "gone@COMPLETE")
 
 
-def test_staging_an_s3_event_issues_ONLY_a_put(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_staging_an_s3_event_issues_only_a_put(monkeypatch: pytest.MonkeyPatch) -> None:
     """The twin of the delete contract: one PutObject, addressed at the event, and no bucket probe.
 
     `stage_event` went through pyarrow — `fs.create_dir(base, recursive=True)` under a comment calling

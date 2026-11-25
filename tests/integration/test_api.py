@@ -716,7 +716,7 @@ def test_describe_version_missing_maps_to_404(client: TestClient, fake_ns: Magic
     assert resp.status_code == 404
 
 
-def test_request_validation_on_a_SPEC_route_maps_to_400_problem_json(client: TestClient) -> None:
+def test_request_validation_on_a_spec_route_maps_to_400_problem_json(client: TestClient) -> None:
     """`UpdateTable` is a spec operation, so its errors answer the spec's contract.
 
     This asserted 422 until 2026-09-14. The vendored spec contains ZERO 422s and maps `InvalidInput`

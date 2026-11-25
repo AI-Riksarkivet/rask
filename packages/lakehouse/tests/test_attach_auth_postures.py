@@ -104,7 +104,7 @@ def fga_calls(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
 
 
 @pytest.mark.asyncio
-async def test_the_default_posture_RESOLVES_when_unpinned(fga_calls: _Recorder) -> None:
+async def test_the_default_posture_resolves_when_unpinned(fga_calls: _Recorder) -> None:
     """Behavioural baseline for every service but the ONE bootstrap — saying nothing must not publish.
 
     `fga_provision.provision` writes a new immutable authorization model for a body the store lacks, so a default
@@ -123,7 +123,7 @@ async def test_the_default_posture_RESOLVES_when_unpinned(fga_calls: _Recorder) 
 
 
 @pytest.mark.asyncio
-async def test_a_reader_with_no_store_leaves_the_door_SHUT(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder, caplog: pytest.LogCaptureFixture) -> None:
+async def test_a_reader_with_no_store_leaves_the_door_shut(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder, caplog: pytest.LogCaptureFixture) -> None:
     """An unbootstrapped estate must not be bootstrapped BY the reader. No client, so the gate 503s, and
     the warning names what `fga_provision.resolve` found missing."""
 
@@ -203,7 +203,7 @@ async def test_a_crashing_boot_reraises_a_failed_verifier_build(monkeypatch: pyt
 
 
 @pytest.mark.asyncio
-async def test_the_default_stays_NON_fatal(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
+async def test_the_default_stays_non_fatal(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
     """The four swallowing services keep swallowing. A failure to BUILD leaves the attribute unset and
     the dependency answers 503 — never a permissive fallback, which would turn a broken authorization
     layer into an open one."""

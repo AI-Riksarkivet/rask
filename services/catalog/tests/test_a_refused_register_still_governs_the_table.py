@@ -43,5 +43,5 @@ class TestTheLocationGuard:
             ("s3://bucket/other_silver$features", "silver$features"),
         ],
     )
-    def test_a_DIFFERENT_location_is_a_real_conflict_and_does_not_converge(self, registered: str, claimed: str) -> None:
+    def test_a_different_location_is_a_real_conflict_and_does_not_converge(self, registered: str, claimed: str) -> None:
         assert registration_points_at(registered, claimed) is False

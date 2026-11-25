@@ -95,7 +95,7 @@ def _empty_arrow_stream() -> bytes:
     return encode_arrow_stream(pa.schema([pa.field("id", pa.int64())]).empty_table())
 
 
-def test_a_cascade_dropped_SUBTREE_undrops_at_every_old_id(catalog: str, warehouse: str) -> None:
+def test_a_cascade_dropped_subtree_undrops_at_every_old_id(catalog: str, warehouse: str) -> None:
     """The plural undrop (`namespaces.py:678`), driven against the deployed release.
 
     THE UNIT OF A CASCADE IS THE SUBTREE, so the unit of its recovery is too — and a leg that drops

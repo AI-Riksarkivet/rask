@@ -33,7 +33,7 @@ _NO_CLIENT = cast(Any, None)
 
 
 @pytest.mark.asyncio
-async def test_an_UNREADABLE_store_falls_back_to_the_repairable_arm(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_an_unreadable_store_falls_back_to_the_repairable_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unreadable is not evidence of absence. Parking a repairable event costs a duplicate; acking an
     unreadable one deletes provenance, and only the second cannot be undone — so the doubt resolves
     toward keeping the event."""

@@ -121,7 +121,7 @@ _OUT_OF_BUDGET = "lifecycle: need 0 <= teardownSeconds < grace - preStopSeconds"
     [({"teardownSeconds": 35}, _OUT_OF_BUDGET), ({"teardownSeconds": -1}, _OUT_OF_BUDGET), ({"teardownSeconds": "null"}, "lifecycle.teardownSeconds")],
     ids=["zero-bound", "negative-teardown", "teardown-unset"],
 )
-def test_a_lifecycle_that_leaves_no_drain_refuses_to_RENDER(lifecycle: dict[str, int | str], refusal: str) -> None:
+def test_a_lifecycle_that_leaves_no_drain_refuses_to_render(lifecycle: dict[str, int | str], refusal: str) -> None:
     """A bound of zero (40 - 5 - 35 on the 40s pods) makes uvicorn cancel every request in flight at
     SIGTERM. A negative teardown renders a bound that ends after the kubelet's SIGKILL, so the teardown
     it budgets for never runs. An unset teardown (an upgrade that reused a release older than the key)

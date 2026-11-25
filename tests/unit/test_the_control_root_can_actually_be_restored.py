@@ -124,7 +124,7 @@ def s3() -> Any:  # noqa: ANN401 — boto3 client has no public stub
         yield _ConditionalCopies(client)
 
 
-def test_a_backup_captures_every_RECORD_prefix(s3: Any, crb: ModuleType) -> None:
+def test_a_backup_captures_every_record_prefix(s3: Any, crb: ModuleType) -> None:
     result = crb.do_backup(s3, root=ROOT, dest=None, stamp="20260914T000000Z")
 
     manifest = crb.read_manifest(s3, result["backup"])
@@ -137,7 +137,7 @@ def test_a_backup_captures_every_RECORD_prefix(s3: Any, crb: ModuleType) -> None
     assert result["raced"] == [], result
 
 
-def test_a_RESTORE_puts_the_bytes_back_and_proves_it(s3: Any, crb: ModuleType) -> None:
+def test_a_restore_puts_the_bytes_back_and_proves_it(s3: Any, crb: ModuleType) -> None:
     """THE ROW'S ACTUAL ASK. A backup that runs is not a backup that restores."""
     backup = crb.do_backup(s3, root=ROOT, dest=None, stamp="20260914T000000Z")["backup"]
 
@@ -152,7 +152,7 @@ def test_a_RESTORE_puts_the_bytes_back_and_proves_it(s3: Any, crb: ModuleType) -
         assert got == body, f"{key} came back with different bytes"
 
 
-def test_a_restore_over_the_LIVE_root_is_refused_without_force(s3: Any, crb: ModuleType) -> None:
+def test_a_restore_over_the_live_root_is_refused_without_force(s3: Any, crb: ModuleType) -> None:
     """A restore is the one operation that can destroy what it exists to protect: run it at the wrong
     target, or against a root that has moved on, and current governance is replaced by old governance.
     The rehearsal form is the default and the destructive one is opt-in — which is also what makes this
@@ -165,7 +165,7 @@ def test_a_restore_over_the_LIVE_root_is_refused_without_force(s3: Any, crb: Mod
     assert "--force" in str(excinfo.value), excinfo.value
 
 
-def test_verify_detects_a_backup_that_has_ROTTED(s3: Any, crb: ModuleType) -> None:
+def test_verify_detects_a_backup_that_has_rotted(s3: Any, crb: ModuleType) -> None:
     """`verify` answers "is this backup intact" BEFORE an incident. A check that passed on a corrupted
     backup would be worse than no check, so the corruption is introduced and the check must catch it."""
     backup = crb.do_backup(s3, root=ROOT, dest=None, stamp="20260914T000000Z")["backup"]
@@ -179,7 +179,7 @@ def test_verify_detects_a_backup_that_has_ROTTED(s3: Any, crb: ModuleType) -> No
     assert "_projects/acme.json" in report["changed"], report
 
 
-def test_a_record_written_DURING_the_backup_is_captured_as_copied_and_REPORTED(s3: Any, monkeypatch: pytest.MonkeyPatch, crb: ModuleType) -> None:
+def test_a_record_written_during_the_backup_is_captured_as_copied_and_reported(s3: Any, monkeypatch: pytest.MonkeyPatch, crb: ModuleType) -> None:
     """A live control root is written while it is being read, and the manifest must describe the bytes
     the backup HAS — not the version the listing happened to see.
 

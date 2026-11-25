@@ -119,7 +119,7 @@ def test_index_stats_refuses_a_body_branch(client: TestClient, fake_ns: MagicMoc
     assert resp.status_code == 406, f"{resp.status_code}: {resp.text[:160]}"
 
 
-def test_drop_table_index_drops_the_index_its_PATH_names(real_ns_client: TestClient) -> None:
+def test_drop_table_index_drops_the_index_its_path_names(real_ns_client: TestClient) -> None:
     """The one door in this family nothing drove. [[LH-105]].
 
     `index/list` and `index/{n}/stats` are covered above; the DROP had no test anywhere in the estate,

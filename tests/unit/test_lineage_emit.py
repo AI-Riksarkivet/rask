@@ -430,7 +430,7 @@ def test_a_write_is_announced_with_its_operation_and_version_under_the_commits_r
 
 
 @pytest.mark.asyncio
-async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
+async def test_a_service_run_can_name_the_person_it_runs_for() -> None:
     """ORIGINATOR, for the catalog's own emits.
 
     Some catalog writes are made BY a service ON BEHALF OF a person, under the service's own account.
@@ -454,7 +454,7 @@ async def test_a_SERVICE_run_can_name_the_person_it_runs_FOR() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("junk", ["system"])
-async def test_a_NON_PERSONAL_originator_is_DROPPED(junk: str) -> None:
+async def test_a_non_personal_originator_is_dropped(junk: str) -> None:
     """An originator is an address, so it must identify a person; a role, a wildcard or a userset is not one, and
     carrying it would address whatever it names (`lakehouse.governed.subjects.is_person_subject`)."""
     bus = BusDouble()

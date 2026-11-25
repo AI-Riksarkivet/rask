@@ -41,7 +41,7 @@ class _NoUuids:
         return None
 
 
-def test_the_measured_write_trailer_STAMPS_the_uri_it_read_back() -> None:
+def test_the_measured_write_trailer_stamps_the_uri_it_read_back() -> None:
     """The door every write goes through must stamp the URI, and it must DERIVE it rather than be told.
 
     Taking it as a parameter would put the burden on each of the dozen call sites and let any one of

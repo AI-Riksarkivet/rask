@@ -27,7 +27,7 @@ from lakehouse.lancekit import lance_session
 from lakehouse.lancekit.lance_session import cache_budget_bytes
 
 
-def test_an_UNLIMITED_container_gets_no_derived_budget(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unlimited_container_gets_no_derived_budget(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`max` means no limit, and a fraction of no limit is not a number.
 
     Returning None rather than a huge integer is the point: a caller must then fall back to its own
@@ -46,7 +46,7 @@ def test_no_cgroup_at_all_is_not_an_error(tmp_path, monkeypatch: pytest.MonkeyPa
     assert cache_budget_bytes() is None
 
 
-def test_the_budget_CLAMPS_a_configured_cap_it_cannot_afford(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_budget_clamps_a_configured_cap_it_cannot_afford(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The defect this exists for: a configured 384 MB inside a 512Mi container is clamped, not honoured.
 
     An operator may always ask for LESS than the container allows. What they may not do is ask for more
@@ -76,7 +76,7 @@ def test_a_cap_that_already_fits_is_left_alone(tmp_path, monkeypatch: pytest.Mon
     assert affordable_cache_bytes(128 << 20, 256 << 20, fraction=0.5) == (128 << 20, 256 << 20)
 
 
-def test_the_LIMIT_is_re_read_and_never_cached(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_limit_is_re_read_and_never_cached(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A container's limit can change under a running process, so the budget may not be memoised.
 
     Kubernetes supports in-place pod resize: `resources.limits.memory` can move without a restart. A

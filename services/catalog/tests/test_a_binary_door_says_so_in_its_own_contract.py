@@ -39,7 +39,7 @@ def _declared_media(route_path: str, method: str) -> set[str]:
         ("/management/v1/table/{id}/changes", "post", door.ARROW_FILE),
     ],
 )
-def test_an_ARROW_door_declares_arrow_and_not_json(path: str, method: str, expected: str) -> None:
+def test_an_arrow_door_declares_arrow_and_not_json(path: str, method: str, expected: str) -> None:
     """A generated client dispatches on this. Declaring JSON tells it to parse an Arrow FILE as text."""
     declared = _declared_media(path, method)
 

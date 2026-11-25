@@ -85,7 +85,7 @@ class TestAReplayIsAnsweredNotReExecuted:
         assert (other.status_code, other.json().get("code")) == (400, 13), other.text
         assert _versions(real_ns_client, "lance_catalog$db$keyed") == after_first, "the refused replay re-executed the create"
 
-    def test_a_DIFFERENT_key_is_a_different_request(self, real_ns_client: TestClient) -> None:
+    def test_a_different_key_is_a_different_request(self, real_ns_client: TestClient) -> None:
         """Convergence must not become deduplication of unrelated calls."""
         assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         first = real_ns_client.post(

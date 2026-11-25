@@ -19,7 +19,7 @@ from chart_render import containers, env_of
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 
-def test_the_chart_probes_READINESS_at_readyz_not_the_static_badge() -> None:
+def test_the_chart_probes_readiness_at_readyz_not_the_static_badge() -> None:
     """A readiness probe pointed at a constant cannot report draining, which is its whole job."""
     from test_invariants import _rendered_docs  # noqa: PLC0415
 

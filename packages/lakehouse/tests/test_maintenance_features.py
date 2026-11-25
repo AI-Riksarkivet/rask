@@ -61,7 +61,7 @@ def test_feature_flags_read_the_documented_values(tmp_path: pathlib.Path) -> Non
     assert features.manifest_feature_flags(lance.dataset(both)) == (expected, expected)
 
 
-def test_every_flag_upstream_DEFINES_is_named_in_a_refusal(tmp_path: pathlib.Path) -> None:
+def test_every_flag_upstream_defines_is_named_in_a_refusal(tmp_path: pathlib.Path) -> None:
     """A refusal must say WHICH feature it declined, and this module exists for that.
 
     Its own words: an operator "can act on `disable_transaction_file`, not on a bare bit". `_named`
@@ -189,7 +189,7 @@ def test_a_manifest_that_does_not_parse_is_refused_by_every_flag_gate(manifest: 
 # --------------------------------------------------------------------------- #
 
 
-def test_the_manifest_says_WHICH_kind_of_base_a_dataset_declares(tmp_path: pathlib.Path) -> None:
+def test_the_manifest_says_which_kind_of_base_a_dataset_declares(tmp_path: pathlib.Path) -> None:
     """`BasePath.is_dataset_root` — the discriminator, measured off real manifest bytes.
 
     Flag 16 means "this dataset spans bases" and says nothing about WHAT the bases are, which is why
@@ -221,7 +221,7 @@ def test_the_manifest_says_WHICH_kind_of_base_a_dataset_declares(tmp_path: pathl
     assert [(ref.path, ref.is_dataset_root) for ref in base_refs] == [(str(external), False)]
 
 
-def test_compaction_is_PERMITTED_on_an_external_blob_base_and_still_refused_on_a_clone(tmp_path: pathlib.Path) -> None:
+def test_compaction_is_permitted_on_an_external_blob_base_and_still_refused_on_a_clone(tmp_path: pathlib.Path) -> None:
     """The cost refusal must land on the case it was measured on, and on no other.
 
     The blanket flag-16 exclusion was justified by ONE measurement — a pristine clone going
@@ -260,7 +260,7 @@ def test_compaction_is_PERMITTED_on_an_external_blob_base_and_still_refused_on_a
     assert refusal is not None and "16" in refusal, f"the clone refusal must survive, got: {refusal}"
 
 
-def test_DATA_LIVING_UNDER_A_BASE_refuses_even_when_the_base_is_no_dataset_root(tmp_path: pathlib.Path) -> None:
+def test_data_living_under_a_base_refuses_even_when_the_base_is_no_dataset_root(tmp_path: pathlib.Path) -> None:
     """The third reading, and the shape neither of the other two can see.
 
     `write_dataset(..., target_bases=["alt"])` lands this dataset's own data files under a registered
@@ -331,7 +331,7 @@ def test_a_base_that_cannot_be_mapped_is_unknown_not_empty() -> None:
         features.data_file_base_paths(cast("Any", _NoAccessor()))
 
 
-def test_EVERY_UNREADABLE_reading_keeps_the_flag_16_refusal() -> None:
+def test_every_unreadable_reading_keeps_the_flag_16_refusal() -> None:
     """The whitelist is loud on purpose, so the allowance only applies where the evidence is present.
 
     Four ways to not know, and every one of them refuses. The asymmetry is deliberate and stated at
@@ -383,7 +383,7 @@ def test_a_gatherer_whose_probe_raises_records_the_unknown_rather_than_raising(t
     assert refusal is not None and str(external) in refusal, f"the refusal must name the base it could not read: {refusal}"
 
 
-def test_a_base_is_probed_in_the_DATASETS_OWN_store_never_the_local_filesystem() -> None:
+def test_a_base_is_probed_in_the_datasets_own_store_never_the_local_filesystem() -> None:
     """The respelling between the manifest and the probe, and why leaving it out fails OPEN.
 
     A Lance manifest states a base as the object store reads it: on S3 that is the schemeless
@@ -406,7 +406,7 @@ def test_a_base_is_probed_in_the_DATASETS_OWN_store_never_the_local_filesystem()
         same_store_uri("/tmp/a.lance", "s3://bucket/y")
 
 
-def test_a_base_in_another_store_is_UNKNOWN_and_therefore_refused(tmp_path: pathlib.Path) -> None:
+def test_a_base_in_another_store_is_unknown_and_therefore_refused(tmp_path: pathlib.Path) -> None:
     """The end of that path, through the shipped binding: a base the probe cannot answer for is
     recorded as None and the gate turns None into a refusal — never into a permit.
 
@@ -432,7 +432,7 @@ def test_a_base_in_another_store_is_UNKNOWN_and_therefore_refused(tmp_path: path
     assert dataset_root_probe(str(tmp_path / "clone.lance"), StorageOptions())(str(tmp_path)) is False
 
 
-def test_a_base_the_CREDENTIAL_may_not_read_says_so_rather_than_blaming_the_store() -> None:
+def test_a_base_the_credential_may_not_read_says_so_rather_than_blaming_the_store() -> None:
     """A denied probe and an unreadable one refuse alike, and must not READ alike.
 
     MEASURED LIVE 2026-09-08 (§ H12): a sweep tick vended a table-scoped STS write credential — the

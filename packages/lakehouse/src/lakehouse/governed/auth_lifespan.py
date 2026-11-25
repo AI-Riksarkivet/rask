@@ -19,7 +19,7 @@ them survived the first extraction:
     Measured live 2026-09-09: 1,256 models in the store, the oldest carrying no `pass_grants`,
     `managed_access` or `maintainer`, and three services running images whose vendored `model.fga` had
     no `maintainer` rung at all.
-    Pinned by `packages/lakehouse/tests/test_attach_auth_postures.py::test_the_default_posture_RESOLVES_when_unpinned`,
+    Pinned by `packages/lakehouse/tests/test_attach_auth_postures.py::test_the_default_posture_resolves_when_unpinned`,
     and the TID251 banned-api entry on `lakehouse.governed.fga_provision.provision` keeps the call at one site.
     A data writer that minted a store and wrote an authorization model would become the source of truth for everyone
     else's permissions, so every service but the catalog resolves read-only and fails closed against an estate that

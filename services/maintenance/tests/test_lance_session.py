@@ -25,7 +25,7 @@ def _dataset(tmp_path: Path, rows: int = 8) -> str:
     return uri
 
 
-def test_referenced_paths_walks_versions_on_the_HEAD_dataset_cache(tmp_path: Path, monkeypatch) -> None:
+def test_referenced_paths_walks_versions_on_the_head_dataset_cache(tmp_path: Path, monkeypatch) -> None:
     """The N+1 fix: the per-version walk must NOT construct fresh datasets. Counted at the real
     seam — lance.dataset call count during the scan's open and walk is exactly ONE (the head open);
     versions ride checkout_version, which reuses the head's cache by contract."""

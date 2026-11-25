@@ -501,7 +501,7 @@ _CONDITIONAL_GRANT_RUNGS: frozenset[tuple[str, str]] = frozenset(
 )
 
 
-def test_only_the_data_rungs_accept_a_TIME_BOXED_grant() -> None:
+def test_only_the_data_rungs_accept_a_time_boxed_grant() -> None:
     """Adding `user with non_expired_grant` to a rung must be a decision, not a diff nobody notices.
 
     This is a STRUCTURAL tripwire because no behavioural test can be one. A type restriction is

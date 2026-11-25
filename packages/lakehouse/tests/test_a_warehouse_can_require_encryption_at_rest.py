@@ -44,7 +44,7 @@ def _opts(*, server_side_encryption: str, sse_kms_key_id: str | None = None, sse
     )
 
 
-def test_a_KMS_key_WITHOUT_a_kms_algorithm_is_REFUSED() -> None:
+def test_a_kms_key_without_a_kms_algorithm_is_refused() -> None:
     """`lance_docs/lance/guide/object_store.md:297`, verbatim: "If set, `aws_server_side_encryption` must be `"aws:kms"` or
     `"aws:kms:dsse"`." The store will not reject the pair; it will ignore the key id and encrypt with
     AES256, so the operator believes their KMS key is in use and it never was."""
@@ -52,7 +52,7 @@ def test_a_KMS_key_WITHOUT_a_kms_algorithm_is_REFUSED() -> None:
         _opts(server_side_encryption="AES256", sse_kms_key_id="arn:aws:kms:eu-north-1:1:key/abc")
 
 
-def test_an_UNKNOWN_algorithm_is_REFUSED() -> None:
+def test_an_unknown_algorithm_is_refused() -> None:
     """The guide names exactly three. Anything else is silently dropped by object_store and the data
     lands in plaintext — the failure this builder exists to make impossible."""
     with pytest.raises(ValueError, match="AES256"):
@@ -74,7 +74,7 @@ def _issued(*_a: object, **_kw: object) -> IssuedSession:
     )
 
 
-def test_the_VENDED_credential_carries_it_to_a_direct_writer() -> None:
+def test_the_vended_credential_carries_it_to_a_direct_writer() -> None:
     """The end of the chain, and the only part that matters operationally.
 
     A vended client writes to object storage with the catalog out of the path, so encryption reaches it

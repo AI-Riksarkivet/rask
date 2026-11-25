@@ -81,7 +81,7 @@ def instrumented() -> Iterator[None]:
         instrumentor.uninstrument()
 
 
-def test_a_record_written_inside_a_span_PRINTS_its_trace_id(stdout_lines: io.StringIO, instrumented: None) -> None:
+def test_a_record_written_inside_a_span_prints_its_trace_id(stdout_lines: io.StringIO, instrumented: None) -> None:
     """The finding: the id rides on the record and never reaches the line an operator greps."""
     from opentelemetry.sdk.trace import TracerProvider
 
@@ -94,7 +94,7 @@ def test_a_record_written_inside_a_span_PRINTS_its_trace_id(stdout_lines: io.Str
     assert expected in line, f"the stdout line carries no trace id, so an operator holding one from a dashboard cannot grep for it: {line!r}"
 
 
-def test_a_record_written_OUTSIDE_a_span_still_formats(stdout_lines: io.StringIO, instrumented: None) -> None:
+def test_a_record_written_outside_a_span_still_formats(stdout_lines: io.StringIO, instrumented: None) -> None:
     """Outside a span the instrumentor sets the id to '0'. Printing `[0]` on every line is noise; the
     line must render a visible placeholder instead."""
     logging.getLogger("catalog.api.v1.endpoints.tables").warning("no span here")
@@ -104,7 +104,7 @@ def test_a_record_written_OUTSIDE_a_span_still_formats(stdout_lines: io.StringIO
     assert "0" * 32 not in line, f"an all-zero trace id was printed as though it were real: {line!r}"
 
 
-def test_the_formatter_SURVIVES_otel_never_having_run(stdout_lines: io.StringIO) -> None:
+def test_the_formatter_survives_otel_never_having_run(stdout_lines: io.StringIO) -> None:
     """No `instrumented` fixture — no `otelTraceID` on the record at all.
 
     This is the failure mode a naive `%(otelTraceID)s` introduces: `logging` raises on a missing
@@ -118,7 +118,7 @@ def test_the_formatter_SURVIVES_otel_never_having_run(stdout_lines: io.StringIO)
     assert "Traceback" not in line and "--- Logging error ---" not in line, f"the formatter raised on a record with no otel attributes: {line!r}"
 
 
-def test_a_record_PRINTS_the_diagnostics_it_carries_in_extra(stdout_lines: io.StringIO) -> None:
+def test_a_record_prints_the_diagnostics_it_carries_in_extra(stdout_lines: io.StringIO) -> None:
     """The estate records causes in `extra=` — 626 call sites — and the stdout line printed none of them.
 
     Measured 2026-09-10 while chasing `lineage_outbox_event_stranded`: the handler that strands an
@@ -141,7 +141,7 @@ def test_a_record_PRINTS_the_diagnostics_it_carries_in_extra(stdout_lines: io.St
     assert "350" in line, f"a non-string diagnostic never reached the line: {line!r}"
 
 
-def test_a_record_carrying_NOTHING_extra_gains_no_trailing_noise(stdout_lines: io.StringIO, instrumented: None) -> None:
+def test_a_record_carrying_nothing_extra_gains_no_trailing_noise(stdout_lines: io.StringIO, instrumented: None) -> None:
     """The `instrumented` fixture is the point: `LoggingInstrumentor` stamps `otelTraceID`,
     `otelSpanID`, `otelServiceName` and `otelTraceSampled` on EVERY record in a live service.
 
@@ -156,7 +156,7 @@ def test_a_record_carrying_NOTHING_extra_gains_no_trailing_noise(stdout_lines: i
     assert line.endswith("plain line"), f"a bare record grew a diagnostics tail: {line!r}"
 
 
-def test_a_LIBRARYS_ambient_record_field_is_not_a_diagnostic(stdout_lines: io.StringIO) -> None:
+def test_a_librarys_ambient_record_field_is_not_a_diagnostic(stdout_lines: io.StringIO) -> None:
     """uvicorn stamps its own field on records, and it is not a diagnostic.
 
     `color_message` is an ANSI-escaped copy of the same message, for uvicorn's own formatter to substitute

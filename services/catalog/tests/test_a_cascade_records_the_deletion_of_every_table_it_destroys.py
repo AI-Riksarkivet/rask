@@ -114,7 +114,7 @@ def test_a_cascade_records_a_drop_for_every_table_it_destroys(app: FastAPI, emit
     )
 
 
-def test_a_RESTRICT_drop_records_nothing_because_it_destroys_nothing(app: FastAPI, ns, emitted: list[dict[str, Any]]) -> None:  # noqa: ANN001
+def test_a_restrict_drop_records_nothing_because_it_destroys_nothing(app: FastAPI, ns, emitted: list[dict[str, Any]]) -> None:  # noqa: ANN001
     """The control. A non-cascade drop of a non-empty namespace is refused, so there is no deletion to
     record — and a door that emitted regardless would mark live tables dropped."""
     with TestClient(app) as client:

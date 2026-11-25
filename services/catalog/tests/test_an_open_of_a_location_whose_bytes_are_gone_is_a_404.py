@@ -43,7 +43,7 @@ def ns(tmp_path: Path):  # noqa: ANN201 — LanceNamespace, runtime-only
     return namespace
 
 
-def test_a_registration_whose_bytes_are_GONE_is_a_404(ns, tmp_path: Path) -> None:  # noqa: ANN001
+def test_a_registration_whose_bytes_are_gone_is_a_404(ns, tmp_path: Path) -> None:  # noqa: ANN001
     """The live shape: the table is registered, the location resolves, and nothing is there."""
     uri = open_by_name(ns, StorageOptions(), TABLE_ID).uri
     versions = Path(urlparse(uri).path) / "_versions"

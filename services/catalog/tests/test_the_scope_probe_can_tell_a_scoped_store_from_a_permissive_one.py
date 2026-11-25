@@ -185,7 +185,7 @@ def _named(checks: list[ProbeCheck]) -> dict[str, str]:
 
 
 class TestTheProbeTellsTheTwoStoresApart:
-    def test_a_store_that_HONOURS_the_policy_reports_the_refusal_as_a_pass(self, store_factory: Callable[..., _Installed]) -> None:
+    def test_a_store_that_honours_the_policy_reports_the_refusal_as_a_pass(self, store_factory: Callable[..., _Installed]) -> None:
         vendor = _Vendor(credentials=_creds())
         installed = store_factory(scoped=True)
         # The probe vends for `<root>/_validate/<uuid>`; the scoped store refuses anything outside it.
@@ -203,7 +203,7 @@ class TestTheProbeTellsTheTwoStoresApart:
         assert (report.outcome, report.enforced, report.versions_guarded) == ("pass", True, True)
         assert installed.store is not None and installed.store.keys == {}, "the probe left objects behind"
 
-    def test_a_store_that_IGNORES_the_policy_is_the_finding(self, store_factory: Callable[..., _Installed]) -> None:
+    def test_a_store_that_ignores_the_policy_is_the_finding(self, store_factory: Callable[..., _Installed]) -> None:
         """The headline case. Every write the probe expects to land does, so a probe that only asked "did the
         writes work" would report a healthy warehouse on a store that hands out the whole bucket."""
         vendor = _Vendor(credentials=_creds())
@@ -224,7 +224,7 @@ class TestTheProbeTellsTheTwoStoresApart:
 
 
 class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
-    def test_a_warehouse_that_vends_NOTHING_reports_enforced_None(self, store_factory: Callable[..., _Installed]) -> None:
+    def test_a_warehouse_that_vends_nothing_reports_enforced_None(self, store_factory: Callable[..., _Installed]) -> None:
         """Server-mediated (Mode B) is not a failure and not a pass: no credential was issued, so
         nothing was learned about scope."""
         vendor = _Vendor(credentials=None)
@@ -237,7 +237,7 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
         assert [outcomes[n] for n in ("write_inside", "read_inside", SCOPE_CHECK, "cleanup")] == ["skip"] * 4
         assert endpoint.summarize_probe(checks).enforced is None
 
-    def test_a_vendor_that_RAISES_is_one_reported_outcome_not_a_500(self, store_factory: Callable[..., _Installed]) -> None:
+    def test_a_vendor_that_raises_is_one_reported_outcome_not_a_500(self, store_factory: Callable[..., _Installed]) -> None:
         vendor = _Vendor(credentials=None, error=RuntimeError("STS unreachable"))
         store_factory(scoped=True)
 
@@ -247,7 +247,7 @@ class TestAnUnexercisedControlIsUNKNOWNNotHealthy:
         assert "STS unreachable" in next(c.detail for c in checks if c.name == "issue")
         assert endpoint.summarize_probe(checks).enforced is None
 
-    def test_a_store_that_refuses_the_FIRST_write_learns_nothing_about_scope(self, store_factory: Callable[..., _Installed]) -> None:
+    def test_a_store_that_refuses_the_first_write_learns_nothing_about_scope(self, store_factory: Callable[..., _Installed]) -> None:
         """An unreachable store and an over-permissive one are different faults. If the probe could not
         write inside its own prefix, the scope question was never asked — reporting `False` here would
         raise a false alarm about a store that may be perfectly scoped."""
@@ -297,7 +297,7 @@ class TestConditionalPut:
     `vend_probe` applies to `enforced`: an unexercised control must not be reported as a guarantee.
     """
 
-    def test_a_store_that_IGNORES_the_header_is_reported_UNSAFE(self, store_factory: Callable[..., _Installed]) -> None:
+    def test_a_store_that_ignores_the_header_is_reported_unsafe(self, store_factory: Callable[..., _Installed]) -> None:
         """THE DANGEROUS CASE, and the reason a probe that only checked "did the write work" is worthless.
 
         This store accepts both conditional puts. Every call returns 200, every log line reads normal, and
@@ -311,7 +311,7 @@ class TestConditionalPut:
         assert report.commit_safe is False, report
         assert report.outcome == "fail", "a store that cannot hold a Lance commit must not pass its own validation"
 
-    def test_a_store_that_REJECTS_the_header_is_UNKNOWN_not_unsafe(self, store_factory: Callable[..., _Installed]) -> None:
+    def test_a_store_that_rejects_the_header_is_unknown_not_unsafe(self, store_factory: Callable[..., _Installed]) -> None:
         """The third behaviour, kept apart from the second on purpose.
 
         Rejecting the header is a loud failure that proves nothing about what a SECOND writer would see, so
@@ -327,7 +327,7 @@ class TestConditionalPut:
 
 
 class TestTheProbeAsksForTheCredentialItThenTests:
-    def test_each_run_uses_a_FRESH_prefix(self, store_factory: Callable[..., _Installed]) -> None:
+    def test_each_run_uses_a_fresh_prefix(self, store_factory: Callable[..., _Installed]) -> None:
         """Two operators validating at once must not collide, and a leftover object from a crashed run
         must not make the next one's cleanup look successful."""
         first = _Vendor(credentials=_creds())
@@ -362,7 +362,7 @@ class TestTheDoorGatesBeforeItWrites:
             pytest.param("admin", True, id="the-projects-admin"),
         ],
     )
-    def test_a_DENIED_caller_gets_the_same_answer_as_a_missing_warehouse(
+    def test_a_denied_caller_gets_the_same_answer_as_a_missing_warehouse(
         self,
         monkeypatch: pytest.MonkeyPatch,
         openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
@@ -406,7 +406,7 @@ class TestTheDoorGatesBeforeItWrites:
             assert not probed, "the probe wrote to a tenant bucket before the gate answered"
 
     @pytest.mark.anyio
-    async def test_a_PERMITTED_caller_probes_the_warehouses_OWN_root(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def test_a_permitted_caller_probes_the_warehouses_own_root(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The happy path, and the one assertion that matters in it: the root the probe writes under
         comes off the REGISTRY RECORD, not off the request. A door that took a caller-supplied root
         would write into any bucket the catalog can reach, under an admin gate for a different one."""

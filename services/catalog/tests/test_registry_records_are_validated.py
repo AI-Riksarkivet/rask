@@ -40,7 +40,7 @@ def _write(tmp_path: Path, prefix: str, name: str, payload: object) -> None:
     (directory / f"{name}.json").write_text(json.dumps(payload))
 
 
-def test_a_warehouse_record_with_a_WRONG_TYPED_identity_field_is_skipped(tmp_path: Path) -> None:
+def test_a_warehouse_record_with_a_wrong_typed_identity_field_is_skipped(tmp_path: Path) -> None:
     good = {"id": "wh-a", "bucket": "bkt-a", "root_uri": "s3://bkt-a", "project": "acme", "created_at": "t"}
     seeding.put_warehouse(_root(tmp_path), StorageOptions(), good)
     # Present and truthy on every identity field, and structurally useless: `bucket` can never equal
@@ -49,7 +49,7 @@ def test_a_warehouse_record_with_a_WRONG_TYPED_identity_field_is_skipped(tmp_pat
     assert [record.stored() for record in wh_svc.list_warehouses(_root(tmp_path), StorageOptions())] == [good]
 
 
-def test_a_project_record_with_a_WRONG_TYPED_id_is_skipped(tmp_path: Path) -> None:
+def test_a_project_record_with_a_wrong_typed_id_is_skipped(tmp_path: Path) -> None:
     good = {"id": "acme", "created_at": "t", "created_by": "root"}
     seeding.put_project(_root(tmp_path), StorageOptions(), good)
     _write(tmp_path, "_projects", "zz-typed", {"id": ["acme"]})

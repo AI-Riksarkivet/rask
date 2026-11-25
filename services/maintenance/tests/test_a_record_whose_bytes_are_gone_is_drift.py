@@ -83,7 +83,7 @@ def _drift(registered: dict[str, tuple[str, str | None]], datasets: list[str], w
     return report
 
 
-def test_an_EMPTY_bucket_that_was_walked_still_reports_its_absent_records() -> None:
+def test_an_empty_bucket_that_was_walked_still_reports_its_absent_records() -> None:
     """The live run's own finding. Deriving "walked" from the discovered URIs makes the answer depend on
     whether a bucket happened to hold anything: the same missing record is a FINDING in a bucket with one
     dataset and merely UNKNOWN in an empty one. Emptiness is the strongest possible evidence of absence,
@@ -94,7 +94,7 @@ def test_an_EMPTY_bucket_that_was_walked_still_reports_its_absent_records() -> N
     assert report.incomplete == []
 
 
-def test_a_bucket_NOBODY_walked_is_unknown_rather_than_clean() -> None:
+def test_a_bucket_nobody_walked_is_unknown_rather_than_clean() -> None:
     """The other side of the same boundary, and the reason the filter exists at all."""
     report = _drift({"ns$t": ("s3://elsewhere", "s3://elsewhere/dead")}, datasets=[], walked=["wh"])
     assert report.absent_datasets == []

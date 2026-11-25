@@ -33,7 +33,7 @@ def _holds_subject(uri: str, reference: str | tuple[str | None, int]) -> bool:
     return bool(lance.dataset(uri).checkout_version(reference).count_rows(filter=PREDICATE))
 
 
-def test_a_BRANCH_tag_pinning_the_subject_is_not_kept_on_mains_evidence(tmp_path: Path, erase: Erase) -> None:
+def test_a_branch_tag_pinning_the_subject_is_not_kept_on_mains_evidence(tmp_path: Path, erase: Erase) -> None:
     """``work`` v3 holds the subject and main v3 does not; the tag names ``work`` v3."""
     uri = str(tmp_path / "subjects")
     lance.write_dataset(rows("bob"), uri)
@@ -89,7 +89,7 @@ def test_pinned_by_names_only_the_refs_that_pin_a_residual(tmp_path: Path, erase
 
 
 @pytest.mark.parametrize("names", [("work", "deeper"), ("alpha", "zulu")], ids=["child-sorts-first", "child-sorts-last"])
-def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path, names: tuple[str, str], erase: Erase) -> None:
+def test_pinned_by_does_not_name_a_branch_cut_from_another_branch(tmp_path: Path, names: tuple[str, str], erase: Erase) -> None:
     """The child stands on the parent's v3, not main v3; main v2 and v3 survive by the retention window alone.
 
     A fork point is a ``(parent branch, version)`` reference (``parent_branch`` in ``branches.list()``,
@@ -114,7 +114,7 @@ def test_pinned_by_does_not_name_a_branch_cut_from_ANOTHER_branch(tmp_path: Path
     assert (report.pinned_by, report.held_by_retention) == ([], ["main@2", "main@3"])
 
 
-def test_a_tag_whose_delete_FAILED_is_named_as_the_pin_on_its_own_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: Erase) -> None:
+def test_a_tag_whose_delete_failed_is_named_as_the_pin_on_its_own_version(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, erase: Erase) -> None:
     """``kept`` names main v2, the one version holding the subject, and step 2 cannot delete it.
 
     No branch stands on main v2, so the surviving tag alone keeps it from cleanup, and it is the whole

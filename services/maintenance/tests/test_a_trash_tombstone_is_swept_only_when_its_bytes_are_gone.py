@@ -102,7 +102,7 @@ def test_a_record_whose_bytes_stand_only_in_its_data_directories_is_refused(tmp_
     assert "still holds 1 object" in refused["ns$t"], refused
 
 
-def test_a_DRY_RUN_plans_and_deletes_NOTHING() -> None:
+def test_a_dry_run_plans_and_deletes_nothing() -> None:
     deleter = _Deleter()
     out = tombstones.sweep_tombstones(_settings(), report=_report(), probe=_probe, delete=deleter)
 
@@ -111,7 +111,7 @@ def test_a_DRY_RUN_plans_and_deletes_NOTHING() -> None:
     assert deleter.seen == [], f"a dry run deleted {deleter.seen}"
 
 
-def test_DISABLED_does_not_even_probe() -> None:
+def test_disabled_does_not_even_probe() -> None:
     probed: list[str] = []
 
     def _counting(finding: OrphanedTrash) -> int:
@@ -124,7 +124,7 @@ def test_DISABLED_does_not_even_probe() -> None:
     assert out.swept == [] and probed == []
 
 
-def test_ARMED_deletes_exactly_the_proven_tombstones() -> None:
+def test_armed_deletes_exactly_the_proven_tombstones() -> None:
     deleter = _Deleter()
     out = tombstones.sweep_tombstones(_settings(MAINTENANCE_TOMBSTONE_SWEEP_DRY_RUN=False), report=_report(), probe=_probe, delete=deleter)
 
@@ -132,7 +132,7 @@ def test_ARMED_deletes_exactly_the_proven_tombstones() -> None:
     assert out.dry_run is False and len(out.swept) == 1
 
 
-def test_the_CAP_truncates_and_SAYS_it_did() -> None:
+def test_the_cap_truncates_and_says_it_did() -> None:
     many = ReconcileReport(
         checked_at="2026-09-20T00:00:00Z",
         orphaned_trash=[OrphanedTrash(id=f"tr-{i}", uuid=str(uuid4()), kind="table", location=f"s3://dead-{i}/t.lance") for i in range(5)],

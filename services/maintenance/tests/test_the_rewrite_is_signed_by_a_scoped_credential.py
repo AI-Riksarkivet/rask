@@ -177,7 +177,7 @@ def test_an_answer_that_is_not_a_vend_stops_the_dataset(router: respx.MockRouter
         pytest.param(403, MaintenanceDenied, "or no such table is registered", id="denied"),
     ],
 )
-def test_a_door_that_said_NO_refuses_the_dataset_and_names_the_remedy(
+def test_a_door_that_said_no_refuses_the_dataset_and_names_the_remedy(
     router: respx.MockRouter, status: int, refused_as: type[MaintenanceDenied], remedy: str
 ) -> None:
     """ "You may not" refuses the DATASET, not the run: the sweep records a refusal and maintains everything else.
@@ -197,7 +197,7 @@ def test_a_door_that_said_NO_refuses_the_dataset_and_names_the_remedy(
 
 
 @pytest.mark.parametrize(("code", "name"), [(4, "TABLE_NOT_FOUND"), (1, "NAMESPACE_NOT_FOUND")])
-def test_a_door_that_found_NO_SUCH_TABLE_refuses_the_dataset(router: respx.MockRouter, code: int, name: str) -> None:
+def test_a_door_that_found_no_such_table_refuses_the_dataset(router: respx.MockRouter, code: int, name: str) -> None:
     """A 404 naming the table or namespace absent is an answer about the id, as a 403 is, not an outage.
 
     Measured 2026-09-26, when a fallback still existed: it cleaned a table the vend door had answered 404 TableNotFound

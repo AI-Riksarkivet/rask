@@ -57,7 +57,7 @@ def _native(backend: _Backend):
 
 
 @pytest.mark.anyio
-async def test_an_existing_id_is_KEPT_and_described(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_an_existing_id_is_kept_and_described(monkeypatch: pytest.MonkeyPatch) -> None:
     """THE GATE. The backend refuses; `exist_ok` means keep, and the caller gets what is really there."""
     backend = _Backend(conflicts=True)
     monkeypatch.setattr(ns_ep.native, "call", _native(backend))

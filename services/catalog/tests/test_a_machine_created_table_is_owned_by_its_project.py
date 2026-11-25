@@ -41,7 +41,7 @@ from tests.unit.named_resolver import NamedResolver, uuid_of
 _TABLE_UUID = uuid_of("table", ["acme-silver", "features"])
 
 
-def test_a_SERVICE_creating_a_table_is_not_granted_owner(openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
+def test_a_service_creating_a_table_is_not_granted_owner(openfga_store: Any) -> None:  # noqa: ANN401 — the root conftest's OpenFgaStore
     """The withdrawal itself, on the real store: a service registering its output does not become its owner, and the
     evaluator grants it no ``can_drop`` on it."""
     service = ServicePrincipal.for_account("system:serviceaccount:default:rask-sa-pipeline")

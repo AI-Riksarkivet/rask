@@ -96,7 +96,7 @@ def test_the_container_bounds_its_arena_count(service: str) -> None:
         assert 1 <= int(value) <= MAX_ARENAS, f"{where}/{service} sets MALLOC_ARENA_MAX={value}, outside the stated budget of 1..{MAX_ARENAS}"
 
 
-def test_the_two_names_ship_TOGETHER() -> None:
+def test_the_two_names_ship_together() -> None:
     """Either alone is the configuration already measured not to work, and it looks correct."""
     envs = [(where, env_of(c)) for where, _name, c in _lakehouse_containers()]
     half = [where for where, env in envs if bool(env.get("MALLOC_ARENA_MAX")) != bool(env.get("ARROW_DEFAULT_MEMORY_POOL"))]

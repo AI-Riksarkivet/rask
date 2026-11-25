@@ -267,7 +267,7 @@ def test_fail_run_id_is_deterministic_per_dataset_and_complete_stays_random() ->
     assert complete_1 not in {fail_a1, fail_b}
 
 
-def test_the_stamp_PRESERVES_other_schema_metadata(tmp_path: Any) -> None:
+def test_the_stamp_preserves_other_schema_metadata(tmp_path: Any) -> None:
     """A replace would destroy the #21 self-describing coordinates other producers write. Merge only."""
     import pyarrow as pa
 

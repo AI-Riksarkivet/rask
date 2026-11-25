@@ -67,7 +67,7 @@ def _discovery_document(monkeypatch: pytest.MonkeyPatch, **document: object) -> 
     monkeypatch.setattr(httpx.Client, "get", _serve)
 
 
-def test_a_discovery_document_advertising_an_HTTP_key_set_is_service_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_discovery_document_advertising_an_http_key_set_is_service_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     """The key-set URL is the provider's to advertise, and the scheme check reads nothing else."""
     _discovery_document(monkeypatch, jwks_uri="http://idp.example.test/jwks")
 

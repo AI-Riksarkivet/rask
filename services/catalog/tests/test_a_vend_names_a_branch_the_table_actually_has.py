@@ -105,7 +105,7 @@ def _vend(location: str, branch: str) -> tuple[Any, RecordingVendor]:
     return response, vendor
 
 
-def test_the_refusal_happens_BEFORE_a_credential_is_minted(table: str) -> None:
+def test_the_refusal_happens_before_a_credential_is_minted(table: str) -> None:
     """A door that refused after vending would have already handed out the grant. The vendor records
     every call, so an empty list is the assertion — the raise alone cannot tell the two apart."""
     vendor = RecordingVendor()
@@ -126,7 +126,7 @@ def test_the_refusal_happens_BEFORE_a_credential_is_minted(table: str) -> None:
     assert vendor.calls == [], "a credential was minted for a branch that does not exist, then the door raised"
 
 
-def test_a_vend_for_a_branch_the_table_DOES_have_is_served(table: str) -> None:
+def test_a_vend_for_a_branch_the_table_does_have_is_served(table: str) -> None:
     """The control, and it is what makes the refusal mean anything: a door that refused every branch
     would satisfy the leg above while breaking the feature the parameter exists for."""
     response, vendor = _vend(table, "work")
@@ -138,7 +138,7 @@ def test_a_vend_for_a_branch_the_table_DOES_have_is_served(table: str) -> None:
 
 
 @pytest.mark.parametrize("main", [pytest.param("", id="absent"), pytest.param("main", id="named")])
-def test_a_vend_for_MAIN_is_untouched(table: str, main: str) -> None:
+def test_a_vend_for_main_is_untouched(table: str, main: str) -> None:
     """Main is the ABSENT branch, not a named one, and `branches.list()` has no entry for it — a lookup
     that did not special-case that would refuse every credential the estate vends today. Spelled `main`, it is
     the same ref ([[LH-258]] (b)), so the credential is main's, never one scoped to a `tree/main` prefix."""

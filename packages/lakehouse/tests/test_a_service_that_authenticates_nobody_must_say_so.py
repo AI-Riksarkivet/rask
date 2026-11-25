@@ -22,17 +22,17 @@ import pytest
 from lakehouse.governed.settings import assert_authentication_configured
 
 
-def test_a_service_with_auth_ON_starts() -> None:
+def test_a_service_with_auth_on_starts() -> None:
     """The governed deployment path, unchanged. Nothing here should make a configured estate think."""
     assert_authentication_configured(oidc_enabled=True, insecure_allow_unauthenticated=False)
 
 
-def test_a_service_that_DECLARED_itself_open_starts() -> None:
+def test_a_service_that_declared_itself_open_starts() -> None:
     """The dev/demo shape stays available — it just has to be chosen rather than defaulted into."""
     assert_authentication_configured(oidc_enabled=False, insecure_allow_unauthenticated=True)
 
 
-def test_the_AMBIGUOUS_case_refuses_to_start() -> None:
+def test_the_ambiguous_case_refuses_to_start() -> None:
     """The defect: auth off with nobody having said so. Indistinguishable from a misconfiguration,
     and it serves every route to anyone who can reach the port."""
     with pytest.raises(RuntimeError) as excinfo:
@@ -43,7 +43,7 @@ def test_the_AMBIGUOUS_case_refuses_to_start() -> None:
     assert "RASK_OIDC_ENABLED" in message, "the refusal must name the fix, not only the escape"
 
 
-def test_declaring_BOTH_is_not_a_way_to_be_half_open() -> None:
+def test_declaring_both_is_not_a_way_to_be_half_open() -> None:
     """`oidc_enabled` wins: the escape is an acknowledgement that authentication is off, not a switch
     that turns it off. A deployment that sets both is authenticated, and this must not read as a
     conflict an operator has to resolve."""

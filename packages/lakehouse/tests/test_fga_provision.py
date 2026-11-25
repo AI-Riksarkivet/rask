@@ -127,7 +127,7 @@ def _with_wildcard_assignee(model: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_a_WILDCARD_only_write_names_the_relation_it_changed(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+async def test_a_wildcard_only_write_names_the_relation_it_changed(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """The write log's ``changed`` is how an operator tells what a new model version is about; a write
     caused only by a type restriction must name that relation rather than report ``changed=[]``."""
     _install(monkeypatch, desired=_with_wildcard_assignee(MODEL), stored=MODEL)
@@ -140,7 +140,7 @@ async def test_a_WILDCARD_only_write_names_the_relation_it_changed(monkeypatch: 
 
 
 @pytest.mark.parametrize("name", ["this"])
-def test_a_relation_NAMED_like_an_empty_message_is_not_kept_as_one(name: str) -> None:
+def test_a_relation_named_like_an_empty_message_is_not_kept_as_one(name: str) -> None:
     """``this`` and ``wildcard`` are grammar fields only inside a message. As a relation name they are a
     key the author chose, and the store's empty metadata fill under it is a default like any other: kept,
     it makes the served model differ from the authored one on every boot."""
@@ -190,7 +190,7 @@ async def test_a_brand_new_store_is_modelled_without_a_read(monkeypatch: pytest.
 # ---------------------------------------------------------------------------------------------- #
 
 
-def test_the_canonical_form_matches_a_REAL_sdk_model_not_just_a_double() -> None:
+def test_the_canonical_form_matches_a_real_sdk_model_not_just_a_double() -> None:
     """THE DOUBLE ABOVE CANNOT CATCH THE ONE THING THAT MATTERS: key spelling.
 
     `_StoredModel.to_dict()` returns the authored dict verbatim, so it agrees with `model.json` by
@@ -272,7 +272,7 @@ def _authored_assignee_model(*, wildcard: bool) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(("stored", "desired"), [(True, False), (False, True)], ids=["sdk-[user:*]-repo-[user]", "sdk-[user]-repo-[user:*]"])
-def test_a_WILDCARD_toggle_survives_the_canonical_form_of_a_REAL_sdk_model(stored: bool, desired: bool) -> None:
+def test_a_wildcard_toggle_survives_the_canonical_form_of_a_real_sdk_model(stored: bool, desired: bool) -> None:
     """The shape `provision` compares: an SDK ``wildcard={}`` against an authored plain restriction, and
     the reverse. Stripping every empty dict makes both pairs equal, and the boot keeps the store's rule."""
     assert fga_provision.canonical_model(_sdk_assignee_model(wildcard=stored)) != fga_provision.canonical_model(_authored_assignee_model(wildcard=desired))
@@ -304,7 +304,7 @@ def _empty_message_fields() -> set[str]:
     return _schema_fields(lambda kind: kind == "object")
 
 
-def test_every_EMPTY_MESSAGE_in_the_model_schema_survives_the_canonical_form() -> None:
+def test_every_empty_message_in_the_model_schema_survives_the_canonical_form() -> None:
     """An empty message is a value by its presence — `this` is a direct assignment, `wildcard` is `[x:*]` —
     so the canonical form must keep it while dropping the store's empty fills. Walked off the SDK's own
     schema, so a field a later SDK adds is covered without anyone remembering to list it."""
@@ -317,7 +317,7 @@ def test_every_EMPTY_MESSAGE_in_the_model_schema_survives_the_canonical_form() -
 
 
 @pytest.mark.parametrize("wildcard", [True, False], ids=["[user:*]", "[user]"])
-def test_an_unchanged_restriction_in_a_REAL_sdk_model_is_still_unchanged(wildcard: bool) -> None:
+def test_an_unchanged_restriction_in_a_real_sdk_model_is_still_unchanged(wildcard: bool) -> None:
     """The no-op beside it: the SDK renders an absent wildcard as ``None`` and fills ``condition``/``module``
     with ``""``, and none of those may read as a change."""
     assert fga_provision.canonical_model(_sdk_assignee_model(wildcard=wildcard)) == fga_provision.canonical_model(_authored_assignee_model(wildcard=wildcard))

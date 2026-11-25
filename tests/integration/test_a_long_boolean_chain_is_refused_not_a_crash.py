@@ -108,7 +108,7 @@ def test_merge_insert_refuses_a_chain_one_connective_past_the_bound(tmp_path: Pa
     assert f"{field} joins 1001 conditions" in str(answer["detail"]), f"{field} was refused for another reason: {answer}"
 
 
-def test_an_update_EXPRESSION_is_bounded_like_its_predicate(real_ns_client: TestClient) -> None:
+def test_an_update_expression_is_bounded_like_its_predicate(real_ns_client: TestClient) -> None:
     rows = pa.table({"id": pa.array(range(3), pa.int64()), "v": pa.array(["a", "b", "c"])})
     assert real_ns_client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
     created = real_ns_client.post(

@@ -480,7 +480,7 @@ def test_a_registry_only_bucket_is_scanned(tmp_path: Path) -> None:
     assert report.incomplete == []
 
 
-def test_an_unreadable_registry_is_REPORTED_not_silently_narrowed(tmp_path: Path) -> None:
+def test_an_unreadable_registry_is_reported_not_silently_narrowed(tmp_path: Path) -> None:
     """The posture that separates a report from a sweep.
 
     The sweep degrades to the configured list with a log line, costing one maintenance cycle. This
@@ -513,7 +513,7 @@ def test_a_registry_bucket_that_duplicates_the_configured_one_is_not_scanned_twi
 # --------------------------------------------------------------------------- #
 
 
-def test_a_row_on_a_WAREHOUSE_root_that_names_another_warehouse_is_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_row_on_a_warehouse_root_that_names_another_warehouse_is_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Every warehouse root is scanned, not the estate's alone: each tenant's names are in its OWN bucket, and a scan of
     one root would leave every other warehouse's layer UNREPORTED. And this report is the gate `purge_expired_trash`
     consults before deleting anything (`report_is_clean`), so a blind spot would certify an estate never looked at.
@@ -558,7 +558,7 @@ def test_one_unreadable_warehouse_root_does_not_blind_the_whole_scan(tmp_path: P
     assert any(i.source == "catalog:namespaces:s3://bkt-gone" for i in report.incomplete), f"the unreadable root was not reported: {report.incomplete}"
 
 
-def test_the_DOORLESS_category_is_reported_but_does_not_gate_the_purge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_doorless_category_is_reported_but_does_not_gate_the_purge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """T8. A category counted into `total` makes `report_is_clean` refuse, and NO endpoint in the product removes or
     moves an unreachable namespace row.
 
@@ -586,7 +586,7 @@ def test_the_DOORLESS_category_is_reported_but_does_not_gate_the_purge(tmp_path:
     assert report_is_clean(walked) is None, "a report whose only drift is doorless still blocks the purge"
 
 
-def test_a_category_WITH_a_door_still_gates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_category_with_a_door_still_gates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The exclusion is a named set (`NON_GATING_CATEGORIES`), not a general relaxation. A ghost project has a door —
     revoke its tuples — so it must still block the purge."""
     estate = _Estate(tmp_path)

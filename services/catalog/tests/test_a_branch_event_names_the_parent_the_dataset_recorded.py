@@ -106,7 +106,7 @@ def _create(client: TestClient, name: str, **source: Any) -> Any:  # noqa: ANN40
     return client.post(f"/v1/table/{TABLE_PATH}/branches/create", json={"id": TABLE, "name": name, **source})
 
 
-def test_a_branch_from_MAIN_announces_the_version_it_actually_branched_from(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
+def test_a_branch_from_main_announces_the_version_it_actually_branched_from(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
     """The common case, and the one the request cannot answer: no `from_version` was sent, and the
     branch records main's current version."""
     with TestClient(app) as client:
@@ -118,7 +118,7 @@ def test_a_branch_from_MAIN_announces_the_version_it_actually_branched_from(app:
     assert extra.get("branch") == "plain", f"the event no longer names the branch it is about: {extra}"
 
 
-def test_an_EXPLICIT_source_version_is_announced_as_the_parent(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
+def test_an_explicit_source_version_is_announced_as_the_parent(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
     """The control for the leg above: a different number must produce a different announcement, or the
     first test would pass on an implementation that hard-codes the table's head."""
     with TestClient(app) as client:
@@ -127,7 +127,7 @@ def test_an_EXPLICIT_source_version_is_announced_as_the_parent(app: FastAPI, emi
     assert emitted[0]["extra"].get("parent_version") == 1, f"an explicit source version was not announced: {emitted[0]['extra']}"
 
 
-def test_a_branch_OF_A_BRANCH_names_that_branch_as_its_parent(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
+def test_a_branch_of_a_branch_names_that_branch_as_its_parent(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
     """The field that is null for every branch above, so its own leg is the only place it can fail."""
     with TestClient(app) as client:
         assert _create(client, "work").status_code == 200
@@ -137,7 +137,7 @@ def test_a_branch_OF_A_BRANCH_names_that_branch_as_its_parent(app: FastAPI, emit
     assert extra.get("parent_branch") == "work", f"a branch of a branch announces no parent branch: {extra}"
 
 
-def test_the_REQUEST_is_not_used_as_a_fallback(app: FastAPI, emitted: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_request_is_not_used_as_a_fallback(app: FastAPI, emitted: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
     """A read-back that fails must omit the fields rather than fill them from the request.
 
     The request's values are what this replaces, and they are null exactly where the answer matters —

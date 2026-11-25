@@ -557,7 +557,7 @@ def test_a_feed_row_is_governed_on_the_column_upstreams_its_writer_was_checked_a
     assert (governed_on.unresolved, summary) == (unresolved, fga_deps.Governed(objects=frozenset(fga_ids.table_object(uuid) for uuid in uuids)))
 
 
-def test_get_events_reports_the_feed_FLOOR_so_a_consumer_can_see_what_it_lost() -> None:
+def test_get_events_reports_the_feed_floor_so_a_consumer_can_see_what_it_lost() -> None:
     """`oldest_seq` — the oldest row the feed still holds.
 
     Lineage prunes its feed on the relay tick, dropping the rows it received longest ago. That

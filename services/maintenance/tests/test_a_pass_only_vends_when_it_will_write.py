@@ -66,7 +66,7 @@ def test_cleanup_enabled_on_a_dataset_with_history_may_reclaim_so_it_vends(tmp_p
     )
 
 
-def test_an_unreadable_dataset_says_MAY_WRITE(tmp_path: Path) -> None:
+def test_an_unreadable_dataset_says_may_write(tmp_path: Path) -> None:
     """The load-bearing direction: uncertainty must never silently stop maintaining a dataset.
 
     A wasted credential is a cost; a dataset that quietly stops being compacted and reclaimed is the

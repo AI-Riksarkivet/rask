@@ -125,7 +125,7 @@ def table(ns, tmp_path: Path) -> DoorTable:  # noqa: ANN001
         ("tags/version", lambda table, tag: get_tag_version(table, StorageOptions(), GetTableTagVersionRequest(id=TABLE_ID, tag=tag))),
     ],
 )
-def test_a_missing_tag_mints_TAG_NOT_FOUND(table: DoorTable, door: str, call: Callable[[DoorTable, str], object], tag: str) -> None:
+def test_a_missing_tag_mints_tag_not_found(table: DoorTable, door: str, call: Callable[[DoorTable, str], object], tag: str) -> None:
     """Spec code 8, for an absent tag and for one no ref file can name: the store refuses the key a lookup of it reads
     with an error that carries no code. `tags/version` rides along as the regression guard — it answered 8 before A5."""
     with pytest.raises(TableTagNotFoundError) as caught:
@@ -148,7 +148,7 @@ def test_a_missing_tag_mints_TAG_NOT_FOUND(table: DoorTable, door: str, call: Ca
         ),
     ],
 )
-def test_a_missing_version_mints_VERSION_NOT_FOUND(table: DoorTable, door: str, call: _Call) -> None:
+def test_a_missing_version_mints_version_not_found(table: DoorTable, door: str, call: _Call) -> None:
     """Spec code 11. `from_version` is the spec's own snake_case wire spelling (`spec.yaml:4521`);
     `lance_docs/ns_catalog/namespace/operations/models/CreateTableBranchRequest.md`'s `fromVersion` is the Java
     generator's client-side naming, not the wire contract."""
@@ -157,7 +157,7 @@ def test_a_missing_version_mints_VERSION_NOT_FOUND(table: DoorTable, door: str, 
     assert caught.value.code == 11, f"{door} minted code {caught.value.code} for a missing version, not 11"
 
 
-def test_creating_a_tag_that_already_exists_mints_TAG_ALREADY_EXISTS(table: DoorTable) -> None:
+def test_creating_a_tag_that_already_exists_mints_tag_already_exists(table: DoorTable) -> None:
     """Spec code 9 — a name collision the caller can fix, not a server fault."""
     with pytest.raises(TableTagAlreadyExistsError) as caught:
         create_tag(table, StorageOptions(), CreateTableTagRequest(id=TABLE_ID, tag=LIVE_TAG, version=1))
@@ -186,14 +186,14 @@ def test_creating_a_tag_that_already_exists_mints_TAG_ALREADY_EXISTS(table: Door
         ),
     ],
 )
-def test_a_missing_branch_mints_BRANCH_NOT_FOUND(table: DoorTable, door: str, call: _Call) -> None:
+def test_a_missing_branch_mints_branch_not_found(table: DoorTable, door: str, call: _Call) -> None:
     """Spec code 22 — added to the spec WITH the branch ops, and unreachable until now."""
     with pytest.raises(TableBranchNotFoundError) as caught:
         call(table)
     assert caught.value.code == 22, f"{door} minted code {caught.value.code} for a missing branch, not 22"
 
 
-def test_a_branch_a_tag_names_is_refused_INVALID_TABLE_STATE_naming_the_tag(table: DoorTable) -> None:
+def test_a_branch_a_tag_names_is_refused_invalid_table_state_naming_the_tag(table: DoorTable) -> None:
     """Spec code 19, naming the tag, and nothing deleted: a tag pins its branch ("Ref conflict error: Branch staging is
     referenced by tags", measured on pylance 13.0.0), which the door asks before its first delete."""
     table.open_unchecked(StorageOptions()).tags.create("pin", (LIVE_BRANCH, None))
@@ -248,7 +248,7 @@ def test_a_ref_listing_pages_by_its_limit(table: DoorTable, listing: Callable[[D
     assert seen == names
 
 
-def test_a_version_error_names_the_SOURCE_branch_not_the_one_being_created(table: DoorTable) -> None:
+def test_a_version_error_names_the_source_branch_not_the_one_being_created(table: DoorTable) -> None:
     """The detail a caller reads must name what was missing.
 
     Branching from a real branch at a version it does not have is correctly 11 — but the first fix
@@ -260,7 +260,7 @@ def test_a_version_error_names_the_SOURCE_branch_not_the_one_being_created(table
     assert LIVE_BRANCH in str(caught.value), f"the version error named the wrong branch: {caught.value}"
 
 
-def test_creating_a_branch_that_already_exists_mints_BRANCH_ALREADY_EXISTS(table: DoorTable) -> None:
+def test_creating_a_branch_that_already_exists_mints_branch_already_exists(table: DoorTable) -> None:
     """Spec code 23.
 
     The one case that CANNOT be read off the exception: pylance answers a branch collision with
@@ -281,7 +281,7 @@ def test_creating_a_branch_that_already_exists_mints_BRANCH_ALREADY_EXISTS(table
         ("branches/create", lambda table: create_branch(table, StorageOptions(), CreateTableBranchRequest(id=TABLE_ID, name="fresh"))),
     ],
 )
-def test_a_ref_write_while_a_reclaim_holds_the_tables_history_mints_CONCURRENT_MODIFICATION(table: DoorTable, tmp_path: Path, door: str, call: _Call) -> None:
+def test_a_ref_write_while_a_reclaim_holds_the_tables_history_mints_concurrent_modification(table: DoorTable, tmp_path: Path, door: str, call: _Call) -> None:
     """Spec code 14, and no ref written: Lance's reclaim reads the refs once, so a ref written while it runs can name a
     version it then deletes ([[LH-308]]). The caller retries once the reclaim ends."""
     dataset = table.open_unchecked(StorageOptions())

@@ -102,7 +102,7 @@ async def _repair(settings: MaintenanceSettings) -> RepairReport:
         ("ungoverned_tables", "ns$live"),
     ],
 )
-def test_a_DATA_tier_finding_is_never_planned_for_deletion(category: str, needle: str) -> None:
+def test_a_data_tier_finding_is_never_planned_for_deletion(category: str, needle: str) -> None:
     """THE DEFECT THIS SUITE EXISTS FOR: `ns$live` is a real table with real bytes and no tuples.
 
     Per category rather than by a total, because a pass planning one data-tier deletion among a dozen
@@ -115,7 +115,7 @@ def test_a_DATA_tier_finding_is_never_planned_for_deletion(category: str, needle
 
 
 @pytest.mark.asyncio
-async def test_a_DRY_RUN_plans_and_asks_NOTHING(door: respx.MockRouter) -> None:
+async def test_a_dry_run_plans_and_asks_nothing(door: respx.MockRouter) -> None:
     """The operator arming this must be able to see the plan without it acting: no route, so an ask fails."""
     out = await _repair(_settings())
 
@@ -123,14 +123,14 @@ async def test_a_DRY_RUN_plans_and_asks_NOTHING(door: respx.MockRouter) -> None:
 
 
 @pytest.mark.asyncio
-async def test_DISABLED_does_not_even_plan(door: respx.MockRouter) -> None:
+async def test_disabled_does_not_even_plan(door: respx.MockRouter) -> None:
     out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_ENABLED=False))
 
     assert (out.enabled, out.revoked) == (False, [])
 
 
 @pytest.mark.asyncio
-async def test_ARMED_asks_the_catalog_for_exactly_the_planned_objects_and_reports_what_it_kept(door: respx.MockRouter) -> None:
+async def test_armed_asks_the_catalog_for_exactly_the_planned_objects_and_reports_what_it_kept(door: respx.MockRouter) -> None:
     asked = _revoking(door, kept="table:ns$gone-t")
 
     out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False))
@@ -151,7 +151,7 @@ async def test_a_door_that_cannot_decide_degrades_rather_than_failing_the_tick(d
 
 
 @pytest.mark.asyncio
-async def test_the_CAP_truncates_and_SAYS_it_did(door: respx.MockRouter) -> None:
+async def test_the_cap_truncates_and_says_it_did(door: respx.MockRouter) -> None:
     """A truncated pass that reads as a complete one is how drift looks fixed and is not."""
     asked = _revoking(door)
 
@@ -160,14 +160,14 @@ async def test_the_CAP_truncates_and_SAYS_it_did(door: respx.MockRouter) -> None
     assert (len(out.revoked), out.capped, len(json.loads(asked.calls.last.request.content)["objects"])) == (2, 1, 2)
 
 
-def test_a_CLEAN_report_plans_nothing() -> None:
+def test_a_clean_report_plans_nothing() -> None:
     """The control. A pass that revoked on an empty report would pass every leg above."""
     planned, refused = repair.plan_repair(ReconcileReport(checked_at="2026-09-20T00:00:00Z"))
 
     assert planned == [] and refused == {}
 
 
-def test_EVERY_drift_category_is_either_revocable_or_refused_BY_NAME() -> None:
+def test_every_drift_category_is_either_revocable_or_refused_by_name() -> None:
     """The invariant that keeps this safe as the report grows, and the reason the two lists are data.
 
     A new drift category added to `reconcile.CATEGORIES` must be classified deliberately. Without this

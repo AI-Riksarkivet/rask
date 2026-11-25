@@ -179,7 +179,7 @@ def test_write_tuples_lands_siblings_when_one_tuple_already_exists() -> None:
     assert store.write_calls == [3]
 
 
-def test_a_server_too_old_for_the_conflict_option_fails_CLOSED() -> None:
+def test_a_server_too_old_for_the_conflict_option_fails_closed() -> None:
     """The property the deleted prose-matching fallback actually protected, kept honestly: against
     a server that 400s duplicates regardless of the option, the seam must raise 503 — never guess
     from the message text that the post-condition might hold. A silent success here is exactly the

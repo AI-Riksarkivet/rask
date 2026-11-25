@@ -40,14 +40,14 @@ def _payload(**overrides: object) -> dict[str, object]:
     return payload
 
 
-def test_a_payload_carrying_a_run_or_a_job_is_REFUSED() -> None:
+def test_a_payload_carrying_a_run_or_a_job_is_refused() -> None:
     """The spec forbids both members; accepting one would re-admit the phantom through the new door."""
     for forbidden in ({"run": {"runId": "r1"}}, {"job": {"namespace": "n", "name": "j"}}):
         with pytest.raises(ValidationError):
             DatasetEvent.model_validate(_payload(**forbidden))
 
 
-def test_the_authorizer_still_refuses_the_ownership_FACET_as_a_source() -> None:
+def test_the_authorizer_still_refuses_the_ownership_facet_as_a_source() -> None:
     """`ownership` is producer-supplied attribution. Reading it here would let a producer sign as anyone."""
     unverified = _payload()
     dataset = unverified["dataset"]

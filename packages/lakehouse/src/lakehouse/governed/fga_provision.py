@@ -73,7 +73,7 @@ def _plain(value: Any) -> Any:
 #: The model grammar's EMPTY MESSAGES, whose presence is the value: ``this: {}`` is a direct assignment
 #: and ``wildcard: {}`` is what makes ``[user:*]`` differ from ``[user]``. They are the only fields the
 #: SDK's model schema types as ``object``, walked rather than listed in
-#: `packages/lakehouse/tests/test_fga_provision.py::test_every_EMPTY_MESSAGE_in_the_model_schema_survives_the_canonical_form`.
+#: `packages/lakehouse/tests/test_fga_provision.py::test_every_empty_message_in_the_model_schema_survives_the_canonical_form`.
 _EMPTY_MESSAGES: Final = frozenset({"this", "wildcard"})
 
 #: The schema's MAP fields, whose keys are names an author chose (a relation, a condition, a parameter)

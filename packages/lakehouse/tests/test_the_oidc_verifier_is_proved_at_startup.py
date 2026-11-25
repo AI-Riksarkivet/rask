@@ -46,7 +46,7 @@ def _a_key_set() -> dict[str, object]:
     return {"keys": [{"kty": "RSA", "kid": "k", "use": "sig", "alg": "RS256", "n": b64(numbers.n), "e": b64(numbers.e)}]}
 
 
-def test_refresh_tries_EVERY_configured_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_refresh_tries_every_configured_issuer(monkeypatch: pytest.MonkeyPatch) -> None:
     """A multi-issuer deployment is exactly where one misconfigured entry hides: the other issuer's
     traffic works, so nothing looks wrong until a user from the broken tenant signs in."""
     seen: list[str] = []

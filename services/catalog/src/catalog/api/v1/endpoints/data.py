@@ -764,7 +764,7 @@ def table_changes(*, id: str, body: TableChangesRequest, table: DoorTableDep, so
     refuses the route for every caller. Any rung above the reader's refuses the feed's whole audience
     and records a write in the audit trail: measured 2026-09-08 at the writer rung, `can_write_data
     ALLOW` beside the `read_data` record for the same call. Pinned by
-    `services/catalog/tests/test_fga_model_contract.py::test_every_DATA_READ_door_is_gated_as_a_READ`.
+    `services/catalog/tests/test_fga_model_contract.py::test_a_door_admits_the_rung_its_tier_names_and_refuses_the_one_below`.
     """
     # ONE CALL FOR ALL THREE KINDS: the window is one snapshot, opened at its end, and `deleted` is
     # answered from the transaction range on that same handle rather than from a scan — learning which

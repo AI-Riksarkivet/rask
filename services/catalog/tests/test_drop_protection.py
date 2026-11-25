@@ -447,7 +447,7 @@ def test_a_record_is_read_whatever_its_bookkeeping_holds(tmp_path: Any) -> None:
     assert all(trash.read(made.model_copy(update={"detached": True}).stored(), at="a record of this test's").detached for made in filed)
 
 
-def test_an_undated_or_unparseable_record_is_NOT_expired(tmp_path: Any) -> None:
+def test_an_undated_or_unparseable_record_is_not_expired(tmp_path: Any) -> None:
     """ "We do not know when this expires" must read as "not yet" — the same fail-toward-not-deleting
     stance the sweep takes when the policy registry is unreadable."""
     from lakehouse.records import trash
@@ -514,7 +514,7 @@ def test_undrop_without_a_record_is_an_honest_404(tmp_path: Any, monkeypatch: py
         )
 
 
-def test_a_recoverable_drop_KEEPS_the_owner_grants(tmp_path: Any) -> None:
+def test_a_recoverable_drop_keeps_the_owner_grants(tmp_path: Any) -> None:
     """Found by driving the DEPLOYED catalog, not by a unit test (these run FGA off): the drop revoked
     the table's tuples unconditionally, so after a recoverable drop the one person who needed to undrop
     it — its owner — was denied. A recoverable drop leaves an object that still exists; its grants die
@@ -652,7 +652,7 @@ def _drop_namespace_cascade(settings: Settings, ns: Any, *, force: bool = False,
     )
 
 
-def test_a_recoverable_cascade_DETACHES_the_subtree_and_files_a_record_per_child(tmp_path: Any) -> None:
+def test_a_recoverable_cascade_detaches_the_subtree_and_files_a_record_per_child(tmp_path: Any) -> None:
     """#96's whole content. A trash record pointing at bytes the native cascade deleted would be a
     lie, so with a grace period the cascade must never issue the destructive native call: tables are
     DEREGISTERED (bytes stay), namespaces emptied then dropped plainly, and every destroyed object —
@@ -775,7 +775,7 @@ def test_trash_kinds_do_not_collide(tmp_path: Any) -> None:
     assert trash.get(settings.registry_root, so, _uuid("bronze")) is not None
 
 
-def test_the_protection_flag_is_READABLE_on_both_rungs(tmp_path: Any) -> None:
+def test_the_protection_flag_is_readable_on_both_rungs(tmp_path: Any) -> None:
     """#123. The SET door shipped with no read at all — an operator could not arm-check, disarm-check,
     or audit protection; they discovered it by eating a 409. The GET returns the flag AND who armed it."""
     from catalog.api.v1.endpoints import namespaces as n_ep

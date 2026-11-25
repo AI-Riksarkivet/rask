@@ -59,7 +59,7 @@ def _report(*incomplete: IncompleteScan) -> ReconcileReport:
         pytest.param(IncompleteScan(source="registry:trash", reason="s3://ctl/_trash/table-0a1b.json is unreadable (OSError: 503)"), id="a-trash-record"),
     ],
 )
-def test_an_unreadable_TABLE_root_or_trash_record_does_not_make_its_tables_ghosts(partial: IncompleteScan) -> None:
+def test_an_unreadable_table_root_or_trash_record_does_not_make_its_tables_ghosts(partial: IncompleteScan) -> None:
     """The live path: `catalog:tables:<root>` and `registry:trash` are IncompleteScans, never errors, so `ghost_tables`
     runs against a record set missing every table under that root, or the table in the trash whose record was skipped
     ([[LH-516]]: a recoverable drop keeps its table's grants for the undrop, and only the record names it)."""
@@ -73,7 +73,7 @@ def test_an_unreadable_TABLE_root_or_trash_record_does_not_make_its_tables_ghost
     assert partial.source in refused["ghost_tables"], f"the refusal does not name the partial source: {refused['ghost_tables']}"
 
 
-def test_an_UNRELATED_partial_read_refuses_nothing() -> None:
+def test_an_unrelated_partial_read_refuses_nothing() -> None:
     """The precision check. The storage scans produce most of this estate's IncompleteScans and feed
     none of the revocable categories, so treating incompleteness as a global stop would refuse every
     tick for a reason that cannot affect the inference."""
@@ -90,7 +90,7 @@ def test_an_UNRELATED_partial_read_refuses_nothing() -> None:
 
 
 @pytest.mark.asyncio
-async def test_the_ARMED_pass_honours_the_refusal_too(catalog_identity_token: Path) -> None:
+async def test_the_armed_pass_honours_the_refusal_too(catalog_identity_token: Path) -> None:
     """`plan_repair` is not the only door — `repair_drift`, the coroutine the reconcile route awaits,
     re-plans, and a guard that lived only in the planner would be bypassed by the path that asks the catalog to revoke."""
     from maintenance.core.config import MaintenanceSettings

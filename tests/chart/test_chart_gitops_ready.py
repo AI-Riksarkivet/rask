@@ -9,7 +9,7 @@ import pytest
 from tests.chart.chart_render import DEFAULT_ARGS, render, render_fixture
 
 
-def test_the_object_store_does_not_inherit_the_generic_APP_memory_ceiling() -> None:
+def test_the_object_store_does_not_inherit_the_generic_app_memory_ceiling() -> None:
     """The object store sits under the whole lakehouse, and its server is the rustfs fixture's ([[XC-131]]). With no
     `resources` tier of its own it inherited `default`: 512Mi, sized for a stateless FastAPI shell. Measured 2026-08-05 on the dev estate:
     370Mi at IDLE and **33 OOMKills**, each one taking every Lance read and write in the cluster
@@ -37,7 +37,7 @@ def test_the_object_store_does_not_inherit_the_generic_APP_memory_ceiling() -> N
         pytest.param(("--set-json", "catalog.trashGraceDays=0.04"), "0.04", id="a-fraction-of-a-day"),
     ],
 )
-def test_the_recoverable_drop_plane_is_actually_WIRED_into_the_catalog(flags: tuple[str, ...], grace: str) -> None:
+def test_the_recoverable_drop_plane_is_actually_wired_into_the_catalog(flags: tuple[str, ...], grace: str) -> None:
     """#122. The trash/undrop/purge plane — ~500 lines, 42 tests, an undrop UI — was inert in every
     chart deployment: `LANCE_TRASH_GRACE_DAYS` was rendered NOWHERE, while two chart comments
     discussed it as an operator knob. Every drop destroyed bytes immediately, `undrop` had nothing to

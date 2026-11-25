@@ -47,7 +47,7 @@ def test_a_conflict_lance_raises_typed_is_judged_by_its_type_and_not_its_message
     assert (classify_commit_failure(failure), is_retryable_conflict(failure)) == (expected, expected is CommitVerdict.RETRYABLE_CONFLICT)
 
 
-def test_INCOMPATIBLE_beats_the_bare_word_concurrent() -> None:
+def test_incompatible_beats_the_bare_word_concurrent() -> None:
     """The defect this module was extracted to make unrepeatable.
 
     An incompatible transaction means the table was REPLACED underneath the writer, so the delta

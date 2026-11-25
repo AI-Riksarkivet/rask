@@ -14,7 +14,7 @@ assignments, bootstrap admin tuples and the model's own bookkeeping alone.
 It is right for a specific reason: **the registry does not record REVOCATION.** Project records carry `created_by`
 (93 of 93, live 2026-09-19) and warehouse records do not (0 of 97) — but `created_by` names who CREATED a tenant, never who may administer it today. An
 admin deliberately removed leaves the record untouched, so re-asserting that grant restores exactly the
-person an operator took care to remove. `test_a_stranded_project_is_REPORTED_not_re_granted` is the one
+person an operator took care to remove. `test_a_stranded_project_is_reported_not_re_granted` is the one
 that matters here; a structural edge cannot confer access, and a grant can.
 """
 
@@ -58,7 +58,7 @@ _ACME = {"id": "acme", "created_at": "2026-08-07T06:48:27.0329", "created_by": "
 _ACME_WH = {"id": "acme-bucket", "bucket": "acme-bucket", "root_uri": "s3://acme-bucket", "project": "acme", "status": "active"}
 
 
-def test_a_stranded_project_is_REPORTED_not_re_granted() -> None:
+def test_a_stranded_project_is_reported_not_re_granted() -> None:
     """THE LINE. A tenant holding no tuples needs an admin grant, and a grant is a decision.
 
     `created_by` is right there and this deliberately does not use it: the registry records creation
@@ -71,7 +71,7 @@ def test_a_stranded_project_is_REPORTED_not_re_granted() -> None:
     assert "decision, not a repair" in unjustified["project:acme"]
 
 
-def test_a_record_with_no_creator_says_SO_rather_than_going_quiet() -> None:
+def test_a_record_with_no_creator_says_so_rather_than_going_quiet() -> None:
     """Worse than a stranded tenant: one with no recorded creator at all, so not even a candidate exists.
     Reported rather than skipped, because a silent skip makes an unrecoverable tenant look recovered."""
     planned, unjustified = plan_rebuild(_report("orphaned"), _sources(projects=[{"id": "orphaned", "created_at": "x"}]))

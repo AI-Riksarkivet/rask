@@ -42,7 +42,7 @@ def _event() -> CatalogControlEvent:
 
 
 @pytest.mark.asyncio
-async def test_a_SUCCESSFUL_publish_drops_the_staged_copy(tmp_path: Any) -> None:
+async def test_a_successful_publish_drops_the_staged_copy(tmp_path: Any) -> None:
     """Drop-on-ack. A staged object that outlives its delivery is one the relay re-publishes forever."""
     from lakehouse.events import outbox
 

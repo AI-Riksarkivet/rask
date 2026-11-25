@@ -129,7 +129,7 @@ def _key(kind: str, name: str, container: str) -> str:
 
 
 @pytest.mark.parametrize("slot", SLOTS)
-def test_no_NEW_first_party_container_renders_without_the_baseline(slot: str) -> None:
+def test_no_new_first_party_container_renders_without_the_baseline(slot: str) -> None:
     """The ratchet. Parametrised over the SLOT, because walking only `containers` is how an init hid.
 
     `rask-lineage` passes the older Deployments-only gate on its app container while its `wait-age` init

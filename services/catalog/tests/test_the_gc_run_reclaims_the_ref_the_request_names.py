@@ -101,7 +101,7 @@ def _parent_data_files(namespace: LanceNamespace) -> list[str]:
     return sorted(entry.name for entry in root.iterdir())
 
 
-def test_a_branch_reclaim_leaves_the_PARENTS_data_files_alone(client: TestClient, namespace: LanceNamespace) -> None:
+def test_a_branch_reclaim_leaves_the_parents_data_files_alone(client: TestClient, namespace: LanceNamespace) -> None:
     """The irreversible half. A branch resolves its inherited fragments through the parent's `data/`."""
     before = _parent_data_files(namespace)
 

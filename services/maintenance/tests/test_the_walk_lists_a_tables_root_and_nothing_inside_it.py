@@ -51,7 +51,7 @@ def test_the_walk_lists_a_tables_root_and_none_of_its_branches(tmp_path: Path) -
     assert discovered == ["s3://bkt/t.lance"]
 
 
-def test_a_datasets_own_internals_are_NOT_walked() -> None:
+def test_a_datasets_own_internals_are_not_walked() -> None:
     """The bound that keeps this from becoming a full recursive crawl.
 
     A dataset holds `data/`, `_versions/`, `_transactions/`, `_indices/`, `_deletions/` — none is a

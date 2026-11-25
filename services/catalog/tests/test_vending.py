@@ -62,7 +62,7 @@ def test_a_tenants_policy_denies_another_tenants_bucket(tier: Tier) -> None:
 
 
 @pytest.mark.parametrize("tier", ["read"])
-def test_a_tenants_policy_still_allows_its_OWN_table(tier: Tier) -> None:
+def test_a_tenants_policy_still_allows_its_own_table(tier: Tier) -> None:
     """The negative twin: a policy that denied everything would satisfy the test above while
     breaking the product, so pin that B keeps reaching B."""
     policy: Any = build_session_policy("tenant-b", "isobns/isobtbl.lance", tier)
@@ -84,7 +84,7 @@ def test_a_tenants_policy_still_allows_its_OWN_table(tier: Tier) -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_a_declared_base_is_granted_READ_even_at_the_maintain_tier() -> None:
+def test_a_declared_base_is_granted_read_even_at_the_maintain_tier() -> None:
     """A table whose fragments resolve through a base cannot use its credential without reading there.
 
     MEASURED LIVE 2026-09-08 (§ H12): the sweep vends a table-scoped write credential — the right

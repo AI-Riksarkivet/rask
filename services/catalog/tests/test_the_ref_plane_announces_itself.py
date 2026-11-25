@@ -119,7 +119,7 @@ def test_a_branch_mutation_announces_itself(app: FastAPI, emitted: list[dict[str
     )
 
 
-def test_a_tag_mutation_announces_itself_including_the_MOVE(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
+def test_a_tag_mutation_announces_itself_including_the_move(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
     """The move is the one a consumer cannot otherwise detect: the name survives, the version changes."""
     with TestClient(app) as client:
         assert client.post(f"/v1/table/{TABLE_PATH}/tags/create", json={"id": TABLE, "tag": "ready", "version": 1}).status_code == 200
@@ -129,7 +129,7 @@ def test_a_tag_mutation_announces_itself_including_the_MOVE(app: FastAPI, emitte
     assert _actions(emitted) == ["table_tag_created", "table_tag_updated", "table_tag_deleted"], f"a tag moved with no control event: {emitted}"
 
 
-def test_a_READ_of_the_ref_plane_stays_SILENT(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
+def test_a_read_of_the_ref_plane_stays_silent(app: FastAPI, emitted: list[dict[str, Any]]) -> None:
     """A list or a resolve changes nothing, and an event per read is a feed nobody can use."""
     with TestClient(app) as client:
         client.post(f"/v1/table/{TABLE_PATH}/branches/create", json={"id": TABLE, "name": "staging"})

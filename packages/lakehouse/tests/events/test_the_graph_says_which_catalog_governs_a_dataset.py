@@ -32,7 +32,7 @@ def test_the_catalog_names_itself() -> None:
     assert facet["warehouseUri"] == "s3://lance-catalog"
 
 
-def test_an_unnamed_catalog_renders_NO_facet() -> None:
+def test_an_unnamed_catalog_renders_no_facet() -> None:
     """`type` and `name` are the fields a consumer JOINS on, so a blank one is worse than an absent
     facet: it merges every unnamed catalog into a single node instead of leaving them unjoined."""
     assert _facet(name="") == {}
@@ -45,7 +45,7 @@ def test_the_warehouse_uri_is_optional() -> None:
     assert "warehouseUri" not in _facet(warehouse_uri="")
 
 
-def test_a_governed_dataset_is_a_TABLE() -> None:
+def test_a_governed_dataset_is_a_table() -> None:
     """The value a governed dataset claims truthfully. The enum also admits FILE, VIEW, TOPIC, STREAM, MODEL
     and JOB_OUTPUT — none of which the catalog serves, so none is emitted."""
     assert table_type_facet(_PRODUCER)["datasetType"] == "TABLE"

@@ -51,7 +51,7 @@ def test_a_reader_ignores_a_writer_only_bit_it_does_not_know() -> None:
     )
 
 
-def test_a_reader_STILL_refuses_an_unknown_bit_in_its_own_field() -> None:
+def test_a_reader_still_refuses_an_unknown_bit_in_its_own_field() -> None:
     """The other half, and the one that keeps this from being a weakening.
 
     A bit in `reader_feature_flags` is by definition one a reader must understand, so an unknown one
@@ -63,7 +63,7 @@ def test_a_reader_STILL_refuses_an_unknown_bit_in_its_own_field() -> None:
     assert str(UNKNOWN_BIT) in reason, f"the refusal does not name the offending bit: {reason}"
 
 
-def test_the_WRITE_gates_still_ask_BOTH_fields() -> None:
+def test_the_write_gates_still_ask_both_fields() -> None:
     """Compaction and GC are writes: a writer must understand the writer flags, and it reads too."""
     assert features.describe_gc_unsupported_flags(0, UNKNOWN_BIT) is not None, (
         "GC accepted a dataset over an unknown WRITER bit — GC deletes files, so it is a write and must refuse"

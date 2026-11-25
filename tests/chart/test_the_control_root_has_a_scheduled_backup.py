@@ -35,7 +35,7 @@ def test_enabled_renders_a_cronjob_that_runs_the_shipped_tool() -> None:
     assert ("command" in container, container["args"][:3]) == (False, ["python", "/srv/control_root_backup.py", "backup"]), container
 
 
-def test_the_backup_root_is_the_SAME_expression_the_catalog_calls_its_control_root() -> None:
+def test_the_backup_root_is_the_same_expression_the_catalog_calls_its_control_root() -> None:
     """Two spellings of one root is how a backup ends up copying an empty prefix and reporting success."""
     container = _cronjob(_render(*_ON))["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
     root = container["args"][container["args"].index("--root") + 1]

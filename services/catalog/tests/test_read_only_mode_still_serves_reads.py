@@ -94,13 +94,13 @@ def read_only_catalog(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterat
 
 
 @pytest.mark.parametrize(("method", "path"), READS)
-def test_a_request_that_only_READS_survives_a_maintenance_window(read_only_catalog: TestClient, method: str, path: str) -> None:
+def test_a_request_that_only_reads_survives_a_maintenance_window(read_only_catalog: TestClient, method: str, path: str) -> None:
     response = read_only_catalog.request(method, path, json={} if method == "POST" else None)
     assert response.status_code != 503, f"{method} {path} is a READ — refusing it makes the catalog unreadable, not read-only: {response.text}"
 
 
 @pytest.mark.parametrize(("method", "path"), WRITES)
-def test_a_request_that_WRITES_is_refused_through_the_window(read_only_catalog: TestClient, method: str, path: str) -> None:
+def test_a_request_that_writes_is_refused_through_the_window(read_only_catalog: TestClient, method: str, path: str) -> None:
     response = read_only_catalog.request(method, path, json={})
     assert (response.status_code, response.json().get("code")) == (503, 17), f"{method} {path} writes and must not pass a read-only window: {response.text}"
     assert response.headers.get("Retry-After"), dict(response.headers)

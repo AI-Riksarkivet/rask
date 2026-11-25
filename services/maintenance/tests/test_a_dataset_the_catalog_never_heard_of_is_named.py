@@ -112,7 +112,7 @@ def _category(monkeypatch: pytest.MonkeyPatch, sources: mod.Sources) -> mod.Reco
         pytest.param(mod.Sources(tables=[], trash_error="registry:trash: OSError: unreachable"), id="trash-index"),
     ],
 )
-def test_an_unread_input_reports_UNAVAILABLE_rather_than_the_whole_estate(monkeypatch: pytest.MonkeyPatch, sources: mod.Sources) -> None:
+def test_an_unread_input_reports_unavailable_rather_than_the_whole_estate(monkeypatch: pytest.MonkeyPatch, sources: mod.Sources) -> None:
     """THE GUARD. The finding is an ABSENCE from the table listing and the trash, so an unread input makes
     every dataset it would have excused look unregistered — the loudest possible way to report nothing.
     UNAVAILABLE leaves both registration categories out of `counts` entirely, because a 0 there would read

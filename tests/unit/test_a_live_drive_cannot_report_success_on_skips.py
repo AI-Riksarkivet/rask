@@ -59,7 +59,7 @@ def test_it_skips() -> None:
 """
 
 
-def test_a_run_that_SKIPPED_fails_under_require_live(tmp_path: Path) -> None:
+def test_a_run_that_skipped_fails_under_require_live(tmp_path: Path) -> None:
     """The gate. Without it the same run is a green, which is what a live drive reported."""
     result = _drive(tmp_path, _SKIPS, "--require-live")
 
@@ -67,7 +67,7 @@ def test_a_run_that_SKIPPED_fails_under_require_live(tmp_path: Path) -> None:
     assert "skipped" in (result.stdout + result.stderr).lower(), "the failure does not say what was skipped, so an operator cannot act on it"
 
 
-def test_a_clean_run_PASSES_under_the_flag(tmp_path: Path) -> None:
+def test_a_clean_run_passes_under_the_flag(tmp_path: Path) -> None:
     """The other control: a gate that failed every live drive would satisfy the first test and make
     the target unusable."""
     result = _drive(tmp_path, "def test_it_runs() -> None:\n    assert True\n", "--require-live")

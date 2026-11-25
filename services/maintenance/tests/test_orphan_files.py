@@ -100,7 +100,7 @@ def _dataset(tmp_path: pathlib.Path, name: str = "t.lance") -> tuple[str, str]:
 # --------------------------------------------------------------------------- #
 
 
-def test_files_only_an_OLD_version_references_are_not_orphans(tmp_path: pathlib.Path) -> None:
+def test_files_only_an_old_version_references_are_not_orphans(tmp_path: pathlib.Path) -> None:
     """The single most dangerous way this pass could be wrong.
 
     Every manifest still in `_versions/` is reachable by time-travel until `cleanup_old_versions`
@@ -329,7 +329,7 @@ def test_a_registered_but_unused_base_is_refused_by_the_flag(tmp_path: pathlib.P
     assert "16" in (result.reason or "") and "base_paths" in (result.reason or "")
 
 
-def test_a_REAL_overlay_dataset_is_refused_with_the_flag_named(tmp_path: pathlib.Path) -> None:
+def test_a_real_overlay_dataset_is_refused_with_the_flag_named(tmp_path: pathlib.Path) -> None:
     """The real-dataset twin of the monkeypatched test above.
 
     On pylance 9.0.0 a committed overlay is WRITABLE but not readable — the open raises
@@ -421,21 +421,21 @@ def _plant(uri: str, rel: str, body: bytes = b"x") -> None:
 
 
 class TestTheLiveFilesThatLookLikeGarbage:
-    def test_a_TAG_is_never_an_orphan(self, dataset: str) -> None:
+    def test_a_tag_is_never_an_orphan(self, dataset: str) -> None:
         """The failure this module exists to avoid: a tag reported as an orphan. A tag PINS a version, so deleting one
         unpins the version its readers open."""
         _plant(dataset, "_refs/tags/stable.json", b'{"version": 1}')
 
         assert not [p for p in _scan(dataset) if p.startswith("_refs/")]
 
-    def test_the_RESERVED_MARKER_is_never_an_orphan(self, dataset: str) -> None:
+    def test_the_reserved_marker_is_never_an_orphan(self, dataset: str) -> None:
         """Zero-byte, structural, referenced by no manifest — so a naive scan reports it once per
         dataset forever, which is how a report trains its reader to ignore it."""
         _plant(dataset, ".lance-reserved", b"")
 
         assert ".lance-reserved" not in _scan(dataset)
 
-    def test_a_BLOB_SIDECAR_is_never_an_orphan(self, blob_dataset: str) -> None:
+    def test_a_blob_sidecar_is_never_an_orphan(self, blob_dataset: str) -> None:
         """`data_files()` names only the `.lance`; the payload bytes sit in `data/<stem>/` beside it.
         A scan that stops at the manifest calls every page image in the estate reclaimable."""
         sidecars = [posixpath.relpath(str(p), blob_dataset) for p in pathlib.Path(blob_dataset).rglob("*") if p.is_file() and p.suffix == ".blob"]
@@ -445,7 +445,7 @@ class TestTheLiveFilesThatLookLikeGarbage:
 
         assert not [p for p in orphans_found if p in sidecars], f"live blob payloads reported reclaimable: {orphans_found}"
 
-    def test_a_REPLACED_index_is_spared_while_the_version_that_cites_it_lives(self, indexed_dataset: str) -> None:
+    def test_a_replaced_index_is_spared_while_the_version_that_cites_it_lives(self, indexed_dataset: str) -> None:
         """`create_scalar_index(replace=True)` mints a NEW uuid and leaves the old directory in place.
         Measured: v2 cites the old uuid, v3 the new, and both dirs are on disk — so a referenced set
         built from the LATEST version alone reclaims an index that time-travel to v2 still needs. The
@@ -458,14 +458,14 @@ class TestTheLiveFilesThatLookLikeGarbage:
 
 
 class TestItStillFindsRealGarbage:
-    def test_an_unreferenced_data_file_IS_reported(self, dataset: str) -> None:
+    def test_an_unreferenced_data_file_is_reported(self, dataset: str) -> None:
         """The scan must still be worth running. A test that only proves it reports nothing would pass
         against a scanner that had been turned off."""
         _plant(dataset, "data/stray-0000.lance", b"not a real fragment")
 
         assert "data/stray-0000.lance" in _scan(dataset)
 
-    def test_an_index_directory_NO_live_version_cites_IS_reported(self, indexed_dataset: str) -> None:
+    def test_an_index_directory_no_live_version_cites_is_reported(self, indexed_dataset: str) -> None:
         """The fix must spare LIVE indices, not the `_indices/` prefix. A blanket skip would pass every
         test above while making the one file class it was written for permanently invisible."""
         _plant(indexed_dataset, "_indices/00000000-0000-0000-0000-000000000000/page_data.lance")
@@ -505,7 +505,7 @@ class _RaisesOnLayoutProbe:
 
 
 class TestAnUncertifiableLayoutIsNotClean:
-    def test_a_RAISING_branch_probe_fails_closed(self, dataset: str) -> None:
+    def test_a_raising_branch_probe_fails_closed(self, dataset: str) -> None:
         """A `tree/` probe that raises means we could not certify the dataset has no branches. That
         must render as `checked=False`, never fall through to a scan that names a live branch's files
         as orphans — "could not look" is not "there was nothing there"."""
