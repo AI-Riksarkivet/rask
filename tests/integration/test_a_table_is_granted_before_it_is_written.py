@@ -15,6 +15,10 @@ runs after a SIGKILL: at the door's grant (its OpenFGA write) or at its backend 
 records the table's row). The app's middleware answers it 500, which no caller reads. A door that fails once the table
 stands, and whose undo of the table fails too, keeps the table's grants with it.
 
+A create sent again while its first try is still running (a client's retry after a read timeout, as lineage's boot
+create is) meets the table the first try declared and writes it; the first try's own write then finds the table written,
+and leaves it, with its grants, to stand.
+
 A namespace is granted the same way ([[LH-585]]): every ``namespace`` relation resolves through a direct tuple or ``from
 parent`` too, so one standing with no tuple is invisible to its creator and its project's admin alike, and its name
 refuses every retry.
@@ -33,6 +37,7 @@ from lance_namespace import ServiceUnavailableError
 
 from catalog.core import native
 from catalog.core.config import get_settings
+from catalog.services.tables import creation
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed import fga_writes
 from lakehouse.naming import UUID_PROPERTY
@@ -171,6 +176,35 @@ def test_a_door_killed_between_its_two_writes_leaves_no_table_without_its_grants
         audited(estate.maintenance)
 
     assert estate.tables_granted() - before == ({standing} if standing else set())
+
+
+def _create_kept(estate: _Estate, table: str) -> tuple[int, dict[str, object]]:
+    answer = estate.catalog.post(
+        f"/v1/table/{table}/create?mode=exist_ok", content=encode_arrow_stream(_ROWS), headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE}
+    )
+    return answer.status_code, answer.json()
+
+
+def test_a_create_retried_while_its_first_try_is_running_leaves_a_table_its_namespace_reaches(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
+    table = f"{estate.namespace}$retried"
+    write = creation._write_blob
+    retried: list[tuple[int, dict[str, object]]] = []
+
+    def _retried_before_the_first_write(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — the write's own arguments and dataset
+        monkeypatch.setattr(creation, "_write_blob", write)
+        retried.append(_create_kept(estate, table))
+        return write(*args, **kwargs)
+
+    monkeypatch.setattr(creation, "_write_blob", _retried_before_the_first_write)
+    first = _create_kept(estate, table)
+
+    standing = estate.standing(table)
+    # Both answer the one table the retry wrote: the first try keeps it, as ExistOk asks.
+    assert [first, *retried] == [(200, retried[0][1])] * 2
+    assert retried[0][1]["version"] == 1
+    assert standing is not None, f"{table} does not stand after both creates answered it kept or made"
+    assert {relation for _, relation, obj in estate.store.naming([standing])[standing] if obj == standing} == {"owner", "parent"}
+    assert estate.catalog.post(f"/v1/table/{table}/count_rows", json={}).json() == _ROWS.num_rows
 
 
 def _at_the_namespace_grant(monkeypatch: pytest.MonkeyPatch, killed: list[str]) -> None:

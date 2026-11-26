@@ -661,6 +661,13 @@ def _write_blob_into(
 
     The location's own claim is :func:`create_table`'s, taken before this write ([[LH-519]]); a failed write
     releases it with the table it drops.
+
+    A WRITE THAT LOSES THE TABLE TO ANOTHER WRITE OF IT UNDOES NOTHING THAT WRITE MADE. Every create of a declared table
+    writes into its one location (a client's retry of a create whose first try is still running meets the declaration
+    and writes into it), and Lance's create commit lets one of them land. The loser finds the location holding a
+    version under the claim both hold, so the name, the claim and the base record are the written table's, and the
+    caller's grants with them; only the data directories this write minted are released, and the answer is the
+    spec's 409 for a table that exists, which an ExistOk caller answers as the table kept.
     """
     claim: base_registry.BaseClaim | None = None
     directories: list[str] = []
@@ -695,6 +702,10 @@ def _write_blob_into(
             transaction_properties=transaction_properties,
         )
     except BaseException as exc:
+        if isinstance(exc, TableAlreadyExistsError) and holds_a_version(location, so):
+            if registry is not None:
+                _release_what_only_this_write_took(registry, location=location, claim=claim, directories=directories, claimed_uuid=claimed_uuid)
+            raise TableAlreadyExistsError(f"Table already exists: {'$'.join(segments)}") from exc
         # A Rust PANIC is a pyo3 `PanicException`, which derives from BaseException, so `except Exception` would skip
         # the rollback and leave the name declared with no dataset behind it ([[LH-302]]).
         # A failed drop leaves the name declared with no dataset behind it: logged as the release below is, while the write
@@ -738,6 +749,27 @@ def _release_what_the_write_took(
         location_claims.release(_claim_store(registry), location, holder, uuid=claimed_uuid)
     except Exception as release_exc:  # noqa: BLE001 — the write error is what the caller is told
         log.error("create_base_record_release_failed", extra={"location": location, "error": str(release_exc)[:300]})
+
+
+def _release_what_only_this_write_took(
+    registry: base_registry.BaseRegistry,
+    *,
+    location: str,
+    claim: base_registry.BaseClaim | None,
+    directories: list[str],
+    claimed_uuid: str | None,
+) -> None:
+    """Release the data directories a first write minted and lost to another write of the table, with their entries in
+    the location's base record; the record and the location's claim are the written table's. Logged, never raised over
+    the conflict the caller is told."""
+    try:
+        if claim is not None:
+            minted = [entry for entry in claim.added if entry.role is base_registry.BaseRole.DATA and entry.path in directories]
+            base_registry.release_claim(registry, base_registry.BaseClaim(location=claim.location, created=False, added=minted))
+        if claimed_uuid is not None:
+            base_registry.release_data_directories(registry, directories, uuid=claimed_uuid)
+    except Exception as release_exc:  # noqa: BLE001 — the conflict is what the caller is told
+        log.error("create_lost_write_release_failed", extra={"location": location, "error": str(release_exc)[:300]})
 
 
 #: Lance's refusal of an Arrow type it does not store, as a bare `OSError`: "LanceError(Schema): Unsupported data type:
