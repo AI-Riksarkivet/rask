@@ -9,6 +9,7 @@ obligation is recorded once per ref it covers. The trail they leave is judged as
 reads without naming its columns and version fails here.
 """
 
+import logging
 from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
@@ -22,7 +23,7 @@ from pydantic import BaseModel, SecretStr
 from catalog.api.dependencies import get_vendor
 from catalog.core.vending import TableRecords, Tier, VendedSession
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
-from lakehouse.governed.audit import AUDIT_FORMAT, AUDIT_LOGGER, AuditAction, AuditOutcome, configure_audit
+from lakehouse.governed.audit import AUDIT_FORMAT, AUDIT_LOGGER, AuditAction, AuditOutcome
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.credential import S3KeyPair
 from tests.traces import trace_named, traceparent_named
@@ -216,7 +217,7 @@ def test_every_door_leaves_a_record_in_the_vocabulary_and_every_read_names_what_
     catalog = governed_catalog
     catalog.client.app.dependency_overrides[get_vendor] = _StsVendor
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
-    configure_audit(enabled=True)
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     caplog.clear()
 
     for door in _CORPUS:
@@ -273,7 +274,7 @@ def test_a_projects_door_names_its_caller_as_every_other_door_does(
     create does, and no record either door leaves names anyone else."""
     catalog = governed_catalog
     catalog.store.write((catalog.person("alice"), "admin", "estate:rask"))
-    configure_audit(enabled=True)
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     caplog.clear()
     assert catalog.create_in_the_estate("alice", "db").status_code == 200
     conforming = {r["audit.subject"] for r in _trail(caplog) if r["audit.action"] == AuditAction.AUTHZ}
@@ -327,7 +328,7 @@ def test_a_caller_no_door_verified_is_named_anonymous_at_every_door(unauthentica
     client = unauthenticated_catalog
     assert client.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
     assert client.post(f"{_TABLE}/create", content=_ROWS, headers={"Content-Type": ARROW_STREAM_MEDIA_TYPE}).status_code == 200
-    configure_audit(enabled=True)
+    caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
     caplog.clear()
 
     for path, body in ((f"{_TABLE}/query", _QUERY), (f"{_MANAGED}/credentials", {}), (f"{_TABLE}/describe", {})):

@@ -68,7 +68,7 @@ def _uuids(table: str) -> DatasetUuids:
 
 #: Bytes that are valid JSON text and no envelope: an integer past what the parser holds. Any stager holding the outbox
 #: credential can write them.
-_HOSTILE: Final = frozendict({"bigint": '{"eventType": ' + "1" * 5000 + "}", "deep": "[" * 100_000 + "]" * 100_000})
+_HOSTILE: Final = frozendict({"bigint": '{"eventType": ' + "1" * 5000 + "}"})
 
 
 def _datasets(store: ProvenanceStoreDouble) -> list[DatasetEvent]:

@@ -111,6 +111,7 @@ from lakehouse.events.cloud_events import STRUCTURED_CONTENT_TYPE, TRACE_ATTRIBU
 from lakehouse.process.supervision import Supervisor
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM
+from tests.bus_double import DEEPEST_BODY
 from tests.chart.chart_render import DEFAULT_ARGS, containers, env_of, render, render_fixture
 
 
@@ -183,9 +184,10 @@ _STATUS_HEADED: tuple[tuple[bytes, dict[str, str]], ...] = (
 )
 #: How long a replica bounded to one delivery at a time is watched while it holds one.
 _ONE_AT_A_TIME_SECONDS = 3.0
-#: Bodies a user the bus admits to the topic can publish and no reader may trust: one nested deeper than a JSON parser
-#: reads, one nested a level past what the seam reads as an envelope, and an envelope whose id is no text.
-_HOSTILE_BODIES = (b"[" * 20_000, b'{"in":' * MAX_ENVELOPE_DEPTH + b"{}" + b"}" * MAX_ENVELOPE_DEPTH, b'{"id": ["no", "text"], "data": {}}')
+#: Bodies a user the bus admits to the topic can publish and no reader may trust: one nested as deep as the payload cap
+#: allows (`tests.bus_double.DEEPEST_BODY`), one nested a level past what the seam reads as an envelope, and an envelope
+#: whose id is no text.
+_HOSTILE_BODIES = (DEEPEST_BODY, b'{"in":' * MAX_ENVELOPE_DEPTH + b"{}" + b"}" * MAX_ENVELOPE_DEPTH, b'{"id": ["no", "text"], "data": {}}')
 #: How long the outage leg waits, its links down, for nats-py to give its connections up and the seam's loop to open new
 #: clients: the shortened reconnect budget above, with room for a loaded host.
 _OUTAGE_WITHIN = 30.0

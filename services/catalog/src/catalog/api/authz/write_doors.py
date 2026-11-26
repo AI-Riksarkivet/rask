@@ -14,12 +14,11 @@ from lance_namespace import (
     NamespaceNotFoundError,
     PermissionDeniedError,
     TableNotFoundError,
-    UnauthenticatedError,
 )
 from openfga_sdk import OpenFgaClient
 
 from catalog.api.authz.context import AuthzContext
-from catalog.api.authz.decisions import authorization, check_recording_outage, require_rung, require_wired
+from catalog.api.authz.decisions import authorization, check_recording_outage, require_rung
 from catalog.api.authz.objects import rung_label, rung_on
 from catalog.api.authz.request_reads import json_body_or_none, rename_landing
 from catalog.api.authz.rungs import (
@@ -339,11 +338,8 @@ async def spec_vend_tier(context: AuthzContext, *, ns: LanceNamespace, segments:
         UnauthenticatedError: FGA is on and nobody is signed in.
     """
     obj = fga_ids.table_object(table_uuid)
-    if context.settings.fga_enabled:
-        client = require_wired(context.client)
-        if context.token is None:
-            raise UnauthenticatedError("authentication required")
-        granted = await _granted_vend_tier(client, context.token.subject, obj)
+    if (authorized := authorization(context)) is not None:
+        granted = await _granted_vend_tier(authorized.client, authorized.subject, obj)
         if granted != "write":
             return granted
     if context.settings.maintenance_read_only:

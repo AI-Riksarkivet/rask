@@ -47,13 +47,13 @@ from lakehouse.events.bus import Bus, bus_dependency, bus_session
 from lakehouse.events.control_emit import make_control_emitter
 from lakehouse.events.signing import SigningKey, parse_published_keys
 from lakehouse.governed.admission import judge_before_the_body
-from lakehouse.governed.auth_lifespan import BootFailure, ModelRole, attach_auth
+from lakehouse.governed.auth_lifespan import BootFailure, ModelRole, attach_auth, openfga_dependency
 from lakehouse.governed.fga_provision import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
 from lakehouse.lance_metrics import register_lance_metrics
-from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
+from lakehouse.process.health import Dependency, HealthWatch
 from lakehouse.process.lifecycle import mark_draining, mark_started, mark_starting
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
@@ -153,7 +153,7 @@ async def _backfill_warehouse_grants(app: FastAPI) -> None:
     from catalog.api.warehouse_grant_backfill import backfill
 
     try:
-        seen, written, failures = await backfill(app.state.settings)
+        seen, written, failures = await backfill(app_wire(app, "settings", Settings), app_wire(app, "fga", OpenFgaClient, none_is_off=True))
     except Exception as exc:
         log.warning("warehouse_grant_backfill_error", extra={"error": str(exc)}, exc_info=exc)
         return

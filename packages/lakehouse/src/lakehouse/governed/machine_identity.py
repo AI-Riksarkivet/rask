@@ -24,7 +24,7 @@ import jwt
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from pydantic import BaseModel, ConfigDict, field_validator
 
-from lakehouse.governed.oidc import OIDCVerifier
+from lakehouse.governed.oidc import OIDCVerifier, claimed_issuer
 from lakehouse.governed.principal import CLIENT_IDP_SUFFIX, SERVICE_ACCOUNT_IDP, Principal
 from lakehouse.governed.projected_token import EmptyTokenFileError, read_token_file
 
@@ -98,10 +98,9 @@ class ServiceAccountVerifier:
     def issued(self, token: str) -> bool:
         """Whether the token claims this issuer: the question that routes it, asked before its signature is checked."""
         try:
-            claimed = jwt.decode(token, options={"verify_signature": False}).get("iss")
+            return claimed_issuer(token) == self.issuer
         except jwt.PyJWTError:
             return False
-        return isinstance(claimed, str) and claimed.rstrip("/") == self.issuer
 
     def refresh(self) -> list[tuple[str, str]]:
         """Fetch the issuer's keys now and report what failed; see `OIDCVerifier.refresh`."""

@@ -80,8 +80,9 @@ async def authorize_grant(
     Starlette so the endpoint re-parses the same bytes.
 
     Fails CLOSED on anything unexpected. The body is client-controlled and this runs BEFORE Pydantic,
-    so a non-dict, a non-string relation, or a rung the model has no ``can_grant_*`` for is a 403 —
-    never a 500, and never a check on a phantom relation.
+    so a non-dict or a non-string relation is the caller's malformed request (400, before any permission is asked,
+    ADR 0173 §4), and a rung the model has no ``can_grant_*`` for is a 403 — never a 500, and never a check on a
+    phantom relation.
 
     **REVOKE IS NOT GATED IDENTICALLY TO GRANT.** Gating a revoke on the rung's own ``can_grant_*`` would
     hold for ``owner`` and fail for everything at or below a delegate's rung: ``can_grant_reader`` is
@@ -109,8 +110,8 @@ async def authorize_grant(
     already inside.
 
     Raises:
-        InvalidInputError: The body is not JSON.
-        PermissionDeniedError: The body is not an access request, or the caller may not grant its rung.
+        InvalidInputError: The body is not JSON, not an object, or names no relation as a string.
+        PermissionDeniedError: The relation is no grantable rung on the type, or the caller may not grant it.
     """
     body, relation = await _grantable_rung(request, fga_type)
     obj = await require_rung(client, resolver, user=user, rung=rung_on(f"can_grant_{relation}", fga_type, segments))
@@ -130,8 +131,8 @@ async def authorize_revoke(
     taking a rung away.
 
     Raises:
-        InvalidInputError: The body is not JSON.
-        PermissionDeniedError: The body is not an access request, or the caller may not revoke its rung.
+        InvalidInputError: The body is not JSON, not an object, or names no relation as a string.
+        PermissionDeniedError: The relation is no grantable rung on the type, or the caller may not revoke it.
     """
     await _grantable_rung(request, fga_type)
     await require_rung(client, resolver, user=user, rung=rung_on("can_revoke_grant", fga_type, segments))
@@ -145,10 +146,10 @@ async def _grantable_rung(request: Request, fga_type: str) -> tuple[dict[str, ob
     """
     body = await json_body_or_400(request)
     if not isinstance(body, dict):
-        raise PermissionDeniedError("malformed access request body")
+        raise InvalidInputError("malformed access request body")
     relation = body.get("relation")
     if not isinstance(relation, str) or not relation:
-        raise PermissionDeniedError("malformed access request body: 'relation' must be a string")
+        raise InvalidInputError("malformed access request body: 'relation' must be a string")
     if f"can_grant_{relation}" not in grant_actions(fga_type):
         raise PermissionDeniedError(f"{relation!r} is not a grantable rung on {fga_type}")
     return body, relation

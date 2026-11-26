@@ -73,9 +73,10 @@ _reannounced = _meter.create_counter(
 _unreadable = _meter.create_counter(
     "catalog.commit_reconcile.unreadable",
     unit="{read}",
-    description="Reads the commit reconciler could not make: a table ref's version log past a point (the ref keeps its mark, "
-    "and every lost announcement after it waits until it is read), or a describe of a table it claims or of lineage's feed "
-    "(nothing is announced for that table, or on that tick, until it is read).",
+    description="Reads and re-announcements the commit reconciler could not make: a table ref's version log past a point "
+    "(the ref keeps its mark, and every lost announcement after it waits until it is read), a describe of a table it claims "
+    "or of lineage's feed (nothing is announced for that table, or on that tick, until it is read), or a missing version "
+    "it could not open or announce (it stays missing and the next tick tries again).",
 )
 _late_derived = _meter.create_counter(
     "catalog.erasure.late_derived",
@@ -366,7 +367,7 @@ class _Reconciled(BaseModel):
 async def _reconcile_table(table: _LiveTable, *, tick_pass: _Pass) -> _Reconciled:
     """Announce every committed version of ``table`` past the grace that the tick's feed lacks, and count what it did."""
     reannounced = unauthored = unreadable = 0
-    emitter, request, settings, so = tick_pass.emitter, tick_pass.request, tick_pass.settings, tick_pass.so
+    settings, so = tick_pass.settings, tick_pass.so
     try:
         found = await run_in_threadpool(
             partial(
@@ -388,19 +389,28 @@ async def _reconcile_table(table: _LiveTable, *, tick_pass: _Pass) -> _Reconcile
         _unreadable.add(len(found.unreadable))
         unreadable += len(found.unreadable)
     for scan in found.scans:
-        for commit in scan.missing:
-            await _announce(emitter, request=request, settings=settings, so=so, table=table, commit=commit)
-            _reannounced.add(1, {"lance.catalog.operation": commit.operation})
-            log.warning(
-                "commit_reannounced",
-                extra={"table": table.segments, "version": commit.version, "branch": commit.branch, "operation": commit.operation},
-            )
+        announced = [await _reannounce(commit, table=table, tick_pass=tick_pass) for commit in scan.missing]
         if scan.unauthored:
             _unauthored.add(len(scan.unauthored))
             log.error("commit_unauthored", extra={"table": table.segments, "versions": list(scan.unauthored), "branch": scan.branch})
-        reannounced += len(scan.missing)
+        reannounced += announced.count(True)
+        unreadable += announced.count(False)
         unauthored += len(scan.unauthored)
     return _Reconciled(reannounced=reannounced, unauthored=unauthored, unreadable=unreadable)
+
+
+async def _reannounce(commit: commit_reconcile.Commit, *, table: _LiveTable, tick_pass: _Pass) -> bool:
+    """Announce one missing version of ``table``; whether it was announced, a version this tick cannot open or announce
+    being counted unreadable and left for the next tick."""
+    try:
+        await _announce(tick_pass.emitter, request=tick_pass.request, settings=tick_pass.settings, so=tick_pass.so, table=table, commit=commit)
+    except Exception as exc:  # noqa: BLE001 — one version this tick cannot announce must not stop the others
+        log.error("commit_reannounce_failed", extra={"table": table.segments, "version": commit.version, "branch": commit.branch, "error": str(exc)[:300]})
+        _unreadable.add(1)
+        return False
+    _reannounced.add(1, {"lance.catalog.operation": commit.operation})
+    log.warning("commit_reannounced", extra={"table": table.segments, "version": commit.version, "branch": commit.branch, "operation": commit.operation})
+    return True
 
 
 async def _watch_released(settings: Settings, estate: LanceNamespace, so: StorageOptions) -> int:

@@ -44,6 +44,13 @@ def test_the_emitter_publishes_on_the_control_topic_under_the_events_own_id() ->
     assert CatalogControlEvent.model_validate(sent.event) == e  # pointer payload, round-trips
 
 
+def test_control_events_made_in_turn_order_by_their_ids_as_they_were_made() -> None:
+    """The id an outbox stages an event under lists the events of one moment in the order they were made."""
+    made = [_evt().event_id for _ in range(64)]
+
+    assert sorted(made) == made
+
+
 def test_make_control_emitter_selection() -> None:
     assert isinstance(make_control_emitter(enabled=True, bus=BusDouble(), timeout_seconds=5, service="catalog", sign=None), BusControlEmitter)
     # Off, or no connection to the bus → the no-op.

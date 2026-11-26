@@ -1,4 +1,4 @@
-"""`OIDC verifier ready` must be a measurement, and a verifier that has its keys keeps serving them.
+"""`oidc_verifier_ready` must be a measurement, and a verifier that has its keys keeps serving them.
 
 A READY LINE IS EARNED BY A FETCH. `OIDCVerifier(...)` performs no I/O, so a verifier merely built proves nothing about
 its issuer: a pod with a wrong `RASK_OIDC_ISSUER`, a wrong `RASK_OIDC_DISCOVERY_URL` (the split-horizon override) or an
@@ -16,15 +16,12 @@ fetch for itself, hold a worker thread for up to the fetch timeout, and answer 5
 """
 
 import base64
-import time
 from collections.abc import Iterator
 from typing import Any
 
 import httpx
-import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
-from jwt import jwk_set_cache
 
 from lakehouse.governed import oidc
 
@@ -57,16 +54,13 @@ def test_refresh_tries_every_configured_issuer(monkeypatch: pytest.MonkeyPatch) 
     # mutation survived the original ordering.
     def _second_only(self: httpx.Client, url: str, **_kw: object) -> httpx.Response:
         seen.append(url)
+        if url == f"{SECOND}/jwks":
+            return httpx.Response(200, json=keys, request=httpx.Request("GET", url))
         if url.startswith(SECOND):
             return httpx.Response(200, json=_ok_document(SECOND), request=httpx.Request("GET", url))
         raise httpx.ConnectError("connection refused")
 
-    def _keys(client: jwt.PyJWKClient) -> object:
-        seen.append(client.uri)
-        return keys
-
     monkeypatch.setattr(httpx.Client, "get", _second_only)
-    monkeypatch.setattr(oidc._CredentialedJWKClient, "fetch_data", _keys)
 
     failures = oidc.OIDCVerifier([ISSUER, SECOND], "rask", 300).refresh()
 
@@ -77,16 +71,6 @@ def test_refresh_tries_every_configured_issuer(monkeypatch: pytest.MonkeyPatch) 
 @pytest.fixture
 def clock() -> Iterator[list[float]]:
     yield [1_000.0]
-
-
-class _Later:
-    """The clock PyJWT times its key-set cache by (`jwt.jwk_set_cache.time`), ``seconds`` ahead of the real one."""
-
-    def __init__(self, seconds: float) -> None:
-        self._seconds = seconds
-
-    def monotonic(self) -> float:
-        return time.monotonic() + self._seconds
 
 
 def test_a_refreshed_verifier_serves_its_keys_through_an_issuer_outage_past_its_ttl(
@@ -103,9 +87,7 @@ def test_a_refreshed_verifier_serves_its_keys_through_an_issuer_outage_past_its_
         raise httpx.ConnectError("the identity provider is down")
 
     monkeypatch.setattr(httpx.Client, "get", _down)
-    monkeypatch.setattr(oidc._CredentialedJWKClient, "fetch_data", _down)
     clock[0] += 10 * 300
-    monkeypatch.setattr(jwk_set_cache, "time", _Later(10 * 300))
 
     claims = verifier.verify(dex_issuer.mint("alice", connector="local", audience="rask"))
 

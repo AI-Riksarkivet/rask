@@ -5,8 +5,8 @@ welded handing out access to owning the data. The rung being handed out lives in
 path-suffix gate cannot express "may grant reader" — this dependency reads the body, exactly as
 ``authorize_batch`` already does for the batch routes.
 
-It runs BEFORE Pydantic on client-controlled JSON, so every malformed shape must be a 403 rather than
-a 500 — and, more importantly, a rung with no ``can_grant_*`` on the type must be refused HERE rather
+It runs BEFORE Pydantic on client-controlled JSON, so every malformed shape must be the caller's 400 rather than
+a 500 (ADR 0173 §4: identity, then shape, then authorization) — and, more importantly, a rung with no ``can_grant_*`` on the type must be refused HERE rather
 than reaching OpenFGA, where an undefined relation is a 400 that fails closed to a 503 for every
 caller: an outage wearing a permission error's clothes.
 
@@ -19,7 +19,7 @@ from typing import Any, cast
 
 import pytest
 from fastapi import Request
-from lance_namespace import PermissionDeniedError
+from lance_namespace import InvalidInputError, PermissionDeniedError
 from starlette.types import Message
 
 from catalog.api.authz import grant_authority
@@ -159,8 +159,8 @@ def test_a_grant_is_gated_on_the_rung_in_its_body_and_never_raises_its_callers_o
         pytest.param([], id="list-body"),
     ],
 )
-def test_a_non_dict_body_is_denied_not_crashed(body: Any) -> None:
-    with pytest.raises(PermissionDeniedError, match=r"^malformed access request body$"):
+def test_a_non_dict_body_is_a_malformed_request(body: Any) -> None:
+    with pytest.raises(InvalidInputError, match=r"^malformed access request body$"):
         _run(body)
 
 
@@ -170,8 +170,8 @@ def test_a_non_dict_body_is_denied_not_crashed(body: Any) -> None:
         pytest.param({"user": "dex~bob"}, id="missing-relation"),
     ],
 )
-def test_a_malformed_relation_is_denied(body: Any) -> None:
-    with pytest.raises(PermissionDeniedError, match=r"^malformed access request body: 'relation' must be a string$"):
+def test_a_malformed_relation_is_a_malformed_request(body: Any) -> None:
+    with pytest.raises(InvalidInputError, match=r"^malformed access request body: 'relation' must be a string$"):
         _run(body)
 
 

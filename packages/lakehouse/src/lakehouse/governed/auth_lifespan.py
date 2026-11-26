@@ -47,7 +47,8 @@ from collections.abc import Sequence
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from starlette.concurrency import run_in_threadpool
+from lakehouse.process.health import Dependency
+from lakehouse.process.own_threads import on_own_threads
 
 
 if TYPE_CHECKING:
@@ -120,7 +121,7 @@ async def build_fga_client(
         client = fga_provision.make_client(
             settings.fga_api_url, store_id, model_id, token_file=settings.fga_token_file, timeout_seconds=settings.fga_timeout_seconds
         )
-        log.info("%s: FGA client ready (%s)", service, settings.fga_api_url)
+        log.info("openfga_client_ready", extra={"service": service, "api_url": settings.fga_api_url})
     except fga_provision.OpenFgaModelAbsentError as exc:
         # Fails CLOSED, and never by provisioning: the service that noticed must not be the one that decides
         # what everyone is allowed to do. A `CRASH` caller lets it end the boot rather than serve with no checker
@@ -178,14 +179,14 @@ async def attach_auth(
         except Exception:
             if on_failure is BootFailure.CRASH:
                 raise
-            log.exception("%s: OIDC verifier failed to build — governed routes will 503", service)
+            log.exception("oidc_verifier_build_failed", extra={"service": service})
 
     try:
         await _attach_service_account_verifier(app, settings, service=service, loops=loops)
     except Exception:
         if on_failure is BootFailure.CRASH:
             raise
-        log.exception("%s: service-account verifier failed to build — service callers will 503", service)
+        log.exception("service_account_verifier_build_failed", extra={"service": service})
 
     app.state.decider = build_catalog_decider(settings, service=service)
     if app.state.decider is not None:
@@ -237,7 +238,7 @@ async def _attach_person_verifier(app: FastAPI, settings: GovernedAuthSettings, 
     #
     # OFF THE EVENT LOOP: `refresh` performs bounded but blocking HTTP, and this runs inside the
     # lifespan of an async app. Awaiting it inline would stall the worker.
-    failures = await run_in_threadpool(app.state.oidc.refresh)
+    failures = await on_own_threads(app.state.oidc.refresh)
     loops.keep("oidc-keys", app.state.oidc.refresh_forever)
     if failures:
         # NOT FATAL, and never readiness. Gating startup or `/readyz` on a downstream IdP
@@ -245,9 +246,9 @@ async def _attach_person_verifier(app: FastAPI, settings: GovernedAuthSettings, 
         # worse than the 503 the door answers on its own. The pod serves and says what is
         # wrong; an operator reads this line.
         for issuer, reason in failures:
-            log.error("%s: OIDC issuer unusable (issuer=%s): %s", service, issuer, reason)
+            log.error("oidc_issuer_unusable", extra={"service": service, "issuer": issuer, "reason": reason})
     else:
-        log.info("%s: OIDC verifier ready (issuers=%s, discovery reached)", service, ", ".join(provider.issuer for provider in providers))
+        log.info("oidc_verifier_ready", extra={"service": service, "issuers": [provider.issuer for provider in providers]})
 
 
 async def _attach_service_account_verifier(app: FastAPI, settings: GovernedAuthSettings, *, service: str, loops: Supervisor) -> None:
@@ -267,12 +268,12 @@ async def _attach_service_account_verifier(app: FastAPI, settings: GovernedAuthS
         max_lifetime=settings.sa_max_token_seconds,
     )
     # Proved at boot, off the loop, reported and never fatal: the Dex verifier's reasons above.
-    failures = await run_in_threadpool(app.state.sa_oidc.refresh)
+    failures = await on_own_threads(app.state.sa_oidc.refresh)
     loops.keep("service-account-keys", app.state.sa_oidc.refresh_forever)
     for issuer, reason in failures:
-        log.error("%s: service-account issuer unusable (issuer=%s): %s", service, issuer, reason)
+        log.error("service_account_issuer_unusable", extra={"service": service, "issuer": issuer, "reason": reason})
     if not failures:
-        log.info("%s: service-account verifier ready (issuer=%s, discovery reached)", service, sa_issuer)
+        log.info("service_account_verifier_ready", extra={"service": service, "issuer": sa_issuer})
 
 
 def build_catalog_decider(settings: FgaSettings, *, service: str) -> AccessDecider | None:
@@ -294,8 +295,14 @@ def build_catalog_decider(settings: FgaSettings, *, service: str) -> AccessDecid
     def token() -> str:
         return read_identity_token(token_file)
 
-    log.info("%s: authorization decided by the catalog (%s)", service, settings.fga_decider_url)
+    log.info("authorization_decider_ready", extra={"service": service, "decider_url": settings.fga_decider_url})
     return CatalogDecider(settings.fga_decider_url, token=token, timeout_seconds=settings.fga_timeout_seconds)
+
+
+def openfga_dependency(app: FastAPI, *, required: bool) -> list[Dependency]:
+    """OpenFGA, read under the client this process holds (``app.state.fga``), or nothing when it asks OpenFGA nothing."""
+    fga = getattr(app.state, "fga", None)
+    return [Dependency(name="openfga", read=fga.get_store, required=required)] if fga is not None else []
 
 
 __all__ = [
@@ -304,5 +311,6 @@ __all__ = [
     "attach_auth",
     "build_catalog_decider",
     "build_fga_client",
+    "openfga_dependency",
     "person_verifier",
 ]

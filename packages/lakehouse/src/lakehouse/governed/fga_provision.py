@@ -10,7 +10,6 @@ import asyncio
 import json
 import logging
 from collections.abc import Iterable
-from contextlib import suppress
 from typing import Any, Final, Self, override
 
 from lance_namespace import ServiceUnavailableError
@@ -27,6 +26,7 @@ from pydantic import BaseModel, ConfigDict
 from lakehouse.governed import fga_model
 from lakehouse.governed.fga_resilience import DEFAULT_RETRY, FAIL_CLOSED, ONE_ATTEMPT, RetryPolicy, guarded
 from lakehouse.governed.machine_identity import read_identity_token
+from lakehouse.process.lifecycle import closed_quietly
 from lakehouse.process.own_threads import on_own_threads
 
 
@@ -549,8 +549,8 @@ async def dispose(app: object) -> None:
     connection per replica on OpenFGA until its own idle timeout, and the only trace is an "Unclosed
     client session" line on the way out.
 
-    SUPPRESSED, NEVER RAISED. A shutdown path that raises hides whatever came after it, and a failed
-    close cannot be retried against anything on a pod that is already leaving. Absent or `None` is
+    LOGGED AT DEBUG, NEVER RAISED (`closed_quietly`). A shutdown path that raises hides whatever came after it, and a
+    failed close cannot be retried against anything on a pod that is already leaving. Absent or `None` is
     silent too: FGA-off stacks never build one, and a lifespan that failed before it got that far must
     still be able to unwind.
     """
@@ -558,8 +558,7 @@ async def dispose(app: object) -> None:
     # The decider too: a catalog decider holds an HTTP pool of its own, and a store decider's close is a no-op.
     for held in (getattr(state, "decider", None), getattr(state, "fga", None)):
         if held is not None:
-            with suppress(Exception):
-                await held.close()
+            await closed_quietly(held.close)
 
 
 __all__ = [

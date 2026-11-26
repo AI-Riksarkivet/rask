@@ -198,12 +198,11 @@ def test_batch_commit_answers_503_when_openfga_cannot_answer_an_item(client: Tes
 
 
 def test_fail_closed_when_fga_client_missing(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    """CONTRACT: FGA enabled but ``app.state.fga`` absent -> 503 (never silently allow)."""
+    """CONTRACT: FGA enabled but no client built (``app.state.fga`` is None) -> 503 (never silently allow)."""
     fake_ns.describe_table.return_value = DescribeTableResponse(location="s3://x")
     _wire(client)
-    # Simulate an unwired client (e.g. lifespan provisioning failed).
-    if hasattr(app_of(client).state, "fga"):
-        delattr(app_of(client).state, "fga")
+    # A client the lifespan could not build: `attach_auth` wires None, and leaves it so when provisioning fails.
+    app_of(client).state.fga = None
 
     # check must never even be reached.
     def boom(*_a: object, **_k: object):

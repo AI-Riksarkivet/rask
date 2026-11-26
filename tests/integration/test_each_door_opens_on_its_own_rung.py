@@ -31,6 +31,8 @@ from tests.governed_catalog import ROWS, GovernedCatalog
 
 #: The Lance Namespace spec's PermissionDenied (`lance_docs/ns_catalog/spec.yaml`).
 PERMISSION_DENIED = 15
+#: The spec's InvalidInput, a request malformed whatever its caller holds.
+INVALID_INPUT = 13
 #: The estate's objects: bob's namespace, the table in it, an empty namespace in it, tables whose names hold a `#` and a `?`.
 NS, TABLE, SUB, HASHED = "lance_catalog$db1", "lance_catalog$db1$users", "lance_catalog$db1$sub", "lance_catalog$db1$us#ers"
 QUESTIONED = "lance_catalog$db1$us?ers"
@@ -310,13 +312,14 @@ def test_a_create_the_backend_refuses_seeds_no_grant(estate: Estate) -> None:
 
 
 def test_a_batch_body_too_malformed_to_judge_is_refused_whatever_its_caller_holds(estate: Estate) -> None:
-    """``operations`` that is no list names no table to judge, so it is refused 403 rather than passed or crashed on,
-    to a caller who writes every table the catalog holds."""
+    """``operations`` that is no list names no table to judge, so it is the caller's malformed request (400, before any
+    permission is asked, ADR 0173 §4) rather than passed or crashed on, to a caller who writes every table the catalog
+    holds."""
     estate.grant("writer", TABLE, OTHER, HASHED, QUESTIONED)
 
     answered = estate.catalog.client.post("/v1/table/batch-commit", json={"operations": 42}, headers=estate.catalog.bearer("alice"))
 
-    assert (answered.status_code, answered.json()["code"]) == (403, PERMISSION_DENIED), answered.text
+    assert (answered.status_code, answered.json()["code"]) == (400, INVALID_INPUT), answered.text
 
 
 @pytest.mark.parametrize(

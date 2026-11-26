@@ -55,7 +55,7 @@ from lakehouse.lancekit import manifest_wire
 from lakehouse.lancekit.listing_floor import FLOOR_KEY
 from lakehouse.lancekit.manifest_names import committed_version
 from lakehouse.naming import UUID_PROPERTY
-from tests.integration.lineage_app import catalog_tick, joined_bus, live_catalog, live_lineage
+from tests.integration.lineage_app import JoinedBus, catalog_tick, joined_bus, live_catalog, live_lineage
 from tests.traces import trace_id_of
 
 
@@ -401,11 +401,11 @@ def test_a_lost_announcement_is_on_the_feed_after_one_tick_exactly_once(
 @contextmanager
 def _governed_estate(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any, *, reconcile_period: str = "86400"
-) -> Generator[tuple[httpx.Client, str]]:
+) -> Generator[tuple[httpx.Client, str, JoinedBus]]:
     """A catalog alice is signed in to and the lineage that keeps its feed, the bus between them joined: the catalog's
-    client and its url. The reconciler looks for a version at once (no grace)."""
+    client, its url and the bus. The reconciler looks for a version at once (no grace)."""
     alice = {"Authorization": f"Bearer {dex_issuer.mint('alice', connector='local', audience='lance-catalog')}"}
-    joined_bus(monkeypatch)
+    bus = joined_bus(monkeypatch)
     env = {
         "LANCE_COMMIT_RECONCILE_GRACE_SECONDS": "0",
         # The reconciler runs, so doors file their commits; its own timer claims one window at the start and no other.
@@ -427,7 +427,7 @@ def _governed_estate(
         monkeypatch.setenv("RASK_CATALOG_IDENTITY_TOKEN_FILE", str(lineage_token))
         monkeypatch.setenv("RASK_OIDC_ENABLED", "false")
         with live_lineage(catalog_url, monkeypatch):
-            yield catalog, catalog_url
+            yield catalog, catalog_url, bus
 
 
 def _pending_entries() -> list[Path]:
@@ -478,7 +478,7 @@ def test_a_table_no_door_committed_to_since_its_entries_lapsed_is_not_read_by_th
 ) -> None:
     from catalog.api import commit_reconcile
 
-    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url, _bus):
         assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
         filed = _filed_for()
@@ -495,7 +495,7 @@ def test_a_table_the_tick_could_not_read_keeps_its_entries_and_the_tables_it_rea
 ) -> None:
     from catalog.api import commit_reconcile
 
-    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url, _bus):
         assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         for table in ("t", "u"):
             assert catalog.post(f"/v1/table/lance_catalog$db${table}/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
@@ -508,10 +508,39 @@ def test_a_table_the_tick_could_not_read_keeps_its_entries_and_the_tables_it_rea
         assert (ticked.unreadable, _filed_for()) == (1, {unread})
 
 
+def test_a_version_the_tick_cannot_open_to_announce_stops_no_other_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any
+) -> None:
+    """Each table's create was lost while the bus was away; the store then fails to open u's version for its
+    re-announcement. The tick counts that version unreadable and keeps u's entries, and still announces t."""
+    from catalog.api import commit_reconcile
+    from catalog.services.tables import versions
+
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url, bus):
+        assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
+        bus.away = True
+        for table in ("u", "t"):
+            assert catalog.post(f"/v1/table/lance_catalog$db${table}/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
+        bus.away = False
+        unread = _uuid_of(catalog, "u")
+        _lapse_every_pending_entry()
+        real_read = versions.read_version_and_schema
+
+        def unopenable_for_u(location: str, so: Any, segments: list[str], **pinned: Any) -> Any:
+            if segments[-1] == "u":
+                raise OSError("the store did not answer")
+            return real_read(location, so, segments, **pinned)
+
+        monkeypatch.setattr(versions, "read_version_and_schema", unopenable_for_u)
+        ticked = catalog_tick(catalog_url, commit_reconcile.tick)
+
+        assert (ticked.reannounced, ticked.unreadable, _filed_for()) == (1, 1, {unread})
+
+
 def test_a_table_the_walk_could_not_read_is_filed_for_the_next_tick(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any) -> None:
     from catalog.api import commit_reconcile
 
-    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url, _bus):
         assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
         unread = _uuid_of(catalog, "t")
@@ -532,7 +561,7 @@ def test_the_entries_of_a_table_no_claim_records_any_more_are_removed_unread(
     from lakehouse.lancekit.base_refs import decoded_path
     from lakehouse.records import location_claims
 
-    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url, _bus):
         assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
         # The claim on the table's location is gone, as it is once a dropped table is purged.
@@ -550,7 +579,7 @@ def test_a_version_committed_past_every_door_is_counted_by_the_walk_and_never_re
 ) -> None:
     from catalog.api import commit_reconcile
 
-    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url, _bus):
         assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
         _lapse_every_pending_entry()
@@ -576,7 +605,7 @@ def test_a_doors_commit_files_its_table_for_the_next_tick(
 ) -> None:
     from catalog.api import commit_reconcile
 
-    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url, _bus):
         assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
         _lapse_every_pending_entry()
@@ -611,7 +640,7 @@ def test_a_door_that_cannot_file_its_commit_makes_none_and_leaves_nothing(
     from catalog.core.config import get_settings
     from lakehouse.records import commit_records
 
-    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url):
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer) as (catalog, catalog_url, _bus):
         assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
         _lapse_every_pending_entry()
@@ -631,7 +660,7 @@ def test_a_door_that_cannot_file_its_commit_makes_none_and_leaves_nothing(
 
 
 def test_a_catalog_that_runs_no_reconciler_files_no_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, dex_issuer: Any, sa_issuer: Any) -> None:
-    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer, reconcile_period="0") as (catalog, _):
+    with _governed_estate(tmp_path, monkeypatch, dex_issuer, sa_issuer, reconcile_period="0") as (catalog, _, _bus):
         assert catalog.post("/v1/namespace/lance_catalog$db/create", json={}).status_code == 200
         assert catalog.post("/v1/table/lance_catalog$db$t/create", content=_rows(0, 3), headers=_ARROW).status_code == 200
 

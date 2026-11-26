@@ -1,11 +1,10 @@
 """OIDC ID-token verification wired directly on **PyJWT** (no python-jose / wrapper lib).
 
-The cryptography is PyJWT's, not ours: ``PyJWKClient`` fetches and parses the provider's JWKS (this module holds the
-signing keys it returns, never the client: see the rules below) and
-``jwt.decode`` does the signature / issuer / audience / expiry math. What we add is the thin OIDC
-plumbing PyJWT does not: discover the provider's ``.well-known/openid-configuration`` for the issuer +
-JWKS URI, and enforce a *local* signing-algorithm allowlist before handing the token to ``jwt.decode``
-(below). Provider-agnostic — works with Keycloak, Dex, Okta, Auth0, Entra, or Google by setting the
+The cryptography is PyJWT's, not ours: ``PyJWKSet`` builds the provider's keys and ``jwt.decode`` does the signature /
+issuer / audience / expiry math. What we add is the thin OIDC plumbing PyJWT does not: fetch, with httpx, the provider's
+``.well-known/openid-configuration`` for the issuer + JWKS URI and then the key set (this module holds the signing keys
+it parsed, never a client: see the rules below), and enforce a *local* signing-algorithm allowlist before handing the
+token to ``jwt.decode`` (below). Provider-agnostic — works with Keycloak, Dex, Okta, Auth0, Entra, or Google by setting the
 issuer + audience. No JWT cryptography is written here.
 
 Security posture:
@@ -75,7 +74,7 @@ import threading
 import time
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Annotated, Any, Final, override
+from typing import Annotated, Any, Final
 from urllib.parse import urlsplit
 
 import httpx
@@ -94,9 +93,8 @@ _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
 #: One constant because the two were asymmetric, and the unstated half was the one that matters more
 #: (SKG-12). Discovery is fetched once per issuer per `cache_ttl`; the key set is fetched again when a token
 #: presents an unknown `kid`, at most once per `UNKNOWN_KID_REFRESH_INTERVAL_SECONDS` — on the REQUEST
-#: path, at exactly the moment an IdP is mid-rotation and least healthy. `PyJWKClient` is not unbounded (PyJWT defaults it to 30s), but it was left to a
-#: library default twice this module's own budget and free to drift on an upgrade, so a hung IdP held a
-#: request worker for twice as long as the deployment ever decided it should.
+#: path, at exactly the moment an IdP is mid-rotation and least healthy. Both fetches go through one `httpx.Client` built
+#: with this budget, so a hung IdP holds a request worker for as long as the deployment decided and no library default.
 HTTP_FETCH_TIMEOUT_SECONDS = 15.0
 
 #: The least time between two key-set refetches forced by a token naming a `kid` the cached set does not hold, per
@@ -163,8 +161,8 @@ class _Discovery(BaseModel):
     """The subset of the provider's discovery document we rely on (boundary-validated)."""
 
     issuer: str
-    # Checked here, where a bad value is the document's fault: `_require_https` and `PyJWKClient` parse it
-    # outside any mapping, and raise `ValueError` / `PyJWKClientError` for one that does not parse or is not HTTP.
+    # Checked here, where a bad value is the document's fault: `_require_https` and the key-set fetch parse it
+    # outside any mapping, and raise `ValueError` / `httpx.InvalidURL` for one that does not parse or is not HTTP.
     jwks_uri: Annotated[str, AfterValidator(_fetchable_url)]
     id_token_signing_alg_values_supported: list[str] = []
 
@@ -192,6 +190,17 @@ class _Provider(BaseModel):
 log = logging.getLogger(__name__)
 
 
+def claimed_issuer(token: str) -> str | None:
+    """The issuer ``token`` claims, UNVERIFIED and without a trailing slash: the question that routes a bearer to its
+    verifier, asked before any signature is checked; ``None`` for a token that names none.
+
+    Raises:
+        jwt.PyJWTError: The token does not decode.
+    """
+    claimed = jwt.decode(token, options={"verify_signature": False}).get("iss")
+    return claimed.rstrip("/") if isinstance(claimed, str) else None
+
+
 class _FetchCredential:
     """The bearer and CA an issuer's fetches carry; neither is set for a public IdP.
 
@@ -212,26 +221,27 @@ class _FetchCredential:
         return self.ssl_context if self.ssl_context is not None else True
 
 
-class _CredentialedJWKClient(jwt.PyJWKClient):
-    """PyJWT's key-set client, carrying the fetch credential read afresh on each fetch.
+class _KeySet(BaseModel):
+    """A JWK Set (RFC 7517 § 5) as the provider served it: its ``keys`` member, each key as the provider wrote it."""
 
-    `PyJWKClient.fetch_data` sends the ``headers`` it was built with; refreshing them first keeps the rest of
-    its contract as shipped, including following no redirect, so the bearer reaches no host but the one the key-set URL
-    names. A token that cannot be read is an ``OSError``, which `OIDCVerifier._fetch_keys` charges to the provider.
+    model_config = ConfigDict(frozen=True)
 
-    ONE CLIENT, ONE FETCH, NO CACHE. `_fetch_keys` builds one per fetch and keeps only the signing keys it returns, so no
-    held state lives in a client: PyJWT 2.15.1 caches any set that parses before it filters for signing keys, and a
-    client kept would hold, and fetch again in place, a set no key of which signs.
+    keys: list[dict[str, Any]]
+
+
+def _signing_keys(body: bytes) -> tuple[jwt.PyJWK, ...]:
+    """The keys of the set ``body`` that sign (``use`` of ``sig`` or none) and carry a ``kid``, the selection PyJWT's own
+    key-set client makes (`PyJWKClient.get_signing_keys`, PyJWT 2.15.1).
+
+    Raises:
+        ValidationError: ``body`` is not a JWK Set, nested past pydantic-core's own JSON depth included.
+        jwt.PyJWKSetError: No key of the set can be built, or none of them signs.
     """
-
-    def __init__(self, uri: str, credential: _FetchCredential, *, max_cached_keys: int, timeout: float) -> None:
-        super().__init__(uri, cache_jwk_set=False, max_cached_keys=max_cached_keys, timeout=timeout, ssl_context=credential.ssl_context)
-        self._credential = credential
-
-    @override
-    def fetch_data(self) -> Any:
-        self.headers = self._credential.headers()
-        return super().fetch_data()
+    built = jwt.PyJWKSet(_KeySet.model_validate_json(body).keys).keys
+    signing = tuple(key for key in built if key.public_key_use in {"sig", None} and key.key_id)
+    if not signing:
+        raise jwt.PyJWKSetError("The JWK Set holds no signing key")
+    return signing
 
 
 class _Flight:
@@ -549,30 +559,31 @@ class OIDCVerifier:
         docstring's rule 2); every failure to produce them is the PROVIDER's, never the token's. Called only by `_fetch`
         and by the unknown-`kid` flight (`_signing_key_for`).
 
-        The failures are classified by AUTHOR, not by type: the try body is one third-party call whose every
-        input is the provider's response, so whatever it raises is the provider's. Two kinds:
+        The failures are classified by AUTHOR, not by type: every input after the fetch is the provider's response, so
+        whatever reading it raises is the provider's. Two kinds:
 
-        * the set could not be fetched — `PyJWKClientConnectionError`, which `fetch_data` raises for a request
-          that fails, is redirected, or is answered short of a whole response (`http.client.HTTPException`), or
-          an `OSError` it does not wrap: a connection reset while the body is read, or the fetch credential
-          failing to read;
-        * anything else: the set arrived and holds no usable signing key (every key marked for another ``use``, or
-          carrying no ``kid``, or none PyJWK can build). Measured on PyJWT 2.15.1 (2026-11-06) that is `PyJWTError`
-          (`PyJWKClientError`, `PyJWKSetError`), `ValueError` (a body that is not JSON), `TypeError` (a key whose
-          ``alg`` is not hashable) and `RecursionError` (a body nested past the JSON parser's depth), but it is
-          caught whole: PyJWK hands provider values to `cryptography`, whose exceptions are not all `ValueError`s
-          (`UnsupportedAlgorithm` subclasses `Exception` alone), and a type left out of a named tuple would answer
-          500 and be audited `invalid_token` against the caller.
+        * the set could not be fetched — an `httpx.HTTPError`: a request that fails or times out, an answer that is not
+          200 (a redirect included: httpx follows none unless asked, so the bearer reaches no host but the one the
+          key-set URL names), or one cut short; or an `OSError`, the fetch credential failing to read;
+        * anything else: the set arrived and holds no usable signing key. `ValidationError` for a body that is not a JWK
+          Set, `PyJWKSetError` for one whose keys PyJWK cannot build or none of which signs, and `TypeError` for a key
+          whose ``alg`` is not hashable (PyJWK looks it up in a dict, and `PyJWKSet` skips only keys failing with
+          `PyJWTError`); it is caught whole, because PyJWK hands provider values to `cryptography`, whose exceptions are
+          not all `ValueError`s (`UnsupportedAlgorithm` subclasses `Exception` alone), and a type left out of a named
+          tuple would answer 500 and be audited `invalid_token` against the caller.
 
         A set that failed is not asked for again in this call: against a slow IdP a second fetch doubles the time a
         request is held, and the next attempt is the pace's or `refresh`'s to make.
         """
-        client = _CredentialedJWKClient(jwks_uri, self._credential, max_cached_keys=16, timeout=HTTP_FETCH_TIMEOUT_SECONDS)
         try:
-            return tuple(client.get_signing_keys())
-        except (jwt.PyJWKClientConnectionError, OSError) as exc:
+            with httpx.Client(timeout=HTTP_FETCH_TIMEOUT_SECONDS, verify=self._credential.verify()) as client:
+                response = client.get(jwks_uri, headers=self._credential.headers())
+                response.raise_for_status()
+        except (httpx.HTTPError, OSError) as exc:
             log.warning("oidc_jwks_unreachable", extra={"jwks_uri": jwks_uri, "error": str(exc)})
             raise ProviderUnavailableError(f"The OIDC key set could not be reached at {jwks_uri}") from exc
+        try:
+            return _signing_keys(response.content)
         # Classified by author, not by type — see this docstring.
         except Exception as exc:
             log.warning("oidc_jwks_malformed", extra={"jwks_uri": jwks_uri, "error": str(exc)})
@@ -628,12 +639,11 @@ class OIDCVerifier:
         is a 401 that costs no fetch and never waits on a provider it does not belong to.
         """
         try:
-            claimed = jwt.decode(token, options={"verify_signature": False}).get("iss")
+            claimed = claimed_issuer(token)
         except jwt.PyJWTError as exc:
             raise UnauthenticatedError("Invalid or expired token") from exc
-        for configured in self._issuers:
-            if isinstance(claimed, str) and claimed.rstrip("/") == configured:
-                return self._resolve(configured)
+        if claimed in self._issuers:
+            return self._resolve(claimed)
         raise UnauthenticatedError("Unrecognized token issuer")
 
     def _signing_key_for(self, provider: _Provider, token: str) -> jwt.PyJWK:
@@ -731,4 +741,5 @@ __all__ = [
     "IDToken",
     "OIDCVerifier",
     "ProviderUnavailableError",
+    "claimed_issuer",
 ]

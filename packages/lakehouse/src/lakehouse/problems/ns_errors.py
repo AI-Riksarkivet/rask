@@ -141,10 +141,16 @@ def error_response(exc: LanceNamespaceError) -> JSONResponse:
     A 5xx-mapped error answers a GENERIC ``detail``, never ``str(exc)``, so internals (paths, DSNs, driver messages)
     reach the log only. A client (4xx) error keeps its message: it is actionable and self-authored, not an internal
     leak. The app's handler answers with this, and so does a request layer that answers before or outside the app's
-    handlers, since an exception raised from a layer passes none of them.
+    handlers, since an exception raised from a layer passes none of them. A 401 names the scheme a caller must present
+    (RFC 6750 § 3), and nothing about why its bearer was refused.
     """
     status = status_for(int(exc.code))
-    return problem_response(exc.code, status=status, title=type(exc).__name__, detail=_detail(exc, status), extensions=_extensions(exc))
+    headers = _CHALLENGE if status == HTTPStatus.UNAUTHORIZED else None
+    return problem_response(exc.code, status=status, title=type(exc).__name__, detail=_detail(exc, status), headers=headers, extensions=_extensions(exc))
+
+
+#: The challenge a 401 carries: the one scheme every governed door admits.
+_CHALLENGE: Final = frozendict({"WWW-Authenticate": "Bearer"})
 
 
 def _detail(exc: LanceNamespaceError, status: int) -> str:

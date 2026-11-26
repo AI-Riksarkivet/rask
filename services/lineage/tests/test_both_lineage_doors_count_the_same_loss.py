@@ -28,7 +28,7 @@ import pytest
 from fastapi import FastAPI, Request
 from lance_namespace import PermissionDeniedError
 
-from lineage.api.security import Caller
+from lakehouse.governed.door_caller import NamedCaller
 from lineage.core.config import LineageSettings
 from lineage.core.metrics import Door, Outcome
 from lineage.core.refusals import UnauthoredRunError, UngovernedOutputError
@@ -83,7 +83,7 @@ async def test_the_http_door_counts_a_refusal_the_way_the_subscriber_does(error:
     async def _deny(*_args: Any, **_kw: Any) -> None:
         raise error
 
-    def _author(event: RunEvent | DatasetEvent, _token: Caller | None) -> RunEvent | DatasetEvent:
+    def _author(event: RunEvent | DatasetEvent, _token: NamedCaller | None) -> RunEvent | DatasetEvent:
         if isinstance(error, UnauthoredRunError):
             raise error
         return event

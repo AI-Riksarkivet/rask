@@ -352,13 +352,15 @@ groups:
           severity: warning
           service: catalog
         annotations:
-          summary: "The commit reconciler cannot read a table's version log, the table, or lineage's feed"
+          summary: "The commit reconciler cannot read a table's version log, the table, or lineage's feed, or cannot re-announce a version"
           description: >-
             The catalog's commit reconciler could not read a retained version, or its commit time, on a table's ref, so
             it kept that ref's mark and announces nothing after it until it can; or it could not describe a table it
-            claims, or lineage's feed, so it announced nothing for that table, or nothing at all on that tick. Read the
-            catalog's `commit_reconcile_ref_unreadable`, `commit_reconcile_table_unreadable`,
-            `commit_reconcile_feed_unreadable` and `commit_reconcile_table_failed` logs for the table and the error.
+            claims, or lineage's feed, so it announced nothing for that table, or nothing at all on that tick; or it could
+            not open or send the re-announcement of a missing version (the store or the bus did not answer), so that
+            version stays missing until a later tick announces it. Read the catalog's `commit_reconcile_ref_unreadable`,
+            `commit_reconcile_table_unreadable`, `commit_reconcile_feed_unreadable`, `commit_reconcile_table_failed` and
+            `commit_reannounce_failed` logs for the table and the error.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#committed-versions-re-announced
 
       # A root whose __manifest history the catalog cannot reclaim keeps a version per namespace operation again, and keeps

@@ -103,6 +103,8 @@ def doors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[TestClien
     application.include_router(tables.spec_router)
     application.include_router(credentials.management_router)
     application.state.vendor = _vendor()
+    # Authorization off, as the lifespan wires it for a catalog with FGA off.
+    application.state.fga = None
     monkeypatch.setattr(tables, "dataset_facts", lambda location, storage_options: VendFacts(read_version=1))
     monkeypatch.setattr(credentials, "dataset_facts", lambda location, storage_options, branch="": VendFacts(read_version=1))
     settings = catalog_settings(

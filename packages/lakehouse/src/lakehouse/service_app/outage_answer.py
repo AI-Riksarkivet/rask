@@ -5,7 +5,7 @@ the exception again so the server can log it (starlette 1.10.0 ``middleware/erro
 time, as ``Exception in ASGI application`` at ERROR. A store that did not answer is an outage the service expects and
 its caller retries, so it is answered here instead, by the app factory inside the request's trace: the spec's 503 with
 one WARN record under the service's logger (:func:`lakehouse.problems.ns_errors.store_unavailable`), and nothing raised
-on. Whether a failure is an outage is :func:`lakehouse.problems.outage.reads_as_store_outage`'s judgement, which reads any
+on. Whether a failure is an outage is :func:`lakehouse.storage.outage.reads_as_store_outage`'s judgement, which reads any
 exception, so no handler keyed on a class could catch them all. Any other failure, and an outage met once the answer has
 begun, is raised on unchanged.
 """

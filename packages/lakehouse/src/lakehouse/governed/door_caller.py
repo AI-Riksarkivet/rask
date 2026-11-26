@@ -18,17 +18,9 @@ from starlette.datastructures import State
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.idp_identity import IdpVerifier, PersonPrincipal
 from lakehouse.governed.machine_identity import ServiceAccountVerifier, ServicePrincipal
-from lakehouse.governed.oidc import ProviderUnavailableError
+from lakehouse.governed.oidc import ProviderUnavailableError, claimed_issuer
+from lakehouse.governed.settings import OidcSettings
 from lakehouse.naming import ANONYMOUS
-
-
-class DoorSettings(Protocol):
-    """What a door's settings say about who may knock."""
-
-    @property
-    def oidc_enabled(self) -> bool: ...
-    @property
-    def sa_issuer(self) -> str | None: ...
 
 
 class NamedCaller(Protocol):
@@ -44,7 +36,7 @@ def caller_subject(caller: NamedCaller | None) -> str:
     return caller.subject if caller is not None else ANONYMOUS
 
 
-def caller_of(state: State, settings: DoorSettings, bearer: str | None) -> PersonPrincipal | ServicePrincipal | None:
+def caller_of(state: State, settings: OidcSettings, bearer: str | None) -> PersonPrincipal | ServicePrincipal | None:
     """The caller ``bearer`` proves at the door whose app holds ``state``; ``None`` with OIDC off.
 
     Raises:
@@ -64,7 +56,7 @@ def caller_of(state: State, settings: DoorSettings, bearer: str | None) -> Perso
     return _proved(verifier, bearer or "")
 
 
-def _claims_the_service_account_issuer(bearer: str, settings: DoorSettings, verifier: ServiceAccountVerifier | None) -> bool:
+def _claims_the_service_account_issuer(bearer: str, settings: OidcSettings, verifier: ServiceAccountVerifier | None) -> bool:
     """Whether the bearer's unverified ``iss`` is the service-account issuer: the routing question, asked before any signature check.
 
     With no verifier built the configured issuer still answers it, so a service-account token is refused as an outage
@@ -75,10 +67,9 @@ def _claims_the_service_account_issuer(bearer: str, settings: DoorSettings, veri
     if not settings.sa_issuer:
         return False
     try:
-        claimed = jwt.decode(bearer, options={"verify_signature": False}).get("iss")
+        return claimed_issuer(bearer) == settings.sa_issuer.rstrip("/")
     except jwt.PyJWTError:
         return False
-    return isinstance(claimed, str) and claimed.rstrip("/") == settings.sa_issuer.rstrip("/")
 
 
 def _proved(verifier: IdpVerifier | ServiceAccountVerifier | None, bearer: str) -> PersonPrincipal | ServicePrincipal:
@@ -102,7 +93,6 @@ def _proved(verifier: IdpVerifier | ServiceAccountVerifier | None, bearer: str) 
 
 
 __all__ = [
-    "DoorSettings",
     "NamedCaller",
     "caller_of",
     "caller_subject",

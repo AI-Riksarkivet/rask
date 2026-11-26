@@ -279,7 +279,9 @@ retained version or its commit time; it keeps that ref's mark until the read suc
 `commit_reconcile_table_unreadable` ERROR log names a table it claims but could not describe, and a
 `commit_reconcile_feed_unreadable` one says lineage's feed could not be described, so that tick announced nothing; both
 are retried on the next tick (a table only the walk read is filed for it), and a table gone from the catalog is not one
-of them. A `commit_pending_unreadable` ERROR log names a table whose filed entries (`_commit_pending/<table uuid>/` on the
+of them. A `commit_reannounce_failed` ERROR log names a missing version the tick could not open or announce (the store or
+the bus did not answer): the alert counts it too, the version stays missing, and the next tick announces it; the tick
+goes on with every other version and table. A `commit_pending_unreadable` ERROR log names a table whose filed entries (`_commit_pending/<table uuid>/` on the
 control root) do not read: they are kept, and the walk reads the table. A write door answering 503 "did not answer
 filing the commit about to be made" means the store refused such an entry, and the door committed nothing.
 

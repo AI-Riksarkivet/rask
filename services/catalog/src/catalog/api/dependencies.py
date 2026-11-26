@@ -478,7 +478,7 @@ async def get_resolved_table(request: Request, ns: NamespaceDep, resolver: Resol
 ResolvedTableDep = Annotated[ResolvedTable, Depends(get_resolved_table)]
 
 
-def get_door_table(ns: NamespaceDep, settings: SettingsDep, resolved: ResolvedTableDep) -> DoorTable:
+async def get_door_table(ns: NamespaceDep, settings: SettingsDep, resolved: ResolvedTableDep) -> DoorTable:
     """The table the request's ``{id}`` resolved to, as a door reading or writing its data or metadata acts on it ([[LH-530]])."""
     return _door_table(ns, settings, resolved)
 
@@ -537,13 +537,12 @@ DataNamespaceDep = Annotated[LanceNamespace, Depends(get_data_namespace)]
 
 
 async def get_fga_client(request: Request) -> OpenFgaClient | None:
-    """The wired OpenFGA client from catalog.state, or ``None`` when FGA isn't provisioned.
+    """The OpenFGA client the lifespan wired (``app.state.fga``), ``None`` where authorization is off.
 
-    One place that knows where the client lives (``app.state.fga``), injected like
-    ``NamespaceDep`` instead of re-spelled as ``getattr(request.app.state, "fga", None)``
-    in every create/seed/list handler.
+    One place that knows where the client lives, injected like ``NamespaceDep``. A client never wired is a catalog that
+    did not start the way it serves (`app_wire`), never read as off.
     """
-    return getattr(request.app.state, "fga", None)
+    return app_wire(request, "fga", OpenFgaClient, none_is_off=True)
 
 
 FgaClientDep = Annotated[OpenFgaClient | None, Depends(get_fga_client)]

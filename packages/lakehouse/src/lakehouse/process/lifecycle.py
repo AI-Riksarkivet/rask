@@ -81,4 +81,4 @@ async def closed_quietly(close: Callable[[], Awaitable[object]]) -> None:
         log.debug("client_close_failed", extra={"close": getattr(close, "__qualname__", type(close).__name__)}, exc_info=True)
 
 
-__all__ = ["closed_quietly", "is_draining", "is_started", "mark_draining", "mark_started"]
+__all__ = ["closed_quietly", "is_draining", "is_started", "mark_draining", "mark_started", "mark_starting"]

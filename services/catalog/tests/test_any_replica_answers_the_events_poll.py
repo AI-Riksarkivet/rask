@@ -95,6 +95,8 @@ def estate(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: Sec
         app.include_router(events.management_router)
         app.dependency_overrides[request_settings] = lambda: settings
         app.state.bus = bus
+        # Authorization off, as the lifespan wires it for a catalog with FGA off.
+        app.state.fga = None
         attach_published_keys(app)
         apps.append(app)
     try:

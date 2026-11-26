@@ -19,60 +19,27 @@ idp id. A service-account token never falls
 through to the IdP, no header names the caller, and OpenFGA alone decides what the principal may do.
 """
 
-from typing import Annotated, cast, overload
+from typing import Annotated, overload
 
-from fastapi import Depends, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends
 
-from catalog.api.dependencies import SettingsDep, request_settings
-from catalog.core.config import Settings
-from lakehouse.governed.admission import admitted_caller, caller_judge
-from lakehouse.governed.door_caller import caller_of, caller_subject
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.machine_identity import ServicePrincipal
+from catalog.api.dependencies import request_settings
+from lakehouse.governed.admission import Caller, door_gate
+from lakehouse.governed.door_caller import caller_subject
 from lakehouse.naming import ANONYMOUS
 
 
-# auto_error=False: we raise UnauthenticatedError ourselves so 401s are problem+json.
-_bearer = HTTPBearer(auto_error=False, description="OIDC bearer token")
-_CredentialsDep = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
-
-#: A verified caller: a person the IdP vouched for, or a machine, a service the cluster vouched for or a Dex client the
-#: IdP vouched for. Authorization reads the principal key off either as `.subject`; `isinstance(token, ServicePrincipal)`
-#: is the estate's one machine test.
-type Caller = PersonPrincipal | ServicePrincipal
-
-
-def authenticate(
-    request: Request,
-    settings: SettingsDep,
-    credentials: _CredentialsDep,
-) -> Caller | None:
-    """Authenticate the request: a projected service-account token (a service) or an OIDC bearer (a person).
-
-    The caller `judge` admitted, when it ran before the body; otherwise judged here.
-    """
-    judged, caller = admitted_caller(request)
-    if judged:
-        return cast("Caller | None", caller)
-    return _authenticated(request, settings, credentials.credentials if credentials is not None else None)
-
-
-def _authenticated(request: Request, settings: Settings, bearer: str | None) -> Caller | None:
-    """The caller ``bearer`` proves, or ``None`` with OIDC off: judged, and recorded, as at every door (`door_caller`).
-
-    Every account in the cluster whose token carries this door's audience authenticates, as its own subject, and is
-    authorized by its tuples alone.
-    """
-    return caller_of(request.app.state, settings, bearer)
-
+#: The catalog's gate: every door depending on `authenticate` judges its caller from the headers before its body is
+#: read (`lakehouse.governed.admission`), so no caller without a token makes this service buffer one. Every account in
+#: the cluster whose token carries this door's audience authenticates, as its own subject, and is authorized by its
+#: tuples alone.
+_GATE = door_gate(request_settings)
+authenticate = _GATE.authenticate
+judge = _GATE.judge
 
 #: The authenticated caller (``None`` when OIDC is disabled). Endpoints that need claims depend on
 #: this and narrow with ``isinstance``; router-level use enforces authentication.
 CurrentToken = Annotated[Caller | None, Depends(authenticate)]
-#: Every door that depends on `authenticate` judges its caller from the headers before its body is read
-#: (`lakehouse.governed.admission`), so no caller without a token makes this service buffer one.
-judge = caller_judge(gate=authenticate, settings=request_settings, authenticated=_authenticated)
 
 
 @overload

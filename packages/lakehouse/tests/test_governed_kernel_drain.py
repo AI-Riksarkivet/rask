@@ -23,14 +23,13 @@ import logging
 from typing import Any, ClassVar, cast
 
 import aiohttp
-import httpx
 import pytest
 from lance_namespace import ServiceUnavailableError
 from openfga_sdk import OpenFgaClient
 from openfga_sdk.client.models import ClientTuple
 from openfga_sdk.models import ExpandResponse
 
-from lakehouse.governed import fga_reads, fga_resilience, fga_writes, oidc
+from lakehouse.governed import fga_reads, fga_resilience, fga_writes
 from lakehouse.governed.audit import AUDIT_LOGGER
 from tests.fga_answers import answer
 
@@ -151,45 +150,3 @@ def test_expand_tree_does_not_call_a_diamond_a_cycle() -> None:
         assert not owner.get("cycle"), f"the shared rung was mislabelled a cycle: {owner}"
         holders.append(owner["leaf"]["users"])
     assert holders == [["user:alice"], ["user:alice"]]
-
-
-# --------------------------------------------------------------------------- #
-# SKG-12 — the JWKS fetch is bounded
-# --------------------------------------------------------------------------- #
-
-
-def test_jwks_client_is_built_with_an_explicit_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SKG-12: an unbounded JWKS fetch parks a request worker on a hung IdP.
-
-    The discovery fetch three lines above it is bounded; the key fetch was not, and it is the one on
-    the per-token path (the discovery document is cached, a rotated `kid` is not).
-    """
-    captured: dict[str, Any] = {}
-
-    class _FakeJWKClient:
-        def __init__(self, uri: str, credential: object, *, max_cached_keys: int, timeout: float) -> None:
-            del credential
-            captured.update(uri=uri, max_cached_keys=max_cached_keys, timeout=timeout)
-
-        def get_signing_keys(self) -> list[object]:
-            return []
-
-    def _fake_get(self: Any, url: str, *a: object, **k: object) -> httpx.Response:
-        del self, a, k
-        return httpx.Response(
-            200,
-            json={
-                "issuer": "https://idp.example",
-                "jwks_uri": "https://idp.example/keys",
-                "id_token_signing_alg_values_supported": ["RS256"],
-            },
-            request=httpx.Request("GET", url),
-        )
-
-    monkeypatch.setattr(oidc, "_CredentialedJWKClient", _FakeJWKClient)
-    monkeypatch.setattr(httpx.Client, "get", _fake_get)
-
-    verifier = oidc.OIDCVerifier(issuer="https://idp.example", audience="rask", cache_ttl=60)
-    verifier._fetch("https://idp.example")
-
-    assert captured["timeout"] == oidc.HTTP_FETCH_TIMEOUT_SECONDS

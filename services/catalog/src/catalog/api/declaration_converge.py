@@ -49,9 +49,9 @@ from lakehouse.records.warehouse_records import DeleteMode, WarehouseRecord
 
 log = logging.getLogger(__name__)
 
-_failed = metrics.get_meter(__name__).create_counter(
+_failed = metrics.get_meter("lance.catalog").create_counter(
     "catalog.declaration_converge.failed",
-    unit="1",
+    unit="{object}",
     description="Objects of the mounted declaration a converge tick could not make or correct; the next tick tries again.",
 )
 _PROTECTED_BY = ProtectionChange(protected=True, by=DECLARATION.actor)
@@ -344,7 +344,7 @@ async def tick(ctx: Tick) -> ConvergeTick:
         return ConvergeTick(failed=["declaration"])
     client = await get_fga_client(request)
     # A door's announcer, for a change no caller made: the tick's scope carries no originator and no bearer.
-    announcer = get_announcer(
+    announcer = await get_announcer(
         request, settings=settings, client=client, resolver=Resolver(request, settings), control=ctx.control, uuids=ObjectUuids(request, settings)
     )
     converged = await _Converger(request, settings, client=client, control=ctx.control, announcer=announcer, vendor=await get_vendor(request)).run(declared)

@@ -21,30 +21,32 @@ A plain FastAPI app rather than `lakehouse.service_app.factory`'s: it has no gov
 state, and the chart runs it from the catalog image with ``uvicorn --factory``. It logs as every lakehouse process does
 (`lakehouse.process.log_handler.setup_logging`), so its lines reach stdout in the one format, at the one level. Its probes are the library's
 (`lakehouse.process.probes`): ``/readyz`` is ready while the issuer serves this pod its discovery document, the one thing
-the mirror depends on.
+the mirror depends on, as a health watch read it last (`lakehouse.process.health`): the probe awaits no fetch.
 """
 
 import logging
 import ssl
-from collections.abc import AsyncGenerator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Callable
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
+from functools import partial
 from typing import Annotated, Any, Final
 
 import httpx
 from fastapi import Depends, FastAPI, Request
 from lance_namespace import ServiceUnavailableError
-from pydantic import Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, identity_bearer
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.process.correlation import FRAMEWORK_TELEMETRY_OFF
 from lakehouse.process.draining import arm_drain_on_sigterm
-from lakehouse.process.health import Verdict
+from lakehouse.process.health import Dependency, HealthWatch
 from lakehouse.process.lifecycle import mark_draining, mark_started
 from lakehouse.process.log_handler import setup_logging
 from lakehouse.process.probes import make_probes_router
-from lakehouse.schemas.health import Readiness, ReadinessStatus
+from lakehouse.process.supervision import Supervisor
+from lakehouse.schemas.health import Readiness
 
 
 log = logging.getLogger(__name__)
@@ -67,7 +69,7 @@ class IssuerMirrorSettings(BaseSettings):
     timeout_seconds: float = Field(default=10.0, gt=0, alias="RASK_ISSUER_MIRROR_TIMEOUT_SECONDS")
 
 
-def _upstream(request: Request) -> httpx.AsyncClient:
+async def _upstream(request: Request) -> httpx.AsyncClient:
     return request.app.state.upstream
 
 
@@ -82,12 +84,29 @@ class IssuerUnansweredError(ServiceUnavailableError):
     """
 
 
-async def _fetch(client: httpx.AsyncClient, url: str, token_file: str) -> dict[str, Any]:
-    """One upstream GET carrying the mirror's token, read now.
+class _Discovery(BaseModel):
+    """The issuer's discovery document: the key set's address is the one field the mirror reads, every other is served on."""
+
+    model_config = ConfigDict(extra="allow")
+
+    jwks_uri: str
+
+
+class _KeySet(BaseModel):
+    """The issuer's key set (RFC 7517 § 5), served as the issuer answered it."""
+
+    model_config = ConfigDict(extra="allow")
+
+    keys: list[dict[str, Any]]
+
+
+async def _fetch[M: BaseModel](client: httpx.AsyncClient, url: str, token_file: str, *, shape: type[M]) -> M:
+    """One upstream GET carrying the mirror's token, read now, its answer read as ``shape``.
 
     Raises:
         ServiceUnavailableError: The mirror's own token cannot be read.
-        IssuerUnansweredError: The issuer did not answer, or answered another status than 200.
+        IssuerUnansweredError: The issuer did not answer, answered another status than 200, or answered a body that is
+            not the document.
     """
     try:
         response = await client.get(url, headers=identity_bearer(token_file))
@@ -101,20 +120,34 @@ async def _fetch(client: httpx.AsyncClient, url: str, token_file: str) -> dict[s
     if response.status_code != 200:
         log.warning("issuer_mirror_upstream_unanswered", extra={"url": url, "status": response.status_code})
         raise IssuerUnansweredError(f"the issuer answered {response.status_code} to {url}")
-    return response.json()
+    try:
+        return shape.model_validate_json(response.content)
+    except ValidationError as exc:
+        log.warning("issuer_mirror_upstream_unanswered", extra={"url": url, "status": response.status_code, "error": str(exc)[:300]})
+        raise IssuerUnansweredError(f"the issuer answered {url} with a body that is not its {shape.__name__.lstrip('_').lower()}") from exc
 
 
-def create_app(settings: IssuerMirrorSettings | None = None) -> FastAPI:
-    """The mirror app; ``settings`` defaults to the environment's (``uvicorn --factory`` passes none)."""
-    setup_logging()
-    resolved = settings or IssuerMirrorSettings()
-    issuer = resolved.issuer.rstrip("/")
+async def _discovered(client: httpx.AsyncClient, settings: IssuerMirrorSettings) -> _Discovery:
+    """The issuer's discovery document, fetched now under the mirror's own token."""
+    return await _fetch(client, f"{settings.issuer.rstrip('/')}{DISCOVERY_PATH}", settings.token_file, shape=_Discovery)
+
+
+def _lifespan(settings: IssuerMirrorSettings) -> Callable[[FastAPI], AbstractAsyncContextManager[None]]:
+    """The mirror's lifespan: its upstream client, and a health watch reading the issuer's discovery document, which
+    ``/readyz`` answers from."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-        verify: ssl.SSLContext | bool = ssl.create_default_context(cafile=resolved.ca_file) if resolved.ca_file else True
-        async with httpx.AsyncClient(verify=verify, timeout=resolved.timeout_seconds) as client:
+        verify: ssl.SSLContext | bool = ssl.create_default_context(cafile=settings.ca_file) if settings.ca_file else True
+        async with AsyncExitStack() as stack:
+            client = await stack.enter_async_context(httpx.AsyncClient(verify=verify, timeout=settings.timeout_seconds))
+            loops = await stack.enter_async_context(Supervisor())
             app.state.upstream = client
+            issuer_answers = Dependency(name="issuer", read=partial(_discovered, client, settings), required=True)
+            app.state.health = HealthWatch([issuer_answers])
+            # One read before the start, so the first probe answers what the issuer said rather than that nobody asked.
+            await app.state.health.check(issuer_answers)
+            app.state.health.watch(loops)
             mark_started(app)
             # At SIGTERM, not at teardown: uvicorn reaches the teardown only once it has drained.
             disarm = arm_drain_on_sigterm(app)
@@ -124,27 +157,31 @@ def create_app(settings: IssuerMirrorSettings | None = None) -> FastAPI:
                 mark_draining(app)
                 disarm()
 
-    async def ready(request: Request) -> Readiness:
-        try:
-            await _fetch(request.app.state.upstream, f"{issuer}{DISCOVERY_PATH}", resolved.token_file)
-        except ServiceUnavailableError:
-            # The verdict alone, as every process names a dependency: the fetch logged the issuer's address and answer.
-            return Readiness(status=ReadinessStatus.unhealthy, components={"issuer": Verdict.unavailable})
-        return Readiness(status=ReadinessStatus.ready, components={"issuer": Verdict.healthy})
+    return lifespan
 
-    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None, telemetry=FRAMEWORK_TELEMETRY_OFF)
+
+async def _ready(request: Request) -> Readiness:
+    health: HealthWatch = request.app.state.health
+    return health.readiness()
+
+
+def create_app(settings: IssuerMirrorSettings | None = None) -> FastAPI:
+    """The mirror app; ``settings`` defaults to the environment's (``uvicorn --factory`` passes none)."""
+    setup_logging()
+    resolved = settings or IssuerMirrorSettings()
+    app = FastAPI(lifespan=_lifespan(resolved), docs_url=None, redoc_url=None, openapi_url=None, telemetry=FRAMEWORK_TELEMETRY_OFF)
     install_problem_handlers(app, log)
-    app.include_router(make_probes_router(ready))
+    app.include_router(make_probes_router(_ready))
 
     @app.get(DISCOVERY_PATH)
     async def discovery(client: UpstreamDep) -> dict[str, Any]:
-        document = await _fetch(client, f"{issuer}{DISCOVERY_PATH}", resolved.token_file)
-        return {**document, "jwks_uri": f"{resolved.public_url.rstrip('/')}{JWKS_PATH}"}
+        document = await _discovered(client, resolved)
+        return {**document.model_dump(), "jwks_uri": f"{resolved.public_url.rstrip('/')}{JWKS_PATH}"}
 
     @app.get(JWKS_PATH)
     async def jwks(client: UpstreamDep) -> dict[str, Any]:
-        document = await _fetch(client, f"{issuer}{DISCOVERY_PATH}", resolved.token_file)
-        return await _fetch(client, str(document["jwks_uri"]), resolved.token_file)
+        document = await _discovered(client, resolved)
+        return (await _fetch(client, document.jwks_uri, resolved.token_file, shape=_KeySet)).model_dump()
 
     return app
 

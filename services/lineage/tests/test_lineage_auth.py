@@ -29,6 +29,7 @@ from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
 from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.governed.idp_identity import IdpVerifier
+from lakehouse.governed.machine_identity import ServicePrincipal
 from lakehouse.governed.oidc import OIDCVerifier
 from lakehouse.governed.settings import OidcProvider
 from lineage.api import fga_deps, security
@@ -511,7 +512,7 @@ def test_enforce_output_authz_bounds_a_service_principal_by_its_own_rung(
     def authorize(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the gate's coroutine
         # The feed lineage's lifespan always wires, here one holding no run, so the event founds its run.
         app = _request(decider=decider, provenance=_FakeStore()).app
-        return fga_deps.enforce_output_authz(_service_run(), app, _settings(**_FULL_AUTH), token=security.ServicePrincipal.for_account(_SERVICE_ACCOUNT))
+        return fga_deps.enforce_output_authz(_service_run(), app, _settings(**_FULL_AUTH), token=ServicePrincipal.for_account(_SERVICE_ACCOUNT))
 
     with outcome:
         decided(openfga_store, authorize)

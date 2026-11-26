@@ -9,8 +9,8 @@ allowlisted algorithms, issuer/audience/exp checks, opaque error mapping) runs f
 real.
 
 The split-horizon section at the bottom goes one level deeper: it runs the *real*
-``_resolve`` and stubs only its two network touch-points (``httpx.Client`` for the
-discovery fetch, ``jwt.PyJWKClient`` for the key fetch) so the tests can assert
+``_resolve`` and stubs only its one network touch-point (the ``httpx.Client`` both the
+discovery fetch and the key fetch use) so the tests can assert
 *where* discovery/JWKS are fetched from while the issuer checks run unmodified.
 
 Mirrors the fastapi_oidc conftest approach: ``rsa.generate_private_key`` +
@@ -73,33 +73,21 @@ def private_pem(rsa_keypair: tuple[Any, Any]) -> bytes:
     )
 
 
-class _LocalJWKClient(jwt.PyJWKClient):
-    """A REAL ``PyJWKClient`` whose one network hop, ``fetch_data``, answers a local key set.
-
-    Everything ``verify`` asks of the client runs as shipped: the key set is parsed into
-    ``PyJWK`` objects, the token's ``kid`` selects one, and that key's bound algorithm is
-    what ``jwt.decode`` verifies with. A stand-in carrying one method would tie these tests
-    to WHICH client methods ``verify`` calls, rather than to what it does with the answers.
-    """
-
-    def __init__(self, uri: str, public_key: rsa.RSAPublicKey, **kwargs: Any) -> None:
-        super().__init__(uri, **kwargs)
-        numbers = public_key.public_numbers()
-        self._key_set = {
-            "keys": [
-                {
-                    "kty": "RSA",
-                    "kid": KID,
-                    "use": "sig",
-                    "alg": "RS256",
-                    "n": _b64url(numbers.n.to_bytes((numbers.n.bit_length() + 7) // 8, "big")),
-                    "e": _b64url(numbers.e.to_bytes((numbers.e.bit_length() + 7) // 8, "big")),
-                }
-            ]
-        }
-
-    def fetch_data(self) -> dict[str, Any]:
-        return self._key_set
+def _local_key_set(public_key: rsa.RSAPublicKey) -> dict[str, Any]:
+    """The JWK Set a provider publishing ``public_key`` serves, under the one ``kid`` the tests sign with."""
+    numbers = public_key.public_numbers()
+    return {
+        "keys": [
+            {
+                "kty": "RSA",
+                "kid": KID,
+                "use": "sig",
+                "alg": "RS256",
+                "n": _b64url(numbers.n.to_bytes((numbers.n.bit_length() + 7) // 8, "big")),
+                "e": _b64url(numbers.e.to_bytes((numbers.e.bit_length() + 7) // 8, "big")),
+            }
+        ]
+    }
 
 
 def _make_verifier(
@@ -113,7 +101,7 @@ def _make_verifier(
 
     ``_resolve`` is the single method that touches the network (discovery + JWKS). We
     replace it with one that returns a :class:`_Provider` built from a controlled
-    discovery doc and a local-key-set ``PyJWKClient``, while still running the verifier's
+    discovery doc and the local key set as PyJWT builds it, while still running the verifier's
     *real* ``_safe_algorithms`` intersection so the allowlist is genuinely exercised.
     """
     _, public_key = rsa_keypair
@@ -129,7 +117,7 @@ def _make_verifier(
         )
         # Run the verifier's real allowlist intersection so HS256/none can never slip in.
         algorithms = self._safe_algorithms(spec.id_token_signing_alg_values_supported)
-        keys = tuple(_LocalJWKClient(spec.jwks_uri, public_key).get_signing_keys())
+        keys = tuple(jwt.PyJWKSet(_local_key_set(public_key)["keys"]).keys)
         return _Provider(spec=spec, jwks_uri=spec.jwks_uri, algorithms=algorithms, keys=keys, began=0)
 
     monkeypatch.setattr(OIDCVerifier, "_resolve", fake_resolve)
@@ -219,32 +207,27 @@ def _stub_network(
 ) -> tuple[list[str], list[str]]:
     """Serve ``document`` from any discovery URL and the local key from any JWKS URI.
 
-    Returns two recorders — the discovery URLs fetched and the JWKS URIs the key-set
-    client was constructed with — so tests assert the *fetch locations*
+    Returns two recorders — the discovery URLs and the JWKS URIs fetched — so tests assert the *fetch locations*
     while ``_resolve``'s own logic (issuer match, https guard, allowlist) runs real.
 
-    Both clients are the real classes, cut at the wire: a real ``httpx.Client`` on a
-    ``MockTransport`` (so ``_resolve`` parses a real ``httpx.Response``), and a
-    :class:`_LocalJWKClient` built with the keyword arguments ``_resolve`` passes.
+    The client is the real class, cut at the wire: a real ``httpx.Client`` on a ``MockTransport``, so both fetches
+    parse a real ``httpx.Response``.
     """
     discovery_urls: list[str] = []
     jwks_urls: list[str] = []
     real_client = httpx.Client
 
     def _serve(request: httpx.Request) -> httpx.Response:
-        discovery_urls.append(str(request.url))
-        return httpx.Response(200, json=document)
+        if str(request.url).endswith(_WELL_KNOWN):
+            discovery_urls.append(str(request.url))
+            return httpx.Response(200, json=document)
+        jwks_urls.append(str(request.url))
+        return httpx.Response(200, json=_local_key_set(public_key))
 
     def _client(**kwargs: Any) -> httpx.Client:
         return real_client(transport=httpx.MockTransport(_serve), **kwargs)
 
-    def _jwk_client(uri: str, credential: object, *, max_cached_keys: int, timeout: float) -> _LocalJWKClient:
-        del credential
-        jwks_urls.append(uri)
-        return _LocalJWKClient(uri, public_key, max_cached_keys=max_cached_keys, timeout=timeout)
-
     monkeypatch.setattr(oidc_module.httpx, "Client", _client)
-    monkeypatch.setattr(oidc_module, "_CredentialedJWKClient", _jwk_client)
     return discovery_urls, jwks_urls
 
 

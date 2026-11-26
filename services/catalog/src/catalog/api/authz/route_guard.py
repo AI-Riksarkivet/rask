@@ -93,23 +93,23 @@ async def authorize_batch(request: Request, client: OpenFgaClient, resolver: Res
     that holds no object is refused with them. ``request.json()`` is cached by Starlette, so the
     downstream endpoint re-parses the same body.
 
-    Fails CLOSED on malformed input: a non-dict body or a non-list ``entries``/``operations``
-    (client-controlled JSON, validated here BEFORE Pydantic since authorize runs first) is a
-    403 deny, never a 500 crash or a silently-skipped check; a body that is not JSON at all is a 400.
+    Fails CLOSED on malformed input: a body that is not JSON, a non-dict body or a non-list ``entries``/``operations``
+    (client-controlled JSON, validated here BEFORE Pydantic since authorize runs first) is the caller's 400, before any
+    permission is asked (ADR 0173 §4), never a 500 crash or a silently-skipped check.
 
     Raises:
-        InvalidInputError: The body is not JSON.
-        PermissionDeniedError: The body is not a batch, or the caller may not write a table it names.
+        InvalidInputError: The body is not JSON, or not a batch.
+        PermissionDeniedError: The caller may not write a table it names.
     """
     body = await json_body_or_400(request)
     if not isinstance(body, dict):
-        raise PermissionDeniedError("malformed batch request body")
+        raise InvalidInputError("malformed batch request body")
     entries = body.get("entries")
     operations = body.get("operations")
     if entries is not None and not isinstance(entries, list):
-        raise PermissionDeniedError("malformed batch request body: 'entries' must be a list")
+        raise InvalidInputError("malformed batch request body: 'entries' must be a list")
     if operations is not None and not isinstance(operations, list):
-        raise PermissionDeniedError("malformed batch request body: 'operations' must be a list")
+        raise InvalidInputError("malformed batch request body: 'operations' must be a list")
     rungs: set[write_judge.Rung] = set()
     for kind, segments in batch_ids(body):
         if kind == "declare_table":  # creating a table -> can_create_table on its parent

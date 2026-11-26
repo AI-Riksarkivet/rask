@@ -452,7 +452,7 @@ async def project_to_delete(project_id: str, context: AuthzContextDep) -> Projec
     return record
 
 
-def project_its_doors_protect(project_id: str, record: Annotated[ProjectRecord, Depends(administered_project)], token: CurrentToken) -> None:
+async def project_its_doors_protect(project_id: str, record: Annotated[ProjectRecord, Depends(administered_project)], token: CurrentToken) -> None:
     """Admit a change to the deletion protection of a project the caller administers and git does not declare ([[XC-213]]).
 
     Raises:
@@ -461,7 +461,7 @@ def project_its_doors_protect(project_id: str, record: Annotated[ProjectRecord, 
     refuse_what_git_declares(record.managed_by, obj=fga_ids.project_object(project_id), token=token)
 
 
-def project_its_doors_delete(project_id: str, record: Annotated[ProjectRecord, Depends(project_to_delete)], token: CurrentToken) -> ProjectRecord:
+async def project_its_doors_delete(project_id: str, record: Annotated[ProjectRecord, Depends(project_to_delete)], token: CurrentToken) -> ProjectRecord:
     """The record of a project the caller may delete and git does not declare ([[XC-213]]).
 
     Raises:
@@ -621,7 +621,7 @@ async def delete_project(
     converge = await keyed.begin(target=fga_ids.project_object(project_id), takeover="unknown")
     if converge.replay is not None:
         return DeleteProjectResponse.model_validate(converge.replay.body)
-    record = project_its_doors_delete(project_id, await project_to_delete(project_id, context), context.token)
+    record = await project_its_doors_delete(project_id, await project_to_delete(project_id, context), context.token)
     so = context.settings.storage_options()
     # Asked before the delete is recorded, so a deployment whose client is not wired refuses with nothing started.
     authz = decisions.wired(context.settings, context.client)

@@ -16,12 +16,12 @@ from fastapi.concurrency import run_in_threadpool
 
 from lakehouse.events.bus import Bus, bus_dependency, bus_session
 from lakehouse.governed.admission import judge_before_the_body
-from lakehouse.governed.auth_lifespan import BootFailure, attach_auth
+from lakehouse.governed.auth_lifespan import BootFailure, attach_auth, openfga_dependency
 from lakehouse.governed.fga_provision import dispose as fga_dispose
 from lakehouse.governed.secrets import secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import secret_store_dependency
-from lakehouse.process.health import Dependency, HealthWatch, openfga_dependency
+from lakehouse.process.health import Dependency, HealthWatch
 from lakehouse.process.lifecycle import closed_quietly, mark_draining, mark_started, mark_starting
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness

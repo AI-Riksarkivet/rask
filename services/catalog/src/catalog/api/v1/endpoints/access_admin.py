@@ -237,7 +237,7 @@ def _tuple_user(user: str, *, evaluated: bool) -> str:
     return _qualified_subject(user)
 
 
-def _require_fga_client(client: FgaClientDep) -> OpenFgaClient:
+async def _require_fga_client(client: FgaClientDep) -> OpenFgaClient:
     """The wired client, or the same 503 the gate raises.
 
     Duplicated with `estate_gate` deliberately and minimally: FastAPI resolves dependencies

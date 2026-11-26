@@ -7,29 +7,24 @@ is at fault (503, audited `verifier_unavailable`, the fault itself in the servic
 third type reaches the door's `except Exception` branch and is recorded as `invalid_token` against the caller, so each
 503 case below also pins that its raise site uses the subclass the door catches.
 
-Measured 2026-11-06 on PyJWT 2.15.1 / httpx 0.28.1, these paths reach the door as a type outside PyJWT's own
-taxonomy unless `oidc.py` classifies them:
+On PyJWT 2.15.1 / httpx 0.28.1, these paths reach the door as a type outside PyJWT's own taxonomy unless `oidc.py`
+classifies them:
 
-* a discovery document that is not JSON (a proxy's sign-in page) — pydantic's `ValidationError`, or
-  `json.JSONDecodeError` were it read through `response.json()`;
-* a key set that is not JSON — `json.JSONDecodeError` out of `PyJWKClient.fetch_data`, which wraps only transport
-  failures;
-* a key-set connection reset while its body is read — a bare `ConnectionResetError`, an `OSError` `fetch_data` does
-  not wrap;
+* a discovery document or a key set that is not JSON (a proxy's sign-in page), or nested past pydantic-core's own JSON
+  depth — pydantic's `ValidationError`;
+* a key-set connection reset while its body is read — an `httpx.HTTPError`;
 * a key whose `alg` is not a string — `TypeError` (unhashable) out of `PyJWK`, which `PyJWKSet` does not skip, since it
   skips only keys failing with `PyJWTError`;
-* a key set nested past the JSON parser's depth — `RecursionError`;
 * a token whose `alg` names another key family than the key its `kid` selects — `TypeError` out of PyJWT's
   `prepare_key` when `jwt.decode` is handed the raw key rather than the `PyJWK` that binds its algorithm. This is the
   one a CALLER chooses, so it must be a 401.
 
-The key-set cases also cover the failures PyJWT does type: `PyJWKClientConnectionError` (a connection closed before
-the status line, a body cut short, both `http.client.HTTPException`s `fetch_data` wraps), `PyJWKClientError` and
-`PyJWKSetError` (a set with no key, or none PyJWK can build). None of them reads the token either, so they are the
+The key-set cases also cover a connection closed before the status line, a body cut short, a redirect, a fetch past the
+budget, and `PyJWKSetError` (a set with no key, or none PyJWK can build). None of them reads the token either, so they are the
 provider's too, and a 401 for them would tell a caller holding a good bearer that it is bad — the same misattribution
 `test_an_unreachable_idp_is_not_the_callers_fault.py` refuses for the discovery document.
 
-THE IdP IS A REAL HTTP SERVER ON LOOPBACK. Neither httpx nor urllib is patched, so both fetches run the libraries'
+THE IdP IS A REAL HTTP SERVER ON LOOPBACK. httpx is not patched, so both fetches run the libraries'
 own parsing — which is where every one of these failures is raised. A stubbed response object would replace exactly
 the code under test.
 """
@@ -55,13 +50,14 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.governed import oidc
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.door_caller import caller_of
 from lakehouse.governed.idp_identity import IdpVerifier
 from lakehouse.governed.oidc import UNKNOWN_KID_REFRESH_INTERVAL_SECONDS, OIDCVerifier
-from lakehouse.governed.settings import OidcProvider
+from lakehouse.governed.settings import OidcProvider, OidcSettings
 from lakehouse.problems.ns_errors import install_problem_handlers
 from tests.app_state import app_of
 
@@ -78,9 +74,13 @@ HOLD_CEILING_SECONDS = 10.0
 SIGN_IN_PAGE = b"<!doctype html><title>Sign in</title>"
 
 
-class _DoorSettings(BaseModel):
-    oidc_enabled: bool = True
-    sa_issuer: str | None = None
+class _DoorSettings(OidcSettings, BaseSettings):
+    """A door's settings with OIDC on: the verifier the app holds is the one the door asks."""
+
+    model_config = SettingsConfigDict(validate_by_name=True, validate_by_alias=True)
+
+
+_DOOR = _DoorSettings(oidc_enabled=True, oidc_issuer="https://idp.example.test", oidc_audience=AUDIENCE, oidc_idp_id="corp")
 
 
 _bearer = HTTPBearer(auto_error=False)
@@ -88,7 +88,11 @@ _bearer = HTTPBearer(auto_error=False)
 
 def _subject(request: Request, credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]) -> str:
     """The subject the door every governed service authenticates at (`door_caller.caller_of`) reads off the bearer."""
-    caller = caller_of(request.app.state, _DoorSettings(), credentials.credentials if credentials is not None else None)
+    caller = caller_of(
+        request.app.state,
+        _DoorSettings(oidc_enabled=True, oidc_issuer="https://idp.example.test", oidc_audience=AUDIENCE, oidc_idp_id="corp"),
+        credentials.credentials if credentials is not None else None,
+    )
     assert caller is not None
     return caller.subject
 
@@ -101,8 +105,7 @@ class _Fault(StrEnum):
 
     CLOSED_BEFORE_ANSWERING = "closed-before-answering"
     BODY_CUT_SHORT = "body-cut-short"
-    #: A pod killed mid-response: the reader gets a bare `ConnectionResetError`, which `fetch_data` does not wrap in
-    #: `PyJWKClientConnectionError` — the one case only `_key_set`'s `OSError` member catches.
+    #: A pod killed mid-response: the reader's connection is reset while it reads the body.
     RESET_MID_BODY = "reset-mid-body"
 
 
@@ -548,9 +551,10 @@ def test_a_key_rotated_in_during_a_flood_is_found_once_the_interval_passes(idp: 
 
 
 def test_a_token_signed_by_another_key_is_the_callers(idp: _IdP, stranger_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture) -> None:
-    status, body = _call(idp, _token(idp, stranger_key, "RS256"))
+    """Refused as RFC 6750 § 3 asks of a protected resource: 401 with the scheme the caller must present."""
+    response = _client(idp).get("/gated", headers={"Authorization": f"Bearer {_token(idp, stranger_key, 'RS256')}"})
 
-    assert status == 401, body
+    assert (response.status_code, response.headers.get("www-authenticate")) == (401, "Bearer"), response.text
     assert _audited_reasons(audit_trail) == ["invalid_token"]
 
 
@@ -646,18 +650,33 @@ def test_a_key_set_the_idp_drops_mid_answer_is_ours(fault: _Fault, idp: _IdP, rs
     assert _audited_reasons(audit_trail) == ["verifier_unavailable"]
 
 
+def test_a_key_set_the_idp_stalls_on_past_the_fetch_budget_is_ours(
+    idp: _IdP, rsa_key: rsa.RSAPrivateKey, audit_trail: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A hung IdP holds the request's worker for the deployment's own fetch budget, then is the provider's 503."""
+    monkeypatch.setattr(oidc, "HTTP_FETCH_TIMEOUT_SECONDS", 0.3)
+    idp.holds[JWKS_PATH] = threading.Event()
+
+    started = time.monotonic()
+    status, body = _call(idp, _token(idp, rsa_key, "RS256"))
+
+    assert (status, time.monotonic() - started < HOLD_CEILING_SECONDS / 2) == (503, True), body
+    assert "could not be reached" in _logged_fault(audit_trail)
+
+
 #: Key-set bodies the provider could serve, none of which the token has any part in: one per exception family that
-#: reaches `_key_set`'s catch-all on PyJWT 2.15.1, so narrowing it to a tuple that leaves a family out answers 500.
+#: reaches `_fetch_keys`'s catch-all on PyJWT 2.15.1, so narrowing it to a tuple that leaves a family out answers 500.
 UNUSABLE_KEY_SETS: Final = frozendict(
     {
-        # `json.JSONDecodeError`, a `ValueError`.
+        # pydantic's `ValidationError`.
         "not-json": SIGN_IN_PAGE,
         # `PyJWKSetError`, a `PyJWTError`.
         "no-keys": json.dumps({"keys": []}).encode(),
         # `TypeError`: PyJWK looks the `alg` up in a dict.
         "alg-not-a-string": json.dumps({"keys": [{"kty": "RSA", "kid": KID, "use": "sig", "alg": ["RS256"], "n": "AQAB", "e": "AQAB"}]}).encode(),
-        # `RecursionError`.
-        "nested-past-the-parsers-depth": b"[" * 100_000 + b"]" * 100_000,
+        # `ValidationError` too, from the parser's own bound: pydantic-core refuses the 202nd level (pydantic-core 2.50.5,
+        # measured 2026-11-26), whatever the interpreter's recursion limit.
+        "nested-past-the-parsers-depth": b"[" * 1_000 + b"]" * 1_000,
     }
 )
 

@@ -618,7 +618,7 @@ def _grant_change(t: fga_writes.ClientTuple, *, action: GrantAction, actor: str 
     return grant_announcement(t, action=action, actor=actor, extra={"reason": reason})
 
 
-def get_announcer(
+async def get_announcer(
     request: Request, *, settings: SettingsDep, client: FgaClientDep, resolver: ResolverDep, control: ControlEmitterDep, uuids: ObjectUuidsDep
 ) -> Announcer:
     """This request's :class:`Announcer`. Its lineage emitter is the app's own, unbound to the request: a marker carries the

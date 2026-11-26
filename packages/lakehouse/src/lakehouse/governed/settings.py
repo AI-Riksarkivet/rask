@@ -258,15 +258,10 @@ class OidcSettings:
         """Fail fast at construction rather than fail open — or fail confusingly — at request time."""
         if self.oidc_enabled and not (self.oidc_issuer and self.oidc_audience):
             raise ValueError("RASK_OIDC_ISSUER and RASK_OIDC_AUDIENCE are required when OIDC is enabled")
-        # AN `http://` ISSUER IS A MISCONFIGURATION, AND IT BELONGS HERE. `_require_https` catches it
-        # only at VERIFY time, refusing every bearer — valid or not — with a 503 on the first request
-        # after a healthy-looking startup. A scheme is knowable at construction, which is what this
-        # validator is for (`_validate_person_naming` holds every issuer to it).
-        #
-        # The `jwks_uri` half cannot move here: it comes from DISCOVERY, so settings never sees it and
-        # `_require_https` remains the backstop for that path.
-        if self.oidc_enabled and self.oidc_issuer and not self.oidc_allow_insecure and not self.oidc_issuer.startswith("https://"):
-            raise ValueError("RASK_OIDC_ISSUER must use HTTPS (set RASK_OIDC_ALLOW_INSECURE=true for a dev IdP)")
+        # AN `http://` ISSUER IS A MISCONFIGURATION, refused at construction by `_validate_person_naming`, which holds
+        # every issuer, `RASK_OIDC_ISSUER` first, to HTTPS: `_require_https` would catch it only at VERIFY time, refusing
+        # every bearer with a 503 after a healthy-looking startup. The `jwks_uri` half cannot move here: it comes from
+        # DISCOVERY, so settings never sees it and `_require_https` remains the backstop for that path.
         return self
 
 

@@ -39,11 +39,12 @@ from lakehouse.events.signing import VerifiedSignature
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
 from lakehouse.governed.decider import AccessDecider, TableDecision
+from lakehouse.governed.door_caller import NamedCaller
 from lakehouse.governed.principal import is_principal
 from lakehouse.governed.settings import FgaSettings
 from lakehouse.naming import identifier_location
 from lineage.api.dependencies import BearerDep, NamesDep, SettingsDep, app_wire
-from lineage.api.security import Caller, CurrentToken
+from lineage.api.security import CurrentToken
 from lineage.core.config import LineageSettings
 from lineage.core.refusals import ForeignRunError, UnauthoredRunError, UngovernedOutputError
 from lineage.core.sources import is_external_source
@@ -200,7 +201,7 @@ def _denied(event: str, *, subject: str, relation: str, resources: Sequence[str]
     log.info(event, extra={"relation": relation, "objects": list(resources)})
 
 
-def _asking(settings: FgaSettings, app: FastAPI, token: Caller | None) -> tuple[AccessDecider, str] | None:
+def _asking(settings: FgaSettings, app: FastAPI, token: NamedCaller | None) -> tuple[AccessDecider, str] | None:
     """The ladder every gate here climbs before its own question: the authorization service and the subject it is asked
     as, or ``None`` with authorization off, where a gate asks nothing.
 
@@ -228,7 +229,7 @@ async def require_caller(request: Request, settings: SettingsDep, token: Current
     _asking(settings, request.app, token)
 
 
-async def _require_relation(relation: str, obj: str | None, *, label: str, request: Request, settings: FgaSettings, token: Caller | None) -> None:
+async def _require_relation(relation: str, obj: str | None, *, label: str, request: Request, settings: FgaSettings, token: NamedCaller | None) -> None:
     """The gate every per-``{name}`` read shares: the ladder (:func:`_asking`), then deny → 403, also for a name that
     resolved to no object (``obj`` is ``None``), named by ``label`` either way; an unanswerable decision → 503, never
     allow."""
@@ -284,7 +285,7 @@ async def require_parks_replayer(request: Request, settings: SettingsDep, token:
     await _require_estate_rung(_REPLAY_PARKS_RELATION, request, settings, token=token)
 
 
-async def _require_estate_rung(relation: str, request: Request, settings: FgaSettings, *, token: Caller | None) -> None:
+async def _require_estate_rung(relation: str, request: Request, settings: FgaSettings, *, token: NamedCaller | None) -> None:
     asking = _asking(settings, request.app, token)
     if asking is None:
         return
@@ -312,7 +313,7 @@ async def require_metadata_access(name: str, *, request: Request, settings: Sett
     )
 
 
-def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> RunEvent | DatasetEvent:
+def enforce_author(event: RunEvent | DatasetEvent, token: NamedCaller | None) -> RunEvent | DatasetEvent:
     """``event`` with its author bound to the *verified* principal — never trust the request body.
 
     When the request is authenticated, the event answered carries the token subject as its ``rask_author`` facet,
@@ -335,7 +336,7 @@ def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> RunE
 
 
 class _StampedAuthor:
-    """The subject a BUS producer stamped on its own event, as a :class:`Caller`.
+    """The subject a BUS producer stamped on its own event, as a :class:`NamedCaller`.
 
     WHAT AUTHENTICATES THE STAMP IS THE SIGNATURE, not the bus. The bus's permission table admits a TRANSPORT (a
     bus user that may publish on the topic), never a producer, so on an estate that does not enforce signing nothing proves the stamp, and what the gate changes
@@ -633,7 +634,7 @@ async def enforce_output_authz(
     app: FastAPI,
     settings: LineageSettings,
     *,
-    token: Caller | None,
+    token: NamedCaller | None,
     relations: tuple[str, ...] = _WRITE_RELATIONS,
     signed_by: VerifiedSignature | None = None,
     names_vouched_by: VerifiedSignature | None = None,
@@ -807,7 +808,7 @@ class DatasetFilter:
     filtered enumerations. Pass-through when FGA is off (dev/tests).
     """
 
-    def __init__(self, request: Request, settings: LineageSettings, token: Caller | None) -> None:
+    def __init__(self, request: Request, settings: LineageSettings, token: NamedCaller | None) -> None:
         self._request = request
         self._settings = settings
         self._token = token

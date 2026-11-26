@@ -65,6 +65,8 @@ def erasure_doors(namespace: LanceNamespace, settings: Settings) -> FastAPI:
     application.include_router(door.table_router)
     application.include_router(door.obligations_router)
     application.state.control_emitter = NoopControlEmitter()
+    # Authorization off, as the lifespan wires it for a catalog with FGA off.
+    application.state.fga = None
     application.dependency_overrides[request_settings] = lambda: settings
     application.dependency_overrides[get_namespace] = lambda: namespace
     application.dependency_overrides[get_storage_options] = lambda: StorageOptions()

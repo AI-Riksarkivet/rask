@@ -224,7 +224,7 @@ async def require_classifier_to_set_labels(
         return
     await authz.require("can_classify", obj, label=label)
     for value in sorted({value for keys in labels.values() for value in keys.values()}):
-        await authz.require("can_apply", f"classification:{value}")
+        await authz.require("can_apply", fga_ids.addressed_object("classification", value))
 
 
 async def require_run_rule_authority(context: AuthzContext, *, project: str | None) -> None:

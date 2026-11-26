@@ -21,16 +21,12 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from enum import StrEnum
 from functools import partial
 from time import monotonic
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from pydantic import BaseModel, ConfigDict
 
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness, ReadinessStatus
-
-
-if TYPE_CHECKING:
-    from fastapi import FastAPI
 
 
 log = logging.getLogger(__name__)
@@ -60,12 +56,6 @@ class Dependency(BaseModel):
     #: What releases what ``read`` holds of its own (a client), once the watch on it stops; none for a read on a client
     #: the process holds anyway.
     close: Callable[[], Awaitable[None]] | None = None
-
-
-def openfga_dependency(app: FastAPI, *, required: bool) -> list[Dependency]:
-    """OpenFGA, read under the client this process holds (``app.state.fga``), or nothing when it asks OpenFGA nothing."""
-    fga = getattr(app.state, "fga", None)
-    return [Dependency(name="openfga", read=fga.get_store, required=required)] if fga is not None else []
 
 
 class _Answer(BaseModel):
@@ -143,4 +133,4 @@ class HealthWatch:
                 await dependency.close()
 
 
-__all__ = ["Dependency", "HealthWatch", "Verdict", "openfga_dependency"]
+__all__ = ["Dependency", "HealthWatch", "Verdict"]

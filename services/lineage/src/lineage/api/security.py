@@ -20,61 +20,22 @@ Fail-closed invariant: if OIDC is enabled but the verifier that would answer a b
 request through or handing it to the other verifier.
 """
 
-from typing import Annotated, Protocol, cast
+from typing import Annotated
 
-from fastapi import Depends, Request
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi import Depends
 
-from lakehouse.governed.admission import admitted_caller, caller_judge
-from lakehouse.governed.door_caller import caller_of
-from lakehouse.governed.idp_identity import PersonPrincipal
-from lakehouse.governed.machine_identity import ServicePrincipal
-from lineage.api.dependencies import SettingsDep, request_settings
-from lineage.core.config import LineageSettings
+from lakehouse.governed.admission import Caller, door_gate
+from lineage.api.dependencies import request_settings
 
 
-# auto_error=False: we raise UnauthenticatedError ourselves so 401s render as problem+json.
-_bearer = HTTPBearer(auto_error=False, description="OIDC bearer token")
-_CredentialsDep = Annotated[HTTPAuthorizationCredentials | None, Depends(_bearer)]
-
-
-class Caller(Protocol):
-    """What the ingest authz layer actually needs of a caller: a principal key to attribute + authorize.
-
-    Both :func:`~lineage.api.fga_deps.enforce_author` and
-    :func:`~lineage.api.fga_deps.enforce_output_authz` read only ``.subject``, so a :class:`PersonPrincipal`
-    and a :class:`ServicePrincipal` are interchangeable there.
-    """
-
-    @property
-    def subject(self) -> str: ...
-
-
-def authenticate(
-    request: Request,
-    settings: SettingsDep,
-    credentials: _CredentialsDep,
-) -> Caller | None:
-    """Authenticate the caller: a person's IdP bearer, or a service's projected service-account token.
-
-    The caller `judge` admitted, when it ran before the body; otherwise judged here. ``None`` when OIDC is off, the open
-    dev default.
-    """
-    judged, caller = admitted_caller(request)
-    if judged:
-        return cast("Caller | None", caller)
-    return _authenticated(request, settings, credentials.credentials if credentials is not None and credentials.credentials else None)
-
-
-def _authenticated(request: Request, settings: LineageSettings, bearer: str | None) -> Caller | None:
-    """The caller ``bearer`` proves, or ``None`` with OIDC off: judged, and recorded, as at every door (`door_caller`)."""
-    return caller_of(request.app.state, settings, bearer)
-
-
-#: The authenticated caller — a ``PersonPrincipal``, a ``ServicePrincipal``, or ``None`` when OIDC is off.
-CurrentToken = Annotated[Caller | None, Depends(authenticate)]
-#: Every door that depends on `authenticate` judges its caller from the headers before its body is read
+#: Lineage's gate: every door depending on `authenticate` judges its caller from the headers before its body is read
 #: (`lakehouse.governed.admission`): the intake's JSON body is never read, let alone parsed, for a caller with no token.
-judge = caller_judge(gate=authenticate, settings=request_settings, authenticated=_authenticated)
+_GATE = door_gate(request_settings)
+authenticate = _GATE.authenticate
+judge = _GATE.judge
 
-__all__ = ["Caller", "CurrentToken", "PersonPrincipal", "ServicePrincipal", "authenticate"]
+#: The authenticated caller — a ``PersonPrincipal``, a ``ServicePrincipal``, or ``None`` when OIDC is off. Authorization
+#: reads its principal key, ``.subject``.
+CurrentToken = Annotated[Caller | None, Depends(authenticate)]
+
+__all__ = ["Caller", "CurrentToken", "authenticate", "judge"]

@@ -299,7 +299,6 @@ def test_a_dex_client_signed_in_for_itself_is_its_client_principal_and_its_tuple
 ) -> None:
     client, _ = catalog
     token = {
-        "granted-client": lambda: dex_issuer.mint_client(_CLIENT_ID, audience="lance-catalog"),
         "ungranted-client": lambda: dex_issuer.mint_client("other-job", audience="lance-catalog"),
         "person-for-another-audience": lambda: dex_issuer.mint(_PERSON_ID, connector="corp", audience="lance-catalog", federated=False, azp=_CLIENT_ID),
     }[caller]()

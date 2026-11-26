@@ -19,7 +19,7 @@ as were counted for it.
 import logging
 from collections.abc import Sequence
 from enum import StrEnum
-from typing import Any, Final
+from typing import Final
 
 from opentelemetry import metrics
 
@@ -139,7 +139,7 @@ def audit_read(
     resource: str,
     version: int | None = None,
     columns: Sequence[str] | None = None,
-    **fields: Any,
+    **fields: object,
 ) -> None:
     """Record that a subject READ data — the question a lakehouse buyer expects answered (§ J1).
 
@@ -174,7 +174,7 @@ def audit(
     *,
     subject: str | None = None,
     resource: str | None = None,
-    **fields: Any,
+    **fields: object,
 ) -> None:
     """Emit one structured audit event (dropped when audit is disabled — see :func:`configure_audit`).
 
