@@ -179,7 +179,7 @@ async def create_table(
     encoding.require_valid_field_encoding(table.schema)
     namespace = parse_identifier(id)[:-1]
     if (labels := provenance_guard.field_labels(table.schema)) and (parent := await resolver.object("namespace", namespace)) is not None:
-        await door_gates.require_classifier_to_set_labels(context, obj=parent, label=fga_ids.canonical_object_id(namespace), labels=labels)
+        await door_gates.require_classifier_to_set_labels(context, door="create", obj=parent, label=fga_ids.canonical_object_id(namespace), labels=labels)
     # OPTIONAL BY SPEC CONSTRAINT (see `catalog.api.idempotency`): a stock Lance client sends no key
     # and is unaffected. A caller that sends one gets the first attempt's answer back rather than a
     # second execution of a door that DROPS AND REWRITES the dataset under `mode=Overwrite`.

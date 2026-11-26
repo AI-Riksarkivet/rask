@@ -339,7 +339,9 @@ def insert_into_table(
                 table.file_pending_commit()
             dataset.insert(rows, mode=mode.value, transaction_properties=transaction_properties)
             version = int(dataset.version)
-            transaction = committed_files.record_landed(table.record_committed_files, dataset, table_location=table.location, branch=req.branch, so=so)
+            transaction = committed_files.record_landed(
+                table.record_committed_files, dataset, table_location=table.location, branch=recorded_branch(req.branch), so=so
+            )
             author = transaction_properties.get(AUTHOR_PROPERTY)
             if author is not None and table.announces(transaction_properties.get(OPERATION_PROPERTY, "")):
                 # The ref's key is read inside the recorder, so a store that does not answer it is a counted miss: the

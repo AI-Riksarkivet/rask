@@ -211,3 +211,16 @@ def test_a_writer_cannot_create_a_table_carrying_a_label(table: tuple[Any, Recor
     )
 
     assert (created.status_code, created.json().get("code")) == (403, PERMISSION_DENIED), created.text
+
+
+def test_a_label_openfga_cannot_name_is_refused_as_bad_input_at_create(table: tuple[Any, RecordingVendor]) -> None:
+    # `classification:a#b` is no OpenFGA object, which the gate would read as an outage: 503 for a caller's bad input.
+    catalog, _ = table
+    field = pa.field("secret", pa.string(), metadata={b"rask.classification": b"a#b"})
+    rows = encode_arrow_stream(pa.table({"secret": pa.array(["a"])}, schema=pa.schema([field])))
+
+    created = catalog.client.post(
+        "/v1/table/lance_catalog$db$u/create", content=rows, headers={**catalog.bearer("alice"), "Content-Type": ARROW_STREAM_MEDIA_TYPE}
+    )
+
+    assert (created.status_code, created.json().get("code")) == (400, INVALID_INPUT), created.text

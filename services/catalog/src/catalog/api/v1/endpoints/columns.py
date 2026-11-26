@@ -74,14 +74,6 @@ from lakehouse.naming import PLATFORM_PREFIX
 #: itself to a gate.
 
 
-#: The OpenFGA type a governance value is delegated under (``classification:<value>``).
-_CLASSIFICATION = "classification:"
-#: OpenFGA's 256-rune object, less the type the value is named under.
-_MAX_VALUE_LENGTH = 256 - len(_CLASSIFICATION)
-#: How much of a refused value its refusal echoes.
-_ECHOED = 64
-
-
 async def _require_classifier_for_governance_keys(
     context: AuthzContext,
     *,
@@ -117,7 +109,7 @@ async def _require_classifier_for_governance_keys(
     if not touched and not replaces:
         return
     values = {(key, str(v)) for update in updates for key, v in (update.get("metadata") or {}).items() if key.startswith(PLATFORM_PREFIX) and v is not None}
-    _refuse_a_value_no_classification_can_be(values)
+    door_gates.refuse_unnameable_labels(values, door="update_field_metadata")
     await door_gates.require_relation(context, relation="can_classify", obj=fga_ids.table_object(table.require_uuid()))
     # THE SECOND QUESTION ([[LH-055]]). `can_classify` is ONE BIT — whoever may label anything may
     # label everything — so the ruling's "per-tag `apply` delegation" needs the VALUE asked about too.
@@ -128,27 +120,7 @@ async def _require_classifier_for_governance_keys(
     # value to be delegated, and gating it on one would let a narrow grant strand a label its holder
     # could attach and nobody present could remove — so removal stays on the table rung alone.
     for value in sorted({value for _, value in values}):
-        await door_gates.require_relation(context, relation="can_apply", obj=_classification(value))
-
-
-def _classification(value: str) -> str:
-    """The OpenFGA object a governance value is delegated by: ``classification:<value>``."""
-    return f"{_CLASSIFICATION}{value}"
-
-
-def _refuse_a_value_no_classification_can_be(values: set[tuple[str, str]]) -> None:
-    """Raise ``InvalidInputError`` for a governance value OpenFGA cannot take as a ``classification`` id."""
-    for key, value in sorted(values):
-        # OpenFGA refuses such an object as a malformed request (`fga_ids.is_object_id`), which the gate reads as an
-        # outage: 503 and an `authz_unavailable` record for a caller's bad input (measured on v1.18.3, 2026-11-22). No
-        # tuple can name such a value, so no caller could be delegated it either.
-        if not fga_ids.is_object_id(_classification(value)):
-            # The value is echoed cut to its first characters: only the body cap bounds it, and it reaches the log too.
-            shown = repr(value) if len(value) <= _ECHOED else f"{value[:_ECHOED]!r}… ({len(value)} characters)"
-            raise InvalidInputError(
-                f"update_field_metadata: {key} value {shown} cannot name a classification (OpenFGA takes 1 to {_MAX_VALUE_LENGTH} characters, "
-                "none of them a space, a control character, ':' or '#', and not the wildcard '*')"
-            )
+        await door_gates.require_relation(context, relation="can_apply", obj=fga_ids.addressed_object("classification", value))
 
 
 async def _sees_the_schema(context: AuthzContext, *, table: ResolvedTable) -> bool:

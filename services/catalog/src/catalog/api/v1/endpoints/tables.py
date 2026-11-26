@@ -29,6 +29,7 @@ from lance_namespace import (
     ListNamespacesRequest,
     ListTablesRequest,
     ListTablesResponse,
+    NamespaceNotFoundError,
     PermissionDeniedError,
     RegisterTableRequest,
     RegisterTableResponse,
@@ -36,6 +37,7 @@ from lance_namespace import (
     RenameTableResponse,
     RestoreTableRequest,
     RestoreTableResponse,
+    ServiceUnavailableError,
     TableAlreadyExistsError,
     TableExistsRequest,
     TableNotFoundError,
@@ -127,8 +129,9 @@ def _collect_tables(ns: LanceNamespace, warehouse_id: str) -> list[str]:
     """Every table in warehouse ``warehouse_id``, fully qualified, declared ones included: each namespace's, depth-first.
 
     Synchronous and run in a threadpool by the caller: the native namespace client is blocking, and
-    a walk of N namespaces is N blocking calls. ``ns`` is the warehouse's own directory catalog. A namespace that
-    cannot be listed is logged and left out, so one bad namespace never empties the listing.
+    a walk of N namespaces is N blocking calls. ``ns`` is the warehouse's own directory catalog. A namespace dropped
+    between its parent's listing and its own holds no table, so it is logged and left out. Any other failure is raised:
+    an outage or a refusal proves nothing about the tables it hides, and a listing without them would read as their absence.
     """
     found: list[str] = []
     stack: list[list[str]] = [[warehouse_id]]
@@ -142,8 +145,8 @@ def _collect_tables(ns: LanceNamespace, warehouse_id: str) -> list[str]:
             tables = native.call(ns, "list_tables", ListTablesRequest(id=parent, include_declared=True)).tables or []
             found.extend(fga_ids.canonical_object_id([*parent, name]) for name in tables)
             children = native.call(ns, "list_namespaces", ListNamespacesRequest(id=parent)).namespaces or []
-        except Exception:  # noqa: BLE001 — one bad namespace, not a blank registry
-            log.warning("could not list %s", parent, exc_info=True)
+        except NamespaceNotFoundError:
+            log.info("namespace %s dropped during the walk", parent, exc_info=True)
             continue
         stack.extend([*parent, child] for child in children)
     return found
@@ -154,8 +157,12 @@ async def _tables_of_every_warehouse(request: Request, settings: Settings) -> li
 
     ONE WALK PER WAREHOUSE, each through that warehouse's own directory catalog ([[LH-593]]): a collection route has no
     `{id}` to route by, and a table's name begins with its warehouse. Concurrent, since each warehouse is an independent
-    round trip, and tolerant: a warehouse that cannot be listed (deactivated, an unreadable bucket) is logged and left
-    out, never a blank registry.
+    round trip. A warehouse whose walk fails, whatever failed (the store not answering or refusing, a catalog that cannot
+    be reached, a namespace that cannot be read), fails the listing: answered without that warehouse's tables, it would
+    read as their absence.
+
+    Raises:
+        ServiceUnavailableError: A warehouse's walk failed; the failure is logged with the exception.
     """
     warehouse_ids = await run_in_threadpool(
         partial(warehouses.served_ids, settings.registry_root, settings.storage_options(), estate=settings.estate_warehouse)
@@ -166,10 +173,12 @@ async def _tables_of_every_warehouse(request: Request, settings: Settings) -> li
 
     names: list[str] = []
     for warehouse_id, listed in zip(warehouse_ids, await asyncio.gather(*(_tables_in(w) for w in warehouse_ids), return_exceptions=True), strict=True):
-        if isinstance(listed, BaseException):
+        if isinstance(listed, Exception):
             log.warning("could not list warehouse %s", warehouse_id, exc_info=listed)
-        else:
-            names.extend(listed)
+            raise ServiceUnavailableError(f"the tables of warehouse {warehouse_id} could not be listed, so the listing is not answered") from listed
+        if isinstance(listed, BaseException):
+            raise listed
+        names.extend(listed)
     return names
 
 

@@ -25,6 +25,7 @@ import lance
 import lance_namespace
 import pytest
 from erasure_rig import PREDICATE, SUBJECT, erasure_doors, rows
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from lance_namespace import CreateNamespaceRequest, LanceNamespace
 from tables_by_name import open_by_name
@@ -286,3 +287,63 @@ def test_a_release_waits_while_a_reclaim_holds_the_tables_history(tmp_path: Path
         "the release changed refs while a reclaim held the history"
     )
     assert erasure_release.scheduled(str(tmp_path / "control"), StorageOptions(), release.release_id) is not None, "the release did not wait for a later tick"
+
+
+#: What a failure the catalog does not choose the words of may carry: an address, a credential.
+_INTERNALS = "fga.internal:8081 refused token s3cr3t"
+
+
+async def _owners_unread(obj: str) -> list[str]:
+    raise RuntimeError(f"{_INTERNALS} reading {obj}")
+
+
+def _schedule_refused(*_args: object) -> None:
+    raise OSError(_INTERNALS)
+
+
+def _plant_owners_unread(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    del monkeypatch
+    assert isinstance(client.app, FastAPI)
+    client.app.dependency_overrides[door.get_table_owners] = lambda: _owners_unread
+
+
+def _plant_release_unrecorded(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    del client
+    monkeypatch.setattr(erasure_release, "schedule", _schedule_refused)
+
+
+def _plant_table_unopened(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    del client
+    monkeypatch.setattr(door, "_open_cold", _schedule_refused)
+
+
+_PLANTED = {"notice": _plant_owners_unread, "release": _plant_release_unrecorded, "verify": _plant_table_unopened}
+
+
+@pytest.mark.parametrize(
+    ("surface", "detail"),
+    [
+        pytest.param("notice", "the table's owners could not be read, so only the requester is told", id="the-owners-unread"),
+        pytest.param("release", "the release of ['tag:trained'] could not be recorded, so nobody was told", id="the-release-unrecorded"),
+        pytest.param("verify", "the verification could not open the table on a fresh session; nothing was verified", id="the-table-unopened"),
+    ],
+)
+def test_a_failed_surface_is_answered_and_stored_in_the_catalogs_words(
+    tmp_path: Path,
+    erasure_job: Any,  # noqa: ANN401 — conftest.ErasureJob
+    monkeypatch: pytest.MonkeyPatch,
+    surface: str,
+    detail: str,
+) -> None:
+    """A failure's own text goes to the log: the verification's answer and the obligation the listing serves to every
+    maintainer of the table say what failed, never what the failure said."""
+    ns = _tagged_over_a_plain_delete(tmp_path / "data")
+    with _catalog(ns, tmp_path, grace_days=7, emitter=ControlEmitterDouble(), clock=_Clock()) as (client, _run_release):
+        _PLANTED[surface](client, monkeypatch)
+        obligation = _record(client)
+        erasure_job(open_by_name(ns, StorageOptions(), _TABLE_ID).uri, PREDICATE).run()
+        verified = _verify(client, obligation)
+        listed = client.get("/management/v1/erasures").json()
+
+    answered = [s["detail"] for s in verified["report"]["surfaces"] if s["surface"] == surface]
+    assert (answered, _INTERNALS in str(listed)) == ([detail], False), (verified["report"]["surfaces"], listed)

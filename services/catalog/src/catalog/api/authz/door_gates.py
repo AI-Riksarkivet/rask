@@ -1,7 +1,7 @@
 """The gates a handler asks itself, for the doors the router leaves to their handler or decides only in part."""
 
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from functools import partial
 
 from fastapi.concurrency import run_in_threadpool
@@ -21,6 +21,7 @@ from lakehouse.storage.options import StorageOptions
 
 
 __all__ = [
+    "refuse_unnameable_labels",
     "require_any_relation",
     "require_can_create_warehouse",
     "require_can_drop_table",
@@ -35,6 +36,11 @@ __all__ = [
 
 
 log = logging.getLogger(__name__)
+
+#: OpenFGA's 256-rune object, less the type a label value is named under.
+_MAX_LABEL_VALUE_LENGTH = 256 - len(fga_ids.addressed_object("classification", ""))
+#: How much of a refused label value its refusal echoes.
+_ECHOED = 64
 
 
 async def require_can_drop_table(
@@ -204,9 +210,27 @@ async def require_classifier_to_copy_a_label(
         await authz.require("can_classify", fga_ids.table_object(table.resolved.require_uuid()), label=fga_ids.canonical_object_id(table.segments))
 
 
+def refuse_unnameable_labels(values: Iterable[tuple[str, str]], *, door: str) -> None:
+    """Raise ``InvalidInputError`` for a ``(key, value)`` label whose value OpenFGA cannot take as a ``classification`` id.
+
+    OpenFGA refuses such an object as a malformed request (`fga_ids.is_object_id`), which a gate reads as an outage: 503
+    and an `authz_unavailable` record for a caller's bad input (measured on v1.18.3, 2026-11-22). No tuple can name such a
+    value, so no caller could be delegated it either.
+    """
+    for key, value in sorted(values):
+        if not fga_ids.is_object_id(fga_ids.addressed_object("classification", value)):
+            # The value is echoed cut to its first characters: only the body cap bounds it, and it reaches the log too.
+            shown = repr(value) if len(value) <= _ECHOED else f"{value[:_ECHOED]!r}… ({len(value)} characters)"
+            raise InvalidInputError(
+                f"{door}: {key} value {shown} cannot name a classification (OpenFGA takes 1 to {_MAX_LABEL_VALUE_LENGTH} characters, "
+                "none of them a space, a control character, ':' or '#', and not the wildcard '*')"
+            )
+
+
 async def require_classifier_to_set_labels(
     context: AuthzContext,
     *,
+    door: str,
     obj: str,
     label: str,
     labels: Mapping[str, Mapping[str, str]],
@@ -215,11 +239,16 @@ async def require_classifier_to_set_labels(
     on each value, as a label set later through ``update_field_metadata`` is asked ([[LH-207]]).
 
     A label decides how a table's bytes leave the store, so a create may not set one its caller could not set after.
-    ``obj`` is the table, or for a table not made yet its namespace, whose ``classifier`` its tables inherit. With no
-    labels, or with FGA off, it allows (:func:`authorization`).
+    ``obj`` is the table, or for a table not made yet its namespace, whose ``classifier`` its tables inherit. A value no
+    classification can be is refused as ``door``'s bad input first, as that door refuses it (:func:`refuse_unnameable_labels`).
+    With no labels, or with FGA off, it allows (:func:`authorization`).
+
+    Raises:
+        InvalidInputError: A label value OpenFGA cannot take as a ``classification`` id.
     """
     if not labels:
         return
+    refuse_unnameable_labels({(key, value) for keys in labels.values() for key, value in keys.items()}, door=door)
     if (authz := authorization(context)) is None:
         return
     await authz.require("can_classify", obj, label=label)

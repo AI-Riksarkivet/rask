@@ -263,6 +263,12 @@ def _the_insert_doors_append(estate: _Estate) -> tuple[str, str]:
     return location, _added_by(estate, location, lambda: estate.write("insert", _rows("eve", 3)), _DATA_FILE)
 
 
+def _the_insert_doors_append_naming_main(estate: _Estate) -> tuple[str, str]:
+    """The insert door's append with main named by name, which Lance records as the unnamed ref."""
+    location = estate.create(_rows("bob"))
+    return location, _added_by(estate, location, lambda: estate.write("insert?branch=main", _rows("eve", 3)), _DATA_FILE)
+
+
 def _a_doors_stamped_merge(estate: _Estate) -> tuple[str, str]:
     location = estate.create(_rows("bob"))
     return location, _added_by(estate, location, lambda: estate.write(_MERGE, _rows("eve", 3)), _DATA_FILE)
@@ -323,6 +329,7 @@ def _deleted_then_put_back(estate: _Estate, location: str, relative: str) -> Non
         pytest.param(_a_blob_sidecar_of_the_create_doors_write, _overwritten, id="a-blob-sidecar"),
         pytest.param(_the_create_doors_overwrite, _overwritten, id="the-create-doors-overwrite"),
         pytest.param(_the_insert_doors_append, _overwritten, id="the-insert-doors-append"),
+        pytest.param(_the_insert_doors_append_naming_main, _overwritten, id="the-insert-doors-append-naming-main"),
         pytest.param(_a_doors_stamped_merge, _overwritten, id="a-doors-stamped-merge"),
         pytest.param(_a_deletion_file_of_a_doors_stamped_delete, _overwritten, id="a-deletion-file"),
         pytest.param(_a_branch_data_file_of_a_doors_stamped_merge, _overwritten, id="a-branch-data-file"),

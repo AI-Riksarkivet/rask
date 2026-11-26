@@ -349,10 +349,9 @@ async def _schedule_release(
     try:
         holders = [subject for subject in await owners(obligation.object_id) if subject.startswith("user:")]
     except Exception as exc:  # noqa: BLE001 — the requester is told whether or not the owners can be read
+        # The failure's own text goes to the log only: the report is answered and stored for every maintainer of the table.
         log.warning("erasure_owners_unread", extra={"table": report.table, "error": str(exc)})
-        report.surfaces.append(
-            SurfaceResult(surface="notice", outcome="failed", detail=f"the table's owners could not be read, so only the requester is told: {exc}")
-        )
+        report.surfaces.append(SurfaceResult(surface="notice", outcome="failed", detail="the table's owners could not be read, so only the requester is told"))
         holders = []
     requester = obligation.requested_by
     # `requested_by` is the requester's OpenFGA user, the form the owners are listed in and a notice names its subject in,
@@ -378,7 +377,7 @@ async def _schedule_release(
     except Exception as exc:  # noqa: BLE001 — the report still answers with what the verification found
         log.error("erasure_release_unscheduled", extra={"table": report.table, "error": str(exc)})
         report.surfaces.append(
-            SurfaceResult(surface="release", outcome="failed", detail=f"the release of {record.refs} could not be recorded, so nobody was told: {exc}")
+            SurfaceResult(surface="release", outcome="failed", detail=f"the release of {record.refs} could not be recorded, so nobody was told")
         )
         report.settled = False
         return

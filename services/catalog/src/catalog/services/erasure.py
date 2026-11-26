@@ -443,7 +443,7 @@ def verify(
         cold = reopen()
     except Exception as exc:  # noqa: BLE001
         log.warning("erasure_verify_unopened", extra={"table": table, "error": str(exc)})
-        detail = f"the verification could not open the table on a fresh session: {exc}; nothing was verified"
+        detail = "the verification could not open the table on a fresh session; nothing was verified"
         report.surfaces.append(SurfaceResult(surface="verify", outcome="failed", detail=detail))
         pins_alone = False
     else:
@@ -456,7 +456,7 @@ def verify(
         report.surfaces.extend(derived())
     except Exception as exc:  # noqa: BLE001 — every surface above keeps its report
         log.warning("erasure_derived_unjudged", extra={"table": table, "error": str(exc)})
-        report.surfaces.append(SurfaceResult(surface=DERIVED, outcome="failed", detail=f"the tables derived from it could not be judged: {exc}"))
+        report.surfaces.append(SurfaceResult(surface=DERIVED, outcome="failed", detail="the tables derived from it could not be judged"))
 
     report.complete = not [surface for surface in report.surfaces if surface.outcome in OPEN_OUTCOMES]
     report.settled = pins_alone and not [surface for surface in report.surfaces if surface.outcome in OPEN_OUTCOMES and surface.surface != "verify"]
@@ -520,7 +520,7 @@ def _drop_subject_tags(report: ErasureReport, dataset: _Dataset, *, every_head_c
             report.untagged.append(DroppedTag(tag=name, branch=reference[0] if reference is not None else None))
         except Exception as exc:  # noqa: BLE001
             log.warning("erasure_tag_failed", extra={"table": report.table, "tag": name, "error": str(exc)})
-            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="failed", detail=str(exc)))
+            report.surfaces.append(SurfaceResult(surface=f"tag:{name}", outcome="failed", detail="the tag could not be deleted"))
 
 
 def _judge_head(report: ErasureReport, history: _History, listing: _StorageListing, *, ref: str | None, predicate: str) -> frozenset[str] | None:
@@ -536,7 +536,7 @@ def _judge_head(report: ErasureReport, history: _History, listing: _StorageListi
         head = max(history.versions(ref))
     except Exception as exc:  # noqa: BLE001 — one ref's failure must not hide the others
         log.warning("erasure_head_unread", extra={"table": report.table, "ref": _label(ref), "error": str(exc)})
-        report.surfaces.append(SurfaceResult(surface=delete, outcome="failed", detail=f"the head could not be read: {exc}"))
+        report.surfaces.append(SurfaceResult(surface=delete, outcome="failed", detail="the head could not be read"))
         return None
     verdict = _probe((ref, head), history, predicate, listing=listing)
     if verdict in {_Verdict.ANSWERS, _Verdict.UNREADABLE}:
@@ -589,7 +589,10 @@ def _reclaim(
             return _reclaim_refs(report, dataset, deepest_first, clean=clean, retention=retention, storage_options=storage_options)
     except HistoryFencedError as exc:
         log.info("erasure_history_fenced", extra={"table": report.table, "reason": str(exc)})
-        report.surfaces += [SurfaceResult(surface=f"history:{_label(ref)}", outcome="failed", detail=f"{exc} Not reclaimed.") for ref in deepest_first]
+        report.surfaces += [
+            SurfaceResult(surface=f"history:{_label(ref)}", outcome="failed", detail="the table's history is held by other work; not reclaimed")
+            for ref in deepest_first
+        ]
         return {}
 
 
@@ -639,7 +642,7 @@ def _reclaim_refs(
             report.surfaces.append(SurfaceResult(surface=surface, outcome="reclaimed", detail=f"{versions} versions, {freed} bytes"))
         except Exception as exc:  # noqa: BLE001
             log.warning("erasure_cleanup_failed", extra={"table": report.table, "ref": _label(ref), "error": str(exc)})
-            report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail=str(exc)))
+            report.surfaces.append(SurfaceResult(surface=surface, outcome="failed", detail="the ref's old versions could not be reclaimed"))
     return cutoffs
 
 
@@ -1341,7 +1344,7 @@ def _record_held(report: ErasureReport, dataset: _Dataset, refs: Sequence[str | 
                 held.setdefault(surface, set()).update(locations)
         except Exception as exc:  # noqa: BLE001 — one ref's failure must not hide the others
             log.warning("erasure_bases_unread", extra={"table": report.table, "ref": _label(ref), "error": str(exc)})
-            detail = f"which files outside the table the subject's rows name could not be read: {exc}"
+            detail = "which files outside the table the subject's rows name could not be read"
             report.surfaces.append(SurfaceResult(surface=f"bases:{_label(ref)}", outcome="failed", detail=detail))
     for surface, locations in sorted(held.items()):
         detail = f"{len(locations)} files under this base hold the subject's bytes, and nothing in the erasure rewrites or deletes them: {_some(locations)}"
@@ -1350,7 +1353,7 @@ def _record_held(report: ErasureReport, dataset: _Dataset, refs: Sequence[str | 
         shards = _mem_wal_objects(str(dataset.uri), storage_options)
     except Exception as exc:  # noqa: BLE001
         log.warning("erasure_mem_wal_unlisted", extra={"table": report.table, "error": str(exc)})
-        report.surfaces.append(SurfaceResult(surface="mem_wal", outcome="failed", detail=f"`_mem_wal/` could not be listed: {exc}"))
+        report.surfaces.append(SurfaceResult(surface="mem_wal", outcome="failed", detail="`_mem_wal/` could not be listed"))
         return
     if shards:
         detail = (

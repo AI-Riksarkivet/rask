@@ -107,6 +107,27 @@ def test_a_manifest_manages_its_blobs_by_either_bit_of_its_flag(reader: int, wri
     assert features.manages_blobs(reader, writer) is manages
 
 
+@pytest.mark.parametrize(
+    ("raised", "flags"),
+    [
+        pytest.param(
+            ValueError(
+                "Not supported: This dataset cannot be read by this version of Lance. Please upgrade Lance to read this dataset. "
+                "Flags: 127, /home/runner/work/lance/lance/rust/lance-table/src/feature_flags.rs:373:20"
+            ),
+            127,
+            id="pylances-refusal",
+        ),
+        pytest.param(ValueError("LanceError(IO): boom. Flags: 3 retries left"), None, id="another-error-naming-flags"),
+    ],
+)
+def test_an_open_is_read_as_refused_over_its_flags_only_on_lances_own_refusal(raised: Exception, flags: int | None) -> None:
+    """pylance 14.0.3 refuses to open a manifest whose reader flags it does not support with the first case's text, measured
+    on a dataset whose manifest's reader flags were set to 127 in place; any other error is reported as itself, whatever
+    its text names."""
+    assert (features.flags_from_open_error(raised), features.unsupported_features_from_open_error(raised) is None) == (flags, flags is None)
+
+
 # --------------------------------------------------------------------------- #
 # flag 16 — base_paths. Genuinely unsafe in compaction today.
 # --------------------------------------------------------------------------- #

@@ -299,11 +299,12 @@ _FLAG_NAMES: Final = frozendict(
 _MANIFEST_READER_FLAGS_FIELD = 9
 _MANIFEST_WRITER_FLAGS_FIELD = 10
 
-#: pylance's own refusal names the offending bits: "… Please upgrade Lance to read this dataset.
-#: Flags: 64, /home/runner/work/lance/…". Match on Lance's WORDING, never on "the open failed" —
-#: a missing directory must keep reading as an ordinary ``open:`` error, not as a feature refusal.
-_OPEN_REFUSAL_MARKERS = ("cannot be read by this version of Lance", "Flags:")
-_OPEN_REFUSAL_FLAGS = re.compile(r"Flags:\s*(\d+)")
+#: pylance's own refusal names the offending bits after its sentence: "Not supported: This dataset cannot be read by this
+#: version of Lance. Please upgrade Lance to read this dataset. Flags: 127, /home/runner/work/lance/…" (measured on
+#: pylance 14.0.3, a `ValueError`). Match on that sentence, never on "the open failed" nor on ``Flags:`` alone: a missing
+#: directory, or any other error whose text names flags, keeps reading as itself, not as a feature refusal.
+_OPEN_REFUSAL = "cannot be read by this version of Lance"
+_OPEN_REFUSAL_FLAGS = re.compile(re.escape(_OPEN_REFUSAL) + r".*?Flags:\s*(\d+)", re.DOTALL)
 
 
 def manifest_feature_flags(ds: ManifestCarrier) -> tuple[int, int]:
@@ -567,10 +568,7 @@ def mixes_data_file_versions(reader: int) -> bool:
 
 def flags_from_open_error(exc: BaseException) -> int | None:
     """The feature flags pylance named when it refused to open a dataset, or ``None`` if it named none."""
-    text = str(exc)
-    if not any(marker in text for marker in _OPEN_REFUSAL_MARKERS):
-        return None
-    match = _OPEN_REFUSAL_FLAGS.search(text)
+    match = _OPEN_REFUSAL_FLAGS.search(str(exc))
     return int(match.group(1)) if match else None
 
 
@@ -722,7 +720,7 @@ def data_file_base_paths(ds: FragmentCarrier) -> set[str]:
 
 #: What an object store says when the credential is the problem rather than the path. Matched on the
 #: MESSAGE because that is all `pyarrow.fs` surfaces — the same constraint, and the same approach, as
-#: `_OPEN_REFUSAL_MARKERS` for pylance's own refusals.
+#: `_OPEN_REFUSAL` for pylance's own refusals.
 _DENIAL_MARKERS: Final = ("ACCESS_DENIED", "AccessDenied", "403 Forbidden", "InvalidAccessKeyId", "SignatureDoesNotMatch")
 
 
@@ -834,7 +832,7 @@ def unsupported_features_from_open_error(exc: BaseException) -> str | None:
     reports a Rust source path from a GitHub runner as a generic ``open:`` error, which the sweep's
     lineage selection classifies as transient non-dataset noise and drops entirely.
     """
-    if not any(marker in str(exc) for marker in _OPEN_REFUSAL_MARKERS):
+    if _OPEN_REFUSAL not in str(exc):
         return None
     flags = flags_from_open_error(exc)
     if flags is None:

@@ -340,7 +340,7 @@ async def _judge_the_staged_version(commit: _StagedCommit, *, context: AuthzCont
             # A later version may change no field's labels (`managed_versions`); the first sets them, as a create does.
             labels = await run_in_threadpool(managed_versions.staged_field_labels, commit.staged, commit.so)
             await door_gates.require_classifier_to_set_labels(
-                context, obj=fga_ids.table_object(commit.table.resolved.require_uuid()), label=commit.canonical, labels=labels
+                context, door="version/create", obj=fga_ids.table_object(commit.table.resolved.require_uuid()), label=commit.canonical, labels=labels
             )
         created = await _record_the_staged_author(commit)
     except BaseException:
