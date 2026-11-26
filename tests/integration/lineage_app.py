@@ -45,6 +45,7 @@ from tests.live_server import loop_of, serve
 if TYPE_CHECKING:
     from catalog.api.ticks import Tick
     from lineage.api.relay import RelayReport
+    from lineage.services.catalog_client import CatalogClients
     from lineage.services.provenance import ProvenanceStore
 
 #: The header a test names the caller's principal key in; lineage's `authenticate` is overridden to read it.
@@ -150,6 +151,19 @@ def live_lineage(catalog_url: str, monkeypatch: pytest.MonkeyPatch) -> Generator
         get_settings.cache_clear()
 
 
+@contextmanager
+def catalog_clients(catalog_url: str) -> Generator[CatalogClients]:
+    """What lineage's lifespan builds to reach the catalog at ``catalog_url`` (`lineage.main._build`), closed as the
+    lifespan closes it: for a test that drives lineage's store or a transport with no app around it."""
+    from lineage.services.catalog_client import CatalogClients
+
+    clients = CatalogClients(catalog_url)
+    try:
+        yield clients
+    finally:
+        clients.close()
+
+
 def catalog_tick[R](catalog_url: str, tick: Callable[[Tick], Awaitable[R]], *, timeout: float = 120, clock: Callable[[], datetime] | None = None) -> R:
     """One ``tick`` of the catalog :func:`live_catalog` serves at ``catalog_url``, run on that server's own event loop with
     the catalog's settings, as the catalog's timer runs it; answers what the tick reports. ``clock`` is the wall clock
@@ -212,6 +226,7 @@ def governed_lineage(
     from lineage.api.security import authenticate
     from lineage.api.v1.router import api_router
     from lineage.core.config import get_settings
+    from lineage.services.catalog_client import CatalogClients
     from lineage.services.names import CatalogNames
     from lineage.services.provenance import ProvenanceStore
     from lineage.services.signature import store_published_keys
@@ -224,7 +239,9 @@ def governed_lineage(
     monkeypatch.setenv("RASK_OIDC_IDP_ID", "dex")
     monkeypatch.setenv("RASK_OIDC_CONNECTORS", '{"local": "dex"}')
     get_settings.cache_clear()
-    store = ProvenanceStore.from_settings(get_settings())
+    # What lineage's lifespan builds for its catalog and closes (`lineage.main._build`); closed below with the app.
+    clients = CatalogClients(catalog_url)
+    store = ProvenanceStore.from_settings(get_settings(), clients)
     ensure_tables(store)
 
     def caller(subject: str = Header(alias=SUBJECT_HEADER)) -> PersonPrincipal | ServicePrincipal:
@@ -262,7 +279,7 @@ def governed_lineage(
     elif granted:
         fga_store.write(*((user_object(subject), relation, obj) for subject, relation, obj in granted))
     app.state.provenance = store
-    app.state.names = CatalogNames.from_settings(settings)
+    app.state.names = CatalogNames.from_settings(settings, clients)
     # The off value lineage's lifespan sets for a process the chart names no bus.
     app.state.bus = None
     app.state.published_keys = store_published_keys()
@@ -270,6 +287,7 @@ def governed_lineage(
         with TestClient(app) as client:
             yield client
     finally:
+        clients.close()
         get_settings.cache_clear()
 
 

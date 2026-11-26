@@ -16,7 +16,7 @@ A follower reading ``seq > since`` therefore never misses a row that commits aft
 A ROW IS WRITTEN ONCE. Each table declares an unenforced primary key and is written with an insert-only
 merge on it, which the catalog runs on Lance's own enforcement: a redelivered event lands no second row, and
 two racing deliveries of one event land it once (``catalog.core.primary_keys``). The feed keeps one row
-per terminal state of a run, one per arrival of a non-terminal state, and one per static change.
+per terminal state of a run, one per event time of a non-terminal state, and one per static change.
 
 A BURST IS ONE COMMIT PER TABLE ([[LH-533]]). Every commit is a Lance version and a fragment that each later open and
 scan of the table pays for (ADR 0174), and the ingest lane handles up to `services.lineage.deliveriesInFlight` deliveries
@@ -41,10 +41,11 @@ import hashlib
 import json
 import logging
 import threading
-from collections import deque
+from collections import Counter, deque
 from collections.abc import Callable, Collection, Coroutine, Mapping, Sequence
 from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any, Final, Protocol
 
 import pyarrow as pa
@@ -67,7 +68,7 @@ from lineage.core.refusals import ForeignRunError
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, RunEvent, author_sub_from_payload, parse_event
 from lineage.schemas import DerivedTable, EventRecord, ParkedDelivery
-from lineage.services.catalog_client import CATALOG_CALLS, catalog_api_client, catalog_read_client, request_headers
+from lineage.services.catalog_client import CatalogClients, request_headers
 from lineage.services.catalog_reader import CatalogAnsweredError, CatalogTableReader, RestCatalogTransport, translate_catalog_errors
 from lineage.services.catalog_writer import RestCatalogWriteTransport
 
@@ -186,6 +187,9 @@ _BATCH_BYTES: Final = 16 * 1024 * 1024
 #: process. Every other failure is about the catalog or the caller, not the rows: one it cannot take now (429, a 5xx, no
 #: answer) or will not take from this caller (401, 403, 404).
 _REFUSED_ROWS: Final = frozenset({400, 413, 422})
+#: How many kept parks' payloads one read of the retirement takes. A kept delivery is at most the bus's `max_payload` and
+#: a kept staged event at most `MAX_EVENT_BYTES`, 1 MiB each, so a read holds about this many MiB whatever the table holds.
+_PARKS_PER_READ: Final = 32
 _SUMMARY_COLUMNS: Final = ["event_type", "event_time", "job", "author", "inputs", "outputs", "table_uuids", "namespace_uuids", "unresolved_tables"]
 _FEED_COLUMNS: Final = [*_SUMMARY_COLUMNS, "event"]
 #: What a bounds probe projects: one fixed-width column, so the catalog sizes its answer without sampling a row.
@@ -206,8 +210,8 @@ def delivery_feed_key(cloud_event: Mapping[str, Any]) -> str | None:
 
 
 def feed_key(event: RunEvent | DatasetEvent) -> str:
-    """The feed row's identity: the run and its terminal state, a non-terminal state and when it arrived, or a static change's
-    derived id and who vouches for it.
+    """The feed row's identity: the run and its terminal state, a non-terminal state and the producer's time for it
+    (``eventTime``), or a static change's derived id and who vouches for it.
 
     A STATIC CHANGE'S ROW IS ITS VOUCHER'S. It has no run to bind to an author, and its id is derived from what it names
     (`DatasetEvent.feed_id`), all of which a writer of the table can read: the catalog's producer URI, its dataset
@@ -222,7 +226,7 @@ def feed_key(event: RunEvent | DatasetEvent) -> str:
         key = f"{event.feed_id}@{event.feed_event_type}"
         return key if SIGNATURE_FACET in event.dataset.facets else f"{key}@posted:{author_sub_from_payload(event.model_dump(by_alias=True)) or ''}"
     # The feed keeps the FIRST row of each terminal state, whatever its event time, so a terminal event a producer
-    # re-sends with a fresh time is one row; a non-terminal state keeps every arrival, its progress trail.
+    # re-sends with a fresh time is one row; a non-terminal state keeps a row per event time, its progress trail.
     if event.event_type in TERMINAL_STATES:
         return f"{event.run.run_id}@{event.event_type}"
     return f"{event.run.run_id}@{event.event_type}@{event.event_time}"
@@ -459,7 +463,8 @@ class ProvenanceStore:
     """The feed, the edge list and the outbox refusals, read and written through the catalog's doors.
 
     Every method is async and runs its catalog calls off the event loop, because the spec client is blocking: a record on
-    the writer thread of its burst, every other call in a worker thread. ``token`` answers this pod's bearer for the
+    the writer thread of its burst, every other call in a worker thread, both of ``clients``, which the lifespan that
+    built them closes. ``token`` answers this pod's bearer for the
     catalog, read on every call: the kubelet rotates a projected token at about 515 s of its 600 s life. ``None`` sends
     none, which only a catalog with authentication off accepts. ``refuse_foreign_runs`` is whether a commit refuses an event
     of a run another author bound (:meth:`_commit`): the doors' rule, on when they authorize.
@@ -467,18 +472,18 @@ class ProvenanceStore:
 
     def __init__(
         self,
+        clients: CatalogClients,
         *,
-        catalog_url: str,
         namespace: Sequence[str],
         token: Callable[[], str | None],
         refuse_foreign_runs: bool,
         timeout_seconds: float = 30.0,
     ) -> None:
-        if not catalog_url:
+        if not clients.url:
             raise ValueError("the provenance store needs the catalog's URL (LINEAGE_CATALOG_URL)")
         if not namespace:
             raise ValueError("the provenance store needs a namespace to keep its tables in")
-        self._url = catalog_url.rstrip("/")
+        self._clients = clients
         self._namespace = list(namespace)
         self._token = token
         self._refuse_foreign_runs = refuse_foreign_runs
@@ -489,15 +494,16 @@ class ProvenanceStore:
         self._landing = False
 
     @classmethod
-    def from_settings(cls, settings: LineageSettings) -> ProvenanceStore:
-        """The store a deployment configures: the catalog at ``LINEAGE_CATALOG_URL``, the namespace it keeps for provenance."""
+    def from_settings(cls, settings: LineageSettings, clients: CatalogClients) -> ProvenanceStore:
+        """The store a deployment configures: the catalog ``clients`` reach (``LINEAGE_CATALOG_URL``), the namespace it
+        keeps for provenance."""
         token_file = settings.catalog_identity_token_file
 
         def token() -> str | None:
             return read_identity_token(token_file) if token_file else None
 
         return cls(
-            catalog_url=settings.catalog_url,
+            clients,
             namespace=settings.provenance_namespace.split(CATALOG_DELIMITER),
             token=token,
             refuse_foreign_runs=settings.fga_enabled,
@@ -509,15 +515,15 @@ class ProvenanceStore:
 
     async def _run[T](self, call: Callable[[], T]) -> T:
         """``call``, a blocking round trip to the catalog, on the threads lineage keeps for its calls through it
-        (`CATALOG_CALLS`), which its doors, its ingest lane and its relay share: apart from the request pool, and apart
-        from the process's own work."""
-        return await CATALOG_CALLS.run(call)
+        (`CatalogClients.calls`), which its doors, its ingest lane and its relay share: apart from the request pool, and
+        apart from the process's own work."""
+        return await self._clients.calls.run(call)
 
     def _reader(self, table: str) -> CatalogTableReader:
-        return CatalogTableReader(RestCatalogTransport(self._url, token=self._token(), timeout=self._timeout), self.table_id(table))
+        return CatalogTableReader(RestCatalogTransport(self._clients, token=self._token(), timeout=self._timeout), self.table_id(table))
 
     def _writer(self, table: str) -> RestCatalogWriteTransport:
-        return RestCatalogWriteTransport(self._url, self.table_id(table), token=self._token(), timeout=self._timeout)
+        return RestCatalogWriteTransport(self._clients, self.table_id(table), token=self._token(), timeout=self._timeout)
 
     # ---- tables -------------------------------------------------------------------------------------------
 
@@ -528,7 +534,7 @@ class ProvenanceStore:
     def _ensure(self) -> None:
         from lance_namespace_urllib3_client.api.data_api import DataApi
 
-        api = DataApi(catalog_api_client(self._url))
+        api = DataApi(self._clients.write)
         for table, schema in _TABLES:
             with translate_catalog_errors():
                 api.create_table(
@@ -542,7 +548,7 @@ class ProvenanceStore:
 
     async def ready(self) -> None:
         """Raise unless the feed table answers: the one thing every door of this service needs. Read on the process's own
-        threads, never the ones its callers' calls hold (`CATALOG_CALLS`): a burst of them must not queue the read the
+        threads, never the ones its callers' calls hold (`CatalogClients.calls`): a burst of them must not queue the read the
         health watch judges this replica by."""
         await on_own_threads(lambda: self._reader(FEED).table_version())
 
@@ -574,7 +580,7 @@ class ProvenanceStore:
             self._landing = True
         if start:
             try:
-                threading.Thread(target=self._land_pending, name="provenance-record").start()
+                self._clients.writer.submit(self._land_pending)
             except BaseException:
                 # No writer took the burst, so the next record starts one, which lands this event too.
                 with self._pending_lock:
@@ -590,7 +596,9 @@ class ProvenanceStore:
                 self._land(batch)
         except BaseException as exc:
             # A panic in a native library is a BaseException, which `_land` does not take: the batch's deliveries fail
-            # with it, and the next record starts a writer for what is still pending.
+            # with it, and the next record starts a writer for what is still pending. Logged here: nothing reads the
+            # writer's own outcome.
+            log.error("provenance_writer_failed", extra={"events": len(batch), "error": f"{type(exc).__name__}: {exc}"}, exc_info=exc)
             for recording in batch:
                 _settle(recording, exc)
             with self._pending_lock:
@@ -701,11 +709,29 @@ class ProvenanceStore:
         row = {"outbox_key": outbox_key, "run_id": run_id, "author": author, "reason": reason, "event": event_json, "refused_at": datetime.now(UTC)}
         await self._run(lambda: self._writer(REFUSALS).merge_upsert(pa.Table.from_pylist([row], schema=REFUSAL_SCHEMA), on=["outbox_key"]))
 
-    async def parked(self, run_id: str | None = None) -> list[ParkedDelivery]:
-        """Each event a park kept, the ingest lane's or the outbox drain's ([[LH-148]]), of ``run_id`` or of every run."""
-        where = lance_filter(t"starts_with(outbox_key, {PARKED_KEY_PREFIX})" + (t" AND run_id = {run_id}" if run_id is not None else t""))
-        rows = await self._run(lambda: self._reader(REFUSALS).to_table(columns=["outbox_key", "run_id", "event"], filter=where))
+    async def parked(self, run_id: str) -> list[ParkedDelivery]:
+        """Each event of ``run_id`` a park kept, the ingest lane's or the outbox drain's ([[LH-148]]), with its payload: the
+        read a replay of the run makes. Read and parsed on a catalog thread."""
+        where = lance_filter(t"starts_with(outbox_key, {PARKED_KEY_PREFIX}) AND run_id = {run_id}")
+        return await self._run(lambda: self._parked(where))
+
+    def _parked(self, where: str) -> list[ParkedDelivery]:
+        rows = self._reader(REFUSALS).to_table(columns=["outbox_key", "run_id", "event"], filter=where)
         return [parked_delivery(row["outbox_key"], row["run_id"], json.loads(row["event"])) for row in rows.to_pylist()]
+
+    async def parked_runs(self) -> dict[str, int]:
+        """How many events a park keeps of each run, read off the run column alone; an event that names no run counts
+        under the empty name."""
+        return await self._run(self._parked_runs)
+
+    def _parked_runs(self) -> dict[str, int]:
+        kept = self._reader(REFUSALS).to_table(columns=["run_id"], filter=lance_filter(t"starts_with(outbox_key, {PARKED_KEY_PREFIX})"))
+        return dict(Counter(run or "" for run in kept.column("run_id").to_pylist()))
+
+    async def _parked_keys(self) -> list[str]:
+        """The key of every kept park, read off the key column alone."""
+        where = lance_filter(t"starts_with(outbox_key, {PARKED_KEY_PREFIX})")
+        return await self._run(lambda: self._reader(REFUSALS).to_table(columns=["outbox_key"], filter=where).column("outbox_key").to_pylist())
 
     async def events_recorded(self, keys: Collection[str]) -> set[str]:
         """Which of the feed row keys ``keys`` the feed holds."""
@@ -724,13 +750,32 @@ class ProvenanceStore:
 
         A run's events reach the feed by other paths too (a replay of the retained stream, a producer's re-announcement),
         and a kept delivery the feed already holds has nothing left to recover.
+
+        The keys are read first, alone, and the payloads a feed row's key is derived from :data:`_PARKS_PER_READ` parks at
+        a time, each read parsed on the catalog thread that made it: a tick holds one read's payloads however many parks
+        are kept.
         """
-        kept = await self.parked()
-        held = await self.events_recorded({delivery.feed_key for delivery in kept if delivery.feed_key})
-        recovered = [delivery.key for delivery in kept if delivery.feed_key in held]
-        if recovered:
-            await self.forget_parked(recovered)
-        return len(recovered)
+        keys = await self._parked_keys()
+        retired = 0
+        for start in range(0, len(keys), _PARKS_PER_READ):
+            feed_keys = await self._run(partial(self._feed_keys_of, keys[start : start + _PARKS_PER_READ]))
+            held = await self.events_recorded(set(feed_keys.values()))
+            recovered = [key for key, feed_row in feed_keys.items() if feed_row in held]
+            if recovered:
+                await self.forget_parked(recovered)
+            retired += len(recovered)
+        return retired
+
+    def _feed_keys_of(self, parks: Sequence[str]) -> dict[str, str]:
+        """The feed row each of the kept ``parks`` would write, by its key, for those an event parses out of."""
+        reader = self._reader(REFUSALS)
+        feed_keys: dict[str, str] = {}
+        for where in in_lists("outbox_key", parks):
+            for row in reader.to_table(columns=["outbox_key", "event"], filter=where).to_pylist():
+                feed_row = delivery_feed_key(json.loads(row["event"]))
+                if feed_row is not None:
+                    feed_keys[row["outbox_key"]] = feed_row
+        return feed_keys
 
     async def prune_events(self, retention_days: int, *, delivered_through: int | None = None) -> int:
         """Delete the feed rows this service received more than ``retention_days`` ago; return how many it found to delete.
@@ -837,7 +882,7 @@ class ProvenanceStore:
         from lance_namespace_urllib3_client.models import DescribeTableRequest
 
         with translate_catalog_errors():
-            described = TableApi(catalog_read_client(self._url)).describe_table(
+            described = TableApi(self._clients.read).describe_table(
                 CATALOG_DELIMITER.join(self.table_id(FEED)),
                 # The uuid is all this reads, so no credential is minted for the feed's location.
                 DescribeTableRequest(vend_credentials=False),

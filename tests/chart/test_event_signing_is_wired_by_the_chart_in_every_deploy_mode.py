@@ -6,8 +6,8 @@
   and lineage could verify nothing. The render refuses it, naming every secret and the script that creates them, until the
   operator attests with `signing.provisioned`. Nor does it mint a NATS user ([[XC-078]], values.yaml `nats.auth`): each
   `nats-user-<user>` waits for `nats.auth.provisioned`.
-- Lineage has no switch: wherever auth is on it carries the signer set and the delegator set the chart derives, and with auth
-  off it carries neither. A render with auth on and no signer at all is refused rather than rendered as a lineage that
+- Lineage has no switch: wherever auth is on it carries the signer set and the delegator set the chart derives, under the
+  names the doors read them by and with no mode, and with auth off it carries neither. A render with auth on and no signer at all is refused rather than rendered as a lineage that
   requires nothing.
 - `signing.doors` is the bus doors' mode (off, observe or enforce). Wherever the store and auth are on, every pod whose app hosts a
   door carries that mode and the two sets lineage verifies with. The pods whose doors take
@@ -67,11 +67,6 @@ def _signers(docs: tuple[dict, ...]) -> list[str]:
     )
 
 
-def _lineage_env(docs: tuple[dict, ...]) -> dict[str, str]:
-    [lineage] = [d for d in docs if d.get("kind") == "Deployment" and d["metadata"]["name"].endswith("-lineage")]
-    return chart_render.env_of(lineage["spec"]["template"]["spec"]["containers"][0])
-
-
 #: The apps that host a signature door, and whether one of their doors takes control events: maintenance's worker, whose
 #: write-event lane runs while MAINTENANCE_ARRIVAL_ENABLED is true, and the catalog, which follows the control events it
 #: publishes while LANCE_CONTROL_EMIT_ENABLED is true ([[CTL-32]]).
@@ -82,6 +77,8 @@ _DOOR_ENV = ("RASK_SIGNATURE_DOORS", "RASK_EVENT_SIGNERS", "RASK_EVENT_DELEGATOR
 #: The door hosts each case names, so a values change that stops rendering one fails the case rather than shrinking it.
 _CONTROL_HOSTS = frozenset({"Deployment/rask-catalog"})
 _ALL_HOSTS = _CONTROL_HOSTS | {"Deployment/rask-maintenance-worker"}
+#: Lineage verifies every event it records, so it carries the two sets and neither a mode nor a role map.
+_LINEAGE = "Deployment/rask-lineage"
 
 
 def _app(container: dict) -> str:
@@ -181,18 +178,6 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
     door_hosts: frozenset[str],
 ) -> None:
     docs = chart_render.render(*DEFAULT_ARGS, *overlay)
-    env = _lineage_env(docs)
-
-    if not enforced:
-        assert not {"LINEAGE_SIGNERS", "LINEAGE_DELEGATORS"} & env.keys(), (
-            f"lineage carries a verifier set without enforcement: {sorted(env.keys() & {'LINEAGE_SIGNERS', 'LINEAGE_DELEGATORS'})}"
-        )
-    else:
-        assert {"LINEAGE_SIGNERS", "LINEAGE_DELEGATORS"} <= env.keys(), "lineage requires no signature: the chart gives it no signer set or delegator set"
-        assert json.loads(env["LINEAGE_SIGNERS"]) == _signers(docs), "the signer set is not the identities the Deployments sign as"
-        assert json.loads(env["LINEAGE_DELEGATORS"]) == _identities_running(docs, "catalog.main:app"), (
-            "only the catalog, which authenticated the person, may sign for one"
-        )
 
     hosts = _door_hosts(docs)
     assert hosts.keys() == door_hosts, f"the pods whose app hosts a door are not the ones this case names: {sorted(hosts)}"
@@ -213,6 +198,9 @@ def test_lineage_and_every_bus_door_verify_against_exactly_the_rendered_signers_
             | ({"RASK_CONTROL_SIGNER_ROLES": roles} if _DOOR_APPS[app] else {})
             for workload, app in hosts.items()
         }
-    # One expected map for the whole render, so a door host missing a setting, a pod carrying one without hosting a door and a set that
-    # differs from the one its door admits all fail on the same diff.
-    assert _door_env(docs) == expected, "the doors' settings are not the sets their doors admit, in the asked mode, on exactly the pods that host a door"
+    if enforced:
+        # Only the catalog, which authenticated the person, may sign for one.
+        expected[_LINEAGE] = {"RASK_EVENT_SIGNERS": _signers(docs), "RASK_EVENT_DELEGATORS": roles["catalog"]}
+    # One expected map for the whole render, so a door host or lineage missing a setting, a pod carrying one without verifying and a
+    # set that differs from the one its door admits all fail on the same diff.
+    assert _door_env(docs) == expected, "the verifier settings are not the sets lineage and the doors admit, in the asked mode, on exactly the pods that verify"

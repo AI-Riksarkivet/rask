@@ -211,11 +211,11 @@ the action names it reads must survive a member it does not know, since the lake
    nobody with authorization off. An address must identify a person.
 5. **An unsigned event, or one from a publisher lineage does not list, is recorded by nobody.** Lineage verifies every
    bus and outbox event against the keys its signers publish and refuses one with no signature, an identity outside
-   `LINEAGE_SIGNERS`, a signer that is not its stamped author (only the catalog signs for a person), or bytes that do
+   `RASK_EVENT_SIGNERS`, a signer that is not its stamped author (only the catalog signs for a person), or bytes that do
    not verify. The refusal is an ACK counted by lineage's signature-refused series (`lineage.core.metrics`): never
    retried, parked or recorded, and the only alert excludes `unsigned` and `signer`. A notifier that does not enforce
    would tell a person about a run lineage's feed does not hold. **A new lineage-lane producer is a `lance.signers`
-   entry in the chart** (it mints the pair, sets `RASK_SIGNING_IDENTITY` and lists the identity in `LINEAGE_SIGNERS`)
+   entry in the chart** (it mints the pair, sets `RASK_SIGNING_IDENTITY` and lists the identity in `RASK_EVENT_SIGNERS`)
    that calls `attach_signature` on every event it emits and emits nothing while its key is unresolved
    (`SigningKeyUnavailableError`). Worked reference: `services/maintenance/src/maintenance/core/lineage_emit.py`.
 

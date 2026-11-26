@@ -41,7 +41,16 @@ from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTrans
 from lineage.services.catalog_writer import RestCatalogWriteTransport
 from lineage.services.provenance import FEED, ProvenanceStore
 from tests.app_state import app_of
-from tests.integration.lineage_app import SUBJECT_HEADER, ensure_tables, governed_lineage, joined_bus, live_catalog, live_lineage, run_event
+from tests.integration.lineage_app import (
+    SUBJECT_HEADER,
+    catalog_clients,
+    ensure_tables,
+    governed_lineage,
+    joined_bus,
+    live_catalog,
+    live_lineage,
+    run_event,
+)
 
 
 if TYPE_CHECKING:
@@ -321,8 +330,8 @@ def _newest_first(query: Callable[[RestCatalogTransport, QueryTableRequest], byt
 def test_every_cursor_pages_the_rows_a_pruned_feed_with_holes_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, newest_first: bool) -> None:
     """Every page answers the rows, in the order, its cursor selects: newest first, older than ``after`` and forward from
     ``since``, over a feed a prune cut and deletes left holes in, whatever order the store answers a query in."""
-    with live_catalog(tmp_path / "catalog", monkeypatch) as url:
-        store = ProvenanceStore(catalog_url=url, namespace=["lance_catalog", "provenance"], token=lambda: None, refuse_foreign_runs=False)
+    with live_catalog(tmp_path / "catalog", monkeypatch) as url, catalog_clients(url) as clients:
+        store = ProvenanceStore(clients, namespace=["lance_catalog", "provenance"], token=lambda: None, refuse_foreign_runs=False)
         ensure_tables(store)
         for burst in range(3):
             _recorded(
@@ -332,10 +341,10 @@ def test_every_cursor_pages_the_rows_a_pruned_feed_with_holes_holds(tmp_path: Pa
                     for n in range(8)
                 ],
             )
-        RestCatalogWriteTransport(url, ["lance_catalog", "provenance", FEED]).delete(
+        RestCatalogWriteTransport(clients, ["lance_catalog", "provenance", FEED]).delete(
             "_rowid < 3 OR _rowid = 4 OR (_rowid >= 10 AND _rowid <= 15) OR _rowid = 20"
         )
-        held = CatalogTableReader(RestCatalogTransport(url), ["lance_catalog", "provenance", FEED]).to_table(columns=["received_at"], with_row_id=True)
+        held = CatalogTableReader(RestCatalogTransport(clients), ["lance_catalog", "provenance", FEED]).to_table(columns=["received_at"], with_row_id=True)
         seqs = sorted(int(row_id) + 1 for row_id in held.column("_rowid").to_pylist())
         if newest_first:
             monkeypatch.setattr(RestCatalogTransport, "query", _newest_first(RestCatalogTransport.query))

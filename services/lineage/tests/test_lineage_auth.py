@@ -140,10 +140,12 @@ def test_authenticate_enabled_verifies_token(dex_issuer: Any) -> None:  # noqa: 
 # --------------------------------------------------------------------------- #
 
 
-def test_gate_unwired_client_fails_closed() -> None:
-    with pytest.raises(ServiceUnavailableError):
+def test_a_gate_with_no_decider_fails_closed() -> None:
+    # `None` is what the lifespan sets where it built no decider; with authorization on that is an outage, never an allow.
+    request = _request(decider=None)
+    with pytest.raises(ServiceUnavailableError, match="authorization service is not available"):
         asyncio.run(
-            fga_deps.require_metadata_access("a$b", request=_request(), settings=_settings(**_FULL_AUTH), token=person(), names=NO_CATALOG_NAMES, bearer=None)
+            fga_deps.require_metadata_access("a$b", request=request, settings=_settings(**_FULL_AUTH), token=person(), names=NO_CATALOG_NAMES, bearer=None)
         )
 
 
@@ -442,9 +444,9 @@ def test_ingest_handler_keeps_body_author_when_oidc_off() -> None:
 # --------------------------------------------------------------------------- #
 
 
-def test_output_authz_unwired_client_fails_closed() -> None:
-    with pytest.raises(ServiceUnavailableError):
-        asyncio.run(fga_deps.enforce_output_authz(_event(outputs=["a$b"]), _request().app, _settings(**_FULL_AUTH), token=person()))
+def test_output_authz_with_no_decider_fails_closed() -> None:
+    with pytest.raises(ServiceUnavailableError, match="authorization service is not available"):
+        asyncio.run(fga_deps.enforce_output_authz(_event(outputs=["a$b"]), _request(decider=None).app, _settings(**_FULL_AUTH), token=person()))
 
 
 def test_output_authz_output_less_still_requires_auth() -> None:

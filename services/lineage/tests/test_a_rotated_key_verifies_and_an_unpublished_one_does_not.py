@@ -45,8 +45,8 @@ def _event() -> dict[str, Any]:
 def test_lineage_verifies_the_previous_key_after_a_rotation_and_refuses_an_unpublished_one(
     monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: SecretStoreDouble, signed_with: str, recorded: bool
 ) -> None:
-    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([SIGNER]))
-    monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps([]))
+    monkeypatch.setenv("RASK_EVENT_SIGNERS", json.dumps([SIGNER]))
+    monkeypatch.setenv("RASK_EVENT_DELEGATORS", json.dumps([]))
     current, previous, unpublished = event_signer(SIGNER), event_signer(SIGNER), event_signer(SIGNER)
     secret_store.hold(f"signing-public-{SIGNER}", {"keys": f"{current.public},{previous.public}"})
     event = (previous if signed_with == "previous" else unpublished).sign(_event())

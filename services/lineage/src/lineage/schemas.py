@@ -1,6 +1,6 @@
 """Typed response schemas for the lineage API (Pydantic, snake_case)."""
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -112,13 +112,16 @@ class DlqBacklog(BaseModel):
 
     ``depth`` / ``oldest_age_seconds`` are the RAW system-health signal (the same numbers the
     ``outbox.depth`` gauge alerts on); ``events`` is the governed subset the caller may see (≤ depth when
-    per-dataset filtering drops events for datasets outside the caller's reach), capped at ``limit``.
+    per-dataset filtering drops events for datasets outside the caller's reach) of the ``limit`` staged events this
+    page covered. ``next_cursor`` is the ``after`` that reads the page behind it, ``None`` once nothing is staged past
+    this one: a page can show fewer events than ``limit``, or none, and still have one.
     """
 
     depth: int
     oldest_age_seconds: float
     events: list[DlqEvent]
     limit: int
+    next_cursor: str | None = None
 
 
 class ParkedDelivery(BaseModel):
@@ -140,5 +143,5 @@ class ParkedRuns(BaseModel):
 class DlqReplayResponse(BaseModel):
     """The result of re-ingesting one staged event (#83): recorded under its key, then dropped."""
 
-    status: str
+    status: Literal["replayed", "recovered"]
     run_id: str

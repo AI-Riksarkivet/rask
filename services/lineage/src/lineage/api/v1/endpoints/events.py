@@ -13,7 +13,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Depends, Query
 from lance_namespace import InvalidInputError
 from pydantic import BaseModel, ConfigDict, ValidationError
 
@@ -23,7 +23,6 @@ from lakehouse.governed import fga_ids, fga_reads
 from lakehouse.naming import CATALOG_DELIMITER
 from lineage.api.dependencies import BearerDep, NamesDep, ProvenanceDep, SettingsDep
 from lineage.api.fga_deps import FilterDep, Governed, governed_refs, output_refs, require_event_feed_reader, upstreams_named_as_tables
-from lineage.api.security import CurrentToken
 from lineage.models import Dataset
 from lineage.schemas import EventRecord, Events, FeedProjection, ProjectedEvent
 from lineage.services.names import CatalogNames
@@ -307,13 +306,10 @@ def _forward_cursor(returned: list[EventRecord], records: list[EventRecord], *, 
     return records[-1].seq if records else min(since, head)
 
 
-@router.get("/events/projection")
+@router.get("/events/projection", dependencies=[Depends(require_event_feed_reader)])
 async def get_events_projection(
     *,
-    request: Request,
     provenance: ProvenanceDep,
-    settings: SettingsDep,
-    token: CurrentToken,
     after: Annotated[int | None, Query(ge=1)] = None,
     since: Annotated[int | None, Query(ge=0)] = None,
     limit: Annotated[int, Query(ge=1, le=_EVENTS_RETURN)] = _EVENTS_RETURN,
@@ -344,7 +340,6 @@ async def get_events_projection(
     the only place a run id lives.
     """
     _one_direction(after, since)
-    await require_event_feed_reader(request, settings, token)
     window = await provenance.window(after=after, since=since)
     records = await window.take(limit)
     bounds = await window.bounds()

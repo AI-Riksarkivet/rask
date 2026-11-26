@@ -119,7 +119,7 @@ def _settings() -> LineageSettings:
             "oidc_connectors": {"local": "dex"},
             "fga_enabled": True,
             "fga_store_id": "s",
-            "signing": Signing(signers=frozenset(), delegators=frozenset()),
+            "signing": Signing(event_signers=frozenset(), event_delegators=frozenset()),
         }
     )
 

@@ -25,21 +25,16 @@ argument with no default and a missing one is a TypeError at import-time coverag
 """
 
 import pytest
+from lineage_lane import measured, outcome
 
+from lineage.core import metrics
 from lineage.core.metrics import Door, Outcome
 
 
 def test_the_door_reaches_the_metric_attributes(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Driven through `record_outcome`, so a call that drops the attribute cannot pass."""
-    from lineage.core import metrics
+    """Driven through `record_outcome` and read off the counter it exports, so a call that drops the attribute cannot pass."""
+    counts = measured(monkeypatch, "_events_processed")
 
-    seen: list[dict[str, str]] = []
-
-    class _Counter:
-        def add(self, _amount: int, attributes: dict[str, str]) -> None:
-            seen.append(attributes)
-
-    monkeypatch.setattr(metrics, "_events_processed", _Counter())
     metrics.record_outcome(Outcome.REFUSED, door=Door.HTTP)
 
-    assert seen == [{"lance.lineage.outcome": "refused", "lance.lineage.door": "http"}]
+    assert counts("lineage.events.processed") == {outcome("refused", "http"): 1}

@@ -290,8 +290,8 @@ spec:
 
             {{- $signers := include "lance.signingIdentities" . | splitList " " | compact }}
             {{- if not $signers }}{{ fail "auth.enabled=true but no identity signs: lineage would verify nothing" }}{{- end }}
-            - { name: LINEAGE_SIGNERS, value: {{ $signers | toJson | quote }} }
-            - { name: LINEAGE_DELEGATORS, value: {{ include "lance.delegatorIdentities" . | splitList " " | compact | toJson | quote }} }
+            - { name: RASK_EVENT_SIGNERS, value: {{ $signers | toJson | quote }} }
+            - { name: RASK_EVENT_DELEGATORS, value: {{ include "lance.delegatorIdentities" . | splitList " " | compact | toJson | quote }} }
             {{- end }}
           {{- include "lance.appProbes" . | nindent 10 }}
           resources: {{- include "lance.resources" (dict "root" . "comp" "lineage") | nindent 12 }}

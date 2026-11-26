@@ -48,7 +48,7 @@ def lineage_port(dex_issuer: Any, monkeypatch: pytest.MonkeyPatch) -> Iterator[i
     }.items():
         monkeypatch.setenv(key, value)
     get_settings.cache_clear()
-    monkeypatch.setattr(main.ProvenanceStore, "from_settings", lambda _settings: _Feed())
+    monkeypatch.setattr(main.ProvenanceStore, "from_settings", lambda _settings, _clients: _Feed())
     with serve(main.app) as url:
         port = urlsplit(url).port
         assert port is not None, url

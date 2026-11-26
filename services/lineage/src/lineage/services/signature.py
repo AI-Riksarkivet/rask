@@ -7,7 +7,8 @@ read; lineage holds PUBLIC keys only, so a compromised lineage can admit or refu
 WHAT THIS MODULE OWNS is the part the library leaves to each service: the secret store, read under this service's own
 login, as the place each identity's published list is read from (`lakehouse.events.published_keys.PublishedKeys` caches and paces the reads, through
 `lakehouse.governed.signing_key.published_key_fetch`, the read every verifying door shares), and turning the library's
-outcomes into the three answers a door needs.
+verdict (`lakehouse.events.door_verdict.judge`, enforcing: the one place a refusal is told from an outage) into the
+three answers a door needs.
 `lakehouse.events.signing.verify_signature` owns what a valid signature is.
 
 * VERIFIED: the event's signer and the key that signed it are known. The caller may act on what the signature attests.
@@ -28,8 +29,9 @@ from fastapi import FastAPI
 from fastapi.concurrency import run_in_threadpool
 from lance_namespace import ServiceUnavailableError
 
+from lakehouse.events.door_verdict import DoorMode, DoorVerdict, judge
 from lakehouse.events.published_keys import PublishedKeys
-from lakehouse.events.signing import KeySourceUnavailableError, SignatureError, VerifiedSignature, signature_of, verify_signature
+from lakehouse.events.signing import VerifiedSignature, signature_of, verify_signature
 from lakehouse.governed.signing_key import published_key_fetch
 from lineage.core.config import LineageSettings
 from lineage.core.metrics import record_signature_refused, record_signature_verified
@@ -77,28 +79,39 @@ async def verify_arrived_event(arrived: Mapping[str, Any], app: FastAPI, setting
         ServiceUnavailableError: the identity's published keys could not be read, or no read has begun since an
             unknown key id was first met and the last one is too recent to repeat. Retry.
     """
-    signing = settings.signing
-    if not signing.enforced:
+    if not settings.signing.enforced:
         return None
-    # The one reader the lifespan builds: its cache and its pacing are the process's, shared by every door that verifies.
-    keys: PublishedKeys = app.state.published_keys
     claim = signature_of(arrived)
-    try:
-        verified = await run_in_threadpool(
-            verify_signature, arrived, source=keys.for_event(claim.kid if claim else None), signers=signing.signers, delegators=signing.delegators
-        )
-    except SignatureError as exc:
-        record_signature_refused(exc.reason)
+    verdict = await _judged(arrived, app, settings)
+    detail = _bounded(verdict.detail or "")
+    if verdict.refused is not None:
+        record_signature_refused(verdict.refused)
         log.warning(
             "lineage_signature_refused",
-            extra={**_subject_of(arrived), "reason": exc.reason, "identity": _bounded(claim.identity) if claim else None},
+            extra={**_subject_of(arrived), "reason": verdict.refused, "identity": _bounded(claim.identity) if claim else None},
         )
-        raise UnverifiedEventError(_bounded(str(exc)), exc.reason) from exc
-    except KeySourceUnavailableError as exc:
-        log.warning("lineage_signature_keys_unavailable", extra={**_subject_of(arrived), "error": _bounded(str(exc))})
-        raise ServiceUnavailableError(_bounded(str(exc))) from exc
-    record_signature_verified(verified.identity)
-    return verified
+        raise UnverifiedEventError(detail, verdict.refused)
+    if verdict.verified is None:
+        log.warning("lineage_signature_keys_unavailable", extra={**_subject_of(arrived), "error": detail})
+        raise ServiceUnavailableError(detail)
+    record_signature_verified(verdict.verified.identity)
+    return verdict.verified
+
+
+async def _judged(arrived: Mapping[str, Any], app: FastAPI, settings: LineageSettings) -> DoorVerdict:
+    """The enforcing verdict on the signature ``arrived`` carries, against the published keys the lifespan's one reader
+    holds (its cache and its pacing are the process's, shared by every door that verifies) and the chart's signer sets.
+    In the threadpool: a key read is a blocking call."""
+    keys: PublishedKeys = app.state.published_keys
+    claim = signature_of(arrived)
+    signing = settings.signing
+
+    def verify() -> VerifiedSignature:
+        return verify_signature(
+            arrived, source=keys.for_event(claim.kid if claim else None), signers=signing.event_signers, delegators=signing.event_delegators
+        )
+
+    return await run_in_threadpool(judge, verify, DoorMode.ENFORCE)
 
 
 async def staged_signature(arrived: Mapping[str, Any], app: FastAPI, settings: LineageSettings) -> VerifiedSignature | None:
@@ -110,12 +123,6 @@ async def staged_signature(arrived: Mapping[str, Any], app: FastAPI, settings: L
     failure to verify is no refusal to count or warn about, and the event takes the full check rather than the page
     failing. A door that records the event verifies with :func:`verify_arrived_event`, which answers each outcome.
     """
-    signing = settings.signing
-    claim = signature_of(arrived)
-    if not signing.enforced or claim is None:
+    if not settings.signing.enforced or signature_of(arrived) is None:
         return None
-    keys: PublishedKeys = app.state.published_keys
-    try:
-        return await run_in_threadpool(verify_signature, arrived, source=keys.for_event(claim.kid), signers=signing.signers, delegators=signing.delegators)
-    except SignatureError, KeySourceUnavailableError:
-        return None
+    return (await _judged(arrived, app, settings)).verified

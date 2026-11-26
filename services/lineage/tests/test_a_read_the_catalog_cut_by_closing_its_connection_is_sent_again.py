@@ -16,7 +16,7 @@ from typing import BinaryIO
 import pytest
 import urllib3
 
-from lineage.services.catalog_client import reset_catalog_clients
+from lineage.services.catalog_client import CatalogClients
 from lineage.services.catalog_reader import RestCatalogTransport
 from lineage.services.catalog_writer import RestCatalogWriteTransport
 
@@ -68,21 +68,19 @@ def _read_request(requests: BinaryIO) -> bool:
 
 @pytest.fixture
 def catalog() -> Iterator[_ClosingCatalog]:
-    reset_catalog_clients()
     closing = _ClosingCatalog()
     yield closing
     closing.close()
-    reset_catalog_clients()
 
 
-def _read(url: str) -> Callable[[], object]:
+def _read(clients: CatalogClients) -> Callable[[], object]:
     """The feed's version, as lineage's readiness reads it through the catalog."""
-    return lambda: RestCatalogTransport(url, timeout=5.0).table_version(["ns", "t"])
+    return lambda: RestCatalogTransport(clients, timeout=5.0).table_version(["ns", "t"])
 
 
-def _write(url: str) -> Callable[[], object]:
+def _write(clients: CatalogClients) -> Callable[[], object]:
     """A delete through the catalog, a write it may have applied before the connection went."""
-    return lambda: RestCatalogWriteTransport(url, ["ns", "t"], timeout=5.0).delete("id > 1")
+    return lambda: RestCatalogWriteTransport(clients, ["ns", "t"], timeout=5.0).delete("id > 1")
 
 
 @pytest.mark.parametrize(
@@ -90,9 +88,11 @@ def _write(url: str) -> Callable[[], object]:
     [pytest.param(_read, True, id="read"), pytest.param(_write, False, id="write")],
 )
 def test_a_request_the_catalog_cut_by_closing_its_connection_is_sent_again_only_for_a_read(
-    catalog: _ClosingCatalog, call_for: Callable[[str], Callable[[], object]], sent_again: bool
+    catalog: _ClosingCatalog, call_for: Callable[[CatalogClients], Callable[[], object]], sent_again: bool
 ) -> None:
-    call = call_for(catalog.url)
+    # The clients a lifespan builds for its catalog, and closes: each transport built on them shares their connections.
+    clients = CatalogClients(catalog.url)
+    call = call_for(clients)
     call()
 
     try:
@@ -101,5 +101,7 @@ def test_a_request_the_catalog_cut_by_closing_its_connection_is_sent_again_only_
         answered = False
     else:
         answered = True
+    finally:
+        clients.close()
 
     assert (answered, catalog.cut) == (sent_again, 1)

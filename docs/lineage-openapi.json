@@ -70,7 +70,7 @@
         "type": "object"
       },
       "DlqBacklog": {
-        "description": "The outbox saturation snapshot + the visible at-risk events (#83).\n\n``depth`` / ``oldest_age_seconds`` are the RAW system-health signal (the same numbers the\n``outbox.depth`` gauge alerts on); ``events`` is the governed subset the caller may see (\u2264 depth when\nper-dataset filtering drops events for datasets outside the caller's reach), capped at ``limit``.",
+        "description": "The outbox saturation snapshot + the visible at-risk events (#83).\n\n``depth`` / ``oldest_age_seconds`` are the RAW system-health signal (the same numbers the\n``outbox.depth`` gauge alerts on); ``events`` is the governed subset the caller may see (\u2264 depth when\nper-dataset filtering drops events for datasets outside the caller's reach) of the ``limit`` staged events this\npage covered. ``next_cursor`` is the ``after`` that reads the page behind it, ``None`` once nothing is staged past\nthis one: a page can show fewer events than ``limit``, or none, and still have one.",
         "properties": {
           "depth": {
             "title": "Depth",
@@ -86,6 +86,17 @@
           "limit": {
             "title": "Limit",
             "type": "integer"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
           },
           "oldest_age_seconds": {
             "title": "Oldest Age Seconds",
@@ -175,6 +186,10 @@
             "type": "string"
           },
           "status": {
+            "enum": [
+              "replayed",
+              "recovered"
+            ],
             "title": "Status",
             "type": "string"
           }
@@ -552,9 +567,27 @@
   "paths": {
     "/admin/dlq": {
       "get": {
-        "description": "The outbox saturation snapshot + the visible at-risk events (oldest first, capped at ``limit``).\n\n``depth``/``oldest_age_seconds`` are the raw system-health signal; ``events`` is the per-dataset-governed\nsubset the caller may see. Requires an authenticated principal when FGA is on (else the raw depth would\nleak to an anonymous caller); the event list is then filtered by dataset visibility.",
+        "description": "The outbox saturation snapshot, and one page of the at-risk events the caller may see, oldest first.\n\n``depth``/``oldest_age_seconds`` are the raw system-health signal, served to any authenticated caller when FGA is\non (:func:`require_caller`, else the raw depth would leak to an anonymous one); ``events`` is the per-dataset-governed\nsubset of this page the caller may see.\n\nPaged as the feed is (``/events``): a request covers the next ``limit`` staged events after ``after``, whichever of\nthem the caller may see, and ``next_cursor`` is the ``after`` to pass next, ``null`` once the page reached the end of\nthe outbox. A page can therefore be empty, or short, with more to read: a caller whose events sit behind others it\nmay not see reaches them by following the cursor, at ``limit`` events' work a request.\n\nA caller that follows the cursor is shown every event it may see that stayed staged throughout its walk exactly\nonce, whatever is delivered or staged meanwhile; an event staged again during the walk can be shown again. The\ncursor is opaque. It holds the time the last event the page covered was staged at and a digest of that event's id,\nnever the id: a caller that already knows an event's id could tell from it that the event was staged then, and\nlearns nothing else of an event it may not see.",
         "operationId": "list_dlq_admin_dlq_get",
         "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "After"
+            }
+          },
           {
             "in": "query",
             "name": "limit",
@@ -708,7 +741,7 @@
     },
     "/admin/dlq/{run_id}/replay": {
       "post": {
-        "description": "Re-ingest one staged event on demand, re-publish it, then drop it \u2014 the manual twin of the reconcile relay's drain.\n\nA replay IS a re-ingest, so it carries the SAME authz as a fresh ingest, twice over: the relay's gate on\nthe staged bytes (:func:`enforce_bus_authz` \u2014 signature and stamped author) and the ingest door's on the\noperator (:func:`enforce_output_authz` \u2014 ``can_write_data`` on the outputs, ``can_read_data`` on the\ninputs, fail-closed). The record is idempotent: every feed row and edge is written under its key. The\nstaged bytes are re-published\nto the lineage topic exactly as the relay re-publishes them, so subscribers hear of the event as well as\nthe feed. The drop is only reached on success \u2014 a failed re-ingest or re-publish leaves the object\nstaged for the relay to retry, and a failed re-publish answers 503 because the feed is already\nrepaired.\n\nNon-disclosure (audit 2026-07-20): replay must not become an oracle for events ``list_dlq`` hid. So a\nrun whose datasets the caller cannot SEE (or an unparseable poison object, which the governed list also\nhides) returns the SAME 404 as a missing run \u2014 never a distinct 422 or a 403 echoing hidden dataset\nnames. Only an event the caller could have listed reaches ``enforce_output_authz``.",
+        "description": "Re-ingest one staged event on demand, re-publish it, then drop it \u2014 the manual twin of the reconcile relay's drain.\n\nA replay IS a re-ingest, so it carries the SAME authz as a fresh ingest, twice over: the relay's gate on\nthe staged bytes (:func:`enforce_bus_authz` \u2014 signature and stamped author) and the ingest door's on the\noperator (:func:`enforce_output_authz` \u2014 ``can_write_data`` on the outputs, ``can_read_data`` on the\ninputs, fail-closed). The record is idempotent: every feed row and edge is written under its key. The\nstaged bytes are re-published\nto the lineage topic exactly as the relay re-publishes them, so subscribers hear of the event as well as\nthe feed. The drop is only reached on success \u2014 a failed re-ingest or re-publish leaves the object\nstaged for the relay to retry, and a re-publish the bus did not take answers 503 because the feed is already\nrepaired.\n\nNon-disclosure (audit 2026-07-20): replay must not become an oracle for events ``list_dlq`` hid. So a\nrun whose datasets the caller cannot SEE (or an unparseable poison object, which the governed list also\nhides) returns the SAME 404 as a missing run \u2014 never a distinct 422 or a 403 echoing hidden dataset\nnames. Only an event the caller could have listed reaches ``enforce_output_authz``.",
         "operationId": "replay_dlq_admin_dlq__run_id__replay_post",
         "parameters": [
           {

@@ -2,7 +2,10 @@
 
 import asyncio
 import json
+import os
 import time
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -137,3 +140,47 @@ def test_list_events_is_bounded_and_oldest_first(tmp_path: Any) -> None:
     assert first_two == ["run-0", "run-1"]  # bounded AND oldest-first (not arbitrary order)
 
     assert len({rid for rid, _ in outbox.list_events(uri, StorageOptions())}) == 5  # no limit => everything
+
+
+#: One modification time, in nanoseconds, for objects a test stages as a store with whole-second times would hold them.
+_ONE_TIME = 1_764_000_000 * 10**9
+
+
+def _staged_at_one_time(root: Path, key: str) -> None:
+    outbox.stage_event(_uri(root), StorageOptions(), key, event_json="{}")
+    os.utime(root / "_lineage_outbox" / f"{key}.json", ns=(_ONE_TIME, _ONE_TIME))
+
+
+def _drop_one_already_listed(root: Path, listed: list[str]) -> set[str]:
+    outbox.drop_event(_uri(root), StorageOptions(), listed[0])
+    return {listed[0]}
+
+
+def _stage_one_more(root: Path, _listed: list[str]) -> set[str]:
+    _staged_at_one_time(root, "0")
+    return {"0"}
+
+
+@pytest.mark.parametrize(
+    "between_pages",
+    [
+        pytest.param(_drop_one_already_listed, id="an-object-the-first-page-listed-is-dropped"),
+        pytest.param(_stage_one_more, id="an-object-is-staged-at-the-cursors-time"),
+    ],
+)
+def test_a_paged_walk_lists_each_object_staged_throughout_it_once_though_all_share_one_modification_time(
+    tmp_path: Path, between_pages: Callable[[Path, list[str]], set[str]]
+) -> None:
+    for key in ("a", "b", "c", "d"):
+        _staged_at_one_time(tmp_path, key)
+
+    page = outbox.page_events(_uri(tmp_path), StorageOptions(), limit=2)
+    listed = [key for key, _ in page.events]
+    came_or_went = between_pages(tmp_path, listed)
+    for _ in range(4):  # more pages than the walk needs, so a cursor that never ends fails the count below
+        if page.next is None:
+            break
+        page = outbox.page_events(_uri(tmp_path), StorageOptions(), limit=2, after=page.next)
+        listed += [key for key, _ in page.events]
+
+    assert sorted(key for key in listed if key not in came_or_went) == sorted({"a", "b", "c", "d"} - came_or_went)

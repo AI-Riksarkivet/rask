@@ -18,6 +18,7 @@ import pyarrow as pa
 import pytest
 
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lineage.services.catalog_client import CatalogClients
 from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport
 from tests.live_server import serve
 
@@ -58,6 +59,6 @@ def test_an_unlimited_read_returns_every_row(catalog_url: str) -> None:
         created = client.post("/v1/table/lance_catalog$paged$t/create", content=_wide_rows(), headers={"content-type": ARROW_STREAM_MEDIA_TYPE})
         assert created.status_code == 200, created.text
 
-    table = CatalogTableReader(RestCatalogTransport(catalog_url), ["lance_catalog", "paged", "t"]).to_table(columns=["id", "vec"])
+    table = CatalogTableReader(RestCatalogTransport(CatalogClients(catalog_url)), ["lance_catalog", "paged", "t"]).to_table(columns=["id", "vec"])
 
     assert sorted(table["id"].to_pylist()) == list(range(_ROWS))

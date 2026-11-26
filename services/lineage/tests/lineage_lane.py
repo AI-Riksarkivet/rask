@@ -172,7 +172,7 @@ def started(monkeypatch: pytest.MonkeyPatch, feed: Feed, *, decider: AccessDecid
     whose environment turns authorization on; the decider is read per delivery, so it is in place before the first.
     """
     bus = BusDouble()
-    monkeypatch.setattr(main.ProvenanceStore, "from_settings", lambda _settings: feed)
+    monkeypatch.setattr(main.ProvenanceStore, "from_settings", lambda _settings, _clients: feed)
     monkeypatch.setattr(main, "bus_session", session_holding(bus))
     get_settings.cache_clear()
     with TestClient(main.app) as client:

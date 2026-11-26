@@ -17,6 +17,7 @@ server, on a store of the test's own holding the tuples a case names.
 
 import asyncio
 import json
+import logging
 import os
 import uuid
 from collections.abc import Awaitable, Callable, Collection
@@ -36,6 +37,7 @@ from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.events.openlineage import run_id_for
 from lakehouse.events.signing import signature_of
 from lakehouse.governed import fga_ids, fga_provision
+from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.decider import OpenFgaDecider
 from lakehouse.storage import store_session
 from lakehouse.storage.credential import S3KeyPair
@@ -115,7 +117,7 @@ def _settings(tmp_path: Path, *, fga_enabled: bool, signers: frozenset[str] = fr
         {
             "outbox_uri": str(tmp_path / "outbox"),
             "fga_enabled": fga_enabled,
-            "signing": Signing(signers=signers, delegators=frozenset({_CATALOG})),
+            "signing": Signing(event_signers=signers, event_delegators=frozenset({_CATALOG})),
             "s3_web_identity_token_file": str(token),
             "s3_sts_endpoint": "http://object-store:9000",
             **(auth if fga_enabled else {}),
@@ -562,11 +564,26 @@ def test_the_dlq_replay_re_publishes_the_staged_event_to_the_lineage_topic(tmp_p
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is None, "a replayed event must be dropped"
 
 
-def test_a_replay_whose_publish_fails_leaves_the_object_for_the_relay(tmp_path: Path, catalog: Any) -> None:
+@pytest.mark.parametrize(
+    ("failing", "answer", "saying"),
+    [
+        pytest.param(BusUnavailableError("this process is not connected to the bus"), ServiceUnavailableError, "re-announcing it failed", id="the-bus-is-away"),
+        pytest.param(
+            ValueError("event payload is 1048577 bytes (> 1048576)"), ValueError, "event payload is 1048577 bytes", id="an-envelope-past-the-payload-cap"
+        ),
+        pytest.param(KeyError("a fault of the door's own"), KeyError, "a fault of the door's own", id="a-fault-the-publish-does-not-document"),
+    ],
+)
+def test_a_replay_whose_publish_fails_leaves_the_object_for_the_relay_and_is_audited_as_failed(
+    tmp_path: Path, catalog: Any, caplog: pytest.LogCaptureFixture, failing: Exception, answer: type[Exception], saying: str
+) -> None:
+    """A bus that did not take the copy answers the retryable 503. An envelope past the payload cap is
+    refused the same on every retry, and a failure the publish does not document is a fault: each answers as itself,
+    never as an outage to retry. Whichever it is, the trail says the replay failed."""
     settings = _settings(tmp_path, fga_enabled=False)
     key, _ = _stage_a_create(settings, catalog)
 
-    with pytest.raises(ServiceUnavailableError, match="re-announcing it failed"):
+    with caplog.at_level(logging.INFO, logger=AUDIT_LOGGER), pytest.raises(answer, match=saying):
         asyncio.run(
             dlq.replay_dlq(
                 run_id=key,
@@ -575,10 +592,14 @@ def test_a_replay_whose_publish_fails_leaves_the_object_for_the_relay(tmp_path: 
                 settings=settings,
                 token=None,
                 datasets=fga_deps.DatasetFilter(_request(), settings, None),
-                publisher=BusDouble(failing=BusUnavailableError("this process is not connected to the bus")),
+                publisher=BusDouble(failing=failing),
             )
         )
 
+    outcomes = [
+        getattr(record, "audit.outcome") for record in caplog.records if record.name == AUDIT_LOGGER and getattr(record, "audit.action") == "dlq_replay"
+    ]
+    assert outcomes == ["failure"]
     assert outbox.resolve_event(settings.outbox_uri, StorageOptions(), key) is not None, "the drop destroyed the copy the relay would still have re-published"
 
 
@@ -588,7 +609,7 @@ def test_the_dlq_view_lists_bytes_no_parser_accepts_as_poison(tmp_path: Path, bo
     key, _ = _stage_a_create(settings, catalog)
     hostile = _stage_hostile_first(settings, body)
 
-    backlog = asyncio.run(dlq.list_dlq(settings=settings, token=None, datasets=fga_deps.DatasetFilter(_request(), settings, None), limit=100))
+    backlog = asyncio.run(dlq.list_dlq(settings=settings, datasets=fga_deps.DatasetFilter(_request(), settings, None), limit=100))
 
     assert [(e.run_id, e.parseable) for e in backlog.events] == [(hostile, False), (key, True)], f"the view does not show the poison: {backlog.events}"
 
@@ -630,9 +651,7 @@ def test_a_create_for_a_table_the_operator_cannot_see_is_neither_listed_nor_repl
     monkeypatch.setattr(dlq.audit, "audit", lambda action, outcome, **_kw: audited.append((action, outcome)))
     repo, publisher = ProvenanceStoreDouble(), BusDouble()
 
-    backlog = _decided(
-        openfga_store, lambda request: dlq.list_dlq(settings=settings, token=stranger, datasets=fga_deps.DatasetFilter(request, settings, stranger), limit=100)
-    )
+    backlog = _decided(openfga_store, lambda request: dlq.list_dlq(settings=settings, datasets=fga_deps.DatasetFilter(request, settings, stranger), limit=100))
     with pytest.raises(TransactionNotFoundError, match=f"no staged lineage event for run {key}"):
         _decided(
             openfga_store,

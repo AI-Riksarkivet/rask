@@ -2,16 +2,15 @@
 
 Auto-instrumentation gives generic HTTP server/client metrics; these are the *business* golden
 signals you'd actually alert on — how many lineage events we ingest vs. drop vs. retry, and how long
-ingest takes. They go out via the OTel SDK (activated by ``opentelemetry-instrument``) **OTLP-direct to
-GreptimeDB** (no Collector — mirrors rask), queryable in PromQL / Perses.
+ingest takes. They go out via the OTel SDK (activated by ``opentelemetry-instrument``) as plain OTLP/HTTP to the
+platform's OTLP gateway (`observability.export.endpoint`, ADR 0215), whose store answers them in PromQL.
 
 Cardinality is bounded on purpose (the otel skill's #1 cost driver): the processed-events counter carries only the bounded,
 namespaced ``lance.lineage.outcome`` and the equally bounded ``lance.lineage.door``, and the signature counters carry the
 signing identity (a member of the chart's signer set, so as many series as the estate has signers) or a refusal reason (a
 closed set) — per-run /
-per-table identifiers belong on spans and logs, never on metric attributes. (Custom attributes use the project's dot-namespaced `lance.*` convention —
-deliberately NOT the otel skill's reverse-DNS letter, pinned in todo_fable; in PromQL the dots become
-underscores → ``lance_lineage_outcome``.)
+per-table identifiers belong on spans and logs, never on metric attributes. (Custom attributes use the project's dot-namespaced `lance.*` convention,
+deliberately not the otel skill's reverse-DNS letter; in PromQL the dots become underscores → ``lance_lineage_outcome``.)
 ``metrics.get_meter`` returns a proxy that binds lazily, so creating the instruments at import time
 (before ``opentelemetry-instrument`` installs the real MeterProvider) is safe.
 """
@@ -57,11 +56,17 @@ _forward_stalled = _meter.create_counter(
 )
 
 
-def record_forwarded(*, forwarded: int, refused: int, stalled: bool) -> None:
-    """Count one tick's forward. Every series is added to, at 0 too, so each exists from the first tick a backend is set."""
+def record_forwarded(*, forwarded: int, refused: int) -> None:
+    """Count one tick's forward. Every series is added to, at 0 too, the stalled ticks' among them, so each exists from
+    the first tick a backend is set."""
     _forwarded.add(forwarded, {"lance.lineage.outcome": "forwarded"})
     _forwarded.add(refused, {"lance.lineage.outcome": "refused"})
-    _forward_stalled.add(1 if stalled else 0)
+    _forward_stalled.add(0)
+
+
+def record_forward_stalled() -> None:
+    """Count one tick whose forward stopped short of the feed's head."""
+    _forward_stalled.add(1)
 
 
 _signature_verified = _meter.create_counter(
@@ -168,7 +173,7 @@ class Door(StrEnum):
     #: arrival but a giving-up and its repair, and an operator reads it as neither of the above.
     DEAD_LETTER = "dead_letter"
     #: The relay tick's outbox drain: an event a producer staged, recorded through the bus door's own gate. Only its
-    #: refusals are counted here, each once the drain has kept it in the refusals table: parked for repair when a grant
+    #: refusals are counted here, each once the drain has kept it in the refusals table and dropped its staged object: parked for repair when a grant
     #: would admit it, as the ingest lane parks one; the drain's other outcomes are the outbox's own counters.
     OUTBOX = "outbox"
 

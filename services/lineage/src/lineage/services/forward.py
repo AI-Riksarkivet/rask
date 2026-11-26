@@ -142,7 +142,8 @@ async def forward(provenance: ProvenanceStore, settings: LineageForward, client:
     reached, outcome = await _send(window, settings, client, url=url, mark=mark)
     if reached > mark:
         await provenance.advance_cursor(name, reached)
-    metrics.record_forwarded(forwarded=outcome.forwarded, refused=outcome.refused, stalled=outcome.stalled is not None)
+    metrics.record_forwarded(forwarded=outcome.forwarded, refused=outcome.refused)
     if outcome.stalled:
+        metrics.record_forward_stalled()
         log.warning("lineage_forward_stalled", extra={"cursor": reached, "reason": outcome.stalled})
     return outcome

@@ -62,8 +62,8 @@ def _event() -> dict[str, Any]:
 def lane(monkeypatch: pytest.MonkeyPatch, signature_counts: Callable[[], dict[tuple[str, str], int]], secret_store: SecretStoreDouble) -> Iterator[Lineage]:
     """Lineage started after `signature_counts`, as a pod starts its lane after its MeterProvider is installed."""
     del signature_counts, secret_store
-    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([SIGNER, "service-catalog"]))
-    monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps(["service-catalog"]))
+    monkeypatch.setenv("RASK_EVENT_SIGNERS", json.dumps([SIGNER, "service-catalog"]))
+    monkeypatch.setenv("RASK_EVENT_DELEGATORS", json.dumps(["service-catalog"]))
     with started(monkeypatch, Feed()) as lineage:
         yield lineage
 
@@ -113,7 +113,7 @@ def test_lineage_does_not_start_authenticated_with_a_secret_store_and_no_signer(
     authenticated = {"oidc_enabled": True, "RASK_OIDC_IDP_ID": "dex", "RASK_OIDC_ISSUER": "https://auth.example.com/dex", "RASK_OIDC_AUDIENCE": "rask"}
     monkeypatch.setattr(main, "get_settings", lambda: LineageSettings.model_validate(authenticated))
 
-    with pytest.raises(RuntimeError, match="LINEAGE_SIGNERS lists no signer"):
+    with pytest.raises(RuntimeError, match="RASK_EVENT_SIGNERS lists no signer"):
         asyncio.run(main.lifespan(FastAPI()).__aenter__())
 
     assert secret_store.login.call_count == 0

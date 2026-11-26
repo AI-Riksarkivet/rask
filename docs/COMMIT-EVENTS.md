@@ -63,7 +63,8 @@ returned, with any filter; the cursor still moves past them, and a seq number di
 | `author` | an attribution label: the `rask_author` facet's `name`, else the first owner of an `ownership` facet |
 | `inputs`, `outputs` | the table ids the event reads and writes |
 | `table_uuids`, `namespace_uuids` | the uuids of the governed tables the event names and of their namespaces |
-| `event` | the stored OpenLineage event, omitted with `summary=true` |
+| `unresolved_tables` | the governed tables the event named that resolved to no uuid (an outside producer's name its credential could not resolve), by name |
+| `event` | the stored OpenLineage event; the empty object `{}` with `summary=true` |
 
 The `rask_lance` facet below is rask's own: `run.facets.rask_lance` on a run, `dataset.facets.rask_lance` on a dataset
 change. Its `version` is the **Lance version the write committed**, an integer, and is the value to act on:
@@ -264,8 +265,11 @@ about their objects alone: every other object is answered refused, as one that d
 holding `event_reader` (`can_read_event_feed` on the estate root). The governed `GET /events` shows a service only the
 tables its own grants reach, so a notifier walking it would never see a run in a warehouse it holds nothing on. Each row
 is `{seq, event}`, the event cut to what deciding whom to tell reads: `eventType`, `eventTime`, `producer`, the run id
-with its `rask_author`, `rask_lance` and `parent` facets, and each output's name with its own `rask_lance` facet (for a dataset
-change, the dataset's name, namespace and those two facets). Nothing describing the data crosses it, and the cursor rule
+with its `rask_author`, `rask_lance`, `parent` and `rask_signature` facets, and each output's name and namespace with its
+own `rask_lance` facet (for a dataset change, the dataset's name, namespace and its `rask_author`, `rask_lance` and
+`rask_signature` facets). The `rask_signature` facet names who lineage verified signed the event when it recorded it,
+and only an event recorded from the bus or the outbox carries one; the cut is not a document the signature verifies
+over. Nothing describing the data crosses it, and the cursor rule
 above holds unchanged. Who is told stays gated per person by `can_be_notified`, so the role widens what the notifier
 observes and never what a person receives.
 

@@ -1,21 +1,18 @@
-"""ONE urllib3 client per catalog, shared by every transport that talks to it.
+"""What lineage reaches its catalog with, built once by its lifespan and closed by it (:class:`CatalogClients`): ONE
+urllib3 client per kind of call, shared by every transport that talks to the catalog, and the threads those calls run on.
 
 An `ApiClient` builds a `urllib3.PoolManager`, and a transport may be constructed once per REQUEST, so a client per
 transport would stand up a fresh pool and connection for every catalog call and drop it. Nothing would close them
 either: the generated `ApiClient.__exit__` is `pass`, so `with ApiClient(...)` releases nothing and the sockets go back
 only when the garbage collector gets there.
 
-Keyed on (base URL, retry policy) because those are the only two things that shape the pool. NOT on
-the caller's bearer: a per-token cache would be a process-global store of end-user credentials, and
-the point of the cache is that the pool outlives any one caller. So the token stops being a DEFAULT
-header on the client and rides each request instead — see `request_headers`. That is the load-bearing
-half of this change: a shared client carrying one caller's `Authorization` would answer the next
-caller's read under the previous caller's identity, and the catalog authorizes on the bearer.
+One pair per catalog, shaped by its base URL and retry policy alone. NOT by the caller's bearer: a client per token
+would be a process-wide store of end-user credentials, and the point of sharing is that the pool outlives any one
+caller. So the token is never a DEFAULT header on the client and rides each request instead — see `request_headers`:
+a shared client carrying one caller's `Authorization` would answer the next caller's read under the previous caller's
+identity, and the catalog authorizes on the bearer.
 
-Unbounded on purpose (`maxsize=None`): the key space is the set of catalogs this process talks to,
-which is one in every deployment and two in a test. An LRU would evict a live pool for no gain.
-
-A READ HAS A CLIENT OF ITS OWN (:func:`catalog_read_client`), which sends a request again on a connection the catalog
+A READ HAS A CLIENT OF ITS OWN (:attr:`CatalogClients.read`), which sends a request again on a connection the catalog
 dropped. Every Lance-namespace read is a POST, and urllib3 sends a POST again only when the request never left (its
 `Retry` takes a dropped connection's error as a read error, which it does not retry for a method it holds unsafe); so a
 read meeting a pooled connection the catalog has just closed for idleness fails outright on the stricter client.
@@ -24,8 +21,8 @@ Measured live 2026-11-12: all 8 of lineage's readiness flips in 6.7 h were that 
 client, since a write the catalog may have applied is never sent twice.
 """
 
-from functools import cache
-from typing import TYPE_CHECKING, Final, cast
+from concurrent.futures import ThreadPoolExecutor
+from typing import TYPE_CHECKING, cast
 
 from urllib3.util.retry import Retry
 
@@ -36,31 +33,47 @@ if TYPE_CHECKING:
     from lance_namespace_urllib3_client import ApiClient
 
 
-#: The threads lineage's calls through the catalog run on, a door's, the ingest lane's and the relay's alike, a set of
-#: their own: a burst of them holds no request thread, and queues none of the process's own work (its renewals, and the
-#: feed read its readiness rests on, `ProvenanceStore.ready`).
-CATALOG_CALLS: Final = ThreadSet("catalog-calls")
+class CatalogClients:
+    """The clients and threads lineage's calls through one catalog share, for the lifespan that builds them to close.
 
+    Attributes:
+        url: The catalog's base URL, without a trailing slash.
+        write: The generated client for a write: a request the catalog may have applied is never sent twice.
+        read: The generated client for a read: a POST included, a request the catalog's dropped connection cut is sent
+            again on a new one, up to ``retries`` times.
+        calls: The threads lineage's calls through the catalog run on, a door's, the ingest lane's and the relay's alike,
+            a set of their own: a burst of them holds no request thread, and queues none of the process's own work (its
+            renewals, and the feed read its readiness rests on, `ProvenanceStore.ready`).
+        writer: The one thread a burst of recorded events is landed on (`ProvenanceStore.record`), apart from ``calls``,
+            so the doors' reads take no seat from the writer and it takes none from them.
+    """
 
-@cache
-def catalog_api_client(base_url: str, *, retries: int = 3) -> ApiClient:
-    """The shared generated client for one catalog, for a write — construct transports through this, never directly."""
-    from lance_namespace_urllib3_client import ApiClient, Configuration  # optional dep
+    def __init__(self, base_url: str, *, retries: int = 3) -> None:
+        from lance_namespace_urllib3_client import ApiClient, Configuration  # optional dep
 
-    return ApiClient(Configuration(host=base_url, retries=retries))
+        self.url = base_url.rstrip("/")
+        self.write: ApiClient = ApiClient(Configuration(host=self.url, retries=retries))
+        reading = Configuration(host=self.url)
+        # The generated `Configuration` annotates `retries` as an int and forwards it unchanged to urllib3's `PoolManager`,
+        # which takes a `Retry` as well: `allowed_methods=None` is what lets a POST be sent again.
+        reading.retries = cast("int", Retry(total=retries, allowed_methods=None))
+        self.read: ApiClient = ApiClient(reading)
+        self.calls = ThreadSet("catalog-calls")
+        self.writer = ThreadPoolExecutor(max_workers=1, thread_name_prefix="lakehouse-provenance-record")
 
-
-@cache
-def catalog_read_client(base_url: str, *, retries: int = 3) -> ApiClient:
-    """The shared generated client for one catalog, for a read: a POST included, a request the catalog's dropped
-    connection cut is sent again on a new one, up to ``retries`` times."""
-    from lance_namespace_urllib3_client import ApiClient, Configuration  # optional dep
-
-    configuration = Configuration(host=base_url)
-    # The generated `Configuration` annotates `retries` as an int and forwards it unchanged to urllib3's `PoolManager`,
-    # which takes a `Retry` as well: `allowed_methods=None` is what lets a POST be sent again.
-    configuration.retries = cast("int", Retry(total=retries, allowed_methods=None))
-    return ApiClient(configuration)
+    def close(self) -> None:
+        """End the threads, each call that had started first, then close both clients' connections. The generated client
+        has no close of its own (its ``__exit__`` is ``pass``), so the pools are cleared here. Blocking: a burst still
+        landing is waited for, so an async caller runs this in a worker thread. A thread set whose shutdown raises
+        keeps neither the other set nor the connections open: each is still ended, and the failure is raised after."""
+        try:
+            self.writer.shutdown(wait=True)
+        finally:
+            try:
+                self.calls.close()
+            finally:
+                for client in (self.write, self.read):
+                    client.rest_client.pool_manager.clear()
 
 
 def request_headers(token: str | None) -> dict[str, str]:
@@ -73,10 +86,4 @@ def request_headers(token: str | None) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"} if token else {}
 
 
-def reset_catalog_clients() -> None:
-    """Drop the cached clients — for tests that assert on pool identity across cases."""
-    catalog_api_client.cache_clear()
-    catalog_read_client.cache_clear()
-
-
-__all__ = ["CATALOG_CALLS", "catalog_api_client", "catalog_read_client", "request_headers", "reset_catalog_clients"]
+__all__ = ["CatalogClients", "request_headers"]

@@ -32,7 +32,7 @@ from lakehouse.problems.ns_errors import status_for
 from lineage.core.config import LineageSettings
 from lineage.core.sources import is_external_source
 from lineage.models import Dataset, DatasetEvent, RunEvent
-from lineage.services.catalog_client import CATALOG_CALLS, catalog_read_client, request_headers
+from lineage.services.catalog_client import CatalogClients, request_headers
 from lineage.services.catalog_reader import CatalogAnsweredError, logged_outage
 
 
@@ -114,21 +114,22 @@ _DESCRIBE_RELATION: Final = "can_get_metadata"
 class CatalogNames:
     """Resolves a governed table's or namespace's name to its uuid through the catalog's describe doors, as the caller."""
 
-    def __init__(self, *, catalog_url: str, timeout_seconds: float = 30.0) -> None:
-        self._url = catalog_url.rstrip("/")
+    def __init__(self, clients: CatalogClients, *, timeout_seconds: float = 30.0) -> None:
+        self._clients = clients
         self._timeout = timeout_seconds
 
     @classmethod
-    def from_settings(cls, settings: LineageSettings) -> CatalogNames:
-        return cls(catalog_url=settings.catalog_url, timeout_seconds=settings.catalog_timeout_seconds)
+    def from_settings(cls, settings: LineageSettings, clients: CatalogClients) -> CatalogNames:
+        """The resolver a deployment configures, asking through the ``clients`` its lifespan built."""
+        return cls(clients, timeout_seconds=settings.catalog_timeout_seconds)
 
     async def table(self, name: str, *, bearer: str | None) -> DatasetUuids:
         """The uuids of the table ``name`` names now and of its namespace; none when it names no table the caller may see."""
-        return await CATALOG_CALLS.run(self._table, name, bearer)
+        return await self._clients.calls.run(self._table, name, bearer)
 
     async def namespace(self, name: str, *, bearer: str | None) -> str | None:
         """The uuid of the namespace ``name`` names now, or ``None`` when it names none the caller may see."""
-        return await CATALOG_CALLS.run(self._namespace, name, bearer)
+        return await self._clients.calls.run(self._namespace, name, bearer)
 
     def _table(self, name: str, bearer: str | None) -> DatasetUuids:
         from lance_namespace_urllib3_client.api.table_api import TableApi
@@ -136,7 +137,7 @@ class CatalogNames:
 
         try:
             with _as_the_caller():
-                described = TableApi(catalog_read_client(self._url)).describe_table(
+                described = TableApi(self._clients.read).describe_table(
                     # The uuid is all this reads, so no credential is minted for the caller's location.
                     name,
                     DescribeTableRequest(vend_credentials=False),
@@ -158,7 +159,7 @@ class CatalogNames:
 
         try:
             with _as_the_caller():
-                described = NamespaceApi(catalog_read_client(self._url)).describe_namespace(
+                described = NamespaceApi(self._clients.read).describe_namespace(
                     name, DescribeNamespaceRequest(), delimiter=CATALOG_DELIMITER, _request_timeout=self._timeout, _headers=request_headers(bearer)
                 )
         except CatalogAnsweredError as refused:
@@ -179,8 +180,8 @@ async def stamp_resolved_uuids(
     bearer: str | None,
     decider: AccessDecider | None = None,
     subject: str | None = None,
-) -> None:
-    """Name every governed dataset ``event`` names by the uuids its name resolves to for the caller, and no other.
+) -> RunEvent | DatasetEvent:
+    """``event`` with every governed dataset it names carrying the uuids its name resolves to for the caller, and no other.
 
     For the HTTP door, whose caller holds a bearer and no signing key: a uuid in its body is a claim, as a signature
     there is, so each governed dataset's is replaced by what the catalog answers and an external source's is removed.
@@ -189,6 +190,7 @@ async def stamp_resolved_uuids(
     name resolves to no table keeps none, and is recorded by its name. A dataset named by a storage location a governed table holds is named by that table's uuid, as
     the catalog's ``locate`` door answers it through ``decider`` ([[LH-553]]): it is that table, which the graph the feed
     is forwarded to joins it to by the table's ``symlinks``, and `fga_deps.enforce_output_authz` decides it on its grants.
+    ``event`` itself is not changed, so a caller authorizes and records the one answered.
     """
     datasets = [*event.inputs, *event.outputs]
     governed = sorted({dataset.name for dataset in datasets if not is_external_source(dataset.namespace, dataset.name)})
@@ -198,13 +200,18 @@ async def stamp_resolved_uuids(
     else:
         resolved = dict(zip(governed, await asyncio.gather(*(names.table(name, bearer=bearer) for name in governed)), strict=True))
     located = await _located(datasets, decider) if decider is not None else {}
-    for dataset in datasets:
+
+    def stamped(dataset: Dataset) -> Dataset:
         if is_external_source(dataset.namespace, dataset.name):
             location = identifier_location(dataset.namespace, dataset.name)
             uuids = DatasetUuids(table_uuid=located.get(location)) if location is not None else DatasetUuids()
         else:
             uuids = resolved[dataset.name]
-        dataset.facets = with_dataset_uuids({"facets": dataset.facets}, uuids, producer=_PRODUCER).get("facets", {})
+        return dataset.model_copy(update={"facets": with_dataset_uuids({"facets": dataset.facets}, uuids, producer=_PRODUCER).get("facets", {})})
+
+    if isinstance(event, DatasetEvent):
+        return event.model_copy(update={"dataset": stamped(event.dataset)})
+    return event.model_copy(update={"inputs": [stamped(dataset) for dataset in event.inputs], "outputs": [stamped(dataset) for dataset in event.outputs]})
 
 
 async def _located(datasets: list[Dataset], decider: AccessDecider) -> dict[str, str | None]:

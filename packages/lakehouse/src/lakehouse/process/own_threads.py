@@ -41,6 +41,11 @@ class ThreadSet:
         in_context = partial(contextvars.copy_context().run, call, *args)
         return await asyncio.get_running_loop().run_in_executor(self._threads, in_context)
 
+    def close(self) -> None:
+        """End the set, for the lifespan that built it: a call still waiting for a seat is dropped, and this returns once
+        each call that had started has. Blocking, so an async caller runs it in a worker thread."""
+        self._threads.shutdown(wait=True, cancel_futures=True)
+
 
 _OWN: Final = ThreadSet("own")
 

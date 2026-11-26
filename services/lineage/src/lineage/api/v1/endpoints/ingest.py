@@ -161,7 +161,7 @@ async def ingest_event(
     # signing key. A facet it supplies is a claim, so it is cleared from both facet bags before the event is
     # parsed, and whatever is stored never carries a signature nobody verified.
     try:
-        event: RunEvent | DatasetEvent = parse_event(without_signature_facet(body))
+        claimed: RunEvent | DatasetEvent = parse_event(without_signature_facet(body))
     except ValidationError as exc:
         raise RequestValidationError(exc.errors()) from exc
     # A GOVERNED TABLE IS RECORDED, AND AUTHORIZED, BY ITS UUID ([[LH-522]], [[LH-524]]), which this door resolves from
@@ -175,8 +175,9 @@ async def ingest_event(
     # decides ([[LH-576]]): the bounds `parse_event` applied cap how many there are, so whatever an event names, a caller
     # who may see none of it costs the catalog one question, never a describe per name.
     try:
-        enforce_author(event, token)
-        await stamp_resolved_uuids(event, names, bearer=bearer, decider=decider if settings.fga_enabled else None, subject=token.subject if token else None)
+        event = await stamp_resolved_uuids(
+            enforce_author(claimed, token), names, bearer=bearer, decider=decider if settings.fga_enabled else None, subject=token.subject if token else None
+        )
         # What the catalog answered the event's locations and symlinks name scopes its feed row for every reader ([[LH-598]]).
         aliased = await enforce_output_authz(event, request.app, settings, token=token)
         started = time.perf_counter()

@@ -1,11 +1,9 @@
 """In-service authz for the lineage read + ingest endpoints.
 
 The lineage service owns the commit feed and the edge list, so it must protect them itself (in-service: the
-cluster route in front of it checks nothing). It mirrors the catalog's authz guard (``services/catalog/api/fga_deps.py``)
-and asks every question through ``app.state.decider`` (:mod:`lakehouse.governed.decider`): deployed, that is the
-catalog's decision door, and lineage holds no credential to the OpenFGA store at all ([[LH-442]]). The thin FastAPI
-authz + filter dependencies are re-derived here because they bind to ``LineageSettings`` rather than the catalog's
-``Settings``.
+cluster route in front of it checks nothing). It asks every question through ``app.state.decider``
+(:mod:`lakehouse.governed.decider`): deployed, that is the catalog's decision door, and lineage holds no credential to
+the OpenFGA store at all ([[LH-442]]). Every gate here climbs one ladder before its own question (:func:`_asking`).
 
 Three holes this closes (audit ``w8u4rc2tg``):
 
@@ -20,7 +18,7 @@ Three holes this closes (audit ``w8u4rc2tg``):
   (:func:`enforce_author`) — the client-claimed facet is overwritten.
 
 Default OFF (``RASK_FGA_ENABLED``), exactly like the catalog; production enables it.
-Fail-closed when enabled-but-unwired (503, never silent allow).
+Fail-closed when enabled with no decider (503, never silent allow).
 """
 
 import logging
@@ -202,20 +200,44 @@ def _denied(event: str, *, subject: str, relation: str, resources: Sequence[str]
     log.info(event, extra={"relation": relation, "objects": list(resources)})
 
 
-async def _require_relation(relation: str, obj: str | None, *, label: str, request: Request, settings: FgaSettings, token: Caller | None) -> None:
-    """The one fail-closed authz ladder every per-``{name}`` gate shares (audit 2026-07-16: it had
-    grown four near-copies). No-op when FGA is off; unwired client → 503; unauthenticated → 401;
-    deny → 403, also for a name that resolved to no object (``obj`` is ``None``), named by ``label`` either way;
-    an unanswerable decision → 503, never allow."""
+def _asking(settings: FgaSettings, app: FastAPI, token: Caller | None) -> tuple[AccessDecider, str] | None:
+    """The ladder every gate here climbs before its own question: the authorization service and the subject it is asked
+    as, or ``None`` with authorization off, where a gate asks nothing.
+
+    Fail-closed, and before any gate looks at what it was asked about, so none admits a caller on an empty set of
+    objects. The decider is the wire the lifespan sets (`app_wire`): its ``None`` is the lifespan's off value, answered
+    as an outage where authorization is on, and a lineage whose lifespan set nothing there faults.
+
+    Raises:
+        ServiceUnavailableError: Authorization is on and the lifespan built no decider.
+        UnauthenticatedError: Authorization is on and the request carries no caller.
+    """
     if not settings.fga_enabled:
-        return
-    decider = getattr(request.app.state, "decider", None)
+        return None
+    decider = app_wire(app, "decider", AccessDecider, none_is_off=True)
     if decider is None:
         raise ServiceUnavailableError("authorization service is not available")
     if token is None:
         raise UnauthenticatedError("authentication required")
-    if obj is None or not await decider.check(user=token.subject, relation=relation, obj=obj):
-        _denied("access_denied", subject=token.subject, relation=relation, resources=[obj or label])
+    return decider, token.subject
+
+
+async def require_caller(request: Request, settings: SettingsDep, token: CurrentToken) -> None:
+    """Gate a door every authenticated caller may open, whose answer is then cut to what that caller may see: the
+    ladder (:func:`_asking`) and no rung of its own."""
+    _asking(settings, request.app, token)
+
+
+async def _require_relation(relation: str, obj: str | None, *, label: str, request: Request, settings: FgaSettings, token: Caller | None) -> None:
+    """The gate every per-``{name}`` read shares: the ladder (:func:`_asking`), then deny → 403, also for a name that
+    resolved to no object (``obj`` is ``None``), named by ``label`` either way; an unanswerable decision → 503, never
+    allow."""
+    asking = _asking(settings, request.app, token)
+    if asking is None:
+        return
+    decider, subject = asking
+    if obj is None or not await decider.check(user=subject, relation=relation, obj=obj):
+        _denied("access_denied", subject=subject, relation=relation, resources=[obj or label])
         raise PermissionDeniedError(f"{relation} required on {label}")
 
 
@@ -227,7 +249,7 @@ _READ_PARKS_RELATION: Final = "can_read_parked_events"
 _REPLAY_PARKS_RELATION: Final = "can_replay_parked_events"
 
 
-async def require_event_feed_reader(request: Request, settings: FgaSettings, token: Caller | None) -> None:
+async def require_event_feed_reader(request: Request, settings: SettingsDep, token: CurrentToken) -> None:
     """Gate the unfiltered run feed on ``can_read_event_feed`` at the configured root object ([[CTL-021]]).
 
     The sibling of :func:`_require_relation` and deliberately not a call into it: that helper asks about one
@@ -237,8 +259,8 @@ async def require_event_feed_reader(request: Request, settings: FgaSettings, tok
     ITS OWN RUNG rather than an estate-admin verb: the reconciler that reads this feed holds `event_reader` and
     nothing that mints a tenant or edits the authorization graph (`model.fga.yaml` pins both halves).
 
-    The same fail-closed ladder as every other gate here: FGA off → no-op; unwired client → 503;
-    unauthenticated → 401; deny → 403; an OpenFGA outage inside `check` → 503, never allow.
+    The ladder every gate here climbs (:func:`_asking`), then deny → 403; an OpenFGA outage inside `check` → 503,
+    never allow.
     """
     await _require_estate_rung(_EVENT_FEED_RELATION, request, settings, token=token)
 
@@ -263,16 +285,13 @@ async def require_parks_replayer(request: Request, settings: SettingsDep, token:
 
 
 async def _require_estate_rung(relation: str, request: Request, settings: FgaSettings, *, token: Caller | None) -> None:
-    if not settings.fga_enabled:
+    asking = _asking(settings, request.app, token)
+    if asking is None:
         return
-    decider = getattr(request.app.state, "decider", None)
-    if decider is None:
-        raise ServiceUnavailableError("authorization service is not available")
-    if token is None:
-        raise UnauthenticatedError("authentication required")
+    decider, subject = asking
     obj = settings.fga_root_object
-    if not await decider.check(user=token.subject, relation=relation, obj=obj):
-        _denied("access_denied", subject=token.subject, relation=relation, resources=[obj])
+    if not await decider.check(user=subject, relation=relation, obj=obj):
+        _denied("access_denied", subject=subject, relation=relation, resources=[obj])
         raise PermissionDeniedError(f"{relation} required on {obj}")
 
 
@@ -293,12 +312,13 @@ async def require_metadata_access(name: str, *, request: Request, settings: Sett
     )
 
 
-def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None:
-    """Bind the author to the *verified* principal — never trust the request body.
+def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> RunEvent | DatasetEvent:
+    """``event`` with its author bound to the *verified* principal — never trust the request body.
 
-    When the request is authenticated, overwrite the ``rask_author`` facet with the token subject so a
-    producer cannot self-assert someone else's identity (provenance forgery). When OIDC is off
-    (dev/tests) the body-supplied author is left as-is.
+    When the request is authenticated, the event answered carries the token subject as its ``rask_author`` facet,
+    whatever the body claimed, so a producer cannot self-assert someone else's identity (provenance forgery). When
+    OIDC is off (dev/tests) the event is answered as it came, with the body-supplied author. ``event`` itself is not
+    changed, so a caller records and authorizes the one answered.
 
     THE FACET LIVES SOMEWHERE ELSE ON A STATIC EVENT, and stamping the wrong place is silent: a
     `DatasetEvent` has no run, so its author rides the DATASET's `rask_author` facet — which is exactly
@@ -307,12 +327,11 @@ def enforce_author(event: RunEvent | DatasetEvent, token: Caller | None) -> None
     verified subject unread and the create attributed to whatever the body claimed.
     """
     if token is None:
-        return
+        return event
     stamp = author_facet(_PRODUCER, token.subject)
     if isinstance(event, DatasetEvent):
-        event.dataset.facets[AUTHOR_FACET] = stamp
-    else:
-        event.run.facets[AUTHOR_FACET] = stamp
+        return event.model_copy(update={"dataset": event.dataset.model_copy(update={"facets": {**event.dataset.facets, AUTHOR_FACET: stamp}})})
+    return event.model_copy(update={"run": event.run.model_copy(update={"facets": {**event.run.facets, AUTHOR_FACET: stamp}})})
 
 
 class _StampedAuthor:
@@ -436,13 +455,13 @@ def _attested(verified: VerifiedSignature | None, settings: LineageSettings) -> 
     version it recorded no author for is announced for nobody (ADR 0187), so it attests what the original would have.
 
     ONLY A SIGNATURE THIS CALL VERIFIED, AND ONLY AS ONE OF THE CHART'S DELEGATORS. The catalog is the delegator set
-    (`LINEAGE_DELEGATORS`, derived from the identities the chart mints keys for), so the name trusted here cannot differ
+    (`RASK_EVENT_DELEGATORS`, derived from the identities the chart mints keys for), so the name trusted here cannot differ
     from the name the catalog signs under. A `rask_signature` merely PRESENT proves nothing and is not read here: where
     signing is not enforced ``verified`` is None, and an unsigned event, or one signed by any other identity, keeps the
     full check. The signing key's reach bounds the attestation: only the catalog's own login to the store may read its
     private key, since its role's policy is the only one that grants it (ADR 0169).
     """
-    return verified is not None and verified.identity in settings.signing.delegators
+    return verified is not None and verified.identity in settings.signing.event_delegators
 
 
 async def _is_replay(event: RunEvent | DatasetEvent, payload: dict[str, object], app: FastAPI) -> bool:
@@ -623,8 +642,8 @@ async def enforce_output_authz(
 
     :func:`enforce_author` proves WHO is ingesting; this proves they were AUTHORIZED to write those outputs —
     a producer cannot record provenance for a table it has no ``can_write_data`` on (the same write
-    permission the catalog requires to mutate that table). No-op when FGA is off. Fail-closed BEFORE any
-    empty-set short-circuit: unwired client → 503, unauthenticated → 401, any non-writable output → 403.
+    permission the catalog requires to mutate that table). No-op when FGA is off. The ladder first
+    (:func:`_asking`): no decider → 503, unauthenticated → 401; then any non-writable output → 403.
     GOVERNED inputs are also authorized (``can_read_data``, the rung the catalog asks of a commit's inputs): you may
     only record READING a dataset you may read, so a caller who merely sees a table ([[LH-570]]) cannot forge
     READ-edge provenance from it.
@@ -653,32 +672,35 @@ async def enforce_output_authz(
         ([[LH-598]]). Empty with authorization off, and for an event the catalog attests or whose names it vouches for
         (``names_vouched_by``), which names its tables by uuid.
     """
-    if not settings.fga_enabled:
+    # THE LADDER FIRST (`_asking`): with authorization on, a missing decider is a fault and a missing caller a 401
+    # before anything is asked about the event.
+    #
+    # AN EVENT THAT NAMES NO GOVERNED DATASET IS ADMITTED FOR ITS AUTHENTICATED AUTHOR (owner, 2026-11-26). A rung is
+    # held on an object, and such an event names none to ask about, so no rung is asked. It is bound to its author by
+    # the run-author rule below, so no other subject extends its run, and its feed row is shown to nobody but a holder
+    # of the estate's feed rung (`can_read_event_feed`, the projection): `DatasetFilter.governed` hides a row that
+    # names nothing.
+    asking = _asking(settings, app, token)
+    if asking is None:
         return frozenset()
-    # Fail-closed FIRST — BEFORE any empty-set short-circuit: an authenticated but unauthorized caller must
-    # not be able to record a run merely by declaring no outputs. (bug hunt 2026-07-13)
-    decider = getattr(app.state, "decider", None)
-    if decider is None:
-        raise ServiceUnavailableError("authorization service is not available")
-    if token is None:
-        raise UnauthenticatedError("authentication required")
-    await _require_run_author(app, event, subject=token.subject)
+    decider, subject = asking
+    await _require_run_author(app, event, subject=subject)
     attested = _attested(signed_by, settings)
     # WHAT THE EVENT NAMES BY A LOCATION OR ANOTHER IDENTIFIER ([[LH-553]]): the catalog attests its own, so they are not re-derived.
     vouched = attested or _attested(names_vouched_by, settings)
-    written = Aliases() if vouched else await resolve_aliases(decider, list(event.outputs), user=token.subject)
+    written = Aliases() if vouched else await resolve_aliases(decider, list(event.outputs), user=subject)
     # A column upstream named by a location is read as its table too: a graph backend joins it there as it joins an input.
     sources = [*event.inputs, *_upstreams_named_by_a_location([*event.inputs, *event.outputs])]
-    read_as = Aliases() if vouched else await resolve_aliases(decider, sources, user=token.subject)
-    outputs = _require_governed_outputs(event, subject=token.subject, relations=relations, written=written)
+    read_as = Aliases() if vouched else await resolve_aliases(decider, sources, user=subject)
+    outputs = _require_governed_outputs(event, subject=subject, relations=relations, written=written)
     if outputs.objects and not attested:
-        await _require_output_rung(decider, event, subject=token.subject, relations=relations, outputs=outputs, written=written)
+        await _require_output_rung(decider, event, subject=subject, relations=relations, outputs=outputs, written=written)
     read = _governed_inputs(event, read_as)
     hidden = set(read.unresolved)
     if read.objects and not attested:
-        hidden |= await _unseen_inputs(decider, subject=token.subject, read=read, sources=sources, read_as=read_as)
+        hidden |= await _unseen_inputs(decider, subject=subject, read=read, sources=sources, read_as=read_as)
     if hidden:
-        _denied("ingest_input_denied", subject=token.subject, relation="can_read_data", resources=sorted(hidden))
+        _denied("ingest_input_denied", subject=subject, relation="can_read_data", resources=sorted(hidden))
         raise PermissionDeniedError(f"can_read_data required on inputs: {', '.join(sorted(hidden))}")
     return written.tables | read_as.tables
 
@@ -805,8 +827,8 @@ class DatasetFilter:
         if not self._settings.fga_enabled or not unique:
             return set(unique)
         undecided = [obj for obj in unique if obj not in self._decided]
-        if undecided:
-            decider, subject = self._asking()
+        if undecided and (asking := _asking(self._settings, self._request.app, self._token)) is not None:
+            decider, subject = asking
             allowed = await decider.batch_check(user=subject, relation="can_get_metadata", objects=undecided)
             self._decided.update({obj: bool(allowed.get(obj)) for obj in undecided})
         return {obj for obj in unique if self._decided[obj]}
@@ -831,23 +853,15 @@ class DatasetFilter:
         """Ask the authorization service what each of ``events`` names for this caller: for an event no door has recorded,
         whose aliases the catalog answers now (:func:`governed_with_aliases`), unless the catalog attests it by its
         signature in ``signatures`` (:meth:`attestation`, by position). With FGA off nothing is asked."""
-        if not self._settings.fga_enabled:
+        asking = _asking(self._settings, self._request.app, self._token)
+        if asking is None:
             return [governed_refs([*event.inputs, *event.outputs]) for event in events]
-        decider, subject = self._asking()
+        decider, subject = asking
         attested = [_attested(signature, self._settings) for signature in signatures]
         return await governed_with_aliases(decider, events, user=subject, attested=attested)
 
-    def _asking(self) -> tuple[AccessDecider, str]:
-        """The authorization service and the subject it is asked as; fail-closed where either is missing."""
-        decider = getattr(self._request.app.state, "decider", None)
-        if decider is None:
-            raise ServiceUnavailableError("authorization service is not available")
-        if self._token is None:
-            raise UnauthenticatedError("authentication required")
-        return decider, self._token.subject
 
-
-def get_dataset_filter(request: Request, settings: SettingsDep, token: CurrentToken) -> DatasetFilter:
+async def get_dataset_filter(request: Request, settings: SettingsDep, token: CurrentToken) -> DatasetFilter:
     """Build the per-request dataset-visibility filter."""
     return DatasetFilter(request, settings, token)
 

@@ -11,14 +11,18 @@ tables so each is governed.
 import asyncio
 import json
 import logging
+import os
 import uuid
 from pathlib import Path
 from typing import Any, cast
 
 import pytest
 from fastapi import Request
+from fastapi.testclient import TestClient
 from lance_namespace import (
+    InvalidInputError,
     PermissionDeniedError,
+    ServiceUnavailableError,
     TransactionNotFoundError,
     UnauthenticatedError,
     UnsupportedOperationError,
@@ -30,12 +34,14 @@ from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.governed import fga_ids
 from lakehouse.governed.audit import AUDIT_LOGGER
 from lakehouse.governed.decider import OpenFgaDecider
+from lineage.api.dependencies import request_settings
 from lineage.api.fga_deps import DatasetFilter
+from lineage.api.security import authenticate
 from lineage.api.v1.endpoints import dlq
 from lineage.core.config import LineageSettings, storage_options
 from lineage.models import RunEvent
 from lineage.services.provenance import ProvenanceStore
-from tests.app_state import request_on
+from tests.app_state import app_holding, request_on
 from tests.callers import person
 from tests.provenance_store_double import ProvenanceStoreDouble
 
@@ -137,14 +143,27 @@ def test_list_surfaces_a_poison_object(tmp_path: Path) -> None:
 
 def test_list_empty_when_no_outbox_configured() -> None:
     s = LineageSettings.model_validate({})  # outbox_uri = ""
-    out = asyncio.run(dlq.list_dlq(settings=s, token=None, datasets=_filter(_request(), s, None), limit=100))
+    out = asyncio.run(dlq.list_dlq(settings=s, datasets=_filter(_request(), s, None), limit=100))
     assert out.depth == 0 and out.events == []
 
 
-def test_list_fails_closed_without_a_token_when_fga_on(tmp_path: Path) -> None:
-    s = _settings(tmp_path, **_FULL_AUTH)
-    with pytest.raises(UnauthenticatedError):
-        asyncio.run(dlq.list_dlq(settings=s, token=None, datasets=_filter(_request(decider=OpenFgaDecider(cast("Any", object()))), s, None), limit=100))
+@pytest.mark.parametrize(
+    ("decider", "caller", "refusal", "saying"),
+    [
+        pytest.param(OpenFgaDecider(cast("Any", object())), None, UnauthenticatedError, "authentication required", id="no-caller"),
+        pytest.param(None, person(), ServiceUnavailableError, "authorization service is not available", id="no-decider"),
+    ],
+)
+def test_list_fails_closed_when_fga_is_on_and_the_gate_cannot_ask(decider: OpenFgaDecider | None, caller: Any, refusal: type[Exception], saying: str) -> None:
+    # No outbox, so the door has nothing to scope and only its own gate stands between the request and the depth: an
+    # anonymous caller, and a caller nothing can be asked about while the lifespan holds no decider.
+    s = LineageSettings.model_validate(_FULL_AUTH)
+    app = app_holding(decider=decider)
+    app.include_router(dlq.router)
+    app.dependency_overrides[request_settings] = lambda: s
+    app.dependency_overrides[authenticate] = lambda: caller
+    with pytest.raises(refusal, match=saying):
+        TestClient(app).get("/admin/dlq")
 
 
 def test_list_filters_events_to_visible_datasets(tmp_path: Path, openfga_store: Any) -> None:  # noqa: ANN401
@@ -154,11 +173,40 @@ def test_list_filters_events_to_visible_datasets(tmp_path: Path, openfga_store: 
     token = person()
 
     async def listed(decider: OpenFgaDecider) -> Any:  # noqa: ANN401 — the door's answer
-        return await dlq.list_dlq(settings=s, token=token, datasets=_filter(_request(decider=decider), s, token), limit=100)
+        return await dlq.list_dlq(settings=s, datasets=_filter(_request(decider=decider), s, token), limit=100)
 
     out = decided(_held(openfga_store, ("alice", "reader", "mine")), listed)
     assert out.depth == 2  # raw health signal unfiltered
     assert [e.run_id for e in out.events] == ["r1"]  # but only the visible dataset's event
+
+
+def test_a_caller_pages_past_events_it_may_not_see_to_the_one_it_may(tmp_path: Path, openfga_store: Any) -> None:  # noqa: ANN401
+    # Two events alice may not see are staged ahead of hers: a page covers two staged events whoever may see them, so
+    # the first shows her none and answers the cursor that reaches hers.
+    s = _settings(tmp_path, **_FULL_AUTH)
+    for second, (run_id, table) in enumerate((("r1", "hidden"), ("r2", "bronze$secret"), ("r3", "mine")), start=1):
+        _stage(s, run_id, _event_json(run_id, outputs=(("bronze", table),)))
+        # The outbox is read in the order its objects were last modified, so each is given a time of its own.
+        os.utime(tmp_path / f"{run_id}.json", ns=(second * 10**9, second * 10**9))
+    token = person()
+
+    async def paged(decider: OpenFgaDecider) -> list[tuple[list[str], bool]]:
+        pages: list[tuple[list[str], bool]] = []
+        after: str | None = None
+        while True:
+            page = await dlq.list_dlq(settings=s, datasets=_filter(_request(decider=decider), s, token), after=after, limit=2)
+            pages.append(([e.run_id for e in page.events], page.next_cursor is not None))
+            after = page.next_cursor
+            if after is None or len(pages) == 3:
+                return pages
+
+    assert decided(_held(openfga_store, ("alice", "reader", "mine")), paged) == [([], True), (["r3"], False)]
+
+
+def test_a_cursor_the_door_did_not_issue_is_refused(tmp_path: Path) -> None:
+    s = _settings(tmp_path)
+    with pytest.raises(InvalidInputError, match="`after` is not a cursor this door issued"):
+        asyncio.run(dlq.list_dlq(settings=s, datasets=_filter(_request(), s, None), after="bm90IGEgY3Vyc29y", limit=2))
 
 
 # --------------------------------------------------------------------------- #
@@ -213,11 +261,22 @@ def test_replay_poison_is_404_under_fga_no_oracle(tmp_path: Path, openfga_store:
     assert outbox.resolve_event(s.outbox_uri, storage_options(s), "bad") is not None
 
 
-def test_replay_hidden_event_is_404_not_a_name_disclosing_403(tmp_path: Path, openfga_store: Any) -> None:  # noqa: ANN401
-    # A caller who can't SEE the event's datasets gets 404 (indistinguishable from missing), NOT a 403 that
-    # echoes 'bronze$secret' — the disclosure gap list_dlq closes, now closed on replay too.
+@pytest.mark.parametrize(
+    "outputs",
+    [
+        pytest.param((("bronze", "bronze$secret"),), id="names-a-table-the-caller-cannot-see"),
+        pytest.param((), id="names-no-table"),
+    ],
+)
+def test_replay_of_an_event_the_list_hides_is_404_and_leaves_it_staged(
+    tmp_path: Path,
+    openfga_store: Any,  # noqa: ANN401 — the root conftest's OpenFgaStore
+    outputs: tuple[tuple[str, str], ...],
+) -> None:
+    # The list hides both from a caller holding no grant, so a replay answers each as it answers a missing run: a 403
+    # would name `bronze$secret`, and a replay of the event that names no table would record and drop another author's.
     s = _settings(tmp_path, **_FULL_AUTH)
-    _stage(s, "r1", _event_json("r1", outputs=(("bronze", "bronze$secret"),)))
+    _stage(s, "r1", _event_json("r1", outputs=outputs, author="dex~bob"))
     repo = ProvenanceStoreDouble()
     with pytest.raises(TransactionNotFoundError):
         decided(_held(openfga_store), lambda decider: _replay(s, "r1", repo, person(), decider))
@@ -239,7 +298,7 @@ def test_replay_seen_but_not_writable_is_403(tmp_path: Path, openfga_store: Any)
 
 def list_dlq_off(settings: LineageSettings) -> Any:
     """list_dlq with FGA off (governed is pass-through) — the common view driver."""
-    return dlq.list_dlq(settings=settings, token=None, datasets=_filter(_request(), settings, None), limit=100)
+    return dlq.list_dlq(settings=settings, datasets=_filter(_request(), settings, None), limit=100)
 
 
 # --------------------------------------------------------------------------- #

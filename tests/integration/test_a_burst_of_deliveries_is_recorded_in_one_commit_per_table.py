@@ -25,10 +25,11 @@ from catalog.core.config import get_settings
 from lakehouse.events.bus_delivery import Verdict
 from lineage.core.metrics import Door
 from lineage.services import catalog_reader
+from lineage.services.catalog_client import CatalogClients
 from lineage.services.catalog_reader import CatalogTableReader, RestCatalogTransport
 from lineage.services.consumer import handle_cloud_event
 from lineage.services.provenance import EDGES, FEED, RUNS, ProvenanceStore
-from tests.integration.lineage_app import ensure_tables, live_catalog, live_lineage, run_event
+from tests.integration.lineage_app import catalog_clients, ensure_tables, live_catalog, live_lineage, run_event
 from tests.open_gate import admits_everything
 
 
@@ -45,19 +46,19 @@ def _complete(run_id: str, output: str, *, author: str = _ALICE, inputs: tuple[s
     return run_event(run_id, "COMPLETE", "2026-10-23T10:00:01+00:00", outputs=[output, *outputs], inputs=inputs, facets=_authored(author))
 
 
-def _store(url: str) -> ProvenanceStore:
+def _store(clients: CatalogClients) -> ProvenanceStore:
     # Refusing a run another author bound, as a store built for an estate that authorizes does (`from_settings`).
-    store = ProvenanceStore(catalog_url=url, namespace=["lance_catalog", "provenance"], token=lambda: None, refuse_foreign_runs=True)
+    store = ProvenanceStore(clients, namespace=["lance_catalog", "provenance"], token=lambda: None, refuse_foreign_runs=True)
     ensure_tables(store)
     return store
 
 
-def _reader(url: str, table: str) -> CatalogTableReader:
-    return CatalogTableReader(RestCatalogTransport(url), ["lance_catalog", "provenance", table])
+def _reader(clients: CatalogClients, table: str) -> CatalogTableReader:
+    return CatalogTableReader(RestCatalogTransport(clients), ["lance_catalog", "provenance", table])
 
 
-def _versions(url: str) -> dict[str, int]:
-    return {table: _reader(url, table).table_version() for table in (RUNS, EDGES, FEED)}
+def _versions(clients: CatalogClients) -> dict[str, int]:
+    return {table: _reader(clients, table).table_version() for table in (RUNS, EDGES, FEED)}
 
 
 _SUCCESS = Verdict.TAKEN
@@ -77,8 +78,8 @@ def _feed(store: ProvenanceStore) -> Counter[tuple[str, str]]:
     return Counter((str(record.event["run"]["runId"]), str(record.event_type)) for record in asyncio.run(store.list_events(10_000, since=0)))
 
 
-def _edges_by_run(url: str) -> Counter[str]:
-    return Counter(_reader(url, EDGES).to_table(columns=["run_id"]).column("run_id").to_pylist())
+def _edges_by_run(clients: CatalogClients) -> Counter[str]:
+    return Counter(_reader(clients, EDGES).to_table(columns=["run_id"]).column("run_id").to_pylist())
 
 
 def test_a_burst_lands_in_two_commits_per_table_each_row_once_and_a_run_extended_only_by_its_first_author(
@@ -93,14 +94,14 @@ def test_a_burst_lands_in_two_commits_per_table_each_row_once_and_a_run_extended
     # A redelivery of a recorded event, two deliveries of one event, and a run whose second event names another author.
     burst = [*fresh, recorded, twice, twice, started, finished]
 
-    with live_catalog(tmp_path / "catalog", monkeypatch) as url:
-        store = _store(url)
+    with live_catalog(tmp_path / "catalog", monkeypatch) as url, catalog_clients(url) as clients:
+        store = _store(clients)
         assert _deliver(store, [recorded]) == [_SUCCESS]
-        before = _versions(url)
+        before = _versions(clients)
         outcomes = _deliver(store, burst)
-        after = _versions(url)
+        after = _versions(clients)
         feed = _feed(store)
-        edges = _edges_by_run(url)
+        edges = _edges_by_run(clients)
         author = asyncio.run(store.run_author(shared))
 
     # The first delivery commits alone and every other one arrives while it is in flight.
@@ -122,9 +123,9 @@ def test_a_run_founded_by_two_replicas_at_once_is_extended_only_by_the_author_wh
     alices = run_event(run, "RUNNING", "2026-10-23T10:00:00+00:00", outputs=["lance_catalog$acme-silver$alice"], inputs=(_SOURCE,), facets=_authored(_ALICE))
     bobs = _complete(run, "lance_catalog$acme-silver$bob", author=_BOB)
 
-    with live_catalog(tmp_path / "catalog", monkeypatch) as url:
+    with live_catalog(tmp_path / "catalog", monkeypatch) as url, catalog_clients(url) as one, catalog_clients(url) as other:
         # Two replicas, each its own store and writer over the one catalog: neither sees the other's batch.
-        first, second = _store(url), _store(url)
+        first, second = _store(one), _store(other)
         read, release = threading.Event(), threading.Event()
         authors_of = first._authors_of
 
@@ -146,7 +147,7 @@ def test_a_run_founded_by_two_replicas_at_once_is_extended_only_by_the_author_wh
         alice.join(60)
         assert not alice.is_alive(), "the first replica's delivery never settled"
         feed = _feed(second)
-        edge_authors = set(_reader(url, EDGES).to_table(columns=["author"]).column("author").to_pylist())
+        edge_authors = set(_reader(other, EDGES).to_table(columns=["author"]).column("author").to_pylist())
         author = asyncio.run(second.run_author(run))
 
     # Alice's event is taken as the no-race path takes it (`ForeignRunError`), and none of its rows land under Bob's run.
@@ -177,15 +178,15 @@ def test_an_event_whose_edges_the_catalog_refuses_fails_alone_and_its_feed_row_n
     fresh = [_complete(str(uuid.uuid4()), f"lance_catalog$acme-silver$t{n}") for n in range(12)]
     burst = [*fresh[:6], _wide(), *fresh[6:]]
 
-    with live_catalog(tmp_path / "catalog", monkeypatch) as url:
-        store = _store(url)
+    with live_catalog(tmp_path / "catalog", monkeypatch) as url, catalog_clients(url) as clients:
+        store = _store(clients)
         # Set once the app is built, for the cap its doors read per request: the body-limit middleware takes its own
         # when `catalog.main` is first imported, and would hold this one for every later test in the worker.
         monkeypatch.setenv("LANCE_MAX_BODY_BYTES", str(_BODY_CAP))
         get_settings.cache_clear()
         outcomes = _deliver(store, burst)
         feed = _feed(store)
-        edges = _edges_by_run(url)
+        edges = _edges_by_run(clients)
 
     assert outcomes == [_SUCCESS] * 6 + [_RETRY] + [_SUCCESS] * 6
     runs = [event["run"]["runId"] for event in fresh]

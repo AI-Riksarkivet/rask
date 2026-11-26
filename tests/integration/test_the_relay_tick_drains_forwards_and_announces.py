@@ -19,6 +19,7 @@ from outside the process.
 """
 
 import json
+import threading
 import time
 from collections.abc import Callable, Generator, Iterator, Sequence
 from contextlib import contextmanager
@@ -103,19 +104,35 @@ def processed(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], dict[tup
     provider.shutdown()
 
 
-def test_a_tick_counts_a_refusal_it_records_as_every_door_counts_it(
+def test_a_tick_counts_a_refusal_it_records_as_every_door_counts_it_once_however_many_ticks_retire_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, processed: Callable[[], dict[tuple[str, str], int]]
 ) -> None:
-    """A staged event no listed signer signed, refused by the bus door's own gate as the tick drains it."""
+    """A staged event no listed signer signed, refused by the bus door's own gate as the tick drains it. The store
+    refuses the first tick's drop of the staged object, so the next tick refuses and keeps the event again: one event
+    refused is one count, whichever tick retires it."""
     outbox_uri = f"file://{tmp_path}/outbox"
     monkeypatch.setenv("LINEAGE_OUTBOX_URI", outbox_uri)
-    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps(["service-catalog"]))
+    monkeypatch.setenv("RASK_EVENT_SIGNERS", json.dumps(["service-catalog"]))
     unsigned = run_event("1d3c5a07-0000-4000-8000-000000000573", "COMPLETE", "2026-11-12T10:00:00+00:00", outputs=[_TABLE])
     outbox.stage_envelope(outbox_uri, StorageOptions(), lineage_envelope(unsigned))
-    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, governed_lineage(catalog_url, monkeypatch, set()) as lineage:
-        tick = relay_tick(lineage)
+    drop_event = outbox.drop_event
+    refusals = iter([OSError("the store did not take the delete")])
 
-    assert (tick.outbox_refused, tick.outbox_refusals_recorded, processed()) == (1, 1, {("signature_refused", "outbox"): 1})
+    def dropped_on_the_second_ask(uri: str, opts: StorageOptions, key: str) -> None:
+        for refusal in refusals:
+            raise refusal
+        drop_event(uri, opts, key)
+
+    monkeypatch.setattr(outbox, "drop_event", dropped_on_the_second_ask)
+    with live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url, governed_lineage(catalog_url, monkeypatch, set()) as lineage:
+        ticks = [relay_tick(lineage), relay_tick(lineage)]
+        left = [key for key, _ in outbox.list_events(outbox_uri, StorageOptions())]
+
+    assert ([(tick.outbox_refused, tick.outbox_refusals_recorded) for tick in ticks], left, processed()) == (
+        [(1, 1), (1, 1)],
+        [],
+        {("signature_refused", "outbox"): 1},
+    )
 
 
 @contextmanager
@@ -171,6 +188,31 @@ def test_a_tick_announces_a_staged_event_on_the_services_own_connection_and_drop
     assert [(taken.event, trace_id_of(taken.envelope["traceparent"])) for taken in bus.sent] == [(event, trace_id_of(_STAGING_REQUEST))] * len(sent)
     assert (staged_at_each_publish, [key for key, _ in outbox.list_events(outbox_uri, StorageOptions())]) == ([1], left), (
         "the staged copy went before the bus took the event, or stayed after it had"
+    )
+
+
+def _threads_of_the_catalog_clients() -> set[threading.Thread]:
+    """The live threads lineage's calls through its catalog run on, and the one its feed's writer lands a burst on."""
+    return {thread for thread in threading.enumerate() if thread.name.startswith(("lakehouse-catalog-calls", "lakehouse-provenance-record"))}
+
+
+def test_lineages_stop_ends_the_threads_its_calls_through_the_catalog_ran_on(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A tick that drains one staged event reads through the catalog and lands a burst, so both kinds of thread run;
+    none of them outlives the lifespan that started them."""
+    outbox_uri = f"file://{tmp_path}/outbox"
+    outbox.stage_envelope(outbox_uri, StorageOptions(), lineage_envelope(run_event(_RUN, "COMPLETE", "2026-11-14T10:00:00+00:00", outputs=[_TABLE])))
+    before = _threads_of_the_catalog_clients()
+    with (
+        live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
+        _lineage_as_its_pod_starts_it(catalog_url, outbox_uri, BusDouble(), monkeypatch) as lineage,
+    ):
+        tick = relay_tick(lineage)
+        started = _threads_of_the_catalog_clients() - before
+
+    assert tick.outbox_drained == 1, tick
+    assert ({thread.name.rsplit("_", 1)[0] for thread in started}, sorted(thread.name for thread in started if thread.is_alive())) == (
+        {"lakehouse-catalog-calls", "lakehouse-provenance-record"},
+        [],
     )
 
 

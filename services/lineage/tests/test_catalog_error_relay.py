@@ -25,7 +25,6 @@ from lance_namespace import ErrorCode
 from lineage_lane import Feed, started
 
 from lineage.services import catalog_reader
-from lineage.services.catalog_client import reset_catalog_clients
 
 
 _UPSTREAM = "<html>nginx/1.25.3 upstream 10.42.0.7:2333 connect() failed</html>"
@@ -78,12 +77,10 @@ class _Catalog:
 
 @pytest.fixture
 def catalog(monkeypatch: pytest.MonkeyPatch) -> Iterator[_Catalog]:
-    reset_catalog_clients()
     stub = _Catalog()
     monkeypatch.setenv("LINEAGE_CATALOG_URL", stub.url)
     yield stub
     stub.close()
-    reset_catalog_clients()
 
 
 def test_lineages_door_answers_the_catalogs_refusal_of_the_callers_describe_as_the_catalog_sent_it(catalog: _Catalog, monkeypatch: pytest.MonkeyPatch) -> None:

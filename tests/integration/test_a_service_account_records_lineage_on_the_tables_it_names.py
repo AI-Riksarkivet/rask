@@ -332,8 +332,8 @@ _CATALOG = "service-catalog"
 def catalog_signs(monkeypatch: pytest.MonkeyPatch, event_signer: Any) -> Any:  # noqa: ANN401 — root conftest's EventSigner
     """Lineage enforces signing, the catalog its one signer and delegator, as the chart renders both wherever auth is on.
     Requested before ``estate``, so lineage boots with it; the catalog's published keys are installed once it has."""
-    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([_CATALOG]))
-    monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps([_CATALOG]))
+    monkeypatch.setenv("RASK_EVENT_SIGNERS", json.dumps([_CATALOG]))
+    monkeypatch.setenv("RASK_EVENT_DELEGATORS", json.dumps([_CATALOG]))
     return event_signer(_CATALOG)
 
 

@@ -16,6 +16,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from lakehouse.events.bus_delivery import Lane
 from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
+from lakehouse.events.signature_doors import EventSignerSettings
 from lakehouse.governed.settings import GovernedAuthSettings
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
@@ -23,13 +24,14 @@ from lakehouse.storage.options import StorageOptions, on_s3
 from lakehouse.storage.store_session import StoreIdentitySettings, env_alias, key_pair_in_force, require_one_store_identity
 
 
-class Signing(BaseSettings):
+class Signing(EventSignerSettings, BaseSettings):
     """WHO MAY SIGN WHAT LINEAGE RECORDS, as ONE object ([[LH-064]]): the chart-derived signer and delegator sets.
 
-    `signers` are the identities whose Ed25519 keys sign events put on the bus or into the outbox; `delegators`
-    are the ones among them that may stamp a PERSON as the author (the catalog, which authenticated that
-    person). Both are rendered by the chart from the identities it mints keys for (`LINEAGE_SIGNERS`,
-    `LINEAGE_DELEGATORS`, JSON lists), so what lineage trusts and what the estate provisions cannot drift.
+    `event_signers` are the identities whose Ed25519 keys sign events put on the bus or into the outbox;
+    `event_delegators` are the ones among them that may stamp a PERSON as the author (the catalog, which authenticated
+    that person). Both are the sets every verifying door reads (`EventSignerSettings`: `RASK_EVENT_SIGNERS`,
+    `RASK_EVENT_DELEGATORS`), rendered by the chart from the identities it mints keys for, so what lineage trusts,
+    what a door trusts and what the estate provisions cannot drift.
 
     EMPTY SIGNERS MEAN NOTHING IS VERIFIED. A process with no secret store or with authentication off (the offline
     and Dagger lanes) lists neither, and a deployment with both lists its signers or is refused its start
@@ -41,13 +43,10 @@ class Signing(BaseSettings):
 
     model_config = SettingsConfigDict(frozen=True, extra="ignore", validate_by_name=True, validate_by_alias=True)
 
-    signers: frozenset[str] = Field(default=frozenset(), alias="LINEAGE_SIGNERS")
-    delegators: frozenset[str] = Field(default=frozenset(), alias="LINEAGE_DELEGATORS")
-
     @property
     def enforced(self) -> bool:
         """Whether lineage refuses an event no listed signer's key verifies."""
-        return bool(self.signers)
+        return bool(self.event_signers)
 
     def require_signers_where_they_can_be_verified(self, *, authenticated: bool, secret_store: bool) -> None:
         """Refuse a start that could verify and lists nobody to verify.
@@ -58,11 +57,11 @@ class Signing(BaseSettings):
         with no secret store has no key to verify against, and one with authentication off authenticates nobody.
 
         Raises:
-            RuntimeError: Authentication and a secret store are on and ``LINEAGE_SIGNERS`` lists nobody.
+            RuntimeError: Authentication and a secret store are on and ``RASK_EVENT_SIGNERS`` lists nobody.
         """
         if authenticated and secret_store and not self.enforced:
             raise RuntimeError(
-                "lineage is authenticated and has a secret store, and LINEAGE_SIGNERS lists no signer: it would record "
+                "lineage is authenticated and has a secret store, and RASK_EVENT_SIGNERS lists no signer: it would record "
                 "signatures nobody verified. List the identities that sign (the chart renders them wherever auth is on)."
             )
 
@@ -189,7 +188,7 @@ class LineageSettings(GovernedAuthSettings, StoreIdentitySettings, LineageForwar
     # The OIDC/FGA field-set itself is `GovernedAuthSettings`' (`RASK_OIDC_*` / `RASK_FGA_*`). A governed dataset is
     # asked about as the table its uuid names (`table:<uuid>`, [[LH-524]]).
     #: Who may sign what the bus and the outbox carry; see `Signing`. Built by its own env aliases
-    #: (`LINEAGE_SIGNERS`, `LINEAGE_DELEGATORS`), so a settings object made by `model_validate` reads them too.
+    #: (`RASK_EVENT_SIGNERS`, `RASK_EVENT_DELEGATORS`), so a settings object made by `model_validate` reads them too.
     signing: Signing = Field(default_factory=Signing)
 
     # The lakehouse's read-only window, rendered from the chart's one `readOnlyWindow` with the catalog's and maintenance's:

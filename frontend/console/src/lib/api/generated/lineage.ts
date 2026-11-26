@@ -13,11 +13,22 @@ export interface paths {
         };
         /**
          * List Dlq
-         * @description The outbox saturation snapshot + the visible at-risk events (oldest first, capped at ``limit``).
+         * @description The outbox saturation snapshot, and one page of the at-risk events the caller may see, oldest first.
          *
-         *     ``depth``/``oldest_age_seconds`` are the raw system-health signal; ``events`` is the per-dataset-governed
-         *     subset the caller may see. Requires an authenticated principal when FGA is on (else the raw depth would
-         *     leak to an anonymous caller); the event list is then filtered by dataset visibility.
+         *     ``depth``/``oldest_age_seconds`` are the raw system-health signal, served to any authenticated caller when FGA is
+         *     on (:func:`require_caller`, else the raw depth would leak to an anonymous one); ``events`` is the per-dataset-governed
+         *     subset of this page the caller may see.
+         *
+         *     Paged as the feed is (``/events``): a request covers the next ``limit`` staged events after ``after``, whichever of
+         *     them the caller may see, and ``next_cursor`` is the ``after`` to pass next, ``null`` once the page reached the end of
+         *     the outbox. A page can therefore be empty, or short, with more to read: a caller whose events sit behind others it
+         *     may not see reaches them by following the cursor, at ``limit`` events' work a request.
+         *
+         *     A caller that follows the cursor is shown every event it may see that stayed staged throughout its walk exactly
+         *     once, whatever is delivered or staged meanwhile; an event staged again during the walk can be shown again. The
+         *     cursor is opaque. It holds the time the last event the page covered was staged at and a digest of that event's id,
+         *     never the id: a caller that already knows an event's id could tell from it that the event was staged then, and
+         *     learns nothing else of an event it may not see.
          */
         get: operations["list_dlq_admin_dlq_get"];
         put?: never;
@@ -105,7 +116,7 @@ export interface paths {
          *     staged bytes are re-published
          *     to the lineage topic exactly as the relay re-publishes them, so subscribers hear of the event as well as
          *     the feed. The drop is only reached on success — a failed re-ingest or re-publish leaves the object
-         *     staged for the relay to retry, and a failed re-publish answers 503 because the feed is already
+         *     staged for the relay to retry, and a re-publish the bus did not take answers 503 because the feed is already
          *     repaired.
          *
          *     Non-disclosure (audit 2026-07-20): replay must not become an oracle for events ``list_dlq`` hid. So a
@@ -346,7 +357,9 @@ export interface components {
          *
          *     ``depth`` / ``oldest_age_seconds`` are the RAW system-health signal (the same numbers the
          *     ``outbox.depth`` gauge alerts on); ``events`` is the governed subset the caller may see (≤ depth when
-         *     per-dataset filtering drops events for datasets outside the caller's reach), capped at ``limit``.
+         *     per-dataset filtering drops events for datasets outside the caller's reach) of the ``limit`` staged events this
+         *     page covered. ``next_cursor`` is the ``after`` that reads the page behind it, ``None`` once nothing is staged past
+         *     this one: a page can show fewer events than ``limit``, or none, and still have one.
          */
         DlqBacklog: {
             /** Depth */
@@ -355,6 +368,8 @@ export interface components {
             events: components["schemas"]["DlqEvent"][];
             /** Limit */
             limit: number;
+            /** Next Cursor */
+            next_cursor?: string | null;
             /** Oldest Age Seconds */
             oldest_age_seconds: number;
         };
@@ -393,8 +408,11 @@ export interface components {
         DlqReplayResponse: {
             /** Run Id */
             run_id: string;
-            /** Status */
-            status: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "replayed" | "recovered";
         };
         /**
          * EventRecord
@@ -553,6 +571,7 @@ export interface operations {
     list_dlq_admin_dlq_get: {
         parameters: {
             query?: {
+                after?: string | null;
                 limit?: number;
             };
             header?: never;

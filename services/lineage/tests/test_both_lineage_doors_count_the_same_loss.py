@@ -28,9 +28,11 @@ import pytest
 from fastapi import FastAPI, Request
 from lance_namespace import PermissionDeniedError
 
+from lineage.api.security import Caller
 from lineage.core.config import LineageSettings
 from lineage.core.metrics import Door, Outcome
 from lineage.core.refusals import UnauthoredRunError, UngovernedOutputError
+from lineage.models import DatasetEvent, RunEvent
 from lineage.services.provenance import ProvenanceStore
 from tests.provenance_store_double import ProvenanceStoreDouble
 from tests.unit.no_uuids import NO_CATALOG_NAMES
@@ -81,9 +83,10 @@ async def test_the_http_door_counts_a_refusal_the_way_the_subscriber_does(error:
     async def _deny(*_args: Any, **_kw: Any) -> None:
         raise error
 
-    def _author(*_args: Any, **_kw: Any) -> None:
+    def _author(event: RunEvent | DatasetEvent, _token: Caller | None) -> RunEvent | DatasetEvent:
         if isinstance(error, UnauthoredRunError):
             raise error
+        return event
 
     monkeypatch.setattr(ingest, "enforce_author", _author)
     monkeypatch.setattr(ingest, "enforce_output_authz", _deny)
@@ -116,7 +119,7 @@ async def test_a_successful_ingest_still_counts_exactly_once(monkeypatch: pytest
     def _record(outcome: Outcome, *, door: Door) -> None:
         recorded.append((outcome, door))
 
-    monkeypatch.setattr(ingest, "enforce_author", lambda *_a, **_k: None)
+    monkeypatch.setattr(ingest, "enforce_author", lambda event, _token: event)
 
     async def _allow(*_args: Any, **_kw: Any) -> frozenset[str]:
         return frozenset()

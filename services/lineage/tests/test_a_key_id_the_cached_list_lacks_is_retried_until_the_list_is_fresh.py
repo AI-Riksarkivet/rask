@@ -146,8 +146,8 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
 ) -> None:
     """``published_now`` is the list the store serves after the priming read, or None for a store that hangs for the read's
     whole timeout and then fails."""
-    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([SIGNER]))
-    monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps([]))
+    monkeypatch.setenv("RASK_EVENT_SIGNERS", json.dumps([SIGNER]))
+    monkeypatch.setenv("RASK_EVENT_DELEGATORS", json.dumps([]))
     # One key id remembered: the second distinct unknown one pushes the first out. `raising=False` lets the test run against a reader
     # with no bound at all (the red check); if the patch ever fails to take effect the eviction case fails, so it cannot pass unnoticed.
     monkeypatch.setattr("lakehouse.events.published_keys.MAX_UNKNOWN_KEY_IDS", 1, raising=False)

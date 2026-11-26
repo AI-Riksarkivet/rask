@@ -982,7 +982,7 @@ No lakehouse service reads a bus credential: each is a session user that present
 
 The split is by READER SET, because the store grants by secret name: a secret two apps read is one secret both name
 (a signer's public key), never a copy, so a rotation writes one place. The verifier
-lists follow the env the same flags render (`LINEAGE_SIGNERS` wherever auth is on, the doors under
+lists follow the env the same flags render (lineage's `RASK_EVENT_SIGNERS` wherever auth is on, the doors under
 `signing.doors`), and a signer reads its own pair. Maintenance's worker reads the signers' public keys when its write-event lane checks
 signatures (`auth.enabled`, `maintenance.arrivalEnabled`, and `signing.doors` not `off`).
 
@@ -1118,7 +1118,7 @@ Pinned by `tests/chart/test_the_lakehouse_bounds_its_allocator_arenas.py`.
 ## `{{- define "lance.signers" -}}`
 
 EVENT SIGNING ([[LH-064]]; values.yaml `signing:`). `lance.signers` is the ONE declaration, an (identity, key name, app-id,
-control-event role) per signer: the mint and seed loops, the store's reads (`lance.storeReads`), RASK_SIGNING_IDENTITY, LINEAGE_SIGNERS and the doors' env
+control-event role) per signer: the mint and seed loops, the store's reads (`lance.storeReads`), RASK_SIGNING_IDENTITY, lineage's signer sets and the doors' env
 are views of it. The identity is the signer's service-account subject (lance.saSubject), the author its events are authorized as;
 the key name is its ServiceAccount's name, which `lakehouse.governed.signing_key.signing_key_name` derives from the identity,
 because a subject's `~` and `:` belong in no secret name, OpenBao path or shell word.

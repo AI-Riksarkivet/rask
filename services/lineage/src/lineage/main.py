@@ -12,6 +12,7 @@ from typing import Final
 
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.concurrency import run_in_threadpool
 
 from lakehouse.events.bus import Bus, bus_dependency, bus_session
 from lakehouse.governed.admission import judge_before_the_body
@@ -33,6 +34,7 @@ from lineage.api.security import authenticate, judge
 from lineage.api.v1.router import api_router
 from lineage.core.config import LineageSettings, get_settings, storage_options
 from lineage.core.metrics import create_outcome_series, create_signature_refused_series
+from lineage.services.catalog_client import CatalogClients
 from lineage.services.names import CatalogNames
 from lineage.services.provenance import ProvenanceStore
 from lineage.services.signature import store_published_keys
@@ -108,10 +110,14 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     if store_session is not None:
         stack.push_async_callback(store_session.stop)
     app.state.store_session = store_session
-    store = ProvenanceStore.from_settings(settings)
+    # What every call through the catalog shares: its two connection pools, the threads the calls run on and the feed's
+    # writer thread (`CatalogClients`). Closed in a worker thread, since it waits for a burst still landing.
+    clients = CatalogClients(settings.catalog_url)
+    stack.push_async_callback(run_in_threadpool, clients.close)
+    store = ProvenanceStore.from_settings(settings, clients)
     await _ensure_tables(store)
     app.state.provenance = store
-    app.state.names = CatalogNames.from_settings(settings)
+    app.state.names = CatalogNames.from_settings(settings, clients)
     # Auth is opt-in; when enabled, converge on the CATALOG's store — provision is idempotent by store
     # NAME ("lance-catalog"), so both services resolve the same store + model without the id being
     # pinned ahead of boot. (The catalog writes the grants on create; lineage reads them — one shared

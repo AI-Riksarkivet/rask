@@ -46,6 +46,7 @@ from lakehouse.governed.settings import OidcProvider
 from lakehouse.problems.ns_errors import install_problem_handlers
 from lineage.api import security as lineage_security
 from lineage.core.config import LineageSettings
+from lineage.services.catalog_client import CatalogClients
 from lineage.services.provenance import ProvenanceStore
 
 
@@ -219,7 +220,7 @@ def test_a_lineage_door_whose_catalog_token_cannot_be_read_is_a_503_with_the_spe
 
     @app.get("/door")
     async def _door() -> dict[str, str]:
-        await ProvenanceStore.from_settings(settings).ensure()
+        await ProvenanceStore.from_settings(settings, CatalogClients(settings.catalog_url)).ensure()
         return {"door": "open"}
 
     response = TestClient(app, raise_server_exceptions=False).get("/door")

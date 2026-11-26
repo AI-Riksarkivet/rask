@@ -104,8 +104,8 @@ def test_lineage_takes_a_delegated_signature_only_from_the_listed_delegator(  # 
     recorded: bool,
 ) -> None:
     governed(monkeypatch, openfga_store)
-    monkeypatch.setenv("LINEAGE_SIGNERS", json.dumps([CATALOG, STAGE, PIPELINE]))
-    monkeypatch.setenv("LINEAGE_DELEGATORS", json.dumps([CATALOG]))
+    monkeypatch.setenv("RASK_EVENT_SIGNERS", json.dumps([CATALOG, STAGE, PIPELINE]))
+    monkeypatch.setenv("RASK_EVENT_DELEGATORS", json.dumps([CATALOG]))
     _hold(openfga_store, holders, PIPELINE if case == "pipeline-own-run" else PERSON)
     catalog, stage, unlisted, impostor, pipeline = (event_signer(name) for name in (CATALOG, STAGE, UNLISTED, CATALOG, PIPELINE))
     for signer in (catalog, stage, pipeline):

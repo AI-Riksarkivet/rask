@@ -346,11 +346,12 @@ async def _keep_refusal_and_drop(
                 outbox_key=key, run_id=event.run_id, author=refused_author, reason=str(exc), event_json=json.dumps(staged.envelope.data)
             )
         landed = True
-        # COUNTED ONCE KEPT, under the outcome every door counts a refusal by, so the alerts reading it see a
-        # drained refusal as they see a delivered one ([[LH-573]]); one whose keep failed stays staged and is
-        # counted by the tick that keeps it.
-        record_outcome(outcome, door=Door.OUTBOX)
         await run_in_threadpool(outbox.drop_event, settings.outbox_uri, opts, key)
+        # COUNTED ONCE RETIRED, under the outcome every door counts a refusal by, so the alerts reading it see a
+        # drained refusal as they see a delivered one ([[LH-573]]). An event whose keep or drop failed stays staged,
+        # is refused and kept again by the next tick (the upsert lands on its row), and is counted by the tick that
+        # drops it: one refused event is one count.
+        record_outcome(outcome, door=Door.OUTBOX)
     except Exception as unretired:
         log.warning(
             "lineage_outbox_refusal_left_staged",

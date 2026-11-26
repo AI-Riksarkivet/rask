@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 from lakehouse.arrow_ipc import encode_arrow_stream
 from lakehouse.naming import CATALOG_DELIMITER
-from lineage.services.catalog_client import catalog_api_client
+from lineage.services.catalog_client import CatalogClients
 from lineage.services.catalog_client import request_headers as _request_headers
 from lineage.services.catalog_reader import translate_catalog_errors
 
@@ -27,20 +27,13 @@ class RestCatalogWriteTransport:
     serve raises the outage (`catalog_reader.translate_catalog_errors`)."""
 
     def __init__(
-        self,
-        base_url: str,
-        table_id: list[str],
-        *,
-        delimiter: str = CATALOG_DELIMITER,
-        token: str | None = None,
-        retries: int = 3,
-        timeout: float = 30.0,
+        self, clients: CatalogClients, table_id: list[str], *, delimiter: str = CATALOG_DELIMITER, token: str | None = None, timeout: float = 30.0
     ) -> None:
         from lance_namespace_urllib3_client.api.data_api import DataApi
 
-        # ONE client (and so one connection pool) per catalog, shared with every other transport
-        # aimed at it — this ctor may run once per request.
-        self._api = DataApi(catalog_api_client(base_url, retries=retries))
+        # The catalog's ONE write client (and so one connection pool), shared with every other transport aimed at it —
+        # this ctor may run once per request.
+        self._api = DataApi(clients.write)
         self._token = token
         self._id_str = delimiter.join(table_id)
         self._delimiter = delimiter

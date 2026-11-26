@@ -175,7 +175,7 @@ and the cause is in that service's log.
 **Symptom.** `LineageSignatureRefusedForAListedSigner` fires, with `lineage_signature_refused_total{lance_lineage_reason}`
 rising for a reason other than `unsigned` or `signer`, and `lineage_signature_refused` WARN lines on the lineage pod.
 
-**Cause.** Where `LINEAGE_SIGNERS` is rendered, lineage records a bus or staged event only when a listed signer's
+**Cause.** Where `RASK_EVENT_SIGNERS` is rendered on it, lineage records a bus or staged event only when a listed signer's
 published Ed25519 key verifies its `rask_signature`. A refusal is **acked**: it is not retried, not parked and
 never recorded, so the counter and the log line are the only trace. By reason: `kid` — the signer signed with a key its
 `signing-public-<identity>` secret does not list (a store that was re-minted under signers that kept the old key, or an

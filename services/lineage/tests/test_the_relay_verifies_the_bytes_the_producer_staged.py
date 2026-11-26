@@ -51,7 +51,7 @@ def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_stag
     signer = event_signer(IDENTITY)
     secret_store.hold(f"signing-public-{IDENTITY}", {"keys": signer.public})
     outbox.stage_envelope(uri, StorageOptions(), lineage_envelope(signer.sign(_wire())))
-    settings = LineageSettings.model_validate({"outbox_uri": uri, "signing": Signing(signers=frozenset({IDENTITY}), delegators=frozenset())})
+    settings = LineageSettings.model_validate({"outbox_uri": uri, "signing": Signing(event_signers=frozenset({IDENTITY}), event_delegators=frozenset())})
     repo = ProvenanceStoreDouble()
     app = app_holding(published_keys=store_published_keys())
 

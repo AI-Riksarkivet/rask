@@ -26,16 +26,18 @@ a refusal, so anything else is the door's own bug, and treating it as a refusal 
 
 from collections.abc import Callable
 from enum import StrEnum
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.events.signing import KeySourceUnavailableError, SignatureError, VerifiedSignature
+from lakehouse.events.signing import KeySourceUnavailableError, RefusalReason, SignatureError, VerifiedSignature
 
 
 #: What OBSERVE reports when it could not read the keys a signature is checked against: the one outcome that is not a refusal
 #: reason. A counter keyed on `observed` stays a handful of series, since the rest come from the closed `signing.RefusalReason`.
 KEYS_UNAVAILABLE: Final = "keys_unavailable"
+#: What OBSERVE reports it would have done: a refusal's reason, or :data:`KEYS_UNAVAILABLE`.
+type Observed = RefusalReason | Literal["keys_unavailable"]
 
 
 class DoorMode(StrEnum):
@@ -53,14 +55,21 @@ class DoorVerdict(BaseModel):
     ENFORCE could not read the keys and so has no verdict on the signature. `refused` is the refusal reason, set only when
     ENFORCE refused the event. `observed` is what OBSERVE would have done instead of acting: the refusal reason, or
     `KEYS_UNAVAILABLE`; it is None when the signature verified, and always None outside OBSERVE.
+
+    `verified` is what the check established, set whenever it ran and the signature verified: a door that admits
+    something on the signer's identity reads it from here, never from the event. `detail` is the check's own sentence
+    for a refusal or an outage, in either mode: what was wrong with the signature, or why the keys could not be read. It
+    quotes what the event claims, so a door bounds it before it logs or answers with it.
     """
 
     model_config = ConfigDict(frozen=True)
 
     act: bool
     retry: bool = False
-    refused: str | None = None
-    observed: str | None = None
+    refused: RefusalReason | None = None
+    observed: Observed | None = None
+    verified: VerifiedSignature | None = None
+    detail: str | None = None
 
 
 def judge(verify: Callable[[], VerifiedSignature], mode: DoorMode) -> DoorVerdict:
@@ -74,17 +83,18 @@ def judge(verify: Callable[[], VerifiedSignature], mode: DoorMode) -> DoorVerdic
         return DoorVerdict(act=True)
     observing = mode is DoorMode.OBSERVE
     try:
-        verify()
+        verified = verify()
     except SignatureError as exc:
-        return DoorVerdict(act=True, observed=exc.reason) if observing else DoorVerdict(act=False, refused=exc.reason)
-    except KeySourceUnavailableError:
-        return DoorVerdict(act=True, observed=KEYS_UNAVAILABLE) if observing else DoorVerdict(act=False, retry=True)
-    return DoorVerdict(act=True)
+        return DoorVerdict(act=True, observed=exc.reason, detail=str(exc)) if observing else DoorVerdict(act=False, refused=exc.reason, detail=str(exc))
+    except KeySourceUnavailableError as exc:
+        return DoorVerdict(act=True, observed=KEYS_UNAVAILABLE, detail=str(exc)) if observing else DoorVerdict(act=False, retry=True, detail=str(exc))
+    return DoorVerdict(act=True, verified=verified)
 
 
 __all__ = [
     "KEYS_UNAVAILABLE",
     "DoorMode",
     "DoorVerdict",
+    "Observed",
     "judge",
 ]

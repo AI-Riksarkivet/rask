@@ -158,16 +158,23 @@ def test_a_staged_event_a_grant_would_admit_is_parked_by_the_relay_and_replayed_
     assert [record.event_type for record in feed] == ["COMPLETE"], "the feed does not hold the replayed event exactly once"
 
 
-def test_the_relay_tick_retires_a_kept_park_the_feed_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_relay_tick_retires_every_kept_park_the_feed_holds_one_read_after_another(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A kept delivery whose row reaches the feed by another path (here the producer's own ingest over HTTP) is retired
-    by the next relay tick, rather than kept until an admin replays it."""
+    by the next relay tick, rather than kept until an admin replays it; with more parks kept than one read of the
+    retirement takes, those of every read are retired."""
+    from lineage.services import provenance
+
+    monkeypatch.setattr(provenance, "_PARKS_PER_READ", 1)
+    states = ("START", "COMPLETE")
     with _estate(tmp_path, monkeypatch) as estate:
         lineage, table = estate.lineage, estate.table
-        parked = estate.deliver({"id": "evt-complete", "data": _event("COMPLETE", table, outputs=True)})
+        parked = [estate.deliver({"id": f"evt-{state}", "data": _event(state, table, outputs=True)}) for state in states]
+        kept = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
         app_of(lineage).state.grants.allowed.add((user_object(_AUTHOR), "can_write_data", table))
-        ingested = lineage.post("/api/v1/lineage", json=_event("COMPLETE", table, outputs=True), headers={SUBJECT_HEADER: _AUTHOR})
+        ingested = [lineage.post("/api/v1/lineage", json=_event(state, table, outputs=True), headers={SUBJECT_HEADER: _AUTHOR}) for state in states]
         tick = relay_tick(lineage)
         left = lineage.get("/admin/dlq/parked", headers={SUBJECT_HEADER: _ADMIN})
 
-    assert (parked, ingested.status_code) == (Settlement(outcome=Outcome.PARKED), 201), ingested.text
-    assert (tick.parks_retired, left.json()) == (1, {"runs": {}})
+    assert (parked, kept.json()) == ([Settlement(outcome=Outcome.PARKED)] * 2, {"runs": {_RUN: 2}})
+    assert [answer.status_code for answer in ingested] == [201, 201], [answer.text for answer in ingested]
+    assert (tick.parks_retired, left.json()) == (2, {"runs": {}})

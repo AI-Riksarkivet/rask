@@ -21,13 +21,16 @@ Storage-agnostic: an ``s3://`` outbox uses an ``S3FileSystem`` built from the SA
 producer/relay already use; a local/``file://`` path uses the local filesystem (dev + unit tests).
 """
 
+import hashlib
 import json
 import logging
 import time
 from collections.abc import Iterator
 from contextlib import suppress
+from typing import Final
 
 import pyarrow.fs as pafs
+from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
 from lakehouse.events import outbox_metrics
@@ -203,7 +206,8 @@ def read_event(outbox_uri: str, storage_options: StorageOptions, key: str) -> st
 
 
 def _staged_infos(outbox_uri: str, storage_options: StorageOptions) -> list[pafs.FileInfo]:
-    """Every staged `.json` object under the prefix, OLDEST FIRST.
+    """Every staged `.json` object under the prefix, OLDEST FIRST, those of one modification time in the order :func:`_rank`
+    gives them.
 
     Oldest-first matters for the bounded drain: when a backlog exceeds the per-tick cap, the events that
     have been at risk LONGEST must drain first, and `outbox.oldest_age` must fall monotonically as the relay
@@ -214,8 +218,26 @@ def _staged_infos(outbox_uri: str, storage_options: StorageOptions) -> list[pafs
     infos = [
         i for i in fs.get_file_info(pafs.FileSelector(base, allow_not_found=True, recursive=False)) if i.type == pafs.FileType.File and i.path.endswith(".json")
     ]
-    infos.sort(key=lambda i: i.mtime_ns or 0)
+    infos.sort(key=_rank)
     return infos
+
+
+#: How many hex digits of an object name's SHA-256 a rank keeps: 128 bits. Two objects of one modification time that
+#: shared a rank would be one position to a paged read, which would list one of them and pass the other; at 128 bits
+#: no outbox holds enough objects for that. The whole digest would rank the same and only lengthen the cursor a door
+#: hands out.
+_TIEBREAK_HEX: Final = 32
+
+
+def _rank(info: pafs.FileInfo) -> tuple[int, str]:
+    """Where a staged object stands in the outbox's one order: its modification time, then a digest of its name.
+
+    A store may keep times no finer than the second, so a burst's objects can share one, and the digest orders them the
+    same in every listing, whatever is staged or dropped between two. A digest rather than the name, since a position
+    is handed to callers (:class:`StagedPosition`) and the name is the staged event's id.
+    """
+    name = info.path.rsplit("/", 1)[-1]
+    return info.mtime_ns or 0, hashlib.sha256(name.encode()).hexdigest()[:_TIEBREAK_HEX]
 
 
 def backlog(outbox_uri: str, storage_options: StorageOptions) -> tuple[int, float]:
@@ -271,10 +293,63 @@ def list_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int 
     makes each tick's work bounded; the remainder drains on the next tick, oldest-first, so nothing starves.
     An absent prefix yields nothing. Blocking IO; the caller threadpools the whole drain.
     """
-    fs, _ = fs_and_base(outbox_uri, storage_options)
     infos = _staged_infos(outbox_uri, storage_options)
-    if limit is not None:
-        infos = infos[:limit]
+    yield from _read_staged(outbox_uri, storage_options, infos if limit is None else infos[:limit])
+
+
+class StagedPosition(BaseModel):
+    """Where a paged read of the outbox stopped (:func:`page_events`): at the staged object of this rank, its
+    modification time and the digest of its name that orders objects of one time.
+
+    What a caller handed one learns: that an object was staged at ``mtime_ns``, which the backlog's oldest age already
+    bounds, and a digest no name can be read back from. A caller that already holds, or guesses, an event's id can
+    digest it and compare, and so confirm that an event under that id was staged at that time; it learns nothing of
+    what the event names, and nothing of an id it cannot produce itself.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    mtime_ns: int = Field(ge=0)
+    tiebreak: str = Field(pattern=rf"^[0-9a-f]{{{_TIEBREAK_HEX}}}$")
+
+
+class StagedPage(BaseModel):
+    """One page of the outbox: the ``(key, event_json)`` of each object it read, oldest first, and where the next page
+    starts, ``None`` once nothing is staged after it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    events: list[tuple[str, str]]
+    next: StagedPosition | None
+
+
+def page_events(outbox_uri: str, storage_options: StorageOptions, *, limit: int, after: StagedPosition | None = None) -> StagedPage:
+    """The next ``limit`` staged events after ``after``, OLDEST FIRST, and the position the page after it starts from.
+
+    A keyset over the outbox's one order (:func:`_rank`): a page is the objects ranked strictly after ``after``, so what
+    is staged or dropped between two pages moves no other object across the position. A reader that passes each page's
+    ``next`` back is therefore handed every object staged throughout its walk exactly once, whatever shares its
+    modification time, and a page covers ``limit`` objects whatever its caller does with them, so one whose caller shows
+    none of them still moves on. An object staged during the walk is read if it ranks after the position reached, and
+    one staged again takes its new time, so a walk that listed it before can list it again.
+
+    Blocking IO, one listing of the prefix and ``limit`` reads at most; the caller threadpools it.
+    """
+    infos = _staged_infos(outbox_uri, storage_options)
+    if after is not None:
+        reached = (after.mtime_ns, after.tiebreak)
+        infos = [info for info in infos if _rank(info) > reached]
+    page = infos[:limit]
+    position = None
+    if page and len(infos) > len(page):
+        mtime_ns, tiebreak = _rank(page[-1])
+        position = StagedPosition(mtime_ns=mtime_ns, tiebreak=tiebreak)
+    return StagedPage(events=list(_read_staged(outbox_uri, storage_options, page)), next=position)
+
+
+def _read_staged(outbox_uri: str, storage_options: StorageOptions, infos: list[pafs.FileInfo]) -> Iterator[tuple[str, str]]:
+    """``(key, event_json)`` of each of ``infos`` still staged, in their order."""
+    fs, _ = fs_and_base(outbox_uri, storage_options)
     for info in infos:
         key = info.path.rsplit("/", 1)[-1].removesuffix(".json")
         # TOCTOU: a publishing writer stages-then-drops on this SAME prefix continuously, so an object
@@ -365,12 +440,15 @@ async def publish_with_outbox(
 
 
 __all__ = [
+    "StagedPage",
+    "StagedPosition",
     "UnpublishedEventError",
     "backlog",
     "drop_event",
     "left_staged",
     "list_events",
     "measured_backlog",
+    "page_events",
     "publish_with_outbox",
     "read_event",
     "resolve_event",

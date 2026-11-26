@@ -99,14 +99,17 @@ An in-place refinement (a run that reads and writes one table) bumps that table'
 | `GET /events` | The durable commit feed, governed per dataset: newest first by `after`, or forward from `since` with `next_cursor`; filterable by `table` or `namespace`; reports `oldest_seq` |
 | `GET /events/projection` | The same feed without the per-dataset filter, cut to the fields that decide whom to notify, with the `rask_signature` lineage verified when it recorded each event, which tells the catalog's change from one a writer posted under the same identity; gated on `can_read_event_feed`, for a notifier holding `event_reader` (granted at the estate admin's tuple door) |
 | `GET /tables/{name}/derived?depth=` | Every table derived from `name`, nearest first |
-| `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | The outbox's at-risk events: list them, replay one |
+| `GET /admin/dlq`, `POST /admin/dlq/{run_id}/replay` | The outbox's at-risk events: list them, replay one. The list is paged: a request covers the next `limit` staged events after `after`, shows those the caller may see, and answers `next_cursor`, the opaque `after` of the next page, until nothing is staged past it. The outbox is read oldest first, events staged at one time in the order of a digest of their ids, and a page resumes strictly after the cursor's time and digest, so a caller following the cursor is shown each event it may see that stayed staged throughout the walk exactly once, whatever is delivered or staged meanwhile. The cursor holds that time and digest and no event's id |
 | `GET /admin/dlq/parked`, `POST /admin/dlq/parked/{run_id}/replay` | The events parked in the refusals table, a bus delivery by the ingest lane or a staged event by the outbox drain: list them by run, re-present a run's (the estate admin's) |
 | `GET /livez` | Liveness |
 
 **Intake.** The author is stamped from the verified bearer token, overwriting any `rask_author` facet the body carries, and
 only a run's author may extend an existing run. A producer may record writing a governed output only where it holds
-`can_write_data`, and reading a governed input only where it holds `can_get_metadata`; an external input is exempt,
-since no tuple could ever exist for it. On the bus doors an announcement the catalog signed for the caller it
+`can_write_data`, and reading a governed input only where it holds `can_read_data`; an external input is exempt,
+since no tuple could ever exist for it. An event that names no governed dataset (a run's START with no inputs or
+outputs, say) names no object a rung could be asked on, so it is recorded for any authenticated caller, bound to that
+caller as its run's author, and its feed row is shown only to a holder of the estate's feed rung
+(`can_read_event_feed`, at `/events/projection`): `/events` hides a row that names no table. On the bus doors an announcement the catalog signed for the caller it
 authenticated is recorded on that signature instead, with neither rung re-derived: the catalog checked both before it
 committed the write, so a grant revoked since takes nothing back (LH-551). The catalog's re-announcement of a commit
 whose own announcement was lost is signed only for the author the catalog recorded authorizing that commit (LH-550),
@@ -197,9 +200,9 @@ in the outbox signs it with its own Ed25519 key. The signature rides inside the 
 signer (`identity`), its key (`kid`) and, for a delegation, `onBehalfOf`. Lineage holds public keys only, so it can admit
 or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/events/signing.py` owns the format).
 
-- **Who signs.** The identities the chart lists in `LINEAGE_SIGNERS` (`lance.signingIdentities`): the catalog and
+- **Who signs.** The identities the chart lists in `RASK_EVENT_SIGNERS` (`lance.signingIdentities`): the catalog and
   maintenance. A signer is its own author. The one exception is
-  the catalog, the sole entry in `LINEAGE_DELEGATORS`, which signs for the person it authenticated.
+  the catalog, the sole entry in `RASK_EVENT_DELEGATORS`, which signs for the person it authenticated.
 - **Control events.** A `CatalogControlEvent` on `catalog.control.v1` is a flat envelope with no facet bag, so the same
   facet rides as its top-level `rask_signature` member, and the signed bytes are canon-1 of the whole envelope with only
   `rask_signature.signature` removed. The envelope's `actor` plays the author: a `user:` actor, the OpenFGA user of a
@@ -230,7 +233,7 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/event
   `rask_signature` the body carries. A lineage with authentication off, or with no secret store to read
   published keys from (the offline and Dagger lanes), verifies nothing and admits nothing on a present facet.
 - **What is refused.** An event with no facet (`unsigned`), a malformed facet or an unsupported `alg` or `canon`, an
-  identity outside `LINEAGE_SIGNERS` (`signer`), a signer that is not the stamped author and declares no delegation
+  identity outside `RASK_EVENT_SIGNERS` (`signer`), a signer that is not the stamped author and declares no delegation
   (`author`), a delegation from a non-delegator (`delegation`) or for another subject (`author`), a `kid` its signer does
   not publish (`kid`), and bytes that do not verify (`signature`, `uncanonical`, `encoding`). A refusal is final, so
   nothing retries or parks it: the ingest lane acknowledges the delivery, the drain records the
@@ -242,7 +245,7 @@ or refuse an event and cannot forge one (`packages/lakehouse/src/lakehouse/event
 - **The lanes that act on the bus.** The catalog's control lane (which feeds `GET /management/v1/events`) and the maintenance worker's write-event lane verify the same signatures before they act, in
   the mode `RASK_SIGNATURE_DOORS` names (chart `signing.doors`: off, observe or enforce), and a notifier's doors verify
   them with the same settings (`lakehouse.events.signature_doors`). A lineage event verifies against `RASK_EVENT_SIGNERS` and
-  `RASK_EVENT_DELEGATORS`, lineage's own sets. A control
+  `RASK_EVENT_DELEGATORS`, the sets lineage reads under the same names. A control
   event verifies against the identities `RASK_CONTROL_SIGNER_ROLES` lists for the role its action names. Only an event
   the door would act on is verified. Enforcing, a refusal is acknowledged and drives nothing, counted in
   `<service>_signature_refused_total` by door and reason; every one of those series exists at 0 from the door's

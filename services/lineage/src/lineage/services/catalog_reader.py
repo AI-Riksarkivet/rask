@@ -20,7 +20,7 @@ from pydantic import BaseModel
 
 from lakehouse.arrow_ipc import decode_arrow_response
 from lakehouse.naming import CATALOG_DELIMITER
-from lineage.services.catalog_client import catalog_read_client
+from lineage.services.catalog_client import CatalogClients
 from lineage.services.catalog_client import request_headers as _request_headers
 
 
@@ -231,20 +231,12 @@ class RestCatalogTransport:
     ``tests/integration/test_a_catalog_reader_reads_a_whole_table_in_bounded_pages.py``.
     """
 
-    def __init__(
-        self,
-        base_url: str,
-        *,
-        delimiter: str = CATALOG_DELIMITER,
-        token: str | None = None,
-        retries: int = 3,
-        timeout: float = 30.0,
-    ) -> None:
+    def __init__(self, clients: CatalogClients, *, delimiter: str = CATALOG_DELIMITER, token: str | None = None, timeout: float = 30.0) -> None:
         from lance_namespace_urllib3_client.api.data_api import DataApi
 
-        # ONE client (and so one connection pool) per catalog, shared with every other transport
-        # aimed at it — this ctor may run once per request.
-        self._api = DataApi(catalog_read_client(base_url, retries=retries))
+        # The catalog's ONE read client (and so one connection pool), shared with every other transport aimed at it —
+        # this ctor may run once per request.
+        self._api = DataApi(clients.read)
         self._token = token
         self._delimiter = delimiter
         self._timeout = timeout
