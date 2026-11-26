@@ -2,7 +2,7 @@
 
 The store publishes every object write of a rask bucket on the bus subject ``store.events``: its operator configures
 each bucket to (``objectStore.events``; the development store's fixture does it for its own, ``deploy/fixtures/rustfs``),
-and the worker reads them off STORE_EVENTS (:meth:`maintenance.services.queue.Worker.run_store_events`). An event names a
+and the worker reads them off STORE_EVENTS (:meth:`maintenance.services.queue_worker.Worker.run_store_events`). An event names a
 key, never what it means to the table. The pass it holds reads every file the table's commits recorded again
 (:mod:`maintenance.services.committed_files`), so a file overwritten in place is reported within the follow-up's delay
 rather than at the table's next recheck, which stays the backstop for an event that never arrives. A delete is not acted
@@ -38,7 +38,8 @@ from lakehouse.records import location_claims
 from lakehouse.storage.credential import StoreCredentialUnavailableError
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.naming import claim_store, claimed_location
-from maintenance.services.queue import Task, TaskQueue
+from maintenance.services.queue import TaskQueue
+from maintenance.services.queue_wire import Task
 
 
 log = logging.getLogger(__name__)

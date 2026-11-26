@@ -175,7 +175,7 @@ data:
               "display": { "name": "Maintenance tasks completed per hour, by kind" },
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [ { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                "query": "sum by (kind) (increase(maintenance_tasks_completed_total[1h]))" } } } } ]
+                "query": "sum by (lance_maintenance_kind) (increase(maintenance_tasks_completed_total[1h]))" } } } } ]
             }
           },
           "errorRate": {
@@ -269,9 +269,9 @@ data:
               "plugin": { "kind": "TimeSeriesChart", "spec": { "legend": { "position": "bottom" } } },
               "queries": [
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum by (kind) (increase(maintenance_tasks_ended_total[1h]))" } } } },
+                  "query": "sum by (lance_maintenance_kind) (increase(maintenance_tasks_ended_total[1h]))" } } } },
                 { "kind": "TimeSeriesQuery", "spec": { "plugin": { "kind": "PrometheusTimeSeriesQuery", "spec": {
-                  "query": "sum by (kind) (increase(maintenance_passes_overran_total[1h]))" } } } }
+                  "query": "sum by (lance_maintenance_kind) (increase(maintenance_passes_overran_total[1h]))" } } } }
               ]
             }
           },

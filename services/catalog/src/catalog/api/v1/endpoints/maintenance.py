@@ -30,11 +30,11 @@ from catalog.api.authz import decisions, visible_pages
 from catalog.api.authz.context import AuthzContextDep
 from catalog.api.dependencies import DoorTableDep, StorageOptionsDep
 from catalog.api.security import CurrentToken
-from catalog.schemas import DueTable, FloorRaiseRequest, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
+from catalog.schemas import DueTable, GcPreview, GcRequest, GcRunResult, MaintenanceDueResponse
 from catalog.services import maintenance, maintenance_commits, table_claims
 from lakehouse.governed import fga_ids
 from lakehouse.lancekit import branch_layout
-from lakehouse.maintenance_doors import CleanupDisarmed, FloorRaised
+from lakehouse.maintenance_doors import CleanupDisarmed, FloorRaised, FloorRaiseRequest
 from lakehouse.records import maintenance_due
 from lakehouse.records.history_fences import HistoryWork
 from lakehouse.storage import stored_objects

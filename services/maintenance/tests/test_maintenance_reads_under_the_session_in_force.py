@@ -24,13 +24,11 @@ from typing import Any, cast
 
 import boto3
 import pytest
-from moto import settings as moto_settings
 from moto.core import DEFAULT_ACCOUNT_ID
-from moto.core.authorization import ActionAuthenticatorMixin
-from moto.iam.access_control import IAMRequestBase
 from moto.server import ThreadedMotoServer
 from moto.sts.models import sts_backends
 from pydantic import BaseModel, SecretStr
+from tests.moto_iam import iam_enforced
 
 from lakehouse.process.supervision import Supervisor
 from lakehouse.records import location_claims
@@ -39,7 +37,8 @@ from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.store_session import SessionCache, start_store_session
 from maintenance.core.config import MaintenanceSettings
-from maintenance.services.queue import Task, TaskQueue
+from maintenance.services.queue import TaskQueue
+from maintenance.services.queue_wire import Task
 from maintenance.services.reconcile import reconcile
 from maintenance.services.store_events import StoreEvents
 
@@ -90,16 +89,7 @@ def store() -> Iterator[Store]:
     iam.create_user(UserName=rig)
     iam.put_user_policy(UserName=rig, PolicyName="do-anything", PolicyDocument=json.dumps(DO_ANYTHING))
     rig_key = iam.create_access_key(UserName=rig)["AccessKey"]["AccessKeyId"]
-    gate = ActionAuthenticatorMixin._authenticate_and_authorize_normal_action
-
-    def _as_aws_gates(self: Any, resource: str = "*") -> None:  # noqa: ANN401 — the moto response class the mixin is mixed into
-        if self._get_action() != "AssumeRoleWithWebIdentity":
-            gate(self, resource)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(IAMRequestBase, "check_signature", lambda _self: None)
-        patch.setattr(ActionAuthenticatorMixin, "_authenticate_and_authorize_normal_action", _as_aws_gates)
-        patch.setattr(moto_settings, "INITIAL_NO_AUTH_ACTION_COUNT", 0)
+    with iam_enforced():
         yield Store(url=url, swept=swept, orphan=orphan, role_arn=f"arn:aws:iam::123456789012:role/{role}", rig_key=rig_key)
     server.stop()
 
@@ -145,7 +135,7 @@ async def test_the_drift_report_lists_the_stores_buckets_under_the_services_sess
         session = await start_store_session(settings.web_identity, session_name="maintenance", duration_seconds=settings.s3_session_seconds, loops=loops)
         assert session is not None, "a service projecting a token holds a session"
         try:
-            report = await reconcile(settings, control_root=f"s3://{store.swept}", namespace_root=f"s3://{store.swept}", walk=False)
+            report = (await reconcile(settings, control_root=f"s3://{store.swept}", namespace_root=f"s3://{store.swept}")).report
         finally:
             await session.stop()
 

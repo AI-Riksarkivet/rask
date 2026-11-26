@@ -44,7 +44,8 @@ from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import lance_storage_options
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import get_settings
-from maintenance.services.queue import Task, TaskQueue
+from maintenance.services.queue import TaskQueue
+from maintenance.services.queue_wire import Task
 from maintenance.services.table_pass import TableTask, run_table_pass
 from maintenance.services.tasks import run_task
 from tests import seeding

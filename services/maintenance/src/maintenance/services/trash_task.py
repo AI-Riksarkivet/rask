@@ -17,7 +17,8 @@ from fastapi.concurrency import run_in_threadpool
 from lakehouse.records import location_claims, trash
 from maintenance.core.config import MaintenanceSettings, MaintenanceStore
 from maintenance.services.naming import claim_store
-from maintenance.services.queue import Task, TaskQueue
+from maintenance.services.queue import TaskQueue
+from maintenance.services.queue_wire import Task
 from maintenance.services.trash_release import release_record
 
 
@@ -56,8 +57,8 @@ async def run_trash_task(task: Task, *, settings: MaintenanceSettings, queue: Ta
     released = await release_record(record, settings, now=now)
     if not released.ran:
         raise TrashUnreadableError(released.reason or "the trash could not be read")
-    if released.held:
-        # Held for a reason a later read may clear: a manifest unreadable now, a table registered again meanwhile.
+    if released.kept:
+        # Kept for a reason a later read may clear: a manifest unreadable now, a table registered again meanwhile.
         await queue.schedule_at(task, now + timedelta(seconds=settings.retry_seconds))
 
 

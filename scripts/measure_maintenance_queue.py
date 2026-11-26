@@ -24,7 +24,10 @@ from typing import Any, Final, NoReturn
 from nats_auth_rig import RENDER_ARGS, VALUES_ENV, Rig, Tools, bus_users, stream_job_script
 from pydantic import BaseModel
 
-from maintenance.services.queue import TASKS_STREAM, Task, TaskQueue, Worker
+from lakehouse.process.supervision import Supervisor
+from maintenance.services.queue import TaskQueue
+from maintenance.services.queue_wire import TASKS_STREAM, Task
+from maintenance.services.queue_worker import Worker
 from tests.chart.chart_render import DEFAULT_ARGS, render
 
 
@@ -65,8 +68,9 @@ def _declare(bus: Rig, docs: tuple[dict[str, Any], ...], home: Path) -> None:
 
 
 async def _connected(bus: Rig) -> TaskQueue:
-    """A worker's queue connection, presenting the token of a pod of its own."""
-    return await TaskQueue.connect(bus.url, bus.pod(_WORKER).settings(bus.url, bus.table.session_seconds), name=_WORKER)
+    """A worker's queue connection, presenting the token of a pod of its own; its session's renewal is kept until the
+    connection closes, and a fault of it ends the measurement."""
+    return await TaskQueue.connect(bus.url, bus.pod(_WORKER).settings(bus.url, bus.table.session_seconds), name=_WORKER, loops=Supervisor())
 
 
 async def _drain(bus: Rig, *, workers: int, tasks: int, pass_seconds: float, tag: str, run: int) -> Measurement:

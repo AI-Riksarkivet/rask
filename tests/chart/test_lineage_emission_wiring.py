@@ -18,7 +18,7 @@ moved off its default, so two equal defaults cannot pass for one derivation.
 """
 
 from lineage.api import ingest_lane
-from maintenance.services import queue
+from maintenance.services import queue_wire
 from tests.chart.chart_render import DEFAULT_ARGS, bus_consumers, containers, env_of, render
 
 
@@ -27,7 +27,7 @@ from tests.chart.chart_render import DEFAULT_ARGS, bus_consumers, containers, en
 _PUBLISHER_TOPICS = ("RASK_LINEAGE_TOPIC", "RASK_LINEAGE_TOPIC", "RASK_LINEAGE_TOPIC")
 
 #: The consumers that take the topic: lineage's ingest lane and maintenance's write-event lane.
-_CONSUMERS = ((ingest_lane.STREAM, ingest_lane.CONSUMER), (queue.ARRIVALS_STREAM, queue.ARRIVALS_CONSUMER))
+_CONSUMERS = ((ingest_lane.STREAM, ingest_lane.CONSUMER), (queue_wire.ARRIVALS_STREAM, queue_wire.ARRIVALS_CONSUMER))
 
 
 def test_every_lineage_publisher_renders_the_topic_the_declared_consumers_take() -> None:

@@ -68,7 +68,7 @@ def test_a_stranded_project_is_reported_not_re_granted() -> None:
     planned, unjustified = plan_rebuild(_report("acme"), _sources(projects=[_ACME]))
 
     assert planned == [], "a project admin grant was written by a repair pass"
-    assert "decision, not a repair" in unjustified["project:acme"]
+    assert [(one.kind, one.id, "decision, not a repair" in one.reason) for one in unjustified] == [("project", "acme", True)]
 
 
 def test_a_record_with_no_creator_says_so_rather_than_going_quiet() -> None:
@@ -77,7 +77,7 @@ def test_a_record_with_no_creator_says_so_rather_than_going_quiet() -> None:
     planned, unjustified = plan_rebuild(_report("orphaned"), _sources(projects=[{"id": "orphaned", "created_at": "x"}]))
 
     assert planned == []
-    assert "no `created_by`" in unjustified["project:orphaned"]
+    assert [(one.kind, one.id, "no `created_by`" in one.reason) for one in unjustified] == [("project", "orphaned", True)]
 
 
 def test_a_warehouse_under_a_healthy_tenant_is_left_alone() -> None:
@@ -157,4 +157,16 @@ async def test_the_remainder_beyond_the_cap_is_reported(door: respx.MockRouter) 
 
     report = await _run(_settings(MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK=1), warehouses=[_ACME_WH, {"id": "acme-second", "project": "acme"}])
 
-    assert (len(report.written), report.capped, json.loads(asked.calls.last.request.content)) == (1, 1, {"warehouses": ["acme-bucket"]})
+    assert (report.capped, len(json.loads(asked.calls.last.request.content)["warehouses"])) == (1, 1)
+
+
+@pytest.mark.asyncio
+async def test_a_warehouse_whose_record_justifies_no_edge_holds_no_slot_from_one_run_to_the_next(door: respx.MockRouter) -> None:
+    asked = _writing(door)
+    settings = _settings(MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK=1)
+    sources = _sources(projects=[_ACME], warehouses=[{"id": "acme-second", "project": "acme"}, _ACME_WH])
+
+    for hour in range(8):
+        await rebuild_tuples(settings, report=_report("acme").model_copy(update={"checked_at": f"2026-11-26T0{hour}:00:00Z"}), sources=sources)
+
+    assert {warehouse for call in asked.calls for warehouse in json.loads(call.request.content)["warehouses"]} == {"acme-second", "acme-bucket"}

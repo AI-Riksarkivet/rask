@@ -73,15 +73,20 @@ UNRESOLVED: Final = DatasetUuids()
 
 
 def classify_retryable(error: str) -> bool | None:
-    """BEST-EFFORT retryable classification from the error text — there is no ground-truth signal.
+    """Whether a failed pass may succeed when run again, read from the error's text; ``None`` when it says neither.
 
-    pylance 8.0.0 raises no typed conflict exception (``lance.commit.CommitConflictError`` exists but is
-    never raised), and Rebasable conflicts are auto-retried inside the commit layer so they never reach
-    Python. Per the three-way taxonomy (``lance_docs/lance/format/table/transaction.md`` ~613) the string heuristic maps
-    Retryable (a re-run may succeed) vs Incompatible (it won't); ``None`` when the text says neither.
-    NEGATED forms are checked FIRST — real object_store/Lance messages say things like "not retryable"
-    or "retry limit exceeded", and a bare substring match would stamp exactly those terminal errors
-    ``retryable=true`` (review 2026-07-10).
+    The text is the only signal a pass's own operations give. Measured on pylance 14.0.3, 2026-11-26: a compaction that
+    lost to a concurrent delete or compaction raises a plain ``OSError``, "Retryable commit conflict for version N:
+    This Rewrite transaction was preempted by concurrent transaction Delete at version N. Please retry."; one that lost
+    to an overwrite or a restore raises a plain ``OSError``, "Incompatible transaction: This ReserveFragments transaction
+    is incompatible with concurrent transaction Overwrite at version N."; ``lance.commit.CommitConflictError`` (an
+    ``OSError``) is raised only by ``LanceDataset.commit``, which no pass calls, and carries the same "Incompatible
+    transaction" text. A rebasable conflict never reaches Python: two deletes of one fragment from one read version
+    both commit. The three outcomes are ``lance_docs/lance/format/table/transaction.md`` § Conflict Resolution:
+    Retryable "can be re-executed at the application level", Incompatible "fails with a non-retryable error".
+
+    NEGATED forms are checked FIRST: a bare substring match would stamp a message reading "not retryable" or "retry
+    limit exceeded", each a terminal error, ``retryable=true``.
     """
     lowered = error.lower()
     if "incompatible" in lowered:

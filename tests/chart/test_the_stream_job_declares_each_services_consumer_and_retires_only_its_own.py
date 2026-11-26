@@ -1,7 +1,7 @@
 """The stream Job declares the consumer each service binds to, and its retire phase removes only this release's own ([[XC-199]]).
 
 A service takes its deliveries from a durable consumer it never creates: it binds by name to the one the stream Job
-declared (`lakehouse.events.bus.Bus.consume`, `maintenance.services.queue.Worker`), and a name the Job does not declare is a
+declared (`lakehouse.events.bus.Bus.consume`, `maintenance.services.queue_worker.Worker`), and a name the Job does not declare is a
 lane that pulls nothing while its pod stays Ready. So the names the chart declares are held here to the names the
 services' own code binds to, in every render that switches a lane on or off, and lineage's lane to the numbers its
 settings are given: a consumer whose ack wait is shorter than the one lineage cuts its handling by hands an event to a
@@ -18,13 +18,17 @@ import pytest
 
 from lineage.api import ingest_lane
 from lineage.core.config import LineageSettings
-from maintenance.services import queue
+from maintenance.services import queue_wire
 from tests.chart.chart_render import DEFAULT_ARGS, bus_consumers, containers, env_of, render, retired_consumers
 
 
 LINEAGE = (ingest_lane.STREAM, ingest_lane.CONSUMER)
-QUEUE = {(queue.TASKS_STREAM, queue.TASK_CONSUMER), (queue.SCHEDULES_STREAM, queue.DUE_CONSUMER), (queue.STORE_EVENTS_STREAM, queue.STORE_EVENTS_CONSUMER)}
-ARRIVALS = (queue.ARRIVALS_STREAM, queue.ARRIVALS_CONSUMER)
+QUEUE = {
+    (queue_wire.TASKS_STREAM, queue_wire.TASK_CONSUMER),
+    (queue_wire.SCHEDULES_STREAM, queue_wire.DUE_CONSUMER),
+    (queue_wire.STORE_EVENTS_STREAM, queue_wire.STORE_EVENTS_CONSUMER),
+}
+ARRIVALS = (queue_wire.ARRIVALS_STREAM, queue_wire.ARRIVALS_CONSUMER)
 
 
 @pytest.mark.parametrize(

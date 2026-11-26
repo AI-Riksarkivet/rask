@@ -10,6 +10,7 @@ import pytest
 
 from lakehouse.events.bus import BusSettings
 from lakehouse.events.control_emit import NoopControlEmitter
+from lakehouse.process.supervision import EndProcess, Supervisor, end_process
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
 from maintenance.services import tasks
@@ -25,7 +26,7 @@ class _Connected(Exception):  # noqa: N818 — a signal that stops the worker at
         self.name = name
 
 
-async def _connect(url: str, presenting: BusSettings, *, name: str) -> TaskQueue:
+async def _connect(url: str, presenting: BusSettings, *, name: str, loops: Supervisor, end: EndProcess = end_process) -> TaskQueue:
     raise _Connected(presenting.token(), name)
 
 

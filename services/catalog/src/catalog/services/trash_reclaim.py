@@ -23,7 +23,7 @@ under them, and the claim on the record's location, which must record that uuid,
 place is refused rather than vended for. Whether a live object holds the place or the name again is the door's to ask
 (``catalog.api.v1.endpoints.trash_reclaim``), through the request's own resolution. A refusal is noted on the record
 (:func:`lakehouse.records.trash.note_refusal`), as maintenance's own refusals are, so a record refused tick after tick sorts
-behind the ones that move (``maintenance.services.purge._drain_order``).
+behind the ones that move (``maintenance.services.purge.drain_order``).
 
 Every function is BLOCKING IO; callers threadpool it.
 """

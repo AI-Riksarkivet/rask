@@ -17,21 +17,19 @@ A GAUGE, not a counter: drift is a level that rises and falls, and `delta()` ove
 a repaired estate as no change at all.
 """
 
-from typing import Any
-
 import pytest
+from tests.exported_points import Exported
 
 from maintenance.core import metrics
 
 
-@pytest.fixture
-def recorded(monkeypatch: pytest.MonkeyPatch) -> list[tuple[int, dict[str, Any]]]:
-    seen: list[tuple[int, dict[str, Any]]] = []
-    monkeypatch.setattr(metrics._drift_items, "set", lambda value, attrs: seen.append((value, attrs)))  # noqa: SLF001
-    return seen
+def test_every_checked_category_gets_a_series(monkeypatch: pytest.MonkeyPatch) -> None:
+    exported = Exported()
+    monkeypatch.setattr(metrics, "_drift_items", exported.meter.create_gauge("maintenance.drift.items"))
 
-
-def test_every_checked_category_gets_a_series(recorded: list[tuple[int, dict[str, Any]]]) -> None:
     metrics.record_drift({"orphaned_trash": 989, "orphan_buckets": 3})
 
-    assert sorted(recorded) == [(3, {"category": "orphan_buckets"}), (989, {"category": "orphaned_trash"})]
+    assert exported.points("maintenance.drift.items") == [
+        ({"lance.maintenance.category": "orphan_buckets"}, 3),
+        ({"lance.maintenance.category": "orphaned_trash"}, 989),
+    ]

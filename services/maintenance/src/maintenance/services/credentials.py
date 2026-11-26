@@ -43,6 +43,7 @@ import logging
 from functools import cache
 from time import monotonic
 from typing import TYPE_CHECKING, Final, Literal
+from urllib.parse import quote
 
 import httpx
 from lance_namespace.errors import ErrorCode
@@ -57,11 +58,15 @@ from lakehouse.maintenance_doors import (
     CloneEndingFinishResponse,
     CloneEndingsResponse,
     FloorRaised,
+    FloorRaiseRequest,
+    GhostRevokeRequest,
     GhostRevokeResponse,
     GrantCensusResponse,
     IdempotencyKeysReclaimResponse,
+    TenancyRebuildRequest,
     TenancyRebuildResponse,
     TrashEndResponse,
+    TrashRefusalRequest,
     TrashRefusalResponse,
     TrashReleaseResponse,
 )
@@ -134,6 +139,15 @@ class VendUndecided(RuntimeError):
     Neither a credential nor a refusal: the dataset stops as a failure and the next tick retries it. Never maintenance's
     own session: the catalog answers 503 when a table's base record cannot be read ([[LH-279]]), and signing anyway is the
     bypass of the refusal the door would have given.
+    """
+
+
+class UnsendableRequest(ValueError):
+    """Maintenance built a request the door's own request model refuses, so none was sent and the catalog answered
+    nothing.
+
+    About what maintenance asked, never about the object or this identity: the catalog judged neither. Its caller
+    reports it as that step's own failure, and the next run builds its request again.
     """
 
 
@@ -418,7 +432,8 @@ class Door(BaseModel):
     #: The door's path under the catalog's address.
     path: str
     params: dict[str, str] = Field(default_factory=dict)
-    body: dict[str, object] | None = None
+    #: The door's own request model (`lakehouse.maintenance_doors`), for a door that takes a body.
+    body: BaseModel | None = None
     #: What the door hands over, as a refusal names it: ``a write credential``, ``a reclaim session``, ...
     answer: str
     #: What it is asked about: a table id, or a trash record's ``<kind>:<uuid>``.
@@ -477,14 +492,38 @@ def end_trash(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor) -> i
 def note_trash_refusal(kind: TrashKind, uuid: str, settings: MaintenanceCatalogDoor, *, reason: str) -> int | None:
     """Have the catalog note maintenance's own refusal on the trash record, and return the record's new attempt count.
 
+    The note is ``reason`` as a note takes it (:func:`_as_note`): a reason of any length is noted, so a record refused
+    for a long one is counted like any other and sorts behind the records that move (``purge.drain_order``).
+
     Raises:
         VendingNotDirect: No catalog door is configured.
         MaintenanceDenied: The door refused (403).
+        UnsendableRequest: ``reason`` is empty, which the door's request model refuses, and nothing is sent.
         TableNotGoverned: No trash record holds the uuid.
         VendUndecided: The door could not be asked or decided nothing.
     """
-    door = _trash_door(kind, uuid, settings, act="/refusals", answer="a note of its refusal", body={"reason": reason})
+    answer = "a note of its refusal"
+    try:
+        body = TrashRefusalRequest(reason=_as_note(reason))
+    except ValidationError as exc:
+        raise _not_a_request(exc, answer=answer, asked_for=f"{kind}:{uuid}") from exc
+    door = _trash_door(kind, uuid, settings, act="/refusals", answer=answer, body=body)
     return _parsed(_answered(settings, door), TrashRefusalResponse, asked_for=door.asked_for).attempts
+
+
+#: The most characters the catalog's note of a refusal takes, read off the request model the door reads its body with.
+_NOTE_TAKES: Final[int] = TrashRefusalRequest.model_json_schema()["properties"]["reason"]["maxLength"]
+
+
+def _as_note(reason: str) -> str:
+    """``reason`` as the catalog's note takes it: whole when it fits, else its head and its tail around a mark that
+    gives its full length, since a refusal names its cause at either end of what it quotes (a location, an error)."""
+    if len(reason) <= _NOTE_TAKES:
+        return reason
+    mark = f" [{len(reason)} characters, cut here to {_NOTE_TAKES}] "
+    tail = (_NOTE_TAKES - len(mark)) // 2
+    head = _NOTE_TAKES - len(mark) - tail
+    return f"{reason[:head]}{mark}{reason[len(reason) - tail :]}"
 
 
 def disarm_cleanup(table_id: str, settings: MaintenanceCatalogDoor, *, branch: str | None) -> CleanupDisarmed:
@@ -513,7 +552,7 @@ def raise_floor(table_id: str, settings: MaintenanceCatalogDoor, *, dry_run: boo
         TableNotGoverned: The catalog names the table absent.
         VendUndecided: The door could not be asked or decided nothing.
     """
-    door = _maintainer_door(table_id, settings, act="floor", answer="a raise of its listing floor", body={"dry_run": dry_run})
+    door = _maintainer_door(table_id, settings, act="floor", answer="a raise of its listing floor", body=FloorRaiseRequest(dry_run=dry_run))
     return _parsed(_answered(settings, door), FloorRaised, asked_for=door.asked_for)
 
 
@@ -540,7 +579,7 @@ def finish_clone_ending(ending: CloneEndingEntry, settings: MaintenanceCatalogDo
         TableNotGoverned: No such ending stands: finished since it was listed.
         VendUndecided: The door could not be asked or decided nothing.
     """
-    door = _clone_endings_door(settings, act=f"/{ending.id}/finish", answer="the finish of a clone's ending")
+    door = _clone_endings_door(settings, act=f"/{_segment(ending.digest)}/{_segment(ending.filing)}/finish", answer="the finish of a clone's ending")
     return _parsed(_answered(settings, door), CloneEndingFinishResponse, asked_for=door.asked_for)
 
 
@@ -616,9 +655,16 @@ def revoke_ghosts(settings: MaintenanceCatalogDoor, objects: list[str]) -> Ghost
     Raises:
         VendingNotDirect: No catalog door is configured.
         MaintenanceDenied: The door refused: this identity holds no reconciler rung (403).
+        UnsendableRequest: The door's request model refuses ``objects`` (none, or more than one request takes), and
+            nothing is sent.
         VendUndecided: The door could not be asked or decided nothing.
     """
-    door = _grants_door(settings, act="/ghosts/revoke", answer="a ghost's revoke", body={"objects": objects})
+    answer = "a ghost's revoke"
+    try:
+        body = GhostRevokeRequest(objects=objects)
+    except ValidationError as exc:
+        raise _not_a_request(exc, answer=answer, asked_for=_ESTATE_GRANTS) from exc
+    door = _grants_door(settings, act="/ghosts/revoke", answer=answer, body=body)
     return _parsed(_answered(settings, door), GhostRevokeResponse, asked_for=door.asked_for)
 
 
@@ -628,10 +674,31 @@ def rebuild_tenancy(settings: MaintenanceCatalogDoor, warehouses: list[str]) -> 
     Raises:
         VendingNotDirect: No catalog door is configured.
         MaintenanceDenied: The door refused: this identity holds no reconciler rung (403).
+        UnsendableRequest: The door's request model refuses ``warehouses`` (none, or more than one request takes), and
+            nothing is sent.
         VendUndecided: The door could not be asked or decided nothing.
     """
-    door = _grants_door(settings, act="/tenancy/rebuild", answer="a tenancy rebuild", body={"warehouses": warehouses})
+    answer = "a tenancy rebuild"
+    try:
+        body = TenancyRebuildRequest(warehouses=warehouses)
+    except ValidationError as exc:
+        raise _not_a_request(exc, answer=answer, asked_for=_ESTATE_GRANTS) from exc
+    door = _grants_door(settings, act="/tenancy/rebuild", answer=answer, body=body)
     return _parsed(_answered(settings, door), TenancyRebuildResponse, asked_for=door.asked_for)
+
+
+#: What a grant door is asked about, as a refusal names it.
+_ESTATE_GRANTS: Final = "the estate's grants"
+
+
+def _segment(text: str) -> str:
+    """``text`` as one segment of a door's path, escaped so the catalog decodes the text it was given.
+
+    A name holds ``?``, ``#``, ``%`` and spaces (ADR 0173 §4), and sent bare each rewrites the request: ``?`` and ``#``
+    end the path, and ``%41`` is decoded to another name. ``$`` joins an id's names and is sent as it is; the catalog
+    reads a ``%2B`` as the ``+`` no name holds and refuses a ``%2F`` (``catalog.api.path_reading``).
+    """
+    return quote(text, safe="$")
 
 
 def _maintain_door(table_id: str, settings: MaintenanceCatalogDoor) -> Door:
@@ -644,7 +711,7 @@ def _maintain_door(table_id: str, settings: MaintenanceCatalogDoor) -> Door:
     writer tier deletes nothing.
     """
     return Door(
-        path=f"/management/v1/table/{table_id}/credentials",
+        path=f"/management/v1/table/{_segment(table_id)}/credentials",
         params={"tier": "maintain"},
         answer="a write credential",
         asked_for=table_id,
@@ -653,12 +720,12 @@ def _maintain_door(table_id: str, settings: MaintenanceCatalogDoor) -> Door:
 
 
 def _maintainer_door(
-    table_id: str, settings: MaintenanceCatalogDoor, *, act: str, answer: str, params: dict[str, str] | None = None, body: dict[str, object] | None = None
+    table_id: str, settings: MaintenanceCatalogDoor, *, act: str, answer: str, params: dict[str, str] | None = None, body: FloorRaiseRequest | None = None
 ) -> Door:
     """The maintainer door ``act`` names on ``table_id`` (``/management/v1/table/{id}/maintenance/<act>``), asked at
     ``can_maintain``."""
     return Door(
-        path=f"/management/v1/table/{table_id}/maintenance/{act}",
+        path=f"/management/v1/table/{_segment(table_id)}/maintenance/{act}",
         params=params or {},
         body=body,
         answer=answer,
@@ -675,12 +742,12 @@ def _trash_door(
     act: str,
     answer: str,
     method: Literal["POST", "DELETE"] = "POST",
-    body: dict[str, str] | None = None,
+    body: TrashRefusalRequest | None = None,
 ) -> Door:
     """The trash door ``act`` names for the record of the ``kind`` object ``uuid`` names."""
     return Door(
         method=method,
-        path=f"/management/v1/trash/{kind}/{uuid}{act}",
+        path=f"/management/v1/trash/{kind}/{_segment(uuid)}{act}",
         body=body,
         answer=answer,
         asked_for=f"{kind}:{uuid}",
@@ -700,7 +767,12 @@ def _clone_endings_door(settings: MaintenanceCatalogDoor, *, act: str, answer: s
 
 
 def _grants_door(
-    settings: MaintenanceCatalogDoor, *, act: str, answer: str, method: Literal["GET", "POST"] = "POST", body: dict[str, object] | None = None
+    settings: MaintenanceCatalogDoor,
+    *,
+    act: str,
+    answer: str,
+    method: Literal["GET", "POST"] = "POST",
+    body: GhostRevokeRequest | TenancyRebuildRequest | None = None,
 ) -> Door:
     """The grant door ``act`` names."""
     return Door(
@@ -708,7 +780,7 @@ def _grants_door(
         path=f"/management/v1/grants{act}",
         body=body,
         answer=answer,
-        asked_for="the estate's grants",
+        asked_for=_ESTATE_GRANTS,
         denial=reconcile_denial_remedy(identity=settings.catalog_service_identity),
     )
 
@@ -744,12 +816,26 @@ def _answered(settings: MaintenanceCatalogDoor, door: Door) -> httpx.Response:
         raise VendingNotDirect(f"no catalog door is configured (MAINTENANCE_CATALOG_URL is empty), so {door.answer} for {door.asked_for} cannot be asked for")
     headers = service_headers(settings)
     try:
-        response = door_client().request(door.method, f"{settings.catalog_url.rstrip('/')}{door.path}", params=door.params, json=door.body, headers=headers)
+        response = door_client().request(
+            door.method, f"{settings.catalog_url.rstrip('/')}{door.path}", params=door.params, json=_sent(door.body), headers=headers
+        )
     except httpx.HTTPError as exc:
         raise VendUndecided(f"the catalog's door could not be asked for {door.answer} for {door.asked_for}: {exc}") from exc
     if (refusal := _refusal_of(response, door, identity=settings.catalog_service_identity)) is not None:
         raise refusal
     return response
+
+
+def _sent(body: BaseModel | None) -> dict[str, object] | None:
+    """``body`` as the JSON a door is sent; ``None`` for a door that takes none."""
+    return None if body is None else body.model_dump(mode="json")
+
+
+def _not_a_request(exc: ValidationError, *, answer: str, asked_for: str) -> UnsendableRequest:
+    """What a request the door's own model refuses is: the door would answer it 422, so it is not sent. It names each
+    field and why, never the value."""
+    why = "; ".join(f"{'.'.join(str(part) for part in problem['loc'])}: {problem['msg']}" for problem in exc.errors(include_url=False, include_input=False))
+    return UnsendableRequest(f"the catalog's door takes no such request for {answer} for {asked_for} ({why}), so none was sent")
 
 
 def _refusal_of(response: httpx.Response, door: Door, *, identity: str) -> MaintenanceDenied | TableNotGoverned | VendUndecided | None:

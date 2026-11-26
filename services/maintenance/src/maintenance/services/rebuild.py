@@ -50,7 +50,9 @@ from pydantic import BaseModel, Field
 from lakehouse.governed import fga_ids
 from lakehouse.records.project_records import ProjectRecord
 from lakehouse.records.warehouse_records import WarehouseRecord
-from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, rebuild_tenancy
+from maintenance.services import drain
+from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, UnsendableRequest, VendUndecided, rebuild_tenancy
+from maintenance.services.outcomes import Refused
 
 
 if TYPE_CHECKING:
@@ -77,7 +79,7 @@ class RebuildReport(BaseModel):
     written: list[RebuiltTuple] = Field(default_factory=list)
     #: Records that justify no tuple, with why. A project with no `created_by` is the shape that
     #: matters: the record exists, the tenant is unadministrable, and nothing here can fix it.
-    unjustified: dict[str, str] = Field(default_factory=dict)
+    unjustified: list[Refused] = Field(default_factory=list)
     #: Eligible records beyond `max_per_tick`, reported so a truncated pass cannot read as a complete one.
     capped: int = 0
     error: str | None = None
@@ -119,7 +121,7 @@ def _warehouse_tenancy(record: WarehouseRecord) -> RebuiltTuple:
     )
 
 
-def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[RebuiltTuple], dict[str, str]]:
+def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[RebuiltTuple], list[Refused]]:
     """The tuples the registries justify for the objects the report found UNGOVERNED, and the records
     that justify none.
 
@@ -130,11 +132,7 @@ def plan_rebuild(report: ReconcileReport, sources: Sources) -> tuple[list[Rebuil
     """
     stranded = {finding.id for finding in report.unreferenced_projects}
     planned: list[RebuiltTuple] = []
-    unjustified: dict[str, str] = {}
-
-    for record in sources.project_records or []:
-        if record.id in stranded:
-            unjustified[fga_ids.project_object(record.id)] = _needs_an_admin(record)
+    unjustified = [Refused(kind="project", id=record.id, reason=_needs_an_admin(record)) for record in sources.project_records or [] if record.id in stranded]
 
     # THE STRUCTURAL HALF, and the only half that writes. Scoped to warehouses under a project the
     # report found stranded, because that is where the pointer is provably gone: a whole-estate
@@ -158,17 +156,17 @@ async def rebuild_tuples(settings: MaintenanceSettings, *, report: ReconcileRepo
     if not settings.tuple_rebuild_enabled:
         return out
     planned, out.unjustified = plan_rebuild(report, sources)
-    out.capped = max(0, len(planned) - settings.tuple_rebuild_max_per_tick)
-    planned = planned[: settings.tuple_rebuild_max_per_tick]
+    window = drain.window_of(report.checked_at, period_seconds=settings.audit_period_seconds)
+    planned, out.capped = drain.share_of(planned, cap=settings.tuple_rebuild_max_per_tick, window=window, name=lambda edge: edge.object)
     if not planned or out.dry_run:
         out.written = planned
         return out
     try:
         answered = await run_in_threadpool(rebuild_tenancy, settings, [edge.object.removeprefix("warehouse:") for edge in planned])
-    except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
+    except (MaintenanceDenied, TableNotGoverned, VendUndecided, UnsendableRequest) as exc:
         log.warning("tuple_rebuild_refused_by_the_catalog", extra={"error": str(exc), "planned": len(planned)})
         out.error = str(exc)
         return out
     out.written = [edge for edge in planned if f"{edge.user} {edge.relation} {edge.object}" in answered.written]
-    out.unjustified |= {fga_ids.warehouse_object(warehouse): why for warehouse, why in answered.unjustified.items()}
+    out.unjustified += [Refused(kind="warehouse", id=warehouse, reason=why) for warehouse, why in answered.unjustified.items()]
     return out

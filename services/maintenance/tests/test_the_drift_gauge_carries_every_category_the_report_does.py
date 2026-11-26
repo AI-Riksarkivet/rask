@@ -47,15 +47,14 @@ def _run(tmp_path: Path, *, walk: bool) -> mod.ReconcileReport:
     (tmp_path / "control").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     return asyncio.run(
-        mod.reconcile(
+        (mod.reconcile_walking if walk else mod.reconcile)(
             settings,
             None,
             control_root=f"file://{tmp_path / 'control'}",
             namespace_root=f"file://{tmp_path / 'data'}",
             bucket_client=_NoBuckets(),
-            walk=walk,
         )
-    )
+    ).report
 
 
 def test_the_gauge_receives_exactly_what_the_report_carries(tmp_path: Path, recorded: list[dict[str, int]]) -> None:

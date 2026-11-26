@@ -12,8 +12,8 @@ and `summarize_refusals` counts by it, into the sweep's one WARNING and the resp
 shape `maintenance.bytes.reclaimed` had before it reached a series.
 
 THE ZERO STAYS UNLABELLED, and that is not an oversight: the caller cannot know which gates exist on a
-tick that refused nothing, and a `refused_by="none"` would put a value in the label set that names no
-gate. `sum(rate(...))` is unaffected; `sum by (refused_by)` reads the breakdown.
+tick that refused nothing, and a `lance.maintenance.refused_by="none"` would put a value in the label set that names
+no gate. `sum(rate(...))` is unaffected; `sum by (lance_maintenance_refused_by)` reads the breakdown.
 """
 
 from collections.abc import Callable
@@ -53,5 +53,5 @@ def test_a_refusal_carries_the_gate(
     result = maintain_one(uri, MaintenanceSettings.model_validate({"s3_bucket": "b"}))
 
     assert result.refused_by == "manifest_flags", f"the dataset was not refused by manifest_flags: {result}"
-    assert refused_added == [(1, {"refused_by": "manifest_flags"})], f"the gate did not reach the series: {refused_added}"
+    assert refused_added == [(1, {"lance.maintenance.refused_by": "manifest_flags"})], f"the gate did not reach the series: {refused_added}"
     assert parked_added == [], f"a layout refusal was counted as a parked table: {parked_added}"

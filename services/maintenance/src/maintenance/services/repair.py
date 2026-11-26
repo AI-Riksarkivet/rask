@@ -53,7 +53,9 @@ from typing import TYPE_CHECKING, Final
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, revoke_ghosts
+from maintenance.services import drain
+from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, UnsendableRequest, VendUndecided, revoke_ghosts
+from maintenance.services.outcomes import Refused, named
 
 
 if TYPE_CHECKING:
@@ -75,7 +77,7 @@ _REVOCABLE: tuple[str, ...] = ("ghost_projects", "ghost_warehouses", "ghost_tabl
 #: absence is only evidence when the listing it was measured against was complete. `_run_category`
 #: already refuses a category whose source reported an ERROR, so an outage yields no findings; a
 #: PARTIAL read travels on a different channel and does not. `_tables_across` returns its unreadable
-#: roots beside the rows it did get and `_build_sources` files them as
+#: roots beside the rows it did get and `reconcile.load_sources` files them as
 #: `IncompleteScan(source="catalog:tables:<root>")` while `tables_error` stays None, so the category
 #: runs against a record set missing exactly those roots. One transient manifest failure would then
 #: classify every table under that warehouse as a ghost and strip its authorization.
@@ -133,10 +135,15 @@ class RepairReport(BaseModel):
     #: "considered and refused" and "never looked" are different facts about a cleaner.
     refused: dict[str, str] = Field(default_factory=dict)
     #: Objects the catalog judged again and found a registry still naming, with why: their grants stay ([[XC-084]]).
-    kept_by_the_catalog: dict[str, str] = Field(default_factory=dict)
+    kept_by_the_catalog: list[Refused] = Field(default_factory=list)
     #: Eligible objects beyond `max_per_tick`, so a truncated pass cannot read as a complete one.
     capped: int = 0
     error: str | None = None
+
+
+def _refused(fga_object: str, reason: str) -> Refused:
+    kind, obj_id = named(fga_object)
+    return Refused(kind=kind, id=obj_id, reason=reason)
 
 
 def _partial(report: ReconcileReport, category: str) -> str | None:
@@ -190,17 +197,17 @@ async def repair_drift(settings: MaintenanceSettings, *, report: ReconcileReport
         return RepairReport(enabled=False, dry_run=settings.drift_repair_dry_run)
     planned, refused = plan_repair(report)
     out = RepairReport(enabled=True, dry_run=settings.drift_repair_dry_run, refused=refused)
-    out.capped = max(0, len(planned) - settings.drift_repair_max_per_tick)
-    planned = planned[: settings.drift_repair_max_per_tick]
+    window = drain.window_of(report.checked_at, period_seconds=settings.audit_period_seconds)
+    planned, out.capped = drain.share_of(planned, cap=settings.drift_repair_max_per_tick, window=window, name=lambda target: target.fga_object)
     if out.dry_run or not planned:
         out.revoked = planned
         return out
     try:
         answered = await run_in_threadpool(revoke_ghosts, settings, [target.fga_object for target in planned])
-    except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
+    except (MaintenanceDenied, TableNotGoverned, VendUndecided, UnsendableRequest) as exc:
         log.warning("drift_repair_refused_by_the_catalog", extra={"objects": len(planned), "error": str(exc)})
         out.error = str(exc)
         return out
     out.revoked = [target.model_copy(update={"tuples": answered.revoked[target.fga_object]}) for target in planned if target.fga_object in answered.revoked]
-    out.kept_by_the_catalog = answered.refused
+    out.kept_by_the_catalog = [_refused(fga_object, why) for fga_object, why in answered.refused.items()]
     return out

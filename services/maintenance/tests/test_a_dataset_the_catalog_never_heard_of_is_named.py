@@ -99,7 +99,7 @@ def _category(monkeypatch: pytest.MonkeyPatch, sources: mod.Sources) -> mod.Reco
 
     settings = MaintenanceSettings(s3_bucket="lance-catalog", s3_access_key_id="unit", s3_secret_access_key=SecretStr("unit"))
     report = mod.ReconcileReport(checked_at="2026-09-20T00:00:00Z")
-    mod._walk_storage(report, settings, sources, walk=True)
+    mod._walk_storage(report, settings, sources)
     return report
 
 

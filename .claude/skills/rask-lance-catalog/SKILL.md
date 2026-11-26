@@ -638,7 +638,7 @@ suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and
 ## Lifecycle
 
 Reclamation, scheduling and the GC design live in `services/maintenance` itself — read
-`services/maintenance/src/maintenance/services/{queue,tasks,table_pass,orphan_check,orphans,floor,expiry,arrival,store_events,committed_files,due,plan,trash_task,audit,purge,reconcile,index_health}.py`
+`services/maintenance/src/maintenance/services/{queue,queue_wire,queue_worker,queue_sampler,tasks,table_pass,orphan_check,orphans,floor,expiry,arrival,store_events,committed_files,due,plan,trash_task,audit,purge,reconcile,index_health}.py`
 and ADR 0198 with its amendments — plus `packages/lakehouse/src/lakehouse/records/clone_sources.py`, the tag a
 registered shallow clone holds on the source version it reads (ADR 0198 §1), which lives in the `lakehouse` library
 beside `base_registry`, whose `forget_base_record` releases that tag wherever a clone's base record is forgotten
@@ -857,7 +857,7 @@ governing their data. The project-scoped surface is the console's project page, 
   task's wait from its queuing to its first delivery (`maintenance.tasks.wait`), each store event by how it settled, and
   each fired schedule the queue refused, and samples every 15 s each stream's depth and oldest message's age and each
   durable's undelivered (`maintenance.queue.waiting`), ack-pending and redelivered counts
-  (`maintenance.services.queue.sample_queue`, `maintenance.queue.*`), which the `maintenance` alert group reads:
+  (`maintenance.services.queue_sampler.sample_queue`, `maintenance.queue.*`), which the `maintenance` alert group reads:
   `MaintenanceQueueStalled` pages when tasks wait and no delivery awaits an ack for ten minutes. Each task's run is a consumer span
   (`process maintenance.task.<kind>`, `Worker._traced`) of a trace of its own, linked to the span that queued it, whose
   context rides the message's headers. Measured 2026-11-13, the
@@ -912,7 +912,7 @@ governing their data. The project-scoped surface is the console's project page, 
   it changes nothing about which bytes the purge deletes. The audit also holds an orphan check, a jittered time within
   a day out, for every live table holding neither a check's schedule nor a queued check. Each runs once per firing, on one replica
   whatever the replica count: its schedule fires on a subject of its own, and the queue holds one task per subject. The
-  two share one claim (`queue._claim_key`, `reconcile`), since each repairs the estate from a report of its own: they
+  two share one claim (`queue_worker._claim_key`, `reconcile`), since each repairs the estate from a report of its own: they
   never run at once, and the scan fires off the hour so it rarely waits. Maintenance runs no fixed timer; the estate's
   six are the catalog's five and lineage's relay (`lakehouse.timers`, `catalog.api.timers`, `lineage.api.relay`).
 - **OpenFGA rejects a bare-type Read.** `read_tuples(obj="project:")` with no user is HTTP 400
@@ -1353,7 +1353,7 @@ governing their data. The project-scoped surface is the console's project page, 
   (`orphans.scan_dataset`, with an age cut: a file not surely before the scan began reading is no finding), raises the
   listing floor on its own findings (`floor.raise_listing_floor`, which asks the catalog's `maintenance/floor` door to
   commit the stamp, ADR 0204; then a follow-up pass of the table), logs one
-  `maintenance_orphan_check` line and counts `maintenance.orphans.checks` by outcome and `maintenance.orphans.stranded`.
+  `maintenance_orphan_check` line and counts `maintenance.orphans.checks` by `lance.maintenance.outcome` and `maintenance.orphans.stranded`.
   Its next check rides the schedule's body (`Task.interval_hours`): stranded or undecided -> a day; after a raise ->
   the retention plus a day; clean or only Lance-reclaimable -> twice its interval up to
   `maintenance.orphanCheck.ceilingDays` (30); excluded (a branch, MemWAL, an unsupported flag, files through a base,
@@ -1632,7 +1632,7 @@ governing their data. The project-scoped surface is the console's project page, 
   refusing today.
   A table the compaction gate refuses is left off the due list, logged `maintenance_compaction_not_due_refused_layout`
   at DEBUG (`due.compaction_due`). A pass reports each refusal of its own on the dataset's `maintenance_dataset_outcome`
-  line and counts it on `maintenance.datasets.refused` by `refused_by` (`table_pass._record_dataset_metrics`) — never
+  line and counts it on `maintenance.datasets.refused` by `lance.maintenance.refused_by` (`table_pass._record_dataset_metrics`) — never
   inside `error` or `skipped`.
   **The ORPHAN scan stays flags-only, and that is not an oversight.** Its own consequence check cannot
   stand in for the flag: `add_bases` registers a base no `DataFile` resolves through yet, every

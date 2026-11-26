@@ -26,7 +26,13 @@ judges both again on its own reads:
 
 A record is taken :data:`lakehouse.records.trash.RELEASE_SETTLE` after its deadline, not at it: an undrop the door admitted
 just before the deadline registers before it clears the record, and a revoke landing between the two would leave the
-restored table ownerless. A refusal the catalog judges it notes on the record; this step reports it as held.
+restored table ownerless. A refusal the catalog judges it notes on the record; this step reports it as refused.
+
+The backstop asks the catalog for at most ``MAINTENANCE_TRASH_RELEASE_MAX_PER_TICK`` records a run, each one request,
+and reports the rest as capped. A record this step holds itself is asked of no one and takes none of them. The records
+it asks for are the head of the purge's own order (:func:`maintenance.services.purge.drain_order`): the least refused
+first, since the catalog counts each refusal it judges on the record, so a record it refuses run after run sorts behind
+the ones that move. A release the catalog could not decide, or refuses this identity, is counted nowhere.
 """
 
 import logging
@@ -43,7 +49,8 @@ from lakehouse.storage.options import StorageOptions, on_s3
 from lakehouse.storage.uri import split_s3_uri
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, release_trash
-from maintenance.services.purge import Liveness, liveness_across, still_registered
+from maintenance.services.outcomes import Failed, Refused
+from maintenance.services.purge import Liveness, drain_order, liveness_across, still_registered
 
 
 log = logging.getLogger(__name__)
@@ -66,22 +73,36 @@ class ReleasedRecord(BaseModel):
     marked: bool = True
 
 
-class HeldRecord(BaseModel):
-    """One drop past its deadline whose grants this tick kept, and why."""
-
-    kind: str
-    id: str
-    uuid: str | None = None
-    reason: str
-
-
 class TrashReleaseReport(BaseModel):
     """One tick's releases. ``ran`` is false when the step stopped before judging any record, and ``reason`` says why."""
 
     ran: bool = False
     reason: str | None = None
     released: list[ReleasedRecord] = Field(default_factory=list)
-    held: list[HeldRecord] = Field(default_factory=list)
+    #: Drops past their deadline whose grants this tick kept, and why: this step's own judgement, or the catalog's.
+    refused: list[Refused] = Field(default_factory=list)
+    #: Drops whose release failed. Their grants are as they were, and the next tick asks again.
+    failed: list[Failed] = Field(default_factory=list)
+    #: Due records beyond the run's cap, so a truncated run cannot read as a complete one.
+    capped: int = 0
+
+    @property
+    def kept(self) -> bool:
+        """Whether a record this tick judged still keeps its grants: one it refused, or one whose release failed."""
+        return bool(self.refused or self.failed)
+
+
+type _Judged = ReleasedRecord | Refused | Failed
+
+
+def _report(judged: list[_Judged], *, capped: int = 0) -> TrashReleaseReport:
+    return TrashReleaseReport(
+        ran=True,
+        released=[one for one in judged if isinstance(one, ReleasedRecord)],
+        refused=[one for one in judged if isinstance(one, Refused)],
+        failed=[one for one in judged if isinstance(one, Failed)],
+        capped=capped,
+    )
 
 
 def roots_read(settings: MaintenanceStore, storage_options: StorageOptions, control_root: str) -> set[str]:
@@ -108,31 +129,40 @@ def _why_held(record: TrashRecord, *, roots: set[str], live: Liveness | None) ->
     return None
 
 
-async def _release_or_hold(record: TrashRecord, *, roots: set[str], live: Liveness | None, settings: MaintenanceCatalogDoor) -> ReleasedRecord | HeldRecord:
-    """Release ONE record, and hold it naming the cause of any failure it raises: the step holds "never raises" by
+async def _release_or_hold(record: TrashRecord, *, roots: set[str], live: Liveness | None, settings: MaintenanceCatalogDoor) -> _Judged:
+    """Hold ONE record, or ask the catalog to release it (:func:`_asked_or_failed`)."""
+    if (reason := _why_held(record, roots=roots, live=live)) is not None:
+        return _held(record, reason)
+    return await _asked_or_failed(record, settings)
+
+
+async def _asked_or_failed(record: TrashRecord, settings: MaintenanceCatalogDoor) -> _Judged:
+    """Ask the catalog to release ONE record, and report the failure of any it raises: the step holds "never raises" by
     construction, each record's failure reported beside the others' releases, so a record whose release fails leaves
     the records after it released ([[LH-572]])."""
     try:
-        return await _release_one(record, roots=roots, live=live, settings=settings)
-    except Exception as exc:  # noqa: BLE001 — one record's failure, whatever it is, holds that record
+        return await _asked_of_the_catalog(record, settings)
+    except Exception as exc:  # noqa: BLE001 — one record's failure, whatever it is, is that record's
         log.exception("trash_release_failed", extra={"kind": record.kind, "id": record.id})
-        reason = f"the release failed ({type(exc).__name__}: {exc}); the record is held and the next tick asks again"
-        return HeldRecord(kind=record.kind, id=record.id, uuid=record.uuid, reason=reason)
+        return Failed(kind=record.kind, id=record.id, uuid=record.uuid, error=f"{type(exc).__name__}: {exc}")
 
 
-async def _release_one(record: TrashRecord, *, roots: set[str], live: Liveness | None, settings: MaintenanceCatalogDoor) -> ReleasedRecord | HeldRecord:
-    """Ask the catalog to release one record; a record the catalog refuses, or could not decide, is held. A failure it does
-    not expect raises, and :func:`_release_or_hold` holds the record."""
+def _held(record: TrashRecord, reason: str) -> Refused:
+    """The refusal of a record this step holds itself (:func:`_why_held`), logged."""
+    log.info("trash_release_held", extra={"kind": record.kind, "id": record.id, "reason": reason})
+    return Refused(kind=record.kind, id=record.id, uuid=record.uuid, reason=reason)
+
+
+async def _asked_of_the_catalog(record: TrashRecord, settings: MaintenanceCatalogDoor) -> ReleasedRecord | Refused:
+    """Ask the catalog to release one record this step does not hold; a record the catalog refuses, or could not
+    decide, keeps its grants. A failure it does not expect raises, and its caller reports it."""
     kind, obj_id = record.kind, record.id
-    if (reason := _why_held(record, roots=roots, live=live)) is not None:
-        log.info("trash_release_held", extra={"kind": kind, "id": obj_id, "reason": reason})
-        return HeldRecord(kind=kind, id=obj_id, uuid=record.uuid, reason=reason)
     uuid = str(record.uuid)
     try:
         released = await run_in_threadpool(partial(release_trash, kind, uuid, settings))
     except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
         log.warning("trash_release_refused_by_the_catalog", extra={"kind": kind, "id": obj_id, "reason": str(exc)})
-        return HeldRecord(kind=kind, id=obj_id, uuid=uuid, reason=str(exc))
+        return Refused(kind=kind, id=obj_id, uuid=uuid, reason=str(exc))
     log.warning("trash_released", extra={"kind": kind, "id": obj_id, "uuid": uuid, "tuples_revoked": released.tuples_revoked, "marked": released.stamped})
     return ReleasedRecord(
         kind=kind, id=obj_id, uuid=uuid, expires_at=(record.expires_at or ""), tuples_revoked=released.tuples_revoked, marked=released.stamped
@@ -140,10 +170,13 @@ async def _release_one(record: TrashRecord, *, roots: set[str], live: Liveness |
 
 
 async def release_expired_trash(settings: MaintenanceSettings, *, control_root: str | None = None, now: datetime | None = None) -> TrashReleaseReport:
-    """Release every drop :data:`lakehouse.records.trash.RELEASE_SETTLE` past its deadline that this step may release: the audit's
-    and the scan's backstop for a record no task released. Never raises."""
+    """Release the drops :data:`lakehouse.records.trash.RELEASE_SETTLE` past their deadline that this step may release:
+    the audit's and the scan's backstop for a record no task released. Never raises.
+
+    Every due record this step holds itself is reported refused. Of the rest, the catalog is asked for the
+    ``settings.trash_release_max_per_tick`` least refused (:func:`maintenance.services.purge.drain_order`), and the
+    others are counted as capped."""
     at = now or datetime.now(UTC)
-    out = TrashReleaseReport()
     resolved_control_root = control_root or settings.resolved_control_root
     try:
         # Read here, once, so a credential outage stops the step with its reason as an unreadable registry does.
@@ -153,13 +186,14 @@ async def release_expired_trash(settings: MaintenanceSettings, *, control_root: 
         due = [record for record in records if record.releasable(now=at) and not record.is_released]
         live = await run_in_threadpool(liveness_across, roots, storage_options) if due else None
     except Exception as exc:  # noqa: BLE001 — an unreadable session, registry or estate stops the step, it does not fail the tick
-        out.reason = f"the trash, the warehouse registry or the estate could not be read ({type(exc).__name__}: {exc})"
-        log.error("trash_release_blocked", extra={"reason": out.reason})
-        return out
-    out.ran = True
-    for record in due:
-        _reported(out, await _release_or_hold(record, roots=roots, live=live, settings=settings))
-    return out
+        reason = f"the trash, the warehouse registry or the estate could not be read ({type(exc).__name__}: {exc})"
+        log.error("trash_release_blocked", extra={"reason": reason})
+        return TrashReleaseReport(reason=reason)
+    reasons = [(record, _why_held(record, roots=roots, live=live)) for record in sorted(due, key=drain_order)]
+    held: list[_Judged] = [_held(record, reason) for record, reason in reasons if reason is not None]
+    askable = [record for record, reason in reasons if reason is None]
+    taken = askable[: settings.trash_release_max_per_tick]
+    return _report([*held, *[await _asked_or_failed(record, settings) for record in taken]], capped=len(askable) - len(taken))
 
 
 async def release_record(record: TrashRecord, settings: MaintenanceSettings, *, now: datetime | None = None) -> TrashReleaseReport:
@@ -172,22 +206,18 @@ async def release_record(record: TrashRecord, settings: MaintenanceSettings, *, 
     names no such place, a namespace's, has no one root, and is judged against every root the registry names, as the
     audit's backstop judges it. The catalog judges the record again on its own reads before it revokes anything.
     """
-    out = TrashReleaseReport()
     if not record.releasable(now=now or datetime.now(UTC)) or record.is_released:
-        out.ran = True
-        return out
+        return _report([])
     try:
         storage_options = settings.storage_options()
         own = root_of(record)
         roots = {own} if own is not None else await run_in_threadpool(roots_read, settings, storage_options, settings.resolved_control_root)
         live = await run_in_threadpool(liveness_across, roots, storage_options)
     except Exception as exc:  # noqa: BLE001 — an unreadable session, registry or estate stops the step, it does not fail the task
-        out.reason = f"the warehouse registry or the estate could not be read ({type(exc).__name__}: {exc})"
-        log.error("trash_release_blocked", extra={"reason": out.reason, "uuid": record.uuid})
-        return out
-    out.ran = True
-    _reported(out, await _release_or_hold(record, roots=roots, live=live, settings=settings))
-    return out
+        reason = f"the warehouse registry or the estate could not be read ({type(exc).__name__}: {exc})"
+        log.error("trash_release_blocked", extra={"reason": reason, "uuid": record.uuid})
+        return TrashReleaseReport(reason=reason)
+    return _report([await _release_or_hold(record, roots=roots, live=live, settings=settings)])
 
 
 def root_of(record: TrashRecord) -> str | None:
@@ -198,11 +228,3 @@ def root_of(record: TrashRecord) -> str | None:
         return None
     bucket = split_s3_uri(location)[0]
     return f"s3://{bucket}" if bucket else None
-
-
-def _reported(out: TrashReleaseReport, judged: ReleasedRecord | HeldRecord) -> None:
-    match judged:
-        case ReleasedRecord() as released:
-            out.released.append(released)
-        case HeldRecord() as held:
-            out.held.append(held)

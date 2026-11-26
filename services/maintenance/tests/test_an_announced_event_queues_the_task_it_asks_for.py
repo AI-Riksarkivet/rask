@@ -13,7 +13,7 @@ event it would queue a task for, driven here through the worker's handling of on
 (`maintenance.services.arrival.Arrivals.hold_task`) with the configuration the chart sets: the signer's public keys come
 from the secret store (the suite's double), and the root conftest's `EventSigner` builds the signatures from the wire
 format alone. The handling answers how the delivery is acknowledged, or raises what the worker settles it by
-(`maintenance.services.queue.Worker.run_arrivals`, driven on a real broker by the queue's own lane). The queue is a
+(`maintenance.services.queue_worker.Worker.run_arrivals`, driven on a real broker by the queue's own lane). The queue is a
 recording fake with `TaskQueue`'s own signatures: the bus contract is the `nats-auth` lane's.
 """
 
@@ -36,7 +36,8 @@ from lakehouse.records import location_claims
 from lakehouse.storage.errors import store_call
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.arrival import Arrivals, LaneTask, lane_task
-from maintenance.services.queue import QueueUnavailableError, Task, TaskQueue
+from maintenance.services.queue import QueueUnavailableError, TaskQueue
+from maintenance.services.queue_wire import Task
 
 
 URI = "s3://bucket/abc12345_db$t"
@@ -262,7 +263,9 @@ def signature_counts(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], C
                     # A counter only ever yields `NumberDataPoint`, the member of the reader's point union that has a value.
                     for point in cast(Sequence[NumberDataPoint], metric.data.data_points):
                         attributes = point.attributes or {}
-                        found.setdefault(metric.name, {})[(str(attributes.get("door")), str(attributes.get("reason")))] = int(point.value)
+                        found.setdefault(metric.name, {})[(str(attributes.get("lance.maintenance.door")), str(attributes.get("lance.maintenance.reason")))] = (
+                            int(point.value)
+                        )
         return found
 
     yield counts

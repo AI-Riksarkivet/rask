@@ -38,15 +38,14 @@ def _run(tmp_path: Path) -> mod.ReconcileReport:
     (tmp_path / "control").mkdir(parents=True, exist_ok=True)
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
     return asyncio.run(
-        mod.reconcile(
+        mod.reconcile_walking(
             settings,
             None,
             control_root=f"file://{tmp_path / 'control'}",
             namespace_root=f"file://{tmp_path / 'data'}",
             bucket_client=_NoBuckets(),
-            walk=True,
         )
-    )
+    ).report
 
 
 def test_a_filesystem_that_cannot_be_built_degrades_the_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -78,9 +78,11 @@ def test_a_vend_refusal_is_counted_as_a_parked_table_under_its_door(
 
     # On a series the worker created at 0 when it started, every refusal's, so the first parked pass is an increase.
     assert parked_added == [
-        (0, {"refused_by": "vend_denied"}),
-        (0, {"refused_by": "table_not_governed"}),
-        (0, {"refused_by": "policy_unreadable"}),
-        (1, {"refused_by": "vend_denied"}),
+        (0, {"lance.maintenance.refused_by": "vend_denied"}),
+        (0, {"lance.maintenance.refused_by": "table_not_governed"}),
+        (0, {"lance.maintenance.refused_by": "policy_unreadable"}),
+        (1, {"lance.maintenance.refused_by": "vend_denied"}),
     ], parked_added
-    assert refused_added == [(1, {"refused_by": "vend_denied"})], f"the refusal reached the datasets counter unlabelled or not at all: {refused_added}"
+    assert refused_added == [(1, {"lance.maintenance.refused_by": "vend_denied"})], (
+        f"the refusal reached the datasets counter unlabelled or not at all: {refused_added}"
+    )

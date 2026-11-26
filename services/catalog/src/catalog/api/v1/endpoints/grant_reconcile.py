@@ -22,10 +22,9 @@ from catalog.api.authz import decisions, door_gates, object_grants
 from catalog.api.authz.context import AuthzContextDep
 from catalog.api.dependencies import FgaClientDep, SettingsDep, namespace_for_table
 from catalog.core.config import Settings
-from catalog.schemas import GhostRevokeRequest, TenancyRebuildRequest
 from catalog.services import grant_reconcile, table_claims, warehouses
 from lakehouse.governed import fga_reads, fga_writes
-from lakehouse.maintenance_doors import GhostRevokeResponse, GrantCensusResponse, TenancyRebuildResponse
+from lakehouse.maintenance_doors import GhostRevokeRequest, GhostRevokeResponse, GrantCensusResponse, TenancyRebuildRequest, TenancyRebuildResponse
 from lakehouse.records import location_claims
 
 

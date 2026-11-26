@@ -11,6 +11,7 @@ import asyncio
 import logging
 from collections.abc import Callable, Coroutine, Iterable
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -26,8 +27,9 @@ from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import audit
 from maintenance.services.purge import TrashPurgeReport
-from maintenance.services.queue import QueueUnavailableError, QueueUnreachableError, Task, TaskQueue
-from maintenance.services.reconcile import GrantCensusReader, ReconcileReport, Sources
+from maintenance.services.queue import QueueUnavailableError, QueueUnreachableError, TaskQueue
+from maintenance.services.queue_wire import Task
+from maintenance.services.reconcile import GrantCensusReader, Reconciled, ReconcileReport, Sources
 
 
 #: These stubs return the real model: a hand-rolled mirror of the report must be edited whenever the thing it doubles
@@ -41,24 +43,28 @@ def _settings(**over: Any) -> MaintenanceSettings:
 
 
 class _Reconciler:
-    """`reconcile` with its real signature: each call's arguments kept, and a report of its own answered to each."""
+    """`reconcile` and `reconcile_walking`, each with its real signature: each call's arguments kept with which of the
+    two was asked, and a report of its own answered to each, built from stores that read nothing."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
         self.reports: list[ReconcileReport] = []
 
-    async def __call__(
+    def stand_in(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(audit, "reconcile", partial(self._asked, False))
+        monkeypatch.setattr(audit, "reconcile_walking", partial(self._asked, True))
+
+    async def _asked(
         self,
+        walk: bool,
         settings: MaintenanceSettings,
         grants: GrantCensusReader | None = None,
         *,
         control_root: str | None = None,
         namespace_root: str | None = None,
-        into_sources: list[Sources] | None = None,
         platform_buckets: Iterable[str] | None = None,
         bucket_client: object = None,
-        walk: bool,
-    ) -> ReconcileReport:
+    ) -> Reconciled:
         self.calls.append(
             {
                 "walk": walk,
@@ -68,7 +74,7 @@ class _Reconciler:
             }
         )
         self.reports.append(ReconcileReport(checked_at=_CHECKED_AT))
-        return self.reports[-1]
+        return Reconciled(report=self.reports[-1], sources=Sources())
 
 
 class _Purger:
@@ -110,7 +116,7 @@ def test_the_audit_hands_the_reconciler_the_catalogs_grant_census(monkeypatch: p
     over: the reconciler builds it per run with the key pair in force ([[XC-082]]), where one built at boot would list
     with a key the store has since replaced."""
     reconciler = _Reconciler()
-    monkeypatch.setattr(audit, "reconcile", reconciler)
+    reconciler.stand_in(monkeypatch)
     settings = _settings()
 
     out = asyncio.run(_the_daily_scan(settings))
@@ -133,7 +139,7 @@ def test_only_the_daily_scan_walks_storage_and_purges(
     takes only a report whose own run walked storage. The hourly audit asks the reconciler for no walk and runs no
     purge."""
     reconciler, purger = _Reconciler(), _Purger()
-    monkeypatch.setattr(audit, "reconcile", reconciler)
+    reconciler.stand_in(monkeypatch)
     monkeypatch.setattr(audit, "purge_expired_trash", purger)
 
     out = asyncio.run(run(_settings()))
@@ -153,7 +159,7 @@ def test_the_purge_consumes_the_report_its_own_audit_produced(monkeypatch: pytes
     by identity, which is the only way to state it that a later refactor cannot quietly weaken.
     """
     reconciler, purger = _Reconciler(), _Purger()
-    monkeypatch.setattr(audit, "reconcile", reconciler)
+    reconciler.stand_in(monkeypatch)
     monkeypatch.setattr(audit, "purge_expired_trash", purger)
 
     out = asyncio.run(_the_daily_scan(_settings()))
@@ -169,7 +175,7 @@ def test_the_audit_asks_the_catalog_to_finish_every_clones_ending_it_lists(tmp_p
     lists (ADR 0198 §1): maintenance's store policy writes no source's tags. A refusal is reported by the ending's id and
     never stops the audit. The same audit asks the catalog to send what a failed door filed to announce (ADR 0205), once
     while nothing is left."""
-    monkeypatch.setattr(audit, "reconcile", _Reconciler())
+    _Reconciler().stand_in(monkeypatch)
     catalog = "http://catalog.test"
     settings = _settings(catalog_url=catalog).model_copy(update={"control_root": str(tmp_path)})
     finished, refused = f"{'a' * 64}/{'c' * 32}", f"{'b' * 64}/{'c' * 32}"
@@ -225,7 +231,7 @@ def test_the_audit_queues_what_neither_a_schedule_nor_the_queue_holds(tmp_path: 
     already released, or carrying no deadline, gets no task: its task would end holding nothing, and be queued again by
     every audit."""
 
-    monkeypatch.setattr(audit, "reconcile", _Reconciler())
+    _Reconciler().stand_in(monkeypatch)
     settings = _settings().model_copy(update={"control_root": str(tmp_path)})
     claims = location_claims.ClaimStore(control_root=str(tmp_path), storage_options=StorageOptions())
     names = ("scheduled", "queued", "lost", "trashed", "released", "undated")
@@ -273,7 +279,7 @@ def test_the_audit_queues_what_neither_a_schedule_nor_the_queue_holds(tmp_path: 
 
 
 def _three_tables_no_task_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> MaintenanceSettings:
-    monkeypatch.setattr(audit, "reconcile", _Reconciler())
+    _Reconciler().stand_in(monkeypatch)
     claims = location_claims.ClaimStore(control_root=str(tmp_path), storage_options=StorageOptions())
     for name in ("a", "b", "c"):
         location_claims.take(claims, f"{tmp_path}/{name}", f"db${name}", segments=["db", name], is_gone=lambda _claim: False, uuid=str(uuid4()))

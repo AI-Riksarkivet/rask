@@ -11,7 +11,7 @@ from opentelemetry import metrics
 from lakehouse.events.signing import RefusalReason
 
 
-#: What parks a TABLE ID, and the closed `refused_by` set of `maintenance.tables.parked`: the vend door's 403, its 404
+#: What parks a TABLE ID, and the closed `lance.maintenance.refused_by` set of `maintenance.tables.parked`: the vend door's 403, its 404
 #: naming the table or namespace absent, and a policy record of the table's that cannot be read as one, which may be a
 #: legal hold and so is never read as the defaults.
 type CatalogRefusal = Literal["vend_denied", "table_not_governed", "policy_unreadable"]
@@ -44,7 +44,7 @@ _refused = _meter.create_counter(
 )
 
 #: ITS OWN SERIES, apart from `_refused`: a parked table is one row in a refusal share measured at 45.3-46.5% of every
-#: sweep (2026-09-24), so no rule over that share can page on it. Labelled by `refused_by` alone (`CatalogRefusal`, a
+#: sweep (2026-09-24), so no rule over that share can page on it. Labelled by `lance.maintenance.refused_by` alone (`CatalogRefusal`, a
 #: closed set): which table is the pass's log line's to say, and a series per table would grow with the estate.
 _tables_parked = _meter.create_counter(
     "maintenance.tables.parked",
@@ -132,7 +132,7 @@ _trash_bytes = _meter.create_counter(
 _drift_items = _meter.create_gauge(
     "maintenance.drift.items",
     unit="{item}",
-    description="Items the reconcile found per drift category (`category` label) on the last tick.",
+    description="Items the reconcile found per drift category (`lance.maintenance.category` label) on the last tick.",
 )
 _trash_planned = _meter.create_counter(
     "maintenance.trash.purge_planned",
@@ -188,17 +188,17 @@ def create_signature_refused_series() -> None:
     """
     for door in get_args(SignatureDoor.__value__):
         for reason in get_args(RefusalReason.__value__):
-            _signature_refused.add(0, {"door": door, "reason": reason})
+            _signature_refused.add(0, {"lance.maintenance.door": door, "lance.maintenance.reason": reason})
 
 
 def record_signature_refused(*, door: SignatureDoor, reason: str) -> None:
     """Count one event ``door`` refused. Keyword-only: both are strings, and a swapped pair would put a reason in the door label."""
-    _signature_refused.add(1, {"door": door, "reason": reason})
+    _signature_refused.add(1, {"lance.maintenance.door": door, "lance.maintenance.reason": reason})
 
 
 def record_signature_would_refuse(*, door: SignatureDoor, reason: str) -> None:
     """Count one event ``door`` acted on in observe mode that enforcing would have refused for ``reason``."""
-    _signature_would_refuse.add(1, {"door": door, "reason": reason})
+    _signature_would_refuse.add(1, {"lance.maintenance.door": door, "lance.maintenance.reason": reason})
 
 
 def record_dataset_swept() -> None:
@@ -252,33 +252,30 @@ def record_reclaimed(*, versions_removed: int, bytes_removed: int = 0) -> None:
 def record_refused(datasets: int, refused_by: str | None = None) -> None:
     """Record how many datasets this tick REFUSED, by WHICH GATE refused them.
 
-    Always emits, for the :func:`record_reclaimed` reason and one sharper one: a whitelist that
-    silently starts refusing the whole estate must be visible from the FIRST tick after the upgrade
-    that caused it, not from whenever someone reads a cron response body.
+    Always emits, for the :func:`record_reclaimed` reason and one sharper one: a gate that
+    silently starts refusing the whole estate must be visible from the FIRST pass after the upgrade
+    that caused it, not from whenever someone reads a pass's log line.
 
     THE GATE IS A LABEL BECAUSE THE MERGED NUMBER IS NOT ACTIONABLE, and the estate proved it:
     measured 2026-09-24, **45.3-46.5% of every sweep is refused**, steady across fourteen hours and
-    ~600 datasets a tick. A number that large and that flat is a standing condition, and the
-    unlabelled series could not say whether it was somebody else's clone (`protected_base`, true
-    forever), a manifest feature a pylance upgrade would support (`manifest_flags`), an unparseable
-    branch directory (`invalid_ref`), a denied credential (`vend_denied`), an
-    id the catalog governs no table by (`table_not_governed`), an id the catalog governs at another
-    location (`governed_elsewhere`) or maintenance's own service credential rejected with a 401
-    (`unauthenticated`). `DatasetResult.refused_by`
-    already carried the answer and `summarize_refusals` already counted by it — it reached maintenance's
-    WARNING and the response body and stopped there, which is the same shape as
-    `maintenance.bytes.reclaimed` before [[LH-099]].
+    ~600 datasets a tick. A number that large and that flat is a standing condition, and an
+    unlabelled series cannot say whether it is a manifest feature a pylance upgrade would support
+    (`manifest_flags`), an unparseable branch directory (`invalid_ref`), a denied credential
+    (`vend_denied`), an id the catalog governs no table by (`table_not_governed`), an id the catalog
+    governs at another location (`governed_elsewhere`) or maintenance's own service credential rejected
+    with a 401 (`unauthenticated`). The value is `DatasetResult.refused_by`.
 
-    CARDINALITY IS BOUNDED BY CONSTRUCTION: the gates are a closed set named in `DatasetResult`, not a
-    message and never the dataset — the same rule `record_failed` states for `error_type`.
+    CARDINALITY IS BOUNDED BY CONSTRUCTION: the gates are a closed set (`maintenance.services.expiry.Gate` and
+    :data:`CatalogRefusal`), not a message and never the dataset — the same rule `record_failed` states for
+    `error_type`.
 
     The ZERO stays UNLABELLED. Emitting it against a gate would require knowing which gates exist this
     tick, which the caller cannot know (`record_failed` documents the same limit), and inventing a
-    `refused_by="none"` would put a value in the label set that names no gate. `sum(rate(...))` is
-    unaffected; `sum by (refused_by)` reads the breakdown with the zeros in the empty-label series.
+    `lance.maintenance.refused_by="none"` would put a value in the label set that names no gate. `sum(rate(...))` is
+    unaffected; `sum by (lance_maintenance_refused_by)` reads the breakdown with the zeros in the empty-label series.
     """
     if datasets and refused_by:
-        _refused.add(datasets, {"refused_by": refused_by})
+        _refused.add(datasets, {"lance.maintenance.refused_by": refused_by})
         return
     _refused.add(datasets)
 
@@ -341,8 +338,8 @@ _tasks_redelivered = _meter.create_counter(
     description="Deliveries of a maintenance task past its first, by kind.",
 )
 
-#: How the worker settled one store event it pulled (:meth:`maintenance.services.queue.Worker.run_store_events`), the
-#: closed `outcome` set of `maintenance.store_events.settled`: acknowledged with a table's pass held (``held``),
+#: How the worker settled one store event it pulled (:meth:`maintenance.services.queue_worker.Worker.run_store_events`), the
+#: closed `lance.maintenance.outcome` set of `maintenance.store_events.settled`: acknowledged with a table's pass held (``held``),
 #: acknowledged holding nothing (``ignored``: a key under no table, a delete, or a table whose follow-up was held
 #: already), handed back for another delivery (``retried``), ended at once as no store event (``unreadable``), and ended
 #: on its last delivery, or on the one past it after its worker died every time (``ended``).
@@ -353,8 +350,8 @@ _store_events_settled = _meter.create_counter(
     unit="{event}",
     description="Store events the worker settled, by outcome: held, ignored, retried, unreadable, ended.",
 )
-#: How the worker settled one commit announcement it pulled (:meth:`maintenance.services.queue.Worker.run_arrivals`), the
-#: closed `outcome` set of `maintenance.arrivals.settled`: acknowledged with the task it asks for held or queued
+#: How the worker settled one commit announcement it pulled (:meth:`maintenance.services.queue_worker.Worker.run_arrivals`), the
+#: closed `lance.maintenance.outcome` set of `maintenance.arrivals.settled`: acknowledged with the task it asks for held or queued
 #: (``held``), acknowledged because a task already held covers it (``covered``), acknowledged untouched (``ignored``: an
 #: event the lane asks nothing for, or a write no table's claim holds), acknowledged and acted on by nothing because no
 #: listed signer's key verifies it (``refused``), handed back for another delivery (``retried``), ended at once as no
@@ -367,7 +364,7 @@ _arrivals_settled = _meter.create_counter(
     unit="{event}",
     description="Commit announcements the worker settled, by outcome: held, covered, ignored, refused, retried, unreadable, ended.",
 )
-#: A fired schedule the queue did not take (:meth:`maintenance.services.queue.Worker._move`): it is delivered again
+#: A fired schedule the queue did not take (:meth:`maintenance.services.queue_worker.Worker._move`): it is delivered again
 #: after a delay, and a refusal that stands is a table whose time never comes.
 _schedules_not_queued = _meter.create_counter(
     "maintenance.schedules.not_queued",
@@ -375,7 +372,7 @@ _schedules_not_queued = _meter.create_counter(
     description="Fired schedules the work queue refused or did not answer, each given back to be moved again.",
 )
 
-#: What the worker's sampler reads off the bus every 15 s (:func:`maintenance.services.queue.sample_queue`). Synchronous
+#: What the worker's sampler reads off the bus every 15 s (:func:`maintenance.services.queue_sampler.sample_queue`). Synchronous
 #: gauges: one exports nothing until it is first set, so a process that imports this module and runs no sampler
 #: exports no constant 0 beside the worker's truth, and once set it exports its last value at every collection
 #: (measured on opentelemetry-sdk 1.45.2, cumulative temporality). A sample the bus does not answer leaves a gauge at
@@ -432,7 +429,7 @@ _store_event_buckets_checked = _meter.create_counter(
 
 def record_store_event_bucket_checked(*, outcome: BucketEventsOutcome) -> None:
     """Record how the audit found one governed bucket's store events."""
-    _store_event_buckets_checked.add(1, {"outcome": outcome})
+    _store_event_buckets_checked.add(1, {"lance.maintenance.outcome": outcome})
 
 
 def create_task_series(kinds: tuple[str, ...]) -> None:
@@ -443,49 +440,49 @@ def create_task_series(kinds: tuple[str, ...]) -> None:
     nothing yet would read "no data"."""
     for kind in kinds:
         for counter in (_tasks_completed, _tasks_ended, _passes_overran, _tasks_retried, _tasks_redelivered):
-            counter.add(0, {"kind": kind})
-    _tasks_ended.add(0, {"kind": "unreadable"})
+            counter.add(0, {"lance.maintenance.kind": kind})
+    _tasks_ended.add(0, {"lance.maintenance.kind": "unreadable"})
     for outcome in get_args(StoreEventOutcome.__value__):
-        _store_events_settled.add(0, {"outcome": outcome})
+        _store_events_settled.add(0, {"lance.maintenance.outcome": outcome})
     for outcome in get_args(ArrivalOutcome.__value__):
-        _arrivals_settled.add(0, {"outcome": outcome})
+        _arrivals_settled.add(0, {"lance.maintenance.outcome": outcome})
     _schedules_not_queued.add(0)
     for outcome in get_args(BucketEventsOutcome.__value__):
-        _store_event_buckets_checked.add(0, {"outcome": outcome})
+        _store_event_buckets_checked.add(0, {"lance.maintenance.outcome": outcome})
     for refused_by in get_args(CatalogRefusal.__value__):
-        _tables_parked.add(0, {"refused_by": refused_by})
+        _tables_parked.add(0, {"lance.maintenance.refused_by": refused_by})
     for kind in _KINDS:
         _trash_refused.add(0, {"lance.maintenance.dry_run": "false", "lance.maintenance.kind": kind})
 
 
 def record_task_retried(*, kind: str) -> None:
     """Record a task handed back for another delivery after its run failed."""
-    _tasks_retried.add(1, {"kind": kind})
+    _tasks_retried.add(1, {"lance.maintenance.kind": kind})
 
 
 def record_task_redelivered(*, kind: str) -> None:
     """Record a delivery of a task past its first."""
-    _tasks_redelivered.add(1, {"kind": kind})
+    _tasks_redelivered.add(1, {"lance.maintenance.kind": kind})
 
 
 def record_task_wait(*, kind: str, seconds: float) -> None:
     """Record how long a task waited on the queue before its first delivery."""
-    _task_wait.record(seconds, {"kind": kind})
+    _task_wait.record(seconds, {"lance.maintenance.kind": kind})
 
 
 def record_task_duration(*, kind: str, seconds: float) -> None:
     """Record how long a completed task held its claim, until its acknowledgement."""
-    _task_duration.record(seconds, {"kind": kind})
+    _task_duration.record(seconds, {"lance.maintenance.kind": kind})
 
 
 def record_store_event_settled(*, outcome: StoreEventOutcome) -> None:
     """Record how the worker settled one store event."""
-    _store_events_settled.add(1, {"outcome": outcome})
+    _store_events_settled.add(1, {"lance.maintenance.outcome": outcome})
 
 
 def record_arrival_settled(*, outcome: ArrivalOutcome) -> None:
     """Record how the worker settled one commit announcement."""
-    _arrivals_settled.add(1, {"outcome": outcome})
+    _arrivals_settled.add(1, {"lance.maintenance.outcome": outcome})
 
 
 def record_schedule_not_queued() -> None:
@@ -496,47 +493,47 @@ def record_schedule_not_queued() -> None:
 def record_stream_unsampled(*, stream: str, reads: int) -> None:
     """Count the reads of ``stream``'s state the bus did not answer on one sample. Always emits, including zero, so the
     series exists from the first sample and a read not answered is an increase."""
-    _queue_unsampled.add(reads, {"stream": stream})
+    _queue_unsampled.add(reads, {"lance.maintenance.stream": stream})
 
 
 def record_consumer_unsampled(*, consumer: str, reads: int) -> None:
     """Count the reads of ``consumer``'s state the bus did not answer on one sample; zero included, as for a stream."""
-    _queue_unsampled.add(reads, {"consumer": consumer})
+    _queue_unsampled.add(reads, {"lance.maintenance.consumer": consumer})
 
 
 def record_stream_depth(*, stream: str, messages: int, oldest_seconds: float | None) -> None:
     """Set a stream's sampled depth; ``oldest_seconds`` only for a stream whose age is read (a work queue a backlog ages
     on), None for one that holds messages for their time (the schedules)."""
-    _queue_messages.set(messages, {"stream": stream})
+    _queue_messages.set(messages, {"lance.maintenance.stream": stream})
     if oldest_seconds is not None:
-        _queue_oldest.set(oldest_seconds, {"stream": stream})
+        _queue_oldest.set(oldest_seconds, {"lance.maintenance.stream": stream})
 
 
 def record_consumer_backlog(*, consumer: str, waiting: int, ack_pending: int, redelivered: int) -> None:
     """Set a durable consumer's sampled backlog."""
-    _queue_waiting.set(waiting, {"consumer": consumer})
-    _queue_ack_pending.set(ack_pending, {"consumer": consumer})
-    _queue_redelivered.set(redelivered, {"consumer": consumer})
+    _queue_waiting.set(waiting, {"lance.maintenance.consumer": consumer})
+    _queue_ack_pending.set(ack_pending, {"lance.maintenance.consumer": consumer})
+    _queue_redelivered.set(redelivered, {"lance.maintenance.consumer": consumer})
 
 
 def record_task_completed(*, kind: str) -> None:
     """Record a task its worker ran to the end and acknowledged."""
-    _tasks_completed.add(1, {"kind": kind})
+    _tasks_completed.add(1, {"lance.maintenance.kind": kind})
 
 
 def record_task_ended(*, kind: str) -> None:
     """Record a task its worker ended on its last delivery, or one whose message no task parses."""
-    _tasks_ended.add(1, {"kind": kind})
+    _tasks_ended.add(1, {"lance.maintenance.kind": kind})
 
 
 def record_pass_overran(*, kind: str) -> None:
     """Record a task still running past its bound."""
-    _passes_overran.add(1, {"kind": kind})
+    _passes_overran.add(1, {"lance.maintenance.kind": kind})
 
 
 def record_table_parked(*, refused_by: CatalogRefusal) -> None:
     """Record that a table is parked this tick: the catalog refused its id at one door, or its policy cannot be read."""
-    _tables_parked.add(1, {"refused_by": refused_by})
+    _tables_parked.add(1, {"lance.maintenance.refused_by": refused_by})
 
 
 def record_mixed_file_versions(datasets: int) -> None:
@@ -598,10 +595,10 @@ def record_drift(counts: dict[str, int]) -> None:
     series an alert fires from.
     """
     for category, value in counts.items():
-        _drift_items.set(value, {"category": category})
+        _drift_items.set(value, {"lance.maintenance.category": category})
 
 
-#: What a table's orphan check found, the closed `outcome` set of `maintenance.orphans.checks`
+#: What a table's orphan check found, the closed `lance.maintenance.outcome` set of `maintenance.orphans.checks`
 #: (:mod:`maintenance.services.orphan_check`); a check whose read failed is counted ``incomplete`` before it raises.
 type OrphanCheckOutcome = Literal[
     "clean",
@@ -637,11 +634,11 @@ def create_orphan_check_series() -> None:
     """Create every outcome's series of the check counter, and the stranded-file counter, at 0 when the worker starts,
     for `create_task_series`' reason: a series born at 1 has no 0 before it."""
     for outcome in get_args(OrphanCheckOutcome.__value__):
-        _orphan_checks.add(0, {"outcome": outcome})
+        _orphan_checks.add(0, {"lance.maintenance.outcome": outcome})
     _stranded_files.add(0)
 
 
 def record_orphan_check(*, outcome: OrphanCheckOutcome, stranded: int) -> None:
     """Record one table's orphan check and the stranded files it found."""
-    _orphan_checks.add(1, {"outcome": outcome})
+    _orphan_checks.add(1, {"lance.maintenance.outcome": outcome})
     _stranded_files.add(stranded)

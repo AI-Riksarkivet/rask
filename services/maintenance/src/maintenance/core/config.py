@@ -10,7 +10,7 @@ treats the signature of a write event before it acts on it.
 """
 
 from functools import lru_cache
-from typing import TYPE_CHECKING, Annotated, Self
+from typing import TYPE_CHECKING, Annotated, Final, Self
 
 from pydantic import AfterValidator, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -18,6 +18,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from lakehouse.events.bus import BusSettings
 from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.events.signature_doors import SignatureDoorSettings
+from lakehouse.maintenance_doors import MAX_OBJECTS_PER_REQUEST
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.objectfs import StoreTimeouts, lance_storage_options
 from lakehouse.storage.options import StorageOptions
@@ -191,6 +192,19 @@ class MaintenanceCatalogDoor(BaseSettings):
     catalog_identity_token_file: str = Field(default="/var/run/secrets/rask/identity/rask-catalog/token", alias="RASK_CATALOG_IDENTITY_TOKEN_FILE")
 
 
+_HOUR_SECONDS: Final = 3600
+#: The time between two firings of each alias a NATS message schedule takes (ADR-51), in seconds.
+_ALIAS_PERIOD_SECONDS: Final = frozendict(
+    {
+        "@hourly": _HOUR_SECONDS,
+        "@daily": 24 * _HOUR_SECONDS,
+        "@weekly": 7 * 24 * _HOUR_SECONDS,
+        "@monthly": 30 * 24 * _HOUR_SECONDS,
+        "@yearly": 365 * 24 * _HOUR_SECONDS,
+    }
+)
+
+
 class MaintenanceQueue(BaseSettings):
     """The work queue: the bus the worker pulls from, how a task is held, bounded and retried, and the schedules."""
 
@@ -250,6 +264,14 @@ class MaintenanceQueue(BaseSettings):
     #: measured 2026-11-13), so under a pass's bound it would be ended at twice 1800 s on an estate of some tens of
     #: thousands of tables, every delivery, and not tried again until the next day.
     scan_max_seconds: int = Field(default=7200, ge=60, alias="MAINTENANCE_SCAN_MAX_SECONDS")
+
+    @property
+    def audit_period_seconds(self) -> int:
+        """How long one window of ``audit_schedule`` lasts, which a capped step of the audit counts its turns in
+        (:mod:`maintenance.services.drain`): the time between two firings of an alias, a month taken as 30 days and a
+        year as 365. A cron expression states no one period, so its window is the hour, the unit its hour field counts
+        in: one that fires every hour, or more often, takes one share an hour."""
+        return _ALIAS_PERIOD_SECONDS.get(self.audit_schedule, _HOUR_SECONDS)
 
     @property
     def max_seconds_by_kind(self) -> dict[str, float]:
@@ -423,8 +445,9 @@ class MaintenanceSettings(SignatureDoorSettings, MaintenanceStore, MaintenanceCa
     tuple_rebuild_dry_run: bool = Field(default=True, alias="MAINTENANCE_TUPLE_REBUILD_DRY_RUN")
     #: Per-tick ceiling on tuples written. The remainder is REPORTED (`RebuildReport.capped`). A
     #: wholesale tuple loss makes every tenant eligible at once, and an uncapped pass would turn one
-    #: cron fire into an estate-wide authorization write.
-    tuple_rebuild_max_per_tick: int = Field(default=50, ge=1, le=5000, alias="MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK")
+    #: cron fire into an estate-wide authorization write. Bounded by what one request to the catalog's
+    #: door names: the pass sends one, and the door refuses a longer list whole.
+    tuple_rebuild_max_per_tick: int = Field(default=50, ge=1, le=MAX_OBJECTS_PER_REQUEST, alias="MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK")
 
     #: [[LH-061]]'s REPAIR half — revoking tuples whose object no longer exists. OFF and DRY-RUN by
     #: default, the same two flags the rebuild and the floor raise carry, and for the same reason:
@@ -436,8 +459,9 @@ class MaintenanceSettings(SignatureDoorSettings, MaintenanceStore, MaintenanceCa
     drift_repair_enabled: bool = Field(default=False, alias="MAINTENANCE_DRIFT_REPAIR_ENABLED")
     drift_repair_dry_run: bool = Field(default=True, alias="MAINTENANCE_DRIFT_REPAIR_DRY_RUN")
     #: Capped per tick so a first armed run on an estate carrying [[LH-148]]'s 1,033 ghost tables
-    #: revokes a reviewable batch rather than sweeping the backlog in one unreviewable write.
-    drift_repair_max_per_tick: int = Field(default=50, ge=1, le=5000, alias="MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK")
+    #: revokes a reviewable batch rather than sweeping the backlog in one unreviewable write. Bounded by
+    #: what one request to the catalog's door names: the pass sends one, and the door refuses a longer list whole.
+    drift_repair_max_per_tick: int = Field(default=50, ge=1, le=MAX_OBJECTS_PER_REQUEST, alias="MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK")
 
     #: [[LH-061]]'s STORAGE tier — removing an orphaned trash record once the bytes it names are
     #: PROVEN gone. `repair.py` refuses `orphaned_trash` because the record is the only remaining
@@ -449,6 +473,11 @@ class MaintenanceSettings(SignatureDoorSettings, MaintenanceStore, MaintenanceCa
     #: Capped per tick because the probe is one listing PER RECORD — 989 of them in a single tick would
     #: turn a reconcile pass into a whole-estate scan, which is the cost this service exists to bound.
     tombstone_sweep_max_per_tick: int = Field(default=50, ge=1, le=5000, alias="MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK")
+
+    #: The most drops past their deadline one audit's backstop asks the catalog to release, each one request. A trash
+    #: task releases a record at its own deadline (ADR 0198 §2), so the backstop meets only what no task released; the
+    #: remainder is reported (`TrashReleaseReport.capped`) and taken by a later audit.
+    trash_release_max_per_tick: int = Field(default=200, ge=1, le=5000, alias="MAINTENANCE_TRASH_RELEASE_MAX_PER_TICK")
 
     # --- Control-plane change-events (#79). The purge is a governance mutation, so it announces itself
     # on the SAME broadcast topic the catalog publishes to (`catalog.control.v1`). Off by default and

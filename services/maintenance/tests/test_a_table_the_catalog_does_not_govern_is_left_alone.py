@@ -57,7 +57,7 @@ def _execute(catalog: TestClient, maintain_one: Callable[..., DatasetResult], ur
 def _assert_left_alone(result: Any, uri: str, refused_added: list[tuple[int, dict[str, Any] | None]]) -> None:
     assert (result.error, result.refused_by) == (None, "table_not_governed"), (result.error, result.error_type, result.refused_by)
     assert result.refused, f"the refusal carries no reason: {result.refused!r}"
-    assert refused_added == [(1, {"refused_by": "table_not_governed"})], f"the refusal did not reach the refused counter: {refused_added}"
+    assert refused_added == [(1, {"lance.maintenance.refused_by": "table_not_governed"})], f"the refusal did not reach the refused counter: {refused_added}"
     assert len(lance.dataset(uri).versions()) == 6, "a table the catalog does not govern had its versions cleaned up"
 
 

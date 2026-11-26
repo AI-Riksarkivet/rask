@@ -1,7 +1,7 @@
 """Maintenance's replicas share one work queue, and a dead replica's task goes to another ([[LH-494]] closes-when (b),
 ADR 0198 §2).
 
-The service's own worker (`maintenance.services.queue.Worker` over `TaskQueue`) on the bus the lane stands up: the NATS
+The service's own worker (`maintenance.services.queue_worker.Worker` over `TaskQueue`) on the bus the lane stands up: the NATS
 fixture's three-node nats-server cluster in operator mode, the chart's stream Job run as `admin`, which declares
 MAINTENANCE_TASKS, MAINTENANCE_SCHEDULES and their two durables at the chart's default replicas, a copy on every server as
 on the estate, and every worker connected as `maintenance-worker`, presenting only its pod's token and granted a session
@@ -113,34 +113,31 @@ from pydantic import BaseModel, SecretStr
 
 from lakehouse.events.control_emit import NoopControlEmitter
 from lakehouse.events.lineage_events import LANCE_FACET, DatasetUuids, with_dataset_uuids
-from lakehouse.process.supervision import EndProcess, end_process
+from lakehouse.process.supervision import EndProcess, Supervisor, end_process
 from lakehouse.records import location_claims
 from lakehouse.storage import store_session
 from lakehouse.storage.credential import S3KeyPair
 from maintenance.core.config import MaintenanceSettings
 from maintenance.core.lineage_emit import NoopEmitter
 from maintenance.core.metrics import ArrivalOutcome
-from maintenance.services import queue as worker_queue
+from maintenance.services import queue_worker as worker_queue
 from maintenance.services import tasks
 from maintenance.services.arrival import Arrivals
-from maintenance.services.queue import (
+from maintenance.services.queue import ClaimsBucketMissingError, TaskQueue
+from maintenance.services.queue_sampler import ARRIVALS_SAMPLED, SAMPLED_CONSUMERS, sample_queue
+from maintenance.services.queue_wire import (
     ARRIVALS_CONSUMER,
-    ARRIVALS_SAMPLED,
     ARRIVALS_STREAM,
     CLAIMS_BUCKET,
     INBOX_PREFIX,
-    SAMPLED_CONSUMERS,
     SCHEDULES_STREAM,
     STORE_EVENTS_STREAM,
     TASK_CONSUMER,
     TASKS_STREAM,
-    ClaimsBucketMissingError,
     Task,
     TaskKind,
-    TaskQueue,
-    Worker,
-    sample_queue,
 )
+from maintenance.services.queue_worker import Worker
 from maintenance.services.store_events import StoreEvents
 from tests.chart.chart_render import DEFAULT_ARGS, render
 
@@ -167,19 +164,19 @@ _RIG_GRANTS = Permissions(publish=("$JS.API.>", "$JS.ACK.>", "maintenance.due.>"
 _ACK_WAIT = 4
 _HEARTBEAT = 1
 #: The longest a fired follow-up waits for the task holding its table before it is moved again
-#: (`maintenance.services.queue`'s retry, 60 s), with room for the move and the pass.
+#: (`maintenance.services.queue_worker`'s retry, 60 s), with room for the move and the pass.
 _FOLLOW_UP_WAIT = 75.0
 #: Deliveries of one task before a worker ends it; the consumer allows one more, on which the task is ended unrun.
 _MAX_DELIVER = 2
 #: The exit a worker ends its process with once a pass runs past twice its bound, once the bus stops answering its
-#: heartbeats until the ack wait runs out, or once its drain ends with a pass still running (`maintenance.services.queue`).
+#: heartbeats until the ack wait runs out, or once its drain ends with a pass still running (`maintenance.services.queue_worker`).
 _HUNG_EXIT = 70
 #: How long a worker in a process of its own drains once told to stop.
 _DOOMED_DRAIN = 1.0
 #: How far into a worker's 5 s pull its task is put: past the 4 s ack wait, so a lease counted from the pull's sending
 #: would run out before the task's first heartbeat.
 _LATE_IN_PULL = 4.0
-#: How long a worker's pull waits at the server for a task (`maintenance.services.queue`).
+#: How long a worker's pull waits at the server for a task (`maintenance.services.queue_worker`).
 _FETCH_SECONDS = 5.0
 #: How long the link holds each frame a worker sends on its way to the broker: the time a slow path to the stream's leader
 #: adds, short of the heartbeat, within which a worker's claim and heartbeat must be answered.
@@ -191,11 +188,13 @@ _PULL_TRANSIT = 0.3
 _DOOMED = f"""
 import asyncio, logging, socket, sys
 from lakehouse.events.bus import BusSettings
+from lakehouse.process.supervision import Supervisor
 from opentelemetry._logs import set_logger_provider
 from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
 from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
-from maintenance.services.queue import TaskQueue, Worker
+from maintenance.services.queue import TaskQueue
+from maintenance.services.queue_worker import Worker
 
 silent = socket.socket()
 silent.bind(("127.0.0.1", 0))
@@ -211,7 +210,7 @@ said.setLevel(logging.WARNING)
 logging.getLogger().addHandler(said)
 
 async def main(url: str, max_pass: float) -> None:
-    queue = await TaskQueue.connect(url, BusSettings(), name="maintenance-worker")
+    queue = await TaskQueue.connect(url, BusSettings(), name="maintenance-worker", loops=Supervisor())
 
     finish = asyncio.Event()
 
@@ -239,10 +238,11 @@ asyncio.run(main(sys.argv[1], float(sys.argv[2])))
 _HOLDING = """
 import asyncio, sys
 from lakehouse.events.bus import BusSettings
+from lakehouse.process.supervision import Supervisor
 from maintenance.services.queue import TaskQueue
 
 async def main(url: str) -> None:
-    await TaskQueue.connect(url, BusSettings(), name="maintenance-worker")
+    await TaskQueue.connect(url, BusSettings(), name="maintenance-worker", loops=Supervisor())
     print("connected", flush=True)
     await asyncio.sleep(3600)
 
@@ -326,7 +326,7 @@ class _Replica:
             ended.append(event)
             raise _Ended(event)
 
-        queue = await TaskQueue.connect(url, pod.settings(url, session_seconds), name=_WORKER, end=closed)
+        queue = await TaskQueue.connect(url, pod.settings(url, session_seconds), name=_WORKER, loops=Supervisor(end=closed), end=closed)
         return cls(queue, name, runs, ready=ready, ended=ended)
 
     def _end_process(self, event: str, **extra: object) -> NoReturn:
@@ -537,7 +537,7 @@ class _Bus:
     async def queue(self, url: str | None = None, *, session_seconds: int = _LONG_SESSION) -> TaskQueue:
         """A worker's queue connection as a pod of its own opens it, presenting that pod's token."""
         target = url or self.rig.url
-        return await TaskQueue.connect(target, self.rig.pod(_WORKER).settings(target, session_seconds), name=_WORKER)
+        return await TaskQueue.connect(target, self.rig.pod(_WORKER).settings(target, session_seconds), name=_WORKER, loops=Supervisor())
 
     async def client(self, user: str, **kwargs: Any) -> Client:
         return await self.rig.client(user, **kwargs)
@@ -908,7 +908,7 @@ async def test_a_task_delivered_as_its_workers_pull_runs_out_runs_on_that_delive
     assert await lane.enqueue(_task("in-transit")) is True, fleet.bus.refusals()
 
     assert await _until(lambda: runs.times("in-transit") == 1, _ACK_WAIT + 15), f"the task never ran: {runs.ran}"
-    assert maintenance_metrics.by("maintenance.tasks.redelivered", "kind") == {}, (
+    assert maintenance_metrics.by("maintenance.tasks.redelivered", "lance.maintenance.kind") == {}, (
         "the task ran only on a second delivery: its first went to a pull its worker had stopped reading"
     )
 
@@ -1401,7 +1401,7 @@ async def test_a_store_event_whose_pass_is_held_is_acknowledged(store_events: _S
 
     assert await store_events.settled_after(1, 30), f"the event was not settled on its first delivery: {store_events.handled}"
     assert await store_events.follow_up_held("held"), "the event's table holds no pass"
-    assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"held": 1}
+    assert maintenance_metrics.by("maintenance.store_events.settled", "lance.maintenance.outcome") == {"held": 1}
 
 
 @pytest.mark.asyncio
@@ -1409,7 +1409,7 @@ async def test_a_store_event_that_is_no_store_event_is_ended_at_once(store_event
     await store_events.deliver(_write_event("held/data/b.lance", bucket=["b"]))
 
     assert await store_events.settled_after(1, 30), f"the event that is no store event was delivered again: {store_events.handled}"
-    assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"unreadable": 1}
+    assert maintenance_metrics.by("maintenance.store_events.settled", "lance.maintenance.outcome") == {"unreadable": 1}
 
 
 @pytest.mark.asyncio
@@ -1423,7 +1423,7 @@ async def test_a_store_event_whose_claim_the_store_refused_comes_back_after_its_
     assert await store_events.settled_after(2, 60), f"the event the store refused once was not settled: {store_events.handled}"
     assert 5 <= store_events.waits()[0] < 10, f"the refused event came back after {store_events.waits()} s, not after its retry delay"
     assert await store_events.follow_up_held("flaky"), "the event's table holds no pass once its claim was read"
-    assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"retried": 1, "held": 1}
+    assert maintenance_metrics.by("maintenance.store_events.settled", "lance.maintenance.outcome") == {"retried": 1, "held": 1}
 
 
 @pytest.mark.asyncio
@@ -1436,7 +1436,7 @@ async def test_a_store_event_the_store_refuses_on_every_delivery_is_ended_on_its
     waits = store_events.waits()
     assert 5 <= waits[0] < 10 and 11 <= waits[1] < 17, f"the refused event came back after {waits} s, not after each delivery's retry delay"
     assert not await store_events.follow_up_held("locked"), "an event that was ended held its table's pass"
-    assert maintenance_metrics.by("maintenance.store_events.settled", "outcome") == {"retried": 2, "ended": 1}
+    assert maintenance_metrics.by("maintenance.store_events.settled", "lance.maintenance.outcome") == {"retried": 2, "ended": 1}
 
 
 # --- commit announcements ---------------------------------------------------------------------------------------------
@@ -1519,7 +1519,7 @@ async def test_an_announcement_whose_pass_is_held_is_acknowledged(announcements:
 
     assert await announcements.settled_after(1, 30), f"the announcement was not settled on its first delivery: {announcements.handled}"
     assert await announcements.follow_up_held("held"), "the announcement's table holds no pass"
-    assert maintenance_metrics.by("maintenance.arrivals.settled", "outcome") == {"held": 1}
+    assert maintenance_metrics.by("maintenance.arrivals.settled", "lance.maintenance.outcome") == {"held": 1}
     assert announcements.lane_calls() == {
         f"$JS.API.CONSUMER.MSG.NEXT.{ARRIVALS_STREAM}.{ARRIVALS_CONSUMER}",
         f"$JS.ACK.{ARRIVALS_STREAM}.{ARRIVALS_CONSUMER}.>",
@@ -1531,7 +1531,7 @@ async def test_an_announcement_that_is_no_envelope_is_ended_at_once(announcement
     await announcements.deliver(b"no envelope")
 
     assert await announcements.settled_after(1, 30), f"the announcement that is no envelope was delivered again: {announcements.handled}"
-    assert maintenance_metrics.by("maintenance.arrivals.settled", "outcome") == {"unreadable": 1}
+    assert maintenance_metrics.by("maintenance.arrivals.settled", "lance.maintenance.outcome") == {"unreadable": 1}
 
 
 @pytest.mark.asyncio
@@ -1545,7 +1545,7 @@ async def test_an_announcement_whose_claim_the_store_refuses_comes_back_after_it
     assert await announcements.settled_after(_MAX_DELIVER, 60), f"the announcement the store refused on every delivery was not ended: {announcements.handled}"
     assert 5 <= announcements.waits()[0] < 10, f"the refused announcement came back after {announcements.waits()} s, not after its retry delay"
     assert not await announcements.follow_up_held("locked"), "an announcement that was ended held its table's pass"
-    assert maintenance_metrics.by("maintenance.arrivals.settled", "outcome") == {"retried": 1, "ended": 1}
+    assert maintenance_metrics.by("maintenance.arrivals.settled", "lance.maintenance.outcome") == {"retried": 1, "ended": 1}
 
 
 @pytest.mark.asyncio
@@ -1650,7 +1650,7 @@ async def test_a_task_whose_run_fails_on_its_last_delivery_is_ended_with_its_fai
         return len(runs) == _MAX_DELIVER and not await queue.held("task", "table")
 
     assert await _until(ended, 30), f"the failing task was not ended on its last delivery: {len(runs)} runs"
-    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "kind") for name in ("retried", "redelivered", "ended", "completed")}
+    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "lance.maintenance.kind") for name in ("retried", "redelivered", "ended", "completed")}
     assert counted == {"retried": {"table": _MAX_DELIVER - 1}, "redelivered": {"table": _MAX_DELIVER - 1}, "ended": {"table": 1}, "completed": {}}
     ended_by = [record.exc_info[0] for record in caplog.records if record.message == "maintenance_task_ended" and record.exc_info]
     assert ended_by == [failure], f"the ended task's failure was not logged with its traceback: {ended_by}"
@@ -1688,7 +1688,9 @@ async def test_a_message_on_the_queue_that_is_no_task_is_ended_without_running(f
     await writer.nc.publish("maintenance.task.table.garbage", b"no task")
     await writer.settle()
 
-    assert await _until(lambda: maintenance_metrics.by("maintenance.tasks.ended", "kind") == {"unreadable": 1}, 30), "the message that is no task was not ended"
+    assert await _until(lambda: maintenance_metrics.by("maintenance.tasks.ended", "lance.maintenance.kind") == {"unreadable": 1}, 30), (
+        "the message that is no task was not ended"
+    )
     assert runs == [], "a message that is no task was run"
 
 
@@ -1744,7 +1746,7 @@ async def test_a_task_a_pull_answers_as_its_worker_stops(fleet: _Fleet, maintena
 
     assert await _until(settled, 30), f"the task was never run and settled: ran by {ran}"
     assert ran == [taken_by]
-    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "kind") for name in ("wait", "redelivered", "retried")}
+    counted = {name: maintenance_metrics.by(f"maintenance.tasks.{name}", "lance.maintenance.kind") for name in ("wait", "redelivered", "retried")}
     assert counted == {"wait": {"table": 1}, "redelivered": {"table": 1} if taken_by == "next" else {}, "retried": {}}
 
 
@@ -2199,7 +2201,7 @@ class _Backlog:
 async def test_the_sampler_reads_each_streams_depth_and_age_and_each_durables_backlog_as_the_bus_holds_them(
     fleet: _Fleet, maintenance_metrics: Measured
 ) -> None:
-    """The worker's sampler (`maintenance.services.queue.sample_queue`), as `maintenance-worker` under the grants the
+    """The worker's sampler (`maintenance.services.queue_sampler.sample_queue`), as `maintenance-worker` under the grants the
     render issues, reads each stream's depth and its oldest message's age, and each durable's messages not yet delivered,
     deliveries awaiting an ack and redeliveries: a task running and one queued behind it, and a store event delivered
     twice and unsettled; and, where the commit lane runs, its consumer's, which holds nothing."""
@@ -2209,13 +2211,13 @@ async def test_the_sampler_reads_each_streams_depth_and_age_and_each_durables_ba
     unread = await sample_queue(lane, (*SAMPLED_CONSUMERS, ARRIVALS_SAMPLED))
 
     sampled_at = backlog.clock()
-    oldest = maintenance_metrics.by("maintenance.queue.oldest", "stream")
+    oldest = maintenance_metrics.by("maintenance.queue.oldest", "lance.maintenance.stream")
     assert unread == 0
-    assert maintenance_metrics.by("maintenance.queue.messages", "stream") == {TASKS_STREAM: 2, SCHEDULES_STREAM: 0, STORE_EVENTS_STREAM: 1}
+    assert maintenance_metrics.by("maintenance.queue.messages", "lance.maintenance.stream") == {TASKS_STREAM: 2, SCHEDULES_STREAM: 0, STORE_EVENTS_STREAM: 1}
     assert set(oldest) == {TASKS_STREAM, STORE_EVENTS_STREAM}
     assert abs(oldest[TASKS_STREAM] - (sampled_at - backlog.queued_at)) < 1.5, f"the oldest task's age read {oldest[TASKS_STREAM]:.1f} s"
     assert abs(oldest[STORE_EVENTS_STREAM] - (sampled_at - backlog.published_at)) < 1.5, f"the oldest event's age read {oldest[STORE_EVENTS_STREAM]:.1f} s"
-    assert {name: maintenance_metrics.by(f"maintenance.queue.{name}", "consumer") for name in ("waiting", "ack_pending", "redelivered")} == {
+    assert {name: maintenance_metrics.by(f"maintenance.queue.{name}", "lance.maintenance.consumer") for name in ("waiting", "ack_pending", "redelivered")} == {
         "waiting": {"maintenance-worker": 1, "maintenance-due": 0, "maintenance-store-events": 0, ARRIVALS_CONSUMER: 0},
         "ack_pending": {"maintenance-worker": 1, "maintenance-due": 0, "maintenance-store-events": 1, ARRIVALS_CONSUMER: 0},
         "redelivered": {"maintenance-worker": 0, "maintenance-due": 0, "maintenance-store-events": 1, ARRIVALS_CONSUMER: 0},
@@ -2230,9 +2232,9 @@ async def test_a_stream_the_sampler_cannot_read_keeps_its_gauges_at_their_last_v
     lane = await backlog.build(with_a_store_event=True)
     assert await sample_queue(lane) == 0
     last = (
-        maintenance_metrics.of("maintenance.queue.messages", stream=STORE_EVENTS_STREAM),
-        maintenance_metrics.of("maintenance.queue.oldest", stream=STORE_EVENTS_STREAM),
-        maintenance_metrics.of("maintenance.queue.ack_pending", consumer="maintenance-store-events"),
+        maintenance_metrics.of("maintenance.queue.messages", **{"lance.maintenance.stream": STORE_EVENTS_STREAM}),
+        maintenance_metrics.of("maintenance.queue.oldest", **{"lance.maintenance.stream": STORE_EVENTS_STREAM}),
+        maintenance_metrics.of("maintenance.queue.ack_pending", **{"lance.maintenance.consumer": "maintenance-store-events"}),
     )
     rig = await fleet.rig()
     dropped = await rig.request(f"$JS.API.STREAM.DELETE.{STORE_EVENTS_STREAM}")
@@ -2241,12 +2243,15 @@ async def test_a_stream_the_sampler_cannot_read_keeps_its_gauges_at_their_last_v
     unread = await sample_queue(lane)
 
     kept = (
-        maintenance_metrics.of("maintenance.queue.messages", stream=STORE_EVENTS_STREAM),
-        maintenance_metrics.of("maintenance.queue.oldest", stream=STORE_EVENTS_STREAM),
-        maintenance_metrics.of("maintenance.queue.ack_pending", consumer="maintenance-store-events"),
+        maintenance_metrics.of("maintenance.queue.messages", **{"lance.maintenance.stream": STORE_EVENTS_STREAM}),
+        maintenance_metrics.of("maintenance.queue.oldest", **{"lance.maintenance.stream": STORE_EVENTS_STREAM}),
+        maintenance_metrics.of("maintenance.queue.ack_pending", **{"lance.maintenance.consumer": "maintenance-store-events"}),
     )
     assert (unread, kept) == (2, last)
-    assert (maintenance_metrics.by("maintenance.queue.unsampled", "stream"), maintenance_metrics.by("maintenance.queue.unsampled", "consumer")) == (
+    assert (
+        maintenance_metrics.by("maintenance.queue.unsampled", "lance.maintenance.stream"),
+        maintenance_metrics.by("maintenance.queue.unsampled", "lance.maintenance.consumer"),
+    ) == (
         {TASKS_STREAM: 0, SCHEDULES_STREAM: 0, STORE_EVENTS_STREAM: 1},
         {"maintenance-worker": 0, "maintenance-due": 0, "maintenance-store-events": 1},
     )
@@ -2260,9 +2265,9 @@ async def test_a_task_is_timed_from_its_claim_to_its_acknowledgement(fleet: _Fle
 
     backlog.release.set()
 
-    timed = await _until(lambda: maintenance_metrics.of("maintenance.tasks.duration", kind="table") == 1, 15)
+    timed = await _until(lambda: maintenance_metrics.of("maintenance.tasks.duration", **{"lance.maintenance.kind": "table"}) == 1, 15)
     acked_by = backlog.clock()
-    total = maintenance_metrics.total("maintenance.tasks.duration", kind="table")
+    total = maintenance_metrics.total("maintenance.tasks.duration", **{"lance.maintenance.kind": "table"})
     assert timed and total is not None and released_at - backlog.started_at <= total <= acked_by - backlog.queued_at, f"the task ran {total} s by its count"
 
 
@@ -2276,9 +2281,9 @@ async def test_a_tasks_wait_is_timed_from_its_queuing_to_its_first_delivery(flee
 
     backlog.release.set()
 
-    waited = await _until(lambda: maintenance_metrics.of("maintenance.tasks.wait", kind="table") == 2, 15)
+    waited = await _until(lambda: maintenance_metrics.of("maintenance.tasks.wait", **{"lance.maintenance.kind": "table"}) == 2, 15)
     delivered_by = backlog.clock()
-    waits = maintenance_metrics.total("maintenance.tasks.wait", kind="table")
+    waits = maintenance_metrics.total("maintenance.tasks.wait", **{"lance.maintenance.kind": "table"})
     assert waited and waits is not None and released_at - backlog.published_at <= waits <= delivered_by - backlog.queued_at, (
         f"the two tasks waited {waits} s by their count"
     )

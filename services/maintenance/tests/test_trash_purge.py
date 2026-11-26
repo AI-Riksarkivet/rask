@@ -44,9 +44,11 @@ from lance_namespace import (
 )
 from pydantic import SecretStr
 from tests.control_emitter_double import ControlEmitterDouble
+from tests.exported_points import Exported
 from tests.integration.maintenance_vend_doors import CATALOG_URL, end_door, trash_doors
 
 from lakehouse.arrow_ipc import encode_arrow_stream
+from lakehouse.maintenance_doors import TrashRefusalRequest
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import base_registry, location_claims, trash
 from lakehouse.records.base_registry import BaseOrigin, BaseRole, RecordedBase
@@ -366,6 +368,26 @@ def test_a_location_outside_the_maintained_estate_is_refused(tmp_path: Path) -> 
     assert estate.record("team$orders") is not None
 
 
+def test_a_refusal_whose_reason_is_longer_than_a_note_takes_is_counted_and_reported_in_full(tmp_path: Path) -> None:
+    estate = _Estate(tmp_path)
+    location = f"file://{tmp_path / 'not-ours' / ('x' * 2000)}"
+    estate.put_record("team$orders", location=location)
+
+    out = _run(estate)
+
+    assert [(one.id, one.attempts, one.reason) for one in out.refused] == [
+        ("team$orders", 1, f"location {location!r} is outside the maintained estate (1 roots)")
+    ]
+    held = estate.record("team$orders")
+    assert held is not None
+    assert held.attempts == 1
+    assert held.last_refusal is not None
+    noted = held.last_refusal.reason
+    assert TrashRefusalRequest(reason=noted).reason == noted
+    assert (noted[:40], noted[-40:]) == (out.refused[0].reason[:40], out.refused[0].reason[-40:])
+    assert f" [{len(out.refused[0].reason)} characters, cut here to {len(noted)}] " in noted
+
+
 def test_a_store_root_location_is_refused(tmp_path: Path) -> None:
     """``location = "s3://bkt"`` would ``delete_dir`` a whole bucket. One malformed record, one estate."""
     estate = _Estate(tmp_path)
@@ -455,9 +477,9 @@ def _releases(estate: _Estate) -> tuple[bool, str | None]:
     return out.ran, out.reason
 
 
-def test_one_records_failed_release_holds_it_and_the_step_goes_on(tmp_path: Path, doors: respx.MockRouter) -> None:
+def test_one_records_failed_release_is_reported_as_failed_and_the_step_goes_on(tmp_path: Path, doors: respx.MockRouter) -> None:
     """The release promises "never raises" as the purge does, by construction: a record whose release fails in a way the
-    catalog's client answers for nothing is held naming its cause, and the record after it is released ([[LH-572]]).
+    catalog's client answers for nothing is reported failed with its cause, and the record after it is released ([[LH-572]]).
     Namespace records under no root, so each reaches the release door with nothing else deciding it first."""
     estate = _Estate(tmp_path)
     for name, days in (("team", 60), ("archive", 50)):
@@ -474,8 +496,57 @@ def test_one_records_failed_release_holds_it_and_the_step_goes_on(tmp_path: Path
 
     out = asyncio.run(trash_release.release_expired_trash(_settings(tmp_path, s3_bucket=""), control_root=estate.control_root, now=_NOW))
 
-    assert (len(out.held), len(out.released)) == (1, 1), out
-    assert out.held[0].reason.startswith("the release failed"), out.held[0].reason
+    # Which of the two is asked first follows the uuids they are filed under.
+    assert ([one.error for one in out.failed], {one.id for one in (*out.failed, *out.released)}, len(out.released), out.refused) == (
+        ["RuntimeError: the transport failed in a way the client does not wrap"],
+        {"team", "archive"},
+        1,
+        [],
+    ), out
+
+
+def test_the_backstop_releases_at_most_its_cap_and_says_how_many_it_left(tmp_path: Path, doors: respx.MockRouter) -> None:
+    estate = _Estate(tmp_path)
+    for name in ("a", "b", "c"):
+        estate.put_record(name, location="", kind="namespace", released=False, dropped_at=_NOW - timedelta(days=60))
+    settings = _settings(tmp_path, s3_bucket="", trash_release_max_per_tick=2)
+
+    out = asyncio.run(trash_release.release_expired_trash(settings, control_root=estate.control_root, now=_NOW))
+
+    assert (len(out.released), out.capped, doors.routes["release"].call_count) == (2, 1, 2), out
+
+
+def test_a_record_the_catalog_refuses_run_after_run_frees_its_slot_to_the_one_behind_it(tmp_path: Path, doors: respx.MockRouter) -> None:
+    """The catalog counts each refusal it judges on the record, as its release door does (``trash.note_refusal``)."""
+    estate = _Estate(tmp_path)
+    stuck = estate.put_record("stuck", location="", kind="namespace", released=False, dropped_at=_NOW - timedelta(days=60))
+    estate.put_record("behind", location="", kind="namespace", released=False, dropped_at=_NOW - timedelta(days=50))
+    answer = cast(Callable[..., httpx.Response], doors.routes["release"].side_effect)
+    why = "a live namespace holds the record's name again"
+
+    def _refusing_the_stuck_one(request: httpx.Request, kind: str, uuid: str) -> httpx.Response:
+        if uuid != stuck.uuid:
+            return answer(request, kind=kind, uuid=uuid)
+        trash.note_refusal(estate.control_root, StorageOptions(), uuid, kind="namespace", reason=why)
+        return httpx.Response(409, json={"code": 19, "detail": why})
+
+    doors.routes["release"].side_effect = _refusing_the_stuck_one
+    settings = _settings(tmp_path, s3_bucket="", trash_release_max_per_tick=1)
+
+    runs = [asyncio.run(trash_release.release_expired_trash(settings, control_root=estate.control_root, now=_NOW)) for _ in range(2)]
+
+    assert [([one.id for one in run.refused], [one.id for one in run.released], run.capped) for run in runs] == [(["stuck"], [], 1), ([], ["behind"], 1)]
+
+
+def test_a_record_the_backstop_holds_itself_takes_no_request_of_the_cap(tmp_path: Path, doors: respx.MockRouter) -> None:
+    estate = _Estate(tmp_path)
+    estate.put_record("unnamed", uuid="", location="", kind="namespace", released=False, dropped_at=_NOW - timedelta(days=60))
+    estate.put_record("behind", location="", kind="namespace", released=False, dropped_at=_NOW - timedelta(days=50))
+    settings = _settings(tmp_path, s3_bucket="", trash_release_max_per_tick=1)
+
+    out = asyncio.run(trash_release.release_expired_trash(settings, control_root=estate.control_root, now=_NOW))
+
+    assert ([one.id for one in out.refused], [one.id for one in out.released], out.capped) == (["unnamed"], ["behind"], 0), out
 
 
 @pytest.mark.parametrize(
@@ -672,7 +743,7 @@ def test_a_second_refusal_counts_up_rather_than_looking_like_the_first(tmp_path:
     record = estate.record(canonical)
     assert record is not None
     assert record.attempts == 2, f"the second refusal did not count up: {record}"
-    assert [r.attempts for r in out.refused] == [2], "the report does not carry the accumulated count"
+    assert [(r.uuid, r.attempts) for r in out.refused] == [(record.uuid, 2)], "the report does not carry the record's uuid and its accumulated count"
 
 
 def _a_refusal_the_catalog_cannot_note(estate: _Estate, doors: respx.MockRouter) -> tuple[str, str | None]:
@@ -842,21 +913,21 @@ def test_a_dry_run_tick_is_distinguishable_on_the_reclamation_counters(monkeypat
     """
     from maintenance.core import metrics as metrics_mod
 
-    seen: list[tuple[int, dict[str, object]]] = []
-
-    class _Counter:
-        def add(self, value: int, attributes: dict[str, object] | None = None) -> None:
-            seen.append((value, dict(attributes or {})))
-
-    for name in ("_trash_purged", "_trash_refused", "_trash_bytes", "_trash_planned"):
-        monkeypatch.setattr(metrics_mod, name, _Counter(), raising=False)
+    exported = Exported()
+    names = {"_trash_purged": "purged", "_trash_refused": "purge_refused", "_trash_bytes": "bytes_reclaimed", "_trash_planned": "purge_planned"}
+    for held, name in names.items():
+        monkeypatch.setattr(metrics_mod, held, exported.meter.create_counter(f"maintenance.trash.{name}"))
 
     metrics_mod.record_trash_purge(purged_by_kind={}, refused_by_kind={"table": 2}, bytes_reclaimed=0, planned_by_kind={"table": 3}, dry_run=True)
 
-    assert seen, "the counters recorded nothing at all"
-    assert all("lance.maintenance.dry_run" in attrs for _v, attrs in seen), f"a point carries no dry-run dimension: {seen}"
-    assert all(attrs["lance.maintenance.dry_run"] == "true" for _v, attrs in seen), seen
-    assert any(v == 3 for v, _a in seen), f"the planned count never reached a counter: {seen}"
+    preview = {"lance.maintenance.dry_run": "true"}
+    by_kind = [({**preview, "lance.maintenance.kind": kind}, count) for kind, count in (("namespace", 0), ("table", 0))]
+    assert {name: exported.points(f"maintenance.trash.{name}") for name in names.values()} == {
+        "purged": by_kind,
+        "purge_refused": [({**preview, "lance.maintenance.kind": "namespace"}, 0), ({**preview, "lance.maintenance.kind": "table"}, 2)],
+        "bytes_reclaimed": [(preview, 0)],
+        "purge_planned": [({**preview, "lance.maintenance.kind": "namespace"}, 0), ({**preview, "lance.maintenance.kind": "table"}, 3)],
+    }
 
 
 def test_the_purge_blocker_names_only_the_categories_that_actually_block() -> None:

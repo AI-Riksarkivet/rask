@@ -875,6 +875,10 @@ maintenance:
   # the next scan, so a backlog never becomes one unbounded delete storm against object storage.
   # -- Maximum trash records purged per tick; the remainder is reported as capped and drained next tick.
   trashPurgeMaxPerTick: 25
+  # ADR 0146: an audit's backstop releases the drops past their deadline that no trash task released, each one request
+  # to the catalog. The remainder is reported (`trash_release.capped`) and taken by a later audit.
+  # -- Maximum drops past their deadline one audit's backstop releases; the remainder is reported as capped.
+  trashReleaseMaxPerTick: 200 # @schema type: integer; minimum: 1; maximum: 5000
   # [[LH-094]] — raise a stranded table's Lance LISTING FLOOR so its residue becomes reclaimable.
   #
   # `cleanup_old_versions` lists `_transactions/` and `_deletions/` only up to the earliest retained
@@ -905,7 +909,7 @@ maintenance:
   # after a clean check, up to `ceilingDays`; an excluded table (a branch, MemWAL, an unsupported flag,
   # files through a base, too many versions or files) waits `ceilingDays`. A table's first pass holds its
   # first check a day out, and the hourly audit holds one for a table that has none. Each check logs one
-  # `maintenance_orphan_check` line and counts `maintenance.orphans.checks` by outcome.
+  # `maintenance_orphan_check` line and counts `maintenance.orphans.checks` by `lance.maintenance.outcome`.
   orphanCheck:
     # -- Run each table's orphan check; off, none is scheduled and one already held ends when it fires.
     enabled: true
@@ -933,9 +937,10 @@ maintenance:
   tupleRebuildDryRun: true
   # Per-tick ceiling on tuples written. A wholesale tuple loss makes every tenant eligible at once, so
   # an uncapped pass would turn one cron fire into an estate-wide authorization write. The remainder is
-  # reported (`tuple_rebuild.capped`).
+  # reported (`tuple_rebuild.capped`). At most 500: the pass sends its share as one request, and the catalog's door
+  # takes no more objects in one.
   # -- Maximum tuples the rebuild writes per tick; the remainder is reported as capped.
-  tupleRebuildMaxPerTick: 50
+  tupleRebuildMaxPerTick: 50 # @schema type: integer; minimum: 1; maximum: 500
   # [[LH-061]] — revoke authorization tuples whose OBJECT no longer exists.
   #
   # The destructive counterpart to `tupleRebuild` above, and the bound is what makes it safe: it
@@ -965,8 +970,9 @@ maintenance:
   # the next tick, so a large backlog drains over ticks instead of becoming one unreviewable batch of
   # authorization deletes. Edge cuts are NOT counted against it: one cut removes a single tuple from a
   # live object, and counting them here would let a backlog of ghosts starve the smaller, safer repair.
+  # At most 500: the pass sends its share as one request, and the catalog's door takes no more objects in one.
   # -- Maximum objects drift repair revokes per reconcile tick; the remainder is reported as capped and taken next tick.
-  driftRepairMaxPerTick: 50
+  driftRepairMaxPerTick: 50 # @schema type: integer; minimum: 1; maximum: 500
   # [[LH-061]]'s STORAGE tier — clear a trash record whose bytes are PROVEN gone.
   #
   # `driftRepair` refuses `orphaned_trash` because the record is the only remaining pointer to those
@@ -1166,14 +1172,14 @@ objectStore:
   # read and not acted on), `s3.bucket.name`, and `s3.object.key`, URL-encoded as S3 sends it (`+` is a space). Times,
   # sizes, ETags, version ids, the principal and the region are ignored, so a store may send them or not. A body that is
   # not JSON, or a record naming no bucket or no key, is ended unread and counted
-  # (`maintenance.store_events.settled{outcome="unreadable"}`, alert `MaintenanceStoreEventsEnded`). An event names a
+  # (`maintenance.store_events.settled{lance.maintenance.outcome="unreadable"}`, alert `MaintenanceStoreEventsEnded`). An event names a
   # key: the worker finds its table by the location claim of the key's root, and holds that table's pass.
   #
   # With events expected (the development store, or `provisioned` below), the hourly audit asks the store for each governed
   # bucket's event configuration (`GetBucketNotificationConfiguration`; maintenance's canned policy holds
   # `s3:GetBucketNotification`) and reports each with no `s3:ObjectCreated:*` rule over the whole bucket
-  # (`maintenance.store_event_buckets.checked` by outcome, alerts `MaintenanceBucketWithoutStoreEvents` and, for a bucket the
-  # store will not answer about, `MaintenanceBucketStoreEventsUnknown`). The answer proves the
+  # (`maintenance.store_event_buckets.checked` by `lance.maintenance.outcome`, alerts `MaintenanceBucketWithoutStoreEvents`
+  # and, for a bucket the store will not answer about, `MaintenanceBucketStoreEventsUnknown`). The answer proves the
   # configuration, not delivery: RustFS 1.0.3 takes a rule naming a target it does not have (measured 2026-11-10).
   events:
     # -- Attests that the platform's store (`objectStore.enabled=false`) delivers every object write of every rask bucket (`s3:ObjectCreated:*`) to the bus subject `store.events`, kept through a bus outage; the render refuses a platform store without it.
@@ -1424,8 +1430,8 @@ nats:
       # The maintenance worker's own user (ADR 0198 decision 5). Pull and ack on its durables, tasks and schedules
       # published, the two queue streams' info for the audit's count, and the claim a pass holds on its table in the
       # MAINTENANCE_CLAIMS bucket (created, renewed and released by revision); no stream or consumer is created or changed by
-      # it. Its replies arrive on an inbox of its own (`maintenance.services.queue.INBOX_PREFIX`), which no other user reads.
-      # Its sampler (`maintenance.services.queue.sample_queue`, every 15 s) reads only counts and times: each of its three
+      # it. Its replies arrive on an inbox of its own (`maintenance.services.queue_wire.INBOX_PREFIX`), which no other user reads.
+      # Its sampler (`maintenance.services.queue_sampler.sample_queue`, every 15 s) reads only counts and times: each of its three
       # streams' info (message count and oldest message's time; the two queue streams' grants serve the audit as well,
       # STORE_EVENTS's only the sampler) and each of its durables' info (deliveries awaiting an ack, redeliveries), no
       # other stream's or consumer's, and no message.

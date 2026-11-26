@@ -50,7 +50,8 @@ from maintenance.services import orphans
 from maintenance.services.floor import raise_listing_floor
 from maintenance.services.orphan_check import OrphanCheckIncompleteError
 from maintenance.services.orphans import OrphanFile
-from maintenance.services.queue import Task, TaskQueue
+from maintenance.services.queue import TaskQueue
+from maintenance.services.queue_wire import Task
 from maintenance.services.tasks import run_task
 from tests import seeding
 from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
@@ -508,7 +509,7 @@ def test_a_stranded_table_has_its_floor_raised_and_its_pass_held(
     status = door.calls.last.response.status_code if door.called else None
     assert (status, FLOOR_KEY in dataset.config(), follow_ups) == (answered, raised, [("table", task.uuid)] if raised else [])
     assert _next(queue, task, started) == ((24 * (RETENTION + DAY).days, RETENTION + DAY) if raised else (24, DAY))
-    assert counted_as == [{"outcome": outcome}]
+    assert counted_as == [{"lance.maintenance.outcome": outcome}]
 
 
 @pytest.mark.parametrize(

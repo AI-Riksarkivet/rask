@@ -164,9 +164,8 @@ class _Estate:
                 control_root=self.control_root,
                 namespace_root=self.namespace_root,
                 bucket_client=self.s3,
-                walk=False,
             )
-        )
+        ).report
 
 
 # --------------------------------------------------------------------------- #
@@ -373,7 +372,7 @@ def test_no_scan_is_capped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     assert "storage:buckets" in reasons and "ONE PAGE" in reasons["storage:buckets"]
     assert "status is not what a record holds" in reasons["registry:warehouses"]
     by_source = [(scan.source, scan.reason) for scan in report.incomplete if scan.source == "registry:projects"]
-    assert len(by_source) == 2 and any("unreadable" in reason for _, reason in by_source), by_source
+    assert len(by_source) == 2 and any(reason.endswith("zzz-corrupt.json cannot be read as a record") for _, reason in by_source), by_source
     assert any("deleting_by is not what a record holds" in reason for _, reason in by_source), by_source
     # ...and the run is still a full report, not a failure: every category was reached.
     assert set(report.counts) == set(mod.CATEGORIES) - {"unregistered_datasets", "absent_datasets"}
@@ -389,9 +388,8 @@ def test_a_missing_control_root_is_not_a_crash(tmp_path: Path, monkeypatch: pyte
             control_root=f"file://{tmp_path / 'nothing-here'}",
             namespace_root=f"file://{tmp_path / 'nothing-here'}",
             bucket_client=_FakeS3([]),
-            walk=False,
         )
-    )
+    ).report
     assert report.total == 0
     assert report.unavailable == []
 
@@ -407,9 +405,8 @@ def test_an_unwired_grant_census_is_reported_not_assumed_clean(tmp_path: Path, m
             control_root=estate.control_root,
             namespace_root=estate.namespace_root,
             bucket_client=estate.s3,
-            walk=False,
         )
-    )
+    ).report
     assert {u.category for u in report.unavailable} == _FGA_DERIVED_CATEGORIES
     assert all("no grant census" in u.reason for u in report.unavailable)
 

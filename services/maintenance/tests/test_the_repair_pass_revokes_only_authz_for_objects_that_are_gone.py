@@ -30,9 +30,12 @@ from pathlib import Path
 import httpx
 import pytest
 import respx
+from pydantic import ValidationError
 
+from lakehouse.maintenance_doors import MAX_OBJECTS_PER_REQUEST
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import repair
+from maintenance.services.outcomes import Refused
 from maintenance.services.reconcile import (
     GhostObject,
     OrphanBucket,
@@ -137,7 +140,7 @@ async def test_armed_asks_the_catalog_for_exactly_the_planned_objects_and_report
 
     assert sorted(json.loads(asked.calls.last.request.content)["objects"]) == ["project:gone-p", "table:ns$gone-t", "warehouse:gone-w"]
     assert sorted((r.fga_object, r.tuples) for r in out.revoked) == [("project:gone-p", 2), ("warehouse:gone-w", 2)]
-    assert out.kept_by_the_catalog == {"table:ns$gone-t": "a trash record keeps the table for its undrop"}
+    assert out.kept_by_the_catalog == [Refused(kind="table", id="ns$gone-t", reason="a trash record keeps the table for its undrop")]
 
 
 @pytest.mark.asyncio
@@ -158,6 +161,36 @@ async def test_the_cap_truncates_and_says_it_did(door: respx.MockRouter) -> None
     out = await _repair(_settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False, MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK=2))
 
     assert (len(out.revoked), out.capped, len(json.loads(asked.calls.last.request.content)["objects"])) == (2, 1, 2)
+
+
+@pytest.mark.asyncio
+async def test_a_ghost_the_catalog_keeps_holds_no_slot_from_one_run_to_the_next(door: respx.MockRouter) -> None:
+    asked = _revoking(door, kept="project:gone-p")
+    settings = _settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False, MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK=1)
+
+    for hour in range(8):
+        await repair.repair_drift(settings, report=_report().model_copy(update={"checked_at": f"2026-11-26T0{hour}:00:00Z"}))
+
+    assert {obj for call in asked.calls for obj in json.loads(call.request.content)["objects"]} == {"project:gone-p", "warehouse:gone-w", "table:ns$gone-t"}
+
+
+@pytest.mark.asyncio
+async def test_a_pass_at_the_largest_cap_sends_one_request_the_door_takes(door: respx.MockRouter) -> None:
+    asked = _revoking(door)
+    ghosts = [GhostObject(kind="project", id=f"gone-{n}", fga_object=f"project:gone-{n}", tuples=1) for n in range(MAX_OBJECTS_PER_REQUEST + 1)]
+    report = ReconcileReport(checked_at="2026-11-26T00:00:00Z", ghost_projects=ghosts)
+    settings = _settings(MAINTENANCE_DRIFT_REPAIR_DRY_RUN=False, MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK=MAX_OBJECTS_PER_REQUEST)
+
+    out = await repair.repair_drift(settings, report=report)
+
+    assert (len(out.revoked), out.capped, out.error, asked.call_count) == (MAX_OBJECTS_PER_REQUEST, 1, None, 1)
+
+
+@pytest.mark.parametrize("cap", ["MAINTENANCE_DRIFT_REPAIR_MAX_PER_TICK", "MAINTENANCE_TUPLE_REBUILD_MAX_PER_TICK"])
+def test_a_cap_above_what_one_request_names_is_refused_at_boot(cap: str) -> None:
+    """Each pass sends its share as one request, and the door refuses a longer list whole: such a cap would refuse every run."""
+    with pytest.raises(ValidationError, match=f"less than or equal to {MAX_OBJECTS_PER_REQUEST}"):
+        _settings(**{cap: MAX_OBJECTS_PER_REQUEST + 1})
 
 
 def test_a_clean_report_plans_nothing() -> None:

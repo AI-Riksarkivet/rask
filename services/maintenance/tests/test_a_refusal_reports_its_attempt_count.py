@@ -1,6 +1,6 @@
 """A reported refusal carries the attempt count that decides when it is next tried.
 
-[[LH-102]]. `due_from` orders the queue by `_drain_order` — attempts first, then `expires_at` — so a
+[[LH-102]]. `due_from` orders the queue by `drain_order` — attempts first, then `expires_at` — so a
 record that has been refused before sorts behind one that has not. That is the whole fix for a queue
 where 18 permanent refusals held 18 of the 25 per-tick slots forever.
 

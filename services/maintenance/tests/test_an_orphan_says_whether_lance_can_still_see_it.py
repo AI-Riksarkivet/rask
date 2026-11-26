@@ -64,7 +64,9 @@ def test_a_data_file_above_the_floor_is_still_lance_s_to_reclaim() -> None:
     orphan = Path(uri) / "data" / "stranded.lance"
     # Above the floor and in the past by the time cleanup runs, the estate's shape: an object rewritten
     # after the commit that last referenced it. A future mtime stays unlisted for an unrelated reason.
-    time.sleep(1.5)
+    deadline = time.monotonic() + 10
+    while time.time() <= orphan.stat().st_mtime and time.monotonic() < deadline:
+        time.sleep(0.05)
 
     scan = scan_dataset(pafs.LocalFileSystem(), uri, prefix=prefix)
 

@@ -25,18 +25,10 @@ from maintenance.core.metrics import create_orphan_check_series, create_signatur
 from maintenance.services.arrival import Arrivals
 from maintenance.services.audit import run_audit, run_scan
 from maintenance.services.orphan_check import FLOOR, run_orphan_check
-from maintenance.services.queue import (
-    ARRIVALS_SAMPLED,
-    BUS_USER,
-    SAMPLE_SECONDS,
-    SAMPLED_CONSUMERS,
-    QueueUnavailableError,
-    Task,
-    TaskKind,
-    TaskQueue,
-    Worker,
-    sample_queue,
-)
+from maintenance.services.queue import QueueUnavailableError, TaskQueue
+from maintenance.services.queue_sampler import ARRIVALS_SAMPLED, SAMPLE_SECONDS, SAMPLED_CONSUMERS, sample_queue
+from maintenance.services.queue_wire import BUS_USER, Task, TaskKind
+from maintenance.services.queue_worker import Worker
 from maintenance.services.store_events import StoreEvents
 from maintenance.services.table_pass import TableTask, emit_pass_lineage, emit_zero_baselines, run_table_pass
 from maintenance.services.trash_task import run_trash_task
@@ -90,9 +82,9 @@ async def _check_orphans(task: Task, *, settings: MaintenanceSettings, queue: Ta
 
 
 @asynccontextmanager
-async def connected_queue(settings: MaintenanceQueue) -> AsyncGenerator[TaskQueue | None]:
+async def connected_queue(settings: MaintenanceQueue, loops: Supervisor) -> AsyncGenerator[TaskQueue | None]:
     """The work queue, connected as this service's own bus user and drained on the way out; ``None`` for a stack with no
-    bus.
+    bus. ``loops`` keeps the renewal of the connection's session.
 
     The worker holds no bus credential: its connection presents this pod's own token (`lakehouse.events.bus.BusSettings`).
 
@@ -102,7 +94,7 @@ async def connected_queue(settings: MaintenanceQueue) -> AsyncGenerator[TaskQueu
     if not settings.nats_url:
         yield None
         return
-    queue = await TaskQueue.connect(settings.nats_url, BusSettings(), name=BUS_USER)
+    queue = await TaskQueue.connect(settings.nats_url, BusSettings(), name=BUS_USER, loops=loops)
     try:
         yield queue
     finally:
@@ -129,19 +121,28 @@ async def running_worker(
     cadence is a clock, so asserting it again moves no firing.
 
     On the way out the worker finishes the task it is running, within ``drain_seconds``, before the connection drains:
-    a task cut short is delivered to another replica once its heartbeat stops. A worker that cannot start, because the
+    a task cut short is delivered to another replica once its heartbeat stops. No loop's end ends the process while it
+    drains, the session's renewal included. A worker that cannot start, because the
     bus refuses its cadences or holds no claims bucket, leaves the connection closed all the same.
 
     Raises:
         OSError: The pod's token is not there to read.
         ClaimsBucketMissingError: The bus holds no claims bucket.
     """
-    async with connected_queue(settings) as queue:
+    # The session's renewal has a supervisor of its own, entered before the connection and left after it: the worker's
+    # loops are drained on the way out (`_worker_on`), and the renewal runs until the connection closes.
+    async with Supervisor(end=end) as session, connected_queue(settings, session) as queue:
         if queue is None:
             yield None
             return
         async with _worker_on(queue, settings, ready=ready, emitter=emitter, control=control, end=end):
-            yield queue
+            try:
+                yield queue
+            finally:
+                # The renewal goes on through the drain, which a session's end would cut, but its fault ends nothing
+                # from here: ending the process would cut the pass the drain lets finish, and a session the bus ends
+                # unrenewed ends the process all the same (`TaskQueue.connect`).
+                session.wind_down()
 
 
 @asynccontextmanager
@@ -215,7 +216,7 @@ async def _keep_cadences(worker: Worker, queue: TaskQueue, settings: Maintenance
 
 async def _sample_queue(worker: Worker, queue: TaskQueue, consumers: Collection[tuple[str, str]]) -> None:
     """Sample the queue's streams and ``consumers`` into their gauges every ``SAMPLE_SECONDS`` until the worker stops, the
-    first at once (:func:`maintenance.services.queue.sample_queue`)."""
+    first at once (:func:`maintenance.services.queue_sampler.sample_queue`)."""
     while not worker.stopping():
         await sample_queue(queue, consumers)
         await worker.pause(SAMPLE_SECONDS)

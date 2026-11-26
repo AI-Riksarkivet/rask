@@ -38,7 +38,7 @@ from catalog.api import control_lane
 from lakehouse.events.bus import BusSettings
 from lakehouse.events.control_events import CONTROL_TOPIC
 from lineage.api import ingest_lane
-from maintenance.services import queue
+from maintenance.services import queue_wire
 from tests.chart import chart_render
 from tests.chart.chart_render import DEFAULT_ARGS, OIDC_ARGS, render
 from tests.chart.test_no_chart_owned_manifest_renders_a_null import _overlays
@@ -59,10 +59,10 @@ _ADMIN = "admin"
 #: The consumers maintenance's worker pulls on the work queue's connection.
 _WORKERS = frozenset(
     {
-        (queue.TASKS_STREAM, queue.TASK_CONSUMER),
-        (queue.SCHEDULES_STREAM, queue.DUE_CONSUMER),
-        (queue.STORE_EVENTS_STREAM, queue.STORE_EVENTS_CONSUMER),
-        (queue.ARRIVALS_STREAM, queue.ARRIVALS_CONSUMER),
+        (queue_wire.TASKS_STREAM, queue_wire.TASK_CONSUMER),
+        (queue_wire.SCHEDULES_STREAM, queue_wire.DUE_CONSUMER),
+        (queue_wire.STORE_EVENTS_STREAM, queue_wire.STORE_EVENTS_CONSUMER),
+        (queue_wire.ARRIVALS_STREAM, queue_wire.ARRIVALS_CONSUMER),
     }
 )
 #: The renders whose publishers and lanes differ from the deployed overlays': the control topic's optional publisher,
@@ -139,7 +139,7 @@ def _own_connection_problems(docs: tuple[dict, ...], users: Users, streams: dict
             env = chart_render.env_of(container)
             workload = f"{doc['kind']}/{doc['metadata']['name']}"
             if "MAINTENANCE_NATS_URL" in env:
-                problems += _session_problems(doc, container, queue.BUS_USER, sessions)
+                problems += _session_problems(doc, container, queue_wire.BUS_USER, sessions)
             user = env.get("RASK_BUS_USER")
             if user is None:
                 continue
@@ -190,7 +190,7 @@ def _lane_problems(docs: tuple[dict, ...], users: Users) -> list[str]:
     declared = chart_render.bus_consumers(docs)
     lineage = _named(docs, "lineage").get("RASK_BUS_USER")
     for stream, name in sorted(declared):
-        puller = lineage if (stream, name) == (ingest_lane.STREAM, ingest_lane.CONSUMER) else queue.BUS_USER if (stream, name) in _WORKERS else None
+        puller = lineage if (stream, name) == (ingest_lane.STREAM, ingest_lane.CONSUMER) else queue_wire.BUS_USER if (stream, name) in _WORKERS else None
         if puller is None:
             problems.append(f"the stream Job declares {stream}/{name}, which no service is configured to pull")
             continue

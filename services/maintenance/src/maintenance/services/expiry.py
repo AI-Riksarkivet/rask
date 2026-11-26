@@ -11,6 +11,7 @@ runs ([[LH-575]]). Every gate here guards one of those deletes.
 import logging
 from contextlib import AbstractContextManager, nullcontext
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from typing import Final, Literal
 
 import lance
@@ -49,6 +50,18 @@ type Gate = Literal["manifest_flags", "invalid_ref", "nested_branch", "governed_
 #: (:mod:`maintenance.services.due`): ``due`` wrote its record, ``clear`` deleted it, ``unnamed`` found no
 #: ``__manifest`` row naming the dataset, ``failed`` could not decide and left the record as it was.
 type DueVerdict = Literal["due", "clear", "unnamed", "failed"]
+
+
+class FailedAt(StrEnum):
+    """The step of a pass that failed. A failure's lineage lane is decided by it: a dataset that would not open emits
+    nothing, one whose maintenance failed emits FAIL, and any other leaves what the pass did reclaim to be announced."""
+
+    OPEN = "open"
+    REFS = "refs"
+    MAINTAIN = "maintain"
+    AUTO_CLEANUP = "auto_cleanup"
+    COMMITTED_FILES = "committed files"
+
 
 #: Why a pass that would delete did not run this tick: a write of the table's tags or branches held its history ([[LH-308]]).
 HISTORY_FENCED: Final = "history_fenced"
@@ -94,9 +107,12 @@ class DatasetResult(BaseModel):
     #: The uuids of that table and its namespace, read for a pass whose lineage event names them (ADR 0173 §10).
     uuids: DatasetUuids = Field(default_factory=DatasetUuids)
     due: DueVerdict | None = None
+    #: What failed, as its log line and the FAIL event's message carry it: the step, then the cause.
     error: str | None = None
     #: The exception CLASS name, never the message: a stable identifier for span aggregation.
     error_type: str | None = None
+    #: The step that failed; ``None`` when none did.
+    failed_at: FailedAt | None = None
     #: Wall-clock seconds the pass took, or ``None`` when nothing was attempted ([[LH-098]]).
     duration_seconds: float | None = None
 
@@ -105,6 +121,11 @@ class DatasetResult(BaseModel):
         self.refused = reason
         self.refused_by = gate
         self.refused_table_id = table_id
+
+    def fail(self, step: FailedAt, cause: BaseException) -> DatasetResult:
+        """This result, failed at ``step`` by ``cause``."""
+        self.error, self.error_type, self.failed_at = f"{step}: {cause}", type(cause).__name__, step
+        return self
 
     def refuse(self, reason: str, *, gate: Gate) -> DatasetResult:
         """This result, refused by ``gate``."""
@@ -217,9 +238,7 @@ def _refuse_a_branch_with_branches_inside(opened: _Opened, uri: str) -> DatasetR
     try:
         nested = _branches_inside(opened.ds, uri)
     except Exception as exc:  # noqa: BLE001 — a per-dataset result: the error and its type are the dataset's to report
-        failed = opened.result(uri)
-        failed.error, failed.error_type = f"refs: {exc}", type(exc).__name__
-        return failed
+        return opened.result(uri).fail(FailedAt.REFS, exc)
     if not nested:
         return None
     log.warning("maintenance_refused_nested_branch", extra={"uri": uri, "nested": nested})
@@ -282,7 +301,7 @@ def _open(target: ExpiryTarget, opener: DatasetOpener | None = None) -> _Opened 
         )
     except Exception as exc:  # noqa: BLE001 — a per-dataset result: a refusal, or the error and its type, for the dataset
         if (refusal := unsupported_features_from_open_error(exc)) is None:
-            return DatasetResult(uri=target.uri, error=f"open: {exc}", error_type=type(exc).__name__)
+            return DatasetResult(uri=target.uri).fail(FailedAt.OPEN, exc)
         log.warning("maintenance_refused_unsupported_features", extra={"uri": target.uri, "reason": refusal})
         refused = DatasetResult(uri=target.uri, mixed_data_file_versions=mixes_data_file_versions(flags_from_open_error(exc) or 0))
         return refused.refuse(refusal, gate="manifest_flags")
@@ -464,8 +483,7 @@ def _record_failure(result: DatasetResult, exc: BaseException) -> None:
         log.warning("maintenance_ref_unmaintainable", extra={"uri": result.uri, "reason": str(exc)})
         result.refuse(str(exc), gate=gate)
         return
-    result.error = f"maintain: {exc}"
-    result.error_type = type(exc).__name__
+    result.fail(FailedAt.MAINTAIN, exc)
 
 
 def expire_versions(target: ExpiryTarget, policy: ExpiryPolicy, *, opener: DatasetOpener | None = None) -> DatasetResult:

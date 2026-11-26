@@ -49,7 +49,8 @@ from lakehouse.storage.objectfs import lance_storage_options
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import credentials, table_pass
 from maintenance.services.expiry import DatasetResult
-from maintenance.services.queue import Task, TaskQueue
+from maintenance.services.queue import TaskQueue
+from maintenance.services.queue_wire import Task
 from maintenance.services.store_events import StoreEvents
 from maintenance.services.table_pass import TableTask
 from tests import seeding

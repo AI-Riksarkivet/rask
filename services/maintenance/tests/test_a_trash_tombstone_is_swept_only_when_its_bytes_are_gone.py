@@ -30,6 +30,7 @@ from lakehouse.records.base_registry import BaseOrigin, BaseRegistry, BaseRole, 
 from lakehouse.storage.options import StorageOptions
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import tombstones
+from maintenance.services.outcomes import Failed
 from maintenance.services.purge import held_by
 from maintenance.services.reconcile import OrphanedTrash, ReconcileReport
 
@@ -98,8 +99,8 @@ def test_a_record_whose_bytes_stand_only_in_its_data_directories_is_refused(tmp_
         ReconcileReport(checked_at="2026-09-20T00:00:00Z", orphaned_trash=[finding]), probe=partial(held_by, storage_options=options, registry=registry)
     )
 
-    assert (planned, list(refused)) == ([], ["ns$t"]), (planned, refused)
-    assert "still holds 1 object" in refused["ns$t"], refused
+    assert (planned, [(one.kind, one.id, one.uuid) for one in refused]) == ([], [("table", "ns$t", _GONE_UUID)]), (planned, refused)
+    assert "still holds 1 object" in refused[0].reason, refused
 
 
 def test_a_dry_run_plans_and_deletes_nothing() -> None:
@@ -141,3 +142,59 @@ def test_the_cap_truncates_and_says_it_did() -> None:
     out = tombstones.sweep_tombstones(_settings(MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK=2), report=many, probe=lambda _finding: 0, delete=_Deleter())
 
     assert len(out.swept) == 2 and out.capped == 3
+
+
+def _held_then_empty() -> list[OrphanedTrash]:
+    """Two drops of one name whose places still hold bytes, listed ahead of a record whose place is empty."""
+    return [
+        OrphanedTrash(id="ns$t", uuid="held-1", kind="table", location=_ALIVE),
+        OrphanedTrash(id="ns$t", uuid="held-2", kind="table", location=_ALIVE),
+        OrphanedTrash(id="ns$u", uuid="empty", kind="table", location=_GONE),
+    ]
+
+
+def test_records_refused_for_good_hold_no_slot_from_one_run_to_the_next() -> None:
+    settings = _settings(MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK=2)
+    runs = [ReconcileReport(checked_at=f"2026-11-26T0{hour}:00:00Z", orphaned_trash=_held_then_empty()) for hour in range(4)]
+
+    swept = {s.uuid for report in runs for s in tombstones.sweep_tombstones(settings, report=report, probe=_probe, delete=_Deleter()).swept}
+
+    assert swept == {"empty"}
+
+
+def test_an_audit_that_fires_daily_takes_the_next_share_each_day() -> None:
+    settings = _settings(MAINTENANCE_TOMBSTONE_SWEEP_MAX_PER_TICK=2, MAINTENANCE_AUDIT_SCHEDULE="@daily")
+    probed: set[str] = set()
+
+    def _probing(finding: OrphanedTrash) -> int:
+        probed.add(finding.uuid)
+        return _probe(finding)
+
+    for day in (26, 27):
+        report = ReconcileReport(checked_at=f"2026-11-{day}T00:00:00Z", orphaned_trash=_held_then_empty())
+        tombstones.sweep_tombstones(settings, report=report, probe=_probing, delete=_Deleter())
+
+    assert probed == {"held-1", "held-2", "empty"}
+
+
+def test_two_drops_of_one_name_are_each_refused_by_their_own_record() -> None:
+    report = ReconcileReport(checked_at="2026-11-26T00:00:00Z", orphaned_trash=_held_then_empty())
+
+    out = tombstones.sweep_tombstones(_settings(), report=report, probe=_probe, delete=_Deleter())
+
+    assert sorted(one.uuid or "" for one in out.refused) == ["held-1", "held-2"]
+
+
+def test_every_record_whose_end_fails_is_named_with_its_failure() -> None:
+    report = ReconcileReport(
+        checked_at="2026-11-26T00:00:00Z",
+        orphaned_trash=[OrphanedTrash(id="ns$t", uuid=uuid, kind="table", location=_GONE) for uuid in ("first", "second")],
+    )
+
+    def _failing(record: tombstones.Tombstone) -> None:
+        raise OSError(f"the door did not answer for {record.uuid}")
+
+    out = tombstones.sweep_tombstones(_settings(MAINTENANCE_TOMBSTONE_SWEEP_DRY_RUN=False), report=report, probe=_probe, delete=_failing)
+
+    assert out.failed == [Failed(kind="table", id="ns$t", uuid=uuid, error=f"OSError: the door did not answer for {uuid}") for uuid in ("first", "second")]
+    assert out.swept == []

@@ -330,7 +330,7 @@ worker: a task handed back after its run failed (`maintenance.tasks.retried`, by
 claim on its table to its acknowledgement (`maintenance.tasks.duration`), how each store event was settled
 (`maintenance.store_events.settled`: held, ignored, retried, unreadable, ended) and a fired schedule the queue refused
 (`maintenance.schedules.not_queued`). Sampled each minute by one more supervised loop of the worker
-(`maintenance.services.queue.sample_queue`): each of the three streams' message count, the oldest message's age on
+(`maintenance.services.queue_sampler.sample_queue`): each of the three streams' message count, the oldest message's age on
 MAINTENANCE_TASKS and STORE_EVENTS, and each durable's deliveries awaiting an ack and redeliveries. The worker's bus user
 gained exactly the three reads that needs it lacked: STORE_EVENTS's stream info and its three durables' consumer info.
 The alerts: a task waiting six hours of the 24 the stream keeps it (`MaintenanceTaskAging`), a store event ended or

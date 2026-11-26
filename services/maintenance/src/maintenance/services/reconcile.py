@@ -33,11 +33,9 @@ parse is reported as an incomplete scan, never allowed to void a category.
 """
 
 import asyncio
-import json
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from datetime import UTC, datetime
-from functools import partial
 from typing import TYPE_CHECKING, Any, Final
 
 import pyarrow.fs as pafs
@@ -48,7 +46,7 @@ from lakehouse.governed import fga_reads
 from lakehouse.lancekit.base_refs import decoded_path, normalise
 from lakehouse.lancekit.lance_session import open_dataset
 from lakehouse.naming import CATALOG_DELIMITER
-from lakehouse.records import control_prefixes, location_claims, project_records, trash, warehouse_records
+from lakehouse.records import control_prefixes, location_claims, project_records, record_store, trash, warehouse_records
 from lakehouse.records.project_records import ProjectRecord, UnreadableProjectRecordError
 from lakehouse.records.trash import TrashKind, TrashRecord, UnreadableTrashRecordError
 from lakehouse.records.warehouse_records import UnreadableWarehouseRecordError, WarehouseRecord
@@ -345,10 +343,11 @@ def _list_json_records(
 ) -> tuple[list[dict[str, str]], list[str]]:
     """Every readable JSON record directly under ``<root>/<prefix>``, plus a reason per record SKIPPED.
 
-    Non-recursive, so ``_warehouses`` does not swallow ``_warehouses/bucket-claims``. Per-record tolerance
-    matches the catalog's own listings — but here a skip is not merely survived, it is REPORTED: a
-    record this cannot read is a tenant it cannot see, and a category computed without it may name a
-    live object as drift.
+    Read through the registries' one listing (:func:`lakehouse.records.record_store.read_listing`): non-recursive, so
+    ``_warehouses`` does not swallow ``_warehouses/bucket-claims``, and a record deleted between the listing and its
+    read is no record, so a trash record purged or undropped mid-scan leaves the scan whole. A record that is there and
+    cannot be read as one is REPORTED, never merely survived: it is a tenant this scan cannot see, and a category
+    computed without it may name a live object as drift.
 
     PRESENT AND EMPTY IS NOT MISSING, and the two rules are separate because the trash registry needs
     both at once. ``required`` asks only that the key EXIST; ``non_empty`` additionally asks that it
@@ -357,31 +356,22 @@ def _list_json_records(
     nothing. A single truthiness test cannot express that, and the cost of getting it wrong is not
     cosmetic: every skip becomes an `IncompleteScan`, and `purge.py::report_is_clean` refuses to
     certify an estate with ANY incomplete entry, so correctly-written records disable the reclaimer.
+
+    Raises:
+        OSError: The store did not answer the listing or a record's read. The caller reports the source unavailable:
+            skipped as one unreadable record, an outage would read as a corrupt record, which no retry mends.
     """
-    fs, base = fs_and_base(root, storage_options)
+    listing = record_store.read_listing(root, storage_options, prefix, event="reconcile_record")
     records: list[dict[str, str]] = []
-    skipped: list[str] = []
-    for info in fs.get_file_info(pafs.FileSelector(f"{base}/{prefix}", allow_not_found=True, recursive=False)):
-        if info.type != pafs.FileType.File or not info.path.endswith(".json"):
-            continue
-        try:
-            with fs.open_input_stream(info.path) as stream:
-                record = json.loads(stream.readall().decode("utf-8"))
-        except Exception as exc:
-            # ONE RECORD, NOT THE SOURCE: whatever kept this record from being read, it is reported as skipped and the
-            # rest are read, so the listing names what it could not see rather than seeing nothing.
-            log.warning("reconcile_record_unreadable", extra={"record": info.path}, exc_info=exc)
-            skipped.append(f"{info.path} is unreadable ({type(exc).__name__}: {exc})")
-            continue
-        if not isinstance(record, dict):
-            skipped.append(f"{info.path} is not a JSON object")
-        elif absent := [key for key in required if key not in record]:
-            skipped.append(f"{info.path} is missing {absent}")
+    skipped = [f"{path} cannot be read as a record" for path in listing.unreadable]
+    for path, record in listing.records:
+        if absent := [key for key in required if key not in record]:
+            skipped.append(f"{path} is missing {absent}")
         elif blank := [key for key in non_empty if not record.get(key)]:
             # NAMED SEPARATELY from an absent key: "present but blank" and "not there at all" are
             # different defects at the writer, and an operator chasing one should not be handed the
             # other's wording.
-            skipped.append(f"{info.path} carries an empty {blank}")
+            skipped.append(f"{path} carries an empty {blank}")
         else:
             records.append(record)
     return records, skipped
@@ -1088,7 +1078,7 @@ def _scannable_buckets(report: ReconcileReport, settings: MaintenanceStore, sour
     invisible to the configured list alone (#81): a walk of that list would report no unregistered dataset for them, and
     a zero in a drift report is read as "checked and clean".
 
-    Reuses the registry `_read_sources` ALREADY loaded rather than reading it again. Two reads would
+    Reuses the registry :func:`load_sources` ALREADY loaded rather than reading it again. Two reads would
     be two answers — the second could disagree with the one `orphan_buckets` and `orphaned_trash`
     were computed from, and a report whose categories disagree about which warehouses exist is worse
     than one that is merely incomplete.
@@ -1168,21 +1158,23 @@ def _registration_drift(report: ReconcileReport, sources: Sources, datasets: lis
             )
 
 
-def _walk_storage(report: ReconcileReport, settings: MaintenanceStore, sources: Sources, *, walk: bool) -> None:
+def _skip_walk(report: ReconcileReport) -> None:
+    """Say that this run walked no storage: both of the walk's categories are SKIPPED with the reason, never a zero,
+    since a 0 that means "we did not look" is the one number this report must never print."""
+    report.skipped.extend(CategorySkipped(category=category, reason=_UNWALKED) for category in WALK_CATEGORIES)
+
+
+def _walk_storage(report: ReconcileReport, settings: MaintenanceStore, sources: Sources) -> None:
     """Walk every bucket for its datasets and attach the two registration categories, or say why they are absent.
 
     The walk lists directories, about two requests per directory, so it grows with the estate: the daily scan runs it
-    and the hourly audit does not (``walk``), and a run that does not walk SKIPS both categories with the reason, never
-    a zero, since a 0 that means "we did not look" is the one number this report must never print. What is inside each
-    dataset (its unreferenced files) is no part of this report.
+    and the hourly audit does not (:func:`_skip_walk`). What is inside each dataset (its unreferenced files) is no part
+    of this report.
 
     Every storage call is guarded, like every other source in this module: a drift report that 500s on one bad store
     tells you nothing about the other categories. A failure is UNAVAILABLE with the reason, or a ``storage:<bucket>``
     note in ``incomplete``, and both block the purge (:func:`maintenance.services.purge.report_is_clean`).
     """
-    if not walk:
-        report.skipped.extend(CategorySkipped(category=category, reason=_UNWALKED) for category in WALK_CATEGORIES)
-        return
     buckets = _scannable_buckets(report, settings, sources)
     try:
         fs, _ = fs_and_base(f"s3://{settings.s3_bucket}", settings.storage_options())
@@ -1215,44 +1207,77 @@ def _walk_storage(report: ReconcileReport, settings: MaintenanceStore, sources: 
     _registration_drift(report, sources, datasets, walked_buckets=walked_buckets)
 
 
+class Reconciled(BaseModel):
+    """A drift report and the stores it was built from, for a caller that acts on the snapshot the report saw. The
+    tuple rebuild is that caller: it writes grants a registry record justifies, and a second load of a live control root
+    could name a record the report never saw."""
+
+    report: ReconcileReport
+    sources: Sources
+
+
 async def reconcile(
     settings: MaintenanceSettings,
     grants: GrantCensusReader | None = None,
     *,
     control_root: str | None = None,
     namespace_root: str | None = None,
-    # FILLED with the stores this run read, for a caller that must act on the SAME snapshot the report
-    # was built from. The tuple rebuild is that caller: it writes grants a registry record justifies,
-    # so reading the registry a second time would let it assert a tuple for a record the report never
-    # saw. An out-parameter rather than a second return value, because `reconcile` has callers whose
-    # signature this must not change — and rather than a second `load_sources`, because two loads of a
-    # live control root can disagree and the difference would surface as an unexplained grant.
-    into_sources: list[Sources] | None = None,
     platform_buckets: Iterable[str] | None = None,
     bucket_client: Any = None,
-    walk: bool,
-) -> ReconcileReport:
-    """Scan the three stores and REPORT their disagreements. Deletes nothing; mutates nothing.
+) -> Reconciled:
+    """The hourly audit's drift report: the three stores compared, and no storage walked. Deletes nothing; mutates
+    nothing.
 
     ``grants`` reads the store's grant census through the catalog (``None`` → the two ghost categories and
-    ``unreferenced_projects`` report unavailable rather than silently empty). ``bucket_client`` is an S3 client (``None`` → same,
-    for ``orphan_buckets``); when omitted one is built from maintenance's own credentials.
+    ``unreferenced_projects`` report unavailable rather than silently empty). ``bucket_client`` is an S3 client (``None`` → one
+    is built from maintenance's own credentials). ``control_root`` defaults to the catalog's control root
+    (``settings.resolved_control_root``), the one place the project and warehouse records live; ``namespace_root`` to
+    the primary lakehouse bucket, the estate's own root, which serves the estate's own warehouse.
 
-    ``control_root`` defaults to the root maintenance already reads the maintenance-policy registry from
-    (``MAINTENANCE_POLICY_ROOT``, else the primary bucket) — the catalog's control root, and the one
-    place the project and warehouse records live. ``namespace_root`` defaults to the primary lakehouse
-    bucket: the estate's own root, which serves the estate's own warehouse (``settings.estate_warehouse``).
-
-    ``walk`` lists every bucket for its datasets (:func:`_walk_storage`): the daily scan walks, the hourly audit does
-    not, and its two categories are then skipped, not zero.
+    The walk's two categories are skipped, not zero (:func:`_skip_walk`), so the purge's gate refuses this report.
     """
-    # `resolved_control_root`, not `resolved_policy_root`. This defaulted to the POLICY root while its
-    # own docstring above says "the catalog's control root … the one place the project and warehouse
-    # records live" — two different settings that happen to coincide whenever neither is overridden.
-    # Latent only because `routes.py` passes the value explicitly; every other caller, and every test,
-    # read the wrong default, so an estate that moved its policy root would have had the drift report
-    # look for project and warehouse records where the policies live and find none — reporting every
-    # tenant as a ghost.
+    found = await _compare_stores(
+        settings, grants, control_root=control_root, namespace_root=namespace_root, platform_buckets=platform_buckets, bucket_client=bucket_client
+    )
+    _skip_walk(found.report)
+    _publish(found.report)
+    return found
+
+
+async def reconcile_walking(
+    settings: MaintenanceSettings,
+    grants: GrantCensusReader | None = None,
+    *,
+    control_root: str | None = None,
+    namespace_root: str | None = None,
+    platform_buckets: Iterable[str] | None = None,
+    bucket_client: Any = None,
+) -> Reconciled:
+    """The daily scan's drift report: the three stores compared, then every bucket listed for its datasets
+    (:func:`_walk_storage`). Deletes nothing; mutates nothing."""
+    found = await _compare_stores(
+        settings, grants, control_root=control_root, namespace_root=namespace_root, platform_buckets=platform_buckets, bucket_client=bucket_client
+    )
+    # Blocking S3 IO, so it goes to the threadpool like every other read here.
+    await run_in_threadpool(_walk_storage, found.report, settings, found.sources)
+    _publish(found.report)
+    return found
+
+
+async def _compare_stores(
+    settings: MaintenanceSettings,
+    grants: GrantCensusReader | None,
+    *,
+    control_root: str | None,
+    namespace_root: str | None,
+    platform_buckets: Iterable[str] | None,
+    bucket_client: Any,  # noqa: ANN401 — the S3 client, which boto3 builds dynamically
+) -> Reconciled:
+    """Read the registries, the catalog's listing, the grant census and the bucket list once, and report where they
+    disagree."""
+    # `resolved_control_root`, not `resolved_policy_root`: two settings that coincide whenever neither is
+    # overridden. On an estate that moved its policy root, the drift report would otherwise look for project
+    # and warehouse records where the policies live, find none, and report every tenant as a ghost.
     resolved_control_root = control_root or settings.resolved_control_root
     resolved_namespace_root = namespace_root or f"s3://{settings.s3_bucket}"
     storage_options = settings.storage_options()
@@ -1283,27 +1308,25 @@ async def reconcile(
         # The one read that uses the client is done; a client this run built is closed with it, its connections with it.
         if own_client is not None:
             own_client.close()
-    if into_sources is not None:
-        into_sources.append(sources)
     report = build_report(
         sources,
         served=served_by_root(sources.warehouse_records or [], namespace_root=resolved_namespace_root, estate_warehouse=settings.estate_warehouse),
         platform_buckets=platform,
     )
-    # The storage walk runs after the store comparison and only where the caller asks for it: it lists every
-    # bucket's directories rather than comparing three stores. Blocking S3 IO, so it goes to the threadpool like
-    # every other read here.
-    await run_in_threadpool(partial(_walk_storage, walk=walk), report, settings, sources)
+    return Reconciled(report=report, sources=sources)
+
+
+def _publish(report: ReconcileReport) -> None:
+    """Record the finished report on the drift gauge and in the log, which read one dict a line apart."""
     # ON THE WIRE, not just in a log line. This report gates the purge and answers whether the estate's
     # storage state is understood; a number only a reader of pod logs can see is one no alert can fire
     # on. Best-effort — a telemetry failure must never fail the reconcile that produced the finding.
     #
     # AFTER THE WALK, which is the whole point of its position. `build_report` compares three STORES;
     # `_walk_storage` then attaches the categories that read STORAGE (`unregistered_datasets`,
-    # `absent_datasets`). Recording inside `build_report` meant the gauge carried fewer categories than
+    # `absent_datasets`). A gauge recorded inside `build_report` carries fewer categories than
     # the log — measured live 2026-09-24, with `absent_datasets=9` non-zero, blocking the trash purge,
-    # and reaching no series any alert could fire on. The log and the metric read the same dict, one
-    # line apart, so they cannot disagree.
+    # and reaching no series any alert could fire on.
     try:
         metrics.record_drift(report.counts)
     except Exception as exc:  # noqa: BLE001 — reporting about a report must not outrank it
@@ -1317,4 +1340,3 @@ async def reconcile(
             "incomplete": len(report.incomplete),
         },
     )
-    return report

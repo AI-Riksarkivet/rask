@@ -34,7 +34,9 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, Field
 
 from lakehouse.records.trash import TrashKind
+from maintenance.services import drain
 from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned
+from maintenance.services.outcomes import Failed, Refused
 
 
 if TYPE_CHECKING:
@@ -67,15 +69,17 @@ class TombstoneReport(BaseModel):
     enabled: bool = False
     dry_run: bool = True
     swept: list[Tombstone] = Field(default_factory=list)
-    #: Records considered and declined, by id, with why. Present rather than silent: "considered and
-    #: refused" and "never looked" are different facts about a cleaner, and only one of them is safe.
-    refused: dict[str, str] = Field(default_factory=dict)
+    #: Records considered and declined, each with the uuid it is filed under and why: two drops of one name are two
+    #: records ([[LH-525]]). Present rather than silent: "considered and refused" and "never looked" are different
+    #: facts about a cleaner, and only one of them is safe.
+    refused: list[Refused] = Field(default_factory=list)
+    #: Records whose end the catalog could not be asked for or did not decide, each with the failure.
+    failed: list[Failed] = Field(default_factory=list)
     #: Eligible records beyond `max_per_tick`, so a truncated pass cannot read as a complete one.
     capped: int = 0
-    error: str | None = None
 
 
-def plan_sweep(report: ReconcileReport, *, probe: Probe) -> tuple[list[Tombstone], dict[str, str]]:
+def plan_sweep(report: ReconcileReport, *, probe: Probe) -> tuple[list[Tombstone], list[Refused]]:
     """The orphaned trash records whose bytes are proven gone, and the ones refused with their reason.
 
     SCOPED TO THE REPORT'S FINDINGS, never a fresh scan of the trash prefix: the justification for
@@ -83,18 +87,17 @@ def plan_sweep(report: ReconcileReport, *, probe: Probe) -> tuple[list[Tombstone
     a second independent read could sweep a record the report never classified.
     """
     planned: list[Tombstone] = []
-    refused: dict[str, str] = {}
+    refused: list[Refused] = []
     for finding in report.orphaned_trash or []:
         try:
             objects = probe(finding)
         except Exception as exc:  # noqa: BLE001 — an unreadable location is a refusal, never a sweep
-            refused[finding.id] = f"the location {finding.location!r} could not be read ({type(exc).__name__}), so nothing proves its bytes are gone"
+            why = f"the location {finding.location!r} could not be read ({type(exc).__name__}), so nothing proves its bytes are gone"
+            refused.append(Refused(kind=finding.kind, id=finding.id, uuid=finding.uuid, reason=why))
             continue
         if objects:
-            refused[finding.id] = (
-                f"{finding.location!r} still holds {objects} object(s) — this record is the only remaining pointer to them, "
-                "so removing it would strand them silently"
-            )
+            why = f"{finding.location!r} still holds {objects} object(s) — this record is the only remaining pointer to them, so removing it would strand them silently"
+            refused.append(Refused(kind=finding.kind, id=finding.id, uuid=finding.uuid, reason=why))
             continue
         planned.append(Tombstone(id=finding.id, uuid=finding.uuid, kind=finding.kind, location=finding.location, probed_objects=objects))
     return planned, refused
@@ -109,20 +112,22 @@ def sweep_tombstones(
 ) -> TombstoneReport:
     """Remove the trash records whose bytes the probe proves are already gone.
 
-    Degrades rather than fails, the same contract `rebuild.py` and `repair.py` carry: one record that
-    will not delete leaves `error` set and the tick continues, because a reconcile tick that 500s over
+    Degrades rather than fails, the same contract `rebuild.py` and `repair.py` carry: a record that
+    will not delete is named in `failed` and the tick continues, because a reconcile tick that fails over
     a failed cleanup is worse than one reporting residue it could not clear — the report is what
     everything else is gated on.
+
+    Over the cap, each window of the audit's schedule takes the next share of the findings
+    (:func:`maintenance.services.drain.share_of`), so a record refused for good holds no slot from one run to the next.
     """
     out = TombstoneReport(enabled=settings.tombstone_sweep_enabled, dry_run=settings.tombstone_sweep_dry_run)
     if not settings.tombstone_sweep_enabled:
         return out
     # CAPPED BEFORE PROBING, not after. The probe is the expensive half — one listing per record — so
     # planning all 989 and then discarding 939 would pay the whole cost to do a fiftieth of the work.
-    findings = list(report.orphaned_trash or [])
-    out.capped = max(0, len(findings) - settings.tombstone_sweep_max_per_tick)
-    head = report.model_copy(update={"orphaned_trash": findings[: settings.tombstone_sweep_max_per_tick]})
-    planned, out.refused = plan_sweep(head, probe=probe)
+    window = drain.window_of(report.checked_at, period_seconds=settings.audit_period_seconds)
+    taken, out.capped = drain.share_of(report.orphaned_trash, cap=settings.tombstone_sweep_max_per_tick, window=window, name=lambda finding: finding.uuid)
+    planned, out.refused = plan_sweep(report.model_copy(update={"orphaned_trash": taken}), probe=probe)
     if not planned or out.dry_run:
         out.swept = planned
         return out
@@ -132,11 +137,11 @@ def sweep_tombstones(
             delete(target)
         except (MaintenanceDenied, TableNotGoverned) as exc:
             # The catalog's answer, not a failure: it judges the record on its own reads and refused to end it.
-            out.refused[target.id] = str(exc)
+            out.refused.append(Refused(kind=target.kind, id=target.id, uuid=target.uuid, reason=str(exc)))
             continue
         except Exception as exc:  # noqa: BLE001 — see the docstring; one record must not fail the tick
-            log.warning("tombstone_sweep_failed", extra={"record": target.id, "location": target.location, "error": str(exc)})
-            out.error = str(exc)
+            log.warning("tombstone_sweep_failed", extra={"record": target.id, "uuid": target.uuid, "location": target.location, "error": str(exc)})
+            out.failed.append(Failed(kind=target.kind, id=target.id, uuid=target.uuid, error=f"{type(exc).__name__}: {exc}"))
             continue
         done.append(target)
     out.swept = done

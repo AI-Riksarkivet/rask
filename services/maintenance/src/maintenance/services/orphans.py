@@ -8,14 +8,14 @@ a real estate.
 `cleanup_old_versions` reclaims OLD VERSIONS. It does not reclaim files that no version references at
 all, and nothing else does either — the phrase "remove orphans" appeared nowhere in this service.
 
-What can be unreferenced, per the Lance table spec (lance.org/format/table/layout/ and /transaction/,
-fetched 2026-08-04):
+What can be unreferenced, by the directories the Lance table layout names (``lance_docs/lance/format/table/layout.md``:
+``data/``, ``_deletions/``, ``_indices/``, ``_transactions/``, ``_versions/``):
 
 * `data/*.lance` files listed in no live manifest;
 * `_deletions/*` vectors no fragment references;
 * `_indices/<uuid>/` directories absent from every live manifest;
-* `_transactions/*.txn` files from failed or rolled-back commits — a conflict leaves them behind
-  ("transaction files remain in storage describing each commit attempt"), so a busy table accrues
+* `_transactions/*.txn` files of commits that did not land: one is written "for each commit attempt"
+  (``lance_docs/lance/format/table/transaction.md`` § Transaction Files), so a busy table accrues
   them. Whether Lance will ever take one depends on its DIRECTORY. `cleanup_old_versions` clamps its
   listing of `_transactions/` and `_deletions/` to the commit timestamp of the earliest RETAINED
   manifest before the 7-day unverified rule filters what was listed, while `data/` is listed through
@@ -29,8 +29,8 @@ fetched 2026-08-04):
   itself once it passes 7 days. `OrphanFile.reclaimable_by_lance` carries which, because only the
   first class justifies a reclaimer;
 * manifests of versions that were deleted;
-* `_versions/latest_version_hint.json`, which the spec calls "purely an optimization" and "always
-  safe to delete".
+* `_versions/latest_version_hint.json`, which the layout calls "purely an optimization" and "always
+  safe to delete" (``layout.md`` § Version Hint).
 
 Plus rask's own two producers: a partially-failed write (fragments written, commit never landed), and
 a bucket whose warehouse record was deleted WITHOUT `?purge_bucket=true` — which the delete door

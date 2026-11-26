@@ -33,6 +33,7 @@
 - { name: MAINTENANCE_TRASH_PURGE_ENABLED, value: {{ hasKey .Values.maintenance "trashPurge" | ternary .Values.maintenance.trashPurge false | quote }} }
 - { name: MAINTENANCE_TRASH_PURGE_DRY_RUN, value: {{ hasKey .Values.maintenance "trashPurgeDryRun" | ternary .Values.maintenance.trashPurgeDryRun false | quote }} }
 - { name: MAINTENANCE_TRASH_PURGE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "trashPurgeMaxPerTick") | ternary .Values.maintenance.trashPurgeMaxPerTick 25 | quote }} }
+- { name: MAINTENANCE_TRASH_RELEASE_MAX_PER_TICK, value: {{ (hasKey .Values.maintenance "trashReleaseMaxPerTick") | ternary .Values.maintenance.trashReleaseMaxPerTick 200 | quote }} }
 - { name: MAINTENANCE_FLOOR_RAISE_ENABLED, value: {{ hasKey .Values.maintenance "floorRaise" | ternary .Values.maintenance.floorRaise false | quote }} }
 - { name: MAINTENANCE_FLOOR_RAISE_DRY_RUN, value: {{ hasKey .Values.maintenance "floorRaiseDryRun" | ternary .Values.maintenance.floorRaiseDryRun true | quote }} }
 - { name: MAINTENANCE_TUPLE_REBUILD_ENABLED, value: {{ hasKey .Values.maintenance "tupleRebuild" | ternary .Values.maintenance.tupleRebuild false | quote }} }

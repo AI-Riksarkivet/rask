@@ -26,7 +26,7 @@ from tests.store_answers import answered
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import audit, bucket_events
-from maintenance.services.reconcile import GrantCensusReader, ReconcileReport, Sources
+from maintenance.services.reconcile import GrantCensusReader, Reconciled, ReconcileReport, Sources
 
 
 async def _reconcile(
@@ -35,12 +35,10 @@ async def _reconcile(
     *,
     control_root: str | None = None,
     namespace_root: str | None = None,
-    into_sources: list[Sources] | None = None,
     platform_buckets: Iterable[str] | None = None,
     bucket_client: object = None,
-    walk: bool,
-) -> ReconcileReport:
-    return ReconcileReport(checked_at="2026-11-10T12:00:00+00:00")
+) -> Reconciled:
+    return Reconciled(report=ReconcileReport(checked_at="2026-11-10T12:00:00+00:00"), sources=Sources())
 
 
 class _RefusingStore:
@@ -119,7 +117,7 @@ def test_the_audit_counts_each_governed_bucket_by_what_the_store_says_of_its_eve
     warned = sorted((record.getMessage(), getattr(record, "bucket", "")) for record in caplog.records if record.name == "maintenance.services.bucket_events")
     data = reader.get_metrics_data()
     points = cast(Sequence[NumberDataPoint], data.resource_metrics[0].scope_metrics[0].metrics[0].data.data_points) if data is not None else ()
-    counted = {str((point.attributes or {})["outcome"]): point.value for point in points}
+    counted = {str((point.attributes or {})["lance.maintenance.outcome"]): point.value for point in points}
     provider.shutdown()
     if not expected:
         assert ("store_events" in out, warned, counted) == (False, [], {})

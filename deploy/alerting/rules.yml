@@ -632,13 +632,13 @@ groups:
       # every bus publisher signs, so any refusal is a forgery or a signer that broke.
       # Runbook: docs/runbooks/RUNBOOK-oncall.md#a-bus-door-refusing-events
       - alert: MaintenanceArrivalRefusingEvents
-        expr: sum by (door, reason) (rate(maintenance_signature_refused_total[5m])) > 0
+        expr: sum by (lance_maintenance_door, lance_maintenance_reason) (rate(maintenance_signature_refused_total[5m])) > 0
         for: 2m
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "Maintenance is REFUSING write events ({{ $labels.door }}, {{ $labels.reason }}) — their tables wait for their next pass"
+          summary: "Maintenance is REFUSING write events ({{ $labels.lance_maintenance_door }}, {{ $labels.lance_maintenance_reason }}) — their tables wait for their next pass"
           description: >-
             A write event no listed signer's key verifies was ACKED and held no pass, so only this alert and the
             `maintenance_signature_refused` log line record it; the table's next scheduled pass still reads it. Forged
@@ -961,7 +961,7 @@ groups:
       # announcement no delivery could settle, for which no pass was held, and a sustained `retried` is a lane that cannot
       # reach what it needs. An announcement is a hint the table's recheck backs up, so both are warnings.
       - alert: MaintenanceArrivalLaneEndingEvents
-        expr: sum(increase(maintenance_arrivals_settled_total{outcome="ended"}[10m])) > 0
+        expr: sum(increase(maintenance_arrivals_settled_total{lance_maintenance_outcome="ended"}[10m])) > 0
         labels:
           severity: warning
           service: maintenance
@@ -976,7 +976,7 @@ groups:
             docs/runbooks/RUNBOOK-oncall.md#dlq-parking--a-delivery-gave-up
 
       - alert: MaintenanceArrivalLaneRetrying
-        expr: sum(rate(maintenance_arrivals_settled_total{outcome="retried"}[5m])) > 0
+        expr: sum(rate(maintenance_arrivals_settled_total{lance_maintenance_outcome="retried"}[5m])) > 0
         for: 15m
         labels:
           severity: warning
@@ -1001,7 +1001,7 @@ groups:
       # how an alert becomes one people route to a muted channel. Drift that appeared TODAY is a
       # different claim: something started producing it.
       #
-      # No `category` in the expr on purpose. A per-category rule is a hand-kept list, and the drift
+      # No `lance_maintenance_category` in the expr on purpose. A per-category rule is a hand-kept list, and the drift
       # categories are exactly the thing that grows — `orphaned_trash` itself was added the same day.
       # The label rides the firing series, so the alert still says WHICH category moved.
       - alert: MaintenanceDriftRising
@@ -1011,7 +1011,7 @@ groups:
           severity: warning
           service: maintenance
         annotations:
-          summary: "A reconcile drift category grew in the last two hours — {{ $labels.category }}"
+          summary: "A reconcile drift category grew in the last two hours — {{ $labels.lance_maintenance_category }}"
           description: >-
             The drift report (the hourly audit's, and the daily scan's, which adds the storage walk's two categories) is finding MORE of this drift category than it did two hours ago.
             Each category names a different disagreement between the registry, OpenFGA and object
@@ -1046,7 +1046,7 @@ groups:
       # the hourly audit, so one slow audit does not page. The series exists from a worker's start at 0
       # (`create_task_series`), so a flat zero is a worker that runs and completes no audit.
       - alert: MaintenanceAuditNotCompleting
-        expr: sum(increase(maintenance_tasks_completed_total{kind="audit"}[2h])) == 0
+        expr: sum(increase(maintenance_tasks_completed_total{lance_maintenance_kind="audit"}[2h])) == 0
         for: 30m
         labels:
           severity: critical
@@ -1057,7 +1057,7 @@ groups:
             The hourly audit (the drift report, its repairs, the release of every drop past its deadline, and the
             backstop that queues a table no schedule holds) has not completed in two hours. Either its schedule no
             longer reaches a worker, or every audit fails or overruns: compare maintenance_tasks_ended_total and
-            maintenance_passes_overran_total for kind audit, and read the maintenance_task_retried log lines.
+            maintenance_passes_overran_total where lance_maintenance_kind is audit, and read the maintenance_task_retried log lines.
 
       # ABSENT IS NOT ZERO. A worker that has died, or whose export broke, emits no maintenance_tasks_completed_total
       # at all, and the `== 0` above cannot fire over a vector that does not exist. Bare `absent()` in its own rule:
@@ -1080,7 +1080,7 @@ groups:
       # purge, which acts only on its own scan's report. A 26h window over the daily schedule, so one late scan does
       # not page.
       - alert: MaintenanceScanNotCompleting
-        expr: sum(increase(maintenance_tasks_completed_total{kind="scan"}[26h])) == 0
+        expr: sum(increase(maintenance_tasks_completed_total{lance_maintenance_kind="scan"}[26h])) == 0
         for: 1h
         labels:
           severity: warning
@@ -1090,18 +1090,18 @@ groups:
           description: >-
             The daily scan has not completed in 26 hours, so no storage walk or expired-trash purge ran.
             Either its schedule no longer reaches a worker, or the scan fails or overruns every time: compare
-            maintenance_tasks_ended_total and maintenance_passes_overran_total for kind scan.
+            maintenance_tasks_ended_total and maintenance_passes_overran_total where lance_maintenance_kind is scan.
 
       # A task a worker ended: it failed, or outlived its worker, on every delivery. No `for:`: an end is final.
       - alert: MaintenanceTasksEnded
-        expr: sum by (kind) (increase(maintenance_tasks_ended_total[1h])) > 0
+        expr: sum by (lance_maintenance_kind) (increase(maintenance_tasks_ended_total[1h])) > 0
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "Maintenance ended {{ $labels.kind }} tasks that failed on every delivery"
+          summary: "Maintenance ended {{ $labels.lance_maintenance_kind }} tasks that failed on every delivery"
           description: >-
-            A {{ $labels.kind }} task failed, or outlived its worker, on each of its `maintenance.queue.maxDeliver`
+            A {{ $labels.lance_maintenance_kind }} task failed, or outlived its worker, on each of its `maintenance.queue.maxDeliver`
             deliveries, and a worker ended it. The maintenance_task_ended ERROR line names the subject and the last error; kind unreadable is a
             message no task parses. Its next try is held `maintenance.queue.recheckHours` out, unless a commit queues it sooner.
 
@@ -1110,27 +1110,27 @@ groups:
       # its task until twice that, when its replica exits and the task is delivered again,
       # so until then this count is the only sign.
       - alert: MaintenancePassesOverran
-        expr: sum by (kind) (increase(maintenance_passes_overran_total[1h])) > 0
+        expr: sum by (lance_maintenance_kind) (increase(maintenance_passes_overran_total[1h])) > 0
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "A maintenance {{ $labels.kind }} task is running past its bound"
+          summary: "A maintenance {{ $labels.lance_maintenance_kind }} task is running past its bound"
           description: >-
-            A {{ $labels.kind }} task has run past its bound (`maintenance.queue.maxPassSeconds`, or its kind's own:
+            A {{ $labels.lance_maintenance_kind }} task has run past its bound (`maintenance.queue.maxPassSeconds`, or its kind's own:
             `maintenance.queue.auditMaxSeconds`, `maintenance.queue.scanMaxSeconds`,
             `maintenance.orphanCheck.maxSeconds`) and still holds its task; at twice that its replica
             exits and the task is delivered again. The
             maintenance_task_overran ERROR line names its subject and how long it had run; while it runs, no later
             commit's pass of its table can start.
 
-      # The queue as the worker samples it every 15 s (`maintenance.services.queue.sample_queue`). The gauge's
+      # The queue as the worker samples it every 15 s (`maintenance.services.queue_sampler.sample_queue`). The gauge's
       # instrument is `maintenance.queue.oldest` with unit `s`, which the exporter appends, as for `outbox_oldest_age_seconds`
       # above. Every replica samples the same streams, so `max` reads one value. MAINTENANCE_TASKS drops a message at its
       # 24 h max age (`chart/templates/nats-stream-job.yaml`) with no consumer told, so a task waiting 6 h is the warning
       # while 18 h are left to act.
       - alert: MaintenanceTaskAging
-        expr: max by (stream) (maintenance_queue_oldest_seconds{stream="MAINTENANCE_TASKS"}) > 21600
+        expr: max by (lance_maintenance_stream) (maintenance_queue_oldest_seconds{lance_maintenance_stream="MAINTENANCE_TASKS"}) > 21600
         for: 30m
         labels:
           severity: warning
@@ -1140,8 +1140,8 @@ groups:
           description: >-
             The oldest message on MAINTENANCE_TASKS is over six hours old: tasks wait unrun, and at 24 hours the stream
             drops them unrun, their tables left to the hourly audit. Read maintenance_queue_ack_pending and
-            maintenance_queue_redelivered for consumer maintenance-worker (deliveries stuck, or a task delivered again and
-            again), maintenance_passes_overran_total (a pass holding its replica), and whether any worker replica runs and
+            maintenance_queue_redelivered where lance_maintenance_consumer is maintenance-worker (deliveries stuck, or a task
+            delivered again and again), maintenance_passes_overran_total (a pass holding its replica), and whether any worker replica runs and
             is ready (maintenance_tasks_completed_total).
 
       # Tasks wait and no worker holds one: the durable has messages it has not delivered (`maintenance.queue.waiting`) and
@@ -1151,7 +1151,7 @@ groups:
       # it stay quiet here and are MaintenancePassesOverran's and MaintenanceTaskAging's. A fleet that is gone samples
       # nothing, which is MaintenanceTaskMetricsMissing's.
       - alert: MaintenanceQueueStalled
-        expr: (max(maintenance_queue_waiting{consumer="maintenance-worker"}) > 0) and (max(maintenance_queue_ack_pending{consumer="maintenance-worker"}) == 0)
+        expr: (max(maintenance_queue_waiting{lance_maintenance_consumer="maintenance-worker"}) > 0) and (max(maintenance_queue_ack_pending{lance_maintenance_consumer="maintenance-worker"}) == 0)
         for: 10m
         labels:
           severity: critical
@@ -1169,14 +1169,14 @@ groups:
       # not read: its table's overwrite check waits for the daily recheck. Every outcome's series is created at 0 when a
       # worker starts, so the first end is an increase. No `for:`: an end is final.
       - alert: MaintenanceStoreEventsEnded
-        expr: sum by (outcome) (increase(maintenance_store_events_settled_total{outcome=~"ended|unreadable"}[1h])) > 0
+        expr: sum by (lance_maintenance_outcome) (increase(maintenance_store_events_settled_total{lance_maintenance_outcome=~"ended|unreadable"}[1h])) > 0
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "Maintenance {{ $labels.outcome }} store events in the last hour"
+          summary: "Maintenance {{ $labels.lance_maintenance_outcome }} store events in the last hour"
           description: >-
-            The worker settled store events as {{ $labels.outcome }}: ended, the store or the bus refused their handling on
+            The worker settled store events as {{ $labels.lance_maintenance_outcome }}: ended, the store or the bus refused their handling on
             every delivery (or the worker died on every one); unreadable, the body is no S3 event record the worker parses
             (the contract is `objectStore.events` in the chart's values). Each one's table is passed at its daily recheck
             instead of after the write. The maintenance_store_event_ended and maintenance_store_event_unreadable ERROR lines
@@ -1185,7 +1185,7 @@ groups:
       # Delivery of store events stops when the durable's deliveries awaiting an ack reach its `max_ack_pending` (1000,
       # `chart/templates/nats-stream-job.yaml`): 900 is 90 % of it.
       - alert: MaintenanceStoreEventsStuck
-        expr: max by (consumer) (maintenance_queue_ack_pending{consumer="maintenance-store-events"}) >= 900
+        expr: max by (lance_maintenance_consumer) (maintenance_queue_ack_pending{lance_maintenance_consumer="maintenance-store-events"}) >= 900
         for: 15m
         labels:
           severity: warning
@@ -1195,8 +1195,9 @@ groups:
           description: >-
             The maintenance-store-events consumer awaits an acknowledgement for at least 900 deliveries, 90 % of its
             max_ack_pending of 1000; at the ceiling the bus delivers no more store events, and overwrites are found only at
-            each table's daily recheck. Read maintenance_store_events_settled_total by outcome (retried rising: the store
-            refuses the claim reads) and maintenance_queue_oldest_seconds for STORE_EVENTS, and the
+            each table's daily recheck. Read maintenance_store_events_settled_total by lance_maintenance_outcome (retried
+            rising: the store refuses the claim reads) and maintenance_queue_oldest_seconds where lance_maintenance_stream
+            is STORE_EVENTS, and the
             maintenance_store_event_retried WARNING lines.
 
       # A governed bucket the hourly audit found configured with no store event for its writes
@@ -1205,7 +1206,7 @@ groups:
       # outcome, a counter that sums across replicas and stops rising once the buckets are fixed; 2h spans two audits, so
       # a bucket the catalog just made waits one for its store's operator to configure it.
       - alert: MaintenanceBucketWithoutStoreEvents
-        expr: sum(increase(maintenance_store_event_buckets_checked_total{outcome="without"}[2h])) > 0
+        expr: sum(increase(maintenance_store_event_buckets_checked_total{lance_maintenance_outcome="without"}[2h])) > 0
         labels:
           severity: warning
           service: maintenance
@@ -1222,7 +1223,7 @@ groups:
       # s3:GetBucketNotification answers 403 for every bucket) or failed, so whether it sends its events is unknown,
       # and an estate where every read is refused would otherwise report nothing missing.
       - alert: MaintenanceBucketStoreEventsUnknown
-        expr: sum(increase(maintenance_store_event_buckets_checked_total{outcome="unknown"}[2h])) > 0
+        expr: sum(increase(maintenance_store_event_buckets_checked_total{lance_maintenance_outcome="unknown"}[2h])) > 0
         labels:
           severity: warning
           service: maintenance
@@ -1329,12 +1330,12 @@ groups:
       # passed again at its recheck (a day) or its next commit, so the 25h window holds the alert from one refused pass
       # to the next. The counter names no table; the pass's log line does.
       - alert: MaintenanceTableParked
-        expr: sum by (refused_by) (increase(maintenance_tables_parked_total[25h])) > 0
+        expr: sum by (lance_maintenance_refused_by) (increase(maintenance_tables_parked_total[25h])) > 0
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "Maintenance of a table is parked ({{ $labels.refused_by }})"
+          summary: "Maintenance of a table is parked ({{ $labels.lance_maintenance_refused_by }})"
           description: >-
             A table's pass was parked in the last day, so its superseded versions are not reclaimed.
             vend_denied is a 403: this identity holds no can_maintain on the id,
@@ -1349,15 +1350,15 @@ groups:
       # (`maintenance.queue.unsampled`, at 0 from the first sample): the chart's stream Job declares each, so one it did
       # not converge is unanswered on every sample, while that stream's gauges stand still or do not exist.
       - alert: MaintenanceQueueUnsampled
-        expr: (sum by (stream) (increase(maintenance_queue_unsampled_total{stream!=""}[10m])) > 0) or (sum by (consumer) (increase(maintenance_queue_unsampled_total{consumer!=""}[10m])) > 0)
+        expr: (sum by (lance_maintenance_stream) (increase(maintenance_queue_unsampled_total{lance_maintenance_stream!=""}[10m])) > 0) or (sum by (lance_maintenance_consumer) (increase(maintenance_queue_unsampled_total{lance_maintenance_consumer!=""}[10m])) > 0)
         for: 15m
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "The bus does not answer about a maintenance stream or consumer ({{ $labels.stream }}{{ $labels.consumer }})"
+          summary: "The bus does not answer about a maintenance stream or consumer ({{ $labels.lance_maintenance_stream }}{{ $labels.lance_maintenance_consumer }})"
           description: >-
-            For 15 minutes the bus has not answered the worker's sampler about {{ $labels.stream }}{{ $labels.consumer }}:
+            For 15 minutes the bus has not answered the worker's sampler about {{ $labels.lance_maintenance_stream }}{{ $labels.lance_maintenance_consumer }}:
             it does not exist as the chart's stream Job declares it (the Job failed, or has not run), or the bus is
             down. The queue alerts read gauges this leaves unset. Read the worker's `maintenance_queue_unsampled`
             WARNING line for the bus's answer, and the stream Job's last run.
@@ -1406,14 +1407,14 @@ groups:
             for the table and the count.
 
       - alert: MaintenanceOrphanChecksFailing
-        expr: sum by (outcome) (increase(maintenance_orphans_checks_total{outcome=~"incomplete|raised"}[25h])) > 0
+        expr: sum by (lance_maintenance_outcome) (increase(maintenance_orphans_checks_total{lance_maintenance_outcome=~"incomplete|raised"}[25h])) > 0
         labels:
           severity: warning
           service: maintenance
         annotations:
-          summary: "Table orphan checks ended {{ $labels.outcome }}"
+          summary: "Table orphan checks ended {{ $labels.lance_maintenance_outcome }}"
           description: >-
-            Orphan checks ended {{ $labels.outcome }} in the last day: incomplete, a read of the table's files or
+            Orphan checks ended {{ $labels.lance_maintenance_outcome }} in the last day: incomplete, a read of the table's files or
             versions failed; raised, the check itself failed. Those tables' unreferenced files are not found until a
             check completes. Read the `maintenance_orphan_check` log for the table and the error.
 

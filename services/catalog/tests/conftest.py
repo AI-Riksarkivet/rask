@@ -12,14 +12,12 @@ import boto3
 import lance
 import pytest
 from fastapi.testclient import TestClient
-from moto import settings as moto_settings
-from moto.core.authorization import ActionAuthenticatorMixin
-from moto.iam.access_control import IAMRequestBase
 from moto.server import ThreadedMotoServer
 from pydantic import BaseModel
 
 from catalog.services.erasure import ErasureReport, ref_heads
 from tests.governed_catalog import GovernedCatalog, governed_catalog_app
+from tests.moto_iam import iam_enforced
 
 
 # THIS DIRECTORY, IMPORTABLE, so a plain helper module beside the suite (`tables_by_name`) resolves for a single file as
@@ -116,20 +114,11 @@ def _admin(iam: Any, user: str) -> Key:  # noqa: ANN401 — a boto3 IAM client
 def two_stores() -> Iterator[TwoStores]:
     """Two buckets under two identities, so a read under the wrong key is REFUSED rather than served.
 
-    moto enforces IAM once ``INITIAL_NO_AUTH_ACTION_COUNT`` is reached, which is set to 0 after the
-    users exist. Its SIGNATURE check is switched off and its POLICY check is not: measured on moto 5.2.2,
-    the object_store client's list request (``prefix=t%2F_versions%2F``) is rejected
-    ``SignatureDoesNotMatch`` by moto's canonicalisation while boto3's identical request passes, so with
-    the check on no Lance write can land at all. The access key id still decides whose policy answers,
-    which is the identity the claims below are about.
+    IAM is enforced once the users exist (:func:`tests.moto_iam.iam_enforced`, which says what moto checks then). The
+    access key id decides whose policy answers, which is the identity the claims below are about.
 
     Names are per instance because moto's backends are process-global: a second server in the same
     worker (another module, or this one set up again under xdist) sees the first one's users and buckets.
-
-    ``AssumeRoleWithWebIdentity`` is answered unauthenticated, as AWS answers it: the token in the body is the
-    credential, so the call carries no signature, and moto 5.2.2's gate authenticates every action but a few Cognito
-    targets (`moto/core/authorization.py`), answering the unsigned exchange 500. A session it issues is still held to
-    its role's policy.
     """
     suffix = uuid.uuid4().hex[:10]
     server = ThreadedMotoServer(port=0)
@@ -148,16 +137,7 @@ def two_stores() -> Iterator[TwoStores]:
         estate=_user_on(iam, f"estate-{suffix}", estate_bucket),
         admin=_admin(iam, f"admin-{suffix}"),
     )
-    gate = ActionAuthenticatorMixin._authenticate_and_authorize_normal_action
-
-    def _as_aws_gates(self: Any, resource: str = "*") -> None:  # noqa: ANN401 — the moto response class the mixin is mixed into
-        if self._get_action() != "AssumeRoleWithWebIdentity":
-            gate(self, resource)
-
-    with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(IAMRequestBase, "check_signature", lambda _self: None)
-        patch.setattr(ActionAuthenticatorMixin, "_authenticate_and_authorize_normal_action", _as_aws_gates)
-        patch.setattr(moto_settings, "INITIAL_NO_AUTH_ACTION_COUNT", 0)
+    with iam_enforced():
         yield stores
     server.stop()
 

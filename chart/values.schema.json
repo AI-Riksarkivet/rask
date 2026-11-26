@@ -631,7 +631,9 @@
                 },
                 "driftRepairMaxPerTick": {
                     "description": "Maximum objects drift repair revokes per reconcile tick; the remainder is reported as capped and taken next tick.",
-                    "type": "integer"
+                    "type": "integer",
+                    "maximum": 500,
+                    "minimum": 1
                 },
                 "enabled": {
                     "description": "Deploy the maintenance service (its worker, the hourly audit and the write-event lane).",
@@ -772,6 +774,12 @@
                     "description": "Maximum trash records purged per tick; the remainder is reported as capped and drained next tick.",
                     "type": "integer"
                 },
+                "trashReleaseMaxPerTick": {
+                    "description": "Maximum drops past their deadline one audit's backstop releases; the remainder is reported as capped.",
+                    "type": "integer",
+                    "maximum": 5000,
+                    "minimum": 1
+                },
                 "tupleRebuild": {
                     "description": "Recreate OpenFGA tuples the control-plane registries still justify (project admin seed, warehouse tenancy); additive only. Off by default.",
                     "type": "boolean"
@@ -782,7 +790,9 @@
                 },
                 "tupleRebuildMaxPerTick": {
                     "description": "Maximum tuples the rebuild writes per tick; the remainder is reported as capped.",
-                    "type": "integer"
+                    "type": "integer",
+                    "maximum": 500,
+                    "minimum": 1
                 },
                 "vendWriteCredentials": {
                     "description": "Wire maintenance to the catalog's vending door, the only credential its rewrites are signed with; off, maintenance holds no maintain rung and refuses every rewrite.",

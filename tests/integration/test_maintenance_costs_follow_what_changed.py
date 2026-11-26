@@ -40,7 +40,8 @@ from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import file_identities
 from maintenance.core.config import get_settings as maintenance_settings
 from maintenance.services.audit import run_audit
-from maintenance.services.queue import Task, TaskQueue
+from maintenance.services.queue import TaskQueue
+from maintenance.services.queue_wire import Task
 from maintenance.services.table_pass import TableTask, run_table_pass
 from tests.governed_catalog import ROWS
 from tests.integration.catalog_and_maintenance import TwoServices, catalog_and_maintenance

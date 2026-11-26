@@ -3,7 +3,7 @@
 A commit is what makes a table's maintenance due sooner than its clock: a write moves its fragment and index counts, and
 a bring-your-own job's compaction is a write through the catalog like any other, so the pass after it takes the table
 off the due list. The lane reads the one announcement every governed writer converges on, `lineage.events.v1`, which
-also carries the catalog's lifecycle markers, and maps each event to at most one task (:mod:`maintenance.services.queue`):
+also carries the catalog's lifecycle markers, and maps each event to at most one task (:mod:`maintenance.services.queue_wire`):
 
 * A **write** or a **registration** holds its table's pass a delay out (``MAINTENANCE_COMMIT_PASS_DELAY_SECONDS``), unless
   one is held already, which covers it (:meth:`maintenance.services.queue.TaskQueue.follow_up`): a burst of commits makes
@@ -20,7 +20,7 @@ also carries the catalog's lifecycle markers, and maps each event to at most one
 **The event is a hint; the pass is the decision.** A write event carries the table and its location, and no fragment or
 row count, so nothing here can tell whether work is due, only that it is worth looking.
 
-**The worker pulls the lane itself** (:class:`Arrivals`, :meth:`maintenance.services.queue.Worker.run_arrivals`), from a
+**The worker pulls the lane itself** (:class:`Arrivals`, :meth:`maintenance.services.queue_worker.Worker.run_arrivals`), from a
 durable consumer of `lineage.events.v1` the chart's stream Job declares, so its replicas compete for each announcement
 and one of them holds the task it asks for.
 
@@ -54,7 +54,8 @@ from lakehouse.records.commit_records import is_canonical_uuid
 from lakehouse.storage.credential import StoreCredentialUnavailableError
 from maintenance.core.metrics import ArrivalOutcome, SignatureDoor, record_signature_refused, record_signature_would_refuse
 from maintenance.services.naming import claim_store
-from maintenance.services.queue import ARRIVALS_CONSUMER, Task, TaskQueue
+from maintenance.services.queue import TaskQueue
+from maintenance.services.queue_wire import ARRIVALS_CONSUMER, Task
 
 
 if TYPE_CHECKING:

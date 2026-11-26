@@ -23,7 +23,7 @@ fixture's) or a user report — not a page.
   (`threadpool_busy`, `threadpool_limit`, `threadpool_waiting`), the catalog's bulk writes in flight
   (`catalog_writes_in_flight`), and each bus lane's own: `bus.deliveries` by `lance.bus.consumer` and
   `lance.bus.outcome` (`taken`, `again`, `parked` for a pulled consumer; `taken`, `failed` for the catalog's followed
-  control topic), `messaging.process.duration`, and `maintenance.arrivals.settled` by outcome. A consumer's backlog is
+  control topic), `messaging.process.duration`, and `maintenance.arrivals.settled` by `lance.maintenance.outcome`. A consumer's backlog is
   the bus's own reading: `nats consumer info <stream> <consumer>` shows its pending messages (`num_pending`), the
   deliveries awaiting an acknowledgement (`num_ack_pending`) and its ack floor.
 - **First move for any pod issue**: `kubectl get pods -o wide`, then `kubectl logs <pod> --all-containers
@@ -634,10 +634,10 @@ is `kubectl logs deploy/rask-maintenance-worker -c worker`).
   worker whose signing key is unresolved takes no task), then their `maintenance_bind_failed` and
   `maintenance_bus_unanswered` WARNING lines.
 - `MaintenanceTaskAging` (warning): the oldest message on MAINTENANCE_TASKS is over six hours old, of the 24 the stream
-  keeps it. First check: `maintenance_queue_waiting` and `maintenance_queue_ack_pending` for consumer
+  keeps it. First check: `maintenance_queue_waiting` and `maintenance_queue_ack_pending` for `lance_maintenance_consumer`
   `maintenance-worker`, and `maintenance_passes_overran_total`.
 - `MaintenanceAuditNotCompleting` (critical): no hourly audit has completed in two hours. First check:
-  `maintenance_tasks_ended_total` and `maintenance_passes_overran_total` for kind `audit`, and the
+  `maintenance_tasks_ended_total` and `maintenance_passes_overran_total` for `lance_maintenance_kind` `audit`, and the
   `maintenance_task_retried` lines.
 - `MaintenanceScanNotCompleting` (warning): no daily scan has completed in 26 hours, so no orphan scan, listing floor or
   trash purge ran. First check: the same two counters for kind `scan`.
@@ -660,7 +660,7 @@ is `kubectl logs deploy/rask-maintenance-worker -c worker`).
   records; a table holds unreferenced files above its listing floor; orphan checks could not finish. First check: the
   `maintenance_unrecorded_base`, `trash_purge_refused` and `maintenance_orphan_check` logs.
 - `MaintenanceTableParked` (warning): maintenance of a table has been parked in the last day, so its
-  versions are not reclaimed. First check: `refused_by` — `vend_denied` (403: no `can_maintain` on the id, or a stale
+  versions are not reclaimed. First check: `lance_maintenance_refused_by` — `vend_denied` (403: no `can_maintain` on the id, or a stale
   `lineage.dataset_id` stamp), `table_not_governed` (404), or `policy_unreadable` (a maintenance policy record of the
   table, its namespace or its project that cannot be read as a policy, which may be a legal hold: rewrite it through the
   policy door); the `maintenance_vend_denied` and `maintenance_table_not_governed` WARNING lines name the dataset, and

@@ -31,7 +31,8 @@ from lakehouse.governed.fga_ids import user_object
 from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records import trash
 from maintenance.core.config import get_settings as maintenance_settings
-from maintenance.services.queue import Task, TaskQueue
+from maintenance.services.queue import TaskQueue
+from maintenance.services.queue_wire import Task
 from maintenance.services.trash_task import TrashUnreadableError, run_trash_task
 from tests import seeding
 from tests.control_emitter_double import ControlEmitterDouble

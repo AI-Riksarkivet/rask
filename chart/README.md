@@ -156,6 +156,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | maintenance.trashPurge | bool | `false` | Delete the bytes of trash records past their grace deadline and revoke their grants, only when that scan's drift report is clean. Irreversible; off by default. |
 | maintenance.trashPurgeDryRun | bool | `false` | Run the purge pass for real but perform no mutation, reporting `would_purge`; adds full read cost. |
 | maintenance.trashPurgeMaxPerTick | int | `25` | Maximum trash records purged per tick; the remainder is reported as capped and drained next tick. |
+| maintenance.trashReleaseMaxPerTick | int | `200` | Maximum drops past their deadline one audit's backstop releases; the remainder is reported as capped. |
 | maintenance.tupleRebuild | bool | `false` | Recreate OpenFGA tuples the control-plane registries still justify (project admin seed, warehouse tenancy); additive only. Off by default. |
 | maintenance.tupleRebuildDryRun | bool | `true` | Plan and report the tuple rebuild without writing. Defaults true. |
 | maintenance.tupleRebuildMaxPerTick | int | `50` | Maximum tuples the rebuild writes per tick; the remainder is reported as capped. |

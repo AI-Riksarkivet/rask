@@ -1,8 +1,8 @@
 """One table's orphan check, run for the ``orphans`` task the work queue hands one replica (owner, 2026-11-09/10).
 
 Each table's check is a task of its own (``maintenance.task.orphans.<uuid>``), held on a schedule of its own, and takes
-its table's claim, so it never runs beside the table's pass or another check of it (:func:`maintenance.services.queue
-._claim_key`). What it costs is the table's: the keyed reads a table's pass makes, then one scan of its main dataset
+its table's claim, so it never runs beside the table's pass or another check of it (:func:`maintenance.services
+.queue_worker._claim_key`). What it costs is the table's: the keyed reads a table's pass makes, then one scan of its main dataset
 (:func:`maintenance.services.orphans.scan_dataset`), never an estate-wide listing. The check:
 
 1. **Applies the table pass's own guards before touching anything** (:func:`maintenance.services.table_pass
@@ -45,7 +45,7 @@ from maintenance.services.floor import FloorRaise, raise_listing_floor
 from maintenance.services.naming import PolicyOwners, claim_store
 from maintenance.services.orphans import DatasetOrphanScan, OrphanFile, scan_dataset
 from maintenance.services.plan import PlanContext, resolve_plan
-from maintenance.services.queue import ORPHAN_CHECK_FLOOR_HOURS, Task
+from maintenance.services.queue_wire import ORPHAN_CHECK_FLOOR_HOURS, Task
 from maintenance.services.table_pass import governs, held_location, read_for
 
 

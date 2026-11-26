@@ -7,7 +7,7 @@ person is most likely to have to chase. The control event a trash purge announce
 signed the same way, with no delegation: maintenance never signs for a person.
 
 A SIGNER WITHOUT ITS KEY EMITS NOTHING and reports itself not ready, and takes no task meanwhile
-(`maintenance.services.queue.Worker`, driven on a real broker by the queue's own lane). The signer is the worker's
+(`maintenance.services.queue_worker.Worker`, driven on a real broker by the queue's own lane). The signer is the worker's
 process, maintenance's only one. Every event names its table's and namespace's uuids beside the names
 (ADR 0173 §10), inside what is signed. A pass and the purge emit after the work they describe, so a signature that cannot
 be made is a withheld event and never a failed pass; maintenance stages no control event, so nothing signs one later.

@@ -14,7 +14,8 @@ from datetime import UTC, datetime
 
 import pytest
 
-from maintenance.services.queue import at_schedule, redelivery_delay
+from maintenance.services.queue import at_schedule
+from maintenance.services.queue_worker import redelivery_delay
 
 
 @pytest.mark.parametrize(

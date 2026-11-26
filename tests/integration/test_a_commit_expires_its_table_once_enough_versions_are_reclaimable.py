@@ -41,7 +41,7 @@ from lakehouse.storage.options import StorageOptions
 from maintenance.core import metrics
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services import expiry, table_pass
-from maintenance.services.expiry import HISTORY_FENCED, DatasetResult
+from maintenance.services.expiry import HISTORY_FENCED, DatasetResult, FailedAt
 from maintenance.services.table_pass import TableTask, held_location, run_table_pass
 from tests import seeding
 from tests.integration.maintenance_vend_doors import CATALOG_URL, maintain_tier_door
@@ -257,7 +257,7 @@ def _outcome(kind: str, uri: str) -> DatasetResult:
     the name it asked under, refused, dropped mid-pass, or run."""
     match kind:
         case "failed":
-            return DatasetResult(uri=uri, error="maintain: the store refused the cleanup")
+            return DatasetResult(uri=uri).fail(FailedAt.MAINTAIN, RuntimeError("the store refused the cleanup"))
         case "fenced":
             return DatasetResult(uri=uri, skipped=HISTORY_FENCED)
         case "parked":
@@ -410,7 +410,7 @@ def test_a_pass_that_cannot_read_its_tables_policy_as_written_reclaims_nothing(
         [refused_by] if not store_fails_it else [],
         now + next_pass if next_pass is not None else retried,
     )
-    assert parked == ([{"refused_by": refused_by}] if refused_by else [])
+    assert parked == ([{"lance.maintenance.refused_by": refused_by}] if refused_by else [])
 
 
 def test_a_pass_whose_tables_uuid_is_read_once_and_fails_runs_under_no_policy_at_all(

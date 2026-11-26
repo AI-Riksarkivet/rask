@@ -35,7 +35,7 @@ from maintenance.core.lineage_emit import (
     classify_retryable,
     make_emitter,
 )
-from maintenance.services.expiry import DatasetResult
+from maintenance.services.expiry import DatasetResult, FailedAt
 from maintenance.services.table_pass import emit_pass_lineage
 from tests.bus_double import BusDouble
 from tests.undelivered_counts import counting, undelivered_counts
@@ -156,7 +156,7 @@ def test_emit_pass_lineage_never_raises_even_for_a_broken_emitter() -> None:
         async def emit_maintenance_failed(self, *, table_id: str, error: str, location: str | None = None, uuids: DatasetUuids = UNRESOLVED) -> None:
             raise RuntimeError("boom from a non-best-effort emitter")
 
-    results = [_named("ns$a", error="maintain: x")]
+    results = [_named("ns$a").fail(FailedAt.MAINTAIN, RuntimeError("x"))]
     asyncio.run(emit_pass_lineage(cast(Any, _OldProtocolEmitter()), results))  # no raise
     asyncio.run(emit_pass_lineage(cast(Any, _RaisingEmitter()), results))  # no raise
 

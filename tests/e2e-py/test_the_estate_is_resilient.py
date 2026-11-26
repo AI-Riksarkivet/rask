@@ -84,7 +84,7 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.governed.fga_ids import user_object
 from lineage.api.ingest_lane import CONSUMER as INGEST_CONSUMER
 from lineage.api.ingest_lane import STREAM as INGEST_STREAM
-from maintenance.services.queue import ARRIVALS_CONSUMER, ARRIVALS_STREAM
+from maintenance.services.queue_wire import ARRIVALS_CONSUMER, ARRIVALS_STREAM
 
 
 #: The spec's code for a door that cannot answer now (`lance_docs/ns_catalog/spec.yaml`, `ErrorResponse.code`).

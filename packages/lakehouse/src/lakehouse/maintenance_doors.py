@@ -1,13 +1,52 @@
-"""What the catalog's maintenance doors answer: the catalog serves each model as its door's response, and maintenance
-reads the answer with the same model, so the two cannot disagree on a field.
+"""What the catalog's maintenance doors take and answer: the catalog reads each request and serves each answer with the
+model maintenance builds the request and reads the answer with, so the two cannot disagree on a field.
 
-They ship in one image and deploy together, so a field the catalog renames is renamed for the reader in the same build;
-a reader of its own copy would only fail at run time, on the estate.
+They ship in one image and deploy together, so a field the catalog renames is renamed for the other side in the same
+build; a copy of its own would only fail at run time, on the estate.
 """
 
 from datetime import datetime
+from typing import Final
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+#: The most objects one request to a grant door names. A longer list is refused whole (422), so maintenance bounds what
+#: one run of its repair and its rebuild takes by it (``maintenance.core.config``).
+MAX_OBJECTS_PER_REQUEST: Final = 500
+
+
+class _DoorRequest(BaseModel):
+    """A request's body, which refuses a field it does not define: one read as absent would be answered as if it had been
+    understood."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class FloorRaiseRequest(_DoorRequest):
+    """A raise of a table's listing floor, or its dry run. A field it does not name is refused, since a misnamed
+    ``dry_run`` would otherwise commit the raise its caller only meant to preview."""
+
+    #: Answer as the raise would be answered, the caller's rung and the table's name judged, and commit nothing.
+    dry_run: bool = False
+
+
+class TrashRefusalRequest(_DoorRequest):
+    """Why maintenance declined to act on a trash record this tick, as its own report names it."""
+
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class GhostRevokeRequest(_DoorRequest):
+    """The objects a drift report found holding grants that no registry names, each an OpenFGA object (``kind:id``)."""
+
+    objects: list[str] = Field(min_length=1, max_length=MAX_OBJECTS_PER_REQUEST)
+
+
+class TenancyRebuildRequest(_DoorRequest):
+    """The warehouses whose tenancy edge a drift report found missing, by id."""
+
+    warehouses: list[str] = Field(min_length=1, max_length=MAX_OBJECTS_PER_REQUEST)
 
 
 class CleanupDisarmed(BaseModel):
@@ -118,16 +157,21 @@ class TenancyRebuildResponse(BaseModel):
 
 
 __all__ = [
+    "MAX_OBJECTS_PER_REQUEST",
     "CleanupDisarmed",
     "CloneEndingEntry",
     "CloneEndingFinishResponse",
     "CloneEndingsResponse",
+    "FloorRaiseRequest",
     "FloorRaised",
+    "GhostRevokeRequest",
     "GhostRevokeResponse",
     "GrantCensusResponse",
     "IdempotencyKeysReclaimResponse",
+    "TenancyRebuildRequest",
     "TenancyRebuildResponse",
     "TrashEndResponse",
+    "TrashRefusalRequest",
     "TrashRefusalResponse",
     "TrashReleaseResponse",
 ]

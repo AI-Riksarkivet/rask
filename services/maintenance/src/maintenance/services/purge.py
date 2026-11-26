@@ -86,8 +86,16 @@ from lakehouse.storage.stored_objects import StoredObject, delete_objects, list_
 from lakehouse.table_paths import objects_at, spellings
 from maintenance.core.config import MaintenanceCatalogDoor, MaintenanceSettings, MaintenanceStore, shared_lance_session
 from maintenance.core.metrics import record_trash_purge
-from maintenance.services.credentials import MaintenanceDenied, TableNotGoverned, VendUndecided, end_trash, note_trash_refusal, reclaim_options_for
+from maintenance.services.credentials import (
+    MaintenanceDenied,
+    TableNotGoverned,
+    VendUndecided,
+    end_trash,
+    note_trash_refusal,
+    reclaim_options_for,
+)
 from maintenance.services.naming import manifest_uuid
+from maintenance.services.outcomes import Refused
 from maintenance.services.reconcile import MANIFEST_DIR, NON_GATING_CATEGORIES, WALK_CATEGORIES, OrphanedTrash, ReconcileReport
 
 
@@ -126,18 +134,15 @@ class PurgedRecord(BaseModel):
     tuples_revoked: int = 0
 
 
-class RefusedRecord(BaseModel):
+class RefusedRecord(Refused):
     """One expired trash record the purge declined to act on, and WHY.
 
     A refusal is a finding, not an error: the common cases (still registered, outside the maintained
     estate) are precisely the states where deleting would have destroyed something live.
     """
 
-    kind: str
-    id: str
-    reason: str
     #: How many ticks have now refused this record, INCLUDING this one — persisted on the trash record
-    #: itself, so the count survives a tick. Without it a record refused every five minutes for thirty
+    #: itself, so the count survives a tick. Without it a record refused by every daily scan for thirty
     #: days is indistinguishable from one refused once, and a permanent exclusion — the state that
     #: actually needs a human — reads as a transient one. ``None`` when the annotation could not be
     #: written (the record was cleared concurrently, or the conditional write lost its race); the
@@ -194,7 +199,7 @@ class TrashPurgeReport(BaseModel):
 
 
 def due_records(control_root: str, storage_options: StorageOptions) -> list[TrashRecord]:
-    """Every trash record past its deadline and released, OLDEST FIRST.
+    """Every trash record past its deadline and released, the least refused first and, among those, the oldest.
 
     Released, since the catalog vends a record's bytes session and ends it only then (``catalog.services.trash_reclaim``):
     the release waits out the settle an undrop admitted at the deadline needs, and tells each person who loses access.
@@ -204,9 +209,9 @@ def due_records(control_root: str, storage_options: StorageOptions) -> list[Tras
     reported and the thing that gets deleted can never be two different sets. ``trash.expired`` refuses
     an undated or unparseable record, which is the fail-toward-not-deleting direction.
 
-    Ordered by refusal count, then oldest-first. `trash_purge_max_per_tick` slices this list BEFORE
-    the refusal checks run, so an oldest-first order lets a permanently-refused record hold the same
-    slot on every tick and the queue behind it never moves (measured 2026-09-20: 18 of a 25 cap).
+    `trash_purge_max_per_tick` slices this list BEFORE the refusal checks run, so an order by age alone
+    lets a permanently-refused record hold the same slot on every tick and the queue behind it never
+    moves (measured 2026-09-20: 18 of a 25 cap).
     """
     return due_from(trash.list_all(control_root, storage_options))
 
@@ -214,18 +219,21 @@ def due_records(control_root: str, storage_options: StorageOptions) -> list[Tras
 def due_from(records: list[TrashRecord]) -> list[TrashRecord]:
     """:func:`due_records` without the read — the expiry rule applied to records already in hand.
 
-    Split out for F6(d): maintenance now reads the trash index ONCE and derives two sets from it (the
-    datasets it must not rewrite, and this report-only due list). Before the split it called
-    `due_records`, which re-listed the whole index — a second full read per tick for a log line.
+    For a caller that reads the trash index once and derives more than this set from it: a second
+    listing of the whole index would be a second full read for the same answer.
 
     The rule itself stays in ONE place on purpose: the set that gets reported and the set that gets deleted can never be
     two different answers.
     """
-    return sorted((record for record in trash.expired(records) if record.is_released), key=_drain_order)
+    return sorted((record for record in trash.expired(records) if record.is_released), key=drain_order)
 
 
-def _drain_order(record: TrashRecord) -> tuple[int, str]:
-    """Sort key: refusal count, then expiry. A record never refused sorts as never-tried."""
+def drain_order(record: TrashRecord) -> tuple[int, str]:
+    """Sort key: refusal count, then expiry. A record never refused sorts as never-tried.
+
+    The purge and the release's backstop (:func:`maintenance.services.trash_release.release_expired_trash`) both take
+    the head of this order under their caps, and the catalog counts a refusal of either on the one record
+    (``attempts``), so a record either keeps refusing sorts behind the ones that move."""
     return (max(record.attempts or 0, 0), record.expires_at or "")
 
 
@@ -651,8 +659,10 @@ async def _refuse(out: TrashPurgeReport, record: TrashRecord, *, reason: str, se
     of the memory by omission.
 
     The note is the catalog's to write (``POST /management/v1/trash/{kind}/{uuid}/refusals``, [[XC-084]]), and it is
-    best-effort: a door that refuses or fails it leaves ``attempts`` unknown and the refusal reported under its own cause,
-    rather than the note's failure standing in for it as :func:`_purge_or_refuse` would report it. A record that keeps no
+    best-effort: a door that refuses or fails it leaves ``attempts`` unknown and the refusal reported under its own
+    cause, rather than the note's failure standing in for it as :func:`_purge_or_refuse` would report it. The report
+    carries ``reason`` whole; the note carries what a note takes of it (``credentials.note_trash_refusal``), so a
+    reason of any length is counted. A record that keeps no
     ``uuid`` is not one any door files, and its refusal is reported, not remembered: there is no key to remember it under.
     """
     kind, obj_id, uuid = record.kind, record.id, record.uuid
@@ -662,13 +672,13 @@ async def _refuse(out: TrashPurgeReport, record: TrashRecord, *, reason: str, se
             attempts = await run_in_threadpool(partial(note_trash_refusal, kind, uuid, settings, reason=reason))
         except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
             log.warning("trash_refusal_not_recorded", extra={"kind": kind, "id": obj_id, "error": f"{type(exc).__name__}: {exc}"})
-    out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason, attempts=attempts))
+    out.refused.append(RefusedRecord(kind=kind, id=obj_id, uuid=uuid, reason=reason, attempts=attempts))
 
 
 def refusal_log_entry(record: RefusedRecord) -> dict[str, object]:
     """One refusal as the result line reports it, attempt count included.
 
-    `attempts` is what `_drain_order` sorts on, so a refusal reported without it leaves the operator
+    `attempts` is what `drain_order` sorts on, so a refusal reported without it leaves the operator
     asking the one question the line exists to answer: is this record being demoted, or refused afresh
     every tick? `None` is a DRY RUN answering honestly — a preview notes no refusal so it
     cannot inflate the evidence it exists to show.
@@ -764,7 +774,7 @@ async def _asked_of_the_catalog[T](record: TrashRecord, out: TrashPurgeReport, a
     try:
         return await run_in_threadpool(ask)
     except (MaintenanceDenied, TableNotGoverned, VendUndecided) as exc:
-        out.refused.append(RefusedRecord(kind=record.kind, id=record.id, reason=str(exc)))
+        out.refused.append(RefusedRecord(kind=record.kind, id=record.id, uuid=record.uuid, reason=str(exc)))
         log.warning("trash_purge_refused_by_the_catalog", extra={"kind": record.kind, "id": record.id, "asked": asked, "reason": str(exc)})
         return None
 
@@ -779,7 +789,7 @@ async def _preview_one(record: TrashRecord, out: TrashPurgeReport, *, roots: set
     """
     kind, obj_id, location = record.kind, record.id, record.location
     if (reason := check(record, roots=roots, live=live)) is not None:
-        out.refused.append(RefusedRecord(kind=kind, id=obj_id, reason=reason))
+        out.refused.append(RefusedRecord(kind=kind, id=obj_id, uuid=record.uuid, reason=reason))
         log.warning("trash_purge_refused", extra={"kind": kind, "id": obj_id, "reason": reason})
         return
     # PAST EVERY REFUSAL THIS PASS CAN EVALUATE WITHOUT MUTATING. `would_purge` remains an UPPER BOUND: the catalog's own
@@ -818,7 +828,7 @@ async def _purge_or_refuse(record: TrashRecord, out: TrashPurgeReport, *, run: _
         await _purge_one(record, out, run=run)
     except Exception as exc:  # noqa: BLE001 — one record's failure, whatever it is, is that record's refusal
         reason = f"the purge failed ({type(exc).__name__}: {exc}) — the record survives and the next tick retries"
-        out.refused.append(RefusedRecord(kind=record.kind, id=record.id, reason=reason))
+        out.refused.append(RefusedRecord(kind=record.kind, id=record.id, uuid=record.uuid, reason=reason))
         log.exception("trash_purge_failed", extra={"kind": record.kind, "id": record.id})
 
 

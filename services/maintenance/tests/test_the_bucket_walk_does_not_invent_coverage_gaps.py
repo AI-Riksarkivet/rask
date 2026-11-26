@@ -38,7 +38,7 @@ import lance
 import pyarrow as pa
 import pyarrow.fs as pafs
 import pytest
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 
 from maintenance.core.config import MaintenanceSettings
 from maintenance.services.discovery import Discovery, discover_datasets
@@ -85,8 +85,8 @@ def test_the_walk_reaches_exactly_as_deep_as_it_is_told(tmp_path: Path, depth: i
 def test_the_setting_exists_and_is_bounded() -> None:
     """A depth of 0 walks nothing and an unbounded one lists every directory in the estate. Both ends are refused."""
     assert MaintenanceSettings(discovery_max_depth=7).discovery_max_depth == 7
-    for refused in (0, 17):
-        with pytest.raises(ValueError):
+    for refused, bound in ((0, "greater than or equal to 1"), (17, "less than or equal to 16")):
+        with pytest.raises(ValidationError, match=bound):
             MaintenanceSettings(discovery_max_depth=refused)
 
 
@@ -117,13 +117,12 @@ def test_the_reconciler_walks_the_configured_bound(tmp_path: Path, monkeypatch: 
     (tmp_path / "data").mkdir(parents=True, exist_ok=True)
 
     asyncio.run(
-        reconcile_mod.reconcile(
+        reconcile_mod.reconcile_walking(
             settings,
             None,
             control_root=f"file://{tmp_path / 'control'}",
             namespace_root=f"file://{tmp_path / 'data'}",
             bucket_client=_NoBuckets(),
-            walk=True,
         )
     )
 

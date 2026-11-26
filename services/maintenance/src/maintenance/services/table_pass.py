@@ -68,6 +68,7 @@ from maintenance.services.expiry import (
     DatasetResult,
     ExpiryPolicy,
     ExpiryTarget,
+    FailedAt,
     count_reclaimable,
     expire_versions,
     lost_staged_manifests,
@@ -224,7 +225,7 @@ def _on_table_not_governed(result: DatasetResult, exc: Exception, table_id: str 
 
 
 def _on_vend_undecided(result: DatasetResult, exc: Exception, _table_id: str | None) -> None:
-    result.error, result.error_type = f"maintain: {exc}", type(exc).__name__
+    result.fail(FailedAt.MAINTAIN, exc)
 
 
 #: How each answer of the vend door that stops the dataset is recorded, and the line it logs. A refusal and a park are
@@ -263,12 +264,13 @@ def _record_vend_answer(result: DatasetResult, exc: Exception, *, table_id: str 
 class DisarmOutcome(BaseModel):
     """The failure :func:`_disarm` met, if any, carried onto whichever result the pass returns."""
 
-    error: str | None = None
-    error_type: str | None = None
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    failure: Exception | None = None
 
     def onto(self, result: DatasetResult) -> DatasetResult:
-        if self.error is not None and result.error is None:
-            result.error, result.error_type = self.error, self.error_type
+        if self.failure is not None and result.error is None:
+            result.fail(FailedAt.AUTO_CLEANUP, self.failure)
         return result
 
 
@@ -294,7 +296,7 @@ def _disarm(uri: str, table: str, *, readings: PassReadings, settings: Maintenan
         answered = credentials.disarm_cleanup(table, settings, branch=_branch_of(uri, table, readings=readings))
     except _VEND_STOPS as exc:
         log.warning("auto_cleanup_disarm_failed", extra={"uri": uri, "error": f"{type(exc).__name__}: {exc}"[:300]})
-        return DisarmOutcome(error=f"auto_cleanup: {exc}", error_type=type(exc).__name__)
+        return DisarmOutcome(failure=exc)
     if answered.disarmed:
         log.warning("auto_cleanup_disarmed", extra={"uri": uri, "keys": answered.disarmed, "version": answered.version})
     return DisarmOutcome()
@@ -491,7 +493,7 @@ def _check_committed_files(
     except (OSError, ValueError) as exc:
         log.warning("committed_files_unchecked", extra={"uri": result.uri, "table_id": result.table_id, "error": f"{type(exc).__name__}: {exc}"[:300]})
         if result.error is None:
-            result.error, result.error_type = f"committed files: {exc}", type(exc).__name__
+            result.fail(FailedAt.COMMITTED_FILES, exc)
         return
     result.overwritten_files = found.overwritten
     if found.reclaimed:
@@ -696,14 +698,13 @@ def audit_material_work(result: DatasetResult, *, subject: str) -> None:
 
 
 def _lane_of(result: DatasetResult) -> Literal["complete", "fail"] | None:
-    """The lineage event a pass emits: ``fail`` for a ``maintain:`` failure, ``complete`` for reclaimed versions, and
-    none for an ``open:`` error, a refusal or a dataset no id names."""
-    error = result.error or ""
+    """The lineage event a pass emits: ``fail`` for a failure of its maintenance, ``complete`` for reclaimed versions,
+    and none for a dataset that would not open, a refusal or a dataset no id names."""
     if result.table_id is None:
         return None
-    if error.startswith("maintain:"):
+    if result.failed_at is FailedAt.MAINTAIN:
         return "fail"
-    if not error.startswith("open:") and _did_material_work(result):
+    if result.failed_at is not FailedAt.OPEN and _did_material_work(result):
         return "complete"
     return None
 

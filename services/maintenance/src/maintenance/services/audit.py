@@ -12,7 +12,7 @@ the shipped configuration deletes no trashed byte.
 
 One task of each, once per firing whatever the replica count: each schedule is a NATS message schedule (``@hourly``, and
 ``0 30 0 * * *`` for the scan, by default), each on a subject of its own, and the queue holds one task per subject. Both
-repair the estate from a drift report of their own, so they hold one claim (:mod:`maintenance.services.queue`): the two
+repair the estate from a drift report of their own, so they hold one claim (:mod:`maintenance.services.queue_worker`): the two
 never run at once, and the later waits out the other.
 """
 
@@ -21,7 +21,7 @@ import secrets
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
@@ -45,9 +45,10 @@ from maintenance.services.credentials import (
 from maintenance.services.naming import claim_store, claimed_location
 from maintenance.services.orphan_check import FLOOR
 from maintenance.services.purge import held_by, purge_expired_trash, refusal_log_entry
-from maintenance.services.queue import QueueUnreachableError, Task, TaskQueue
+from maintenance.services.queue import QueueUnreachableError, TaskQueue
+from maintenance.services.queue_wire import Task
 from maintenance.services.rebuild import rebuild_tuples
-from maintenance.services.reconcile import CATEGORIES, ReconcileReport, reconcile
+from maintenance.services.reconcile import CATEGORIES, GrantCensusReader, Reconciled, ReconcileReport, reconcile, reconcile_walking
 from maintenance.services.reconcile import Sources as ReconcileSources
 from maintenance.services.repair import repair_drift
 from maintenance.services.tombstones import Tombstone, sweep_tombstones
@@ -55,6 +56,13 @@ from maintenance.services.trash_release import release_expired_trash
 
 
 log = logging.getLogger(__name__)
+
+
+class Reconciling(Protocol):
+    """How a run builds its drift report: the audit's (:func:`reconcile`), or the scan's with the storage walk
+    (:func:`reconcile_walking`)."""
+
+    async def __call__(self, settings: MaintenanceSettings, grants: GrantCensusReader | None = None, *, control_root: str | None = None) -> Reconciled: ...
 
 
 async def run_audit(settings: MaintenanceSettings, *, queue: TaskQueue | None) -> dict[str, Any]:
@@ -65,11 +73,11 @@ async def run_audit(settings: MaintenanceSettings, *, queue: TaskQueue | None) -
     noticed. It leaves the walk to the daily scan (:func:`run_scan`, owner 2026-11-09), and with it the purge, whose gate
     refuses a report whose run walked no storage (:func:`maintenance.services.purge.report_is_clean`).
     """
-    payload, _, sources = await _report_and_repair(settings, walk=False)
+    payload, found = await _report_and_repair(settings, reconcile)
     if settings.store_events_expected and (bucket_events := await run_in_threadpool(report_bucket_events, settings)) is not None:
         payload["store_events"] = bucket_events.model_dump()
     if queue is not None:
-        payload["unscheduled"] = await _queue_what_holds_nothing(settings, queue, sources)
+        payload["unscheduled"] = await _queue_what_holds_nothing(settings, queue, found.sources)
     return payload
 
 
@@ -82,10 +90,10 @@ async def run_scan(settings: MaintenanceSettings, *, control: ControlEmitter) ->
     reading a stored or previous report would certify a state that no longer exists. Reclamation is off by default
     (`MAINTENANCE_TRASH_PURGE_ENABLED`), so on the shipped configuration this adds one report key and deletes nothing.
     """
-    payload, report, _ = await _report_and_repair(settings, walk=True)
+    payload, found = await _report_and_repair(settings, reconcile_walking)
     purged = await purge_expired_trash(
         settings,
-        report=report,
+        report=found.report,
         control=control,
         control_root=settings.resolved_control_root,
     )
@@ -136,20 +144,12 @@ async def _reclaim_idempotency_keys(settings: MaintenanceCatalogDoor) -> dict[st
     return {"reclaimed": reclaimed, "kept": kept, "left": left, "unreadable": unreadable}
 
 
-async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tuple[dict[str, Any], ReconcileReport, ReconcileSources | None]:
-    """One cross-store drift REPORT, the storage walk with it when ``walk``, the repairs it justifies and the release of
-    every drop past its deadline; the payload to log, the report, for a caller whose next step it gates, and the stores
-    it read."""
-    # The stores this run read, so the tuple rebuild below writes only grants the records the
-    # REPORT saw actually justify — see `reconcile`'s `into_sources`.
-    read_sources: list[ReconcileSources] = []
-    report = await reconcile(
-        settings,
-        partial(grant_census, settings),
-        control_root=settings.resolved_control_root,
-        into_sources=read_sources,
-        walk=walk,
-    )
+async def _report_and_repair(settings: MaintenanceSettings, reconciling: Reconciling) -> tuple[dict[str, Any], Reconciled]:
+    """One cross-store drift REPORT as ``reconciling`` builds it (the audit's, or the scan's with the storage walk), the
+    repairs it justifies and the release of every drop past its deadline; the payload to log, and the report with the
+    stores it read, for a caller whose next step either gates."""
+    found = await reconciling(settings, partial(grant_census, settings), control_root=settings.resolved_control_root)
+    report = found.report
     payload = report.model_dump(mode="json")
     summary = {
         "total": report.total,
@@ -173,22 +173,22 @@ async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tu
         log.info("reconcile_clean", extra=summary)
     # BEFORE the purge, because it RESTORES rather than reclaims: a tenant this revives may own
     # datasets the purge would otherwise act on while nobody can administer them.
-    if read_sources:
-        rebuilt = await rebuild_tuples(settings, report=report, sources=read_sources[0])
-        payload["tuple_rebuild"] = rebuilt.model_dump(mode="json")
-        if rebuilt.written or rebuilt.unjustified or rebuilt.error:
-            # NAMED at WARNING: every entry is an authorization change (or a tenant that cannot be
-            # recovered), and a count answers neither question an operator has about it.
-            log.warning(
-                "tuple_rebuild_result",
-                extra={
-                    "dry_run": rebuilt.dry_run,
-                    "written": [f"{t.user} {t.relation} {t.object} <- {t.justified_by}" for t in rebuilt.written],
-                    "unjustified": rebuilt.unjustified,
-                    "capped": rebuilt.capped,
-                    "error": rebuilt.error,
-                },
-            )
+    # The stores the REPORT was built from, so the rebuild writes only grants the records it saw justify.
+    rebuilt = await rebuild_tuples(settings, report=report, sources=found.sources)
+    payload["tuple_rebuild"] = rebuilt.model_dump(mode="json")
+    if rebuilt.written or rebuilt.unjustified or rebuilt.error:
+        # NAMED at WARNING: every entry is an authorization change (or a tenant that cannot be
+        # recovered), and a count answers neither question an operator has about it.
+        log.warning(
+            "tuple_rebuild_result",
+            extra={
+                "dry_run": rebuilt.dry_run,
+                "written": [f"{t.user} {t.relation} {t.object} <- {t.justified_by}" for t in rebuilt.written],
+                "unjustified": [u.model_dump(exclude_none=True) for u in rebuilt.unjustified],
+                "capped": rebuilt.capped,
+                "error": rebuilt.error,
+            },
+        )
     # AFTER the rebuild, and the order is load-bearing rather than tidy: the rebuild REVIVES a
     # tenant by re-asserting the tenancy pointer its registry record justifies, and this pass
     # revokes authz for objects no record names. Running the revoke first would let one tick revoke
@@ -205,7 +205,7 @@ async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tu
                 "dry_run": repaired.dry_run,
                 "revoked": [f"{r.fga_object} ({r.tuples} tuples) <- {r.justified_by}" for r in repaired.revoked],
                 "refused": repaired.refused,
-                "kept_by_the_catalog": repaired.kept_by_the_catalog,
+                "kept_by_the_catalog": [k.model_dump(exclude_none=True) for k in repaired.kept_by_the_catalog],
                 "capped": repaired.capped,
                 "error": repaired.error,
             },
@@ -226,7 +226,7 @@ async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tu
     probe = partial(held_by, storage_options=options, registry=BaseRegistry(control_root=settings.resolved_control_root, storage_options=options))
     swept = await run_in_threadpool(sweep_tombstones, settings, report=report, probe=probe, delete=_clear)
     payload["tombstone_sweep"] = swept.model_dump(mode="json")
-    if swept.swept or swept.refused or swept.error:
+    if swept.swept or swept.refused or swept.failed:
         # NAMED at WARNING like its siblings: each entry removed a recovery record, and "swept 50"
         # tells an operator nothing they can check against the store.
         log.warning(
@@ -234,19 +234,20 @@ async def _report_and_repair(settings: MaintenanceSettings, *, walk: bool) -> tu
             extra={
                 "dry_run": swept.dry_run,
                 "swept": [f"{s.kind}:{s.id} <- {s.location} ({s.probed_objects} objects)" for s in swept.swept],
-                "refused": swept.refused,
+                "refused": [r.model_dump() for r in swept.refused],
                 "capped": swept.capped,
-                "error": swept.error,
+                "failed": [f.model_dump() for f in swept.failed],
             },
         )
-    # ADR 0146: a drop past its deadline loses its grants on every tick, ungated by the report and by the purge's
-    # opt-in, since it deletes no byte. Before the purge, which then finds nothing left to revoke.
+    # ADR 0146: every run asks the catalog to release the drops past their deadline, at most
+    # `MAINTENANCE_TRASH_RELEASE_MAX_PER_TICK` of them and the rest reported capped, ungated by the report and by the
+    # purge's opt-in, since a release deletes no byte. Before the purge, which then finds nothing left to revoke.
     payload["trash_release"] = await _release_expired_trash(settings)
     # ADR 0198 §1: a clone's tag a door could not release is released by the catalog, asked here; it deletes no byte.
     payload["clone_endings"] = (await finish_clone_endings(settings)).model_dump(mode="json")
     # ADR 0188 as amended ([[LH-576]]): what a failed door left to announce is sent by the catalog, asked here.
     payload["announcement_intents"] = await _finish_announcement_intents(settings)
-    return payload, report, (read_sources[0] if read_sources else None)
+    return payload, found
 
 
 #: The most calls one audit makes to the catalog's finish door, each judging up to the door's own limit, so an audit
@@ -277,15 +278,17 @@ async def _finish_announcement_intents(settings: MaintenanceCatalogDoor) -> dict
 
 
 async def _release_expired_trash(settings: MaintenanceSettings) -> dict[str, Any]:
-    """One tick's release of the drops past their deadline, logged NAMED at WARNING when it did or held anything: each
+    """One tick's release of the drops past their deadline, logged NAMED at WARNING when it did or kept anything: each
     entry removed every grant on an object, and a count names no one to check."""
     released = await release_expired_trash(settings, control_root=settings.resolved_control_root)
-    if released.released or released.held or released.reason:
+    if released.released or released.kept or released.capped or released.reason:
         log.warning(
             "trash_release_result",
             extra={
                 "released": [f"{r.kind}:{r.uuid} ({r.tuples_revoked} tuples) <- {r.id}" for r in released.released],
-                "held": [{"id": f"{h.kind}:{h.id}", "reason": h.reason} for h in released.held],
+                "refused": [{"id": f"{r.kind}:{r.id}", "reason": r.reason} for r in released.refused],
+                "failed": [{"id": f"{f.kind}:{f.id}", "error": f.error} for f in released.failed],
+                "capped": released.capped,
                 "reason": released.reason,
             },
         )
@@ -344,7 +347,7 @@ def _finding_identity(finding: BaseModel) -> str:
     return str(dumped)
 
 
-async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQueue, sources: ReconcileSources | None) -> dict[str, int]:
+async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQueue, sources: ReconcileSources) -> dict[str, int]:
     """Queue a pass for every table, and a task for every trash record, that neither a schedule nor the queue holds, and
     schedule an orphan check for every table holding neither a check's schedule nor a queued check.
 
@@ -364,10 +367,10 @@ async def _queue_what_holds_nothing(settings: MaintenanceSettings, queue: TaskQu
     released, or carrying no deadline, gets no task: its task would end holding nothing and be queued again next hour.
     """
     options = settings.storage_options()
-    tables = sources.live_tables() if sources is not None else None
+    tables = sources.live_tables()
     if tables is None:
         tables = await run_in_threadpool(_held_tables, settings)
-    records = sources.trash if sources is not None and sources.trash is not None and not sources.trash_error else None
+    records = sources.trash if sources.trash is not None and not sources.trash_error else None
     if records is None:
         records = await run_in_threadpool(trash.list_all, settings.resolved_control_root, options)
     trashed = {str(uuid): record for record in records if (uuid := record.uuid)}

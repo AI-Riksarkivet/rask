@@ -11,7 +11,7 @@ import pytest
 
 from lakehouse.events.lineage_events import DatasetUuids
 from maintenance.core.lineage_emit import UNRESOLVED
-from maintenance.services.expiry import DatasetResult
+from maintenance.services.expiry import DatasetResult, FailedAt
 from maintenance.services.table_pass import emit_pass_lineage
 
 
@@ -46,7 +46,7 @@ def _material(n: int) -> list[DatasetResult]:
 @pytest.mark.asyncio
 async def test_a_raising_complete_publish_does_not_abort_the_emit_phase() -> None:
     """The FAIL lane is documented raise-proof "even for a mis-wired emitter"; the COMPLETE lane was not."""
-    results = [*_material(3), DatasetResult(uri="s3://b/9999_ns.bad", table_id="ns$bad", error="maintain: boom", error_type="RuntimeError")]
+    results = [*_material(3), DatasetResult(uri="s3://b/9999_ns.bad", table_id="ns$bad").fail(FailedAt.MAINTAIN, RuntimeError("boom"))]
     emitter = _RecordingEmitter(raise_on="ns$tbl1")
     await emit_pass_lineage(emitter, results)
     assert sorted(emitter.completed) == ["ns$tbl0", "ns$tbl2"], "a raising publish must not take its siblings down"
@@ -57,31 +57,33 @@ async def test_a_raising_complete_publish_does_not_abort_the_emit_phase() -> Non
     ("result", "lane"),
     [
         pytest.param(
-            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", old_versions_removed=4, error="auto_cleanup: denied", error_type="OSError"),
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", old_versions_removed=4).fail(FailedAt.AUTO_CLEANUP, OSError("denied")),
             "complete",
             id="a-failed-disarm-beside-a-reclaim",
         ),
         pytest.param(
-            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", error="auto_cleanup: denied", error_type="OSError"),
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t").fail(FailedAt.AUTO_CLEANUP, OSError("denied")),
             None,
             id="a-failed-disarm-that-reclaimed-nothing",
         ),
         pytest.param(DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", old_versions_removed=1), "complete", id="a-reclaim"),
         pytest.param(DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t"), None, id="a-pass-that-changed-nothing"),
-        pytest.param(DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", error="maintain: Commit conflict"), "fail", id="a-maintain-failure"),
         pytest.param(
-            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", old_versions_removed=2, error="maintain: cleanup blew up"),
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t").fail(FailedAt.MAINTAIN, RuntimeError("Commit conflict")), "fail", id="a-maintain-failure"
+        ),
+        pytest.param(
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", old_versions_removed=2).fail(FailedAt.MAINTAIN, RuntimeError("cleanup blew up")),
             "fail",
             id="a-maintain-failure-after-partial-work",
         ),
         pytest.param(
-            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", old_versions_removed=1, error="open: not a dataset"),
+            DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", old_versions_removed=1).fail(FailedAt.OPEN, RuntimeError("not a dataset")),
             None,
             id="an-open-error",
         ),
-        pytest.param(DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t", error="boom"), None, id="an-unprefixed-error"),
+        pytest.param(DatasetResult(uri="s3://b/0001_ns.t", table_id="ns$t").fail(FailedAt.REFS, RuntimeError("boom")), None, id="a-failure-before-maintenance"),
         pytest.param(DatasetResult(uri="s3://b/medallion", old_versions_removed=1), None, id="a-reclaim-no-table-id-names"),
-        pytest.param(DatasetResult(uri="s3://b/medallion", error="maintain: nope"), None, id="a-maintain-failure-no-table-id-names"),
+        pytest.param(DatasetResult(uri="s3://b/medallion").fail(FailedAt.MAINTAIN, RuntimeError("nope")), None, id="a-maintain-failure-no-table-id-names"),
     ],
 )
 @pytest.mark.asyncio
