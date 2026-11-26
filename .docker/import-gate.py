@@ -42,8 +42,6 @@ directive none of these dockerfiles declare, and the one-liner form has to be es
 `sh -c` twice, which is how the escaping — not the imports — became the thing under test.
 """
 
-from __future__ import annotations
-
 import importlib
 import importlib.util
 import pkgutil

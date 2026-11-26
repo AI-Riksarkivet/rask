@@ -19,8 +19,6 @@ Reproduce the build's verdict on the host, where the workspace venv carries both
     .venv/bin/python .docker/pool-gate.py                      # fails: the variable is undeclared
 """
 
-from __future__ import annotations
-
 import importlib
 import os
 import sys
