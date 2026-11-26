@@ -287,6 +287,23 @@ groups:
             and the worker's `maintenance_event_withheld_unsigned` or `maintenance_publish_failed` log lines for the table.
             Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
 
+      # A MAINTENANCE LINEAGE EVENT NO OUTBOX HOLDS IS LOST, and pages at once as a lost control event does
+      # (ControlEventsLost): the rule above warns on any sustained failure, staged or not; this one reads `staged`.
+      - alert: MaintenanceLineageEventsLost
+        expr: >-
+          sum(increase(maintenance_lineage_emit_failed_total{lance_maintenance_staged="false"}[15m])) > 0
+        labels:
+          severity: critical
+          service: maintenance
+        annotations:
+          summary: "Maintenance lineage events were not published and no outbox holds them"
+          description: >-
+            In the last 15 minutes a maintenance pass's lineage event did not reach the bus and no outbox holds it: the
+            worker could not sign it, or the bus refused it before the outbox took it. The reclamation happened and is
+            audited (`expire_versions`), and lineage's feed does not record it. Read the worker's
+            `maintenance_event_withheld_unsigned` or `maintenance_publish_failed` log lines for the table.
+            Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining
+
       # LH-497: the commit is the outbox. A find is a write whose own announcement was lost between its commit and its
       # staging, which the catalog's commit reconcile has just announced from the version log: the feed now holds it, and a
       # pipeline following `/events` was late to hear of it. Any find pages, as the closes-when of the row asks.

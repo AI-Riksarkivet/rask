@@ -565,6 +565,9 @@ is `kubectl logs deploy/rask-maintenance-worker -c worker`).
   and the `control_emit_withheld_unsigned` and `control_publish_failed` logs.
 - `ControlEmitFailing` (warning): control emits have failed at the bus for 15 minutes and wait staged. First check:
   the bus.
+- `MaintenanceLineageEventsLost` (critical): a maintenance pass's lineage event did not reach the bus and no outbox
+  holds it (`lance.maintenance.staged=false`), so lineage's feed does not record that pass. First check: the worker's
+  `maintenance_event_withheld_unsigned` or `maintenance_publish_failed` log, then the bus.
 - `MaintenanceLineageEmitFailing` (warning): a maintenance pass's lineage event did not reach the bus
   (`lance.maintenance.reason`: `unsigned` or `publish`; `lance.maintenance.staged`: whether the outbox holds it). First
   check: the worker's `maintenance_event_withheld_unsigned` or

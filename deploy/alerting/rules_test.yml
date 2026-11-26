@@ -2334,6 +2334,30 @@ tests:
               summary: "Maintenance passes are reclaiming without recording their provenance"
               description: "A maintenance pass committed its reclamation and its lineage event did not reach the bus, so lineage's feed does not record that the pass happened. Read `lance.maintenance.reason` — `unsigned` means the worker had no signing key or no canonical form for the event, `publish` that the bus refused or did not answer — and `lance.maintenance.staged`, `true` when the outbox holds the event for lineage's relay, `false` when it is lost, and the worker's `maintenance_event_withheld_unsigned` or `maintenance_publish_failed` log lines for the table. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
 
+  # A maintenance lineage event no outbox holds pages at once; one the outbox holds does not page this rule.
+  - interval: 1m
+    input_series:
+      - series: 'maintenance_lineage_emit_failed_total{lance_maintenance_reason="publish",lance_maintenance_staged="false"}'
+        values: "0 0 0 1+0x30"
+      - series: 'maintenance_lineage_emit_failed_total{lance_maintenance_reason="publish",lance_maintenance_staged="true"}'
+        values: "0 1 2 3+1x30"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MaintenanceLineageEventsLost
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: MaintenanceLineageEventsLost
+        exp_alerts:
+          - exp_labels:
+              severity: "critical"
+              service: "maintenance"
+            exp_annotations:
+              summary: "Maintenance lineage events were not published and no outbox holds them"
+              description: "In the last 15 minutes a maintenance pass's lineage event did not reach the bus and no outbox holds it: the worker could not sign it, or the bus refused it before the outbox took it. The reclamation happened and is audited (`expire_versions`), and lineage's feed does not record it. Read the worker's `maintenance_event_withheld_unsigned` or `maintenance_publish_failed` log lines for the table. Runbook: docs/runbooks/RUNBOOK-oncall.md#outbox-not-draining"
+      - eval_time: 25m
+        alertname: MaintenanceLineageEventsLost
+        exp_alerts: []
+
   # A healthy worker must NOT page: every reason's series exists at 0 and stays flat.
   - interval: 1m
     input_series:
