@@ -47,6 +47,11 @@ from lakehouse.governed import fga_provision, fga_reads, fga_resilience, secrets
 from tests.secret_store_double import SecretStoreDouble
 
 
+#: `tests.postgres_fixtures` serves `postgres` and `postgres_database` to every suite; `pytester` lets a test run a pytest
+#: session of its own against a fixture, as the Postgres fixture's own test does.
+pytest_plugins = ["pytester", "tests.postgres_fixtures"]
+
+
 #: The OTLP variables a CI harness may inject. `OTEL_EXPORTER_OTLP_ENDPOINT` is the one Dagger sets
 #: and the one the OTLP exporters fall back on; the signal-specific overrides and the headers are
 #: removed with it so a partially-stripped environment cannot produce a half-configured exporter,

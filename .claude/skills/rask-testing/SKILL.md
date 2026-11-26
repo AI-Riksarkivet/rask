@@ -117,10 +117,10 @@ consequences it does not spell out.
 
 | Lane                                              | What it runs                                                                                                      |
 | ------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `make test`                                       | (`make test`, `check-fast` and `coverage` first export `.localbin/openfga` through Dagger, `make openfga`) `-m "not e2e"` at `-n 16` (`PYTEST_WORKERS=0` for one process) |
+| `make test`                                       | (`make test`, `check-fast` and `coverage` first export `.localbin/openfga` and `.localbin/postgres` through Dagger, `make openfga` and `make postgres`) `-m "not e2e"` at `-n 16` (`PYTEST_WORKERS=0` for one process) |
 | `make check-fast`                                 | `tests/unit tests/chart tests/integration` at `-n 16`, with no marker filter. `--dist loadfile`, because three suites are parallel-unsafe at the file level (the `lance.audit` process-global logger, `configure_audit`'s level, the registry CAS markers) |
 | `make coverage`                                   | `-m "not e2e" --cov`, on request only                                                                             |
-| CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter without `tests/chart`, at `-n 4`, with `--timeout=300 --timeout-method=thread`, helm installed |
+| CI: `dagger call test` (`.dagger/test.go`)        | the `make test` marker filter without `tests/chart`, at `-n 4`, with `--timeout=300 --timeout-method=thread`, helm, the OpenFGA binary and the Postgres install (`.dagger/postgres.go`, at `.localbin/postgres` under the source) in place |
 | CI: `dagger call chart-tests` (`.dagger/test.go`, ms-gates leg `chart-tests`) | `tests/chart`, the chart's render tests, in the same container ([[XC-172]]) |
 | CI: `dagger call governance-chain` | a real Dex, OpenFGA, catalog and lineage as Dagger services on RustFS, asserting through `tests/e2e-py/test_governance_e2e.py` under `--require-live` (the e2e-stack lane runs the same module on the chart's render). The catalog holds no store key, as the chart's does not: it exchanges a ServiceAccount token a stand-in issuer signs (`scripts/lane_store_issuer.py`, `.dagger/store_identity.go`) at the store's STS for the canned policy the chart renders for it ([[XC-081]]) |
 | CI: `dagger call rustfs-lifecycle`, `dagger call smoke-rustfs` | `tests/e2e-py/test_e2e.py` under `--require-live` against a catalog whose bytes are on RustFS, booted on the exchanged session as governance-chain's is, and `scripts/smoke_rustfs.py` through `lakehouse.storage` |
@@ -146,7 +146,10 @@ Don't redo any of it in a suite. At import, before collection builds any app, th
 On request the root `conftest.py` also serves the identity and authorization plane for real: `sa_issuer` and
 `dex_issuer` (loopback issuers that mint tokens), `openfga` (the pinned OpenFGA server in memory, one per xdist worker,
 failing the test when the binary is missing) and `openfga_store` (a fresh store on it holding the bundled model, with
-`write()` for seeding tuples as the catalog's declaration does). `secret_store` configures the test's process for a
+`write()` for seeding tuples as the catalog's declaration does), `postgres` (the development fixture's pinned Postgres, one
+per xdist worker on a loopback port, failing the test when `.localbin/postgres` is missing; the plugin `tests/postgres_fixtures.py` over `tests/postgres_server.py`)
+and `postgres_database` (a database of the test's own, cloned from the worker's template, dropped when the test passes
+and kept, named in the report, when it fails). `secret_store` configures the test's process for a
 secret store as the chart's env does and answers the store's HTTP API in the shapes measured on the development OpenBao:
 the login, each secret a test has it hold, and a token's question about itself (`lookup`), which a test answers 403 to
 have the store drop the token (`tests/secret_store_double.py`; `references/fixtures.md` § A service app). Read a

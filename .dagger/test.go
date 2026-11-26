@@ -22,7 +22,8 @@ const natsImage = "nats:2.15.2-alpine"
 func withRenderableChart(c *dagger.Container) *dagger.Container {
 	return c.
 		WithExec([]string{"apt-get", "update"}).
-		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "make", "ca-certificates"}).
+		// git: the comment gate's own tests drive a real repository (`tests/unit/test_comment_history_gate.py`).
+		WithExec([]string{"apt-get", "install", "-y", "--no-install-recommends", "make", "ca-certificates", "git"}).
 		WithFile("/usr/local/bin/helm", helmBinary()).
 		// Cache helm's repo index + vendored archives: the source mount changes on every edit, so
 		// `make k3s-deps` re-runs constantly, and without these it re-fetches ten subcharts each time.
@@ -35,13 +36,21 @@ func withRenderableChart(c *dagger.Container) *dagger.Container {
 // (packages, services, tests/unit, tests/integration — and tests/e2e-py stays collectable so the
 // collection gate can see it), excluding the live-stack `e2e` marker. tests/chart is ChartTests',
 // so a chart change is judged in the charts leg and the suite renders nothing twice.
+//
+// The suite's Postgres server is the fixture's own image's, laid out where `make postgres` puts it on a developer box
+// (`.localbin/postgres` under the source), so root `conftest.py::postgres` starts it the same way in both places.
 func (m *Rask) Test(
 	ctx context.Context,
 	// +defaultPath="/"
 	// +optional
 	src *dagger.Directory,
 ) (string, error) {
+	postgres, err := postgresInstall(ctx, src.File(postgresValues))
+	if err != nil {
+		return "", err
+	}
 	return m.pytestLane(src).
+		WithDirectory("/src/.localbin/postgres", postgres).
 		WithExec(append(pytestArgv(), "-m", "not e2e", "--ignore=tests/chart")).
 		Stdout(ctx)
 }

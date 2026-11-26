@@ -71,7 +71,22 @@ $(OPENFGA_BIN): .dagger/governed.go
 .PHONY: openfga
 openfga: $(OPENFGA_BIN) ## Export the pinned OpenFGA server binary to .localbin, for the suite's authorization tests
 
-test: $(OPENFGA_BIN)
+# The Postgres server the offline suite's databases live on (root `conftest.py::postgres`, `tests/postgres_server.py`):
+# the server of the image the development fixture pins (`deploy/fixtures/postgres/chart/values.yaml`, the one pin), laid
+# out by `.dagger/postgres.go` as one directory that runs from anywhere as an ordinary user, with the shared libraries
+# of the image's own architecture. `dagger call test` copies the same directory to the same path. It depends on the pin
+# and the layout, so a bumped image or a changed layout re-exports it; the stamp is written last, so an interrupted
+# export is redone.
+POSTGRES_HOME := $(CURDIR)/.localbin/postgres
+POSTGRES_STAMP := $(POSTGRES_HOME)/.exported
+$(POSTGRES_STAMP): deploy/fixtures/postgres/chart/values.yaml .dagger/postgres.go
+	@rm -rf $(POSTGRES_HOME)
+	$(DAGGER) call postgres-install export --path=$(POSTGRES_HOME)
+	@touch $@
+.PHONY: postgres
+postgres: $(POSTGRES_STAMP) ## Export the development fixture's pinned Postgres server to .localbin, for the suite's databases
+
+test: $(OPENFGA_BIN) $(POSTGRES_STAMP)
 	uv run pytest -m "not e2e" $(PYTEST_PARALLEL)
 
 lint:
@@ -207,7 +222,7 @@ knip:
 # NO `fail_under` HERE ON PURPOSE. Picking the number is an owner's decision, and a threshold invented
 # by whoever fixed the plumbing is how a gate ends up ratcheted to whatever happened to be true that
 # afternoon. The report is honest now; the policy is a separate call.
-coverage: $(OPENFGA_BIN) ## The coverage report, computed on request against a correct denominator
+coverage: $(OPENFGA_BIN) $(POSTGRES_STAMP) ## The coverage report, computed on request against a correct denominator
 	uv run pytest -m "not e2e" --cov --cov-report=term-missing:skip-covered
 
 # `go-fmt` IS IN HERE because a gate that runs nowhere is not a gate. It gated the Go plane from no
@@ -808,7 +823,7 @@ e2e-compaction:     ## Maintenance proof: a deployed commit's pass (needs LANCE_
 #
 # `-n 16` rather than `auto`: `auto` takes all 64 cores and the run is IO-bound long before that —
 # measured, 16 workers already reach the wall-clock floor while leaving the machine usable.
-check-fast: $(OPENFGA_BIN) ## The pre-push suite in parallel — 1m17s against 9m57s serial
+check-fast: $(OPENFGA_BIN) $(POSTGRES_STAMP) ## The pre-push suite in parallel — 1m17s against 9m57s serial
 	uv run pytest tests/unit tests/chart tests/integration -q -n 16 --dist loadfile
 
 # REQUIRES its targets, rather than skipping into a green: every test in this suite skips without

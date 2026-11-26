@@ -67,6 +67,10 @@ dev = [
     "pytest-timeout>=2.3",
     "pytest-xdist>=3.6",
     "httpx2>=2.16.2",
+    # The driver the suite's Postgres fixture (root `conftest.py::postgres`) speaks to the server with, ADR 0230's stack.
+    # [binary] ships libpq inside the wheel, with cp315 manylinux wheels for x86_64 and aarch64 (3.3.9, read 2026-11-26),
+    # so no host libpq or compiler is needed.
+    "psycopg[binary]>=3.3.9",
 ]
 
 [tool.ruff]
