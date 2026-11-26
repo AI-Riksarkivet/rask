@@ -1,13 +1,16 @@
 # 0230. The catalog's governance records live in Postgres (2026-11-26)
 
-**Status:** accepted as a direction; the schema, the order of the move and the questions under "Open, for the spec"
-are settled by the spec that follows. Source: the 2026-11-26 review of all code and the comparison the owner asked for
-(`docs/architecture/catalog-design-comparison-findings.md`). Owner, 2026-11-26, through the multi-question tool on that
-comparison: "Move them into Postgres". Amends ADR 0228 (the sentence "rask's services do not open a database connection
-at all") and withdraws the premise ADR 0045 and ADR 0107 state as "this estate needs no relational DB" for the
-catalog's own records; what those records say about a table's commit stands.
+**Status:** accepted. Source: the 2026-11-26 review of all code, the comparison the owner asked for
+(`docs/architecture/catalog-design-comparison-findings.md`), and three studies made the same day: rask's own records
+read kind by kind, Lakekeeper's Postgres layer read from source, and `lance_docs/` read in full with measurements on
+pylance 14.0.3. Owner, 2026-11-26: "Move them into Postgres"; "the move now and not after phase 1"; the names of tables
+and namespaces stay in `__manifest`; psycopg; the secret store issues the database credential. Amends ADR 0228 (the
+sentence "rask's services do not open a database connection at all") and withdraws the premise ADR 0045 and ADR 0107
+state as "this estate needs no relational DB" for the catalog's own records; what those records say about a table's
+commit stands.
 
 ## Context
+
 
 The catalog keeps some thirty kinds of record of its own beside the tables it governs: the project and warehouse
 registries, roles and principals, location and bucket claims, protection, trash, policies, contracts, labels, erasure
@@ -41,22 +44,54 @@ Lakekeeper writes a drop, its soft-delete mark and its clean-up task in one tran
 
 ## Decision
 
-1. **The catalog's governance records are rows in a Postgres database**, and a request that changes several of them
-   changes them in one transaction. The records are the catalog's own state about projects, warehouses, namespaces and
-   tables: who claims what, what is protected, dropped, due, contracted, labelled, owed.
-2. **A table's commit stays where Lance puts it.** The manifest's put-if-absent on the object store decides a commit;
-   the catalog judges it and coordinates it as today (ADR 0157). Table data, versions, tags and branches do not move.
-3. **Provenance stays as it is**: lineage's feed and edge list are Lance tables in the catalog's provenance namespace
-   (ADR 0158). This record decides nothing about them.
-4. **Authorization stays in OpenFGA and events on NATS JetStream.** A request still spans the database, the authorizer,
-   the bus and the object store, so the order of those steps stays a designed thing: each path is ordered so a failure
-   leaves a grant missing and never one too many, and the row that says a step is owed is written in the transaction
-   that makes it owed.
-5. **The database is the platform's** (ADR 0228 stands): the chart renders none, names it by host, and development gets
-   it from the `postgres` fixture. The catalog's credential for it comes from the secret store, is scoped to the
-   catalog's own database and role, and reaches the process as a file, never through the environment.
-6. **Nothing is migrated.** The estate is pre-production: the records are rebuilt, and the object-store records, their
-   primitives and their repairers are deleted in the change that replaces them.
+1. **Twenty kinds of governance record become rows in a Postgres database, and a request that changes several of them
+   changes them in one transaction**: location claims, base records and data-directory claims, bucket claims, the
+   project and warehouse registries, roles, principals, declared grants, protection, trash, branch trash, maintenance
+   policies, cadence stamps and the due list, data contracts, labels, erasure obligations and releases, clone endings,
+   idempotency keys, timer claims, and the announcement intents with both outboxes. Protection and trash are columns of
+   one row a governed object, keyed by its uuid (ADR 0173); a bucket claim is a unique column of its warehouse's row.
+2. **The names of tables and namespaces stay in `__manifest`**, Lance's Directory Catalog. `lance_docs/` describes two
+   catalog shapes and leaves a REST server's own store open ("The server is responsible for storing and organizing
+   namespace metadata", `ns_catalog/namespace/supported-catalogs/lance-rest.md`); rask keeps the first for names. The
+   directory namespace of pylance 14.0.3 has no rename (measured: `NotImplementedError`), so a rename stays a
+   deregister and a register, guarded by the location claim, now a row, and finished after a crash from a row that says
+   it is owed. The tables are shaped so a name column could join the object's row later.
+3. **A table's commit stays where Lance puts it.** The manifest's put-if-absent at its canonical path is the commit
+   point (`lance_docs/lance/format/table/transaction.md`, External Manifest Store), which is what the catalog's
+   finalize does today (ADR 0157). Table data, versions, tags and branches do not move.
+4. **The six records about a commit stay on the object store in this move** (declared inputs, the commit's author, the
+   pending notes and marks, file identities, the commit turn, the history fence) and are a second phase. Lance's own
+   design for coordinating commits beside the object store is a key-value store that reserves each version with a
+   put-if-not-exists; a row a table version is that store, and the second phase is judged against it after the commit
+   path is measured.
+5. **Provenance stays as it is**: lineage's feed and edge list are Lance tables (ADR 0158).
+6. **Authorization stays in OpenFGA and events on NATS JetStream.** A request spans the database, Lance, the
+   authorizer and the bus, so the order of those steps is designed, by one rule: a failure leaves a grant missing or a
+   file unreferenced, never a grant too many. A tuple that gives access is written before the commit and taken back on
+   failure; a tuple that removes access on a move is written before the commit; tuples of a dropped object go after
+   it; bytes are deleted by a task, never in the request. A commit whose outcome is unknown is an error of its own, and
+   nothing is cleaned up after one.
+7. **An event owed is a row written in the transaction of the change it announces**, relayed to the bus and marked
+   sent. Events are not sent best effort after the commit: provenance is built from them, maintenance is driven by
+   them, and Phase 1's fourth criterion is that they are correct.
+8. **The database is the platform's** (ADR 0228 stands): one cluster may serve OpenFGA's database and the catalog's,
+   each with a role of its own. The chart renders none and names it by host; development gets it from the `postgres`
+   fixture. Each service's credential comes from the secret store, is short-lived, and reaches the process as a file,
+   never through the environment; connections are recycled within the credential's life.
+9. **Maintenance holds a database role of its own**: read on the tables it reads today, write on cadence stamps and
+   the due list, insert on events owed. Lineage holds none.
+10. **The stack is psycopg 3, SQLModel and Alembic.** Transactions run at the default isolation level; a race is
+    closed by a unique constraint, by a lock and a compare in one statement, or by an advisory lock taken before the
+    check, and never by a stricter level. A transaction is never held open across a call to Lance, the object store or
+    OpenFGA unless the step's order requires it, and no second connection is taken inside one.
+11. **The schema is applied by the release**: a Job runs the migrations as a hook of the upgrade, every migration in
+    one transaction behind an advisory lock; a pod waits for it and refuses to start against a schema behind or ahead
+    of its own; there are no down migrations.
+12. **With the database unavailable the catalog answers unavailable**, and its readiness says why. A client holding a
+    vended credential keeps reading and writing a table's bytes until it expires.
+13. **Nothing is migrated.** The estate is pre-production: the records are rebuilt (projects, warehouses and grants
+    from the git declaration), and each kind's object-store code, its repairer and their tests are deleted in the
+    change that replaces it. The move goes kind by kind, each change deployed and read back before the next.
 
 ## The four facts
 
@@ -64,35 +99,41 @@ Lakekeeper writes a drop, its soft-delete mark and its clean-up task in one tran
   applied by the release, and no hand-run step creates or repairs a row.
 - **Cloud native.** One more named platform service of a kind the estate already names for OpenFGA; no operator, no
   bundled database.
-- **Lance-namespace and table idiomatic.** The spec places this state outside Lance; Lance's own commit, the only
-  thing it arbitrates, is untouched.
-- **Zero trust.** One more credential, scoped to one database and one role, short-lived where the platform's secret
-  store issues such, and held by the catalog only. Maintenance and lineage get no database credential: they keep
-  reaching these records through the catalog's doors.
+- **Lance-namespace and table idiomatic.** The spec places this state outside Lance; the names stay in Lance's
+  Directory Catalog; Lance's own commit, the only thing it arbitrates, is untouched.
+- **Zero trust.** A credential a service, each scoped to one role, short-lived and issued by the secret store. The
+  catalog's role owns its tables; maintenance's reads what it reads today and writes its own two; the database refuses
+  either anything else. Lineage holds none.
 
 ## Consequences
 
 - The conditional-record primitives, the leases on the store's clock and most sweeps lose their callers. The work is
   mostly deletion; the spec states, per record kind, what replaces it and which repairer goes.
 - Listings become queries: paging by a key, filters and counts without one GET a record.
-- The catalog gains a hard dependency for every request, where today a governance read needs only the object store.
-  Its readiness and its behaviour during a database outage are part of the spec.
-- The control-root backup shrinks to what stays on the object store; the database's backup is its owner's (ADR 0228).
+- The catalog gains a hard dependency for every request, a commit included: a table open reads its trash state, its
+  claim and its contract. Every request already needs OpenFGA, which stands on the same platform's Postgres.
+- A create, a drop, an undrop and a rename still span the database and `__manifest`; each is ordered, and finished
+  after a crash from a row that says a step is owed. They become one transaction only if the names follow.
+- The measured gain is smaller than the hand-built arbitration's size suggests: of its 19,200 lines, 8,333 serve the
+  commit path and the reconcile of OpenFGA and the buckets and do not change; an estimated 4,000 to 5,500 lines go.
+  Of the review's 24 production defects, 8 are of a kind rows cannot have.
+- The control-root backup shrinks to what stays on the object store, and keeps a copy of nothing the database holds;
+  the database's backup is its owner's (ADR 0228). A table's directory is named by its uuid and its name stays in
+  `__manifest`, so losing the database loses no table.
 - `CLAUDE.md` states the opposite premise in two places and is corrected with the first change that lands.
 
 ## Open, for the spec
 
-1. **The records about a commit** (the commit's author, marks, pending notes and turns, history fences, file
-   identities): they are catalog records, written on every commit. Whether they move, and what a commit then costs.
-2. **The name registry**: namespaces and tables are rows of the directory namespace's `__manifest`, a Lance table. If
-   it stays, a create and a rename span two stores; if it moves, the catalog no longer runs on Lance's own namespace
-   implementation.
-3. **The outboxes**: whether an event owed is a row written in the transaction of the change it announces.
-4. **Maintenance's queue**: whether tasks become rows picked under a lock, or stay on JetStream.
-5. **The order**: the move first, or the review's six object-store defects patched in place first.
-6. **Lineage's five tables** are named here only to say they are out of scope until the owner raises them.
+1. The order of the batches and the first one's content.
+2. How a storage location is kept from overlapping another: a unique index refuses an equal location only; a prefix
+   needs a lock and a range check, as the reference catalog does it.
+3. How one replica learns that another changed a row it caches.
+4. The second phase: the six records about a commit as one row a table version.
+5. Whether the names follow, decided on two measurements: what a describe costs on the busiest doors at 10,000 tables,
+   and how concurrent creates behave under one root.
 
 ## Not chosen
+
 
 - **Keep the records on the object store and harden them.** No new dependency, but the class of defect and a fifth of
   the code stay, and each new record kind pays for its own arbitration.
@@ -100,3 +141,9 @@ Lakekeeper writes a drop, its soft-delete mark and its clean-up task in one tran
   manifest, the table needs compaction the lakehouse does not run, and upstream withdrew the same shape for records
   written on every commit.
 - **Put another catalog underneath.** Refused in ADR 0107, and nothing measured since changes that.
+- **Send events best effort after the commit**, as the reference catalog does. Its events are notifications; rask's
+  build the provenance record and drive maintenance.
+- **Catalog doors for everything maintenance reads.** A database role scoped to those tables is refused everything
+  else by the database itself, and is far less to build.
+- **Move the names into Postgres in this move.** Both shapes are Lance's own; the twenty kinds do not depend on it, and
+  the owner keeps the Directory Catalog for names.
