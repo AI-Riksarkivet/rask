@@ -89,7 +89,7 @@ def test_an_oversized_post_with_no_token_is_refused_from_its_headers() -> None:
 
 
 def test_uploads_with_no_token_hold_no_write_seat(tenant: Tenant) -> None:
-    table = f"{tenant.bronze}$seats"
+    table = f"{tenant.namespace}$seats"
     ok(tenant.admin.http.post(f"{CATALOG}/v1/table/{table}/create", data=_rows(), headers={"content-type": ARROW_STREAM_MEDIA_TYPE}, timeout=60))
     tenant.tables.append(table)
     upload = {"Content-Type": ARROW_STREAM_MEDIA_TYPE, "Content-Length": str(1 << 20)}
@@ -111,11 +111,11 @@ def test_a_grant_whose_body_is_not_json_is_the_callers_error(tenant: Tenant) -> 
     """Sent as `text/plain`: a body declared JSON is parsed by FastAPI before any gate runs and answered 422, so only a
     body the client did not declare JSON reaches the grant gate's own read of it, which is where C5 answered 500."""
     admin = tenant.admin
-    namespace = namespace_uuid(CATALOG, tenant.bronze, dict(admin.http.headers))
+    namespace = namespace_uuid(CATALOG, tenant.namespace, dict(admin.http.headers))
 
     assert_refused(
         lambda: admin.http.post(
-            f"{CATALOG}/management/v1/namespace/{tenant.bronze}/access/grant", data=b"{", headers={"content-type": "text/plain"}, timeout=60
+            f"{CATALOG}/management/v1/namespace/{tenant.namespace}/access/grant", data=b"{", headers={"content-type": "text/plain"}, timeout=60
         ),
         status=400,
         code=ErrorCode.INVALID_INPUT,

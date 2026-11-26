@@ -16,20 +16,18 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import SecretStr
 
 from catalog.api.dependencies import get_vendor
-from catalog.core.vending import VendedSession
-from lakehouse.storage.credential import S3KeyPair
 from tests.app_state import app_of
+from tests.vendor_double import RecordingVendor
 
 
-_VEND = VendedSession(key_pair=S3KeyPair(access_key_id="AK", secret_access_key=SecretStr("SK")), endpoint=None, region="us-east-1", expires_at_millis=1)
-#: What the describe door answers for `_VEND`: its storage options, AWS proper so no endpoint, its signing pinned on, and
+#: What the describe door answers for `tests.vendor_double.VENDED`: its storage options, AWS proper so no endpoint, its signing pinned on, and
 #: its expiry inside them.
 _VENDED_OPTIONS = {
     "aws_access_key_id": "AK",
     "aws_secret_access_key": "SK",
+    "aws_session_token": "ST",
     "aws_region": "us-east-1",
     "allow_http": "false",
     "aws_virtual_hosted_style_request": "false",
@@ -56,12 +54,11 @@ def _version_exists(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
-def vendor(client: TestClient, claim_described: Callable[[str], str]) -> Iterator[MagicMock]:
+def vendor(client: TestClient, claim_described: Callable[[str], str]) -> Iterator[RecordingVendor]:
     """A vendor answering one credential, for the real table the double describes, whose location's claim records its uuid,
     as a credential is scoped by it (ADR 0173 §6)."""
     claim_described("lance_catalog$db$t")
-    vend = MagicMock()
-    vend.vend.return_value = _VEND
+    vend = RecordingVendor()
     app_of(client).dependency_overrides[get_vendor] = lambda: vend
     yield vend
     app_of(client).dependency_overrides.pop(get_vendor, None)
@@ -103,7 +100,7 @@ def test_a_body_flag_is_honoured(
     assert _sent(fake_ns).with_table_uri is with_table_uri
 
 
-def test_the_query_form_still_works(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
+def test_the_query_form_still_works(client: TestClient, fake_ns: MagicMock, vendor: RecordingVendor) -> None:
     # rask's own callers (lakehouse's catalog.remote.ts, the e2e suites) send query params and no body.
     resp = client.post("/v1/table/lance_catalog$db$t/describe?vend_credentials=true&version=3&with_table_uri=true")
     assert resp.status_code == 200, resp.text
@@ -112,7 +109,7 @@ def test_the_query_form_still_works(client: TestClient, fake_ns: MagicMock, vend
     assert (sent.version, sent.with_table_uri) == (3, True)
 
 
-def test_an_absent_body_field_does_not_clobber_its_query_value(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
+def test_an_absent_body_field_does_not_clobber_its_query_value(client: TestClient, fake_ns: MagicMock, vendor: RecordingVendor) -> None:
     # A body carrying only `version` must not reset `with_table_uri`/`check_declared` to the model's
     # False defaults — presence in the JSON is what decides, not the parsed model's value.
     resp = client.post("/v1/table/lance_catalog$db$t/describe?with_table_uri=true", json={"version": 2})
@@ -121,24 +118,24 @@ def test_an_absent_body_field_does_not_clobber_its_query_value(client: TestClien
     assert (sent.version, sent.with_table_uri) == (2, True)
 
 
-def test_the_body_wins_where_both_are_sent(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
+def test_the_body_wins_where_both_are_sent(client: TestClient, fake_ns: MagicMock, vendor: RecordingVendor) -> None:
     resp = client.post("/v1/table/lance_catalog$db$t/describe?version=9&vend_credentials=false", json={"version": 4, "vend_credentials": True})
     assert resp.status_code == 200, resp.text
     assert _sent(fake_ns).version == 4
     assert resp.json()["storage_options"] == _VENDED_OPTIONS
 
 
-def test_a_body_tag_and_a_query_version_still_conflict(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
+def test_a_body_tag_and_a_query_version_still_conflict(client: TestClient, fake_ns: MagicMock, vendor: RecordingVendor) -> None:
     resp = client.post("/v1/table/lance_catalog$db$t/describe?version=2", json={"tag": "stable"})
     assert resp.status_code == 400, resp.text
 
 
-def test_a_matching_body_id_is_accepted(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
+def test_a_matching_body_id_is_accepted(client: TestClient, fake_ns: MagicMock, vendor: RecordingVendor) -> None:
     resp = client.post("/v1/table/lance_catalog$db$t/describe", json={"id": ["lance_catalog", "db", "t"]})
     assert resp.status_code == 200, resp.text
 
 
-def test_a_non_main_branch_is_refused_rather_than_answered_off_main(client: TestClient, fake_ns: MagicMock, vendor: MagicMock) -> None:
+def test_a_non_main_branch_is_refused_rather_than_answered_off_main(client: TestClient, fake_ns: MagicMock, vendor: RecordingVendor) -> None:
     # The body carries a `branch` this door cannot honour: the native describe takes no branch selector and
     # the branch-aware read lives in the dataplane. Answering off main anyway would hand a caller who pinned
     # a branch a confident, wrong answer — the failure mode the refusal exists to prevent — so this must

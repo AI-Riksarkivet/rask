@@ -32,25 +32,30 @@ KEEP="${RASK_REGISTRY_KEEP:-2}"
 REGISTRY_NAMESPACE="${RASK_REGISTRY_NAMESPACE:-dev-registry}"
 PINS="${RASK_REGISTRY_PINS:-deploy/values-live-pins.yaml}"
 KUBECONFIG_PATH="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+# The cluster whose running tags are protected, declared as every k3s caller declares it (scripts/helm.sh): a
+# kubeconfig that resolves another cluster would protect that cluster's tags and delete this one's.
+EXPECT_CONTEXT="${RASK_EXPECT_CONTEXT:-default}"
 
 curl -sf "http://$REG/v2/" >/dev/null || { echo "!! no registry at $REG (make dev-registry)" >&2; exit 1; }
 
-# Every image reference the cluster currently names, across every pod spec AND every controller
-# template — a controller whose pods are momentarily gone still needs its image on the next schedule.
-in_use=""
-if command -v kubectl >/dev/null 2>&1 && KUBECONFIG="$KUBECONFIG_PATH" kubectl version >/dev/null 2>&1; then
-  in_use=$(KUBECONFIG="$KUBECONFIG_PATH" kubectl get pods,deployments,statefulsets,daemonsets,cronjobs,jobs -A \
-    -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{range .spec.initContainers[*]}{.image}{"\n"}{end}{range .spec.template.spec.containers[*]}{.image}{"\n"}{end}{range .spec.template.spec.initContainers[*]}{.image}{"\n"}{end}{end}' 2>/dev/null || true)
-  # RayService/RayCluster and any other CR carrying images are not covered by the selector above, so
-  # sweep every object's rendered image strings as a backstop.
-  in_use="$in_use
-$(KUBECONFIG="$KUBECONFIG_PATH" kubectl get rayclusters,rayservices -A -o json 2>/dev/null | grep -oE '"image": *"[^"]+"' | sed 's/.*"image": *"//;s/"$//' || true)"
-else
-  echo "!! kubectl unreachable — protecting only the tags in $PINS" >&2
+actual="$(KUBECONFIG="$KUBECONFIG_PATH" kubectl config current-context 2>/dev/null || echo '<none>')"
+if [[ "$actual" != "$EXPECT_CONTEXT" ]]; then
+  echo "!! refusing to reclaim: kubectl's context is '$actual', not '$EXPECT_CONTEXT' (KUBECONFIG=$KUBECONFIG_PATH)" >&2
+  exit 1
 fi
 
+# Every image reference the cluster currently names, across every pod spec AND every controller
+# template — a controller whose pods are momentarily gone still needs its image on the next schedule.
+# A read that fails stops the reclaim: rule 1 is the whole safety argument, and an empty list protects nothing.
+in_use=$(KUBECONFIG="$KUBECONFIG_PATH" kubectl get pods,deployments,statefulsets,daemonsets,cronjobs,jobs -A \
+  -o jsonpath='{range .items[*]}{range .spec.containers[*]}{.image}{"\n"}{end}{range .spec.initContainers[*]}{.image}{"\n"}{end}{range .spec.template.spec.containers[*]}{.image}{"\n"}{end}{range .spec.template.spec.initContainers[*]}{.image}{"\n"}{end}{end}') \
+  || { echo "!! could not read the images the cluster runs; nothing is reclaimed" >&2; exit 1; }
+
+plan_file="$(mktemp)"
+trap 'rm -f "$plan_file"' EXIT
+
 export REG KEEP PINS
-python3 - "$in_use" <<'PY' > /tmp/registry-gc-plan.txt
+uv run --no-sync python - "$in_use" <<'PY' > "$plan_file"
 import json, os, sys, urllib.request
 from pathlib import Path
 
@@ -92,8 +97,8 @@ PY
 if [[ -n "${RASK_REGISTRY_DRY_RUN:-}" ]]; then
   # A reclaim whose safety rests on a protection list deserves a way to READ that list before trusting
   # it — the rule this script replaced was wrong for months and nothing could have shown it.
-  echo ">> DRY RUN — would delete $(grep -c . /tmp/registry-gc-plan.txt || echo 0) manifest(s); no blobs swept"
-  cat /tmp/registry-gc-plan.txt
+  echo ">> DRY RUN — would delete $(grep -c . "$plan_file" || echo 0) manifest(s); no blobs swept"
+  cat "$plan_file"
   exit 0
 fi
 
@@ -106,8 +111,12 @@ while read -r repo t; do
   d=$(curl -sI -H 'Accept: application/vnd.docker.distribution.manifest.v2+json' \
         "http://$REG/v2/$repo/manifests/$t" | tr -d '\r' | sed -n 's/^[Dd]ocker-[Cc]ontent-[Dd]igest: //p')
   [[ -n "$d" ]] || continue
-  curl -s -X DELETE "http://$REG/v2/$repo/manifests/$d" >/dev/null && deleted=$((deleted + 1))
-done < /tmp/registry-gc-plan.txt
+  if curl -sf -X DELETE "http://$REG/v2/$repo/manifests/$d" >/dev/null; then
+    deleted=$((deleted + 1))
+  else
+    echo "!! the registry refused to delete $repo:$t ($d)" >&2
+  fi
+done < "$plan_file"
 
 if [[ "$deleted" -eq 0 ]]; then
   # A freshly created registry has no `repositories/` directory at all, and garbage-collect treats that

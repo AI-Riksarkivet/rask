@@ -19,18 +19,21 @@ maintenance's, which the catalog's announcement of each compaction commit sets o
 
 Usage::
 
-    COMPACT_CATALOG_TOKEN="$(...the person's OIDC id_token...)" uv run python scripts/compact_due_tables.py
+    uv run python scripts/compact_due_tables.py --token-file <a file holding the person's OIDC id_token>
     uv run python scripts/compact_due_tables.py --catalog-url http://localhost:8080/api/catalog --only 'lance_catalog$provenance'
 
-Env (argparse overrides both)::
+The bearer is read from a file, never from the environment or an argument: either is readable by every process of the
+same user. With no ``--token-file`` the run sends no bearer, for an auth-off local stack.
+
+Env (argparse overrides it)::
 
     COMPACT_CATALOG_URL    the catalog's public base (default http://localhost:8080/api/catalog)
-    COMPACT_CATALOG_TOKEN  the caller's OIDC bearer; empty = an auth-off local stack
 """
 
 import argparse
 import os
 import sys
+from pathlib import Path
 from typing import Final
 
 import httpx
@@ -110,14 +113,15 @@ def main() -> int:
     """One run: compact each due table the caller may maintain; non-zero when any failed or the list could not be read."""
     parser = argparse.ArgumentParser(description="Compact each table the catalog lists as due, through the catalog's doors.")
     parser.add_argument("--catalog-url", default=os.environ.get("COMPACT_CATALOG_URL", "http://localhost:8080/api/catalog"))
-    parser.add_argument("--token", default=os.environ.get("COMPACT_CATALOG_TOKEN", ""), help="the caller's OIDC bearer (empty = auth off)")
+    parser.add_argument("--token-file", type=Path, help="a file holding the caller's OIDC bearer (none = auth off)")
     parser.add_argument(
         "--only",
         default="",
         help="compact only the tables under this warehouse or namespace, named in full from the warehouse, e.g. 'lance_catalog$provenance'",
     )
     args = parser.parse_args()
-    headers = {"Authorization": f"Bearer {args.token}"} if args.token else {}
+    token = args.token_file.read_text(encoding="utf-8").strip() if args.token_file is not None else ""
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
 
     with httpx.Client(base_url=args.catalog_url.rstrip("/"), headers=headers, timeout=_TIMEOUT_SECONDS) as client:
         listed = due_tables(client)

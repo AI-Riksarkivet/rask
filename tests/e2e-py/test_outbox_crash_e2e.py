@@ -69,7 +69,7 @@ SIGNING_IDENTITY = os.environ.get(
 #: The output this probe's staged event names. NAMESPACE AND TABLE SEPARATELY because the event needs
 #: both spellings: `namespace` is the OpenLineage domain label and `table_id` carries the CATALOG ID,
 #: which is `<namespace>$<table>`, the namespace a full id in the suites' warehouse.
-PROBE_NAMESPACE = namespace_id("bronze")
+PROBE_NAMESPACE = namespace_id("raw")
 PROBE_TABLE = "e2e_crash_ds"
 
 pytestmark = pytest.mark.e2e

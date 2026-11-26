@@ -27,17 +27,18 @@ writing it is precisely how a ghost is made.
 
 THE ESTATE MIRRORS THE FGA FIXTURES (``lakehouse/governed/auth/model.fga.yaml``), the same set
 ``fga model test`` asserts against, so this is the tested estate rather than a toy: three
-projects, three warehouses, the bronze, silver and gold namespaces under acme, each project's admins as a role of
+projects, three warehouses, the three namespaces under acme (``raw``, ``cleaned`` and ``served``), each project's admins as a role of
 that project, a stewards persona,
 and the users that exercise the interesting cases (a writer who is NO classifier, a classifier who
-reaches gold only through a role, a tenant member who is not an admin). Three deliberate differences:
+reaches served only through a role, a tenant member who is not an admin). Three deliberate differences:
 
 * **A warehouse is named for its tenant and holds its bucket.** The fixtures write ``warehouse:acme_bucket``;
   here the warehouse is ``acme`` over the bucket ``acme-bucket``, because a warehouse's id is the first segment
   of every name inside it, and ids are DNS-safe (``^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$``), so an underscore
   cannot be created through the API at all.
-* **A namespace is named inside its warehouse.** The fixtures' ``namespace:acme_gold`` is ``acme$gold`` here:
-  the namespace ``gold`` of the warehouse ``acme``.
+* **A namespace is named inside its warehouse, in words that carry no layering.** The fixtures' ``namespace:acme_gold``
+  is ``acme$served`` here: the namespace ``served`` of the warehouse ``acme`` (``acme_silver`` is ``acme$cleaned``,
+  ``acme_bronze`` is ``acme$raw``).
 * **A table or namespace is named by its PATH and granted on its uuid.** The fixtures name
   ``table:acme_silver_features`` as a flat illustrative id; a table created through the real door is named
   ``<warehouse>$<namespace>$<name>``, and OpenFGA holds its grants on the uuid the catalog minted for it
@@ -64,13 +65,15 @@ Usage (against a reachable catalog — ``kubectl port-forward svc/rask-catalog 2
 
     uv run python scripts/seed_estate.py
     uv run python scripts/seed_estate.py --dry-run
-    SEED_CATALOG_TOKEN="$(…dex id_token…)" uv run python scripts/seed_estate.py
+    uv run python scripts/seed_estate.py --token-file <a file holding the Dex id_token, readable by you alone>
     uv run python scripts/seed_estate.py --map alice=<sub> --map bob=<sub>
 
-Env (argparse overrides all of them)::
+The bearer is read from a file, never from the environment or an argument: either is readable by every process of the
+same user. With no ``--token-file`` the seed sends no bearer, for an auth-off local stack.
+
+Env (argparse overrides it)::
 
     SEED_CATALOG_URL    default http://127.0.0.1:2333
-    SEED_CATALOG_TOKEN  the OIDC bearer; empty = an auth-off local stack
 
 Exits non-zero if any step failed OR the read-back does not SHOW every object the plan named — a seed that
 cannot show you what it made has not proved anything, and "the calls returned 2xx" is not the claim being
@@ -83,6 +86,7 @@ import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 from typing import Final
 
 import httpx
@@ -94,9 +98,6 @@ from lakehouse.naming import CATALOG_DELIMITER
 #: The catalog's own port (``rask-catalog``), not the edge's — the seed drives the service directly so
 #: a routing problem in front of it cannot be mistaken for a guard's refusal.
 CATALOG_URL = os.environ.get("SEED_CATALOG_URL", "http://127.0.0.1:2333")
-#: The catalog accepts ONLY IdP bearers when auth is on, and every door here is a governed write — so a
-#: seed against an auth-enabled estate must carry one or the first POST 401s. Empty = auth off.
-CATALOG_TOKEN = os.environ.get("SEED_CATALOG_TOKEN", "")
 
 #: The development Dex's two static demo identities as the principals they are: `dex~` and the userID the Dex fixture
 #: declares (deploy/fixtures/dex/chart/values.yaml, `scripts/dex_principal.py`): a seed that drifted from them would
@@ -206,13 +207,13 @@ DEMO_ESTATE = Estate(
                     id="acme",
                     bucket="acme-bucket",
                     namespaces=(
-                        # The tier namespaces the fixtures describe. bronze holds no table there, and
+                        # The namespaces the fixtures describe. raw holds no table there, and
                         # holding none here too keeps the two readable as the same estate.
-                        Namespace(name="bronze"),
+                        Namespace(name="raw"),
                         # The table layer POSTs `/declare` with `parent=namespace:<ns>`, which is the link
                         # a warehouse rung needs to reach the table.
-                        Namespace(name="silver", tables=("features",)),
-                        Namespace(name="gold", tables=("catalog",)),
+                        Namespace(name="cleaned", tables=("features",)),
+                        Namespace(name="served", tables=("catalog",)),
                     ),
                 ),
             ),
@@ -244,11 +245,11 @@ DEMO_ESTATE = Estate(
         Grant(user="user:dave", relation="writer", object="warehouse:acme"),
         # NO READ GRANT FOR A CLIENT'S OWN SERVICE ACCOUNT, and its absence is the control (Q17-8 / §F2-2 F2-4).
         # A client that sends its own identity when there is no session makes it the ANONYMOUS principal —
-        # granting it reader on a tenant's tiers is granting the public those tiers. A human reads a tenant's
+        # granting it reader on a tenant's namespaces is granting the public those namespaces. A human reads a tenant's
         # lineage with their OWN bearer; if a surface needs to be public, grant this subject that surface
         # explicitly and it becomes visible in the model.
-        # carol: reaches gold ONLY through a role, plus reader on the bucket so she can read silver.
-        Grant(user="role:acme/stewards#assignee", relation="classifier", object="namespace:acme$gold"),
+        # carol: reaches served ONLY through a role, plus reader on the bucket so she can read cleaned.
+        Grant(user="role:acme/stewards#assignee", relation="classifier", object="namespace:acme$served"),
         Grant(user="user:carol", relation="reader", object="warehouse:acme"),
         # gina: a plain tenant member (not via acme's admins role): listed in the tenant and granted no data rung.
         Grant(user="user:gina", relation="member", object="project:acme"),
@@ -256,17 +257,17 @@ DEMO_ESTATE = Estate(
         # ivan holds ONE grant, on ONE table. The containers above it become VISIBLE — the breadcrumb
         # to his own data resolves instead of 403ing — while a SIBLING namespace stays invisible. This is
         # the only persona whose object is a table.
-        Grant(user="user:ivan", relation="reader", object="table:acme$gold$catalog"),
+        Grant(user="user:ivan", relation="reader", object="table:acme$served$catalog"),
         # ---- THE GRANT AXIS (C2) — administering access is not the same as holding it -------------
         # judy: grant authority on the bucket and NO data rung — the access-review persona that was
         # unexpressible while granting was welded to `owner`.
         Grant(user="user:judy", relation="manage_grants", object="warehouse:acme"),
-        # kevin: a DELEGATE on the silver namespace — a writer who may hand on exactly what he holds, and
+        # kevin: a DELEGATE on the cleaned namespace — a writer who may hand on exactly what he holds, and
         # no more.
-        Grant(user="user:kevin", relation="writer", object="namespace:acme$silver"),
-        Grant(user="user:kevin", relation="pass_grants", object="namespace:acme$silver"),
+        Grant(user="user:kevin", relation="writer", object="namespace:acme$cleaned"),
+        Grant(user="user:kevin", relation="pass_grants", object="namespace:acme$cleaned"),
         # leo: holds the grant OPTION and no rung — the option is worthless alone, by construction.
-        Grant(user="user:leo", relation="pass_grants", object="namespace:acme$silver"),
+        Grant(user="user:leo", relation="pass_grants", object="namespace:acme$cleaned"),
         # ---- MANAGED ACCESS (C4) -----------------------------------------------------------------
         # The flag, written as the ONE canonical tuple the catalog stores it as (`_MANAGED_ACCESS_SUBJECT`
         # in the catalog's access endpoints). `user:*` is a TYPE RESTRICTION used as a switch, not a
@@ -765,7 +766,9 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
     """Seed the estate; return 0 only when every step landed AND the result could be read back."""
     parser = argparse.ArgumentParser(description="Seed the demo estate through the catalog's real APIs, in hierarchy order.")
     parser.add_argument("--catalog", default=CATALOG_URL, help=f"catalog base URL (default {CATALOG_URL})")
-    parser.add_argument("--token", default=CATALOG_TOKEN, help="OIDC bearer for the governed doors (default $SEED_CATALOG_TOKEN; empty = auth off)")
+    # The catalog accepts ONLY IdP bearers when auth is on, and every door here is a governed write, so a seed against an
+    # auth-enabled estate must carry one or the first POST 401s.
+    parser.add_argument("--token-file", type=Path, help="a file holding the OIDC bearer for the governed doors (none = auth off)")
     parser.add_argument("--timeout", type=float, default=30.0, help="per-request timeout in seconds (default 30)")
     parser.add_argument("--dry-run", action="store_true", help="print the calls in order, make none of them")
     parser.add_argument(
@@ -780,13 +783,14 @@ def main(argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | 
     steps = plan(DEMO_ESTATE, principals)
     print(f"  {len(steps)} steps against {args.catalog}")
     print(f"  identities mapped to their principal: {', '.join(sorted(principals))}")
-    print(f"  bearer: {'yes' if args.token else 'NO — assuming an auth-off stack'}")
+    token = args.token_file.read_text(encoding="utf-8").strip() if args.token_file is not None else ""
+    print(f"  bearer: {'yes' if token else 'NO — assuming an auth-off stack'}")
     if args.dry_run:
         for step in steps:
             print(f"    {step.layer:9} {step.method:4} {step.path}  {json.dumps(step.body) if step.body else ''}")
         return 0
 
-    headers = {"Authorization": f"Bearer {args.token}"} if args.token else {}
+    headers = {"Authorization": f"Bearer {token}"} if token else {}
     with httpx.Client(base_url=args.catalog.rstrip("/"), timeout=args.timeout, headers=headers, transport=transport) as http:
         outcomes = seed(http, steps)
         problems = summarize(http, DEMO_ESTATE)

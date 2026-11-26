@@ -194,10 +194,12 @@ have() { command -v "$1" >/dev/null 2>&1; }
 # The toolchain's pins. This runs from the handover kit before the repository is cloned, so it carries its own copies:
 # the Dagger CLI's version is dagger.json's engineVersion and its archive digests are .github/actions/dagger's, bun's
 # version is frontend/package.json's packageManager and its digests that release's SHASUMS256.txt, and uv's installer
-# digest is read off https://astral.sh/uv/<version>/install.sh (2026-11-16).
+# digest is read off https://astral.sh/uv/<version>/install.sh (2026-11-25). prek's version is the one the hooks were last
+# measured with (prek 0.5.3, 2026-11-26).
 DAGGER_VERSION="0.21.8"
 BUN_VERSION="1.4.4"
 UV_VERSION="0.13.10"
+PREK_VERSION="0.5.3"
 UV_INSTALLER_SHA256="51781aafe6950cc659f79873e1bdca55fbb9da6e0ef650bf98093a0f0aaaf453"
 
 banner "rask on a new computer"
@@ -255,7 +257,7 @@ if ! have bun; then
     rm -f "$archive"; skip_install bun
   fi
 fi
-have prek || { step "installing prek"; uv tool install prek; }
+have prek || { step "installing prek $PREK_VERSION"; uv tool install "prek==$PREK_VERSION"; }
 if ! have dagger || ! dagger version 2>/dev/null | grep -q "v$DAGGER_VERSION"; then
   step "installing the Dagger CLI v$DAGGER_VERSION into ~/.local/bin"
   read -r arch sum <<<"$(pinned_digest dagger)"

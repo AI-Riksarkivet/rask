@@ -96,9 +96,10 @@ def test_the_container_bounds_its_arena_count(service: str) -> None:
         assert 1 <= int(value) <= MAX_ARENAS, f"{where}/{service} sets MALLOC_ARENA_MAX={value}, outside the stated budget of 1..{MAX_ARENAS}"
 
 
-def test_the_two_names_ship_together() -> None:
-    """Either alone is the configuration already measured not to work, and it looks correct."""
-    envs = [(where, env_of(c)) for where, _name, c in _lakehouse_containers()]
-    half = [where for where, env in envs if bool(env.get("MALLOC_ARENA_MAX")) != bool(env.get("ARROW_DEFAULT_MEMORY_POOL"))]
+def test_every_container_routes_arrow_through_the_allocator_the_arena_bound_governs() -> None:
+    """The arena bound without Arrow on `system` is the configuration already measured not to work, and it looks correct:
+    any other pool (`mimalloc`, `jemalloc`) allocates where `MALLOC_ARENA_MAX` does not reach."""
+    pools = {f"{where}/{name}": env_of(c).get("ARROW_DEFAULT_MEMORY_POOL") for where, name, c in _lakehouse_containers()}
 
-    assert not half, f"these carry one of the pair and not the other, which is the shape that fooled this row once: {half}"
+    assert pools, "no lakehouse container rendered"
+    assert {where: pool for where, pool in pools.items() if pool != "system"} == {}

@@ -16,6 +16,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from _files_under import files_under
+from _judged_text import judged_text, line_hits, spelled
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -34,8 +35,8 @@ EXCLUDED = (
 
 
 def pattern(names: frozenset[str]) -> re.Pattern[str]:
-    """One case-insensitive alternation over the names."""
-    return re.compile("|".join(re.escape(name) for name in sorted(names)), re.IGNORECASE)
+    """One case-insensitive alternation over the names, each as `_judged_text.spelled`."""
+    return re.compile("|".join(spelled(name) for name in sorted(names)), re.IGNORECASE)
 
 
 def code_files(root: Path) -> list[str]:
@@ -51,11 +52,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     found = pattern(REFERENCE_PRODUCTS)
     hits: list[str] = []
     for name in code_files(args.root):
-        try:
-            text = (args.root / name).read_text(encoding="utf-8")
-        except UnicodeDecodeError, FileNotFoundError:
-            continue
-        hits += [f"{name}:{n}: {m.group(0)!r}" for n, line in enumerate(text.splitlines(), 1) for m in found.finditer(line)]
+        text = judged_text(args.root / name)
+        if text is not None:
+            hits += line_hits(name, text, found)
     for hit in hits:
         print(hit)
     if hits:

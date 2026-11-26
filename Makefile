@@ -187,7 +187,7 @@ alert-rules-check: ## promtool: the alert rules are valid AND actually fire on s
 # Exit 2 (no datasource) is a SKIP so a laptop without a cluster is not a red build — which means it
 # is the k3s/CI run that actually proves anything. Run it before shipping a rule change.
 alert-rules-drill: ## replay every alert rule against a REAL GreptimeDB (skips with no cluster)
-	@uv run python scripts/alert_rules_drill.py; s=$$?; [ $$s -eq 1 ] && exit 1 || exit 0
+	@uv run python scripts/alert_rules_drill.py; s=$$?; case $$s in 0|2) exit 0;; *) exit $$s;; esac
 
 # ---- frontend dead-code + dep gate (knip, workspace-wide; see knip.json) ---------
 # Analyses the whole JS graph at once, so it runs once over the workspace rather than per package.
@@ -248,13 +248,13 @@ fga-store-check: ## Does the RUNNING store hold the model this repo declares? (n
 # that state from the one after the hook ran. `fga-store-check` is the only thing that can, and it is
 # deliberately NOT in `check`: it needs a live cluster, and `check` is offline.
 fga-test: ## The OpenFGA model's validity + its own suite + the three-copy drift check
-	@AUTH=packages/lakehouse/src/lakehouse/governed/auth; \
+	@set -e; AUTH=packages/lakehouse/src/lakehouse/governed/auth; \
 	FGA=$$(command -v fga 2>/dev/null || echo $(LOCALBIN)/fga); \
 	test -x "$$FGA" || { echo "fga not found — run 'make bootstrap'"; exit 1; }; \
 	"$$FGA" model validate --file $$AUTH/model.fga > $(LOCALBIN)/model.validate.json; \
 	jq -e '.is_valid == true' $(LOCALBIN)/model.validate.json > /dev/null \
 	  || { echo "model.fga is INVALID:"; cat $(LOCALBIN)/model.validate.json; exit 1; }; \
-	"$$FGA" model test --tests $$AUTH/model.fga.yaml; \
+	"$$FGA" model test --tests $$AUTH/model.fga.yaml || { echo "model.fga.yaml: the model's own suite failed"; exit 1; }; \
 	"$$FGA" model transform --file $$AUTH/model.fga > $(LOCALBIN)/model.transformed.json; \
 	jq -S . $(LOCALBIN)/model.transformed.json > $(LOCALBIN)/model.a.json; \
 	jq -S . $$AUTH/model.json > $(LOCALBIN)/model.b.json; \
@@ -367,14 +367,14 @@ frontend-check:       # svelte-check, lint, format, unit tests and knip over the
 # ---- dev seeding -----------------------------------------------------------
 # The demo estate through the catalog's real doors, in hierarchy order (scripts/seed_estate.py): projects, warehouses,
 # namespaces and grants a fresh install shows nothing of.
-seed-dev: ## Seed the dev estate's projects, warehouses, namespaces and grants through the catalog (needs a running cluster)
-	uv run python scripts/seed_estate.py
+seed-dev: ## Seed the dev estate's projects, warehouses, namespaces and grants through the catalog (needs a running cluster; TOKEN_FILE=<bearer file> when auth is on)
+	uv run python scripts/seed_estate.py $(if $(TOKEN_FILE),--token-file $(TOKEN_FILE),)
 
 # Each table the catalog lists as due, compacted by hand through the catalog's doors as the bearer in
-# COMPACT_CATALOG_TOKEN (scripts/compact_due_tables.py). A scheduled compaction job is bring-your-own (ADR 0174) and
+# TOKEN_FILE (scripts/compact_due_tables.py). A scheduled compaction job is bring-your-own (ADR 0174) and
 # lives outside this repository; this is the same caller run by a person on an estate that has none.
-compact-due: ## Compact every table the catalog's due list names, as COMPACT_CATALOG_TOKEN's person (ONLY=<namespace> to narrow)
-	uv run python scripts/compact_due_tables.py $(if $(ONLY),--only $(ONLY),)
+compact-due: ## Compact every table the catalog's due list names, as the person whose bearer TOKEN_FILE holds (ONLY=<namespace> to narrow)
+	uv run python scripts/compact_due_tables.py $(if $(TOKEN_FILE),--token-file $(TOKEN_FILE),) $(if $(ONLY),--only $(ONLY),)
 
 # ---- rustfs (S3-compatible object storage) smoke ---------------------------
 # Prove lakehouse.storage and pylance work against a REAL rustfs backend (not moto).
@@ -440,7 +440,12 @@ KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
 # by name (rask-rustfs, rask-dex, rask-openbao, rask-nats) install into `default` (each fixture.env), so the
 # release must share it. Helm reads HELM_NAMESPACE; kubectl takes the flag, and a later `-n`/`-A` in a recipe wins.
 RELEASE_NAMESPACE ?= default
-HELM ?= KUBECONFIG=$(KUBECONFIG) HELM_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/helm.sh
+# The context the k3s kubeconfig names (`default`). Every helm call and every fixture install a target makes DECLARES it,
+# so scripts/helm.sh and scripts/fixtures.sh refuse a KUBECONFIG inherited from the shell that resolves another cluster,
+# rather than installing there. Another estate is reached by naming both: `make k3s-up KUBECONFIG=<file> K3S_CONTEXT=<ctx>`.
+K3S_CONTEXT ?= default
+HELM ?= KUBECONFIG=$(KUBECONFIG) RASK_EXPECT_CONTEXT=$(K3S_CONTEXT) HELM_NAMESPACE=$(RELEASE_NAMESPACE) ./scripts/helm.sh
+FIXTURES_SH ?= KUBECONFIG=$(KUBECONFIG) RASK_EXPECT_CONTEXT=$(K3S_CONTEXT) ./scripts/fixtures.sh
 KUBECTL ?= KUBECONFIG=$(KUBECONFIG) kubectl --namespace $(RELEASE_NAMESPACE)
 # lance-rest-catalog is the ONE lakehouse image (catalog + lineage + maintenance — chart `image.catalog`);
 # the default render runs its containers from it, so the
@@ -517,10 +522,10 @@ k3s-extra-values-check: ## Refuse a values file K3S_EXTRA_VALUES or K3S_DEX_EXTR
 	@for f in $(K3S_EXTRA_VALUES) $(K3S_DEX_EXTRA_VALUES); do [ -r "$$f" ] || { echo "values file '$$f' (K3S_EXTRA_VALUES / K3S_DEX_EXTRA_VALUES) is not readable from $(CURDIR)" >&2; exit 1; }; done
 
 k3s-fixtures: k3s-extra-values-check ## Install the development fixtures (FIXTURES) as their own releases, before the rask chart
-	$(if $(filter-out dex nats rustfs,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh $(filter-out dex nats rustfs,$(FIXTURES)))
-	$(if $(filter nats,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh nats -- --set nats.auth.server=true)
-	$(if $(filter rustfs,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh rustfs -- --set-string events.busCa=$(DEV_BUS_CA))
-	$(if $(filter dex,$(FIXTURES)),KUBECONFIG=$(KUBECONFIG) ./scripts/fixtures.sh dex -- --set-string issuer=$(DEV_ISSUER) $(foreach f,$(K3S_DEX_EXTRA_VALUES),-f $(f)))
+	$(if $(filter-out dex nats rustfs,$(FIXTURES)),$(FIXTURES_SH) $(filter-out dex nats rustfs,$(FIXTURES)))
+	$(if $(filter nats,$(FIXTURES)),$(FIXTURES_SH) nats -- --set nats.auth.server=true)
+	$(if $(filter rustfs,$(FIXTURES)),$(FIXTURES_SH) rustfs -- --set-string events.busCa=$(DEV_BUS_CA))
+	$(if $(filter dex,$(FIXTURES)),$(FIXTURES_SH) dex -- --set-string issuer=$(DEV_ISSUER) $(foreach f,$(K3S_DEX_EXTRA_VALUES),-f $(f)))
 
 # THE RELEASE'S VALUES ARE COMPOSED FROM GIT, NEVER READ BACK FROM THE RELEASE ([[XC-194]]). Each upgrade resets to the
 # chart's defaults and supplies exactly these: the estate's overlay, where its images come from, the image tags the pins

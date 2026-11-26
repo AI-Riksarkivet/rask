@@ -1741,25 +1741,41 @@ def test_writers_waiting_on_a_held_commit_turn_leave_the_catalog_answering_other
     turns = _turns(stock, tmp_path)
     token = turns.take(None)
     held_from = time.monotonic()
+    releases: list[float] = []
+
+    def release() -> None:
+        releases.append(time.monotonic())
+        turns.release(token)
+
+    # The turn is released at a fixed instant by a thread of its own, whatever the describes below are doing: released by
+    # the thread that describes, a describe held until the release would be followed by one that ends before it.
+    releaser = threading.Timer(4, release)
     writers = [threading.Thread(target=run, args=(row,), daemon=True) for row in range(1, 51)]
+    described: list[tuple[float, float]] = []
     try:
+        releaser.start()
         for writer in writers:
             writer.start()
-        described, until = [], time.monotonic() + 4
-        while time.monotonic() < until:
+        all_waiting = time.monotonic()
+        while not releases:
+            began = time.monotonic()
             stock.describe_table(lance_namespace.DescribeTableRequest(id=["lance_catalog", "db", "other"]))
-            described.append(time.monotonic())
+            described.append((began, time.monotonic()))
             time.sleep(0.2)
     finally:
-        released = time.monotonic()
-        turns.release(token)
+        releaser.cancel()
+        releaser.join()
+        if not releases:
+            release()
+    released = releases[0]
     for writer in writers:
         writer.join(timeout=120)
 
     held_reads = [at for at in reads if held_from <= at < released]
-    # Served while the turn is held, however slow the host: writers holding every request thread would hold a describe
-    # until the release, and none would end before it. A bound in seconds is the host's speed, not this claim.
-    assert [at for at in described if at < released], "no describe of another table was answered while 50 writers waited on a held turn"
+    # Served while the turn is held, however slow the host: writers holding every request thread would hold every describe
+    # begun after they started until the release, and none would end before it. A bound in seconds is the host's speed.
+    answered = [ended for began, ended in described if all_waiting <= began and ended < released]
+    assert answered, "no describe of another table was answered while 50 writers waited on a held turn"
     assert len(held_reads) <= 20 * (released - held_from), f"50 waiters read the turn record {len(held_reads)} times in {released - held_from:.1f} s"
     assert [at for at, exc in finished if exc is None and at < released] == []
     assert [exc for _, exc in finished if exc is not None and not isinstance(exc, may_fail_with)] == []

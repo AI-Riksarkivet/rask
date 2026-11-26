@@ -1,6 +1,6 @@
 """A scratch tenant on the live estate, and the two Dex users a live drill plays its parts with.
 
-The estate admin creates a project, a warehouse with its own bucket and a bronze namespace in it, owns what it seeds there,
+The estate admin creates a project, a warehouse with its own bucket and a namespace in it, owns what it seeds there,
 and grants the job identity the relations a drill names on that namespace. The job is never an owner. Everything is
 deleted again at the end: the tables first, then the warehouse with its bucket, then the project.
 """
@@ -20,7 +20,7 @@ class Tenant:
         self.job = Identity.person(PIPELINE_USER)
         self.project = f"{purpose}-{uuid.uuid4().hex[:8]}"
         #: The tenant's namespace, in its own warehouse (whose id is the project's), so no other tenant's names meet it.
-        self.bronze = f"{self.project}$bronze"
+        self.namespace = f"{self.project}$raw"
         self.grants = tuple(grants)
         self.tables: list[str] = []
 
@@ -28,9 +28,9 @@ class Tenant:
         admin = self.admin
         ok(admin.http.post(f"{CATALOG}/management/v1/projects", json={"id": self.project}))
         ok(admin.http.post(f"{CATALOG}/management/v1/warehouses", json={"id": self.project, "project": self.project}))
-        ok(admin.http.post(f"{CATALOG}/v1/namespace/{self.bronze}/create", json={}))
+        ok(admin.http.post(f"{CATALOG}/v1/namespace/{self.namespace}/create", json={}))
         for relation in self.grants:
-            ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.bronze}/access/grant", json={"user": self.job.principal, "relation": relation}))
+            ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.namespace}/access/grant", json={"user": self.job.principal, "relation": relation}))
 
     def tear_down(self) -> list[str]:
         """Drop every table, then the warehouse with its bucket, then the project; what failed."""

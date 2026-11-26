@@ -77,7 +77,7 @@ class TestATagTheEstateIsRunningIsNeverACandidate:
         assert planner.protected_refs(planner.parse_cluster_images(["localhost:5000/gateway"]), "") == set()
 
 
-class TestWhatIsLeftIsRankedByTHISIMAGESAGE:
+class TestWhatIsLeftIsRankedByTheImagesOwnAge:
     def test_the_oldest_go_first_regardless_of_how_the_tag_spells(self, planner: ModuleType) -> None:
         """The whole point: `zzz` built today outlives `aaa` built last year."""
         created = {"aaa-old": "2025-01-01T00:00:00Z", "zzz-new": "2026-09-09T00:00:00Z", "mmm-mid": "2026-01-01T00:00:00Z"}

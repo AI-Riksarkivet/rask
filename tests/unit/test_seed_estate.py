@@ -14,6 +14,7 @@ convergence rule and the refusal handling are all assertable offline.
 import json
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from types import ModuleType
 from typing import Final
 
@@ -74,11 +75,11 @@ _REGISTRY = [
     {"project": "beta", "warehouses": [{"id": "beta", "bucket": "beta-bucket", "status": "active"}], "admins": []},
     {"project": "research", "warehouses": [{"id": "research", "bucket": "research-bucket", "status": "active"}], "admins": []},
 ]
-#: Per-namespace, not one answer for all of them: `acme$gold` holds `catalog`, not `features`, and a mock
+#: Per-namespace, not one answer for all of them: `acme$served` holds `catalog`, not `features`, and a mock
 #: that ignored the namespace let a read-back "verify" a table the plan never declared there.
 #: `beta$locked` is the managed-access scope's stage — its table is what makes the C4 fixture a real
 #: object rather than a tuple about nothing.
-_TABLES: Final = frozendict({"acme$bronze": [], "acme$silver": ["features", "undeclared"], "acme$gold": ["catalog"], "beta$locked": ["records"]})
+_TABLES: Final = frozendict({"acme$raw": [], "acme$cleaned": ["features", "undeclared"], "acme$served": ["catalog"], "beta$locked": ["records"]})
 #: The roles each project's role door lists after a clean seed, each with the uuid the fake minted for it.
 _ROLES: Final = frozendict({"acme": ["admins", "stewards"], "research": ["admins"], "beta": ["admins"]})
 
@@ -150,8 +151,8 @@ def test_a_project_is_created_before_its_warehouse_before_its_namespace_before_i
     assert (
         _index(recorded, lambda r: r.url.path == "/management/v1/projects" and _body(r).get("id") == "acme")
         < _index(recorded, lambda r: r.url.path == "/management/v1/warehouses" and _body(r).get("id") == "acme")
-        < _index(recorded, lambda r: r.url.path == "/v1/namespace/acme$gold/create")
-        < _index(recorded, lambda r: r.url.path == "/v1/table/acme$gold$catalog/declare")
+        < _index(recorded, lambda r: r.url.path == "/v1/namespace/acme$served/create")
+        < _index(recorded, lambda r: r.url.path == "/v1/table/acme$served$catalog/declare")
     )
 
 
@@ -172,19 +173,21 @@ def test_a_grant_on_a_table_names_the_table_this_run_actually_created(seed_estat
     described = [described for request in recorded if (described := _describe(request.url.path)) is not None and described[0] == "table"]
     granted = [str(_body(request)["object"]) for request in recorded if _layer(request) == "grant"]
 
-    assert "/v1/table/acme$gold$catalog/declare" in declared
-    assert described == [("table", "acme$gold$catalog")], f"the table grant did not resolve the table this run declared: {described}"
-    assert _object("table", "acme$gold$catalog") in granted, f"the table grant is not on the uuid its table resolved to: {granted}"
-    assert not [obj for obj in granted if "acme$gold" in obj], f"a name reached the wire: {granted}"
+    assert "/v1/table/acme$served$catalog/declare" in declared
+    assert described == [("table", "acme$served$catalog")], f"the table grant did not resolve the table this run declared: {described}"
+    assert _object("table", "acme$served$catalog") in granted, f"the table grant is not on the uuid its table resolved to: {granted}"
+    assert not [obj for obj in granted if "acme$served" in obj], f"a name reached the wire: {granted}"
     # And it is ORDERED behind the declare: a grant resolved before its table is declared names nothing yet.
-    assert _index(recorded, lambda r: r.url.path == "/v1/table/acme$gold$catalog/declare") < _index(
-        recorded, lambda r: _layer(r) == "grant" and _body(r)["object"] == _object("table", "acme$gold$catalog")
+    assert _index(recorded, lambda r: r.url.path == "/v1/table/acme$served$catalog/declare") < _index(
+        recorded, lambda r: _layer(r) == "grant" and _body(r)["object"] == _object("table", "acme$served$catalog")
     )
 
 
-def test_the_bearer_token_rides_every_call_and_is_absent_when_there_is_none(seed_estate: ModuleType) -> None:
+def test_the_bearer_token_file_rides_every_call_and_is_absent_when_there_is_none(seed_estate: ModuleType, tmp_path: Path) -> None:
+    token_file = tmp_path / "bearer"
+    token_file.write_text("id-token-abc\n", encoding="utf-8")
     recorded: list[httpx.Request] = []
-    assert _run(seed_estate, recorded, argv=["--catalog", "http://catalog", "--token", "id-token-abc"]) == 0
+    assert _run(seed_estate, recorded, argv=["--catalog", "http://catalog", "--token-file", str(token_file)]) == 0
     assert {request.headers.get("authorization") for request in recorded} == {"Bearer id-token-abc"}
 
     unauthenticated: list[httpx.Request] = []
@@ -200,7 +203,7 @@ def test_the_bearer_token_rides_every_call_and_is_absent_when_there_is_none(seed
 def test_an_already_exists_refusal_is_convergence_and_the_run_still_succeeds(capsys: pytest.CaptureFixture[str], seed_estate: ModuleType) -> None:
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
         if _layer(request) in {"namespace", "table"}:
-            return 409, _problem("NamespaceAlreadyExistsError", "namespace 'acme$gold' already exists", 2)
+            return 409, _problem("NamespaceAlreadyExistsError", "namespace 'acme$served' already exists", 2)
         return None
 
     recorded: list[httpx.Request] = []
@@ -243,11 +246,11 @@ def test_grants_are_skipped_not_failed_when_the_stack_runs_authorization_off(cap
 
 
 def test_a_grant_is_never_written_against_an_object_whose_create_failed(seed_estate: ModuleType) -> None:
-    # THE ghost rule. OpenFGA stores a tuple whether or not its object exists, so writing the gold
+    # THE ghost rule. OpenFGA stores a tuple whether or not its object exists, so writing the served
     # namespace's classifier grant after that namespace failed to be created is exactly how the live
     # estate got three tenants the catalog had never heard of.
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        if request.url.path == "/v1/namespace/acme$gold/create":
+        if request.url.path == "/v1/namespace/acme$served/create":
             return 403, _problem("PermissionDeniedError", "can_create_namespace required on warehouse:acme", 15)
         return None
 
@@ -255,7 +258,7 @@ def test_a_grant_is_never_written_against_an_object_whose_create_failed(seed_est
     assert _run(seed_estate, recorded, refuse) == 1
 
     grants = [_body(request) for request in recorded if request.url.path == "/management/v1/access/tuples"]
-    assert not [grant for grant in grants if grant["object"] == _object("namespace", "acme$gold")]
+    assert not [grant for grant in grants if grant["object"] == _object("namespace", "acme$served")]
     # Everything the failure does NOT block still lands: one broken branch must not empty the estate.
     assert {"demo~dave", "demo~carol", "demo~gina"} <= {str(grant["user"]) for grant in grants}
 
@@ -331,11 +334,11 @@ def test_a_declared_table_the_namespace_does_not_list_is_not_reported_as_seeded(
     # `declare` returning 200 says the call was accepted. Only the namespace's own listing says the table
     # is there — and the two disagreeing is the whole class of bug this script was written against.
     def refuse(request: httpx.Request) -> tuple[int, object] | None:
-        return (200, {"tables": []}) if request.url.path == "/v1/namespace/acme$gold/table/list" else None
+        return (200, {"tables": []}) if request.url.path == "/v1/namespace/acme$served/table/list" else None
 
     recorded: list[httpx.Request] = []
     assert _run(seed_estate, recorded, refuse) == 1
-    assert "table catalog is absent from namespace acme$gold" in capsys.readouterr().err
+    assert "table catalog is absent from namespace acme$served" in capsys.readouterr().err
 
 
 def test_a_read_back_that_is_not_json_is_a_failure_and_never_a_crash(capsys: pytest.CaptureFixture[str], seed_estate: ModuleType) -> None:

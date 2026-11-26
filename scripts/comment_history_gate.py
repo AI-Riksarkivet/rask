@@ -39,15 +39,15 @@ MEASURED PRECISION (2026-08-30, `--report` over every tracked gated file)
 first version said "52 are genuine. ONE is a false positive", which an adversarial re-read of all 53
 refuted. AT LEAST TWO are false positives, and a third is right for the wrong reason:
 
-* `frontend/microfrontends/lakehouse/src/lib/storage/ObjectBrowser.svelte:50` — a generic error banner
-  "threw away the only sentence that said what was actually wrong", where `sentence` means the
-  server's problem+json detail, not a comment.
-* `frontend/microfrontends/models/e2e/shell.spec.ts:14` — "the lakehouse's panel no longer advertises
-  the routes it gave up" is a present-tense statement of what the test ASSERTS about the UI. Nothing
-  in it narrates prose; `no longer` alone carried the match.
-* `services/annotator/tests/test_publish_saga.py:491` — "This used to say 'demo'" is history, so flagging it is
-  defensible, but its subject is a FIXTURE LITERAL. The gate reports it as "a comment whose subject is
-  a previous comment", and that reason is false.
+* a console component's error banner "threw away the only sentence that said what was actually
+  wrong", where `sentence` means the server's problem+json detail, not a comment.
+* a browser test's "the panel no longer advertises the routes it gave up" is a present-tense statement
+  of what the test ASSERTS about the UI. Nothing in it narrates prose; `no longer` alone carried the match.
+* a suite's "This used to say 'demo'" is history, so flagging it is defensible, but its subject is a
+  FIXTURE LITERAL. The gate reports it as "a comment whose subject is a previous comment", and that
+  reason is false.
+
+(The three files left the repository with the clients that held them; git holds them at `64ef118a9`.)
 
 So budget the error rate at ROUGHLY ONE IN TWENTY, not one in fifty, concentrated on prose that quotes
 or describes user-visible TEXT — and treat even that as a floor rather than a measurement, because
@@ -93,11 +93,14 @@ EXEMPT_PATHS = frozenset(
 )
 
 #: Python is checked exactly (tokenize tells us which lines are comment or docstring). The others are
-#: checked with a line-prefix heuristic — see `_prose_lines_by_prefix`. Markdown is NOT here: the rule
-#: governs module prose, and docs legitimately keep a trail (docs/adr/ carries superseded reasoning
-#: under its own heading).
+#: checked with a line-prefix heuristic — see `_prose_lines_by_prefix`: the C-family by `//`, `*` and
+#: `<!--`, the shell, YAML, TOML, the Makefile and the dockerfiles by `#`. Markdown is NOT here: the
+#: rule governs module prose, and docs legitimately keep a trail (docs/adr/ carries superseded
+#: reasoning under its own heading).
 PYTHON_SUFFIXES = frozenset({".py", ".pyi"})
 PREFIX_COMMENT_SUFFIXES = frozenset({".ts", ".tsx", ".js", ".mjs", ".cjs", ".svelte", ".go"})
+HASH_COMMENT_SUFFIXES = frozenset({".sh", ".yaml", ".yml", ".toml", ".dockerfile", ".fga"})
+HASH_COMMENT_NAMES = frozenset({"Makefile", "Dockerfile", ".importlinter"})
 
 #: Directories whose contents are not ours to gate.
 SKIP_DIR_PARTS = frozenset({".venv", "node_modules", "__pycache__", ".svelte-kit", "dist", "build", ".turbo", "third_party", "site"})
@@ -249,6 +252,8 @@ def prose_lines(path: str, source: str) -> set[int]:
         return exact if exact is not None else _prose_lines_by_prefix(source, ("#",))
     if suffix in PREFIX_COMMENT_SUFFIXES:
         return _prose_lines_by_prefix(source, ("//", "*", "/*", "<!--"))
+    if suffix in HASH_COMMENT_SUFFIXES or Path(path).name in HASH_COMMENT_NAMES:
+        return _prose_lines_by_prefix(source, ("#",))
     return set()
 
 
@@ -258,7 +263,7 @@ def is_gated(path: str) -> bool:
         return False
     if SKIP_DIR_PARTS & set(p.parts):
         return False
-    return p.suffix in PYTHON_SUFFIXES or p.suffix in PREFIX_COMMENT_SUFFIXES
+    return bool({p.suffix} & (PYTHON_SUFFIXES | PREFIX_COMMENT_SUFFIXES | HASH_COMMENT_SUFFIXES)) or p.name in HASH_COMMENT_NAMES
 
 
 def scan_source(path: str, source: str, only_lines: set[int] | None = None) -> list[Finding]:
@@ -298,6 +303,11 @@ def _git(*args: str) -> str:
         raise RuntimeError(msg)
     # argv is a literal tuple and git is resolved through shutil.which — no shell, no user string.
     return subprocess.run((git, *args), cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout  # noqa: S603
+
+
+def _diff(*operands: str) -> str:
+    """`git diff` with zero context, spelled with `a/` and `b/` whatever `diff.noprefix` or `diff.mnemonicPrefix` says."""
+    return _git("diff", *operands, "--unified=0", "--no-color", "--no-ext-diff", "--src-prefix=a/", "--dst-prefix=b/")
 
 
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
@@ -349,6 +359,16 @@ def scan_changes(diff: str, *, staged: bool) -> list[Finding]:
     return findings
 
 
+def scan_untracked() -> list[Finding]:
+    """Each untracked file git does not ignore, whole: every line of a new file is an added line."""
+    findings: list[Finding] = []
+    for path in _git("ls-files", "--others", "--exclude-standard").splitlines():
+        source = _content(path, staged=False)
+        if source is not None:
+            findings.extend(scan_source(path, source))
+    return findings
+
+
 def scan_tree() -> list[Finding]:
     """Whole-tree scan. ADVISORY — this is how the standing count is measured, never how a change is gated."""
     findings: list[Finding] = []
@@ -379,7 +399,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--staged", action="store_true", help="gate the staged diff (the pre-commit entry point)")
-    mode.add_argument("--worktree", action="store_true", help="gate every uncommitted change against HEAD")
+    mode.add_argument("--worktree", action="store_true", help="gate every uncommitted change against HEAD, untracked files whole")
     mode.add_argument("--base", metavar="REF", help="gate this branch's added lines against REF's merge-base")
     mode.add_argument("--paths", nargs="+", metavar="FILE", help="gate whole files (a newly added file has no base to diff)")
     mode.add_argument("--report", action="store_true", help="ADVISORY whole-tree count; always exits 0")
@@ -396,19 +416,21 @@ def _report() -> int:
 
 
 def _gated_findings(args: argparse.Namespace) -> list[Finding] | None:
-    """The matches on the lines the mode gates, ``None`` when ``--base`` names a ref with no merge-base here."""
+    """The matches on the lines the mode gates, ``None`` when ``--paths`` names no file or ``--base`` a ref with no merge-base here."""
     if args.paths:
+        missing = [path for path in args.paths if not Path(path).is_file()]
+        if missing:
+            print(f"no such file: {', '.join(missing)} — a gate asked about a file it cannot read has judged nothing.", file=sys.stderr)
+            return None
         findings = []
         for path in args.paths:
             resolved = Path(path).resolve()
             relative = str(resolved.relative_to(REPO_ROOT)) if resolved.is_relative_to(REPO_ROOT) else path
-            source = resolved.read_text(encoding="utf-8", errors="replace") if resolved.is_file() else None
-            if source is not None:
-                findings.extend(scan_source(relative, source))
+            findings.extend(scan_source(relative, resolved.read_text(encoding="utf-8", errors="replace")))
     elif args.staged:
-        findings = scan_changes(_git("diff", "--cached", "--unified=0", "--no-color"), staged=True)
+        findings = scan_changes(_diff("--cached"), staged=True)
     elif args.worktree:
-        findings = scan_changes(_git("diff", "HEAD", "--unified=0", "--no-color"), staged=False)
+        findings = [*scan_changes(_diff("HEAD"), staged=False), *scan_untracked()]
     else:
         try:
             base = _git("merge-base", "HEAD", args.base).strip()
@@ -417,7 +439,7 @@ def _gated_findings(args: argparse.Namespace) -> list[Finding] | None:
             # as a broken invocation, and in CI that difference decides whether anyone looks at it.
             print(f"cannot resolve a merge-base against {args.base!r} — fetch it, or name a ref this clone has.", file=sys.stderr)
             return None
-        findings = scan_changes(_git("diff", base, "--unified=0", "--no-color"), staged=False)
+        findings = scan_changes(_diff(base), staged=False)
     return findings
 
 

@@ -142,6 +142,32 @@ def test_concurrent_appends_each_emit_the_version_that_carries_their_own_rows(re
         assert _ids(location, version) - _ids(location, version - 1) == {marker}, f"v{version} is not the commit that added row {marker}"
 
 
+def test_a_schema_change_names_its_own_commit_when_another_writer_commits_before_the_read_back(
+    real_ns_client: TestClient, location: str, bus: BusDouble, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The read-back a schema change's event is built from opens the version the change committed, not the head: another
+    writer's commit landing between the two is not attached to this change's WROTE edge."""
+    read_back = versions.read_version_and_schema
+    landed: list[int] = []
+
+    def _after_another_commit(*args: Any, **kwargs: Any) -> versions.CommitReadback:
+        if not landed:
+            dataset = lance.dataset(location)
+            dataset.delete("id = 1")
+            landed.append(lance.dataset(location).version)
+        return read_back(*args, **kwargs)
+
+    monkeypatch.setattr(versions, "read_version_and_schema", _after_another_commit)
+
+    response = real_ns_client.post(f"/v1/table/{TABLE}/add_columns", json={"new_columns": [{"name": "x", "expression": "id + 1"}]})
+
+    assert response.status_code == 200, response.text
+    committed = int(response.json()["version"])
+    [event] = [event for event in bus.events if _lance(event)["operation"] == "add_columns"]
+    schema = [field["name"] for field in _dataset(event).get("facets", {}).get("schema", {}).get("fields", [])]
+    assert (_version(event), schema, landed) == (committed, ["id", "v", "x"], [committed + 1])
+
+
 def test_every_branch_door_emits_its_branch_and_that_branchs_version(real_ns_client: TestClient, location: str, bus: BusDouble) -> None:
     """Every door keyed on a ``branch`` request field emits that ref, the branch's head version and schema, and commits
     that version naming its verified caller and the door's own operation ([[LH-497]]).

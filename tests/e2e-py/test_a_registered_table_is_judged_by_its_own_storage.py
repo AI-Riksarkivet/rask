@@ -1,7 +1,7 @@
 """[[LH-528]], [[LH-532]] A table registered at a nested location is judged, and destroyed, by its own storage on the estate.
 
 The `dir` backend judges whether a table holds storage by probing ``base_path.join(location)``, and its drop deletes
-there, which object_store encodes as one segment, so a table registered over data at ``<namespace>-outside/held`` reads
+there, which object_store encodes as one segment, so a table registered over data at ``outside/held`` reads
 to it as only declared, and a drop deletes none of its bytes (lance-format/lance#10281). The catalog judges and destroys
 each table's storage itself (``table_objects.holds_a_version``, ``tables.destroy.destroy_table``), so on the deployed estate a
 stock client finds such a table among the tables that hold storage, every door that asks keeps it, and a destructive
@@ -49,9 +49,9 @@ def tenant() -> Iterator[Tenant]:
 
 def test_a_table_registered_at_a_nested_location_is_judged_and_destroyed_by_its_own_storage(tenant: Tenant) -> None:
     admin, client = tenant.admin, tenant.admin.namespace()
-    held, moved = [*tenant.bronze.split("$"), "held"], [*tenant.bronze.split("$"), "moved"]
+    held, moved = [*tenant.namespace.split("$"), "held"], [*tenant.namespace.split("$"), "moved"]
     bucket = ok(admin.http.get(f"{CATALOG}/management/v1/warehouses/{tenant.project}"))["bucket"]
-    location = "bronze-outside/held"
+    location = "outside/held"
     lance.write_dataset(
         pa.table({"id": pa.array([1, 2], pa.int64())}),
         f"s3://{bucket}/{location}",
@@ -63,7 +63,7 @@ def test_a_table_registered_at_a_nested_location_is_judged_and_destroyed_by_its_
     tenant.tables.append(CATALOG_DELIMITER.join(held))
 
     # It is among the tables that hold storage, and described as holding a version.
-    assert client.list_tables(ln.ListTablesRequest(id=tenant.bronze.split("$"), include_declared=False)).tables == ["held"]
+    assert client.list_tables(ln.ListTablesRequest(id=tenant.namespace.split("$"), include_declared=False)).tables == ["held"]
     described = client.describe_table(ln.DescribeTableRequest(id=held, check_declared=True))
     assert described.is_only_declared is False
 

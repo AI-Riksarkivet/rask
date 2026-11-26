@@ -21,7 +21,6 @@ import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import (
     CreateNamespaceResponse,
-    CreateTableResponse,
     DescribeTableResponse,
     DescribeTableVersionResponse,
     LanceNamespace,
@@ -147,64 +146,6 @@ def test_describe_answers_the_file_format_the_table_was_written_at(real_ns_clien
 _ONE_ROW = encode_arrow_stream(pa.table({"id": [1]}))
 
 
-def test_create_delegates_to_the_creation_facade(client: TestClient, fake_ns: MagicMock, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    # The endpoint stays thin: it delegates create; the write path lives in the facade.
-    seen: dict[str, object] = {}
-
-    def _stub(
-        ns,
-        so,
-        segments,
-        *,
-        table,
-        root,
-        mode=None,
-        properties=None,
-        external_blob_bases=None,
-        data_bases=None,
-        registry=None,
-        holder="",
-        transaction_properties=None,
-        recorded_author=None,
-        overwriting=None,
-        before_commit=None,
-        file_commit=None,
-        before_register=None,
-        after_register=None,
-    ) -> CreateTableResponse:
-        seen["segments"] = segments
-        seen["root"] = root  # [[LH-520]] where a table this create brings into being is declared under its uuid
-        seen["registry"] = registry  # [[LH-279]] the door hands the write the control root to record its bases in
-        seen["mode"] = mode
-        seen["external_blob_bases"] = external_blob_bases  # the allowlist is forwarded too
-        seen["data_bases"] = data_bases  # #3-B: no ?data_base → None (backward-compatible)
-        # An overwrite writes a version into the table it replaces, at the location that table's claim records.
-        return CreateTableResponse(location=fake_ns.describe_table.return_value.location, version=1)
-
-    monkeypatch.setattr("catalog.services.tables.creation.create_table", _stub)
-    claim_described("lance_catalog$media$clips")  # the table the overwrite replaces, which the double describes as existing
-    resp = client.post(
-        "/v1/table/lance_catalog$media$clips/create?mode=overwrite",
-        content=encode_arrow_stream(pa.table({"id": [1]})),
-        headers=ARROW_STREAM,
-    )
-
-    assert resp.status_code == 200
-    from catalog.core.config import get_settings
-
-    registry = seen.pop("registry")
-    assert registry is not None and getattr(registry, "control_root", None) == get_settings().registry_root, (
-        "the create must be told where its base record lives"
-    )
-    assert seen == {
-        "segments": ["lance_catalog", "media", "clips"],
-        "root": get_settings().root,
-        "mode": "overwrite",
-        "external_blob_bases": [],
-        "data_bases": None,
-    }
-
-
 def test_merge_insert_reads_its_query_params_as_the_spec_states_them(real_ns_client: TestClient) -> None:
     """A repeated ``on`` is one composite key, a ``*_filt`` is its clause's own condition, and ``when_not_matched_insert_all``
     defaults to false (``spec.yaml``).
@@ -304,38 +245,44 @@ def test_list_branches_routes_to_dataset_branches(client: TestClient, monkeypatc
     assert resp.json()["branches"]["exp"]["parentVersion"] == 2  # serialized with the spec's camelCase alias
 
 
-def test_create_branch_maps_from_version_to_int_reference(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    claim_described("lance_catalog$db$t")  # the table a ref is made on, whose location's claim records its uuid
-    dataset = MagicMock()
-    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
-    resp = client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "exp", "from_version": 3})
-    assert resp.status_code == 200
-    dataset.create_branch.assert_called_once_with("exp", 3)  # fromVersion → int reference
+@pytest.fixture
+def forked(real_ns_client: TestClient) -> tuple[TestClient, str]:
+    """``db$t`` on real pylance: main at v3 holding 1, 2, 3, and ``exp`` forked from main's v2 and moved to its own v3 holding
+    1, 2, 10, so a version named on ``exp`` and the same number on main hold different rows. Answers its location."""
+    _ensure_namespace(real_ns_client, "lance_catalog$db")
+    table = "/v1/table/lance_catalog$db$t"
+
+    def ok(path: str, **kwargs: Any) -> None:
+        answered = real_ns_client.post(f"{table}/{path}", **kwargs)
+        assert answered.status_code == 200, f"{path}: {answered.status_code} {answered.text}"
+
+    ok("create", content=encode_arrow_stream(pa.table({"id": [1]})), headers=ARROW_STREAM)
+    ok("insert", content=encode_arrow_stream(pa.table({"id": [2]})), headers=ARROW_STREAM)
+    ok("branches/create", json={"name": "exp"})
+    ok("insert?branch=exp", content=encode_arrow_stream(pa.table({"id": [10]})), headers=ARROW_STREAM)
+    ok("insert", content=encode_arrow_stream(pa.table({"id": [3]})), headers=ARROW_STREAM)
+    described = real_ns_client.post(f"{table}/describe", json={})
+    return real_ns_client, described.json()["table_uri"]
 
 
-def test_create_branch_maps_from_branch_and_version_to_tuple(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    claim_described("lance_catalog$db$t")  # the table a ref is made on, whose location's claim records its uuid
-    dataset = MagicMock()
-    # The double must NAME the source branch, because the door now reads the branch list to establish
-    # it: pylance renders a missing source branch and a missing source version with the same
-    # object-store text, so a create from a source that does not exist answered 11 ("no such version")
-    # instead of 22. A bare MagicMock answers False to `in`, which is the honest reading of a double
-    # that models no branches — the request under test needs `exp` to exist for its mapping to be
-    # reached at all.
-    dataset.branches.list.return_value = {"exp": {"parent_version": 2}}
-    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
-    resp = client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "x", "from_branch": "exp", "from_version": 2})
-    assert resp.status_code == 200
-    dataset.create_branch.assert_called_once_with("x", ("exp", 2))  # (branch, version) reference
+@pytest.mark.parametrize(
+    ("door", "body", "ref", "ids"),
+    [
+        pytest.param("branches/create", {"name": "m"}, ("m", None), [1, 2, 3], id="branch-from-latest-main"),
+        pytest.param("branches/create", {"name": "v2", "from_version": 2}, ("v2", None), [1, 2], id="branch-from-a-main-version"),
+        pytest.param("branches/create", {"name": "x", "from_branch": "exp", "from_version": 3}, ("x", None), [1, 2, 10], id="branch-from-a-branch-version"),
+        pytest.param("tags/create", {"tag": "rc", "version": 3, "branch": "exp"}, "rc", [1, 2, 10], id="tag-on-a-branch-version"),
+    ],
+)
+def test_a_ref_is_made_on_the_version_its_request_names(
+    forked: tuple[TestClient, str], door: str, body: dict[str, object], ref: tuple[str, None] | str, ids: list[int]
+) -> None:
+    client, location = forked
 
+    made = client.post(f"/v1/table/lance_catalog$db$t/{door}", json=body)
 
-def test_create_branch_from_main_uses_no_reference(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    claim_described("lance_catalog$db$t")  # the table a ref is made on, whose location's claim records its uuid
-    dataset = MagicMock()
-    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
-    resp = client.post("/v1/table/lance_catalog$db$t/branches/create", json={"name": "exp"})
-    assert resp.status_code == 200
-    dataset.create_branch.assert_called_once_with("exp", None)  # neither → latest of main
+    assert made.status_code == 200, made.text
+    assert sorted(lance.dataset(location).checkout_version(ref).to_table(columns=["id"]).column("id").to_pylist()) == ids
 
 
 # --- #110 lineage-emit coverage: schema-evolution / index / restore / register / declare now emit, ---
@@ -380,32 +327,6 @@ def _capture_measured_emit(monkeypatch) -> dict[str, object]:
 
     monkeypatch.setattr("catalog.api.lineage_deps.emit_write_event", _cap)
     return captured
-
-
-def test_add_columns_emits_pinned_schema_evolution_lineage(client: TestClient, fake_ns: MagicMock, monkeypatch) -> None:
-    # A schema change must carry the NEW per-version schema so /schema + /columns follow the evolution —
-    # and the read-back must be PINNED to the response's version, so a concurrent writer between the
-    # commit and the read can't attach a later version's schema to this WROTE edge.
-    from lance_namespace import AlterTableAddColumnsResponse
-
-    monkeypatch.setattr("catalog.services.tables.schema.add_columns", lambda *a, **k: AlterTableAddColumnsResponse(version=4))
-    seen: dict[str, object] = {}
-
-    def _readback(_ns: object, _so: object, _segments: object, pin_version: object = None, branch: object = None) -> object:
-        seen["pin"] = pin_version
-        seen["branch"] = branch
-        return CommitReadback(version=cast(int, pin_version), schema_fields=[{"name": "x", "type": "int64"}], uri="s3://bucket/abc12345_db$t")
-
-    monkeypatch.setattr("catalog.services.tables.versions.read_version_and_schema", _readback)
-    captured = _capture_measured_emit(monkeypatch)
-
-    resp = client.post("/v1/table/lance_catalog$db$t/add_columns", json={"new_columns": [{"name": "x", "expression": "1"}]})
-    assert resp.status_code == 200
-    assert seen["pin"] == 4  # the read-back opened the dataset AT the version the response reported
-    assert seen["branch"] is None  # no branch on the request → the read-back stays on main
-    assert captured["operation"] == "add_columns"
-    assert captured["version"] == 4
-    assert captured["schema_fields"] == [{"name": "x", "type": "int64"}]  # post-evolution schema rides along
 
 
 class _NativePanic(BaseException):
@@ -732,18 +653,6 @@ def test_request_validation_on_a_spec_route_maps_to_400_problem_json(client: Tes
 
 
 # --- data-plane request building (our logic; fake dataset) ----------------- #
-
-
-def test_create_tag_with_branch_passes_branch_version_tuple(client: TestClient, monkeypatch, claim_described: Callable[[str], str]) -> None:
-    claim_described("lance_catalog$db$t")  # the table a ref is made on, whose location's claim records its uuid
-    # A branch-scoped tag must pass (branch, version) — a bare int would resolve against main, tagging the
-    # WRONG version. (Was silently dropping `branch`.)
-    dataset = MagicMock()
-    dataset.branches.list.return_value = {"dev": {}}  # a tag is made on a branch the table has ([[LH-406]])
-    monkeypatch.setattr("catalog.services.table_claims.open_resolved_dataset", lambda *a, **k: dataset)
-    resp = client.post("/v1/table/lance_catalog$db$t/tags/create", json={"tag": "rc", "version": 5, "branch": "dev"})
-    assert resp.status_code == 200
-    dataset.tags.create.assert_called_once_with("rc", ("dev", 5))
 
 
 def test_alter_columns_converts_json_arrow_type_to_pyarrow(real_ns_client: TestClient) -> None:

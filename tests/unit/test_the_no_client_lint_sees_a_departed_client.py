@@ -8,7 +8,8 @@ Driven on a tree of the test's own, which holds the console and no client: a lak
 each position a name takes (an account, an image, an object, a module, a path inside a client's tree, a departed tree's
 path, a former zone of the console, a plain name), the retired notifications inbox and its SMTP relay ([[XC-195]]), and
 the console, which is the lakehouse's own UI and no client, and uses the same words in ordinary English, which the lint
-must let through. The console's tree is the lakehouse's, so a departed client named there is refused too.
+must let through. The console's tree is the lakehouse's, so a departed client named there is refused too, and so is one
+named in an overlay and in a file holding a byte that is not UTF-8.
 """
 
 from pathlib import Path
@@ -48,9 +49,13 @@ def test_the_lint_reports_each_place_a_lakehouse_file_names_a_departed_client(ga
     suite = tmp_path / "tests/integration/test_names.py"
     suite.parent.mkdir(parents=True)
     suite.write_text(_SUITE, encoding="utf-8")
+    (tmp_path / "deploy/values-e2e-suites.yaml").write_text("# the annotator's suite\n", encoding="utf-8")
+    (tmp_path / "conftest.py").write_bytes(b"# caf\xe9: the annotator\n")
 
     assert gate.main(["--root", str(tmp_path)]) == 1
     assert capsys.readouterr().out.splitlines() == [
+        "conftest.py:1: 'annotator'",
+        "deploy/values-e2e-suites.yaml:1: 'annotator'",
         "frontend/console/inbox.ts:1: 'services/notifications'",
         "tests/integration/test_names.py:1: 'rask-sa-flows'",
         "tests/integration/test_names.py:2: 'flows:dev'",

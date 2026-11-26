@@ -65,12 +65,13 @@ def main(argv: list[str]) -> int:
         # in fact the common case, because a package's `__init__` usually pulls in the app. Uncaught,
         # it ended the run with a raw traceback and no report at all: the build still failed, but the
         # message a build log showed was a stack trace instead of the one line naming the module and
-        # the missing dependency. Classified here exactly as below, then skipped.
+        # the missing dependency. A root package that raised ANYTHING is a failure, unlike a submodule below: its
+        # submodules are found only through it, so none of them was imported and the gate has proven nothing.
         try:
             found = importlib.import_module(package)
-        except Exception as exc:  # noqa: BLE001 — a per-module verdict: whatever the import raised is classified and reported
-            line = f"{package}: {type(exc).__name__}: {exc}"
-            (failures if _is_packaging_failure(exc) else executed).append(line)
+        except Exception as exc:  # noqa: BLE001 — a per-module verdict: whatever the import raised is reported
+            kind = "" if _is_packaging_failure(exc) else " (raised on import, so none of its modules was imported)"
+            failures.append(f"{package}: {type(exc).__name__}: {exc}{kind}")
             continue
         # Appended only AFTER it imported — listing it up front made a failing root package appear in
         # both the failure list and the retry loop, and the report read "2/1 modules".

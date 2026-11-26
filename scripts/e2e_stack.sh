@@ -273,7 +273,7 @@ step "4/8 deploy the governed stack (auth ON, #3-A/#3-B/#4 flags ON, maintenance
 # a bare `<component>:<tag>` reference that resolves on the NODE rather than at a registry. Without it
 # `rask.image` refuses the render outright — `image.repository must be set to a registry ... or set
 # image.localImages=true` — and the lane dies at `helm upgrade` having already built and loaded every
-# image it needs. Measured 2026-09-24 on `e2e-ray`, the first run that got past the kubeconfig guard
+# image it needs. Measured 2026-09-24 on a kind lane, the first run that got past the kubeconfig guard
 # far enough to reach a deploy.
 # A COMMENT CANNOT GO INSIDE THE INVOCATION: a `#` line inside a backslash continuation ends
 # the command and turns every following line into its own, which `bash -n` accepts.
@@ -442,14 +442,17 @@ door "$ALICE" POST /management/v1/projects "{\"id\":\"$PROJECT\"}" 200 201 409 |
 # ServiceAccount, through a TokenRequest the suites re-read from the run's `fga-token` credential.
 FGA_TOKEN="$(kubectl create token "$RELEASE-sa-hooks" --audience rask-openfga --duration 2h)" || { echo "!! could not mint a rask-openfga token"; exit 1; }
 keep fga-token "$FGA_TOKEN"
-SID="$(fga store list --api-url http://localhost:8081 --api-token "$FGA_TOKEN" \
+# The CLI reads the token from a config file of the run's own (`--config`, measured on fga v0.6.4: sent as the bearer),
+# so it reaches no argv.
+keep fga.yaml "api-token: $FGA_TOKEN"
+SID="$(fga store list --api-url http://localhost:8081 --config "$CREDENTIALS/fga.yaml" 2>/dev/null \
   | uv run python -c "import sys,json;s=[x for x in json.load(sys.stdin)['stores'] if x['name']=='lance-catalog'];print(max(s,key=lambda x:x['created_at'])['id'])")"
 # The project's creator holds `admin` on it, written by the create. bob gets NOTHING on it — he is the 403 leg.
 # WAIT until that grant is READABLE before using it. OpenFGA on Postgres is eventually consistent: a write returns
 # BEFORE a subsequent `check` is guaranteed to see it, so the warehouse create below can 403 on a fresh stack — a race
 # that makes the job "green once, flaky forever". Poll the permission the next door checks.
 for i in $(seq 1 30); do
-  allowed="$(fga query check --api-url http://localhost:8081 --api-token "$FGA_TOKEN" --store-id "$SID" \
+  allowed="$(fga query check --api-url http://localhost:8081 --config "$CREDENTIALS/fga.yaml" --store-id "$SID" \
     "$ALICE_USER" can_create_warehouse "project:$PROJECT" 2>/dev/null \
     | uv run python -c "import sys,json;print(json.load(sys.stdin).get('allowed', False))" 2>/dev/null || echo False)"
   [ "$allowed" = "True" ] && { echo "   project:$PROJECT is alice's (can_create_warehouse=allowed, store ${SID:0:8}…)"; break; }

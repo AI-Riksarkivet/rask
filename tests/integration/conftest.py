@@ -73,7 +73,7 @@ def client(fake_ns: MagicMock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     # `tmp_path`, not a fixed `/tmp/lance-test-root`: the environment was restored on teardown but the
     # DIRECTORY was not, so real catalog state accumulated in one path shared across runs, across
     # concurrent runs, and across users on the same host — which is how a run passes because of what a
-    # previous run left behind. Pinned by tests/unit/test_no_fixed_tmp_roots.py.
+    # previous run left behind.
     monkeypatch.setenv("LANCE_REST_IMPL", "dir")
     monkeypatch.setenv("LANCE_REST_ROOT", str(tmp_path))
     # Object-store credentials are required by Settings; the local-dir backend

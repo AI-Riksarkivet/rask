@@ -183,10 +183,9 @@ max-nested-blocks = 3
 # ---- TID251: the sanctioned sites of the banned-api rules ---------------------------------------
 # A dedicated seam module IS the sanctioned site, so it takes a per-file ignore. Every other sanctioned
 # use takes a LINE-level `# noqa: TID251` at its call site, never a per-file ignore: a per-file ignore
-# waives every ban in the file. Measured: with annotator's projects endpoint per-file-ignored (it is
-# sanctioned for grant_on_create), a raw ActorProxy planted in the same file went unflagged, and
-# maintenance's rebuild may grant tuples but must never revoke them, which only a line-level exemption
-# can express.
+# waives every ban in the file. Measured: with a module per-file-ignored for the one ban it was sanctioned for, a
+# second banned call planted in the same file went unflagged, and maintenance's rebuild may grant tuples but must
+# never revoke them, which only a line-level exemption can express.
 "packages/lakehouse/src/lakehouse/storage/client.py" = ["TID251"]  # boto3: the S3 client seam
 "packages/lakehouse/src/lakehouse/storage/sts.py" = ["TID251"]  # boto3: the STS client seam
 "packages/lakehouse/src/lakehouse/storage/errors.py" = ["TID251"]  # botocore.exceptions: the seam that reads the S3 client's failures

@@ -142,7 +142,7 @@ def _root_listing(identity: Identity) -> list[str]:
 
 
 def test_a_table_lands_in_its_warehouses_bucket_and_in_no_other(tenant: Tenant, second_warehouse: str) -> None:
-    table = f"{tenant.bronze}$e2etbl"
+    table = f"{tenant.namespace}$e2etbl"
 
     created = ok(
         tenant.admin.http.post(
@@ -222,7 +222,7 @@ def test_a_stock_client_lists_creates_writes_and_reads_a_table_in_a_warehouse(te
     tables = client.list_tables(ln.ListTablesRequest(id=namespace)).tables
     ids = sorted(lance.dataset(namespace_client=client, table_id=table).to_table(columns=["id"]).column("id").to_pylist())
 
-    assert (namespaces, tables, ids) == (["bronze", "events", SAME_NAME], ["t"], [0, 1, 2])
+    assert (namespaces, tables, ids) == (["events", "raw", SAME_NAME], ["t"], [0, 1, 2])
 
 
 def test_the_root_lists_each_caller_the_warehouses_it_may_see(tenant: Tenant, same_names: SameNames) -> None:

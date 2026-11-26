@@ -16,11 +16,12 @@ import (
 type Rask struct{}
 
 // UvPythonImage carries Python 3.15 + uv preinstalled. Same Python version as
-// the workspace `.python-version`; uv path is `/usr/local/bin/uv`. Trixie, NOT
-// bookworm: `lance-graph` ships a single manylinux_2_39 wheel (glibc >= 2.39),
-// so on bookworm (glibc 2.36) uv falls back to its sdist and dies in a
-// Rust-less maturin build. Matches the chartsBaseImage comment in charts.go.
-const UvPythonImage = "ghcr.io/astral-sh/uv:python3.15-trixie-slim"
+// the workspace `.python-version`; uv path is `/usr/local/bin/uv`. Trixie, the
+// release the chartsBaseImage in charts.go matches. Pinned by the digest the
+// lakehouse image's builder stage names (.docker/rest-catalog.dockerfile), so the
+// gates judge with the interpreter and uv the image is built with, and a moved
+// tag changes neither until git does.
+const UvPythonImage = "ghcr.io/astral-sh/uv:python3.15-trixie-slim@sha256:3ee10471b12b57f6f86d03f68c44fbd4bb8d5540efa25ab3b89159e1216b1a70"
 
 // Echo returns whatever string you pass it (smoke-test for the module).
 func (m *Rask) Echo(ctx context.Context, msg string) (string, error) {

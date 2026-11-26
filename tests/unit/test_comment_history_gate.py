@@ -6,6 +6,8 @@ the third from the first two would be rejected on its first false positive, so t
 load-bearing here in exactly the way the reject case is.
 """
 
+import subprocess
+from pathlib import Path
 from types import ModuleType
 
 import pytest
@@ -91,3 +93,44 @@ def test_markdown_is_out_of_scope_because_docs_keep_a_trail(gate: ModuleType) ->
     assert not gate.is_gated("docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md")
     assert gate.is_gated("services/example/src/example/mod.py")
     assert gate.is_gated("frontend/console/src/lib/x.ts")
+
+
+# --- the modes, driven on a repository of the test's own ------------------------------------------
+
+_BANNED = "# This comment used to say the lookup was cached.\n"
+
+
+@pytest.fixture
+def repo(gate: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A git repository holding one committed file, which the gate reads as its own."""
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True)  # noqa: S607
+
+    git("init", "-q")
+    git("config", "user.email", "gate@example.invalid")
+    git("config", "user.name", "gate")
+    (tmp_path / "run.sh").write_text("echo ok\n", encoding="utf-8")
+    git("add", "run.sh")
+    git("commit", "-q", "-m", "base")
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    return tmp_path
+
+
+@pytest.mark.parametrize("prefix", ["diff.noprefix", "diff.mnemonicPrefix"])
+def test_a_staged_shell_comment_is_refused_whatever_prefix_the_diff_is_configured_with(gate: ModuleType, repo: Path, prefix: str) -> None:
+    subprocess.run(["git", "-C", str(repo), "config", prefix, "true"], check=True)  # noqa: S607
+    (repo / "run.sh").write_text(f"echo ok\n{_BANNED}", encoding="utf-8")
+    subprocess.run(["git", "-C", str(repo), "add", "run.sh"], check=True)  # noqa: S607
+
+    assert gate.main(["--staged"]) == 1
+
+
+def test_the_worktree_mode_judges_an_untracked_file_whole(gate: ModuleType, repo: Path) -> None:
+    (repo / "new.yaml").write_text(f"a: 1\n{_BANNED}", encoding="utf-8")
+
+    assert gate.main(["--worktree"]) == 1
+
+
+def test_a_path_that_is_not_a_file_is_refused_rather_than_passed(gate: ModuleType, repo: Path) -> None:
+    assert gate.main(["--paths", str(repo / "absent.py")]) == 2

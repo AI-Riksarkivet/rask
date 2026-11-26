@@ -4,10 +4,11 @@ Owner, 2026-11-04: "Lakehouse don't know anything about the other stuff what so 
 compute" (CLAUDE.md). The lakehouse ships the generic seam with empty defaults; a client's integration values live in
 the client's own tree. A rule about what files say is a lint, so this runs in `make lint` and `dagger call lint`.
 
-WHAT IS THE LAKEHOUSE'S. Its workspace members, its console (the `frontend` workspace and its image's dockerfile), its
-product chart (less the vendored upstream CRDs), the overlays and alert rules it deploys with, the platform's development
-fixtures, and its root suites (`tests/unit`, `tests/chart`, `tests/integration`, `tests/e2e-py`): a lakehouse test that names a client
-depends on it, so deleting the client turns `make test` red. Repository tooling (`.dagger`, `scripts`, the Makefile),
+WHAT IS THE LAKEHOUSE'S. Its workspace members and their image's dockerfile, its console (the `frontend` workspace and
+its image's dockerfile), its product chart (less the vendored upstream CRDs), every overlay, the alert rules and the
+cluster configurations it deploys with, the platform's development fixtures, and its root suites (`tests/unit`,
+`tests/chart`, `tests/integration`, `tests/e2e-py`, with the root `conftest.py` and the workspace's `pyproject.toml`): a
+lakehouse test that names a client depends on it, so deleting the client turns `make test` red. Repository tooling (`.dagger`, `scripts`, the Makefile),
 `docs` and the agent instructions are not the product, and this repository hosts no client for them to build.
 
 WHO THE CLIENTS ARE is read off the tree: every workspace member outside the lakehouse and every fixture that is not the
@@ -25,6 +26,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from _files_under import files_under
+from _judged_text import judged_text, line_hits, spelled
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,10 +42,11 @@ LAKEHOUSE_MEMBERS = (
 PLATFORM_FIXTURES = ("dex", "external-secrets", "marquez", "nats", "observability", "openbao", "postgres", "registry", "rustfs")
 #: The lakehouse's console: the single-page app, its packages and its image.
 LAKEHOUSE_CONSOLE = ("frontend", ".docker/frontend.dockerfile")
-#: The rest of what the lakehouse deploys with.
-LAKEHOUSE_DEPLOY = ("chart", "deploy/values-local.yaml", "deploy/values-prod.yaml", "deploy/alerting")
-#: The lakehouse's root suites.
-LAKEHOUSE_TESTS = ("tests/unit", "tests/chart", "tests/integration", "tests/e2e-py")
+#: The rest of what the lakehouse deploys with: its chart, its image, the clusters it is installed on and every overlay
+#: (`deploy/values-*.yaml`, read off the tree by `lakehouse_files`).
+LAKEHOUSE_DEPLOY = ("chart", "deploy/alerting", "deploy/k3s", "deploy/kind", ".docker/rest-catalog.dockerfile")
+#: The lakehouse's root suites, the conftest that serves them, and the workspace's own configuration.
+LAKEHOUSE_TESTS = ("tests/unit", "tests/chart", "tests/integration", "tests/e2e-py", "conftest.py", "pyproject.toml")
 #: Vendored upstream files the lakehouse does not write.
 VENDORED = ("/charts/",)
 #: The gates' own tests, the product chart's render gate and this lint's: each names a client to show it is refused, as
@@ -79,13 +82,10 @@ def client_names(root: Path) -> set[str]:
 
 
 def pattern(names: set[str]) -> re.Pattern[str]:
-    """One alternation: plain names as whole words; ambiguous ones only in a name's position."""
-
-    def spellings(name: str) -> list[str]:
-        return sorted({re.escape(name), re.escape(name.replace("-", "_"))})
+    """One alternation: plain names as whole words; ambiguous ones only in a name's position; each as `_judged_text.spelled`."""
 
     path = r"(?:services|packages|frontend|fixtures|runners|microfrontends)/"
-    plain = [s for n in names - AMBIGUOUS - CONSOLE_ZONES for s in spellings(n)]
+    plain = [spelled(n) for n in names - AMBIGUOUS - CONSOLE_ZONES]
     role = r"(?:service|release|fixture|zone|client|runner|plane|inbox|image|account)"
     # A name's positions: a tree's path, an account or object (`rask-sa-<name>`), an import, a backticked name, a
     # possessive, a dotted module, a module file, a path inside its tree, an image (`<name>:<tag>`), a versioned name, and
@@ -94,15 +94,16 @@ def pattern(names: set[str]) -> re.Pattern[str]:
         r"{path}{s}\b", r"\b(?:sa|rask(?:-[a-z0-9]+)*)-{s}\b", r"\bservices\.{s}\b", r"`{s}`", r"\b{s}'s\b",
         r"\b{s}\.[a-z_]+\.[a-z_]", r"\b{s}\.py\b", r"\b{s}/\w+(?:/|\.py\b)", r"\b{s}:\w[\w.-]*", r"\b{s}-\d", r"\b{s} {role}\b",
     )  # fmt: skip
-    named = [form.format(path=path, s=s, role=role) for n in names & AMBIGUOUS for s in spellings(n) for form in forms]
-    named += [rf"\bmicrofrontends/{s}\b" for n in names & CONSOLE_ZONES for s in spellings(n)]
+    named = [form.format(path=path, s=spelled(n), role=role) for n in names & AMBIGUOUS for form in forms]
+    named += [rf"\bmicrofrontends/{spelled(n)}\b" for n in names & CONSOLE_ZONES]
     parts = [*named, *([rf"\b(?:{'|'.join(sorted(plain))})\b"] if plain else [])]
     return re.compile("|".join(parts) if parts else r"(?!)", re.IGNORECASE)
 
 
 def lakehouse_files(root: Path) -> list[str]:
     """The files under the lakehouse's paths (`_files_under.files_under`), less the vendored ones and the gates' own tests."""
-    scope = [*LAKEHOUSE_MEMBERS, *LAKEHOUSE_CONSOLE, *LAKEHOUSE_DEPLOY, *LAKEHOUSE_TESTS, *(f"deploy/fixtures/{f}" for f in PLATFORM_FIXTURES)]
+    overlays = sorted(str(p.relative_to(root)) for p in (root / "deploy").glob("values-*.yaml"))
+    scope = [*LAKEHOUSE_MEMBERS, *LAKEHOUSE_CONSOLE, *LAKEHOUSE_DEPLOY, *overlays, *LAKEHOUSE_TESTS, *(f"deploy/fixtures/{f}" for f in PLATFORM_FIXTURES)]
     return [f for f in files_under(root, scope) if not any(v in f for v in VENDORED) and f not in CLIENT_GATES]
 
 
@@ -114,11 +115,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     found = pattern(client_names(args.root) | DEPARTED | CONSOLE_ZONES)
     hits: list[str] = []
     for name in lakehouse_files(args.root):
-        try:
-            text = (args.root / name).read_text(encoding="utf-8")
-        except UnicodeDecodeError, FileNotFoundError:
-            continue
-        hits += [f"{name}:{n}: {m.group(0)!r}" for n, line in enumerate(text.splitlines(), 1) for m in found.finditer(line)]
+        text = judged_text(args.root / name)
+        if text is not None:
+            hits += line_hits(name, text, found)
     for hit in hits:
         print(hit)
     if hits:

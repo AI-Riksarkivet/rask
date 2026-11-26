@@ -157,10 +157,14 @@ def _admits_everything(peer: dict) -> bool:
 
 @pytest.mark.parametrize("overlay", sorted(_OVERLAYS))
 def test_every_egress_rule_names_the_peers_it_admits(overlay: str) -> None:
-    """Each egress rule of each NetworkPolicy names its peers, none of them every address, and a rule stated in values
-    that names no peer, or every address, is refused. An egress policy with no rules allows nothing."""
+    """Every first-party pod is selected by a policy governing its egress, so it is denied what no rule admits; each egress
+    rule of each NetworkPolicy names its peers, none of them every address, and a rule stated in values that names no
+    peer, or every address, is refused. An egress policy with no rules allows nothing."""
     policies = [doc for doc in chart_render.render(*_OVERLAYS[overlay]) if doc.get("kind") == "NetworkPolicy"]
     rules = [(policy["metadata"]["name"], rule) for policy in policies for rule in policy["spec"].get("egress") or []]
+    governing = [policy["spec"]["podSelector"] for policy in policies if "Egress" in policy["spec"].get("policyTypes", [])]
+    ungoverned = [pod.workload for pod in _pods(*_OVERLAYS[overlay]) if pod.first_party and not any(chart_render.selects(s, pod.labels) for s in governing)]
+    assert ungoverned == [], f"{overlay}: first-party pods no policy denies egress to: {ungoverned}"
 
     # The walk reads the isolation layer: default-deny with DNS, the namespace, the API server, the telemetry backend.
     assert len(rules) >= 4, f"{overlay}: only {len(rules)} egress rules rendered"

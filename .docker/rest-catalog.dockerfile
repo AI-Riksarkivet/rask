@@ -26,7 +26,7 @@ WORKDIR /app
 # source trees; --no-install-workspace skips the members themselves). The union of --package
 # flags covers every service the chart runs from this image — cached until pyproject/uv.lock change.
 # No toolchain precedes it: every package in this closure locks an arm64 and an x86_64 wheel (read from uv.lock
-# 2026-10-24). lance-graph, the one with no arm64 wheel, is the viewer's and compiles in the media image.
+# 2026-10-24).
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=uv.lock,target=uv.lock \
     --mount=type=bind,source=pyproject.toml,target=pyproject.toml \

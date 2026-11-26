@@ -79,8 +79,8 @@ for name in "$@"; do
 
   # THE HANDOVER. Every object this fixture renders that already exists under another Helm release is annotated
   # helm.sh/resource-policy=keep first, so that release's next upgrade (the one that stops rendering it) leaves it
-  # standing, and the install takes ownership of it. An object no release owns is adopted the same way: a RayCluster
-  # or a CRD changes owner in place. A kind the cluster does not serve yet (a CRD the fixture itself installs) has
+  # standing, and the install takes ownership of it. An object no release owns is adopted the same way: a custom
+  # resource or a CRD changes owner in place. A kind the cluster does not serve yet (a CRD the fixture itself installs) has
   # nothing to hand over, so its lookup error is not a failure.
   #
   # A WORKLOAD WHOSE SELECTOR CHANGES cannot change owner in place, because a selector is immutable and most charts put
@@ -93,7 +93,7 @@ for name in "$@"; do
   RENDER="$(mktemp)"
   trap 'rm -f "$RENDER"' EXIT
   # The install renders against the capabilities the cluster serves, so the handover render is given the same ones, or a
-  # chart that guards on an API (the annotator's CloudNativePG Cluster) lists other objects here than its install creates.
+  # chart that guards on an API (a CloudNativePG Cluster) lists other objects here than its install creates.
   # Helm counts every served group/version and each kind at each of them (`kubectl api-resources` names a kind at its
   # group's preferred version only), and a group whose discovery fails still counts as served. Read per fixture: an
   # earlier one in the same run can install the CRDs a later one guards on.

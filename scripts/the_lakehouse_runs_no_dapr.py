@@ -16,12 +16,13 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from _files_under import files_under
+from _judged_text import judged_text, line_hits, spelled
 
 
 ROOT = Path(__file__).resolve().parent.parent
 
-#: The name, matched in any case.
-NAME = re.compile("dapr", re.IGNORECASE)
+#: The name, matched in any case and as `_judged_text.spelled`.
+NAME = re.compile(spelled("dapr"), re.IGNORECASE)
 #: This lint's own name, which the lines that run it carry (the Makefile's `lint`, the Dagger lint lane) and which is no
 #: mention of the framework.
 OWN_NAME = "the_lakehouse_runs_no_dapr"
@@ -54,11 +55,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     hits: list[str] = []
     for name in code_files(args.root):
-        try:
-            text = (args.root / name).read_text(encoding="utf-8")
-        except UnicodeDecodeError, FileNotFoundError:
-            continue
-        hits += [f"{name}:{n}: {m.group(0)!r}" for n, line in enumerate(text.splitlines(), 1) for m in NAME.finditer(line.replace(OWN_NAME, ""))]
+        text = judged_text(args.root / name)
+        if text is not None:
+            hits += line_hits(name, text.replace(OWN_NAME, ""), NAME)
     for hit in hits:
         print(hit)
     if hits:

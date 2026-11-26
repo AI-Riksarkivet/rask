@@ -44,7 +44,7 @@ def names_the_logger(tree: ast.AST) -> Iterator[tuple[int, str]]:
             isinstance(node, ast.Call)
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "getChild"
-            and any(isinstance(arg, ast.Constant) and arg.value == LEAF for arg in node.args)
+            and any(isinstance(arg, ast.Constant) and arg.value == LEAF for arg in [*node.args, *(keyword.value for keyword in node.keywords)])
         ):
             yield node.lineno, f"getChild({LEAF!r})"
 

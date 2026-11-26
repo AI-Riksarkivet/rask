@@ -110,7 +110,7 @@ def _versions_once_gone(client: lance_namespace.LanceNamespace, table_id: list[s
 def test_a_table_lives_its_whole_lifecycle_under_any_name(tenant: Tenant, name: str) -> None:
     admin, client = tenant.admin, tenant.admin.namespace()
     feed_reader = scenario.Identity(admin.bearer)
-    made, renamed = [*tenant.bronze.split("$"), name], [*tenant.bronze.split("$"), f"{name} renamed"]
+    made, renamed = [*tenant.namespace.split("$"), name], [*tenant.namespace.split("$"), f"{name} renamed"]
     since = scenario.feed_start(feed_reader)
 
     # A stock client makes the table, writes it and reads it, at versions 1 and 2.
@@ -174,5 +174,5 @@ def test_a_table_lives_its_whole_lifecycle_under_any_name(tenant: Tenant, name: 
         status=403,
         code=ErrorCode.PERMISSION_DENIED,
         unchanged=lambda: (_described(admin, renamed).status_code, tuples_on(fga_ids.table_object(table_uuid))),
-        foreign={table_uuid, namespace_uuid(CATALOG, tenant.bronze, {"authorization": f"Bearer {admin.bearer}"}), tenant.job.principal},
+        foreign={table_uuid, namespace_uuid(CATALOG, tenant.namespace, {"authorization": f"Bearer {admin.bearer}"}), tenant.job.principal},
     )

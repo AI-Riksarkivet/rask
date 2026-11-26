@@ -64,8 +64,8 @@ class Estates(BaseModel):
 
 
 def _create(tenant: Tenant, name: str) -> Placed:
-    """The tenant's admin creates ``name`` in its bronze namespace; where the catalog put it."""
-    table = f"{tenant.bronze}${name}"
+    """The tenant's admin creates ``name`` in its namespace; where the catalog put it."""
+    table = f"{tenant.namespace}${name}"
     ok(
         tenant.admin.http.post(
             f"{CATALOG}/v1/table/{table}/create",

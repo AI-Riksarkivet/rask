@@ -3,7 +3,7 @@
 The pipeline signs in with Dex's client-credentials grant as the confidential client the Dex fixture declares
 (`machineClients`, `rask-pipeline`), asking for the lakehouse's audience, which the audience client issues only to a
 client it trusts. The catalog names that bearer `dex-client~<client id>`, a machine: granted `writer` on a scratch tenant's
-bronze namespace, it creates a table, the commit Lance holds names it as the author, and since a machine never owns what
+namespace, it creates a table, the commit Lance holds names it as the author, and since a machine never owns what
 it creates (LH-433) its own drop of that table is refused, leaving the table where its owner describes it and naming
 nothing the client did not send ([[LH-255]]), while the tenant's admin, who owns it through the namespace, drops it at
 teardown.
@@ -55,8 +55,8 @@ def client_bearer() -> str:
 def test_a_pipeline_signed_in_as_its_own_dex_client_writes_as_that_client_and_does_not_own_what_it_writes(tenant: Tenant, client_bearer: str) -> None:
     principal = principal_of(CATALOG, client_bearer)
     assert principal == f"dex-client~{CLIENT_ID}", f"the client's bearer proves {principal}"
-    ok(tenant.admin.http.post(f"{CATALOG}/management/v1/namespace/{tenant.bronze}/access/grant", json={"user": principal, "relation": "writer"}))
-    table = f"{tenant.bronze}$written_by_a_client"
+    ok(tenant.admin.http.post(f"{CATALOG}/management/v1/namespace/{tenant.namespace}/access/grant", json={"user": principal, "relation": "writer"}))
+    table = f"{tenant.namespace}$written_by_a_client"
     headers = {"authorization": f"Bearer {client_bearer}", "connection": CLOSE_EACH_REQUEST}
     rows = encode_arrow_stream(pa.table({"id": pa.array([1, 2], pa.int64())}))
 
@@ -77,5 +77,5 @@ def test_a_pipeline_signed_in_as_its_own_dex_client_writes_as_that_client_and_do
         status=403,
         code=ErrorCode.PERMISSION_DENIED,
         unchanged=lambda: (described(CATALOG, table, owner), tuples_on(fga_ids.table_object(table_uuid))),
-        foreign={tenant.admin.principal, tenant.job.principal, standing["location"], table_uuid, namespace_uuid(CATALOG, tenant.bronze, owner)},
+        foreign={tenant.admin.principal, tenant.job.principal, standing["location"], table_uuid, namespace_uuid(CATALOG, tenant.namespace, owner)},
     )

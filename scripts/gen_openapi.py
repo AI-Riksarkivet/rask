@@ -14,13 +14,12 @@ for schema generation, so the placeholders below are inert. The frontend types a
 
 import json
 import os
-import sys
+import tempfile
 from pathlib import Path
 from typing import Any
 
 
 _ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(_ROOT / "services"))  # `uv run` doesn't apply the pytest pythonpath
 os.environ.setdefault("LANCE_S3_ACCESS_KEY_ID", "spec")
 os.environ.setdefault("LANCE_S3_SECRET_ACCESS_KEY", "spec")
 
@@ -34,9 +33,16 @@ _SERVICES = [
 
 
 def _dump(app: Any, path: Path) -> int:
-    """Write ``app.openapi()`` deterministically (sorted keys); return the path count for a summary line."""
+    """Write ``app.openapi()`` deterministically (sorted keys), whole or not at all; return the path count for a summary line.
+
+    Written to a file beside ``path`` and renamed over it, so an interrupted run leaves the committed spec as it was.
+    """
     spec = app.openapi()
-    path.write_text(json.dumps(spec, indent=2, sort_keys=True) + "\n")
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False) as staged:
+        staged.write(json.dumps(spec, indent=2, sort_keys=True) + "\n")
+    staged_path = Path(staged.name)
+    staged_path.chmod(0o644)  # a temporary file is created 0600; the spec is read by everyone, as a checkout writes it
+    staged_path.replace(path)
     return len(spec.get("paths", {}))
 
 

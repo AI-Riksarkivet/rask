@@ -28,6 +28,7 @@ reported was a false positive of its own making.
 """
 
 import re
+from collections.abc import Callable
 from typing import Final
 
 import pytest
@@ -35,8 +36,18 @@ import yaml
 from test_invariants import _helm_template
 
 
-#: The baseline `lance.securityContext` writes.
-BASELINE = ("runAsNonRoot", "seccompProfile", "allowPrivilegeEscalation", "readOnlyRootFilesystem")
+#: The baseline `lance.securityContext` writes, each key with the value it must hold. A key present with a weaker value
+#: (`allowPrivilegeEscalation: true`, a capability added) is as missing as an absent one.
+HOLDS: Final[frozendict[str, Callable[[object], bool]]] = frozendict(
+    {
+        "runAsNonRoot": lambda value: value is True,
+        "seccompProfile": lambda value: isinstance(value, dict) and value.get("type") in ("RuntimeDefault", "Localhost"),
+        "allowPrivilegeEscalation": lambda value: value is False,
+        "readOnlyRootFilesystem": lambda value: value is True,
+        "capabilities": lambda value: isinstance(value, dict) and "ALL" in (value.get("drop") or []) and not value.get("add"),
+    }
+)
+BASELINE = tuple(HOLDS)
 
 #: The baseline keys Kubernetes also accepts on the POD, which every container in it then inherits
 #: unless it overrides them. The other two are container-only fields and a pod-level value for them is
@@ -59,15 +70,15 @@ WORKLOAD_KINDS = ("Deployment", "StatefulSet", "DaemonSet", "Job", "CronJob")
 SLOTS = ("containers", "initContainers")
 
 
-def _effective(pod: dict, container: dict) -> set[str]:
-    """The baseline keys in force on this container once the pod's own context is merged in.
+def _effective(pod: dict, container: dict) -> dict[str, object]:
+    """The security context in force on this container once the pod's own context is merged in.
 
     Container-level wins, which is the kubelet's own rule; for the two pod-inheritable keys an absent
     container value falls back to the pod's.
     """
-    own = set(container.get("securityContext") or {})
-    inherited = {key for key in POD_INHERITABLE if key in (pod.get("securityContext") or {})}
-    return own | inherited
+    pod_context = pod.get("securityContext") or {}
+    inherited = {key: pod_context[key] for key in POD_INHERITABLE if key in pod_context}
+    return inherited | (container.get("securityContext") or {})
 
 
 def _first_party_workloads() -> list[tuple[str, str, dict]]:
@@ -140,7 +151,7 @@ def test_no_new_first_party_container_renders_without_the_baseline(slot: str) ->
     for kind, name, pod in _first_party_workloads():
         for container in pod.get(slot) or []:
             effective = _effective(pod, container)
-            missing = [key for key in BASELINE if key not in effective]
+            missing = [key for key in BASELINE if not (key in effective and HOLDS[key](effective[key]))]
             if not missing:
                 continue
             key = _key(kind, name, container["name"])

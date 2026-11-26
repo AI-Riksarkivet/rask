@@ -8,7 +8,7 @@ verification door has released the obligation on the catalog's own reading of st
 compaction out, and the obligation stays open naming it.
 
 Two Dex users from the deployed configmap play the parts. The estate admin creates a scratch tenant (a project, a
-warehouse with its own bucket, a bronze namespace), owns the table it seeds and asks for the erasure. The job identity
+warehouse with its own bucket, a namespace), owns the table it seeds and asks for the erasure. The job identity
 holds `writer` and `maintainer` on the namespace. The tenant is deleted at the end.
 
 Run with `bash scripts/e2e_live.sh tests/e2e-py/test_an_erasure_is_rewritten_by_a_bring_your_own_job.py`, which
@@ -87,7 +87,7 @@ def _objects_holding(identity: Identity, table_id: list[str], needle: bytes) -> 
 
 def test_a_job_rewrites_every_surface_and_the_catalog_releases_what_it_verifies(tenant: Tenant) -> None:
     admin, job = tenant.admin, tenant.job
-    table_id = [*tenant.bronze.split("$"), "people"]
+    table_id = [*tenant.namespace.split("$"), "people"]
     table = "$".join(table_id)
     owner = admin.namespace()
     lance.write_dataset(

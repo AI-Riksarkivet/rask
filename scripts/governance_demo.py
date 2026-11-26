@@ -5,9 +5,9 @@ A runnable story (not just a smoke test): it drives the full governance stack an
 step by step, how the three axes meet on one identity (``table:<id>``):
 
   who-may   (OpenFGA)      — alice owns what she creates; bob, with no grant, is denied
-  what/when (Lance)        — the bronze/silver tables are real Lance datasets
+  what/when (Lance)        — the raw/cleaned tables are real Lance datasets
   how/who   (OpenLineage)  — the catalog records alice as the *verified* creator; a promote
-                             run links silver ← bronze (derivation lineage)
+                             run links cleaned ← raw (derivation lineage)
 
 Run it through the stack that already exists: `dagger call governance-chain --demo`.
 Or, against a stack you stood up yourself:
@@ -114,7 +114,7 @@ def poll(fn: Callable[[], object], want: object, *, tries: int = 20, delay: floa
 
 def main() -> int:
     ns = f"{ESTATE_WAREHOUSE}$demo{os.getpid()}"
-    bronze, silver = f"{ns}$bronze$events", f"{ns}$silver$events"
+    raw, cleaned = f"{ns}$raw$events", f"{ns}$cleaned$events"
 
     step("Tokens from Dex (the IdP)")
     alice, bob = token("alice@example.com"), token("bob@example.com")
@@ -123,11 +123,11 @@ def main() -> int:
     print(f"  alice sub = {alice_sub}")
 
     _anonymous_create_is_refused(ns)
-    _alice_creates_bronze(ns, bronze, ah)
-    _only_the_owner_reads_bronze(bronze, ah, bh)
-    _the_create_is_authored_by_alice(bronze, ah, alice_sub)
-    _a_job_promotes_bronze_to_silver(ns, bronze, silver, ah=ah, alice_sub=alice_sub)
-    _silver_derives_from_bronze(bronze, silver, ah)
+    _alice_creates_raw(ns, raw, ah)
+    _only_the_owner_reads_raw(raw, ah, bh)
+    _the_create_is_authored_by_alice(raw, ah, alice_sub)
+    _a_job_promotes_raw_to_cleaned(ns, raw, cleaned, ah=ah, alice_sub=alice_sub)
+    _cleaned_derives_from_raw(raw, cleaned, ah)
 
     summary = f"{RED}{_failures} check(s) FAILED{RESET}" if _failures else f"{GREEN}ALL GOVERNANCE INVARIANTS HELD{RESET}"
     print(f"\n{summary}")
@@ -141,40 +141,40 @@ def _anonymous_create_is_refused(ns: str) -> None:
     check(anon.status_code == 401, f"anon create namespace -> {anon.status_code} (want 401)")
 
 
-def _alice_creates_bronze(ns: str, bronze: str, ah: dict[str, str]) -> None:
-    """Alice creates the namespace and its bronze table, and owns both."""
-    step("alice creates a namespace + a bronze Lance table (she becomes its owner)")
+def _alice_creates_raw(ns: str, raw: str, ah: dict[str, str]) -> None:
+    """Alice creates the namespace and its raw table, and owns both."""
+    step("alice creates a namespace + a raw Lance table (she becomes its owner)")
     r = requests.post(f"{CATALOG}/v1/namespace/{ns}/create", headers=ah, json={}, timeout=10)
     check(r.status_code == 200, f"alice create namespace -> {r.status_code} (want 200)")
     rows = pa.table({"id": pa.array([1, 2, 3], pa.int64()), "kind": ["a", "b", "c"]})
-    r = requests.post(f"{CATALOG}/v1/table/{bronze}/create", headers={**ah, **ARROW}, data=ipc(rows), timeout=30)
-    check(r.status_code == 200, f"alice create {bronze} -> {r.status_code} (want 200)")
+    r = requests.post(f"{CATALOG}/v1/table/{raw}/create", headers={**ah, **ARROW}, data=ipc(rows), timeout=30)
+    check(r.status_code == 200, f"alice create {raw} -> {r.status_code} (want 200)")
 
 
-def _only_the_owner_reads_bronze(bronze: str, ah: dict[str, str], bh: dict[str, str]) -> None:
+def _only_the_owner_reads_raw(raw: str, ah: dict[str, str], bh: dict[str, str]) -> None:
     """Bob, holding no grant, is refused the table's metadata; alice, its owner, reads it."""
     step("who-may: bob holds no grant, so he cannot even read the table's metadata")
-    r = requests.post(f"{CATALOG}/v1/table/{bronze}/describe", headers=bh, timeout=10)
-    check(r.status_code == 403, f"bob describe {bronze} -> {r.status_code} (want 403)")
-    r = requests.post(f"{CATALOG}/v1/table/{bronze}/describe", headers=ah, timeout=10)
-    check(r.status_code == 200, f"alice describe {bronze} -> {r.status_code} (want 200, cascade from owner)")
+    r = requests.post(f"{CATALOG}/v1/table/{raw}/describe", headers=bh, timeout=10)
+    check(r.status_code == 403, f"bob describe {raw} -> {r.status_code} (want 403)")
+    r = requests.post(f"{CATALOG}/v1/table/{raw}/describe", headers=ah, timeout=10)
+    check(r.status_code == 200, f"alice describe {raw} -> {r.status_code} (want 200, cascade from owner)")
 
 
-def _the_create_is_authored_by_alice(bronze: str, ah: dict[str, str], alice_sub: str) -> None:
+def _the_create_is_authored_by_alice(raw: str, ah: dict[str, str], alice_sub: str) -> None:
     """Lineage's feed names alice, whose token the catalog verified, as an author of the create."""
     step("how/who: the catalog (which verified alice's token) recorded her as the author of the create")
 
-    def bronze_authors() -> set[str | None]:
-        rows = get_json(f"{LINEAGE}/events?table={bronze}&limit=500", ah).get("events", [])
+    def raw_authors() -> set[str | None]:
+        rows = get_json(f"{LINEAGE}/events?table={raw}&limit=500", ah).get("events", [])
         return {author_sub_from_payload(row.get("event")) for row in rows}
 
-    recorded = poll(lambda: alice_sub in bronze_authors(), True)
-    check(recorded is True, f"lineage feed authors of {bronze} = {bronze_authors()} (want {alice_sub} among them)")
+    recorded = poll(lambda: alice_sub in raw_authors(), True)
+    check(recorded is True, f"lineage feed authors of {raw} = {raw_authors()} (want {alice_sub} among them)")
 
 
-def _a_job_promotes_bronze_to_silver(ns: str, bronze: str, silver: str, *, ah: dict[str, str], alice_sub: str) -> None:
-    """A pipeline job's OpenLineage run, bronze in and silver out, is accepted 201."""
-    step("a pipeline job promotes bronze -> silver and emits OpenLineage")
+def _a_job_promotes_raw_to_cleaned(ns: str, raw: str, cleaned: str, *, ah: dict[str, str], alice_sub: str) -> None:
+    """A pipeline job's OpenLineage run, raw in and cleaned out, is accepted 201."""
+    step("a pipeline job promotes raw -> cleaned and emits OpenLineage")
     promote = {
         "eventType": "COMPLETE",
         "eventTime": "2026-06-24T00:00:00+00:00",
@@ -182,22 +182,22 @@ def _a_job_promotes_bronze_to_silver(ns: str, bronze: str, silver: str, *, ah: d
             "runId": f"promote-{os.getpid()}",
             "facets": {"rask_author": {"name": alice_sub, "sub": alice_sub}},
         },
-        "job": {"namespace": "pipeline", "name": "promote_bronze_to_silver"},
-        "inputs": [{"namespace": ns, "name": bronze}],
-        "outputs": [{"namespace": ns, "name": silver}],
+        "job": {"namespace": "pipeline", "name": "promote_raw_to_cleaned"},
+        "inputs": [{"namespace": ns, "name": raw}],
+        "outputs": [{"namespace": ns, "name": cleaned}],
     }
     r = requests.post(f"{LINEAGE}/api/v1/lineage", json=promote, headers=ah, timeout=10)
     check(r.status_code == 201, f"emit promote run -> {r.status_code} (want 201)")
 
 
-def _silver_derives_from_bronze(bronze: str, silver: str, ah: dict[str, str]) -> None:
-    """Lineage's edge list names silver among bronze's derived tables."""
-    step("how: silver is derived from bronze (derivation lineage, off lineage's edge list)")
+def _cleaned_derives_from_raw(raw: str, cleaned: str, ah: dict[str, str]) -> None:
+    """Lineage's edge list names cleaned among raw's derived tables."""
+    step("how: cleaned is derived from raw (derivation lineage, off lineage's edge list)")
     down = poll(
-        lambda: [d["table"] for d in get_json(f"{LINEAGE}/tables/{bronze}/derived", ah).get("derived", [])],
-        [silver],
+        lambda: [d["table"] for d in get_json(f"{LINEAGE}/tables/{raw}/derived", ah).get("derived", [])],
+        [cleaned],
     )
-    check(isinstance(down, list) and silver in down, f"derived({bronze}) = {down} (want it to include {silver})")
+    check(isinstance(down, list) and cleaned in down, f"derived({raw}) = {down} (want it to include {cleaned})")
 
 
 if __name__ == "__main__":

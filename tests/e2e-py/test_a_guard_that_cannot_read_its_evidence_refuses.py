@@ -66,7 +66,7 @@ def label(tenant: Tenant) -> Iterator[str]:
 
 def _classified_table(tenant: Tenant, label: str) -> tuple[str, str, str]:
     """A table of the tenant's whose ``id`` column carries ``label``: its id, its uuid, and its latest manifest's key."""
-    table = f"{tenant.bronze}$labelled"
+    table = f"{tenant.namespace}$labelled"
     admin = tenant.admin.http
     rows = encode_arrow_stream(pa.table({"id": pa.array([1, 2, 3], pa.int64())}))
     ok(admin.post(f"{CATALOG}/v1/table/{table}/create", data=rows, headers={"content-type": ARROW_STREAM_MEDIA_TYPE}, timeout=60))
@@ -108,7 +108,7 @@ def test_a_project_delete_is_refused_while_a_warehouse_record_cannot_be_read(ten
             code=ErrorCode.INTERNAL,
             unchanged=lambda: (
                 tuples_on(admin, f"project:{tenant.project}"),
-                ok(admin.http.get(f"{CATALOG}/v1/namespace/{tenant.bronze}/table/list", timeout=60)),
+                ok(admin.http.get(f"{CATALOG}/v1/namespace/{tenant.namespace}/table/list", timeout=60)),
             ),
             foreign=(unreadable,),
         )
