@@ -15,7 +15,7 @@ const DETAIL = {
 	project: 'acme',
 	warehouses: [
 		{ id: 'acme-wh', bucket: 'acme-bucket', status: 'active' },
-		{ id: 'acme-gold', bucket: 'gold-bucket', status: 'pending' },
+		{ id: 'acme-gold', bucket: 'gold-bucket', status: 'deactivated' },
 	],
 	admins: ['user:alice', 'role:7d2c0f4e-5b1a-4c3e-9f6d-2a8b1c0e9f3a#assignee'],
 };
@@ -37,13 +37,13 @@ test('renders the project’s warehouse rows and effective admins', async ({ pag
 	await expect(page.getByRole('heading', { name: 'acme', exact: true })).toBeVisible();
 
 	// Every registry fact the row carries — id, bucket and the status chip, whose non-active value is
-	// the only thing separating a provisioned warehouse from one that is still coming up.
+	// the only thing separating a warehouse that serves from one its project quarantined.
 	const work = page.getByRole('row').filter({ hasText: 'acme-wh' });
 	await expect(work).toContainText('acme-bucket');
 	await expect(work).toContainText('active');
 	const gold = page.getByRole('row').filter({ hasText: 'acme-gold' });
 	await expect(gold).toContainText('gold-bucket');
-	await expect(gold).toContainText('pending');
+	await expect(gold).toContainText('deactivated');
 
 	// The effective admins, verbatim — a userset (`role:<id>#assignee`) is a real grant and must not be
 	// flattened into a plain user.
