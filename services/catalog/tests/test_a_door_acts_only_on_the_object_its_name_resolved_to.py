@@ -112,7 +112,9 @@ _DOORS = [
 #: The rivals beside a destroying drop and a create landing after authorization, which every door is driven against: two
 #: that leave a table at the location the door resolved, each on a door acting through a handle there and on a native
 #: read, and a drop and a create landing as the door makes its native write, on one door making one.
-_RIVALS: Final = frozendict({"recoverable-drop": {"insert", "query"}, "re-register": {"insert", "list-versions"}, "drop-at-the-native-write": {"drop-index"}})
+_RIVALS: Final = frozendict(
+    {"recoverable-drop": {"insert", "query", "describe"}, "re-register": {"insert", "list-versions"}, "drop-at-the-native-write": {"drop-index"}}
+)
 
 #: Where the estate registers `lance_catalog$db$t` for the re-register rival, beneath the namespace root.
 _HELD = "held"

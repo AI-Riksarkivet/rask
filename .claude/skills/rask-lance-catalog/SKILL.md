@@ -130,8 +130,10 @@ Two contracts stack here, and confusing them is how bugs happen:
   resolves to the location under that claim (`require_named`): after a native read, its answer discarded and its failure
   told the change first (`DoorTable.read_natively`), and right before a write Lance serves only through the namespace
   (`DoorTable.write_natively`): both version finalizes (`version/create`'s and `commit_stamped`'s, the backend's
-  put-if-not-exists), drop_index, whose system-index refusal is the namespace's and not Lance's, and backfill. Describe
-  answers for the name off its own describe (`require_described_at`). A readback after a committed write (the lineage
+  put-if-not-exists), drop_index, whose system-index refusal is the namespace's and not Lance's, and backfill. A plain
+  describe answers from the resolution's own DescribeTable (`ResolvedTable.described`, [[LH-611]]) while the location
+  still holds that table (`require_held`); one pinned to a version or asking `with_table_uri` describes again and answers
+  for the name off that describe (`require_described_at`). A readback after a committed write (the lineage
   trailer, `tables.versions.committed_version`, `branch_identifier`) opens the location unguarded: a 409 after a commit would
   make a retry commit twice. An `Overwrite` create writes at the table it asked `can_drop` on, and one whose door found
   no table creates in Create mode, so a table created under the name meanwhile answers TableAlreadyExists rather than
@@ -422,7 +424,14 @@ the rule:
   `lineage.*` namespace key are refused 400 (`write_judge.declares_requires_run`).
 - **Every write is judged.** `route_guard.authorize` hands each non-read `table` / `materialized_view` door and each
   create of one to `write_judge.judge`, with FGA on or off. The judge asks the route's declared rung first, then
-  reads the rule, and audits `write_judge` with `requires_run`.
+  reads the rule off the request's `Resolver.namespace_properties`, the one description of each namespace the router,
+  the judge and an event's namespace uuid share ([[LH-611]]), and audits `write_judge` with `requires_run`. What still
+  reads `__manifest` in a commit, measured on pylance 14.0.3 (3 store requests a lookup): the resolution, the walk's
+  namespaces (each namespace inside the warehouse; the warehouse's own row is never read, since no door can give it the
+  rule), the guard before a native call (`require_named`) and the backend's own lookup inside that call: 4 lookups for
+  an insert in `<warehouse>$<namespace>`; a stock append makes 1 (describe), 3 (`version/list`: resolution, the
+  backend's, the guard after it) and 4 (`version/create`), pinned by
+  `test_an_insert_and_a_stock_commit_read_the_namespace_manifest_only_for_their_resolutions_and_guards`.
 - **Pinned by tests.** `services/catalog/tests/test_an_undeclared_door_is_refused.py` walks every mounted route and
   fails on a write that skips the judge; `tests/integration/test_the_run_rule_is_declared_by_its_admin_and_judged_on_every_write.py`
   covers the admin gate and the judged rule over HTTP.

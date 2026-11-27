@@ -16,8 +16,6 @@ from typing import Literal
 from lance_namespace import ConcurrentModificationError, DescribeNamespaceRequest, DescribeTableRequest, InternalError, LanceNamespace, NamespaceNotFoundError
 
 from catalog.core import native
-from lakehouse.events.control_events import ControlUuids
-from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids
 from lakehouse.naming import uuid_of
 from lakehouse.process.supervision import is_fault
@@ -42,23 +40,26 @@ class UnidentifiedObjectError(InternalError):
         super().__init__(f"{kind} {segments} carries no uuid, so nothing kept for it can be read")
 
 
-def namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str | None:
-    """The uuid of the namespace ``segments`` names, or ``None`` for the root, a warehouse's own name, a namespace that is
-    gone, or a failed read.
-
-    A one-segment name is a warehouse ([[LH-593]]), governed as ``warehouse:<id>``: the uuid its row in its own catalog
-    carries names no object an event's reader could look up, so an event names none for it.
-    """
-    if len(segments) < 2:
-        return None
+def namespace_properties(ns: LanceNamespace, segments: list[str]) -> dict[str, str] | None:
+    """The properties of the namespace ``segments`` names, or ``None`` when no namespace has that name."""
     try:
         described = native.call(ns, "describe_namespace", DescribeNamespaceRequest(id=segments))
-    except BaseException as exc:  # noqa: BLE001 — an event is announced without what it cannot read, a native panic too
-        if not is_fault(exc):
-            raise
-        log.info("event_namespace_uuid_unread", extra={"namespace": segments, "error": str(exc)[:300]})
+    except NamespaceNotFoundError:
         return None
-    return uuid_of(described.properties)
+    return dict(described.properties or {})
+
+
+def recorded_namespace_uuid(properties: dict[str, str], segments: list[str]) -> str:
+    """The uuid the namespace ``segments`` records in its ``properties``.
+
+    Raises:
+        UnidentifiedObjectError: The namespace carries no uuid, which no door leaves.
+    """
+    uuid = uuid_of(properties)
+    if uuid is None:
+        log.error("namespace_uuid_unrecorded", extra={"namespace": segments})
+        raise UnidentifiedObjectError("namespace", segments)
+    return uuid
 
 
 def resolve_namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str | None:
@@ -67,15 +68,8 @@ def resolve_namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str | Non
     Raises:
         UnidentifiedObjectError: The namespace carries no uuid, which no door leaves.
     """
-    try:
-        described = native.call(ns, "describe_namespace", DescribeNamespaceRequest(id=segments))
-    except NamespaceNotFoundError:
-        return None
-    uuid = uuid_of(described.properties)
-    if uuid is None:
-        log.error("namespace_uuid_unrecorded", extra={"namespace": segments})
-        raise UnidentifiedObjectError("namespace", segments)
-    return uuid
+    properties = namespace_properties(ns, segments)
+    return None if properties is None else recorded_namespace_uuid(properties, segments)
 
 
 def require_namespace_uuid(ns: LanceNamespace, segments: list[str]) -> str:
@@ -107,16 +101,6 @@ def table_uuid(ns: LanceNamespace, store: ClaimStore, segments: list[str], *, lo
         log.info("event_table_uuid_unread", extra={"table": segments, "error": str(exc)[:300]})
         return None
     return claim.claim.uuid if claim is not None else None
-
-
-def of_table(ns: LanceNamespace, store: ClaimStore, segments: list[str], *, location: str | None = None, uuid: str | None = None) -> DatasetUuids:
-    """A table's uuid and its namespace's. ``uuid`` is the one the door resolved, when it holds one: it wins."""
-    return DatasetUuids(table_uuid=uuid or table_uuid(ns, store, segments, location=location), namespace_uuid=namespace_uuid(ns, segments[:-1]))
-
-
-def of_namespace(ns: LanceNamespace, segments: list[str]) -> ControlUuids:
-    """A namespace's uuid and its parent namespace's."""
-    return ControlUuids(object_uuid=namespace_uuid(ns, segments), namespace_uuid=namespace_uuid(ns, segments[:-1]))
 
 
 def require_standing_as_identified(segments: list[str], *, identified: str, standing: str | None) -> None:

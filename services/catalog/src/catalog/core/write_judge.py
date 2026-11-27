@@ -19,11 +19,9 @@ import logging
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Final, Literal
 
-from fastapi.concurrency import run_in_threadpool
-from lance_namespace import DescribeNamespaceRequest, InternalError, InvalidInputError, LanceNamespace, NamespaceNotFoundError, UnsupportedOperationError
+from lance_namespace import InternalError, InvalidInputError, UnsupportedOperationError
 from pydantic import BaseModel, ConfigDict
 
-from catalog.core import native
 from catalog.core.provenance_guard import RESERVED_METADATA_PREFIXES, is_reserved_key
 from catalog.core.run_context import INPUTS_HEADER, INPUTS_PROPERTY, RUN_ID_HEADER, RUN_ID_PROPERTY, RunContext
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
@@ -50,6 +48,10 @@ type RungCheck = Callable[["Rung"], Awaitable[None]]
 
 #: Refuse a run whose inputs do not each name a table the committer may read, with the spec's typed refusal.
 type InputsCheck = Callable[[RunContext], Awaitable[object]]
+
+#: The properties of the namespace a name names, ``None`` when no namespace has that name: the request's own description
+#: of it (``catalog.api.dependencies.Resolver.namespace_properties``), so the judge reads what the router read.
+type NamespaceProperties = Callable[[list[str]], Awaitable[Mapping[str, str] | None]]
 
 
 class Named(BaseModel):
@@ -125,13 +127,9 @@ def declares_requires_run(properties: Mapping[str, str] | None) -> bool:
     return True
 
 
-async def declared_on(ns: LanceNamespace, namespace: Sequence[str]) -> bool:
+async def declared_on(properties: NamespaceProperties, namespace: Sequence[str]) -> bool:
     """Whether namespace ``namespace`` itself declares the run rule (a namespace that does not exist declares nothing)."""
-    try:
-        described = await run_in_threadpool(native.call, ns, "describe_namespace", DescribeNamespaceRequest(id=list(namespace)))
-    except NamespaceNotFoundError:
-        return False
-    value = (described.properties or {}).get(REQUIRES_RUN_PROPERTY)
+    value = ((await properties(list(namespace))) or {}).get(REQUIRES_RUN_PROPERTY)
     if value is not None and value != REQUIRED:
         # Only the create door writes the key and it refuses this value, so a stored one is not a caller's
         # mistake. Allowing would judge the write under no rule at all.
@@ -139,25 +137,26 @@ async def declared_on(ns: LanceNamespace, namespace: Sequence[str]) -> bool:
     return value is not None
 
 
-async def requires_run(ns: LanceNamespace, namespace: Sequence[str]) -> bool:
+async def requires_run(properties: NamespaceProperties, namespace: Sequence[str]) -> bool:
     """Whether the namespace path ``namespace`` requires a run: any namespace on it, the shallowest first, declares it.
 
-    The walk starts at the name's first segment, its warehouse's own row, which no door gives the rule, so a namespace
-    directly in a warehouse costs two describes. A namespace that does not exist declares nothing; the door that needs
-    it answers its own 404.
+    The walk starts at the first namespace inside the warehouse. The name's first segment is the warehouse, whose row no
+    door can give the rule: every namespace door but a read refuses a one-segment id 400
+    (``request_reads._require_a_name_inside_a_warehouse``), and only the catalog writes that row
+    (``warehouses.ensure_catalog_row``), with no property but its uuid. A namespace that does not exist declares nothing;
+    the door that needs it answers its own 404.
     """
-    for depth in range(1, len(namespace) + 1):
-        if await declared_on(ns, namespace[:depth]):
+    for depth in range(2, len(namespace) + 1):
+        if await declared_on(properties, namespace[:depth]):
             return True
     return False
 
 
-async def judge(op: Write, *, caller: str, check: RungCheck | None, inputs: InputsCheck, namespace: Callable[[str], Awaitable[LanceNamespace]]) -> Judgement:
+async def judge(op: Write, *, caller: str, check: RungCheck | None, inputs: InputsCheck, properties: NamespaceProperties) -> Judgement:
     """Allow ``op`` or refuse it with the spec's typed error.
 
     ``check`` asks the rung (``None`` with FGA off, when no rung exists to ask). ``inputs`` judges the inputs a stamping
-    door's run names. ``namespace`` yields the connection of the warehouse a name's first segment names, and is only
-    awaited once the rung allowed.
+    door's run names. ``properties`` reads a namespace on the table's path, and is only awaited once the rung allowed.
 
     A rename commits nothing, so no run can reach it: one that moves a table into a namespace requiring a run from one
     that does not is refused, because it would place data there that no run produced.
@@ -168,9 +167,9 @@ async def judge(op: Write, *, caller: str, check: RungCheck | None, inputs: Inpu
     """
     if check is not None and op.rung is not None:
         await check(op.rung)
-    required = await _requires_run_for(namespace, op.table)
+    required = await _requires_run_for(properties, op.table)
     try:
-        await _judge_under_the_run_rule(op, required=required, inputs=inputs, namespace=namespace)
+        await _judge_under_the_run_rule(op, required=required, inputs=inputs, properties=properties)
     except InvalidInputError, UnsupportedOperationError:
         # The rung's own denial is audited where it is asked; this is the rule's, or an input the committer may not read.
         audit(AuditAction.WRITE_JUDGE, AuditOutcome.DENY, subject=caller, resource=op.obj, op=op.op, requires_run=str(required).lower())
@@ -179,7 +178,7 @@ async def judge(op: Write, *, caller: str, check: RungCheck | None, inputs: Inpu
     return Judgement(requires_run=required)
 
 
-async def _judge_under_the_run_rule(op: Write, *, required: bool, inputs: InputsCheck, namespace: Callable[[str], Awaitable[LanceNamespace]]) -> None:
+async def _judge_under_the_run_rule(op: Write, *, required: bool, inputs: InputsCheck, properties: NamespaceProperties) -> None:
     """Refuse ``op`` where the run rule, read as ``required``, does not admit it.
 
     Raises:
@@ -187,7 +186,7 @@ async def _judge_under_the_run_rule(op: Write, *, required: bool, inputs: Inputs
             write that names no run or an input the committer may not read.
         UnsupportedOperationError: A door that cannot carry a run, under a namespace that requires one.
     """
-    if op.moved_from and required and not await _requires_run_for(namespace, op.moved_from):
+    if op.moved_from and required and not await _requires_run_for(properties, op.moved_from):
         raise InvalidInputError(
             f"rename refused: moving a table into a namespace that requires a run ({REQUIRES_RUN_PROPERTY}) from one that does not "
             "places data there no run produced; write it there with the run that derives it"
@@ -201,9 +200,9 @@ async def _judge_under_the_run_rule(op: Write, *, required: bool, inputs: Inputs
         await judge_run(required, op.run, inputs=inputs, names=f"the request's Context headers {RUN_ID_HEADER} and {INPUTS_HEADER}")
 
 
-async def _requires_run_for(namespace: Callable[[str], Awaitable[LanceNamespace]], table: Sequence[str]) -> bool:
-    """Whether the namespace path table ``table`` lies in requires a run, read through its warehouse's connection."""
-    return await requires_run(await namespace(table[0]), table[:-1]) if len(table) > 1 else False
+async def _requires_run_for(properties: NamespaceProperties, table: Sequence[str]) -> bool:
+    """Whether the namespace path table ``table`` lies in requires a run."""
+    return await requires_run(properties, table[:-1]) if len(table) > 1 else False
 
 
 async def judge_run(required: bool, run: RunContext | None, *, inputs: InputsCheck, names: str) -> None:

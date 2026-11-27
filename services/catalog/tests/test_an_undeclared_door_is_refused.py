@@ -229,9 +229,9 @@ def judged(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     recorded: list[str] = []
 
     async def judge(
-        write: write_judge.Write, *, caller: str | None, check: write_judge.RungCheck | None, inputs: write_judge.InputsCheck, namespace: object
+        write: write_judge.Write, *, caller: str | None, check: write_judge.RungCheck | None, inputs: write_judge.InputsCheck, properties: object
     ) -> write_judge.Judgement:
-        del caller, inputs, namespace
+        del caller, inputs, properties
         recorded.append(write.op)
         if check is not None and write.rung is not None:
             await check(write.rung)

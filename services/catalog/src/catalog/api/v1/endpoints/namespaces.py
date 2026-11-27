@@ -120,7 +120,7 @@ async def create_namespace(
     # the kept namespace's own, and an Overwrite's replacement is a new namespace with a new one.
     req.properties = with_minted_uuid(req.properties)
     minted = req.properties[UUID_PROPERTY]
-    await _judge_run_rule_declaration(ns, context, segments=segments, declared=declared, mode=create_mode)
+    await _judge_run_rule_declaration(ns, context, resolver=resolver, segments=segments, declared=declared, mode=create_mode)
     # The namespace's owner and its `parent` edge are written under the uuid minted above BEFORE the backend records it
     # ([[LH-585]], `object_grants.seed_namespace_before_write`), so a seed that fails has nothing to undo and no namespace
     # stands without them. They name the minted uuid, so they reach no namespace the request only finds standing: an
@@ -276,6 +276,7 @@ async def _judge_run_rule_declaration(
     ns: LanceNamespace,
     context: AuthzContext,
     *,
+    resolver: Resolver,
     segments: list[str],
     declared: bool,
     mode: CreateMode,
@@ -291,7 +292,7 @@ async def _judge_run_rule_declaration(
     Raises:
         PermissionDeniedError: The caller is not the namespace's project admin (or the estate admin).
     """
-    replaced = await write_judge.declared_on(ns, segments) if mode is CreateMode.OVERWRITE else False
+    replaced = await write_judge.declared_on(partial(resolver.namespace_properties, ns=ns), segments) if mode is CreateMode.OVERWRITE else False
     if not declared and not replaced:
         return
     project = await run_in_threadpool(warehouses.project_of, context.settings.registry_root, context.settings.storage_options(), segments[0])

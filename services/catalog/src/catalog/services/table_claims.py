@@ -25,6 +25,7 @@ from lance_namespace import (
     ConcurrentModificationError,
     CreateTableVersionRequest,
     DescribeTableRequest,
+    DescribeTableResponse,
     InternalError,
     InvalidTableStateError,
     LanceNamespace,
@@ -63,6 +64,9 @@ class ResolvedTable(BaseModel):
     claim: ClaimRead | None = None
     #: The name named no table because its namespace does not exist, as the backend answered (code 1, not 4).
     namespace_absent: bool = False
+    #: The backend's answer to the plain DescribeTable the resolution made, which a describe door answering the same
+    #: request answers from; ``None`` when the name named no table.
+    described: DescribeTableResponse | None = None
 
     @property
     def uuid(self) -> str | None:
@@ -111,7 +115,9 @@ def resolve(ns: LanceNamespace, store: ClaimStore, segments: list[str]) -> Resol
     except NamespaceNotFoundError:
         return ResolvedTable(segments=segments, namespace_absent=True)
     location = described.location or None
-    return ResolvedTable(segments=segments, location=location, claim=location_claims.read(store, location) if location else None)
+    if location is None:
+        return ResolvedTable(segments=segments)
+    return ResolvedTable(segments=segments, location=location, claim=location_claims.read(store, location), described=described)
 
 
 type _Open = Callable[..., lance.LanceDataset]

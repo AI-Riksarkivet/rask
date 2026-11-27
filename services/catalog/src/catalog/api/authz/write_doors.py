@@ -2,7 +2,7 @@
 uuid identifies, a stock client's staged run, and the credential tier a spec door vends."""
 
 import logging
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import partial
 from typing import Literal
 
@@ -38,7 +38,7 @@ from catalog.api.authz.rungs import (
     resource_for,
     route_suffix,
 )
-from catalog.api.dependencies import Resolver, namespace_for_warehouse
+from catalog.api.dependencies import Resolver
 from catalog.api.route_path import route_path
 from catalog.core import run_context, vending, write_judge
 from catalog.core.identifiers import parse_identifier
@@ -238,19 +238,21 @@ async def _require_estate_admin_for_unidentified(client: OpenFgaClient, *, user:
         raise PermissionDeniedError(f"{rung.relation} required on {label}")
 
 
-async def judge_write(request: Request, *, context: AuthzContext, resolver: Resolver, write: write_judge.Write) -> None:
-    """Hand ``write`` to the write judge, with the rung asked through :func:`require_rung` when FGA is on."""
+async def judge_write(context: AuthzContext, *, resolver: Resolver, write: write_judge.Write) -> None:
+    """Hand ``write`` to the write judge, with the rung asked through :func:`require_rung` when FGA is on, and the run rule
+    read off the namespaces this request resolved, each in a warehouse that is not deactivated."""
     check = _rung_check(context, resolver=resolver)
 
-    async def namespace(warehouse_id: str) -> LanceNamespace:
-        return await namespace_for_warehouse(request, context.settings, warehouse_id)
+    async def properties(segments: list[str]) -> Mapping[str, str] | None:
+        await resolver.require_active_warehouse(segments[0])
+        return await resolver.namespace_properties(segments)
 
     await write_judge.judge(
         write,
         caller=caller_subject(context.token),
         check=check,
         inputs=partial(require_declared_inputs, context=context, resolver=resolver),
-        namespace=namespace,
+        properties=properties,
     )
 
 
@@ -273,7 +275,7 @@ async def judge_staged_run(
         InvalidInputError: The table lies under a namespace that requires a run and the commit names no run or no input,
             or an input names no table the committer may read.
     """
-    required = await write_judge.requires_run(ns, segments[:-1]) if adds_data and len(segments) > 1 else False
+    required = await write_judge.requires_run(partial(resolver.namespace_properties, ns=ns), segments[:-1]) if adds_data and len(segments) > 1 else False
     names = f"the staged manifest's transaction properties {run_context.RUN_ID_PROPERTY} and {run_context.INPUTS_PROPERTY}"
     declared: dict[str, run_context.RunInput] = {}
 
@@ -312,7 +314,9 @@ async def _granted_vend_tier(client: OpenFgaClient, subject: str, obj: str) -> L
     return "write"
 
 
-async def spec_vend_tier(context: AuthzContext, *, ns: LanceNamespace, segments: Sequence[str], table_uuid: str, door: str) -> Literal["read", "write"] | None:
+async def spec_vend_tier(
+    context: AuthzContext, *, resolver: Resolver, ns: LanceNamespace, segments: Sequence[str], table_uuid: str, door: str
+) -> Literal["read", "write"] | None:
     """The highest tier a spec door (``describe``, ``declare``) vends the caller on table ``segments`` (ADR 0156 C3).
 
     ``table_uuid`` is the uuid the door resolved the name to (or minted, for a declare), whose object the grants are
@@ -345,11 +349,10 @@ async def spec_vend_tier(context: AuthzContext, *, ns: LanceNamespace, segments:
     if context.settings.maintenance_read_only:
         return "read"
 
-    async def namespace(_warehouse_id: str) -> LanceNamespace:
-        return ns
-
     write = write_judge.Write(op=door, obj=fga_ids.addressed_object("table", list(segments)), rung=None, table=tuple(segments))
-    await write_judge.judge(write, caller=caller_subject(context.token), check=None, inputs=_names_no_run, namespace=namespace)
+    await write_judge.judge(
+        write, caller=caller_subject(context.token), check=None, inputs=_names_no_run, properties=partial(resolver.namespace_properties, ns=ns)
+    )
     return "write"
 
 

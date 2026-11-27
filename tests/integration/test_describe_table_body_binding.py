@@ -65,20 +65,21 @@ def vendor(client: TestClient, claim_described: Callable[[str], str]) -> Iterato
 
 
 def _sent(fake_ns: MagicMock) -> Any:
-    """The DescribeTableRequest the ROUTE handed the backend — the SECOND call.
+    """The DescribeTableRequest the backend was handed last.
 
     The first is the resolution every door acts on (ADR 0173 §7, [[LH-530]]), which names the table and nothing the
-    body carries; the route's own describe follows it.
+    body carries. The route answers a plain describe from it ([[LH-611]]), and describes again only for what the
+    resolution did not ask: a version, or the table's uri.
     """
-    return fake_ns.describe_table.call_args_list[1][0][0]
+    return fake_ns.describe_table.call_args_list[-1][0][0]
 
 
 @pytest.mark.parametrize(
     ("flag", "answered", "with_table_uri"),
     [
         pytest.param("with_table_uri", {"is_only_declared": None, "version": None}, True, id="with-table-uri-reaches-the-backend"),
-        pytest.param("check_declared", {"is_only_declared": False, "version": None}, None, id="check-declared-is-judged"),
-        pytest.param("load_detailed_metadata", {"is_only_declared": False, "version": 1}, None, id="load-detailed-metadata-is-loaded"),
+        pytest.param("check_declared", {"is_only_declared": False, "version": None}, False, id="check-declared-is-judged"),
+        pytest.param("load_detailed_metadata", {"is_only_declared": False, "version": 1}, False, id="load-detailed-metadata-is-loaded"),
     ],
 )
 def test_a_body_flag_is_honoured(

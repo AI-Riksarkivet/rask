@@ -18,6 +18,7 @@ from lance_namespace import LanceNamespace
 from catalog.api.dependencies import Resolver
 from catalog.core.config import Settings
 from catalog.services.table_claims import ResolvedTable
+from lakehouse.naming import UUID_PROPERTY
 from lakehouse.records.trash import TrashRecord
 
 
@@ -57,8 +58,8 @@ class NamedResolver(Resolver):
         )
 
     @override
-    async def namespace_uuid(self, segments: list[str], *, ns: LanceNamespace | None = None) -> str | None:
-        return None if not segments or tuple(segments) in self._absent else uuid_of("namespace", segments)
+    async def namespace_properties(self, segments: list[str], *, ns: LanceNamespace | None = None) -> dict[str, str] | None:
+        return None if tuple(segments) in self._absent else {UUID_PROPERTY: uuid_of("namespace", segments)}
 
     @override
     async def object(self, kind: str, segments: list[str]) -> str | None:

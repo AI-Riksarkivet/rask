@@ -255,6 +255,7 @@ async def _vend_on_spec_door(
     table_uuid: str,
     location: str,
     context: AuthzContext,
+    resolver: Resolver,
     so: StorageOptions,
     vendor: CredentialVendor,
     asked: bool,
@@ -285,7 +286,7 @@ async def _vend_on_spec_door(
         bases = await run_in_threadpool(_vendable_bases, location, context.settings, so)
         if bases is None or isinstance(vendor, ModeBVendor):
             return None
-        tier = await write_doors.spec_vend_tier(context, ns=ns, segments=segments, table_uuid=table_uuid, door=door)
+        tier = await write_doors.spec_vend_tier(context, resolver=resolver, ns=ns, segments=segments, table_uuid=table_uuid, door=door)
         if tier is None:
             if asked:
                 raise PermissionDeniedError(f"can_read_data required on table:{fga_ids.canonical_object_id(segments)} to vend credentials")
@@ -398,6 +399,7 @@ async def declare_table(
             so,
             segments,
             context=context,
+            resolver=resolver,
             req=req,
             location=location,
             table_uuid=table_uuid,
@@ -446,6 +448,7 @@ async def _vended_declaration(
     table_uuid: str,
     undo: Callable[[], Awaitable[None]],
     context: AuthzContext,
+    resolver: Resolver,
     vendor: CredentialVendor,
 ) -> DeclareTableResponse:
     """The declaration of ``segments`` at ``location`` as its declarer is answered, owned by them since before it was
@@ -460,6 +463,7 @@ async def _vended_declaration(
             response.storage_options = await _vend_on_spec_door(
                 ns,
                 context=context,
+                resolver=resolver,
                 door="declare",
                 segments=segments,
                 table_uuid=table_uuid,
@@ -571,6 +575,7 @@ async def describe_table(
     id: str,
     table: DoorTableDep,
     context: AuthzContextDep,
+    resolver: ResolverDep,
     so: StorageOptionsDep,
     vendor: VendorDep,
     body: DescribeTableRequest | None = None,
@@ -661,6 +666,7 @@ async def describe_table(
         response.storage_options = await _vend_on_spec_door(
             table.namespace,
             context=context,
+            resolver=resolver,
             door="describe",
             segments=segments,
             table_uuid=table_uuid,
@@ -689,8 +695,10 @@ def _describe(
     the table answers the same one.
 
     THE DESCRIBE IS THE ACT, so it answers for the name's resolution ([[LH-530]]): every open it makes is at the door's
-    location, and the answer stands only when its own describe found the name there, under the claim the resolution
-    read (``DoorTable.require_described_at``); a failure is told the change first, as every door's open is.
+    location. The plain describe is the one the resolution made ([[LH-611]]), and it stands while the location still holds
+    the table the resolution read (``DoorTable.require_held``); a describe pinned to a version or asking for the table's
+    uri is the door's own, and stands only when it found the name there, under the claim the resolution read
+    (``DoorTable.require_described_at``). A failure is told the change first, as every door's open is.
 
     WHETHER THE TABLE IS ONLY DECLARED IS THE CATALOG'S JUDGMENT ([[LH-528]]), and so is the detailed metadata that rides
     on it. The backend is asked only for the plain describe: its own verdict misjudges a table registered at a nested
@@ -711,8 +719,15 @@ def _describe(
         # mints the spec's own error 11 `TableVersionNotFound`; the open runs ONLY when a version was
         # named, so the unpinned describe every client makes is untouched.
         pinned = open_resolved_dataset_unchecked(table.location, so, segments, version=version) if version is not None else None
-        response: DescribeTableResponse = native.call(
-            table.namespace, "describe_table", DescribeTableRequest(id=segments, with_table_uri=with_table_uri, version=version)
+        # A plain describe is the one the request's resolution already made, which asks only for the table by its id. One
+        # asking `with_table_uri` is described again: the spec makes the uri something a caller asks for ("Whether to include
+        # the table URI in the response", `lance_docs/ns_catalog/spec.yaml:2814-2817`), so a backend may answer it only then,
+        # though the `dir` backend answers it unset, false and true alike (measured 2026-11-27 on pylance 14.0.3).
+        described = table.resolved.described if version is None and not with_table_uri else None
+        response: DescribeTableResponse = (
+            described.model_copy(deep=True)
+            if described is not None
+            else native.call(table.namespace, "describe_table", DescribeTableRequest(id=segments, with_table_uri=with_table_uri, version=version))
         )
         if response.location and load_detailed_metadata:
             _load_or_judge_declared(response, table, so, pinned=pinned)
@@ -721,7 +736,11 @@ def _describe(
     except Exception:
         table.require_named()
         raise
-    table.require_described_at(response.location)
+    if described is not None:
+        # The answer is the resolution's, so it stands while the location still holds that table, as every open's does.
+        table.require_held()
+    else:
+        table.require_described_at(response.location)
     if (uuid := table.resolved.uuid) is not None:
         response.properties = {**(response.properties or {}), UUID_PROPERTY: uuid}
     return response

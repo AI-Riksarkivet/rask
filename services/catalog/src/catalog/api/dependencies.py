@@ -32,7 +32,7 @@ from lakehouse.events.control_events import CatalogControlEvent, ControlUuids
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids
 from lakehouse.governed.settings import FgaSettings
-from lakehouse.naming import CONTROL_ID_RE
+from lakehouse.naming import CONTROL_ID_RE, uuid_of
 from lakehouse.problems.outage import store_refusal
 from lakehouse.process.supervision import is_fault
 from lakehouse.records import trash
@@ -323,7 +323,7 @@ class Resolver:
         self._request = request
         self._settings = settings
         self._tables: dict[tuple[str, ...], ResolvedTable] = {}
-        self._namespaces: dict[tuple[str, ...], str | None] = {}
+        self._namespaces: dict[tuple[str, ...], dict[str, str] | None] = {}
         self._trashed: dict[tuple[str, tuple[str, ...]], list[TrashRecord]] = {}
         self._admitted: dict[tuple[str, tuple[str, ...]], list[TrashRecord]] = {}
 
@@ -366,6 +366,16 @@ class Resolver:
         reads, which this request's earlier resolution of the name would not."""
         return await run_in_threadpool(table_claims.resolve, await self._connection(segments), table_claims.claim_store(self._settings), list(segments))
 
+    async def namespace_properties(self, segments: list[str], *, ns: LanceNamespace | None = None) -> dict[str, str] | None:
+        """The properties of the namespace ``segments`` names, or ``None`` when no namespace has that name (``ns``: the
+        connection to read it through): its uuid and the run rule it declares, which the router, the write judge and an
+        event's uuids read from this one description."""
+        key = tuple(segments)
+        if key not in self._namespaces:
+            connection = ns if ns is not None else await self._connection(segments)
+            self._namespaces[key] = await run_in_threadpool(object_uuids.namespace_properties, connection, list(segments))
+        return self._namespaces[key]
+
     async def namespace_uuid(self, segments: list[str], *, ns: LanceNamespace | None = None) -> str | None:
         """The uuid of the namespace ``segments`` names, or ``None`` when no namespace has that name (or for the root)
         (``ns``: the connection to read it through).
@@ -373,14 +383,10 @@ class Resolver:
         Raises:
             UnidentifiedObjectError: The namespace carries no uuid, which no door leaves.
         """
-        key = tuple(segments)
-        if key not in self._namespaces:
-            if segments:
-                connection = ns if ns is not None else await self._connection(segments)
-                self._namespaces[key] = await run_in_threadpool(object_uuids.resolve_namespace_uuid, connection, list(segments))
-            else:
-                self._namespaces[key] = None
-        return self._namespaces[key]
+        if not segments:
+            return None
+        properties = await self.namespace_properties(segments, ns=ns)
+        return None if properties is None else object_uuids.recorded_namespace_uuid(properties, list(segments))
 
     async def object(self, kind: str, segments: list[str]) -> str | None:
         """The FGA object ``kind`` ``segments`` names (``table:<uuid>``, ``namespace:<uuid>``), or ``None`` when nothing has that name.
@@ -619,13 +625,15 @@ class ObjectUuids:
     """Reads the uuids a door's events name a table or namespace by (ADR 0173 §10), through the connection of its first segment's warehouse.
 
     Per request, because the routing is: an event names inputs that may live in another warehouse than the table the
-    door wrote. Best-effort like the events it serves: what cannot be read is ``None``, and nothing raises into a door
-    whose act has already happened.
+    door wrote. Every namespace is read as the request's ``resolver`` described it, so one request's events name each
+    namespace by one reading, the one its doors were judged on. Best-effort like the events it serves: what cannot be read
+    is ``None``, and nothing raises into a door whose act has already happened.
     """
 
-    def __init__(self, request: Request, settings: Settings) -> None:
+    def __init__(self, request: Request, settings: Settings, *, resolver: Resolver) -> None:
         self._request = request
         self._settings = settings
+        self._resolver = resolver
 
     async def _connection(self, segments: list[str]) -> LanceNamespace | None:
         try:
@@ -642,7 +650,26 @@ class ObjectUuids:
         if ns is None:
             return DatasetUuids(table_uuid=uuid)
         claims = table_claims.claim_store(self._settings)
-        return await run_in_threadpool(partial(object_uuids.of_table, ns, claims, segments, location=location, uuid=uuid))
+        table_uuid = uuid or await run_in_threadpool(partial(object_uuids.table_uuid, ns, claims, segments, location=location))
+        return DatasetUuids(table_uuid=table_uuid, namespace_uuid=await self._namespace_uuid(segments[:-1], ns=ns))
+
+    async def _namespace_uuid(self, segments: list[str], *, ns: LanceNamespace) -> str | None:
+        """The uuid of the namespace ``segments`` names, as the request described it (``ns``: the connection to read it
+        through), or ``None`` for the root, a warehouse's own name, a namespace that is gone, or a failed read.
+
+        A one-segment name is a warehouse ([[LH-593]]), governed as ``warehouse:<id>``: the uuid its row in its own catalog
+        carries names no object an event's reader could look up, so an event names none for it.
+        """
+        if len(segments) < 2:
+            return None
+        try:
+            properties = await self._resolver.namespace_properties(segments, ns=ns)
+        except BaseException as exc:  # noqa: BLE001 — an event is announced without what it cannot read, a native panic too
+            if not is_fault(exc):
+                raise
+            log.info("event_namespace_uuid_unread", extra={"namespace": segments, "error": str(exc)[:300]})
+            return None
+        return uuid_of(properties)
 
     async def branch_identifier(self, segments: list[str], branch: str) -> str | None:
         """The incarnation of the table's ``branch`` now, read off the location its name resolves to; ``None`` when unread."""
@@ -664,18 +691,20 @@ class ObjectUuids:
     async def namespace(self, segments: list[str]) -> ControlUuids:
         """A namespace's uuid and its parent namespace's."""
         ns = await self._connection(segments) if segments else None
-        return ControlUuids() if ns is None else await run_in_threadpool(object_uuids.of_namespace, ns, segments)
+        if ns is None:
+            return ControlUuids()
+        return ControlUuids(object_uuid=await self._namespace_uuid(segments, ns=ns), namespace_uuid=await self._namespace_uuid(segments[:-1], ns=ns))
 
     async def namespace_of(self, name: str) -> str | None:
         """The uuid of the namespace the table or namespace ``name`` is in; ``None`` for a warehouse's own name or a failed read."""
         segments = [segment for segment in parse_identifier(name) if segment][:-1]
         ns = await self._connection(segments) if segments else None
-        return None if ns is None else await run_in_threadpool(object_uuids.namespace_uuid, ns, segments)
+        return None if ns is None else await self._namespace_uuid(segments, ns=ns)
 
 
-async def get_object_uuids(request: Request, settings: SettingsDep) -> ObjectUuids:
-    """This request's :class:`ObjectUuids`."""
-    return ObjectUuids(request, settings)
+async def get_object_uuids(request: Request, settings: SettingsDep, resolver: ResolverDep) -> ObjectUuids:
+    """This request's :class:`ObjectUuids`, reading through this request's :class:`Resolver`."""
+    return ObjectUuids(request, settings, resolver=resolver)
 
 
 ObjectUuidsDep = Annotated[ObjectUuids, Depends(get_object_uuids)]

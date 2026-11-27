@@ -344,8 +344,9 @@ async def tick(ctx: Tick) -> ConvergeTick:
         return ConvergeTick(failed=["declaration"])
     client = await get_fga_client(request)
     # A door's announcer, for a change no caller made: the tick's scope carries no originator and no bearer.
+    resolver = Resolver(request, settings)
     announcer = await get_announcer(
-        request, settings=settings, client=client, resolver=Resolver(request, settings), control=ctx.control, uuids=ObjectUuids(request, settings)
+        request, settings=settings, client=client, resolver=resolver, control=ctx.control, uuids=ObjectUuids(request, settings, resolver=resolver)
     )
     converged = await _Converger(request, settings, client=client, control=ctx.control, announcer=announcer, vendor=await get_vendor(request)).run(declared)
     if converged.converged or converged.released or converged.grants_written or converged.grants_revoked or converged.failed:

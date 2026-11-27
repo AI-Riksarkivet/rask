@@ -1180,6 +1180,37 @@ def test_a_commit_whose_store_read_fails_is_service_unavailable_and_leaves_the_t
     assert (after.version, _rows(after)) == (1, [(1, "a"), (2, "b"), (3, "c")])
 
 
+def _manifest_reads(store: store_requests.CountedStore) -> int:
+    """How many requests the catalog made of the namespace's ``__manifest`` table since the last count: one lookup of a name
+    in it is a HEAD and two GETs on pylance 14.0.3 (measured 2026-11-26)."""
+    return sum("/__manifest/" in request.path for request in store.taken())
+
+
+def test_an_insert_and_a_stock_commit_read_the_namespace_manifest_only_for_their_resolutions_and_guards(
+    served_through_a_proxy: Served, catalogs_store: store_requests.CountedStore
+) -> None:
+    """[[LH-611]]: a request resolves its table and its namespaces once and every step reads that resolution. What reads
+    ``__manifest`` again is a guard around a native call (``DoorTable.require_named``), the backend's own lookup inside that
+    call, and the run rule's walk, which reads each namespace inside the warehouse on the table's path."""
+    served = served_through_a_proxy
+    stock = _created(served)
+    rows = encode_arrow_stream(_keyed([4], ["d"]))
+    catalogs_store.taken()
+
+    inserted = httpx.post(
+        f"{served.url}/v1/table/lance_catalog$db$t/insert", content=rows, headers={**_TOKEN, "content-type": ARROW_STREAM_MEDIA_TYPE}, timeout=60
+    )
+    insert_reads = _manifest_reads(catalogs_store)
+    lance.write_dataset(_keyed([5], ["e"]), namespace_client=stock, table_id=_TABLE, mode="append", storage_options=served.storage_options)
+    stock_reads = _manifest_reads(catalogs_store)
+
+    assert inserted.status_code == 200, inserted.text
+    # The insert: its resolution, the walk's one namespace, the guard and the backend's own lookup at the finalize.
+    # The stock append calls describe (its resolution), list_table_versions (its resolution, the backend's lookup and
+    # the guard after it) and version/create (its resolution, the walk's one namespace, the guard and the backend's lookup).
+    assert (insert_reads, stock_reads) == (4 * 3, (1 + 3 + 4) * 3)
+
+
 def test_a_commit_on_a_table_whose_latest_version_does_not_open_is_refused_as_internal_and_lands_nothing(served: Served) -> None:
     """[[LH-545]]: only a table that holds no committed version follows version 0 (``table_objects.holds_a_version``). One whose
     latest committed manifest Lance cannot read is no table with none: read as one, the version after none is the slot a

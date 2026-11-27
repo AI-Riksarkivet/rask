@@ -354,6 +354,50 @@ def test_every_event_names_the_table_and_its_namespace_by_their_uuids(real_ns_cl
     assert stamped == table_uuid.encode(), stamped
 
 
+class _NativePanic(BaseException):
+    """Where pylance's panic sits: ``pyo3_runtime.PanicException`` derives from BaseException alone (measured on pylance
+    14.0.3), so a stand-in of that shape is how a test raises one by choice."""
+
+
+def test_an_input_whose_namespace_cannot_be_read_is_announced_without_its_namespace_uuid(
+    real_ns_client: TestClient, location: str, bus: BusDouble, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A write names its run's input by its uuids after it committed, and the input's namespace is one the request did not
+    describe before: a native panic reading it leaves the event without that uuid, and the door answers its commit."""
+    from catalog.services import object_uuids
+
+    client = real_ns_client
+    assert client.post("/v1/namespace/lance_catalog$feeds/create", json={}).status_code == 200
+    created = client.post("/v1/table/lance_catalog$feeds$src/create", content=encode_arrow_stream(_rows(7)), headers=ARROW)
+    assert created.status_code == 200, created.text
+    source_uuid = client.post("/v1/table/lance_catalog$feeds$src/describe", json={}).json()["properties"][UUID_PROPERTY]
+    run = {
+        "x-rask-run-id": "0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a08",
+        "x-rask-job-namespace": "pipelines",
+        "x-rask-job": "nightly",
+        "x-rask-inputs": json.dumps([{"table": ["lance_catalog", "feeds", "src"], "version": 1}]),
+    }
+    read = object_uuids.namespace_properties
+
+    def _panics_on_the_inputs_namespace(ns: Any, segments: list[str]) -> dict[str, str] | None:  # noqa: ANN401 — the backend connection, as the real reader takes it
+        if segments == ["lance_catalog", "feeds"]:
+            raise _NativePanic("called `Result::unwrap()` on an `Err` value")
+        return read(ns, segments)
+
+    monkeypatch.setattr(object_uuids, "namespace_properties", _panics_on_the_inputs_namespace)
+    as_a_caller_sees_it = TestClient(client.app, raise_server_exceptions=False)
+    as_a_caller_sees_it.portal = client.portal
+    before = len(bus.events)
+
+    answer = as_a_caller_sees_it.post(f"/v1/table/{TABLE}/insert", content=encode_arrow_stream(_rows(9)), headers={**ARROW, **run})
+
+    assert answer.status_code == 200, answer.text
+    (written,) = bus.events[before:]
+    (source,) = written["inputs"]
+    named = {key: source.get("facets", {}).get("rask_lance", {}).get(key) for key in ("tableUuid", "namespaceUuid")}
+    assert named == {"tableUuid": source_uuid, "namespaceUuid": None}, source
+
+
 def test_a_tables_create_names_the_tenant_of_its_warehouse_at_any_depth(real_ns_client: TestClient, bus: BusDouble) -> None:
     """A project's watchers are reached through the event's ``rask_lance.project`` alone, and a tenant is its warehouse's
     project, so a table two namespaces deep is announced under the tenant of the warehouse its name begins with

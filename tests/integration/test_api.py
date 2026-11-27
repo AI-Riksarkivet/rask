@@ -341,7 +341,6 @@ class _NativePanic(BaseException):
         pytest.param("catalog.services.tables.versions.open_resolved_dataset", None, id="the-pinned-open"),
         pytest.param("catalog.services.tables.versions.manifest_bytes.commit_time", None, id="the-commit-time"),
         pytest.param("catalog.services.tables.versions.facet_fields", None, id="the-schema-facet"),
-        pytest.param("catalog.services.object_uuids.DescribeNamespaceRequest", None, id="the-namespace-uuid"),
         pytest.param("catalog.services.object_uuids.location_claims", None, id="the-table-uuid"),
         pytest.param("catalog.api.dependencies.namespace_for_warehouse", None, id="the-uuid-connection"),
         pytest.param("catalog.services.committed_files.read_transaction", "committed_files_unrecorded", id="the-landed-transaction"),

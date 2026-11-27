@@ -41,7 +41,7 @@ from lance_namespace import DescribeTableRequest, LanceNamespace, NamespaceNotFo
 from opentelemetry import metrics
 from pydantic import BaseModel, ConfigDict, Field, SkipValidation
 
-from catalog.api.dependencies import ObjectUuids, app_wire, estate_namespace, namespace_for_table
+from catalog.api.dependencies import ObjectUuids, Resolver, app_wire, estate_namespace, namespace_for_table
 from catalog.api.signing_gate import commit_ids_of
 from catalog.api.ticks import Tick
 from catalog.core import native
@@ -143,6 +143,8 @@ async def _live_tables(request: Request, settings: Settings, claims: list[Locati
     """
     store = table_claims.claim_store(settings)
     live = _LiveTables()
+    # One reading of each namespace for the tick, as a request keeps one for itself.
+    uuids = ObjectUuids(request, settings, resolver=Resolver(request, settings))
     for claim in claims:
         if claim.uuid is None or not claim.segments or await run_in_threadpool(table_claims.kept_in_trash, store, claim):
             continue
@@ -163,7 +165,7 @@ async def _live_tables(request: Request, settings: Settings, claims: list[Locati
         location = str(described.location or "")
         if decoded_path(location) != claim.location:
             continue
-        namespace_uuid = await ObjectUuids(request, settings).namespace(claim.segments[:-1]) if len(claim.segments) > 1 else None
+        namespace_uuid = await uuids.namespace(claim.segments[:-1]) if len(claim.segments) > 1 else None
         live.tables.append(
             _LiveTable(
                 segments=claim.segments,
@@ -226,7 +228,7 @@ async def _announce(
             author=commit.author,
             version=commit.version,
             operation=commit.operation,
-            uuids=ObjectUuids(request, settings),
+            uuids=ObjectUuids(request, settings, resolver=Resolver(request, settings)),
             known=table.uuids,
             branch=commit.branch,
             branch_identifier=commit.branch_identifier,

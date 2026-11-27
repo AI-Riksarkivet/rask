@@ -166,7 +166,7 @@ async def _decide(request: Request, context: AuthzContext, *, resolver: Resolver
     (ADR 0173 §8, [[LH-524]]), through ``resolver``, which the door then reads the same resolution from.
     """
     if (write := await write_door(request)) is not None:
-        await judge_write(request, context=context, resolver=resolver, write=write)
+        await judge_write(context, resolver=resolver, write=write)
         return
     if not context.settings.fga_enabled:
         return
