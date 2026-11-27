@@ -107,6 +107,18 @@ class Refusal(BaseModel):
     reason: str
 
 
+def _instant(text: str | None) -> datetime | None:
+    """The instant a record's ``isoformat`` text names, read in UTC where it names no offset; ``None`` for no text or
+    text that is no instant."""
+    if not text:
+        return None
+    try:
+        when = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    return when if when.tzinfo is not None else when.replace(tzinfo=UTC)
+
+
 class TrashRecord(BaseModel):
     """What a drop kept of an object for an undrop: one JSON object per dropped table or namespace.
 
@@ -225,13 +237,12 @@ class TrashRecord(BaseModel):
     def deadline(self) -> datetime | None:
         """The record's deadline, or ``None`` when its ``expires_at`` is missing or does not parse: an undated record is
         a bug in whatever wrote it, and "we do not know when this expires" reads as "not yet". :func:`read` says so once."""
-        if self.expires_at is None:
-            return None
-        try:
-            deadline = datetime.fromisoformat(self.expires_at)
-        except ValueError:
-            return None
-        return deadline if deadline.tzinfo is not None else deadline.replace(tzinfo=UTC)
+        return _instant(self.expires_at)
+
+    @property
+    def dropped_when(self) -> datetime | None:
+        """When the object was dropped, or ``None`` when ``dropped_at`` is empty or does not parse."""
+        return _instant(self.dropped_at)
 
     @property
     def release_at(self) -> datetime | None:

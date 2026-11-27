@@ -28,7 +28,7 @@ const WarehouseSchema = mirrors<Wire['WarehouseResponse']>()(
 		bucket: v.string(),
 		root_uri: v.string(),
 		created_at: v.optional(v.nullable(v.string())),
-		status: v.optional(v.nullable(v.string())),
+		status: v.optional(v.nullable(v.picklist(['active', 'deactivated']))),
 		/** `"git"` for a warehouse git declares, whose lifecycle its doors refuse (XC-213); absent otherwise. */
 		managed_by: v.optional(v.picklist(['git', 'self'])),
 		delete_profile: v.optional(

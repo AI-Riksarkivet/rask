@@ -30,8 +30,8 @@ def entry(record: TrashRecord) -> TrashEntry:
         uuid=record.uuid or "",
         location=record.location,
         dropped_by=record.dropped_by,
-        dropped_at=record.dropped_at,
-        expires_at=record.expires_at or "",
+        dropped_at=record.dropped_when,
+        expires_at=record.deadline,
         expired=record.past_deadline(),
     )
 

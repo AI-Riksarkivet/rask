@@ -102,8 +102,10 @@ export const TrashEntrySchema = mirrors<components['schemas']['TrashEntry']>()(
 		expired: v.optional(v.boolean(), false),
 		location: v.string(),
 		dropped_by: v.string(),
-		dropped_at: v.string(),
-		expires_at: v.string(),
+		/** Absent for a record that keeps no readable drop time. */
+		dropped_at: v.optional(v.nullable(v.string())),
+		/** Absent for a record that keeps no readable deadline, which the catalog reads as not yet passed. */
+		expires_at: v.optional(v.nullable(v.string())),
 	}),
 );
 export type TrashEntry = v.InferOutput<typeof TrashEntrySchema>;

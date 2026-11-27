@@ -13,12 +13,23 @@ from datetime import datetime
 from typing import Annotated, Any, Literal, Self
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, PlainSerializer, WithJsonSchema, model_validator
 
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.lancekit.features import TableFileFormat
 from lakehouse.records.maintenance_due import CompactionDue, IndexDue
-from lakehouse.records.warehouse_records import DeleteMode
+from lakehouse.records.warehouse_records import DeleteMode, WarehouseStatus
+
+
+#: An instant a registry record keeps as ``datetime.isoformat`` text, served as that text (``+00:00`` for UTC, where an
+#: ``AwareDatetime`` field serializes ``Z``), so what a record holds and what its door answers are one string. An
+#: assignment rather than a ``type`` statement: the statement would make it a named schema, where a timestamp is an
+#: inline date-time string.
+StoredInstant = Annotated[
+    AwareDatetime,
+    PlainSerializer(datetime.isoformat, return_type=str, when_used="json"),
+    WithJsonSchema({"type": "string", "format": "date-time"}),
+]
 
 
 class RequestBody(BaseModel):
@@ -182,7 +193,7 @@ class PrincipalRecord(BaseModel):
     principal: str
     #: ``service`` for a principal the cluster's service-account issuer vouched for, else ``person``.
     kind: Literal["person", "service"]
-    deleted_at: datetime
+    deleted_at: AwareDatetime
     #: The estate admin's principal that ran the door.
     deleted_by: str
 
@@ -467,7 +478,7 @@ class DueTable(BaseModel):
     indices: list[IndexDue] = Field(default_factory=list)
     #: The policy record that governed the evaluation, ``None`` when none matched.
     policy: str | None = None
-    evaluated_at: datetime
+    evaluated_at: AwareDatetime
 
 
 class MaintenanceDueResponse(BaseModel):
@@ -502,6 +513,10 @@ class ErasureVerifyRequest(RequestBody):
 # --------------------------------------------------------------------------- #
 # Maintenance policy (#50 / #76)
 # --------------------------------------------------------------------------- #
+
+
+#: How a compaction moves a table's bytes: Lance's re-encode, or a binary copy tried with a fallback or forced.
+type RepackMode = Literal["reencode", "try_binary_copy", "force_binary_copy"]
 
 
 class PolicyRequest(RequestBody):
@@ -553,7 +568,7 @@ class PolicyRequest(RequestBody):
     # HOW this table's bytes move. Per policy for the same reason the two bounds above are: a table of
     # uniformly-encoded fragments can binary-copy where a table that has evolved its schema cannot, and
     # `try_binary_copy` falls back rather than failing. None = Lance's re-encode, today's behaviour.
-    repack_mode: Literal["reencode", "try_binary_copy", "force_binary_copy"] | None = None
+    repack_mode: RepackMode | None = None
     # NO FIELD hands version reclamation to Lance's commit-path auto-cleanup (`lance.auto_cleanup.*`).
     # That lane deletes inside whichever writer commits, past a legal hold and a protected base and with
     # no record, so the sweep is the one reclaimer and disarms those keys on every tick ([[LH-245]]).
@@ -615,7 +630,7 @@ class PolicyResponse(BaseModel):
     optimize_indices_enabled: bool = True
     scan_batch_size: int | None = None
     max_source_bytes: int | None = None
-    repack_mode: str | None = None
+    repack_mode: RepackMode | None = None
     #: A record is kept for the object; a describe of an object that holds none answers :class:`PolicyUnset`. Required,
     #: with no default, so the schema marks it on both answers and a typed client narrows the union on it.
     set: Literal[True]
@@ -638,8 +653,8 @@ class PolicyUnset(BaseModel):
 
 
 class PolicyDeleteResponse(BaseModel):
-    status: str
-    kind: str
+    status: Literal["deleted"]
+    kind: PolicyKind
     id: str
 
 
@@ -720,7 +735,8 @@ class WarehouseResponse(BaseModel):
     bucket: str
     root_uri: str
     project: str
-    status: str | None = None  # "active" / "deactivated" (P2.3 lifecycle); absent on pre-lifecycle records
+    #: Absent on a record that names none, which is active.
+    status: WarehouseStatus | None = None
     # #123: the delete-door safety, finally OBSERVABLE — records carry "true" (string), coerced here.
     # None on unprotected/pre-protection records (exclude_none keeps them byte-identical on the wire).
     protected: bool | None = None
@@ -740,7 +756,7 @@ class WarehouseResponse(BaseModel):
     # and holding it grants nothing without access to that store. No request sets it and no door reads
     # it ([[LH-205]]), which is why a record naming another store is refused rather than served.
     credential_ref: str | None = None
-    created_at: str | None = None
+    created_at: StoredInstant | None = None
     # `git` while git declares the warehouse ([[XC-213]]): its doors then refuse a change to its status, protection,
     # delete profile and its delete, which the declaration owns. `self` for a warehouse its own doors manage.
     managed_by: Literal["git", "self"] = "self"
@@ -769,6 +785,10 @@ class VendedCredentials(BaseModel):
     expires_at_millis: int | None = None
 
 
+#: Whether a vend issued a credential (``direct``) or none, the client reading through the data doors (``server_mediated``).
+type VendMode = Literal["direct", "server_mediated"]
+
+
 class CredentialResponse(BaseModel):
     """The vending result. ``mode="direct"`` carries scoped ``credentials``; ``mode="server_mediated"``
     means no credential was issued (Mode B / unknown bucket) — the client uses the data endpoints.
@@ -777,7 +797,7 @@ class CredentialResponse(BaseModel):
     one round-trip: the client writes under ``location`` and stages its commit, which the catalog finalizes
     through the spec's ``CreateTableVersion`` (ADR 0157)."""
 
-    mode: str
+    mode: VendMode
     credentials: VendedCredentials | None = None
     location: str | None = None
     read_version: int | None = None
@@ -853,7 +873,7 @@ class LabelDefinition(BaseModel):
     #: The values an ``enumerated`` label may hold; ``None`` for the other kinds.
     allowed_values: list[str] | None = None
     defined_by: str | None = None
-    defined_at: str
+    defined_at: StoredInstant
 
 
 class LabelDefinitionRequest(RequestBody):
@@ -905,7 +925,7 @@ class ContractResponse(BaseModel):
     #: The ODCS v3 document as it was set; ``None`` for a table holding no contract.
     contract: dict[str, Any] | None = None
     set_by: str | None = None
-    set_at: datetime | None = None
+    set_at: AwareDatetime | None = None
 
 
 class LabelledObjectsResponse(BaseModel):
@@ -927,10 +947,12 @@ class TrashEntry(BaseModel):
     uuid: str
     location: str
     dropped_by: str
-    dropped_at: str
+    #: ``None``, left out of the answer, for a record that keeps no readable drop time.
+    dropped_at: StoredInstant | None = None
     #: When recovery ends (ADR 0146): past it the undrop is refused, the object's grants are revoked, and its
-    #: bytes wait for the purge.
-    expires_at: str
+    #: bytes wait for the purge. ``None``, left out of the answer, for a record that keeps no readable deadline, which
+    #: reads as not yet passed.
+    expires_at: StoredInstant | None = None
     #: True once `expires_at` has passed: the drop is final, though its bytes may stand until the purge.
     expired: bool = False
 
@@ -966,8 +988,8 @@ class MeResponse(BaseModel):
 #: names one rung of it. Here rather than in ``endpoints/members.py`` because ``MemberList`` advertises the ladder
 #: on the wire (so a UI does not keep a second copy of the model's rungs) — the endpoint's own policy
 #: constants (lock-out protection's ``ADMINISTRATIVE``) stay with the routing logic that enforces them.
-GRANTABLE: tuple[str, ...] = ("admin", "member")
-Rung = Literal["admin", "member"]
+type Rung = Literal["admin", "member"]
+GRANTABLE: tuple[Rung, ...] = ("admin", "member")
 
 
 class Member(BaseModel):
@@ -976,13 +998,13 @@ class Member(BaseModel):
     #: The FGA user string as stored (``user:gina``, ``role:<id>#assignee``). Verbatim,
     #: because it is what a revoke must send back and a prettified name that cannot round-trip is a trap.
     user: str
-    relation: str
+    relation: Rung
 
 
 class MemberList(BaseModel):
     members: list[Member]
     #: The rungs this API will grant, so a UI does not keep a second copy of the model's ladder.
-    grantable: list[str] = Field(default_factory=lambda: list(GRANTABLE))
+    grantable: list[Rung] = Field(default_factory=lambda: list(GRANTABLE))
 
 
 class GrantRequest(RequestBody):
@@ -1006,7 +1028,7 @@ class RoleRecord(BaseModel):
     project: str
     name: str
     description: str | None = None
-    created_at: datetime
+    created_at: AwareDatetime
     #: The principal that minted it.
     created_by: str
 
@@ -1088,7 +1110,7 @@ class ProjectWarehouse(BaseModel):
 
     id: str
     bucket: str
-    status: str
+    status: WarehouseStatus
 
 
 class ProjectResponse(BaseModel):
@@ -1136,7 +1158,7 @@ class DeleteProjectResponse(BaseModel):
 #: it. Lance answers that question from the TRANSACTION range instead
 #: (`DatasetDelta.get_deleted_row_ids()`, which streams a single `_rowid` column), so the door branches
 #: on the kind rather than composing one filter for all three.
-ChangeKind = Literal["inserted", "updated", "deleted"]
+type ChangeKind = Literal["inserted", "updated", "deleted"]
 
 
 class TableChangesRequest(RequestBody):

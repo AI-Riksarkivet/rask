@@ -5704,6 +5704,8 @@ export interface components {
              */
             occurred_at?: string;
         };
+        /** @enum {string} */
+        ChangeKind: "inserted" | "updated" | "deleted";
         /**
          * CleanupDisarmed
          * @description What the disarm of a ref's commit-path cleanup did ([[LH-575]]).
@@ -6425,8 +6427,7 @@ export interface components {
             file_format?: components["schemas"]["TableFileFormat"] | null;
             /** Location */
             location?: string | null;
-            /** Mode */
-            mode: string;
+            mode: components["schemas"]["VendMode"];
             /** Read Version */
             read_version?: number | null;
         };
@@ -7795,11 +7796,7 @@ export interface components {
         };
         /** GrantRequest */
         GrantRequest: {
-            /**
-             * Relation
-             * @enum {string}
-             */
-            relation: "admin" | "member";
+            relation: components["schemas"]["Rung"];
             /** User */
             user: string;
         };
@@ -8049,7 +8046,10 @@ export interface components {
         LabelDefinition: {
             /** Allowed Values */
             allowed_values?: string[] | null;
-            /** Defined At */
+            /**
+             * Defined At
+             * Format: date-time
+             */
             defined_at: string;
             /** Defined By */
             defined_by?: string | null;
@@ -8480,15 +8480,14 @@ export interface components {
          * @description One direct grant on this tenant.
          */
         Member: {
-            /** Relation */
-            relation: string;
+            relation: components["schemas"]["Rung"];
             /** User */
             user: string;
         };
         /** MemberList */
         MemberList: {
             /** Grantable */
-            grantable?: string[];
+            grantable?: components["schemas"]["Rung"][];
             /** Members */
             members: components["schemas"]["Member"][];
         };
@@ -8680,10 +8679,12 @@ export interface components {
         PolicyDeleteResponse: {
             /** Id */
             id: string;
-            /** Kind */
-            kind: string;
-            /** Status */
-            status: string;
+            kind: components["schemas"]["PolicyKind"];
+            /**
+             * Status
+             * @constant
+             */
+            status: "deleted";
         };
         /** @enum {string} */
         PolicyKind: "table" | "namespace" | "project";
@@ -8723,8 +8724,7 @@ export interface components {
              * @default true
              */
             optimize_indices_enabled?: boolean;
-            /** Repack Mode */
-            repack_mode?: ("reencode" | "try_binary_copy" | "force_binary_copy") | null;
+            repack_mode?: components["schemas"]["RepackMode"] | null;
             /** Retain Versions */
             retain_versions?: number | null;
             /** Retention Days */
@@ -8760,8 +8760,7 @@ export interface components {
              * @default true
              */
             optimize_indices_enabled?: boolean;
-            /** Repack Mode */
-            repack_mode?: string | null;
+            repack_mode?: components["schemas"]["RepackMode"] | null;
             /** Retain Versions */
             retain_versions?: number | null;
             /** Retention Days */
@@ -8947,8 +8946,7 @@ export interface components {
             bucket: string;
             /** Id */
             id: string;
-            /** Status */
-            status: string;
+            status: components["schemas"]["WarehouseStatus"];
         };
         /** ProtectionResponse */
         ProtectionResponse: {
@@ -9331,6 +9329,8 @@ export interface components {
              */
             transaction_id?: string | null;
         };
+        /** @enum {string} */
+        RepackMode: "reencode" | "try_binary_copy" | "force_binary_copy";
         /**
          * RestoreTableBranchRequest
          * @description Which deleted branch to bring back.
@@ -9466,6 +9466,8 @@ export interface components {
             /** Project */
             project: string;
         };
+        /** @enum {string} */
+        Rung: "admin" | "member";
         /**
          * SetLabelRequest
          * @description Attach a label the object's project defines, with its value; a marker carries none.
@@ -9566,12 +9568,8 @@ export interface components {
             columns?: string[] | null;
             /** End Version */
             end_version?: number | null;
-            /**
-             * Kind
-             * @default inserted
-             * @enum {string}
-             */
-            kind?: "inserted" | "updated" | "deleted";
+            /** @default inserted */
+            kind?: components["schemas"]["ChangeKind"];
         };
         /**
          * TableDecision
@@ -9722,7 +9720,7 @@ export interface components {
          */
         TrashEntry: {
             /** Dropped At */
-            dropped_at: string;
+            dropped_at?: string | null;
             /** Dropped By */
             dropped_by: string;
             /**
@@ -9731,7 +9729,7 @@ export interface components {
              */
             expired?: boolean;
             /** Expires At */
-            expires_at: string;
+            expires_at?: string | null;
             /** Id */
             id: string;
             /**
@@ -9997,6 +9995,8 @@ export interface components {
              */
             transaction_id?: string | null;
         };
+        /** @enum {string} */
+        VendMode: "direct" | "server_mediated";
         /**
          * VendedCredentials
          * @description Scoped storage credentials for one table at one tier.
@@ -10058,9 +10058,15 @@ export interface components {
             protected_by?: string | null;
             /** Root Uri */
             root_uri: string;
-            /** Status */
-            status?: string | null;
+            status?: components["schemas"]["WarehouseStatus"] | null;
         };
+        /**
+         * WarehouseStatus
+         * @description Whether a warehouse serves: ``deactivated`` is offboarding's first step, after which every operation beneath it is
+         *     refused and nothing rewrites its data.
+         * @enum {string}
+         */
+        WarehouseStatus: "active" | "deactivated";
     };
     responses: never;
     parameters: never;

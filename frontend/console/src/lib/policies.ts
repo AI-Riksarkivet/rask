@@ -85,8 +85,8 @@ export const ProjectPoliciesSchema = mirrors<components['schemas']['ProjectPolic
 /** A policy delete's acknowledgement, on every rung. */
 export const PolicyDeleteSchema = mirrors<components['schemas']['PolicyDeleteResponse']>()(
 	v.object({
-		status: v.string(),
-		kind: v.string(),
+		status: v.literal('deleted'),
+		kind: v.picklist(['table', 'namespace', 'project']),
 		id: v.string(),
 	}),
 );

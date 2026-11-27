@@ -2926,6 +2926,14 @@
         "title": "CatalogControlEvent",
         "type": "object"
       },
+      "ChangeKind": {
+        "enum": [
+          "inserted",
+          "updated",
+          "deleted"
+        ],
+        "type": "string"
+      },
       "CleanupDisarmed": {
         "description": "What the disarm of a ref's commit-path cleanup did ([[LH-575]]).",
         "properties": {
@@ -4690,8 +4698,7 @@
             "title": "Location"
           },
           "mode": {
-            "title": "Mode",
-            "type": "string"
+            "$ref": "#/components/schemas/VendMode"
           },
           "read_version": {
             "anyOf": [
@@ -7769,12 +7776,7 @@
         "additionalProperties": false,
         "properties": {
           "relation": {
-            "enum": [
-              "admin",
-              "member"
-            ],
-            "title": "Relation",
-            "type": "string"
+            "$ref": "#/components/schemas/Rung"
           },
           "user": {
             "maxLength": 256,
@@ -8330,6 +8332,7 @@
             "title": "Allowed Values"
           },
           "defined_at": {
+            "format": "date-time",
             "title": "Defined At",
             "type": "string"
           },
@@ -9310,8 +9313,7 @@
         "description": "One direct grant on this tenant.",
         "properties": {
           "relation": {
-            "title": "Relation",
-            "type": "string"
+            "$ref": "#/components/schemas/Rung"
           },
           "user": {
             "title": "User",
@@ -9329,7 +9331,7 @@
         "properties": {
           "grantable": {
             "items": {
-              "type": "string"
+              "$ref": "#/components/schemas/Rung"
             },
             "title": "Grantable",
             "type": "array"
@@ -9753,10 +9755,10 @@
             "type": "string"
           },
           "kind": {
-            "title": "Kind",
-            "type": "string"
+            "$ref": "#/components/schemas/PolicyKind"
           },
           "status": {
+            "const": "deleted",
             "title": "Status",
             "type": "string"
           }
@@ -9840,18 +9842,12 @@
           "repack_mode": {
             "anyOf": [
               {
-                "enum": [
-                  "reencode",
-                  "try_binary_copy",
-                  "force_binary_copy"
-                ],
-                "type": "string"
+                "$ref": "#/components/schemas/RepackMode"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Repack Mode"
+            ]
           },
           "retain_versions": {
             "anyOf": [
@@ -9972,13 +9968,12 @@
           "repack_mode": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/RepackMode"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Repack Mode"
+            ]
           },
           "retain_versions": {
             "anyOf": [
@@ -10388,8 +10383,7 @@
             "type": "string"
           },
           "status": {
-            "title": "Status",
-            "type": "string"
+            "$ref": "#/components/schemas/WarehouseStatus"
           }
         },
         "required": [
@@ -11337,6 +11331,14 @@
         "title": "RenameTableResponse",
         "type": "object"
       },
+      "RepackMode": {
+        "enum": [
+          "reencode",
+          "try_binary_copy",
+          "force_binary_copy"
+        ],
+        "type": "string"
+      },
       "RestoreTableBranchRequest": {
         "additionalProperties": false,
         "description": "Which deleted branch to bring back.",
@@ -11641,6 +11643,13 @@
         "title": "RoleRecord",
         "type": "object"
       },
+      "Rung": {
+        "enum": [
+          "admin",
+          "member"
+        ],
+        "type": "string"
+      },
       "SetLabelRequest": {
         "additionalProperties": false,
         "description": "Attach a label the object's project defines, with its value; a marker carries none.",
@@ -11820,14 +11829,8 @@
             "title": "End Version"
           },
           "kind": {
-            "default": "inserted",
-            "enum": [
-              "inserted",
-              "updated",
-              "deleted"
-            ],
-            "title": "Kind",
-            "type": "string"
+            "$ref": "#/components/schemas/ChangeKind",
+            "default": "inserted"
           }
         },
         "required": [
@@ -12140,8 +12143,16 @@
         "description": "One recoverable drop \u2014 what the owner needs to decide whether to undrop before the deadline.",
         "properties": {
           "dropped_at": {
-            "title": "Dropped At",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dropped At"
           },
           "dropped_by": {
             "title": "Dropped By",
@@ -12153,8 +12164,16 @@
             "type": "boolean"
           },
           "expires_at": {
-            "title": "Expires At",
-            "type": "string"
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
           },
           "id": {
             "title": "Id",
@@ -12182,9 +12201,7 @@
           "id",
           "uuid",
           "location",
-          "dropped_by",
-          "dropped_at",
-          "expires_at"
+          "dropped_by"
         ],
         "title": "TrashEntry",
         "type": "object"
@@ -12727,6 +12744,13 @@
         "title": "UpdateTableTagResponse",
         "type": "object"
       },
+      "VendMode": {
+        "enum": [
+          "direct",
+          "server_mediated"
+        ],
+        "type": "string"
+      },
       "VendedCredentials": {
         "description": "Scoped storage credentials for one table at one tier.\n\n``storage_options`` is consumed directly by pylance / the LanceDB SDK /\nobject_store. ``expires_at_millis`` is when the client must refresh\n(``None`` for long-lived static keys).",
         "properties": {
@@ -12785,6 +12809,7 @@
           "created_at": {
             "anyOf": [
               {
+                "format": "date-time",
                 "type": "string"
               },
               {
@@ -12882,13 +12907,12 @@
           "status": {
             "anyOf": [
               {
-                "type": "string"
+                "$ref": "#/components/schemas/WarehouseStatus"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Status"
+            ]
           }
         },
         "required": [
@@ -12899,6 +12923,15 @@
         ],
         "title": "WarehouseResponse",
         "type": "object"
+      },
+      "WarehouseStatus": {
+        "description": "Whether a warehouse serves: ``deactivated`` is offboarding's first step, after which every operation beneath it is\nrefused and nothing rewrites its data.",
+        "enum": [
+          "active",
+          "deactivated"
+        ],
+        "title": "WarehouseStatus",
+        "type": "string"
       }
     },
     "securitySchemes": {

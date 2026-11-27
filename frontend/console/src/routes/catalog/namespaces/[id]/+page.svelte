@@ -92,13 +92,15 @@
 	// split on the FIRST delimiter would compare a nested namespace's top-level ancestor against `ns`.
 	const members = $derived((tables ?? []).filter((t) => parentNamespace(t) === ns).sort());
 
+	/** When a trash record's drop was made; a record that keeps no drop time sorts before every other. */
+	const droppedMs = (entry: TrashEntry): number =>
+		entry.dropped_at == null ? -Infinity : Date.parse(entry.dropped_at);
+
 	/** The newest of a name's trash records: a name dropped twice keeps a record per drop. */
 	const newestDrop = (entries: readonly TrashEntry[]): TrashEntry | undefined =>
 		entries.reduce<TrashEntry | undefined>(
 			(newest, entry) =>
-				newest === undefined || Date.parse(entry.dropped_at) > Date.parse(newest.dropped_at)
-					? entry
-					: newest,
+				newest === undefined || droppedMs(entry) > droppedMs(newest) ? entry : newest,
 			undefined,
 		);
 

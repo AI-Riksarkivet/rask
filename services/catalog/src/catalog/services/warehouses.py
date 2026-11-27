@@ -246,7 +246,9 @@ def upsert_warehouse(
             del merged[DELETE_MODE]
         # A record written before the lifecycle feature has no status, and absent means live.
         merged.setdefault("status", "active")
-        merged["created_at"] = live.get("created_at") or record.get("created_at", "")
+        # The first write's instant; a record that names none keeps no `created_at`, which no instant could be read from.
+        if created_at := live.get("created_at") or record.get("created_at"):
+            merged["created_at"] = created_at
         if protection is not None:
             merged = with_protection(merged, protection)
         # THE THIRD REQUEST FIELD, and it must be one: `merged` takes only `_CALLER_OWNED` keys from

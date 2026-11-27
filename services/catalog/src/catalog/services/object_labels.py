@@ -137,7 +137,7 @@ def proposed(
         kind=kind,
         allowed_values=allowed_values,
         defined_by=actor,
-        defined_at=datetime.now(UTC).isoformat(),
+        defined_at=datetime.now(UTC),
     )
 
 

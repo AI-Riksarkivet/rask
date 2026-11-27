@@ -115,7 +115,7 @@ def _group_by_project(records: list[WarehouseRecord]) -> dict[str, list[ProjectW
     """
     grouped: dict[str, list[ProjectWarehouse]] = {}
     for record in records:
-        grouped.setdefault(record.project, []).append(ProjectWarehouse(id=record.id, bucket=record.bucket, status=str(record.status or WarehouseStatus.ACTIVE)))
+        grouped.setdefault(record.project, []).append(ProjectWarehouse(id=record.id, bucket=record.bucket, status=record.status or WarehouseStatus.ACTIVE))
     for entries in grouped.values():
         entries.sort(key=lambda w: w.id)
     return grouped

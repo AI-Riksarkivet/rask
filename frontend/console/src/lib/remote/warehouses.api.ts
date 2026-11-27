@@ -34,7 +34,7 @@ const ProjectSchema = mirrors<Wire['ProjectResponse']>()(
 			v.object({
 				id: v.string(),
 				bucket: v.string(),
-				status: v.string(),
+				status: v.picklist(['active', 'deactivated']),
 			}),
 		),
 		admins: v.array(v.string()),

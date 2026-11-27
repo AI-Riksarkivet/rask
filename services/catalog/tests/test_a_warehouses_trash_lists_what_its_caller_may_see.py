@@ -22,6 +22,7 @@ from catalog.core.config import get_settings
 from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.naming import UUID_PROPERTY
+from lakehouse.records import trash
 from lakehouse.records.warehouse_records import WarehouseRecord
 
 
@@ -130,3 +131,19 @@ def test_the_trash_lists_exactly_the_drops_its_caller_holds_a_grant_on(
     listed = _listed(catalog, caller, namespace)
 
     assert sorted(listed) == sorted((kind, name, uuids[key]) for kind, name, key in expected)
+
+
+def test_each_drop_time_is_the_text_its_record_keeps_and_an_unreadable_one_is_left_out(estate: tuple[Any, dict[str, str]]) -> None:
+    """A record's ``isoformat`` instants are answered as stored (``+00:00``, not ``Z``); one whose instants do not read is
+    answered without them, and as not expired, rather than failing the listing."""
+    catalog, uuids = estate
+    settings = get_settings()
+    kept = trash.get(settings.registry_root, settings.storage_options(), uuids["sales$shared"])
+    undated = trash.get(settings.registry_root, settings.storage_options(), uuids["sales$mine"])
+    assert kept is not None and undated is not None
+    trash.put(settings.registry_root, settings.storage_options(), undated.model_copy(update={"dropped_at": "", "expires_at": "not-a-date"}))
+
+    body = _ok(catalog, "GET", f"/management/v1/warehouses/{HERE}/trash", params={"namespace": f"{HERE}$sales"}).json()
+
+    answered = {entry["uuid"]: (entry.get("dropped_at"), entry.get("expires_at"), entry["expired"]) for entry in body["objects"]}
+    assert answered == {kept.uuid: (kept.dropped_at, kept.expires_at, False), undated.uuid: (None, None, False)}
