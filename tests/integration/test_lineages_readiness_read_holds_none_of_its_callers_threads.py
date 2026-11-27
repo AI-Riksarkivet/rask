@@ -25,7 +25,7 @@ from tests.integration.lineage_app import ensure_tables, live_catalog
 BUDGET_SECONDS = 5.0
 
 
-async def _read_with_every_catalog_call_thread_held(store: ProvenanceStore, calls: ThreadSet) -> tuple[bool, BaseException | None]:
+async def _read_with_every_catalog_call_thread_held(store: ProvenanceStore, calls: ThreadSet, own: ThreadSet) -> tuple[bool, BaseException | None]:
     """Whether the readiness read answered inside the budget while a burst held every thread of lineage's catalog calls,
     and what it raised."""
     release = threading.Event()
@@ -40,7 +40,7 @@ async def _read_with_every_catalog_call_thread_held(store: ProvenanceStore, call
         async with asyncio.timeout(10):
             while len(entered) < calls.seats:
                 await asyncio.sleep(0.005)
-        reading = asyncio.create_task(store.ready())
+        reading = asyncio.create_task(store.ready(own))
         answered, _ = await asyncio.wait({reading}, timeout=BUDGET_SECONDS)
         in_time = reading in answered
     finally:
@@ -50,7 +50,9 @@ async def _read_with_every_catalog_call_thread_held(store: ProvenanceStore, call
     return in_time, reading.exception()
 
 
-def test_the_readiness_read_answers_while_every_thread_of_the_catalog_calls_is_held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_readiness_read_answers_while_every_thread_of_the_catalog_calls_is_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet
+) -> None:
     with live_catalog(tmp_path, monkeypatch) as catalog_url:
         monkeypatch.setenv("LINEAGE_CATALOG_URL", catalog_url)
         get_settings.cache_clear()
@@ -58,7 +60,7 @@ def test_the_readiness_read_answers_while_every_thread_of_the_catalog_calls_is_h
         store = ProvenanceStore.from_settings(get_settings(), clients)
         ensure_tables(store)
 
-        in_time, failure = asyncio.run(_read_with_every_catalog_call_thread_held(store, clients.calls))
+        in_time, failure = asyncio.run(_read_with_every_catalog_call_thread_held(store, clients.calls, own_threads))
         clients.close()
     get_settings.cache_clear()
 

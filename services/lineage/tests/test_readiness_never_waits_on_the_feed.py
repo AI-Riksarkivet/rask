@@ -15,6 +15,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from lakehouse.process.health import HealthWatch
+from lakehouse.process.own_threads import ThreadSet
 from lineage import main
 from lineage.services.catalog_reader import CatalogAnsweredError
 
@@ -35,7 +36,8 @@ class _Feed:
     async def ensure(self) -> None:
         return None
 
-    async def ready(self) -> None:
+    async def ready(self, threads: ThreadSet) -> None:
+        del threads
         self.started += 1
         while not self.released.is_set():
             await asyncio.sleep(0.01)

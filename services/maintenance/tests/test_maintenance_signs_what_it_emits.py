@@ -36,6 +36,7 @@ from tests.secret_store_double import SecretStoreDouble
 from lakehouse.events.control_emit import emit_control
 from lakehouse.events.lineage_events import DatasetUuids, dataset_uuids
 from lakehouse.events.signing import RefusalReason, SignatureError, SigningKey, parse_published_keys, verify_control_signature, verify_signature
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.governed.signing_key import SigningKeyHolder, signing_ready_check
 from lakehouse.process.lifecycle import mark_started
 from lakehouse.process.supervision import Supervisor
@@ -103,7 +104,11 @@ def boot(  # noqa: PLR0913 — the fixtures a started, signing worker stands on
 
     @asynccontextmanager
     async def _started(app: FastAPI) -> AsyncGenerator[None]:
-        async with Supervisor() as loops, runtime.standing(app, get_settings(), loops), runtime.collaborators(app, get_settings(), loops) as held:
+        async with (
+            Supervisor() as loops,
+            runtime.standing(app, get_settings(), loops) as secrets,
+            runtime.collaborators(app, get_settings(), loops, secrets=secrets) as held,
+        ):
             app.state.held = held
             mark_started(app)
             yield
@@ -215,8 +220,8 @@ def test_a_worker_takes_no_task_while_the_connection_its_control_events_go_out_o
     assert (takes_tasks_while_up, held.ready()) == (True, False)
 
 
-def test_an_emitter_refuses_a_key_for_an_identity_it_does_not_stamp_as_its_author() -> None:
-    holder = SigningKeyHolder(identity=IDENTITY, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
+def test_an_emitter_refuses_a_key_for_an_identity_it_does_not_stamp_as_its_author(secret_session: SecretStore) -> None:
+    holder = SigningKeyHolder(secrets=secret_session, identity=IDENTITY, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
 
     with pytest.raises(ValueError, match="signer that is not its event's author"):
         BusMaintenanceEmitter(

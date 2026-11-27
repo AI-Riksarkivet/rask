@@ -39,6 +39,7 @@ from lakehouse.events.cloud_events import control_envelope
 from lakehouse.events.control_emit import BusControlEmitter, NoopControlEmitter
 from lakehouse.events.control_events import CONTROL_TOPIC, CatalogControlEvent
 from lakehouse.events.signing import SigningKey, parse_published_keys
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing
 from lakehouse.process.supervision import Supervisor
 from lakehouse.storage import store_session
@@ -107,19 +108,24 @@ def deployed_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Callab
 
 
 def _relay_app(
-    publisher: BusDouble, *, signing: SigningKeyHolder[SigningKey] | None = None, lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]] | None = None
+    publisher: BusDouble,
+    *,
+    signing: SigningKeyHolder[SigningKey] | None = None,
+    secrets: SecretStore | None = None,
+    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[None]] | None = None,
 ) -> FastAPI:
     """A bare app holding what the catalog's lifespan hands its relay: the connection to the bus, the signing holder, the
     reader of the keys it publishes, and the control emitter every tick is built with.
 
     `signing` is published where the catalog's lifespan publishes its own holder (`attach_signing`); None is a catalog
-    that does not sign. `lifespan` is what the app's start runs.
+    that does not sign. `secrets` is the session the keys are read under; None is a catalog with no secret store.
+    `lifespan` is what the app's start runs.
     """
     app = FastAPI(lifespan=lifespan)
     app.state.bus = publisher
     app.state.control_emitter = NoopControlEmitter()  # the lifespan's, with control emission off; the relay emits none
     attach_signing(app, signing)
-    attach_published_keys(app)
+    attach_published_keys(app, secrets)
     return app
 
 
@@ -129,9 +135,9 @@ def _tick(client: TestClient, settings: Settings) -> ControlRelayReport:
     return client.portal.call(control_relay.tick, Tick(app_of(client), settings))
 
 
-def _catalog_key(secret_store: SecretStoreDouble, pair: Any | None) -> SigningKeyHolder[SigningKey]:
+def _catalog_key(secret_store: SecretStoreDouble, session: SecretStore, pair: Any | None) -> SigningKeyHolder[SigningKey]:
     """The catalog's signing key holder: resolved from the secret store when `pair` is given, else never resolved."""
-    holder = SigningKeyHolder(identity=CATALOG, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
+    holder = SigningKeyHolder(secrets=session, identity=CATALOG, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
     if pair is not None:
         secret_store.hold(f"signing-key-{CATALOG}", {"seed": pair.seed})
         secret_store.hold(f"signing-public-{CATALOG}", {"keys": pair.public})
@@ -207,6 +213,7 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_as_it_w
     tmp_path: Path,
     event_signer: Any,
     secret_store: SecretStoreDouble,
+    secret_session: SecretStore,
     deployed_settings: Callable[[str], Settings],
     forge: Callable[[Any, Any], dict[str, Any]],
 ) -> None:
@@ -220,7 +227,7 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_as_it_w
     """
     uri = f"file://{tmp_path}/control-outbox"
     pair = event_signer(CATALOG)
-    signing = _catalog_key(secret_store, pair)
+    signing = _catalog_key(secret_store, secret_session, pair)
     forged = control_envelope(forge(pair, event_signer))
     outbox.stage_envelope(uri, StorageOptions(), forged)
     _staged_before_everything_else(tmp_path, forged.id)
@@ -228,7 +235,7 @@ async def test_the_relay_delivers_only_what_this_catalog_signed_and_that_as_it_w
     recorder = BusDouble()
 
     _store_serving_the_catalogs_keys(secret_store, 200, pair)
-    with TestClient(_relay_app(recorder, signing=signing)) as client:
+    with TestClient(_relay_app(recorder, signing=signing, secrets=secret_session)) as client:
         report = _tick(client, deployed_settings(uri))
         delivered = [sent.envelope for sent in recorder.sent]
         staged = json.loads(genuine)["data"]
@@ -250,6 +257,7 @@ async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(
     tmp_path: Path,
     event_signer: Any,
     secret_store: SecretStoreDouble,
+    secret_session: SecretStore,
     deployed_settings: Callable[[str], Settings],
     bus: Callable[[], BusDouble],
     keys: int | None,
@@ -258,12 +266,12 @@ async def test_an_event_the_relay_may_not_deliver_yet_stays_staged(
     publish: a key list the store cannot serve says nothing about a signature, so the event neither goes out unverified
     nor is retired as a forgery; it waits, staged, for a tick that can read the keys."""
     uri = f"file://{tmp_path}/control-outbox"
-    signing = None if keys is None else _catalog_key(secret_store, event_signer(CATALOG))
+    signing = None if keys is None else _catalog_key(secret_store, secret_session, event_signer(CATALOG))
     await _stage(uri, _published_event(), signing=signing)
     publisher = bus()
 
     read_before = _store_serving_the_catalogs_keys(secret_store, keys)
-    with TestClient(_relay_app(publisher, signing=signing)) as client:
+    with TestClient(_relay_app(publisher, signing=signing, secrets=secret_session)) as client:
         report = _tick(client, deployed_settings(uri))
         assert (report.republished, publisher.sent) == (0, []), "the relay delivered an event it may not deliver yet"
         assert list(outbox.list_events(uri, StorageOptions())), "the relay dropped a staged event it never delivered"

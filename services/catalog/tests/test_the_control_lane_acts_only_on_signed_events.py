@@ -30,6 +30,7 @@ from catalog.api.control_relay import attach_published_keys
 from catalog.api.dependencies import request_settings
 from catalog.core.config import get_settings
 from lakehouse.events.bus_delivery import Delivery
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.governed.signing_key import signing_public_secret
 from tests.catalog_settings import catalog_settings
 from tests.secret_store_double import SecretStoreDouble
@@ -106,7 +107,9 @@ def _signed_by_a_signer_whose_role_is_not_this_actions(_catalog: Any, maintenanc
 
 
 @pytest.fixture
-def lane(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: SecretStoreDouble, respx_allows_unused_routes: None) -> Iterator[_Lane]:
+def lane(
+    monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: SecretStoreDouble, secret_session: SecretStore, respx_allows_unused_routes: None
+) -> Iterator[_Lane]:
     """A catalog app carrying the lane, both signers, each one's key list held by the store, and a reader of what the lane
     counts."""
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "k")
@@ -129,7 +132,7 @@ def lane(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: Secre
     monkeypatch.setattr(control_lane, "_signature_refused", meter.create_counter("catalog.signature.refused"))
     app = FastAPI()
     app.dependency_overrides[request_settings] = lambda: settings
-    attach_published_keys(app)
+    attach_published_keys(app, secret_session)
     for signer in (catalog, maintenance):
         secret_store.hold(signing_public_secret(signer.identity), {"keys": signer.public})
     try:

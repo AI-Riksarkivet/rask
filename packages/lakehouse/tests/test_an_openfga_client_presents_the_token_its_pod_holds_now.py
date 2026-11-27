@@ -20,6 +20,7 @@ from pydantic_settings import BaseSettings
 from lakehouse.governed.auth_lifespan import BootFailure, ModelRole, build_fga_client
 from lakehouse.governed.fga_provision import OpenFgaCredentialRefusedError
 from lakehouse.governed.settings import FgaSettings
+from lakehouse.process.own_threads import ThreadSet
 from tests.unit.openfga_stub import BY_NAME, Recorded, openfga
 
 
@@ -38,7 +39,7 @@ def _environment(monkeypatch: pytest.MonkeyPatch, url: str, token: Path) -> _Ser
 @pytest.mark.asyncio
 @pytest.mark.parametrize("model_role", [pytest.param(ModelRole.READER, id="resolve"), pytest.param(ModelRole.PUBLISHER, id="provision")])
 async def test_the_service_client_presents_the_token_the_file_holds_at_each_request(
-    model_role: ModelRole, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    model_role: ModelRole, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet
 ) -> None:
     token = tmp_path / "token"
     token.write_text("projected-before-rotation\n")
@@ -46,7 +47,7 @@ async def test_the_service_client_presents_the_token_the_file_holds_at_each_requ
     request = ClientCheckRequest(user="user:alice", relation="owner", object="warehouse:lance_catalog")
 
     with openfga(BY_NAME, recorded, token_file=token) as url:
-        client = await build_fga_client(_environment(monkeypatch, url, token), service="probe", model_role=model_role)
+        client = await build_fga_client(_environment(monkeypatch, url, token), threads=own_threads, service="probe", model_role=model_role)
         assert client is not None, f"the boot lookup built no client; OpenFGA refused {recorded.refused} requests 401"
 
         async def answer() -> bool | str:
@@ -66,7 +67,7 @@ async def test_the_service_client_presents_the_token_the_file_holds_at_each_requ
 
 
 @pytest.mark.asyncio
-async def test_a_refused_credential_fails_the_boot_of_a_non_fatal_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_refused_credential_fails_the_boot_of_a_non_fatal_service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     admitted, presented = tmp_path / "admitted", tmp_path / "presented"
     admitted.write_text("the-token-openfga-admits\n")
     presented.write_text("a-token-it-does-not\n")
@@ -74,4 +75,4 @@ async def test_a_refused_credential_fails_the_boot_of_a_non_fatal_service(tmp_pa
     with openfga(BY_NAME, Recorded(), token_file=admitted) as url:
         settings = _environment(monkeypatch, url, presented)
         with pytest.raises(OpenFgaCredentialRefusedError, match="refused this pod's credential"):
-            await build_fga_client(settings, service="probe", model_role=ModelRole.READER, on_failure=BootFailure.SERVE_UNAVAILABLE)
+            await build_fga_client(settings, threads=own_threads, service="probe", model_role=ModelRole.READER, on_failure=BootFailure.SERVE_UNAVAILABLE)

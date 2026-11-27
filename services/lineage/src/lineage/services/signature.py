@@ -32,6 +32,7 @@ from lance_namespace import ServiceUnavailableError
 from lakehouse.events.door_verdict import DoorMode, DoorVerdict, judge
 from lakehouse.events.published_keys import PublishedKeys
 from lakehouse.events.signing import VerifiedSignature, signature_of, verify_signature
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.governed.signing_key import published_key_fetch
 from lineage.core.config import LineageSettings
 from lineage.core.metrics import record_signature_refused, record_signature_verified
@@ -46,9 +47,9 @@ log = logging.getLogger(__name__)
 _MAX_REASON_CHARS: Final = 300
 
 
-def store_published_keys(*, clock: Callable[[], float] = time.monotonic) -> PublishedKeys:
-    """The kit's key reader, reading each identity's list from the secret store under THIS process's own login."""
-    return PublishedKeys(published_key_fetch(), clock=clock)
+def store_published_keys(secrets: SecretStore | None, *, clock: Callable[[], float] = time.monotonic) -> PublishedKeys:
+    """The kit's key reader, reading each identity's list from ``secrets``, this start's session with the secret store."""
+    return PublishedKeys(published_key_fetch(secrets), clock=clock)
 
 
 def _bounded(text: str) -> str:

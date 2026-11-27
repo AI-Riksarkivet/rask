@@ -27,7 +27,7 @@ from lakehouse.governed import fga_model
 from lakehouse.governed.fga_resilience import DEFAULT_RETRY, FAIL_CLOSED, ONE_ATTEMPT, RetryPolicy, guarded
 from lakehouse.governed.machine_identity import read_identity_token
 from lakehouse.process.lifecycle import closed_quietly
-from lakehouse.process.own_threads import on_own_threads
+from lakehouse.process.own_threads import ThreadSet
 
 
 log = logging.getLogger(__name__)
@@ -342,6 +342,7 @@ async def _model_history(
         raise ModelHistoryTooLongError(f"the store's model history exceeded {MODEL_MAX_PAGES} pages; refusing to read it as absent")
 
     return await guarded(
+        client,
         _do_read,
         event="openfga_read_model_unavailable",
         retry=retry,
@@ -352,6 +353,7 @@ async def provision(
     api_url: str,
     *,
     token_file: str | None,
+    threads: ThreadSet,
     store_name: str = "lance-catalog",
     store_id: str | None = None,
     retry: RetryPolicy = DEFAULT_RETRY,
@@ -366,7 +368,8 @@ async def provision(
     new model versions. A pinned ``store_id`` (``RASK_FGA_STORE_ID``) is used as is, the store the hook uses
     too.
     """
-    model = await on_own_threads(fga_model.load_model)
+    # The image's model file, read on the process's own threads (`lakehouse.process.own_threads`).
+    model = await threads.run(fga_model.load_model)
     store_is_new = False
     if store_id is None:
         async with OpenFgaClient(client_configuration(api_url, token_file=token_file)) as client:
@@ -423,6 +426,7 @@ async def resolve(
     api_url: str,
     *,
     token_file: str | None,
+    threads: ThreadSet,
     store_name: str = "lance-catalog",
     store_id: str | None = None,
     deadline_seconds: float = RESOLVE_DEADLINE_SECONDS,
@@ -450,7 +454,8 @@ async def resolve(
         OpenFgaModelAbsentError: at the deadline the store or this image's model was still absent, or OpenFGA was
             not answering; the message names which.
     """
-    model = await on_own_threads(fga_model.load_model)
+    # The image's model file, read on the process's own threads (`lakehouse.process.own_threads`).
+    model = await threads.run(fga_model.load_model)
     loop = asyncio.get_running_loop()
     started = loop.time()
     known_newest: str | None = None

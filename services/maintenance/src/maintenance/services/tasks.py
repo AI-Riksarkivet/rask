@@ -18,6 +18,7 @@ from fastapi.concurrency import run_in_threadpool
 
 from lakehouse.events.bus import BusSettings
 from lakehouse.events.control_emit import ControlEmitter
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.process.supervision import EndProcess, Supervisor, end_process
 from maintenance.core.config import MaintenanceQueue, MaintenanceSettings
 from maintenance.core.lineage_emit import MaintenanceEmitter
@@ -108,10 +109,12 @@ async def running_worker(
     ready: Callable[[], bool],
     emitter: MaintenanceEmitter,
     control: ControlEmitter,
+    secrets: SecretStore | None,
     end: EndProcess = end_process,
 ) -> AsyncGenerator[TaskQueue | None]:
     """Connect the work queue (:func:`connected_queue`), keep the audit's and the scan's schedules, and run the worker
-    until its process stops; the queue it runs on. A stack with no bus runs no worker and yields ``None``.
+    until its process stops; the queue it runs on. A stack with no bus runs no worker and yields ``None``. ``secrets`` is the
+    process's session with its secret store, which the commit lane reads its signers' published keys under.
 
     Every loop runs under a supervisor (`lakehouse.process.supervision`): one that ends before the worker stops, with an error or
     without, ends the process by ``end``, so no fault of one leaves a replica that stays Ready and does nothing (ADR 0203).
@@ -135,7 +138,7 @@ async def running_worker(
         if queue is None:
             yield None
             return
-        async with _worker_on(queue, settings, ready=ready, emitter=emitter, control=control, end=end):
+        async with _worker_on(queue, settings, ready=ready, emitter=emitter, control=control, secrets=secrets, end=end):
             try:
                 yield queue
             finally:
@@ -153,6 +156,7 @@ async def _worker_on(
     ready: Callable[[], bool],
     emitter: MaintenanceEmitter,
     control: ControlEmitter,
+    secrets: SecretStore | None,
     end: EndProcess,
 ) -> AsyncGenerator[None]:
     """Run the worker's loops on ``queue`` until the block ends, then drain them."""
@@ -173,7 +177,7 @@ async def _worker_on(
         max_seconds_by_kind=settings.max_seconds_by_kind,
         retry_ended_seconds=settings.recheck_hours * 3600,
         store_events=StoreEvents(settings, queue).hold_passes,
-        arrivals=Arrivals(settings, queue).hold_task if settings.arrival_enabled else None,
+        arrivals=Arrivals(settings, queue, secrets=secrets).hold_task if settings.arrival_enabled else None,
         end=end,
     )
     sampled = (*SAMPLED_CONSUMERS, ARRIVALS_SAMPLED) if settings.arrival_enabled else SAMPLED_CONSUMERS

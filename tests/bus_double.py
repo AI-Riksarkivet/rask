@@ -23,6 +23,7 @@ from pydantic import BaseModel, ConfigDict
 
 from lakehouse.events.bus import MAX_PAYLOAD_BYTES, Bus, BusSettings, Follow, StreamPage
 from lakehouse.events.bus_delivery import Delivery, Handle, Lane, Park, Settlement, judged
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.process.supervision import Supervisor
 
 
@@ -56,7 +57,8 @@ class BusDouble(Bus):
     instead, as a bus that does not answer or refuses would, and ``down`` is a connection that is away."""
 
     def __init__(self, *, failing: Exception | None = None) -> None:
-        super().__init__(BusSettings.model_construct(url="nats://bus.test:4222", user="test"))
+        # The double never connects, so nothing runs on its thread set, which starts no thread until a call does.
+        super().__init__(BusSettings.model_construct(url="nats://bus.test:4222", user="test"), ThreadSet("bus-double"))
         self.sent: list[Sent] = []
         self.failing = failing
         self.down = False

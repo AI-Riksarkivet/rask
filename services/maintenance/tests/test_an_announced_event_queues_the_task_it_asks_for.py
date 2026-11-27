@@ -32,6 +32,7 @@ from tests.store_answers import answered
 
 from lakehouse.events.cloud_events import lineage_envelope
 from lakehouse.events.lineage_events import DatasetUuids, with_dataset_uuids
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.records import location_claims
 from lakehouse.storage.errors import store_call
 from maintenance.core.config import MaintenanceSettings
@@ -131,7 +132,7 @@ async def test_each_commit_holds_its_tables_pass_a_delay_out() -> None:
     before it clears the trash record."""
     queue = _RecordingQueue()
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b"})
-    arrivals = Arrivals(settings, _queue(queue))
+    arrivals = Arrivals(settings, _queue(queue), secrets=None)
     delay = timedelta(seconds=settings.commit_pass_delay_seconds)
     before = datetime.now(UTC)
 
@@ -147,7 +148,9 @@ async def test_each_commit_holds_its_tables_pass_a_delay_out() -> None:
 async def test_a_drop_queues_the_release_of_the_uuid_it_names() -> None:
     queue = _RecordingQueue()
 
-    answer = await Arrivals(MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(queue)).hold_task(_body(_event("drop_table", uri=None)))
+    answer = await Arrivals(MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(queue), secrets=None).hold_task(
+        _body(_event("drop_table", uri=None))
+    )
 
     assert (answer, queue.queued) == ("held", [Task(kind="trash", uuid=TABLE_UUID)])
 
@@ -169,7 +172,7 @@ async def test_a_write_naming_no_uuid_is_passed_as_its_locations_claim_names_it(
     claimed = str(uuid4())
     location_claims.take(claims, URI, "db$t", segments=["db", "t"], is_gone=lambda _claim: False, uuid=claimed)
 
-    answered = await Arrivals(settings, _queue(queue)).hold_task(_body(_event("insert", uri=uri, uuid=None)))
+    answered = await Arrivals(settings, _queue(queue), secrets=None).hold_task(_body(_event("insert", uri=uri, uuid=None)))
 
     expected = [Task(kind="table", uuid=claimed, location=URI)][: int(passed)]
     assert (answered, [task for task, _ in queue.followed]) == (answer, expected)
@@ -191,7 +194,7 @@ async def test_an_announcement_the_lane_cannot_settle_raises_what_the_worker_set
     queue = _RecordingQueue(down=down)
 
     with pytest.raises(raised, match=match):
-        await Arrivals(MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(queue)).hold_task(body)
+        await Arrivals(MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(queue), secrets=None).hold_task(body)
 
 
 @pytest.mark.asyncio
@@ -205,7 +208,7 @@ async def test_a_claim_the_store_does_not_answer_for_is_a_failure_a_redelivery_c
             raise answered(503, "SlowDown", operation="GetObject")
 
     monkeypatch.setattr(location_claims, "holder", refused)
-    arrivals = Arrivals(MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(_RecordingQueue()))
+    arrivals = Arrivals(MaintenanceSettings.model_validate({"s3_bucket": "b"}), _queue(_RecordingQueue()), secrets=None)
 
     with pytest.raises(OSError, match="the store answered 503 SlowDown"):
         await arrivals.hold_task(_body(_event("insert", uuid=None)))
@@ -273,9 +276,9 @@ def signature_counts(monkeypatch: pytest.MonkeyPatch) -> Iterator[Callable[[], C
 
 
 @pytest.fixture
-def commit_lane(monkeypatch: pytest.MonkeyPatch, signature_counts: Callable[[], Counts]) -> Iterator[Lane]:
+def commit_lane(monkeypatch: pytest.MonkeyPatch, signature_counts: Callable[[], Counts], secret_session: SecretStore) -> Iterator[Lane]:
     """`commit_lane(mode)`: the worker's handling of the commit lane, configured through the environment as the chart
-    configures it, and the queue it puts tasks on.
+    configures it, and the queue it puts tasks on, its signers' keys read under the process's session with its store.
 
     Built after `signature_counts`, as a worker starts its lane after its MeterProvider is installed.
     """
@@ -291,7 +294,7 @@ def commit_lane(monkeypatch: pytest.MonkeyPatch, signature_counts: Callable[[], 
         }.items():
             monkeypatch.setenv(key, value)
         get_settings.cache_clear()
-        return Arrivals(get_settings(), _queue(queue)), queue
+        return Arrivals(get_settings(), _queue(queue), secrets=secret_session), queue
 
     yield _lane
     get_settings.cache_clear()

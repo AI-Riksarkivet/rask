@@ -35,6 +35,7 @@ A token naming nobody is refused 401 and the reason is logged.
 import base64
 import logging
 from collections.abc import Sequence
+from typing import TYPE_CHECKING
 
 from lance_namespace import UnauthenticatedError
 from pydantic import BaseModel, ConfigDict, ValidationError, field_validator
@@ -43,6 +44,10 @@ from lakehouse.governed.machine_identity import ServicePrincipal, client_princip
 from lakehouse.governed.oidc import IDToken, OIDCVerifier
 from lakehouse.governed.principal import Principal
 from lakehouse.governed.settings import ClientMarker, OidcProvider
+
+
+if TYPE_CHECKING:
+    from lakehouse.process.own_threads import ThreadSet
 
 
 log = logging.getLogger(__name__)
@@ -187,9 +192,9 @@ class IdpVerifier:
         """Fetch every issuer's keys now and report what failed; see `OIDCVerifier.refresh`."""
         return self._verifier.refresh()
 
-    async def refresh_forever(self) -> None:
+    async def refresh_forever(self, threads: ThreadSet) -> None:
         """Fetch every issuer's keys again in the background until cancelled; see `OIDCVerifier.refresh_forever`."""
-        await self._verifier.refresh_forever()
+        await self._verifier.refresh_forever(threads)
 
     def verify(self, token: str) -> PersonPrincipal | ServicePrincipal:
         """The caller the token proves; `UnauthenticatedError` for a token at fault, `ProviderUnavailableError` for the IdP."""

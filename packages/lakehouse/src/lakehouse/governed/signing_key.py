@@ -42,21 +42,14 @@ from typing import TYPE_CHECKING, Final, Protocol
 from fastapi import FastAPI, Request
 
 from lakehouse.governed.principal import Principal
-from lakehouse.governed.secrets import (
-    SecretStoreUnansweredError,
-    read_secret,
-    read_secret_answered,
-    secret_store_answers,
-    secret_store_configured,
-    secret_store_login_held,
-)
+from lakehouse.governed.secrets import SecretStore, SecretStoreUnansweredError
 from lakehouse.process.health import Dependency
-from lakehouse.process.own_threads import on_own_threads
 from lakehouse.process.probes import ReadyCheck
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 
 
 if TYPE_CHECKING:
+    from lakehouse.process.own_threads import ThreadSet
     from lakehouse.process.supervision import Supervisor
 
 
@@ -79,7 +72,7 @@ MAX_REFRESH_SECONDS: Final = 300.0
 _KEY_NAME: Final = re.compile(r"[a-z0-9][a-z0-9-]*")
 
 #: The bound on one verifier's read of a published key list. ONE attempt, and short: verification sits on the delivery
-#: path of every signed event, and the boot-time budget `read_secret` defaults to (about two minutes) would hold a
+#: path of every signed event, and the boot-time budget `SecretStore.read` defaults to (about two minutes) would hold a
 #: worker that long per event through a store blip. An outage asks for the delivery again instead, and the redelivery is the retry.
 KEY_READ_TIMEOUT_SECONDS: Final = 2.0
 
@@ -127,24 +120,27 @@ def signing_public_secret(identity: str) -> str:
     return f"signing-public-{signing_key_name(identity)}"
 
 
-def secret_store_dependency() -> Dependency:
-    """The secret store as a dependency `/readyz` reports and never gates on (ADR 0203): whether the store still honours
-    this process's own login, by the store's answer about its token. A service rides through the store's outage on the
-    keys it already holds. The blocking question runs on the process's own threads
-    (:mod:`lakehouse.process.own_threads`), never behind a burst of sync doors."""
-    return Dependency(name="secret-store", read=partial(on_own_threads, secret_store_answers), required=False)
+def secret_store_dependency(store: SecretStore, threads: ThreadSet) -> Dependency:
+    """``store`` as a dependency `/readyz` reports and never gates on (ADR 0203): whether the store still honours this
+    process's own login, by the store's answer about its token. A service rides through the store's outage on the keys
+    it already holds. The blocking question runs on ``threads``, the process's own (`lakehouse.process.own_threads`),
+    never behind a burst of sync doors."""
+    return Dependency(name="secret-store", read=partial(threads.run, store.answers), required=False)
 
 
-def published_key_fetch() -> Callable[[str], Mapping[str, str]]:
+def published_key_fetch(store: SecretStore | None) -> Callable[[str], Mapping[str, str]]:
     """The read a verifier's `lakehouse.events.published_keys.PublishedKeys` takes: an identity's published list (its
-    `signing-public-<name>`, `signing_public_secret`) from the store, under THIS process's own login.
+    `signing-public-<name>`, `signing_public_secret`) from ``store``, under THIS process's own login.
 
     One attempt bounded by `KEY_READ_TIMEOUT_SECONDS`. A secret the store does not serve answers ``{}``, which the
-    reader turns into `KeySourceUnavailableError`, so the door asks for the delivery again rather than refusing an honest event.
+    reader turns into `KeySourceUnavailableError`, so the door asks for the delivery again rather than refusing an honest
+    event. A process with no store (``None``) raises `RuntimeError` at every read: it has no list to verify against.
     """
 
     def fetch(identity: str) -> dict[str, str]:
-        return read_secret(signing_public_secret(identity), timeout=KEY_READ_TIMEOUT_SECONDS, retries=1)
+        if store is None:
+            raise RuntimeError("this process is configured with no secret store (RASK_SECRET_STORE_ADDR is unset), so it has no secret to read")
+        return store.read(signing_public_secret(identity), timeout=KEY_READ_TIMEOUT_SECONDS, retries=1)
 
     return fetch
 
@@ -155,6 +151,7 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
     def __init__(
         self,
         *,
+        secrets: SecretStore,
         identity: str,
         load_key: Callable[[str], KeyT],
         parse_published: Callable[[str], Sequence[str]],
@@ -164,6 +161,7 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
         """Build a holder that has resolved nothing yet.
 
         Args:
+            secrets: The process's session with its secret store, which every resolution reads under.
             identity: The identity this service signs as, as the chart names it.
             load_key: Turns the stored seed text into a key, raising `ValueError` or `TypeError` for text that is no
                 seed (`lakehouse.events.signing.SigningKey.from_seed`).
@@ -179,6 +177,7 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
             raise ValueError(f"{identity!r} is not a signing identity: its key name becomes part of a secret name, so only [a-z0-9-] is read")
         if not 0 < retry_seconds <= refresh_seconds <= MAX_REFRESH_SECONDS:
             raise ValueError(f"the intervals must satisfy 0 < retry <= refresh <= {MAX_REFRESH_SECONDS}s, got {retry_seconds}s and {refresh_seconds}s")
+        self._secrets = secrets
         self._identity = identity
         self._load_key = load_key
         self._parse_published = parse_published
@@ -223,20 +222,20 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
             Whether the signer is ready after this pass.
         """
         try:
-            seed = read_secret_answered(signing_key_secret(self._identity), retries=1).get(SEED_FIELD, "")
+            seed = self._secrets.read_answered(signing_key_secret(self._identity), retries=1).get(SEED_FIELD, "")
             if not seed.strip():
                 return self._settle(None, "the signing key cannot be read from the secret store")
             try:
                 key = self._load_key(seed)
             except (TypeError, ValueError) as exc:
                 return self._settle(None, f"the stored seed is not a signing key ({exc})")
-            published = read_secret_answered(signing_public_secret(self._identity), retries=1).get(KEYS_FIELD, "")
+            published = self._secrets.read_answered(signing_public_secret(self._identity), retries=1).get(KEYS_FIELD, "")
         except SecretStoreUnansweredError:
             # AN OUTAGE SAYS NOTHING OF THE KEY, so a signer rides through it on the key it holds (ADR 0203); the read
             # has logged what the store did. ONLY WHILE THE STORE'S LAST ADMISSION OF THIS PROCESS STANDS: a store that
             # refuses the process's next login is not heard by a read (the session's loop makes the logins), so once
             # the held lease has run out nothing says the process may still read its key, and it stops signing.
-            if self._key is not None and secret_store_login_held():
+            if self._key is not None and self._secrets.holds_login():
                 return True
             return self._settle(None, "the secret store did not answer the read of the signing key, and this process holds no login it admitted")
         if key.public_nkey not in self._parse_published(published):
@@ -259,13 +258,14 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
         return key is not None
 
     async def start(self, loops: Supervisor) -> None:
-        """Resolve once now, then keep re-resolving on a loop of ``loops`` until `stop`.
+        """Resolve once now, then keep re-resolving on a loop of ``loops`` until `stop`, each resolution on ``loops``' own
+        threads.
 
         An unresolved key does not fail the start: a signer that is waiting for its key must still boot, so that its
         probes and its retry answers are served while it heals.
         """
-        await on_own_threads(self.resolve)
-        self._task = loops.keep(f"signing-key-{self._identity}", self._refresh_forever)
+        await loops.threads.run(self.resolve)
+        self._task = loops.keep(f"signing-key-{self._identity}", partial(self._refresh_forever, loops.threads))
 
     async def stop(self) -> None:
         """End the background loop. Safe to call when it never started."""
@@ -275,11 +275,11 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
             with suppress(asyncio.CancelledError):
                 await task
 
-    async def _refresh_forever(self) -> None:
+    async def _refresh_forever(self, threads: ThreadSet) -> None:
         while True:
             await asyncio.sleep(self._refresh_seconds if self.ready else self._retry_seconds)
             try:
-                await on_own_threads(self.resolve)
+                await threads.run(self.resolve)
             except Exception:
                 # A fault in a pass must not end the loop: the next pass is the only way a signer heals.
                 log.exception("signing_key_pass_failed", extra={"identity": self._identity})
@@ -287,19 +287,21 @@ class SigningKeyHolder[KeyT: SigningKeyLike]:
 
 def make_signing_holder[KeyT: SigningKeyLike](
     *,
+    secrets: SecretStore | None,
     identity: str,
     load_key: Callable[[str], KeyT],
     parse_published: Callable[[str], Sequence[str]],
 ) -> SigningKeyHolder[KeyT] | None:
     """The holder for a service that signs, or None for one that does not.
 
-    A service signs when the chart named it a secret store (`secret_store_configured`) and the identity it signs as
-    (`RASK_SIGNING_IDENTITY`). A stack with no store has no key to read, and a service without an identity has no
-    name to publish under: both emit exactly what they emit without signing.
+    A service signs when it holds a session with the secret store the chart named it (``secrets``,
+    `lakehouse.governed.secrets.secret_store_session`) and the identity it signs as (`RASK_SIGNING_IDENTITY`). A stack
+    with no store has no key to read, and a service without an identity has no name to publish under: both emit exactly
+    what they emit without signing.
     """
-    if not (secret_store_configured() and identity):
+    if secrets is None or not identity:
         return None
-    return SigningKeyHolder(identity=identity, load_key=load_key, parse_published=parse_published)
+    return SigningKeyHolder(secrets=secrets, identity=identity, load_key=load_key, parse_published=parse_published)
 
 
 #: What `/readyz` names as the signing component of a process whose lifespan never published a holder.

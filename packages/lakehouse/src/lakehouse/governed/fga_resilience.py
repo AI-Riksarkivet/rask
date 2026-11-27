@@ -1,4 +1,4 @@
-"""How every OpenFGA call retries a transient failure and fails closed, and the process's one circuit over OpenFGA.
+"""How every OpenFGA call retries a transient failure and fails closed, and each client's circuit over OpenFGA.
 
 Every read of ``lakehouse.governed.fga_reads`` (the checks, the listings, ``expand``) and the
 post-create grant writes go through a bounded retry with exponential backoff + jitter (tenacity). Only
@@ -15,11 +15,13 @@ so the request surfaces as a 503 rather than a 500 — and never as a silent all
 import asyncio
 import logging
 import time
+import weakref
 from collections.abc import Awaitable, Callable
 from typing import Final, cast
 
 import aiohttp
 from lance_namespace import ServiceUnavailableError
+from openfga_sdk import OpenFgaClient
 from openfga_sdk.exceptions import ApiException
 from openfga_sdk.models.check_error import CheckError
 from pydantic import BaseModel, ConfigDict, Field
@@ -128,7 +130,7 @@ def _is_transient(exc: BaseException) -> bool:
 
 
 class _Circuit:
-    """The process's one circuit over OpenFGA, which every call through :func:`guarded` passes.
+    """One OpenFGA client's circuit, which every call :func:`guarded` makes through that client passes.
 
     Closed, it counts outages in a row. At ``BREAKER_THRESHOLD`` it opens and refuses every call for
     ``BREAKER_RESET_SECONDS``; after that calls pass again, and the first to end decides: an answer closes the circuit,
@@ -158,12 +160,15 @@ class _Circuit:
             self._opened_at = time.monotonic()
 
 
-_CIRCUIT = _Circuit()
+#: Each client's circuit, held for as long as the client is. A client is built and closed by the lifespan that serves
+#: with it (`lakehouse.governed.auth_lifespan`), so its circuit is that start's: two apps in one process share none, and
+#: a client built again starts closed. Keyed weakly, so a closed client's circuit goes with it.
+_CIRCUITS: Final[weakref.WeakKeyDictionary[OpenFgaClient, _Circuit]] = weakref.WeakKeyDictionary()
 
 
-def reset_circuit() -> None:
-    """Close the circuit over OpenFGA and forget the outages it counted, as a process that has just started."""
-    _CIRCUIT.answered()
+def _circuit_of(client: OpenFgaClient) -> _Circuit:
+    """``client``'s circuit, closed and with no outage counted at its first call."""
+    return _CIRCUITS.setdefault(client, _Circuit())
 
 
 def _log_retry(retry_state: RetryCallState) -> None:
@@ -202,6 +207,7 @@ def retrying[T](policy: RetryPolicy) -> Callable[[Callable[..., Awaitable[T]]], 
 
 
 async def guarded[T](
+    client: OpenFgaClient,
     operation: Callable[[], Awaitable[T]],
     *,
     event: str,
@@ -222,22 +228,24 @@ async def guarded[T](
     what was being asked. The message is deliberately CONSTANT — a caller must not be able to tell
     which authorization call failed, and every one of them means the same thing to a client.
 
-    Every call passes the process's circuit over OpenFGA (:class:`_Circuit`): after ``BREAKER_THRESHOLD`` outages in a
-    row a call is refused with that same 503 without dialling, until ``BREAKER_RESET_SECONDS`` have passed.
+    ``operation`` calls OpenFGA through ``client``, and passes that client's circuit (:class:`_Circuit`): after
+    ``BREAKER_THRESHOLD`` outages in a row a call through it is refused with that same 503 without dialling, until
+    ``BREAKER_RESET_SECONDS`` have passed.
     """
-    if _CIRCUIT.refuses():
+    circuit = _circuit_of(client)
+    if circuit.refuses():
         log.warning("openfga_circuit_open", extra=extra)
         raise ServiceUnavailableError("authorization service unavailable")
     try:
         answer = await retrying(retry)(operation)()
     except FAIL_CLOSED as exc:
         if _is_transient(exc):
-            _CIRCUIT.outage()
+            circuit.outage()
         else:
-            _CIRCUIT.answered()
+            circuit.answered()
         log.error(event, extra=extra, exc_info=True)
         raise ServiceUnavailableError("authorization service unavailable") from exc
-    _CIRCUIT.answered()
+    circuit.answered()
     return answer
 
 
@@ -250,6 +258,5 @@ __all__ = [
     "RetryPolicy",
     "UnansweredBatchItemsError",
     "guarded",
-    "reset_circuit",
     "retrying",
 ]

@@ -38,6 +38,7 @@ from lakehouse.events import bus, bus_metrics
 from lakehouse.events.bus_delivery import Delivery, Lane, Verdict
 from lakehouse.events.cloud_events import CloudEvent
 from lakehouse.process.correlation import continuing
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.process.supervision import EndProcess, Supervisor
 from tests.bus_double import DEEPEST_BODY
 from tests.traces import trace_id_of
@@ -83,8 +84,8 @@ class _Broker:
         """Answer the next opens with ``outcomes``, in order."""
         self._outcomes.extend(outcomes)
 
-    async def open(self, settings: bus.BusSettings, session: Any, *, said: set[str]) -> Client:
-        del settings, said
+    async def open(self, settings: bus.BusSettings, session: Any, *, said: set[str], threads: ThreadSet) -> Client:
+        del settings, said, threads
         session.began = asyncio.get_running_loop().time()
         self.opened.append(_Opened(session))
         outcome = self._outcomes.pop(0)
@@ -449,7 +450,9 @@ async def test_each_connect_presents_the_token_the_pod_holds_then_and_nothing_el
 
 
 @pytest.mark.asyncio
-async def test_a_bus_dialled_over_tls_is_sent_nothing_until_it_has_proved_itself(monkeypatch: pytest.MonkeyPatch, as_catalog: Path) -> None:
+async def test_a_bus_dialled_over_tls_is_sent_nothing_until_it_has_proved_itself(
+    monkeypatch: pytest.MonkeyPatch, as_catalog: Path, own_threads: ThreadSet
+) -> None:
     """A server at a `tls://` address that greets in plaintext, asks for no encryption and keeps the socket open, as
     one standing in the path would: nats-py's own client opens with its TLS handshake, so the pod's token never leaves
     the process, and the opening is given up within its bound for the loop to try again."""
@@ -484,7 +487,7 @@ async def test_a_bus_dialled_over_tls_is_sent_nothing_until_it_has_proved_itself
     try:
         async with asyncio.timeout(20):
             with contextlib.suppress(OSError, bus.NatsError, TimeoutError):
-                opened = await bus._open(settings, bus._Session(), said=set())
+                opened = await bus._open(settings, bus._Session(), said=set(), threads=own_threads)
     finally:
         if opened is not None:
             await opened.close()

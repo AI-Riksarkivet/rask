@@ -45,10 +45,10 @@ neither publishes no model, and a build of its that fails leaves the governed do
 import logging
 from collections.abc import Sequence
 from enum import StrEnum
+from functools import partial
 from typing import TYPE_CHECKING
 
 from lakehouse.process.health import Dependency
-from lakehouse.process.own_threads import on_own_threads
 
 
 if TYPE_CHECKING:
@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from lakehouse.governed.decider import AccessDecider
     from lakehouse.governed.idp_identity import IdpVerifier
     from lakehouse.governed.settings import FgaSettings, GovernedAuthSettings, OidcProvider
+    from lakehouse.process.own_threads import ThreadSet
     from lakehouse.process.supervision import Supervisor
 
 
@@ -86,6 +87,7 @@ async def build_fga_client(
     settings: FgaSettings,
     *,
     service: str,
+    threads: ThreadSet,
     model_role: ModelRole = ModelRole.READER,
     on_failure: BootFailure = BootFailure.SERVE_UNAVAILABLE,
 ) -> OpenFgaClient | None:
@@ -100,7 +102,8 @@ async def build_fga_client(
     client and its gate answers 503; a `CRASH` caller lets the error end its boot, because it reads a missing client as
     "authorization off".
 
-    Disposal belongs to the caller's lifespan: `lakehouse.governed.fga_provision.dispose`.
+    Disposal belongs to the caller's lifespan: `lakehouse.governed.fga_provision.dispose`. ``threads`` are the process's
+    own, which the image's model is read on.
     """
     if not settings.fga_enabled:
         return None
@@ -111,12 +114,16 @@ async def build_fga_client(
         # by its body ([[LH-201]]), so a `model.fga` edit takes effect with the image that ships it. A store id may be
         # named (a per-cluster id, never a committed default); the model's id is read from that store.
         if model_role is ModelRole.PUBLISHER:
-            store_id, model_id = await fga_provision.provision(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)  # noqa: TID251 — the estate's one publisher of the model
+            store_id, model_id = await fga_provision.provision(  # noqa: TID251 — the estate's one publisher of the model
+                settings.fga_api_url, token_file=settings.fga_token_file, threads=threads, store_id=settings.fga_store_id
+            )
             # Structured, not a printf: `openfga_provisioned` is a documented INFO audit-tier event
             # (`lakehouse.process.log_handler`), and its fields are what the audit reads.
             log.info("openfga_provisioned", extra={"service": service, "store_id": store_id, "model_id": model_id})
         else:
-            store_id, model_id = await fga_provision.resolve(settings.fga_api_url, token_file=settings.fga_token_file, store_id=settings.fga_store_id)
+            store_id, model_id = await fga_provision.resolve(
+                settings.fga_api_url, token_file=settings.fga_token_file, threads=threads, store_id=settings.fga_store_id
+            )
             log.info("openfga_resolved_by_name", extra={"service": service, "store_id": store_id, "model_id": model_id})
         client = fga_provision.make_client(
             settings.fga_api_url, store_id, model_id, token_file=settings.fga_token_file, timeout_seconds=settings.fga_timeout_seconds
@@ -191,7 +198,7 @@ async def attach_auth(
     app.state.decider = build_catalog_decider(settings, service=service)
     if app.state.decider is not None:
         return
-    client = await build_fga_client(settings, service=service, model_role=model_role, on_failure=on_failure)
+    client = await build_fga_client(settings, service=service, threads=loops.threads, model_role=model_role, on_failure=on_failure)
     if client is not None:
         from lakehouse.governed.decider import OpenFgaDecider
 
@@ -238,8 +245,8 @@ async def _attach_person_verifier(app: FastAPI, settings: GovernedAuthSettings, 
     #
     # OFF THE EVENT LOOP: `refresh` performs bounded but blocking HTTP, and this runs inside the
     # lifespan of an async app. Awaiting it inline would stall the worker.
-    failures = await on_own_threads(app.state.oidc.refresh)
-    loops.keep("oidc-keys", app.state.oidc.refresh_forever)
+    failures = await loops.threads.run(app.state.oidc.refresh)
+    loops.keep("oidc-keys", partial(app.state.oidc.refresh_forever, loops.threads))
     if failures:
         # NOT FATAL, and never readiness. Gating startup or `/readyz` on a downstream IdP
         # turns one blip into every governed pod leaving its Service endpoints at once —
@@ -268,8 +275,8 @@ async def _attach_service_account_verifier(app: FastAPI, settings: GovernedAuthS
         max_lifetime=settings.sa_max_token_seconds,
     )
     # Proved at boot, off the loop, reported and never fatal: the Dex verifier's reasons above.
-    failures = await on_own_threads(app.state.sa_oidc.refresh)
-    loops.keep("service-account-keys", app.state.sa_oidc.refresh_forever)
+    failures = await loops.threads.run(app.state.sa_oidc.refresh)
+    loops.keep("service-account-keys", partial(app.state.sa_oidc.refresh_forever, loops.threads))
     for issuer, reason in failures:
         log.error("service_account_issuer_unusable", extra={"service": service, "issuer": issuer, "reason": reason})
     if not failures:

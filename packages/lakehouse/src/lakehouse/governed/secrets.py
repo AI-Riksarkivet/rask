@@ -56,11 +56,11 @@ and ends the wait between two: a call waiting out its backoff is woken and asks 
 leaves no thread waiting to ask a store again. A wait already under way (another reader's login, a request in flight)
 ends within its own bound.
 
-ONE SESSION PER PROCESS, OPENED AND CLOSED BY THE SERVICE THAT RUNS IT. Every reader in a process shares one login
-(`read_secret`), so a pod holds one store token. The session is this module's state, as the object-store sessions are
-`lakehouse.storage.store_session`'s: its readers include settings validation, the signing key's and the commit ids' holders and
-the maintenance worker, none of which has an app to carry it. The service's lifespan opens it and closes it
-(`secret_store_session`).
+ONE SESSION PER START, OPENED AND CLOSED BY THE LIFESPAN OR WORKER THAT RUNS IT (`secret_store_session`). Every reader
+of that start shares its one login, so a pod holds one store token, and reaches it through what it was built with: the
+signing key's and the commit ids' holders, the published keys' readers, lineage's forwarder and the readiness report
+are each handed the session, so two apps in one process share none. A process that keeps no loop (a tool) opens a
+:class:`SecretStore` of its own and closes it.
 
 MEASURED on the development OpenBao, from the catalog's own container as its ServiceAccount, 2026-11-13: a login answers
 `auth.client_token` and `auth.lease_duration` (900); a read answers the fields at `data.data`; a secret the role's policy
@@ -96,10 +96,10 @@ from tenacity import (
 )
 
 from lakehouse.governed.projected_token import read_token_file
-from lakehouse.process.own_threads import on_own_threads
 
 
 if TYPE_CHECKING:
+    from lakehouse.process.own_threads import ThreadSet
     from lakehouse.process.supervision import Supervisor
 
 log = logging.getLogger(__name__)
@@ -381,7 +381,7 @@ class SecretStore:
     ) -> dict[str, str]:
         """The fields of secret ``name``, or ``{}`` (logged as a warning) when the store did not serve it within the
         caller's budget. What a miss costs is the caller's to say: a start that requires the secret fails on it
-        (`read_required_secret`), and a door on a delivery's path answers retry.
+        (:meth:`read_required`), and a door on a delivery's path answers retry.
 
         EVERY ATTEMPT THE STORE DID NOT SERVE IS ASKED AGAIN, a refusal included. A store still being seeded for this
         process refuses before it serves: a role not written yet is a 400, a secret its policy does not name yet a 403,
@@ -423,6 +423,24 @@ class SecretStore:
             if isinstance(exc, httpx.HTTPStatusError) and exc.response.is_client_error and exc.response.status_code not in _COME_BACK:
                 return {}
             raise SecretStoreUnansweredError(f"the secret store did not answer the read of {name!r}: {exc}") from exc
+
+    def read_required(
+        self, name: str, *, require: str, timeout: float = _BOOT_ATTEMPT_SECONDS, retries: int = _BOOT_ATTEMPTS, backoff: float = _BOOT_BACKOFF_SECONDS
+    ) -> dict[str, str]:
+        """The fields of secret ``name``, FAILING CLOSED when ``require`` is not among them.
+
+        The store is the strict sole source, since the chart ships no plaintext for the value, so a miss must not boot a
+        process on an empty key. ``timeout``, ``retries`` and ``backoff`` are :meth:`read`'s, defaulting to its BOOT
+        budget; a caller on a request path passes its own bound.
+
+        Raises:
+            RuntimeError: The store did not serve ``name``, or the secret holds no ``require``.
+            ValueError: ``name`` is no secret name.
+        """
+        fields = self.read(name, timeout=timeout, retries=retries, backoff=backoff)
+        if not fields.get(require):
+            raise RuntimeError(f"secret {name!r} gave this process no {require!r}: failing closed (the secret store is the sole source)")
+        return fields
 
     def holds_login(self) -> bool:
         """Whether this process holds a login the store admitted whose lease has not run out: its standing at the
@@ -641,51 +659,20 @@ def _fields(answer: httpx.Response) -> dict[str, str]:
         raise _NotServedError("the secret store's answer is not a KV v2 read of string fields") from None
 
 
-class _ProcessStore:
-    """This process's one session, opened at the first use from the settings in force then."""
-
-    def __init__(self) -> None:
-        self._store: SecretStore | None = None
-        self._guard = threading.Lock()
-
-    def configured(self) -> bool:
-        """Whether this process has a secret store: the session it holds, else what its environment names now."""
-        with self._guard:
-            return self._store is not None or bool(SecretStoreSettings().address)
-
-    def get(self) -> SecretStore:
-        with self._guard:
-            if self._store is None:
-                settings = SecretStoreSettings()
-                if not settings.address:
-                    raise RuntimeError("this process is configured with no secret store (RASK_SECRET_STORE_ADDR is unset), so it has no secret to read")
-                self._store = SecretStore(settings)
-            return self._store
-
-    def forget(self) -> None:
-        with self._guard:
-            store, self._store = self._store, None
-        if store is not None:
-            store.close()
-
-
-_PROCESS: Final = _ProcessStore()
-
-
 def secret_store_configured() -> bool:
-    """Whether the chart named this process a secret store. A process with none reads no secret, signs nothing and keys
-    nothing."""
-    return _PROCESS.configured()
+    """Whether the chart named this process a secret store, by what its environment names now. A process with none reads
+    no secret, signs nothing and keys nothing."""
+    return bool(SecretStoreSettings().address)
 
 
 @asynccontextmanager
-async def secret_store_session(loops: Supervisor, *, wake_seconds: float = _RENEWAL_WAKE_SECONDS) -> AsyncGenerator[None]:
-    """Keep this process logged in to its secret store for the length of the block, or do nothing for a process the
-    chart named no secret store.
+async def secret_store_session(loops: Supervisor, *, wake_seconds: float = _RENEWAL_WAKE_SECONDS) -> AsyncGenerator[SecretStore | None]:
+    """This process's session with its secret store, kept logged in for the length of the block; ``None`` for a process
+    the chart named no secret store.
 
     Logs in with the BOOT budget before the block runs, then keeps the login on a loop of ``loops``, which asks the store
-    every ``wake_seconds`` (`SecretStore.keep_logged_in`). On the way out the loop is ended and the process's session
-    closed, whether the block ended, failed, or the login never came.
+    every ``wake_seconds`` (`SecretStore.keep_logged_in`); both run on ``loops``' own threads. On the way out the loop is
+    ended and the session closed, whether the block ended, failed, or the login never came.
 
     Raises:
         RuntimeError: The store gave this process no usable login within the budget. The start fails closed: a wrong
@@ -693,100 +680,34 @@ async def secret_store_session(loops: Supervisor, *, wake_seconds: float = _RENE
             the minute to the hour a login is taken with, a policy that does not let the token ask about itself and a
             store that never comes up all end here, whichever secrets the service goes on to read.
     """
-    if not secret_store_configured():
-        yield
+    settings = SecretStoreSettings()
+    if not settings.address:
+        yield None
         return
-    store = _PROCESS.get()
+    store = SecretStore(settings)
     try:
-        await on_own_threads(store.log_in)
-        loop = loops.keep("secret-store-login", partial(_keep_logged_in, store, wake_seconds))
+        await loops.threads.run(store.log_in)
+        loop = loops.keep("secret-store-login", partial(_keep_logged_in, store, loops.threads, wake_seconds))
         try:
-            yield
+            yield store
         finally:
             loop.cancel()
             # `gather`, not an await under `suppress(CancelledError)`: a cancellation of THIS task that lands while the
             # loop ends is its own to end on, and `gather` hands it on where the bare await would swallow it.
             await asyncio.gather(loop, return_exceptions=True)
     finally:
-        forget_secret_store()
+        store.close()
 
 
-async def _keep_logged_in(store: SecretStore, wake_seconds: float) -> None:
+async def _keep_logged_in(store: SecretStore, threads: ThreadSet, wake_seconds: float) -> None:
     while True:
         await asyncio.sleep(wake_seconds)
         try:
-            await on_own_threads(store.keep_logged_in)
+            await threads.run(store.keep_logged_in)
         except Exception:
             # A fault in one pass must not end the loop: while it passes, the next pass is the only way the login is
             # made again.
             log.exception("secret_store_pass_failed")
-
-
-def read_secret(name: str, *, timeout: float = _BOOT_ATTEMPT_SECONDS, retries: int = _BOOT_ATTEMPTS, backoff: float = _BOOT_BACKOFF_SECONDS) -> dict[str, str]:
-    """`SecretStore.read` on this process's session.
-
-    Raises:
-        RuntimeError: This process is configured with no secret store.
-        ValueError: ``name`` is no secret name.
-    """
-    return _PROCESS.get().read(name, timeout=timeout, retries=retries, backoff=backoff)
-
-
-def read_secret_answered(
-    name: str, *, timeout: float = _BOOT_ATTEMPT_SECONDS, retries: int = _BOOT_ATTEMPTS, backoff: float = _BOOT_BACKOFF_SECONDS
-) -> dict[str, str]:
-    """`SecretStore.read_answered` on this process's session.
-
-    Raises:
-        SecretStoreUnansweredError: The store did not answer within the caller's budget.
-        RuntimeError: This process is configured with no secret store.
-        ValueError: ``name`` is no secret name.
-    """
-    return _PROCESS.get().read_answered(name, timeout=timeout, retries=retries, backoff=backoff)
-
-
-def secret_store_login_held() -> bool:
-    """`SecretStore.holds_login` on this process's session.
-
-    Raises:
-        RuntimeError: This process is configured with no secret store.
-    """
-    return _PROCESS.get().holds_login()
-
-
-def read_required_secret(
-    name: str, *, require: str, timeout: float = _BOOT_ATTEMPT_SECONDS, retries: int = _BOOT_ATTEMPTS, backoff: float = _BOOT_BACKOFF_SECONDS
-) -> dict[str, str]:
-    """The fields of secret ``name`` from this process's session, FAILING CLOSED when ``require`` is not among them.
-
-    The store is the strict sole source, since the chart ships no plaintext for the value, so a miss must not boot a
-    process on an empty key. ``timeout``, ``retries`` and ``backoff`` are `SecretStore.read`'s, defaulting to its BOOT
-    budget; a caller on a request path passes its own bound.
-
-    Raises:
-        RuntimeError: This process is configured with no secret store, the store did not serve ``name``, or the secret
-            holds no ``require``.
-        ValueError: ``name`` is no secret name.
-    """
-    fields = read_secret(name, timeout=timeout, retries=retries, backoff=backoff)
-    if not fields.get(require):
-        raise RuntimeError(f"secret {name!r} gave this process no {require!r}: failing closed (the secret store is the sole source)")
-    return fields
-
-
-def secret_store_answers() -> None:
-    """`SecretStore.answers` on this process's session.
-
-    Raises:
-        ConnectionError: The store did not admit this process, did not answer, or no longer honours its login.
-        RuntimeError: This process is configured with no secret store.
-    """
-    _PROCESS.get().answers()
-
-
-def forget_secret_store() -> None:
-    """Close this process's session and forget its login, so the next read opens one from the settings in force then."""
-    _PROCESS.forget()
 
 
 __all__ = [
@@ -794,12 +715,6 @@ __all__ = [
     "SecretStoreSettings",
     "SecretStoreUnansweredError",
     "fits_a_header",
-    "forget_secret_store",
-    "read_required_secret",
-    "read_secret",
-    "read_secret_answered",
-    "secret_store_answers",
     "secret_store_configured",
-    "secret_store_login_held",
     "secret_store_session",
 ]

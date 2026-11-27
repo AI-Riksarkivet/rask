@@ -46,8 +46,10 @@ DEPLOYMENTS: Final = frozendict(
 #: Reads each named secret as the pod's own process does, and prints, per secret, the FIELD NAMES the store gave it.
 _READ_AS_THE_APP: Final = """\
 import json, sys
-from lakehouse.governed.secrets import read_secret
-print(json.dumps({name: sorted(read_secret(name, retries=1)) for name in sys.argv[1:]}))
+from lakehouse.governed.secrets import SecretStore, SecretStoreSettings
+store = SecretStore(SecretStoreSettings())
+print(json.dumps({name: sorted(store.read(name, retries=1)) for name in sys.argv[1:]}))
+store.close()
 """
 
 

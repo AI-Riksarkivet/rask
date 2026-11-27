@@ -104,15 +104,16 @@ async def _work(settings: MaintenanceSettings, stop: asyncio.Event, started: asy
         return
     async with (
         # The background loops what the worker stands on runs (its store login, its store session, its signing key),
-        # each of which ending unasked ends the process (ADR 0203); the worker's own loops have a supervisor of their own.
+        # each of which ending unasked ends the process (ADR 0203), and the process's own threads their blocking calls run
+        # on, ended once everything below has stopped; the worker's own loops have a supervisor of their own.
         Supervisor() as loops,
-        standing(app, settings, loops),
-        collaborators(app, settings, loops) as held,
-        running_worker(settings, ready=lambda: held.ready() and not stop.is_set(), emitter=held.lineage, control=held.control) as queue,
+        standing(app, settings, loops) as secrets,
+        collaborators(app, settings, loops, secrets=secrets) as held,
+        running_worker(settings, ready=lambda: held.ready() and not stop.is_set(), emitter=held.lineage, control=held.control, secrets=secrets) as queue,
     ):
         if queue is None:
             raise RuntimeError("MAINTENANCE_NATS_URL names no bus: the worker has no queue to take a task from")
-        app.state.health = reported_health(settings, queue)
+        app.state.health = reported_health(settings, queue, secrets=secrets, threads=loops.threads)
         app.state.health.watch(loops)
         mark_started(app)
         started.set()

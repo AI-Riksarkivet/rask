@@ -154,6 +154,7 @@ async def write_tuples(
         await client.write(ClientWriteRequest(writes=tuples), options=cast("dict[str, Any]", conflict))
 
     await guarded(
+        client,
         _do_write,
         event="openfga_write_unavailable",
         retry=retry,

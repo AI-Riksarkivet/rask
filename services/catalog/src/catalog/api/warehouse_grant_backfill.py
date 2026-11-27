@@ -28,13 +28,13 @@ from opentelemetry import metrics
 
 from catalog.api.authz import warehouse_grants
 from catalog.services import warehouses
-from lakehouse.process.own_threads import on_own_threads
 
 
 if TYPE_CHECKING:
     from openfga_sdk.client import OpenFgaClient
 
     from catalog.core.config import Settings
+    from lakehouse.process.own_threads import ThreadSet
 
 
 log = logging.getLogger(__name__)
@@ -51,9 +51,9 @@ _failed = metrics.get_meter("lance.catalog").create_counter(
 )
 
 
-async def backfill(settings: Settings, client: OpenFgaClient | None) -> tuple[int, int, list[str]]:
+async def backfill(settings: Settings, client: OpenFgaClient | None, *, threads: ThreadSet) -> tuple[int, int, list[str]]:
     """Converge the warehouse grants of every registered warehouse through ``client``, the one the lifespan wired
-    (``None`` where authorization is off).
+    (``None`` where authorization is off), listing the registry on ``threads``, the process's own.
 
     Returns ``(warehouses_seen, tuples_converged, failures)``, the tuples counted as written plus revoked. A warehouse
     whose grants could not be converged is reported in ``failures``, logged and counted, and the walk goes on.
@@ -71,7 +71,7 @@ async def backfill(settings: Settings, client: OpenFgaClient | None) -> tuple[in
         # grant and nothing to take back. Logged because a silent zero is the same shape as a broken run.
         log.info("warehouse_grant_backfill_skipped", extra={"reason": "nothing_declared"})
         return (0, 0, [])
-    records = await on_own_threads(warehouses.list_warehouses, settings.registry_root, settings.storage_options())
+    records = await threads.run(warehouses.list_warehouses, settings.registry_root, settings.storage_options())
     seen = written = 0
     failures: list[str] = []
     for record in records:

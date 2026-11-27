@@ -602,7 +602,7 @@ def test_closing_a_session_ends_the_login_that_is_waiting_to_ask_again(
 
 @pytest.mark.asyncio
 async def test_a_service_is_logged_in_before_its_block_runs_kept_logged_in_by_its_loop_and_its_session_closed_after(
-    monkeypatch: pytest.MonkeyPatch, secret_store: SecretStoreDouble
+    secret_store: SecretStoreDouble,
 ) -> None:
     """Driven with the store dropping the token at the loop's first pass, so the login the loop makes comes at once, and
     with the shortest lease a login is taken with."""
@@ -611,17 +611,16 @@ async def test_a_service_is_logged_in_before_its_block_runs_kept_logged_in_by_it
     secret_store.lookup.mock(side_effect=lambda _request: next(questions, secret_store.honoured()))
 
     async with Supervisor() as loops:
-        async with secrets.secret_store_session(loops, wake_seconds=0.01):
+        async with secrets.secret_store_session(loops, wake_seconds=0.01) as session:
             logged_in_at_start = secret_store.login.call_count
             async with asyncio.timeout(10):
                 while secret_store.login.call_count < 2:
                     await asyncio.sleep(0.01)
-            # With its environment gone, what still says this process has a store is the session it holds.
-            monkeypatch.delenv("RASK_SECRET_STORE_ADDR")
-            held_while_running = secrets.secret_store_configured()
-        closed_after = secrets.secret_store_configured()
+        assert session is not None
+        with pytest.raises(secrets.SecretStoreUnansweredError, match="the session with the secret store is closed"):
+            session.read_answered(SECRET, retries=1)
 
-    assert (logged_in_at_start, held_while_running, closed_after) == (1, True, False)
+    assert logged_in_at_start == 1
 
 
 @pytest.mark.asyncio
@@ -648,12 +647,11 @@ async def test_a_service_cancelled_while_its_session_closes_ends_cancelled(secre
 
 
 @pytest.mark.asyncio
-async def test_a_process_with_no_store_configured_says_so_reads_nothing_and_keeps_no_session() -> None:
-    assert secrets.secret_store_configured() is False
-    async with Supervisor() as loops, secrets.secret_store_session(loops):
+async def test_a_process_with_no_store_configured_says_so_and_opens_no_session() -> None:
+    async with Supervisor() as loops, secrets.secret_store_session(loops) as session:
         pass
-    with pytest.raises(RuntimeError, match="RASK_SECRET_STORE_ADDR"):
-        secrets.read_secret(SECRET, retries=1)
+
+    assert (secrets.secret_store_configured(), session) == (False, None)
 
 
 @pytest.mark.parametrize("unnamed", ["RASK_SECRET_STORE_ROLE", "RASK_SECRET_STORE_TOKEN_FILE"])

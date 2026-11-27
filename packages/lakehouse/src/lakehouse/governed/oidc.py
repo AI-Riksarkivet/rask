@@ -83,7 +83,7 @@ from lance_namespace import ServiceUnavailableError, UnauthenticatedError
 from pydantic import AfterValidator, BaseModel, ConfigDict, InstanceOf, SkipValidation, ValidationError
 
 from lakehouse.governed.projected_token import read_token_file
-from lakehouse.process.own_threads import on_own_threads
+from lakehouse.process.own_threads import ThreadSet
 
 
 _DISCOVERY_SUFFIX = "/.well-known/openid-configuration"
@@ -624,11 +624,12 @@ class OIDCVerifier:
                 failures.append((configured, f"{type(exc).__name__}: {exc}"))
         return failures
 
-    async def refresh_forever(self) -> None:
-        """:meth:`refresh` every ``cache_ttl`` seconds, off the event loop, until cancelled; a failed fetch is logged."""
+    async def refresh_forever(self, threads: ThreadSet) -> None:
+        """:meth:`refresh` every ``cache_ttl`` seconds on ``threads``, the process's own, until cancelled; a failed fetch is
+        logged."""
         while True:
             await asyncio.sleep(self._ttl)
-            for issuer, reason in await on_own_threads(self.refresh):
+            for issuer, reason in await threads.run(self.refresh):
                 log.warning("oidc_refresh_failed_serving_held_keys", extra={"issuer": issuer, "reason": reason})
 
     def _provider_for(self, token: str) -> _Provider:

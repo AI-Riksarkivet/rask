@@ -43,7 +43,9 @@ from typing import Final
 import pytest
 import respx
 
-from lakehouse.governed import fga_provision, fga_reads, fga_resilience, secrets
+from lakehouse.governed import fga_provision, fga_reads
+from lakehouse.governed.secrets import SecretStore, SecretStoreSettings
+from lakehouse.process.own_threads import ThreadSet
 from tests.secret_store_double import SecretStoreDouble
 
 
@@ -191,28 +193,13 @@ def _lance_reads_commit_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LANCE_AUTO_MIGRATION", "false")
 
 
-@pytest.fixture(autouse=True)
-def _no_held_secret_store_session() -> Iterator[None]:
-    """Give each test a process that has logged in to no secret store.
-
-    The process's one session holds a store token for most of its lease and the settings it was opened with, so one
-    test's login would otherwise serve the next test's reads, and a test asserting what the store is asked would pass or
-    fail by collection order. Forgotten after the test as well, which closes the session's connections.
-    """
-    secrets.forget_secret_store()
-    yield
-    secrets.forget_secret_store()
-
-
-@pytest.fixture(autouse=True)
-def _a_closed_openfga_circuit() -> Iterator[None]:
-    """Give each test a process whose circuit over OpenFGA is closed and has counted no outage.
-
-    The circuit is the process's, so one test's outage would otherwise refuse the next test's checks at once.
-    """
-    fga_resilience.reset_circuit()
-    yield
-    fga_resilience.reset_circuit()
+@pytest.fixture
+def own_threads() -> Iterator[ThreadSet]:
+    """The process's own thread set, as a service's supervisor holds it (`lakehouse.process.supervision.Supervisor.threads`),
+    for a test that builds what runs on it without a supervisor; ended after the test."""
+    threads = ThreadSet("own")
+    yield threads
+    threads.close()
 
 
 @pytest.fixture(autouse=True)
@@ -255,6 +242,16 @@ def secret_store(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
         yield double
     if "respx_allows_unused_routes" not in request.fixturenames:
         assert not double.unread(), f"the store held secrets this test never read: {double.unread()}"
+
+
+@pytest.fixture
+def secret_session(secret_store: SecretStoreDouble) -> Iterator[SecretStore]:
+    """This test's process's session with the `secret_store` double, opened from the environment that fixture sets as a
+    service's start opens its own (`lakehouse.governed.secrets.secret_store_session`), and closed after the test."""
+    del secret_store
+    session = SecretStore(SecretStoreSettings())
+    yield session
+    session.close()
 
 
 class ServiceAccountIssuer:
@@ -770,7 +767,11 @@ class OpenFgaStore:
 
         self.url = url
         # The bootstrap seam on a throwaway store, so the model a test is judged by is the one the catalog writes.
-        self.store_id, self.model_id = asyncio.run(fga_provision.provision(url, token_file=None, store_name=f"test-{uuid.uuid4().hex}"))  # noqa: TID251
+        threads = ThreadSet("own")
+        try:
+            self.store_id, self.model_id = asyncio.run(fga_provision.provision(url, token_file=None, threads=threads, store_name=f"test-{uuid.uuid4().hex}"))  # noqa: TID251
+        finally:
+            threads.close()
 
     def write(self, *tuples: tuple[str, str, str]) -> None:
         """Write `(user, relation, object)` tuples straight to the store, as a write past every door would."""

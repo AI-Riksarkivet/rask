@@ -272,8 +272,9 @@ build straight from the root uv workspace via `uv sync --package <name>`, one do
     the store session in `store_session`, objects by key in `stored_objects`, and the writes the store arbitrates in
     `conditional_records`). A client reaches the
     lakehouse through its doors and events, never by importing this package: the doors are `docs/*-openapi.json`, the
-    events `docs/COMMIT-EVENTS.md`. The suite's process-global seams (the secret-read cache, the projected token files,
-    strict respx) are autouse fixtures in the root `conftest.py`.
+    events `docs/COMMIT-EVENTS.md`. The suite's process-global seams (the projected token files, strict respx) are
+    autouse fixtures in the root `conftest.py`; a service's own threads and secret-store session belong to the start that
+    builds them, and a test builds its own through the root fixtures `own_threads` and `secret_session`.
 - `services/` — runnable **Python** code:
   - `services/catalog`, `services/lineage`, `services/maintenance` — **the lakehouse**, built from the lance app factory
     and shipped as ONE image (`.docker/rest-catalog.dockerfile`) run with three commands.

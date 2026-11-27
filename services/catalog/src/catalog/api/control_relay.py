@@ -56,6 +56,7 @@ from lakehouse.events.cloud_events import CloudEvent, control_envelope
 from lakehouse.events.control_events import CONTROL_TOPIC
 from lakehouse.events.published_keys import PublishedKeys
 from lakehouse.events.signing import KeySourceUnavailableError, SignatureError, SigningKey, VerifiedSignature, control_signature_of, verify_control_signature
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.governed.signing_key import SIGNING_STATE, SigningKeyHolder, published_key_fetch
 from lakehouse.storage.options import StorageOptions
 
@@ -111,10 +112,11 @@ def get_control_publisher(request: Request) -> Bus | None:
     return app_wire(request, "bus", Bus, none_is_off=True)
 
 
-def attach_published_keys(app: FastAPI) -> None:
-    """Give ``app`` the one reader of its signers' published keys, which reads the secret store under this process's
-    login when an event is verified. The catalog's start calls it, so each start reads through a cache of its own."""
-    app.state.published_keys = PublishedKeys(published_key_fetch())
+def attach_published_keys(app: FastAPI, secrets: SecretStore | None) -> None:
+    """Give ``app`` the one reader of its signers' published keys, which reads ``secrets``, this start's session with
+    the secret store, when an event is verified. The catalog's start calls it, so each start reads through a cache of
+    its own."""
+    app.state.published_keys = PublishedKeys(published_key_fetch(secrets))
 
 
 def published_keys(app: FastAPI) -> PublishedKeys:

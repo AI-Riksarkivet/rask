@@ -463,7 +463,9 @@ async def _start_replica(stack: AsyncExitStack, replica: tuple[MaintenanceSettin
     given, run until ``stack`` closes; the queue it runs on. Every task it is handed runs nothing. No secret store is
     named to it, so a bus credential it read from anywhere would fail its start."""
     settings, pod = replica
-    lane = await stack.enter_async_context(tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter(), end=end))
+    lane = await stack.enter_async_context(
+        tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter(), secrets=None, end=end)
+    )
     assert lane is not None, "the replica started with no bus"
     assert bus.rig.reviewer.reviews_of(pod.token_file.read_text()) >= 1, "the replica's queue did not present the token its pod was given"
     return lane
@@ -1457,7 +1459,7 @@ class _Announcements(_StoreEvents):
 
     async def deliver(self, body: bytes) -> None:
         queue = await self.fleet.lane()
-        arrivals = Arrivals(MaintenanceSettings(s3_bucket="b", control_root=str(self.control), commit_pass_delay_seconds=3600), queue)
+        arrivals = Arrivals(MaintenanceSettings(s3_bucket="b", control_root=str(self.control), commit_pass_delay_seconds=3600), queue, secrets=None)
         loop = asyncio.get_running_loop()
 
         async def handle(announced: bytes) -> ArrivalOutcome:

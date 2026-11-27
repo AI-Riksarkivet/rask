@@ -18,11 +18,12 @@ from lakehouse.events.bus import Bus, bus_dependency, bus_session
 from lakehouse.governed.admission import judge_before_the_body
 from lakehouse.governed.auth_lifespan import BootFailure, attach_auth, openfga_dependency
 from lakehouse.governed.fga_provision import dispose as fga_dispose
-from lakehouse.governed.secrets import secret_store_configured, secret_store_session
+from lakehouse.governed.secrets import SecretStore, secret_store_configured, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import secret_store_dependency
 from lakehouse.process.health import Dependency, HealthWatch
 from lakehouse.process.lifecycle import closed_quietly, mark_draining, mark_started, mark_starting
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.factory import build_service_app
@@ -98,7 +99,9 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     # never admits it: with no key of its own to read it would otherwise ask the store nothing until the first event it
     # has to verify. A loop of `loops` then logs in again once half the store token's lease is used, or as soon as the
     # store no longer honours it. Nothing for a stack with no secret store.
-    await stack.enter_async_context(secret_store_session(loops))
+    secrets = await stack.enter_async_context(secret_store_session(loops))
+    # The session the forwarder reads the graph backend's key under, or None for a stack with no secret store.
+    app.state.secret_store = secrets
     # LINEAGE HOLDS NO STORE KEY ([[XC-084]], ADR 0170). Its outbox drain signs with a session its ServiceAccount token is
     # exchanged for, here at boot, failing the boot closed if none is issued, then again once half the session's life is
     # used; its relay's timer claims each window with the same session. With no token (the offline and Dagger lanes) an
@@ -135,7 +138,7 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
     app.state.bus = bus
     # The signers' published keys, read from the secret store under this process's login when an event is verified
     # (`lineage.services.signature`). Built per start, before the first delivery or request can ask for it.
-    app.state.published_keys = store_published_keys()
+    app.state.published_keys = store_published_keys(secrets)
     _take_deliveries(app, settings, bus, loops=loops)
     # The forwarder's client, and only when a graph backend is configured: one connection pool per process.
     app.state.forward_client = httpx.AsyncClient(timeout=settings.forward_timeout_seconds) if settings.forward_url else None
@@ -143,7 +146,7 @@ async def _build(app: FastAPI, settings: LineageSettings, *, stack: AsyncExitSta
         stack.push_async_callback(closed_quietly, app.state.forward_client.aclose)
     # Readiness reads these verdicts, never a dependency itself (`lakehouse.process.health`): the feed's read costs what the
     # catalog takes to open the feed, which a one-second probe cannot wait for.
-    app.state.health = HealthWatch(_dependencies(app, settings, store))
+    app.state.health = HealthWatch(_dependencies(app, settings, store, secrets=secrets, threads=loops.threads))
     app.state.health.watch(loops)
     # THE RELAY'S TIMER ([[XC-199]]), started last, once everything a tick works with is on `app.state`.
     start_relay(app, settings, loops)
@@ -163,22 +166,22 @@ def _take_deliveries(app: FastAPI, settings: LineageSettings, bus: Bus | None, *
     loops.keep("lineage-ingest", partial(bus.consume, lane(settings), ingest.handle, park=ingest.park))
 
 
-def _dependencies(app: FastAPI, settings: LineageSettings, store: ProvenanceStore) -> list[Dependency]:
+def _dependencies(app: FastAPI, settings: LineageSettings, store: ProvenanceStore, *, secrets: SecretStore | None, threads: ThreadSet) -> list[Dependency]:
     """What lineage reads to know it can serve. The feed table answering through the catalog gates (owner, 2026-11-12): a
     pod whose catalog cannot be reached would otherwise report Ready, get rotated in, and answer every delivery with a
     retry. The rest is reported and never gates: OpenFGA where lineage asks it directly, whose outage its doors answer
     503 and its deliveries retry; the bus, which delivers again what lineage could not take; the object store where the
     outbox the relay drains is kept there, whose drain waits for it; and the secret store its signers' published keys are
-    read from, since the keys it read carry it through."""
+    read from, since the keys it read carry it through. The blocking reads run on ``threads``, the process's own."""
     dependencies = [
-        Dependency(name="catalog", read=store.ready, required=True),
+        Dependency(name="catalog", read=partial(store.ready, threads), required=True),
         *openfga_dependency(app, required=False),
         *bus_dependency(app.state.bus),
     ]
     if settings.outbox_on_the_store:
-        dependencies.append(store_dependency(settings.outbox_uri, partial(storage_options, settings), required=False))
-    if secret_store_configured():
-        dependencies.append(secret_store_dependency())
+        dependencies.append(store_dependency(settings.outbox_uri, partial(storage_options, settings), required=False, threads=threads))
+    if secrets is not None:
+        dependencies.append(secret_store_dependency(secrets, threads))
     return dependencies
 
 

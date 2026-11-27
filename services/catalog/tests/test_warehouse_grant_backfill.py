@@ -12,25 +12,26 @@ from openfga_sdk import OpenFgaClient
 from catalog.api import warehouse_grant_backfill
 from catalog.api.authz import warehouse_grants
 from lakehouse.governed import fga_provision
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.records.warehouse_records import WarehouseRecord
 from tests.catalog_settings import catalog_settings, governed_settings
 
 
 @pytest.mark.asyncio
-async def test_fga_off_is_a_no_op_not_a_failure() -> None:
+async def test_fga_off_is_a_no_op_not_a_failure(own_threads: ThreadSet) -> None:
     """An estate without authorization has nothing to grant — and must not report a failure for it."""
-    assert await warehouse_grant_backfill.backfill(catalog_settings(), None) == (0, 0, [])
+    assert await warehouse_grant_backfill.backfill(catalog_settings(), None, threads=own_threads) == (0, 0, [])
 
 
 @pytest.mark.asyncio
-async def test_no_declared_maintainers_is_a_no_op() -> None:
+async def test_no_declared_maintainers_is_a_no_op(own_threads: ThreadSet) -> None:
     """Empty by default. An estate that declares no maintenance identity and names no account of its own has no rung to
     grant or take back."""
-    assert await warehouse_grant_backfill.backfill(governed_settings(), _client()) == (0, 0, [])
+    assert await warehouse_grant_backfill.backfill(governed_settings(), _client(), threads=own_threads) == (0, 0, [])
 
 
 @pytest.mark.asyncio
-async def test_an_estate_that_declares_only_its_own_accounts_still_runs_the_backfill(monkeypatch) -> None:
+async def test_an_estate_that_declares_only_its_own_accounts_still_runs_the_backfill(monkeypatch, own_threads: ThreadSet) -> None:
     """`backfill` returns early when the release declares nothing. An estate that names its own accounts and no
     maintainer still has rungs to take back: a maintenance account that stopped vending writes keeps `maintenance` on
     every warehouse until a run revokes it, so the guard must not skip that estate.
@@ -44,11 +45,11 @@ async def test_an_estate_that_declares_only_its_own_accounts_still_runs_the_back
 
     monkeypatch.setattr(warehouse_grant_backfill.warehouses, "list_warehouses", _registry)
 
-    assert (await warehouse_grant_backfill.backfill(settings, _client()), walked) == ((0, 0, []), [settings.registry_root])
+    assert (await warehouse_grant_backfill.backfill(settings, _client(), threads=own_threads), walked) == ((0, 0, []), [settings.registry_root])
 
 
 @pytest.mark.asyncio
-async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
+async def test_one_failure_does_not_abandon_the_rest(monkeypatch, own_threads: ThreadSet) -> None:
     """A single unreachable warehouse must not strand every warehouse after it in the walk."""
     calls: list[str] = []
 
@@ -65,7 +66,7 @@ async def test_one_failure_does_not_abandon_the_rest(monkeypatch) -> None:
         lambda *a, **k: [WarehouseRecord(id=name, bucket=f"b-{name}", project="p", root_uri=f"s3://b-{name}") for name in ("a", "boom", "z")],
     )
     seen, written, failures = await warehouse_grant_backfill.backfill(
-        governed_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"]), _client()
+        governed_settings(LANCE_FGA_MAINTAINERS=["kubernetes~system:serviceaccount:rask:rask-sa-maintenance"]), _client(), threads=own_threads
     )
     assert calls == ["a", "boom", "z"], "the walk stopped at the failure"
     assert (seen, written) == (3, 4)

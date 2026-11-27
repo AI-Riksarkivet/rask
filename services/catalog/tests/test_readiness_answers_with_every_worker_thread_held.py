@@ -18,6 +18,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from catalog.core.config import get_settings
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.storage.objectfs import store_dependency
 
 
@@ -85,11 +86,11 @@ def test_readiness_answers_within_the_probe_timeout_with_every_worker_thread_hel
     assert answered.status_code == 200, answered.text
 
 
-def test_a_call_on_the_process_own_threads_answers_with_every_worker_thread_held(burst: _Burst) -> None:
+def test_a_call_on_the_process_own_threads_answers_with_every_worker_thread_held(burst: _Burst, own_threads: ThreadSet) -> None:
     """What the process runs on its own threads (`lakehouse.process.own_threads`) never waits behind the burst: the health
     watch's read of the store, taken as the watch takes it, on the app's event loop."""
     settings = get_settings()
-    store = store_dependency(settings.registry_root, settings.storage_options, required=True)
+    store = store_dependency(settings.registry_root, settings.storage_options, required=True, threads=own_threads)
     portal = burst.client.portal
     assert portal is not None, "the client runs the app's event loop only inside its `with`"
 

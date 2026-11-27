@@ -17,6 +17,7 @@ from typing import Any, cast
 
 from lakehouse.events import outbox
 from lakehouse.events.cloud_events import lineage_envelope
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.storage.options import StorageOptions
 from lineage.api import relay
 from lineage.core.config import LineageSettings, Signing
@@ -45,7 +46,7 @@ def _wire() -> dict[str, Any]:
 
 
 def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_staged_bytes(
-    tmp_path: Any, event_signer: Any, secret_store: SecretStoreDouble
+    tmp_path: Any, event_signer: Any, secret_store: SecretStoreDouble, secret_session: SecretStore
 ) -> None:
     uri = f"file://{tmp_path}/outbox"
     signer = event_signer(IDENTITY)
@@ -53,7 +54,7 @@ def test_the_relay_drains_a_staged_event_whose_signature_covers_exactly_the_stag
     outbox.stage_envelope(uri, StorageOptions(), lineage_envelope(signer.sign(_wire())))
     settings = LineageSettings.model_validate({"outbox_uri": uri, "signing": Signing(event_signers=frozenset({IDENTITY}), event_delegators=frozenset())})
     repo = ProvenanceStoreDouble()
-    app = app_holding(published_keys=store_published_keys())
+    app = app_holding(published_keys=store_published_keys(secret_session))
 
     outcome = asyncio.run(relay._drain_outbox(app, cast(ProvenanceStore, repo), settings, opts=StorageOptions(), publisher=None))
 

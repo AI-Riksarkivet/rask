@@ -28,6 +28,7 @@ from lakehouse.governed import fga_provision
 from lakehouse.governed import oidc as oidc_mod
 from lakehouse.governed.auth_lifespan import BootFailure, ModelRole, attach_auth, build_fga_client
 from lakehouse.governed.settings import GovernedAuthSettings
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.process.supervision import Supervisor
 
 
@@ -96,7 +97,8 @@ def fga_calls(monkeypatch: pytest.MonkeyPatch) -> _Recorder:
         def refresh(self) -> list[tuple[str, str]]:
             return []
 
-        async def refresh_forever(self) -> None:
+        async def refresh_forever(self, threads: ThreadSet) -> None:
+            del threads
             await asyncio.Event().wait()
 
     monkeypatch.setattr(oidc_mod, "OIDCVerifier", lambda *a, **k: _WarmVerifier())
@@ -146,16 +148,18 @@ async def test_a_reader_with_no_store_leaves_the_door_shut(monkeypatch: pytest.M
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("model_role", "lookup"), [(ModelRole.READER, "resolve"), (ModelRole.PUBLISHER, "provision")], ids=["resolve", "provision"])
-async def test_a_pinned_store_reaches_the_lookup(fga_calls: _Recorder, model_role: ModelRole, lookup: str) -> None:
+async def test_a_pinned_store_reaches_the_lookup(fga_calls: _Recorder, model_role: ModelRole, lookup: str, own_threads: ThreadSet) -> None:
     """The model hook writes into a pinned store; a service that looked its store up by
     name instead would check against a different one ([[LH-201]])."""
-    await build_fga_client(_settings(fga_store_id="01PINNED"), service="t", model_role=model_role)
+    await build_fga_client(_settings(fga_store_id="01PINNED"), threads=own_threads, service="t", model_role=model_role)
 
     assert fga_calls.kwargs[lookup].get("store_id") == "01PINNED"
 
 
 @pytest.mark.asyncio
-async def test_a_crashing_boot_refuses_to_run_without_the_model_its_image_carries(monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder) -> None:
+async def test_a_crashing_boot_refuses_to_run_without_the_model_its_image_carries(
+    monkeypatch: pytest.MonkeyPatch, fga_calls: _Recorder, own_threads: ThreadSet
+) -> None:
     """A caller that reads a missing client as "authorization off" comes up open, so a fatal one (the
     catalog's cascade backfill) whose resolve finds no store, or no model its image carries, must crash
     instead ([[LH-201]])."""
@@ -167,7 +171,7 @@ async def test_a_crashing_boot_refuses_to_run_without_the_model_its_image_carrie
     monkeypatch.setattr(fga_provision, "resolve", resolve)
 
     with pytest.raises(fga_provision.OpenFgaModelAbsentError, match=r"holds no model carrying this image's model\.json"):
-        await build_fga_client(_settings(), service="warehouse-grant-backfill", on_failure=BootFailure.CRASH)
+        await build_fga_client(_settings(), threads=own_threads, service="warehouse-grant-backfill", on_failure=BootFailure.CRASH)
     assert not any(c.startswith("make_client") for c in fga_calls.calls)
 
 
@@ -233,11 +237,11 @@ async def test_the_default_stays_non_fatal(monkeypatch: pytest.MonkeyPatch, fga_
 
 
 @pytest.mark.asyncio
-async def test_provisioning_emits_the_structured_audit_event(caplog: pytest.LogCaptureFixture, fga_calls: _Recorder) -> None:
+async def test_provisioning_emits_the_structured_audit_event(caplog: pytest.LogCaptureFixture, fga_calls: _Recorder, own_threads: ThreadSet) -> None:
     import logging
 
     with caplog.at_level(logging.INFO):
-        await build_fga_client(_settings(), service="catalog", model_role=ModelRole.PUBLISHER)
+        await build_fga_client(_settings(), threads=own_threads, service="catalog", model_role=ModelRole.PUBLISHER)
     rec = next((r for r in caplog.records if r.getMessage() == "openfga_provisioned"), None)
     assert rec is not None, "openfga_provisioned is no longer emitted — obs.py raises it to OTLP as a severity-9 audit event"
     assert getattr(rec, "store_id", None) and getattr(rec, "model_id", None), "the event lost its store_id/model_id extra — a printf string would"
@@ -245,9 +249,9 @@ async def test_provisioning_emits_the_structured_audit_event(caplog: pytest.LogC
 
 
 @pytest.mark.asyncio
-async def test_resolve_by_name_emits_the_structured_diagnostic(caplog: pytest.LogCaptureFixture, fga_calls: _Recorder) -> None:
+async def test_resolve_by_name_emits_the_structured_diagnostic(caplog: pytest.LogCaptureFixture, fga_calls: _Recorder, own_threads: ThreadSet) -> None:
     with caplog.at_level(logging.INFO):
-        await build_fga_client(_settings(), service="maintenance", model_role=ModelRole.READER)
+        await build_fga_client(_settings(), threads=own_threads, service="maintenance", model_role=ModelRole.READER)
     rec = next((r for r in caplog.records if r.getMessage() == "openfga_resolved_by_name"), None)
     assert rec is not None, "the unpinned resolve-by-name diagnostic (was maintenance's reconcile_fga_resolved_by_name) is gone"
     assert getattr(rec, "store_id", None) and getattr(rec, "model_id", None), "the diagnostic lost its store_id/model_id extra"

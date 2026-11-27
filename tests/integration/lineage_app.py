@@ -280,9 +280,10 @@ def governed_lineage(
         fga_store.write(*((user_object(subject), relation, obj) for subject, relation, obj in granted))
     app.state.provenance = store
     app.state.names = CatalogNames.from_settings(settings, clients)
-    # The off value lineage's lifespan sets for a process the chart names no bus.
+    # The off values lineage's lifespan sets for a process the chart names no bus and no secret store.
     app.state.bus = None
-    app.state.published_keys = store_published_keys()
+    app.state.secret_store = None
+    app.state.published_keys = store_published_keys(None)
     try:
         with TestClient(app) as client:
             yield client

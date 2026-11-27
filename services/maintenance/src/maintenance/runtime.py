@@ -1,8 +1,8 @@
 """What maintenance's worker process stands on (ADR 0198).
 
 The worker (:mod:`maintenance.worker`) runs the queue's tasks and pulls the commit lane. It reads the store under this
-service's session (:func:`standing`), and signs and emits with its signing key, the connection its events are published
-on and the two emitters (:func:`collaborators`). Each is built once at the process's start and stopped at its end, and a
+service's session and its secrets under its session with the secret store (:func:`standing`), and signs and emits with
+its signing key, the connection its events are published on and the two emitters (:func:`collaborators`). Each is built once at the process's start and stopped at its end, and a
 start that fails part-way stops what it had started.
 """
 
@@ -16,10 +16,11 @@ from pydantic import BaseModel, ConfigDict
 from lakehouse.events.bus import Bus, bus_session
 from lakehouse.events.control_emit import ControlEmitter, ControlSign, make_control_emitter
 from lakehouse.events.signing import SigningKey, attach_control_signature, parse_published_keys
-from lakehouse.governed.secrets import secret_store_configured, secret_store_session
+from lakehouse.governed.secrets import SecretStore, secret_store_session
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency
 from lakehouse.lance_metrics import register_lance_metrics
 from lakehouse.process.health import Dependency, HealthWatch
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 from lakehouse.storage.objectfs import store_dependency
@@ -33,16 +34,16 @@ if TYPE_CHECKING:
     from maintenance.services.queue import TaskQueue
 
 
-def reported_health(settings: MaintenanceStore, queue: TaskQueue | None) -> HealthWatch:
+def reported_health(settings: MaintenanceStore, queue: TaskQueue | None, *, secrets: SecretStore | None, threads: ThreadSet) -> HealthWatch:
     """What a maintenance process reports in `/readyz` and gates on none of (ADR 0203): the object store under its own
     session (the control root's listing), which a task the store fails is retried against; the bus its queue is on, which
-    delivers again what the process could not take; and the secret store it reads keys from, whose keys it already read
-    carry it through."""
-    dependencies = [store_dependency(settings.resolved_control_root, settings.storage_options, required=False)]
+    delivers again what the process could not take; and ``secrets``, the secret store it reads keys from, whose keys it
+    already read carry it through. The blocking reads run on ``threads``, the process's own."""
+    dependencies = [store_dependency(settings.resolved_control_root, settings.storage_options, required=False, threads=threads)]
     if queue is not None:
         dependencies.append(Dependency(name="bus", read=queue.answering, required=False))
-    if secret_store_configured():
-        dependencies.append(secret_store_dependency())
+    if secrets is not None:
+        dependencies.append(secret_store_dependency(secrets, threads))
     return HealthWatch(dependencies)
 
 
@@ -79,15 +80,16 @@ def _control_sign(holder: SigningKeyHolder[SigningKey]) -> ControlSign:
 
 
 @asynccontextmanager
-async def standing(app: FastAPI, settings: MaintenanceSettings, loops: Supervisor) -> AsyncGenerator[None]:
-    """The secret store's login and the object store's session, their loops on ``loops``, stopped on the way out."""
+async def standing(app: FastAPI, settings: MaintenanceSettings, loops: Supervisor) -> AsyncGenerator[SecretStore | None]:
+    """The secret store's login and the object store's session, their loops on ``loops``, stopped on the way out; the
+    session with the secret store, or ``None`` for a stack with none."""
     async with AsyncExitStack() as stack:
         register_lance_metrics()  # Lance-native IO metrics onto the global MeterProvider
         stack.callback(credentials.close_door_client)
         # MAINTENANCE LOGS IN TO ITS SECRET STORE ITSELF ([[XC-199]]), before it serves or takes a task, and its start
         # fails when the store never admits it. A loop of `loops` then logs in again once half the store token's lease
         # is used, or as soon as the store no longer honours it. Nothing for a stack with no secret store.
-        await stack.enter_async_context(secret_store_session(loops))
+        secrets = await stack.enter_async_context(secret_store_session(loops))
         # MAINTENANCE HOLDS NO STORE KEY ([[XC-084]], ADR 0170). Its identity at the store is the ServiceAccount token its
         # pod projects for the store's audience, exchanged here for a session before the first read, failing the start
         # closed if none is issued, then exchanged again once half the session's life is used. Its own reads and records
@@ -99,14 +101,14 @@ async def standing(app: FastAPI, settings: MaintenanceSettings, loops: Superviso
         else:
             stack.push_async_callback(store_session.stop)
         app.state.store_session = store_session
-        yield
+        yield secrets
 
 
 @asynccontextmanager
-async def collaborators(app: FastAPI, settings: MaintenanceSettings, loops: Supervisor) -> AsyncGenerator[Collaborators]:
-    """Build what the worker emits with (its signing key, its connection to the bus for events and the two emitters),
-    publish the key on ``app.state`` for the readiness probe that reads it there, keep the key's and the connection's
-    loops on ``loops``, and stop it all on the way out."""
+async def collaborators(app: FastAPI, settings: MaintenanceSettings, loops: Supervisor, *, secrets: SecretStore | None) -> AsyncGenerator[Collaborators]:
+    """Build what the worker emits with (its signing key, read under ``secrets``, its connection to the bus for events
+    and the two emitters), publish the key on ``app.state`` for the readiness probe that reads it there, keep the key's
+    and the connection's loops on ``loops``, and stop it all on the way out."""
     async with AsyncExitStack() as stack:
         # ONE CONNECTION TO THE BUS for both emitters, lineage (data) and control (governance), as this service's own
         # bus user ([[XC-199]], `lakehouse.events.bus`), beside the work queue's (ADR 0198). Held when either emits; a loop of
@@ -116,7 +118,7 @@ async def collaborators(app: FastAPI, settings: MaintenanceSettings, loops: Supe
         # THIS SERVICE'S OWN SIGNING KEY ([[LH-064]]), or None for a stack with no store or no identity. It is also the
         # author every event stamps, which the emitter checks at construction: a verifier refuses a signer that is not
         # its event's author.
-        signing = make_signing_holder(identity=settings.signing_identity, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
+        signing = make_signing_holder(secrets=secrets, identity=settings.signing_identity, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
         attach_signing(app, signing)
         lineage = make_emitter(
             enabled=settings.lineage_emit_enabled,

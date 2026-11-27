@@ -17,6 +17,7 @@ import httpx
 import pytest
 import respx
 
+from lakehouse.governed.secrets import SecretStore
 from lineage.core.config import LineageSettings
 from lineage.schemas import EventRecord
 from lineage.services.forward import forward
@@ -72,7 +73,7 @@ class _Feed:
 )
 @pytest.mark.respx(base_url=BACKEND, assert_all_called=False)
 async def test_the_forwarder_sends_an_event_only_with_the_key_its_store_holds(
-    respx_mock: respx.MockRouter, secret_store: SecretStoreDouble, held: dict[str, str], sent: list[str]
+    respx_mock: respx.MockRouter, secret_store: SecretStoreDouble, secret_session: SecretStore, held: dict[str, str], sent: list[str]
 ) -> None:
     took = respx_mock.post("/api/v1/lineage").mock(return_value=httpx.Response(201))
     key = secret_store.hold("graph-backend", held)
@@ -81,11 +82,11 @@ async def test_the_forwarder_sends_an_event_only_with_the_key_its_store_holds(
 
     async with httpx.AsyncClient() as client:
         if sent:
-            outcome = await forward(cast("ProvenanceStore", feed), settings, client)
+            outcome = await forward(cast("ProvenanceStore", feed), settings, client, secrets=secret_session)
             assert outcome.forwarded == 1
         else:
             with pytest.raises(RuntimeError, match="failing closed") as refused:
-                await forward(cast("ProvenanceStore", feed), settings, client)
+                await forward(cast("ProvenanceStore", feed), settings, client, secrets=secret_session)
             assert [value for value in held.values() if value in str(refused.value)] == []
 
     assert ([call.request.headers["Authorization"] for call in took.calls], key.call_count, feed.cursors) == (

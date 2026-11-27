@@ -34,13 +34,14 @@ and passed.
 """
 
 import logging
+from functools import partial
 from typing import Final
 
 import httpx
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
-from lakehouse.governed.secrets import fits_a_header, read_required_secret
+from lakehouse.governed.secrets import SecretStore, fits_a_header
 from lineage.core import metrics
 from lineage.core.config import LineageForward
 from lineage.services.provenance import FeedWindow, ProvenanceStore
@@ -74,19 +75,20 @@ def follower(settings: LineageForward, feed: str) -> str:
     return f"forward:{endpoint_url(settings)}@{feed}"
 
 
-async def _authorization(settings: LineageForward) -> dict[str, str]:
-    """The bearer the backend asks for, read from the secret store on every tick, so a rotated key needs no restart.
+async def _authorization(settings: LineageForward, secrets: SecretStore | None) -> dict[str, str]:
+    """The bearer the backend asks for, read from ``secrets`` on every tick, so a rotated key needs no restart.
 
     Raises:
-        RuntimeError: The store did not serve the key, or holds one no HTTP header carries. The tick fails closed, and
-            the key is in neither case named: the client would quote one it cannot send in its error, which
-            `_send` reports as the reason a tick stalled.
+        RuntimeError: The process holds no session with a secret store, the store did not serve the key, or it holds
+            one no HTTP header carries. The tick fails closed, and the key is in no case named: the client would quote
+            one it cannot send in its error, which `_send` reports as the reason a tick stalled.
     """
     if not settings.forward_api_key_secret:
         return {}
-    bundle = await run_in_threadpool(
-        read_required_secret, settings.forward_api_key_secret, require=settings.forward_api_key_field, timeout=2.0, retries=1, backoff=0.1
-    )
+    if secrets is None:
+        raise RuntimeError(f"secret {settings.forward_api_key_secret!r} names the backend's key and this process is configured with no secret store")
+    read = partial(secrets.read_required, settings.forward_api_key_secret, require=settings.forward_api_key_field, timeout=2.0, retries=1, backoff=0.1)
+    bundle = await run_in_threadpool(read)
     # Less the newline a key seeded from a file ends with.
     key = bundle[settings.forward_api_key_field].strip()
     if not fits_a_header(key):
@@ -94,7 +96,9 @@ async def _authorization(settings: LineageForward) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
 
 
-async def _send(window: FeedWindow, settings: LineageForward, client: httpx.AsyncClient, *, url: str, mark: int) -> tuple[int, ForwardOutcome]:
+async def _send(
+    window: FeedWindow, settings: LineageForward, client: httpx.AsyncClient, *, url: str, mark: int, secrets: SecretStore | None
+) -> tuple[int, ForwardOutcome]:
     """POST up to ``forward_batch`` events of ``window``, the feed after ``mark``, a page at a time.
 
     Returns the seq of the last event the backend answered, which the cursor may move to, and what was sent.
@@ -106,7 +110,7 @@ async def _send(window: FeedWindow, settings: LineageForward, client: httpx.Asyn
         if not records:
             break
         if headers is None:
-            headers = await _authorization(settings)
+            headers = await _authorization(settings, secrets)
         for record in records:
             try:
                 answer = await client.post(url, json=record.event, headers=headers)
@@ -123,8 +127,9 @@ async def _send(window: FeedWindow, settings: LineageForward, client: httpx.Asyn
     return reached, ForwardOutcome(forwarded=forwarded, refused=refused)
 
 
-async def forward(provenance: ProvenanceStore, settings: LineageForward, client: httpx.AsyncClient) -> ForwardOutcome:
-    """POST the feed's events after the forwarder's cursor to the backend, in seq order, and move the cursor past them."""
+async def forward(provenance: ProvenanceStore, settings: LineageForward, client: httpx.AsyncClient, *, secrets: SecretStore | None) -> ForwardOutcome:
+    """POST the feed's events after the forwarder's cursor to the backend, in seq order, and move the cursor past them,
+    with the key ``secrets`` holds where the backend asks for one."""
     url = endpoint_url(settings)
     name = follower(settings, await provenance.feed_incarnation())
     mark = await provenance.cursor(name)
@@ -139,7 +144,7 @@ async def forward(provenance: ProvenanceStore, settings: LineageForward, client:
         window = await provenance.window(since=mark)
     elif bounds is not None and mark and bounds[0] > mark + 1:
         log.error("lineage_forward_pruned_before_forwarded", extra={"cursor": mark, "oldest_seq": bounds[0]})
-    reached, outcome = await _send(window, settings, client, url=url, mark=mark)
+    reached, outcome = await _send(window, settings, client, url=url, mark=mark, secrets=secrets)
     if reached > mark:
         await provenance.advance_cursor(name, reached)
     metrics.record_forwarded(forwarded=outcome.forwarded, refused=outcome.refused)

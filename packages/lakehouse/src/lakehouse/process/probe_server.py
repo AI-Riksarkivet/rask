@@ -23,7 +23,6 @@ import uvicorn
 from fastapi import FastAPI
 
 from lakehouse.process.correlation import FRAMEWORK_TELEMETRY_OFF
-from lakehouse.process.own_threads import on_own_threads
 from lakehouse.process.probes import ReadyCheck, make_probes_router
 
 
@@ -87,9 +86,17 @@ class ProbeServer:
             raise RuntimeError(f"the probes did not start on port {self._port}")
         return False
 
+    def ask_to_stop(self) -> None:
+        """Ask the server to stop; :meth:`stopped` says when its thread has ended."""
+        self._server.should_exit = True
+
+    def stopped(self) -> bool:
+        """Whether the server's thread has ended."""
+        return not self._thread.is_alive()
+
     def stop(self) -> None:
         """Ask the server to stop and wait :data:`START_SECONDS` for its thread."""
-        self._server.should_exit = True
+        self.ask_to_stop()
         self._thread.join(timeout=START_SECONDS)
 
 
@@ -139,7 +146,13 @@ async def serving_beside(app: FastAPI, ready_check: ReadyCheck, port: int) -> As
     finally:
         beating.cancel()
         await asyncio.gather(beating, return_exceptions=True)
-        await on_own_threads(server.stop)
+        # Waited for by polling, as its start is, so the stop holds no thread of any pool.
+        server.ask_to_stop()
+        deadline = monotonic() + START_SECONDS
+        while not server.stopped():
+            if monotonic() >= deadline:
+                break
+            await asyncio.sleep(_POLL_SECONDS)
 
 
 __all__ = ["BEAT_SECONDS", "STALE_SECONDS", "START_SECONDS", "LoopBeat", "ProbeServer", "serving", "serving_beside"]

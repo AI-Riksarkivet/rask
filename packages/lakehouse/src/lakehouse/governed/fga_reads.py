@@ -194,6 +194,7 @@ async def check_fga_user(
         return bool(response.allowed)
 
     return await guarded(
+        client,
         _do_check,
         event="openfga_check_unavailable",
         extra={"relation": relation, "object": obj},
@@ -245,6 +246,7 @@ async def batch_check(
         return unaskable | {r.request.object: bool(r.allowed) for r in response.result}
 
     return await guarded(
+        client,
         _do_batch_check,
         event="openfga_batch_check_unavailable",
         extra={"relation": relation},
@@ -339,6 +341,7 @@ async def list_fga_user_objects(
         return ObjectListing(objects=objects, truncated=truncated)
 
     return await guarded(
+        client,
         _do_list_objects,
         event="openfga_list_objects_unavailable",
         extra={"relation": relation, "object_type": object_type},
@@ -479,6 +482,7 @@ async def _list_users(client: OpenFgaClient, request: _ListUsers, *, render: Cal
         return sorted(subjects)
 
     return await guarded(
+        client,
         _do_list_users,
         event="openfga_list_users_unavailable",
         extra={"relation": request.relation, "object": request.obj},
@@ -572,6 +576,7 @@ async def expand(
         return _expand_node(root) if root is not None else {}
 
     return await guarded(
+        client,
         _do_expand,
         event="openfga_expand_unavailable",
         extra={"relation": relation, "object": obj},
@@ -813,6 +818,7 @@ async def read_changes(
         return changes, response.continuation_token
 
     return await guarded(
+        client,
         _do_read_changes,
         event="openfga_read_changes_unavailable",
         extra={"object_type": object_type},
@@ -878,6 +884,7 @@ async def read_tuples(
         return page, response.continuation_token or None
 
     return await guarded(
+        client,
         _do_read_page,
         event="openfga_read_unavailable",
         extra={"object": obj, "user": user},

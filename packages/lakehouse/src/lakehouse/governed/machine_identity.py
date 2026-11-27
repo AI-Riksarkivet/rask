@@ -18,7 +18,7 @@ ten minutes.
 
 import logging
 from pathlib import Path
-from typing import Self
+from typing import TYPE_CHECKING, Self
 
 import jwt
 from lance_namespace import ServiceUnavailableError, UnauthenticatedError
@@ -27,6 +27,10 @@ from pydantic import BaseModel, ConfigDict, field_validator
 from lakehouse.governed.oidc import OIDCVerifier, claimed_issuer
 from lakehouse.governed.principal import CLIENT_IDP_SUFFIX, SERVICE_ACCOUNT_IDP, Principal
 from lakehouse.governed.projected_token import EmptyTokenFileError, read_token_file
+
+
+if TYPE_CHECKING:
+    from lakehouse.process.own_threads import ThreadSet
 
 
 log = logging.getLogger(__name__)
@@ -106,9 +110,9 @@ class ServiceAccountVerifier:
         """Fetch the issuer's keys now and report what failed; see `OIDCVerifier.refresh`."""
         return self._oidc.refresh()
 
-    async def refresh_forever(self) -> None:
+    async def refresh_forever(self, threads: ThreadSet) -> None:
         """Fetch the issuer's keys again in the background until cancelled; see `OIDCVerifier.refresh_forever`."""
-        await self._oidc.refresh_forever()
+        await self._oidc.refresh_forever(threads)
 
     def verify(self, token: str) -> ServicePrincipal:
         """The principal the token proves; `UnauthenticatedError` for a token at fault, `ProviderUnavailableError` for the issuer."""

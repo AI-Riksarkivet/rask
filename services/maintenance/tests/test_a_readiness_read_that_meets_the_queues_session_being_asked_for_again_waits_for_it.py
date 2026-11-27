@@ -106,7 +106,10 @@ async def test_a_renewal_that_fails_while_the_worker_drains_ends_nothing(monkeyp
         ended.append((event, extra.get("loop")))
         raise _Ended(event)
 
-    async with asyncio.timeout(10), tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter(), end=end):
+    async with (
+        asyncio.timeout(10),
+        tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter(), secrets=None, end=end),
+    ):
         draining.set()
 
     assert (failed.is_set(), ended) == (True, [])

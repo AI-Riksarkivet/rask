@@ -26,6 +26,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from lakehouse.events import outbox, outbox_metrics
 from lakehouse.events.bus import Bus
 from lakehouse.events.cloud_events import CloudEvent
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.process.supervision import Supervisor
 from lakehouse.storage.options import StorageOptions
 from lakehouse.timers import Timer
@@ -150,6 +151,7 @@ def start_relay(app: FastAPI, settings: LineageSettings, loops: Supervisor) -> N
         work=work,
         root=settings.timer_root,
         storage_options=lambda: storage_options(settings),
+        threads=loops.threads,
         held=lambda: settings.read_only,
         # The tick measures the outbox's backlog, so a replica another ran the window of drops its own snapshot.
         elsewhere=partial(outbox_metrics.forget_backlog, "lineage"),
@@ -169,12 +171,13 @@ async def tick(app: FastAPI, settings: LineageSettings) -> RelayReport:
     The forward client is ``None`` only where no graph backend is named, as the lifespan sets it.
 
     Raises:
-        InternalError: The lifespan wired no provenance store, no bus (not even its ``None``), or no forward client
-            where a graph backend is named.
+        InternalError: The lifespan wired no provenance store, no bus or secret store session (not even its ``None``),
+            or no forward client where a graph backend is named.
     """
     provenance = app_wire(app, "provenance", ProvenanceStore)
     publisher = app_wire(app, "bus", Bus, none_is_off=True)
     client = app_wire(app, "forward_client", httpx.AsyncClient, none_is_off=not settings.forward_url)
+    secrets = app_wire(app, "secret_store", SecretStore, none_is_off=True)
     report = RelayReport()
     if settings.outbox_uri:
         try:
@@ -191,7 +194,7 @@ async def tick(app: FastAPI, settings: LineageSettings) -> RelayReport:
         log.warning("lineage_parks_retire_failed", extra={"error": str(exc)}, exc_info=exc)
     if settings.forward_url and client is not None:
         try:
-            forwarded = await forward(provenance, settings, client)
+            forwarded = await forward(provenance, settings, client, secrets=secrets)
             report.forwarded, report.forward_refused, report.forward_stalled = forwarded.forwarded, forwarded.refused, forwarded.stalled
         except Exception as exc:
             report.forward_stalled = f"{type(exc).__name__}: {exc}"

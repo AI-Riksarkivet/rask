@@ -7,7 +7,7 @@ holds no key at all once the store answers otherwise, rides through a store that
 as long as its login's lease stands, and keeps re-resolving so a store that is re-minted or seeded late is followed
 without a restart.
 
-DRIVEN AGAINST THE STORE'S HTTP API, which respx answers over the real `read_secret`: the claim is what the holder does
+DRIVEN AGAINST THE STORE'S HTTP API, which respx answers over the real `SecretStore` session: the claim is what the holder does
 with each answer the store can give (a value, a 500, an empty field), so the answers are the inputs.
 The holder's key constructor and list parser are plain stand-ins here, so each answer is the only input; the services'
 suites build the holder with the real two (`services/maintenance/tests/test_the_sweep_signs_what_it_emits.py`).
@@ -22,7 +22,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import BaseModel, ConfigDict
 
-from lakehouse.governed import signing_key
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.governed.signing_key import SigningKeyHolder, SigningKeyUnavailableError, attach_signing, make_signing_holder, signing_ready_check
 from lakehouse.process.lifecycle import mark_started
 from lakehouse.process.probes import make_probes_router
@@ -53,8 +53,9 @@ def _parse_published(field: str) -> list[str]:
     return [entry.strip() for entry in field.split(",") if entry.strip()]
 
 
-def _holder(*, refresh_seconds: float = 300.0, retry_seconds: float = 15.0) -> SigningKeyHolder[_Key]:
+def _holder(secrets: SecretStore, *, refresh_seconds: float = 300.0, retry_seconds: float = 15.0) -> SigningKeyHolder[_Key]:
     return SigningKeyHolder(
+        secrets=secrets,
         identity=IDENTITY,
         load_key=_load_key,
         parse_published=_parse_published,
@@ -69,11 +70,12 @@ def _found(field: str, value: str) -> httpx.Response:
 
 
 class _Store:
-    """The store's two answers for this identity, changeable between reads."""
+    """The store's two answers for this identity, changeable between reads, and the process's session with it."""
 
-    def __init__(self, double: SecretStoreDouble) -> None:
+    def __init__(self, double: SecretStoreDouble, session: SecretStore) -> None:
         self.seed = double.hold(f"signing-key-{IDENTITY}", httpx.Response(500))
         self.keys = double.hold(f"signing-public-{IDENTITY}", httpx.Response(500))
+        self.session = session
 
     def serve(self, seed: httpx.Response, keys: httpx.Response) -> None:
         self.seed.mock(return_value=seed)
@@ -81,10 +83,10 @@ class _Store:
 
 
 @pytest.fixture
-def store(secret_store: SecretStoreDouble, respx_allows_unused_routes: None) -> _Store:
-    """The store holding both of the identity's secrets. A signer that cannot use its seed never asks for its key list,
-    so one of the two may go unread."""
-    return _Store(secret_store)
+def store(secret_store: SecretStoreDouble, secret_session: SecretStore, respx_allows_unused_routes: None) -> _Store:
+    """The store holding both of the identity's secrets, and the process's session with it. A signer that cannot use its
+    seed never asks for its key list, so one of the two may go unread."""
+    return _Store(secret_store, secret_session)
 
 
 def _held_kid(holder: SigningKeyHolder[_Key]) -> str | None:
@@ -104,7 +106,7 @@ def _held_kid(holder: SigningKeyHolder[_Key]) -> str | None:
 )
 def test_a_signer_holds_a_key_only_while_its_identity_lists_it(store: _Store, seed: httpx.Response, keys: httpx.Response, kid: str | None) -> None:
     store.serve(seed, keys)
-    holder = _holder()
+    holder = _holder(store.session)
 
     ready = holder.resolve()
 
@@ -120,10 +122,9 @@ def test_a_signer_holds_a_key_only_while_its_identity_lists_it(store: _Store, se
 def test_a_service_with_no_secret_store_or_no_identity_signs_nothing(request: pytest.FixtureRequest, store_named: bool, identity: str) -> None:
     """A stack with no store has no key to read, and a service with no identity no name to publish under: neither builds a
     holder, so each emits what it emits unsigned."""
-    if store_named:
-        request.getfixturevalue("secret_store")
+    secrets = request.getfixturevalue("store").session if store_named else None
 
-    assert make_signing_holder(identity=identity, load_key=_load_key, parse_published=_parse_published) is None
+    assert make_signing_holder(secrets=secrets, identity=identity, load_key=_load_key, parse_published=_parse_published) is None
 
 
 @pytest.mark.parametrize(
@@ -145,10 +146,10 @@ def test_a_signer_keeps_the_key_it_holds_through_an_outage_and_drops_it_on_the_s
     login the store last admitted the process under: a store that refuses its next login is heard by the session's
     loop and by no read, so past that lease nothing says the process may still read its key."""
     store.serve(_found("seed", "SEED-a"), _found("keys", "PUB-a"))
-    holder = _holder()
+    holder = _holder(store.session)
     assert holder.resolve()
     if not admitted:
-        monkeypatch.setattr(signing_key, "secret_store_login_held", lambda: False)
+        monkeypatch.setattr(store.session, "holds_login", lambda: False)
     if isinstance(then, Exception):
         store.seed.mock(side_effect=then)
     else:
@@ -164,7 +165,7 @@ async def test_a_signer_heals_in_place_follows_a_re_minted_store_and_drops_an_un
     """Driven through the background loop, with a poll for each state it must reach: the loop is the claim."""
 
     store.serve(httpx.Response(500), _found("keys", "PUB-a"))
-    holder = _holder(refresh_seconds=0.05, retry_seconds=0.01)
+    holder = _holder(store.session, refresh_seconds=0.05, retry_seconds=0.01)
 
     async def reaches(kid: str | None, state: str) -> None:
         deadline = time.monotonic() + 5.0
@@ -206,7 +207,7 @@ def test_a_signer_reports_ready_only_while_it_holds_its_key(
     holder: SigningKeyHolder[_Key] | None = None
     if seed is not None:
         store.serve(seed, _found("keys", "PUB-a"))
-        holder = _holder()
+        holder = _holder(store.session)
         holder.resolve()
     app = FastAPI()
     app.include_router(make_probes_router(signing_ready_check()))
@@ -233,9 +234,10 @@ def test_a_signer_reports_ready_only_while_it_holds_its_key(
         pytest.param(IDENTITY, 10.0, 15.0, id="a-retry-slower-than-the-refresh"),
     ],
 )
-def test_a_holder_refuses_an_identity_and_intervals_it_could_not_honour(identity: str, refresh_seconds: float, retry_seconds: float) -> None:
+def test_a_holder_refuses_an_identity_and_intervals_it_could_not_honour(store: _Store, identity: str, refresh_seconds: float, retry_seconds: float) -> None:
     with pytest.raises(ValueError, match=r"signing identity|intervals"):
         SigningKeyHolder(
+            secrets=store.session,
             identity=identity,
             load_key=_load_key,
             parse_published=_parse_published,

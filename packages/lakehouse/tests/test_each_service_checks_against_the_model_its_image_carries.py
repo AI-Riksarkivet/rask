@@ -29,6 +29,7 @@ from openfga_sdk.models import ListStoresResponse, ReadAuthorizationModelsRespon
 from lakehouse.governed import fga_model, fga_provision, fga_resilience
 from lakehouse.governed.auth import write_model
 from lakehouse.governed.fga_provision import ModelHistoryTooLongError
+from lakehouse.process.own_threads import ThreadSet
 from tests.fga_answers import answer
 
 
@@ -168,15 +169,15 @@ def _install(monkeypatch: pytest.MonkeyPatch, fake: _OpenFga, image_model: dict[
 
 
 @pytest.mark.asyncio
-async def test_a_service_checks_against_the_model_its_image_carries_not_the_newest(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_service_checks_against_the_model_its_image_carries_not_the_newest(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     fake = _OpenFga([[_ESTATE]], [[_stored("model-NEWER", NEWER), _stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, OLDER)
 
-    assert await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=0.0) == ("store-ESTATE", "model-OLDER")
+    assert await fga_provision.resolve("http://fga:8080", threads=own_threads, token_file=None, deadline_seconds=0.0) == ("store-ESTATE", "model-OLDER")
 
 
 @pytest.mark.asyncio
-async def test_a_wait_for_an_absent_model_rereads_one_page_per_poll_then_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_wait_for_an_absent_model_rereads_one_page_per_poll_then_fails_closed(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     """The first read scans the whole history; a new model can only be prepended, so a later read stops at
     the newest one already scanned. A full re-scan of the live store's 1,353 models measured ~16 s a read,
     which would put a two-minute wait past the fleet's 300 s startup budget."""
@@ -188,50 +189,62 @@ async def test_a_wait_for_an_absent_model_rereads_one_page_per_poll_then_fails_c
     with pytest.raises(
         fga_provision.OpenFgaModelAbsentError, match=r"^store store-ESTATE at http://fga:8080 holds no model carrying this image's model\.json$"
     ):
-        await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=0.2, poll_seconds=0.02)
+        await fga_provision.resolve("http://fga:8080", threads=own_threads, token_file=None, deadline_seconds=0.2, poll_seconds=0.02)
     assert fake.pages_per_read[0] == 3, "the first read did not scan the whole history"
     assert len(fake.pages_per_read) > 2, "the wait did not re-read"
     assert set(fake.pages_per_read[1:]) == {1}, f"a re-read scanned past the model it had already seen: {fake.pages_per_read}"
 
 
 @pytest.mark.asyncio
-async def test_a_model_written_while_the_service_waits_is_found(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_model_written_while_the_service_waits_is_found(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     fake = _OpenFga([[_ESTATE]], [[], [_stored("model-OLDER", OLDER)], [_stored("model-NEWER", NEWER), _stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, NEWER)
 
-    assert await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-NEWER")
+    assert await fga_provision.resolve("http://fga:8080", threads=own_threads, token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == (
+        "store-ESTATE",
+        "model-NEWER",
+    )
 
 
 @pytest.mark.asyncio
-async def test_a_store_that_appears_while_the_service_waits_is_found(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_store_that_appears_while_the_service_waits_is_found(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     """A first install: the catalog creates the store at boot, and a service booting beside it must not
     answer 503 for its whole life because it looked a moment too early."""
     fake = _OpenFga([[], [_SCRATCH], [_SCRATCH, _ESTATE]], [[_stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, OLDER)
 
-    assert await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-OLDER")
+    assert await fga_provision.resolve("http://fga:8080", threads=own_threads, token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == (
+        "store-ESTATE",
+        "model-OLDER",
+    )
 
 
 @pytest.mark.asyncio
-async def test_an_openfga_that_is_not_answering_yet_is_waited_out(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_an_openfga_that_is_not_answering_yet_is_waited_out(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     fake = _OpenFga([aiohttp.ClientConnectionError("connection refused"), [_ESTATE]], [[_stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, OLDER)
 
-    assert await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-OLDER")
+    assert await fga_provision.resolve("http://fga:8080", threads=own_threads, token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == (
+        "store-ESTATE",
+        "model-OLDER",
+    )
 
 
 @pytest.mark.asyncio
-async def test_a_history_read_that_fails_at_first_is_waited_out(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_history_read_that_fails_at_first_is_waited_out(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     """The history read can fail after the store listing answered, and an OpenFGA that is not answering yet is waited
     for."""
     fake = _OpenFga([[_ESTATE]], [[_stored("model-OLDER", OLDER)]], history_failures=2)
     _install(monkeypatch, fake, OLDER)
 
-    assert await fga_provision.resolve("http://fga:8080", token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == ("store-ESTATE", "model-OLDER")
+    assert await fga_provision.resolve("http://fga:8080", threads=own_threads, token_file=None, deadline_seconds=5.0, poll_seconds=0.0) == (
+        "store-ESTATE",
+        "model-OLDER",
+    )
 
 
 @pytest.mark.asyncio
-async def test_a_pinned_store_is_used_without_a_name_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_pinned_store_is_used_without_a_name_lookup(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     """The model hook honours `RASK_FGA_STORE_ID`, so every reader must, or the model is
     written to one store and looked for in another."""
     fake = _OpenFga([[_SCRATCH]], [[_stored("model-OLDER", OLDER)]])
@@ -244,28 +257,33 @@ async def test_a_pinned_store_is_used_without_a_name_lookup(monkeypatch: pytest.
 
     monkeypatch.setattr(fga_model, "load_model", image_model)
 
-    assert await fga_provision.resolve("http://fga:8080", token_file=None, store_id="store-PINNED", deadline_seconds=0.0) == ("store-PINNED", "model-OLDER")
-    assert await fga_provision.provision("http://fga:8080", token_file=None, store_id="store-PINNED") == ("store-PINNED", "model-OLDER")
+    assert await fga_provision.resolve("http://fga:8080", threads=own_threads, token_file=None, store_id="store-PINNED", deadline_seconds=0.0) == (
+        "store-PINNED",
+        "model-OLDER",
+    )
+    assert await fga_provision.provision("http://fga:8080", threads=own_threads, token_file=None, store_id="store-PINNED") == ("store-PINNED", "model-OLDER")
     assert fake.listed == 0, "a pinned store was looked up by name"
     # The image's model is a file read, so each is taken on a thread and none holds the event loop.
     assert len(read_on) == 2 and threading.get_ident() not in read_on, "the image's model was read on the event loop"
 
 
 @pytest.mark.asyncio
-async def test_a_body_the_store_holds_below_its_newest_is_not_written_again(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+async def test_a_body_the_store_holds_below_its_newest_is_not_written_again(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, own_threads: ThreadSet
+) -> None:
     """A body-only difference passes the narrowing guard, so an older catalog image rewrote the newest."""
     fake = _OpenFga([[_ESTATE]], [[_stored("model-NEWER", NEWER), _stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, OLDER)
 
     with caplog.at_level(logging.INFO, logger=fga_provision.log.name):
-        assert await fga_provision.provision("http://fga:8080", token_file=None) == ("store-ESTATE", "model-OLDER")
+        assert await fga_provision.provision("http://fga:8080", threads=own_threads, token_file=None) == ("store-ESTATE", "model-OLDER")
 
     assert fake.written == [], "a held body was written again"
     assert any(record.getMessage() == "openfga_model_held_below_newest" for record in caplog.records)
 
 
 @pytest.mark.asyncio
-async def test_a_body_that_removes_what_the_newest_defines_is_still_written_and_used(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_body_that_removes_what_the_newest_defines_is_still_written_and_used(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     """The catalog checks against the model its own image carries, so a body the store has never held is
     written and used even when it lacks a relation the newest defines: it governs only the pods built with
     it, and answering with the newest's id would put the catalog on rules its code does not carry."""
@@ -273,38 +291,38 @@ async def test_a_body_that_removes_what_the_newest_defines_is_still_written_and_
     fake = _OpenFga([[_ESTATE]], [[_stored("model-WIDE", wide), _stored("model-OLDER", OLDER)]])
     _install(monkeypatch, fake, NEWER)
 
-    assert await fga_provision.provision("http://fga:8080", token_file=None) == ("store-ESTATE", "model-WRITTEN")
+    assert await fga_provision.provision("http://fga:8080", threads=own_threads, token_file=None) == ("store-ESTATE", "model-WRITTEN")
     assert [store for store, _request in fake.written] == ["store-ESTATE"]
 
 
 @pytest.mark.asyncio
-async def test_a_store_holding_no_model_yet_gets_this_images(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_store_holding_no_model_yet_gets_this_images(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     fake = _OpenFga([[_ESTATE]], [[]])
     _install(monkeypatch, fake, OLDER)
 
-    assert await fga_provision.provision("http://fga:8080", token_file=None) == ("store-ESTATE", "model-WRITTEN")
+    assert await fga_provision.provision("http://fga:8080", threads=own_threads, token_file=None) == ("store-ESTATE", "model-WRITTEN")
 
 
 @pytest.mark.asyncio
-async def test_a_store_whose_history_cannot_be_read_is_not_written(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_store_whose_history_cannot_be_read_is_not_written(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     """An unread history is not an absent model: the catalog, which is fatal, does not boot on a guess."""
     fake = _OpenFga([[_ESTATE]], [[_stored("model-OLDER", OLDER)]], history_failures=5)
     _install(monkeypatch, fake, OLDER)
 
     with pytest.raises(ServiceUnavailableError):
-        await fga_provision.provision("http://fga:8080", token_file=None, retry=fga_resilience.ONE_ATTEMPT)
+        await fga_provision.provision("http://fga:8080", threads=own_threads, token_file=None, retry=fga_resilience.ONE_ATTEMPT)
     assert fake.written == []
 
 
 @pytest.mark.asyncio
-async def test_a_history_past_the_page_bound_is_refused_not_read_as_absent(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_history_past_the_page_bound_is_refused_not_read_as_absent(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     """Absent is what makes a writer write, so a history too long to read must not answer absent."""
     monkeypatch.setattr(fga_provision, "MODEL_MAX_PAGES", 2)
     fake = _OpenFga([[_ESTATE]], [[_stored(f"model-{n}", NEWER) for n in range(3)]])
     _install(monkeypatch, fake, OLDER)
 
     with pytest.raises(ModelHistoryTooLongError):
-        await fga_provision.provision("http://fga:8080", token_file=None, retry=fga_resilience.ONE_ATTEMPT)
+        await fga_provision.provision("http://fga:8080", threads=own_threads, token_file=None, retry=fga_resilience.ONE_ATTEMPT)
     assert fake.written == []
 
 

@@ -21,7 +21,7 @@ import time
 from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime
-from functools import cache
+from functools import cache, partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Final
 
@@ -31,7 +31,6 @@ from pydantic_settings import BaseSettings
 
 from lakehouse.governed.machine_identity import IdentityTokenUnavailableError, read_identity_token
 from lakehouse.governed.secrets import secret_store_configured
-from lakehouse.process.own_threads import on_own_threads
 from lakehouse.storage.credential import S3KeyPair, StoreCredentialUnavailableError
 from lakehouse.storage.options import DEFAULT_REGION
 
@@ -40,6 +39,7 @@ if TYPE_CHECKING:
     from mypy_boto3_sts.client import STSClient
     from mypy_boto3_sts.type_defs import AssumeRoleWithWebIdentityRequestTypeDef
 
+    from lakehouse.process.own_threads import ThreadSet
     from lakehouse.process.supervision import Supervisor
 
 
@@ -379,13 +379,14 @@ class StoreSession:
             log.error("store_session_expired", extra={"error": error})
 
     async def start(self, loops: Supervisor) -> None:
-        """Exchange at boot, then keep the session renewed by a loop of ``loops`` until `stop`.
+        """Exchange at boot, then keep the session renewed by a loop of ``loops`` until `stop`, each exchange on ``loops``'
+        own threads.
 
         Raises:
             RuntimeError: The boot exchange failed; see `exchange_at_boot`.
         """
-        await on_own_threads(self.exchange_at_boot)
-        self._task = loops.keep("store-session", self._wake_forever)
+        await loops.threads.run(self.exchange_at_boot)
+        self._task = loops.keep("store-session", partial(self._wake_forever, loops.threads))
 
     async def stop(self) -> None:
         """End the background loop and forget the session. Safe to call when it never started."""
@@ -396,11 +397,11 @@ class StoreSession:
                 await task
         SESSIONS.forget(self._identity)
 
-    async def _wake_forever(self) -> None:
+    async def _wake_forever(self, threads: ThreadSet) -> None:
         while True:
             await asyncio.sleep(self._wake_seconds)
             try:
-                await on_own_threads(self.refresh_if_due)
+                await threads.run(self.refresh_if_due)
             except Exception:
                 # A fault in one pass must not end the loop: the next pass is the only way the session is renewed.
                 log.exception("store_session_pass_failed")

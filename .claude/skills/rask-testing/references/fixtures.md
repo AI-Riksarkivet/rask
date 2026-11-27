@@ -35,13 +35,15 @@ Every service builds `app` at module import. Pick the fixture by how settings re
    counting calls or replacing its answers; a read of one it holds none of fails the test, and so does
    a secret held that nothing read, unless the test takes `respx_allows_unused_routes`). No test writes
    the store's address or its answer's shape itself. A service's START under `secret_store` logs in to it
-   first (`secret_store_session`), and a process under it is handed no key pair, acknowledged or
+   first (`secret_store_session`, whose session the start hands each reader), and code a test builds without a
+   start reads under the root conftest's `secret_session` (the `SecretStore` session over that double, closed after the
+   test). A process under it is handed no key pair, acknowledged or
    not, as a pod is (`lakehouse.storage.store_session.key_pair_in_force`): a test whose code signs an
    object-store request, or only builds its storage options, projects the service's token and holds its
    session (`store_session.SESSIONS.hold`, as
    `tests/integration/test_a_store_credential_is_in_clear_only_at_the_call_that_signs.py` does) or
-   exchanges it at a moto STS. The process has ONE secret-store session, so a test that runs two services
-   in one process cannot give only one of them a store. Answer the STS exchange and the object store with a moto server
+   exchanges it at a moto STS. Each start opens a secret-store session of its own, but the store's env is the
+   process's, so a test that runs two services in one process cannot give only one of them a store. Answer the STS exchange and the object store with a moto server
    (`services/catalog/tests/conftest.py::two_stores` for the catalog,
    `services/maintenance/tests/test_maintenance_signs_what_it_emits.py` for maintenance, on its suite's `moto_url`).
    A maintenance pass that rewrites a table asks the catalog's maintain-tier door first ([[LH-219]]), and one that

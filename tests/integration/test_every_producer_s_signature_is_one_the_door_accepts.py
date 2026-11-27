@@ -28,6 +28,7 @@ from lance_namespace import PermissionDeniedError
 
 from lakehouse.governed import fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
+from lakehouse.governed.secrets import SecretStore
 from lineage.api import fga_deps
 from lineage.core.config import LineageSettings, Signing
 from lineage.core.refusals import UnverifiedEventError
@@ -114,12 +115,12 @@ class _EmptyFeed:
         return None
 
 
-async def _drive(event: dict[str, Any], settings: LineageSettings, client: Any = None) -> None:  # noqa: ANN401 — an OpenFGA client
+async def _drive(event: dict[str, Any], settings: LineageSettings, client: Any = None, *, secrets: SecretStore | None) -> None:  # noqa: ANN401 — an OpenFGA client
     """Through the REAL door, as the bus drives it: the parsed model plus the bytes that arrived, decided on ``client`` where
     the door asks OpenFGA."""
     app = FastAPI()
     app.state.decider = OpenFgaDecider(cast("Any", client or object()))
-    app.state.published_keys = store_published_keys()
+    app.state.published_keys = store_published_keys(secrets)
     # The feed lineage's lifespan always wires, which the door reads when it refuses.
     app.state.provenance = _EmptyFeed()
     parsed = parse_event(json.loads(json.dumps(event)))
@@ -129,7 +130,7 @@ async def _drive(event: dict[str, Any], settings: LineageSettings, client: Any =
 @pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), [pytest.param(*p, id=p[0]) for p in PRODUCERS])
 @pytest.mark.asyncio
 async def test_the_door_admits_what_this_producer_signs(  # noqa: PLR0913 — parametrized
-    name: str, builder: Any, identity: str, on_behalf_of: str | None, event_signer: Any, secret_store: SecretStoreDouble
+    name: str, builder: Any, identity: str, on_behalf_of: str | None, event_signer: Any, secret_store: SecretStoreDouble, secret_session: SecretStore
 ) -> None:
     """IF THIS IS RED the producer and the door disagree about the document, and every sweep or catalog write from
     that service is refused at the bus: an ack that discards the event, and on the outbox drain the deletion of its only copy."""
@@ -137,13 +138,13 @@ async def test_the_door_admits_what_this_producer_signs(  # noqa: PLR0913 — pa
     secret_store.hold(f"signing-public-{identity}", {"keys": signer.public})
     event = signer.sign(builder(on_behalf_of or identity), on_behalf_of=on_behalf_of)
 
-    await _drive(event, _settings({identity}, {CATALOG}))
+    await _drive(event, _settings({identity}, {CATALOG}), secrets=secret_session)
 
 
 @pytest.mark.parametrize(("name", "builder", "identity", "on_behalf_of"), [pytest.param(*p, id=p[0]) for p in PRODUCERS])
 @pytest.mark.asyncio
 async def test_a_peers_key_is_refused_for_the_same_event(  # noqa: PLR0913 — parametrized
-    name: str, builder: Any, identity: str, on_behalf_of: str | None, event_signer: Any, secret_store: SecretStoreDouble
+    name: str, builder: Any, identity: str, on_behalf_of: str | None, event_signer: Any, secret_store: SecretStoreDouble, secret_session: SecretStore
 ) -> None:
     """The control, per producer. Without it every admission above is equally consistent with a door that admits everything."""
     published, peer = event_signer(identity), event_signer(identity)
@@ -151,7 +152,7 @@ async def test_a_peers_key_is_refused_for_the_same_event(  # noqa: PLR0913 — p
     event = peer.sign(builder(on_behalf_of or identity), on_behalf_of=on_behalf_of)
 
     with pytest.raises(UnverifiedEventError) as refused:
-        await _drive(event, _settings({identity}, {CATALOG}))
+        await _drive(event, _settings({identity}, {CATALOG}), secrets=secret_session)
 
     assert refused.value.reason == "kid"
 
@@ -191,6 +192,6 @@ async def test_an_estate_that_lists_no_signer_verifies_nothing_and_trusts_no_sig
 
     with pytest.raises(PermissionDeniedError) if refused else nullcontext() as outcome:
         async with fga_provision.make_client(openfga_store.url, openfga_store.store_id, openfga_store.model_id, token_file=None) as client:
-            await _drive(arriving, _settings(set(), set(), fga_enabled=fga_enabled), client)
+            await _drive(arriving, _settings(set(), set(), fga_enabled=fga_enabled), client, secrets=None)
 
     assert not isinstance(getattr(outcome, "value", None), UnverifiedEventError), "the refusal came from the signature gate, which this estate does not run"

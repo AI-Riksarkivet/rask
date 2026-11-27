@@ -1,4 +1,5 @@
-"""What a lakehouse process runs beside its work: background loops it supervises, and its own end when one of them ends.
+"""What a lakehouse process runs beside its work: background loops it supervises, the threads their blocking calls run on,
+and its own end when one of them ends.
 
 A background loop that ends while its process serves leaves a pod that is Ready and does nothing: a pylance panic is a
 BaseException, so it ends a loop that catches Exception with no log line and the probes green, and the task the bus
@@ -22,6 +23,9 @@ from typing import Any, Final, NoReturn, Self
 
 from opentelemetry import metrics, trace
 from opentelemetry._logs import get_logger_provider
+from starlette.concurrency import run_in_threadpool
+
+from lakehouse.process.own_threads import ThreadSet
 
 
 log = logging.getLogger(__name__)
@@ -114,6 +118,12 @@ class Supervisor:
     stopped, never failed, so a component cancels its own loop when its user stops it. Once :meth:`wind_down` is called
     every end is the process stopping: a worker that drains its loops lets them return.
 
+    :attr:`threads` is this supervisor's own thread set, where the loops it runs and what lets them recover make their
+    blocking calls (`lakehouse.process.own_threads`). Each lifespan or worker that enters a supervisor holds a set of its
+    own; a supervisor nested inside another builds one too and leaves it unused unless its own loops call it, which costs
+    nothing, since the set starts a thread only on its first call. It is ended when the supervisor is left, after
+    :meth:`stop`. A start enters its supervisor before what runs on these threads, so their releases have run by then.
+
     ``end`` is :func:`end_process` outside a test.
     """
 
@@ -121,6 +131,7 @@ class Supervisor:
         self._end = end
         self._running: dict[asyncio.Task[None], tuple[str, bool]] = {}
         self._winding_down = False
+        self.threads = ThreadSet("own")
 
     def keep(self, name: str, loop: Work) -> asyncio.Task[None]:
         """Run ``loop`` as the process's background loop ``name``, until the process stops; the task that runs it."""
@@ -151,7 +162,11 @@ class Supervisor:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
-        await self.stop()
+        try:
+            await self.stop()
+        finally:
+            # In a worker thread, as `ThreadSet.close` waits for each call that had started.
+            await run_in_threadpool(self.threads.close)
 
     def _spawn(self, name: str, work: Work, *, kept: bool) -> asyncio.Task[None]:
         task = asyncio.create_task(work(), name=name)

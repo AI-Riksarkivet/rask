@@ -46,7 +46,7 @@ async def test_the_worker_connects_as_its_own_user_with_the_token_its_pod_holds(
     settings = MaintenanceSettings.model_validate({"s3_bucket": "b", "nats_url": "nats://bus:4222"})
 
     with pytest.raises(_Connected) as connected:
-        async with tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter()):
+        async with tasks.running_worker(settings, ready=lambda: True, emitter=NoopEmitter(), control=NoopControlEmitter(), secrets=None):
             pass
 
     assert (connected.value.token, connected.value.name) == ("the-workers-pods-token", "maintenance-worker")

@@ -21,7 +21,6 @@ from pydantic import BaseModel, Field
 
 from lakehouse.lancekit.base_refs import decoded_path
 from lakehouse.process.health import Dependency
-from lakehouse.process.own_threads import on_own_threads
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import REGION, VIRTUAL_HOSTED, StorageOptions, on_s3, s3_filesystem
 from lakehouse.storage.uri import split_s3_uri
@@ -29,6 +28,8 @@ from lakehouse.storage.uri import split_s3_uri
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from lakehouse.process.own_threads import ThreadSet
 
 
 def lance_storage_options(
@@ -267,12 +268,12 @@ def _where_a_root_may_be(uri: str) -> list[str]:
     return [uri] if opened == uri.rstrip("/") else [uri, opened]
 
 
-def store_dependency(root_uri: str, options: Callable[[], StorageOptions], *, required: bool) -> Dependency:
+def store_dependency(root_uri: str, options: Callable[[], StorageOptions], *, required: bool, threads: ThreadSet) -> Dependency:
     """The object store, read as one listing of ``root_uri`` under the options in force at each read (the process's own
     session, renewed as it runs), which a store that is down, or a session it no longer honours, refuses. The blocking
-    read runs on the process's own threads (:mod:`lakehouse.process.own_threads`), never behind a burst of sync doors
-    holding every thread of the request pool."""
-    return Dependency(name="store", read=partial(on_own_threads, _list_the_root, root_uri, options), required=required)
+    read runs on ``threads``, the process's own (:mod:`lakehouse.process.own_threads`), never behind a burst of sync
+    doors holding every thread of the request pool."""
+    return Dependency(name="store", read=partial(threads.run, _list_the_root, root_uri, options), required=required)
 
 
 def _list_the_root(root_uri: str, options: Callable[[], StorageOptions]) -> None:

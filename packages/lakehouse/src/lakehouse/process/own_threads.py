@@ -5,10 +5,12 @@ that must not wait behind those doors, or that must hold none of their threads w
 :class:`ThreadSet`: an executor of the set's own, so a burst that fills the request pool, or one set, queues nothing in
 another, and none of it runs on the event loop's default executor, where asyncio resolves names.
 
-The process's own set (:func:`on_own_threads`) carries what lets a process recover and what its loops do: its store
-session's exchange and renewal, its secret store's login, its keys' resolves, its OIDC refresh, its timers' window claims
-and its readiness reads. Work that callers drive has a set of its own, so no burst of them queues that recovery: the
-commit turns' reads (`lakehouse.records.commit_turns`) and lineage's calls through the catalog.
+A process's own set is its supervisor's (`lakehouse.process.supervision.Supervisor.threads`), built and ended with the
+lifespan or the worker that enters it, so two apps in one process share none. It carries what lets a process recover and
+what its loops do: its store session's exchange and renewal, its secret store's login, its keys' resolves, its OIDC
+refresh, its timers' window claims and its readiness reads. Work that callers drive has a set of its own, so no burst of
+them queues that recovery: the commit turns' reads (`lakehouse.records.commit_turns`) and lineage's calls through the
+catalog.
 
 A caller that is cancelled stops waiting at once, so a budget or a shutdown is not held until the call returns. A call
 that has started runs on and keeps its seat until it returns, and one still waiting for a seat is dropped, so a set
@@ -47,12 +49,4 @@ class ThreadSet:
         self._threads.shutdown(wait=True, cancel_futures=True)
 
 
-_OWN: Final = ThreadSet("own")
-
-
-async def on_own_threads[*Ts, R](call: Callable[[*Ts], R], *args: *Ts) -> R:
-    """``call(*args)``, a blocking call of the process's own, on a thread of the process's own set."""
-    return await _OWN.run(call, *args)
-
-
-__all__ = ["ThreadSet", "on_own_threads"]
+__all__ = ["ThreadSet"]

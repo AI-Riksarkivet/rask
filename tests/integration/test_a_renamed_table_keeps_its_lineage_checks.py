@@ -27,6 +27,7 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
 from lakehouse.events.lineage_events import DatasetUuids
 from lakehouse.governed import fga_ids, fga_provision
 from lakehouse.governed.decider import OpenFgaDecider
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.naming import UUID_PROPERTY
 from lineage.api.fga_deps import enforce_bus_authz, enforce_output_authz
 from lineage.core.config import LineageSettings, Signing
@@ -139,7 +140,7 @@ def _announced_rename(renamed: Renamed) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_a_renamed_tables_writes_pass_lineages_checks(
-    decider: OpenFgaDecider, renamed: Renamed, event_signer: Any, secret_store: SecretStoreDouble
+    decider: OpenFgaDecider, renamed: Renamed, event_signer: Any, secret_store: SecretStoreDouble, secret_session: SecretStore
 ) -> None:
     """Each gate refuses by raising, so the write, the outside producer's event and the catalog's signed announcement of
     the rename are admitted when none raises."""
@@ -177,6 +178,6 @@ async def test_a_renamed_tables_writes_pass_lineages_checks(
     secret_store.hold(f"signing-public-{CATALOG}", {"keys": catalog.public})
     announced = catalog.sign(_announced_rename(renamed), on_behalf_of=PIPELINE)
     assert announced["dataset"]["facets"]["lifecycleStateChange"]["previousIdentifier"] == {"namespace": CATALOG_NAMESPACE, "name": "lance_catalog$acme$t"}
-    app.state.published_keys = store_published_keys()
+    app.state.published_keys = store_published_keys(secret_session)
     signed = LineageSettings.model_validate({**auth, "signing": Signing(event_signers=frozenset({CATALOG}), event_delegators=frozenset({CATALOG}))})
     await enforce_bus_authz(parse_event(announced), app, signed, arrived=announced)

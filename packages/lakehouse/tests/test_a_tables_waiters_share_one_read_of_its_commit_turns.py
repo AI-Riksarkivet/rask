@@ -27,7 +27,7 @@ import anyio.to_thread
 import pytest
 from pydantic import SecretStr
 
-from lakehouse.process.own_threads import ThreadSet, on_own_threads
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.records import commit_turns
 from lakehouse.records.commit_turns import TableTurns, Writer
 from lakehouse.storage import conditional_records
@@ -228,15 +228,17 @@ async def test_waiters_held_on_one_slow_read_hold_no_request_thread_and_none_of_
     in_flight, answered = slow_read
     turns = _turns(tmp_path, "AKIDCATALOG")
     waiters = [asyncio.create_task(turns.wait_in_loop(None)) for _ in range(ThreadSet.seats)]
+    process_own = ThreadSet("own")
     own: list[asyncio.Task[int]] = []
     try:
         await _begun(in_flight)
         request_threads_held = anyio.to_thread.current_default_thread_limiter().borrowed_tokens
-        own = [asyncio.create_task(on_own_threads(threading.get_ident))]
+        own = [asyncio.create_task(process_own.run(threading.get_ident))]
         seated, _ = await asyncio.wait(own, timeout=ANSWERED_WITHIN_SECONDS)
     finally:
         answered.set()
         await asyncio.gather(*waiters, *own, return_exceptions=True)
+        process_own.close()
 
     assert request_threads_held == 0, f"writers waiting for a turn held {request_threads_held} of the request pool's threads"
     assert seated == set(own), "a call on the process's own threads waited behind the writers waiting for a turn"

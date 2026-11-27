@@ -41,6 +41,14 @@ async def _ask(client: OpenFgaClient) -> bool:
     return await fga_reads.check(client, user="dex~alice", relation="can_read", obj="table:t", retry=_NO_WAIT)
 
 
+async def _answer(client: OpenFgaClient) -> bool | str:
+    """The check's verdict, or the refusal it was answered with."""
+    try:
+        return await _ask(client)
+    except ServiceUnavailableError as refused:
+        return str(refused)
+
+
 @pytest.mark.asyncio
 async def test_an_outage_is_refused_without_dialling_once_the_circuit_opens(monkeypatch: pytest.MonkeyPatch) -> None:
     openfga = _OpenFga()
@@ -66,3 +74,27 @@ async def test_an_outage_is_refused_without_dialling_once_the_circuit_opens(monk
             assert openfga.requests == dialled + 2
         finally:
             await client.close()
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_refuses_only_the_calls_made_through_its_own_client() -> None:
+    """Each start builds and closes its own OpenFGA client, and the circuit is that client's: an outage one app's client
+    met refuses nothing a second app in the same process asks through its own, once OpenFGA answers again."""
+    openfga = _OpenFga()
+    app = web.Application()
+    app.router.add_post("/stores/{store}/check", openfga.check)
+    async with TestServer(app) as server:
+        url = str(server.make_url("")).rstrip("/")
+        tripped = fga_provision.make_client(url, "01HX5T0RE0000000000000000A", "01HXM0DE10000000000000000B", token_file=None)
+        other = fga_provision.make_client(url, "01HX5T0RE0000000000000000A", "01HXM0DE10000000000000000B", token_file=None)
+        try:
+            for _ in range(fga_resilience.BREAKER_THRESHOLD):
+                await _answer(tripped)
+            openfga.down = False
+            dialled = openfga.requests
+            answers = (await _answer(tripped), await _answer(other))
+        finally:
+            await tripped.close()
+            await other.close()
+
+    assert (answers, openfga.requests) == (("authorization service unavailable", True), dialled + 1)

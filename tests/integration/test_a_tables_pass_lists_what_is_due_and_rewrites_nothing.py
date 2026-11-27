@@ -142,7 +142,11 @@ def maintenance(store_url: str, monkeypatch: pytest.MonkeyPatch, bus: BusDouble)
 
     @asynccontextmanager
     async def _started(app: FastAPI) -> AsyncGenerator[None]:
-        async with Supervisor() as loops, runtime.standing(app, get_settings(), loops), runtime.collaborators(app, get_settings(), loops) as held:
+        async with (
+            Supervisor() as loops,
+            runtime.standing(app, get_settings(), loops) as secrets,
+            runtime.collaborators(app, get_settings(), loops, secrets=secrets) as held,
+        ):
             app.state.held = held
             yield
 

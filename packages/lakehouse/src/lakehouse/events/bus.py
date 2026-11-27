@@ -86,12 +86,12 @@ from lakehouse.governed.projected_token import read_token_file
 from lakehouse.process.correlation import continuing, current_trace_context
 from lakehouse.process.health import Dependency
 from lakehouse.process.lifecycle import closed_quietly
-from lakehouse.process.own_threads import on_own_threads
 
 
 if TYPE_CHECKING:
     from nats.js import JetStreamContext
 
+    from lakehouse.process.own_threads import ThreadSet
     from lakehouse.process.supervision import Supervisor
 
 
@@ -277,7 +277,7 @@ class _Session(BaseModel):
     began: float = 0.0
 
 
-async def _open(settings: BusSettings, session: _Session, *, said: set[str]) -> Client:
+async def _open(settings: BusSettings, session: _Session, *, said: set[str], threads: ThreadSet) -> Client:
     """Connect to the bus as ``settings.user``, presenting this pod's token, and hold the connection once the bus has
     granted it the user's own inbox.
 
@@ -285,6 +285,7 @@ async def _open(settings: BusSettings, session: _Session, *, said: set[str]) -> 
         settings: Where the bus is, who connects and what it presents.
         session: Told when the bus takes a connect of this client, and when the client has closed for good.
         said: The faults the outage in course has been told of, which this connection's own are added to.
+        threads: The process's own threads, which the trust bundle is read on.
 
     Raises:
         nats.errors.Error: No server took the connection, or the bus refused the token.
@@ -325,7 +326,7 @@ async def _open(settings: BusSettings, session: _Session, *, said: set[str]) -> 
         # is one the loop never ends on.
         failed.push_async_callback(_released, client)
         opening = await failed.enter_async_context(asyncio.timeout(_OPEN_WITHIN_SECONDS))
-        trust = await on_own_threads(settings.trust)
+        trust = await threads.run(settings.trust)
         await client.connect(
             servers=[server.strip() for server in settings.url.split(",") if server.strip()],
             # nats-py calls this as it builds each connect, inside its own coroutine: one read of the projected token,
@@ -386,8 +387,9 @@ async def _released(client: Client) -> None:
 class Bus:
     """This process's one connection to the bus, as its own user, for as long as the process runs."""
 
-    def __init__(self, settings: BusSettings) -> None:
+    def __init__(self, settings: BusSettings, threads: ThreadSet) -> None:
         self._settings = settings
+        self._threads = threads
         self._client: Client | None = None
         #: Whether the outage in course has been logged: a bus that is away is tried every few seconds.
         self._reported = False
@@ -440,7 +442,7 @@ class Bus:
     async def _opened(self, session: _Session) -> Client | None:
         """A client connected as this process's user, or None when the bus gave no connection."""
         try:
-            return await _open(self._settings, session, said=self._said)
+            return await _open(self._settings, session, said=self._said, threads=self._threads)
         except (NatsError, OSError) as exc:
             self._report(f"{type(exc).__name__}: {exc}"[:300])
         except Exception as exc:  # noqa: BLE001 — the reconnect loop must outlive any connect fault; no exc_info, as the text and trace may hold the token
@@ -1018,7 +1020,7 @@ async def bus_session(loops: Supervisor, settings: BusSettings | None = None) ->
     if not resolved.url:
         yield None
         return
-    bus = Bus(resolved)
+    bus = Bus(resolved, loops.threads)
     keeping = loops.keep("bus-connection", bus.keep_connected)
     try:
         yield bus

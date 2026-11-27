@@ -76,6 +76,7 @@ def start_timers(app: FastAPI, settings: Settings, loops: Supervisor) -> None:
             work=partial(_run, app, settings, timer.tick),
             root=settings.registry_root,
             storage_options=settings.storage_options,
+            threads=loops.threads,
             held=lambda: settings.maintenance_read_only,
             elsewhere=timer.elsewhere,
         )

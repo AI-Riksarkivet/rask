@@ -24,6 +24,7 @@ from catalog.api.control_lane import TOPIC
 from catalog.api.control_relay import attach_published_keys
 from catalog.api.dependencies import request_settings
 from catalog.core.config import get_settings
+from lakehouse.governed.secrets import SecretStore
 from lakehouse.governed.signing_key import signing_public_secret
 from tests.bus_double import BusDouble
 from tests.catalog_settings import catalog_settings
@@ -70,7 +71,9 @@ class _Estate:
 
 
 @pytest.fixture
-def estate(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: SecretStoreDouble, respx_allows_unused_routes: None) -> Iterator[_Estate]:
+def estate(
+    monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: SecretStoreDouble, secret_session: SecretStore, respx_allows_unused_routes: None
+) -> Iterator[_Estate]:
     monkeypatch.setenv("LANCE_S3_ACCESS_KEY_ID", "k")
     monkeypatch.setenv("LANCE_S3_SECRET_ACCESS_KEY", "s")
     monkeypatch.setenv("RASK_BUS_URL", "nats://bus.test:4222")
@@ -97,7 +100,7 @@ def estate(monkeypatch: pytest.MonkeyPatch, event_signer: Any, secret_store: Sec
         app.state.bus = bus
         # Authorization off, as the lifespan wires it for a catalog with FGA off.
         app.state.fga = None
-        attach_published_keys(app)
+        attach_published_keys(app, secret_session)
         apps.append(app)
     try:
         with TestClient(apps[0]) as first, TestClient(apps[1]) as second:

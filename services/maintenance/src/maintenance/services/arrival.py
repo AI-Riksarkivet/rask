@@ -59,6 +59,7 @@ from maintenance.services.queue_wire import ARRIVALS_CONSUMER, Task
 
 
 if TYPE_CHECKING:
+    from lakehouse.governed.secrets import SecretStore
     from maintenance.core.config import MaintenanceSettings
 
 
@@ -144,9 +145,11 @@ def _bounded(value: object) -> str | None:
 class Arrivals:
     """What one replica does with the commit lane's deliveries: holds the task each admitted announcement asks for."""
 
-    def __init__(self, settings: MaintenanceSettings, queue: TaskQueue) -> None:
+    def __init__(self, settings: MaintenanceSettings, queue: TaskQueue, *, secrets: SecretStore | None) -> None:
         self._settings = settings
         self._queue = queue
+        #: The process's session with its secret store, which the signers' published keys are read under.
+        self._secrets = secrets
         #: This replica's key reader, built on first use and kept so its cache outlives one delivery.
         self._keys: PublishedKeys | None = None
 
@@ -219,7 +222,7 @@ class Arrivals:
         if mode is DoorMode.OFF:
             return DoorVerdict(act=True)
         if self._keys is None:
-            self._keys = PublishedKeys(published_key_fetch())
+            self._keys = PublishedKeys(published_key_fetch(self._secrets))
         claim = signature_of(arrived)
         source = self._keys.for_event(claim.kid if claim else None)
         signers, delegators = self._settings.event_signers, self._settings.event_delegators

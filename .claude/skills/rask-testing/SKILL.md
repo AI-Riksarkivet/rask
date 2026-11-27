@@ -156,13 +156,15 @@ have the store drop the token (`tests/secret_store_double.py`; `references/fixtu
 route's `call_count` while its router answers: stopping a respx router rolls back the calls of every route it held when
 it started.
 
-It also resets the process-global state the `lakehouse` library keeps. It makes bare
+It also guards the process-global state a test can leave behind. It makes bare
 `@respx.mock` strict (`assert_all_called`; a test whose unused routes are the point takes the
-`respx_allows_unused_routes` fixture), and around every test, as autouse fixtures, it gives the test a
-process that has logged in to no secret store (`lakehouse.governed.secrets.forget_secret_store`), writes the projected
+`respx_allows_unused_routes` fixture), and around every test, as autouse fixtures, it writes the projected
 service-account token files the catalog's and lineage's doors read and the one a process logs in to its secret store
 with, and sets `LANCE_AUTO_MIGRATION` to `false` as every app build does for its process (`lakehouse.service_app.factory`),
-restoring it after. A new fixture guarding such state goes there too, so every suite in the repository gets it. The
+restoring it after. A new fixture guarding such state goes there too, so every suite in the repository gets it. What a
+service's start builds (the process's own threads, its secret-store session, its OpenFGA client and that client's
+circuit) is the start's, never the process's, so a test that builds such a piece without a start takes the fixture that
+builds one for it: `own_threads` (a `ThreadSet`) or `secret_session`. The
 repository root is on the import path through pytest's own `pythonpath` setting, so a helper the suites share
 (`tests.secret_store_double`, `tests.bus_double`, `tests.loopback`) resolves under one name from every member's tests and
 from the root conftest.

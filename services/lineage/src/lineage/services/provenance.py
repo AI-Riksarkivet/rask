@@ -62,7 +62,7 @@ from lakehouse.events.signing import SIGNATURE_FACET
 from lakehouse.governed.machine_identity import read_identity_token
 from lakehouse.lancekit.filters import in_lists, lance_filter
 from lakehouse.naming import CATALOG_DELIMITER, uuid_of
-from lakehouse.process.own_threads import on_own_threads
+from lakehouse.process.own_threads import ThreadSet
 from lineage.core.config import LineageSettings
 from lineage.core.refusals import ForeignRunError
 from lineage.core.sources import is_external_source
@@ -546,11 +546,11 @@ class ProvenanceStore:
                     _headers=request_headers(self._token()),
                 )
 
-    async def ready(self) -> None:
-        """Raise unless the feed table answers: the one thing every door of this service needs. Read on the process's own
-        threads, never the ones its callers' calls hold (`CatalogClients.calls`): a burst of them must not queue the read the
-        health watch judges this replica by."""
-        await on_own_threads(lambda: self._reader(FEED).table_version())
+    async def ready(self, threads: ThreadSet) -> None:
+        """Raise unless the feed table answers: the one thing every door of this service needs. Read on ``threads``, the
+        process's own, never the ones its callers' calls hold (`CatalogClients.calls`): a burst of them must not queue the
+        read the health watch judges this replica by."""
+        await threads.run(lambda: self._reader(FEED).table_version())
 
     # ---- writes -------------------------------------------------------------------------------------------
 

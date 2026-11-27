@@ -30,7 +30,7 @@ from typing import Final
 from opentelemetry import metrics
 from pydantic import AwareDatetime, BaseModel, ConfigDict, ValidationError
 
-from lakehouse.process.own_threads import on_own_threads
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.records import control_prefixes
 from lakehouse.storage import conditional_records
 from lakehouse.storage.errors import StoreRefusedError
@@ -146,6 +146,8 @@ class Timer:
         work: What a claimed window runs.
         root: The control root the claim record lives under.
         storage_options: How to reach that root, read at each turn so a rotated session signs the next one.
+        threads: The process's own threads (`lakehouse.process.supervision.Supervisor.threads`), on which each claim is
+            read and written.
         held: Whether the service holds its timers now; a held turn claims nothing and runs nothing.
         elsewhere: Run on a turn that finds the window another replica's: where a replica drops what only the replica
             that ran the tick knows, as a gauge the tick measured. Not run for the replica that claimed the window.
@@ -160,6 +162,7 @@ class Timer:
         work: Work,
         root: str,
         storage_options: Callable[[], StorageOptions],
+        threads: ThreadSet,
         held: Callable[[], bool] = _never,
         elsewhere: Callable[[], None] = _nothing,
         holder: str | None = None,
@@ -171,6 +174,7 @@ class Timer:
         self._work = work
         self._root = root
         self._storage_options = storage_options
+        self._threads = threads
         self._held = held
         self._elsewhere = elsewhere
         self._holder = holder or socket.gethostname()
@@ -193,7 +197,7 @@ class Timer:
             return self._ended(Outcome.HELD, None, self._period)
         began = monotonic()
         try:
-            asked = await on_own_threads(self._ask)
+            asked = await self._threads.run(self._ask)
         except Exception as exc:
             log.warning("timer_claim_unread", extra={"timer": self.name, "error": str(exc)[:300]}, exc_info=exc)
             return self._ended(Outcome.UNREAD, None, min(self._period, RETRY_SECONDS))

@@ -15,6 +15,7 @@ from openfga_sdk import CreateStoreRequest, OpenFgaClient
 from openfga_sdk.models import CreateStoreResponse, ListStoresResponse, ReadAuthorizationModelsResponse, WriteAuthorizationModelResponse
 
 from lakehouse.governed import fga_model, fga_provision
+from lakehouse.process.own_threads import ThreadSet
 from tests.fga_answers import answer
 
 
@@ -127,13 +128,15 @@ def _with_wildcard_assignee(model: dict[str, Any]) -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_a_wildcard_only_write_names_the_relation_it_changed(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+async def test_a_wildcard_only_write_names_the_relation_it_changed(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, own_threads: ThreadSet
+) -> None:
     """The write log's ``changed`` is how an operator tells what a new model version is about; a write
     caused only by a type restriction must name that relation rather than report ``changed=[]``."""
     _install(monkeypatch, desired=_with_wildcard_assignee(MODEL), stored=MODEL)
 
     with caplog.at_level(logging.INFO, logger=fga_provision.__name__):
-        await fga_provision.provision("http://fga:8080", token_file=None)
+        await fga_provision.provision("http://fga:8080", threads=own_threads, token_file=None)
 
     [written] = [record for record in caplog.records if record.getMessage() == "openfga_model_written"]
     assert written.__dict__["changed"] == ["role#assignee"], "the write was logged without the relation whose restriction it changed"
@@ -162,23 +165,23 @@ def test_a_relation_named_like_an_empty_message_is_not_kept_as_one(name: str) ->
 
 
 @pytest.mark.asyncio
-async def test_an_unchanged_model_is_not_rewritten(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_an_unchanged_model_is_not_rewritten(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     """THE GATE. 1,316 versions on the live store came from this write firing on every boot."""
     _install(monkeypatch, desired=MODEL, stored=MODEL)
 
-    store_id, model_id = await fga_provision.provision("http://fga:8080", token_file=None)
+    store_id, model_id = await fga_provision.provision("http://fga:8080", threads=own_threads, token_file=None)
 
     assert _ModelStoreClient.requests == [], "an unchanged model must not mint a new version on every pod start"
     assert (store_id, model_id) == ("store-1", "model-EXISTING"), "the estate keeps answering with the model it already has"
 
 
 @pytest.mark.asyncio
-async def test_a_brand_new_store_is_modelled_without_a_read(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_a_brand_new_store_is_modelled_without_a_read(monkeypatch: pytest.MonkeyPatch, own_threads: ThreadSet) -> None:
     """A store minted moments ago holds nothing to compare against, so it must not pay the read — the
     same reason the narrowing guard skips it."""
     _install(monkeypatch, desired=MODEL, stored=None, empty_store=True)
 
-    store_id, model_id = await fga_provision.provision("http://fga:8080", token_file=None)
+    store_id, model_id = await fga_provision.provision("http://fga:8080", threads=own_threads, token_file=None)
 
     assert _ModelStoreClient.reads == 0, "a first boot must not depend on a model that cannot exist yet"
     assert len(_ModelStoreClient.requests) == 1
@@ -324,7 +327,7 @@ def test_an_unchanged_restriction_in_a_real_sdk_model_is_still_unchanged(wildcar
 
 
 @pytest.mark.asyncio
-async def test_the_estates_store_is_found_behind_more_stores_than_one_listing_page_holds(openfga: Any) -> None:
+async def test_the_estates_store_is_found_behind_more_stores_than_one_listing_page_holds(openfga: Any, own_threads: ThreadSet) -> None:
     """The estate's store is the newest one of its name, wherever a listing of every store would put it. OpenFGA lists
     50 stores a page, oldest first (measured on the pinned server), so on a platform's OpenFGA that held 50 stores
     before the estate's, a boot that read one page would not find it, mint a second, and strand every grant on the
@@ -333,9 +336,9 @@ async def test_the_estates_store_is_found_behind_more_stores_than_one_listing_pa
         for index in range(60):
             await client.create_store(CreateStoreRequest(name=f"other-{uuid.uuid4().hex}-{index}"))
     name = f"estate-{uuid.uuid4().hex}"
-    first, _ = await fga_provision.provision(openfga.url, token_file=None, store_name=name)
+    first, _ = await fga_provision.provision(openfga.url, threads=own_threads, token_file=None, store_name=name)
 
-    again, _ = await fga_provision.provision(openfga.url, token_file=None, store_name=name)
-    resolved, _ = await fga_provision.resolve(openfga.url, token_file=None, store_name=name, deadline_seconds=5, poll_seconds=0.1)
+    again, _ = await fga_provision.provision(openfga.url, threads=own_threads, token_file=None, store_name=name)
+    resolved, _ = await fga_provision.resolve(openfga.url, threads=own_threads, token_file=None, store_name=name, deadline_seconds=5, poll_seconds=0.1)
 
     assert (again, resolved) == (first, first)

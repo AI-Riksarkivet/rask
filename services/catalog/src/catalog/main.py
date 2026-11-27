@@ -49,12 +49,13 @@ from lakehouse.events.signing import SigningKey, parse_published_keys
 from lakehouse.governed.admission import judge_before_the_body
 from lakehouse.governed.auth_lifespan import BootFailure, ModelRole, attach_auth, openfga_dependency
 from lakehouse.governed.fga_provision import dispose as fga_dispose
-from lakehouse.governed.secrets import secret_store_configured, secret_store_session
+from lakehouse.governed.secrets import SecretStore, secret_store_session
 from lakehouse.governed.settings import assert_authentication_configured
 from lakehouse.governed.signing_key import SigningKeyHolder, attach_signing, make_signing_holder, secret_store_dependency, signing_ready_check
 from lakehouse.lance_metrics import register_lance_metrics
 from lakehouse.process.health import Dependency, HealthWatch
 from lakehouse.process.lifecycle import mark_draining, mark_started, mark_starting
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.process.supervision import Supervisor
 from lakehouse.schemas.health import Readiness
 from lakehouse.service_app.body_limit import BulkBodies
@@ -148,12 +149,12 @@ async def _ensure_estate_namespaces(app: FastAPI) -> None:
         delay = min(delay * 2, _PROVENANCE_RETRY_MAX_SECONDS)
 
 
-async def _backfill_warehouse_grants(app: FastAPI) -> None:
+async def _backfill_warehouse_grants(app: FastAPI, threads: ThreadSet) -> None:
     """Run the warehouse-grant backfill, reporting rather than raising. See its call site for why."""
     from catalog.api.warehouse_grant_backfill import backfill
 
     try:
-        seen, written, failures = await backfill(app_wire(app, "settings", Settings), app_wire(app, "fga", OpenFgaClient, none_is_off=True))
+        seen, written, failures = await backfill(app_wire(app, "settings", Settings), app_wire(app, "fga", OpenFgaClient, none_is_off=True), threads=threads)
     except Exception as exc:
         log.warning("warehouse_grant_backfill_error", extra={"error": str(exc)}, exc_info=exc)
         return
@@ -219,7 +220,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> None:
     """Build what the catalog serves with onto ``app.state``, each piece's release pushed onto ``stack`` as it is built,
     and its background loops and tasks started on ``loops``."""
-    namespace = await _open_the_store(app, settings, stack=stack, loops=loops)
+    secrets, namespace = await _open_the_store(app, settings, stack=stack, loops=loops)
     await _attach_authorization_and_vending(app, settings, stack=stack, loops=loops)
     # THIS PROCESS'S ONE CONNECTION TO THE BUS ([[XC-199]]), as the catalog's own bus user, which both emitters and the
     # control relay publish on (`lakehouse.events.bus`). A loop of `loops` connects it behind the start and keeps it, so the
@@ -227,13 +228,13 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # it is drained after them. None for a stack the chart names no bus.
     bus = await stack.enter_async_context(bus_session(loops, settings.bus))
 
-    signing = make_signing_holder(identity=settings.signing_identity, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
+    signing = make_signing_holder(secrets=secrets, identity=settings.signing_identity, load_key=SigningKey.from_seed, parse_published=parse_published_keys)
     attach_signing(app, signing)
     # The reader the relay and the control lane verify with, built per start and before either can ask for it.
-    attach_published_keys(app)
+    attach_published_keys(app, secrets)
     # THE KEY EVERY COMMIT'S RUN ID IS DERIVED UNDER ([[LH-497]]): read from the store like the signing seed, or the empty
     # key for a stack with no store. Published for the gate, the readiness check and the reconciler.
-    commit_ids = make_commit_ids()
+    commit_ids = make_commit_ids(secrets)
     setattr(app.state, COMMIT_IDS_STATE, commit_ids)
     _attach_emitters(app, settings, bus=bus, signing=signing, commit_ids=commit_ids)
     # RESOLVED LAST, so the probes and the app are up whether or not the key resolved: a catalog that is waiting for
@@ -258,7 +259,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     #     exactly as it was, which is the state this repairs, not a worse one.
     #   * Per-replica repetition is harmless: every write is idempotent (`write_tuples` retries
     #     one-by-one past a duplicate), so replicas racing land the same tuples.
-    loops.start("warehouse-grant-backfill", partial(_backfill_warehouse_grants, app))
+    loops.start("warehouse-grant-backfill", partial(_backfill_warehouse_grants, app, loops.threads))
     # The estate's own warehouse row and the namespace lineage keeps its tables in, in the background for the
     # backfill's reasons: lineage retries its tables until the namespace exists, so a slow OpenFGA or store must not
     # delay this catalog's readiness. A name under the estate's warehouse is absent until the row is there.
@@ -271,7 +272,7 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # surfaces that as a domain error.
     with suppress(LanceNamespaceError):
         app.state.readiness_facts = {"namespace": str(namespace.namespace_id())}
-    app.state.health = HealthWatch(_dependencies(app, settings, bus))
+    app.state.health = HealthWatch(_dependencies(app, settings, bus, secrets=secrets, threads=loops.threads))
     app.state.health.watch(loops)
     # THE CATALOG'S FIXED TIMERS ([[XC-199]]), started last, once everything a tick works with is on `app.state`: the
     # control relay, the erasure release, the commit reconcile, the manifest reclaim and the
@@ -280,13 +281,14 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     start_timers(app, settings, loops)
 
 
-async def _open_the_store(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> LanceNamespace:
-    """Log in to the secret store, start the store session and open the namespace this catalog serves."""
+async def _open_the_store(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> tuple[SecretStore | None, LanceNamespace]:
+    """Log in to the secret store, start the store session and open the namespace this catalog serves; the session with
+    the secret store (``None`` for a stack with none) and the namespace."""
     # THE CATALOG LOGS IN TO ITS SECRET STORE ITSELF ([[XC-199]]), before anything below reads a secret, and refuses to
     # start when the store never admits it, whichever secrets it goes on to read. A loop of `loops` then logs in again
     # once half the store token's lease is used, or as soon as the store no longer honours it. Nothing for a stack with
     # no secret store.
-    await stack.enter_async_context(secret_store_session(loops))
+    secrets = await stack.enter_async_context(secret_store_session(loops))
     # THE CATALOG HOLDS NO STORE KEY ([[XC-083]], ADR 0170). Its identity is the ServiceAccount token its pod projects
     # for the store's audience, exchanged here for a session (`AssumeRoleWithWebIdentity`), waiting out a store or a
     # provisioning hook still starting, and the boot FAILS CLOSED if none is issued; a background loop exchanges again
@@ -310,7 +312,7 @@ async def _open_the_store(app: FastAPI, settings: Settings, *, stack: AsyncExitS
         await run_in_threadpool(warehouses.ensure_catalog_row, namespace, settings.estate_warehouse)
     except Exception as exc:  # noqa: BLE001 — retried by the loop below
         log.warning("estate_warehouse_row_deferred", extra={"error": str(exc)})
-    return namespace
+    return secrets, namespace
 
 
 async def _attach_authorization_and_vending(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> None:
@@ -430,16 +432,17 @@ def _follow_control_events(app: FastAPI, settings: Settings, bus: Bus | None, *,
     loops.keep("catalog-control-lane", partial(bus.follow, CONTROL_STREAM, CONTROL_TOPIC, ControlLane(app, settings).handle))
 
 
-def _dependencies(app: FastAPI, settings: CatalogStore, bus: Bus | None) -> list[Dependency]:
+def _dependencies(app: FastAPI, settings: CatalogStore, bus: Bus | None, *, secrets: SecretStore | None, threads: ThreadSet) -> list[Dependency]:
     """What the catalog reads to know it can serve: its store under its own session (the control root's listing), OpenFGA
-    under its own credential, the bus where the chart names one, and the secret store its keys are read from."""
+    under its own credential, the bus where the chart names one, and ``secrets``, the secret store its keys are read
+    from. The blocking reads run on ``threads``, the process's own."""
     dependencies = [
-        store_dependency(settings.registry_root, settings.storage_options, required=True),
+        store_dependency(settings.registry_root, settings.storage_options, required=True, threads=threads),
         *openfga_dependency(app, required=True),
         *bus_dependency(bus),
     ]
-    if secret_store_configured():
-        dependencies.append(secret_store_dependency())
+    if secrets is not None:
+        dependencies.append(secret_store_dependency(secrets, threads))
     return dependencies
 
 

@@ -156,7 +156,7 @@ def test_an_unknown_key_id_is_retried_until_the_list_is_fresh_and_a_cached_list_
     events = {name: signer.sign(_event(RUN_IDS[name])) for name, signer in signers.items()}
     published = secret_store.hold(f"signing-public-{SIGNER}", {"keys": signers["old"].public})
     with started(monkeypatch, Feed()) as lineage:
-        main.app.state.published_keys = store_published_keys(clock=clock)
+        main.app.state.published_keys = store_published_keys(main.app.state.secret_store, clock=clock)
         primed = lineage.deliver({"data": signers["old"].sign(_event(PRIMER))})
         assert (primed, published.call_count) == (Settlement(outcome=Outcome.TAKEN), 1), "the list was not cached by a verified event, so this tests nothing"
         if published_now is None:

@@ -45,6 +45,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core.identifiers import with_minted_uuid
 from catalog.services import warehouses
 from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE, encode_arrow_stream
+from lakehouse.process.own_threads import ThreadSet
 from lakehouse.storage.options import StorageOptions
 from lineage.services.provenance import ProvenanceStore
 from tests import seeding
@@ -308,12 +309,12 @@ def feed_on_a_counted_store(moto_url: str, monkeypatch: pytest.MonkeyPatch) -> I
 
 
 def test_lineages_read_of_its_feeds_version_lists_the_feeds_versions_once(
-    feed_on_a_counted_store: tuple[ProvenanceStore, store_requests.CountedStore, str],
+    feed_on_a_counted_store: tuple[ProvenanceStore, store_requests.CountedStore, str], own_threads: ThreadSet
 ) -> None:
     provenance, store, feed = feed_on_a_counted_store
     versions = f"{feed.removeprefix('s3://counted/')}/_versions/"
     store.taken()
 
-    asyncio.run(provenance.ready())
+    asyncio.run(provenance.ready(own_threads))
 
     assert sum(request.lists(versions) for request in store.taken()) == 1

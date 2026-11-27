@@ -23,14 +23,15 @@ import hmac
 import logging
 import uuid
 from contextlib import suppress
+from functools import partial
 from typing import TYPE_CHECKING, Final
 
-from lakehouse.governed.secrets import read_secret, secret_store_configured
 from lakehouse.governed.signing_key import SigningKeyUnavailableError
-from lakehouse.process.own_threads import on_own_threads
 
 
 if TYPE_CHECKING:
+    from lakehouse.governed.secrets import SecretStore
+    from lakehouse.process.own_threads import ThreadSet
     from lakehouse.process.supervision import Supervisor
 
 
@@ -75,9 +76,11 @@ def _keyed_uuid(key: bytes, fields: tuple[str, ...]) -> str:
 
 
 class CommitIdKeyHolder:
-    """The catalog's ``commit-id-key``, read under its own login to the store and re-read until held, then every five minutes."""
+    """The catalog's ``commit-id-key``, read under its own login to the store (``secrets``) and re-read until held, then
+    every five minutes."""
 
-    def __init__(self) -> None:
+    def __init__(self, secrets: SecretStore) -> None:
+        self._secrets = secrets
         self._key: bytes | None = None
         self._reason = "the commit id key has not been resolved yet"
         self._task: asyncio.Task[None] | None = None
@@ -108,7 +111,7 @@ class CommitIdKeyHolder:
         A key once held is kept, through a store outage and through a changed value alike: it is never rotated, and
         an id derived under another key would announce every unconfirmed commit a second time.
         """
-        text = read_secret(KEY_SECRET, retries=1).get(KEY_FIELD, "").strip()
+        text = self._secrets.read(KEY_SECRET, retries=1).get(KEY_FIELD, "").strip()
         try:
             key = bytes.fromhex(text)
         except ValueError:
@@ -128,9 +131,10 @@ class CommitIdKeyHolder:
         return True
 
     async def start(self, loops: Supervisor) -> None:
-        """Resolve once now, then keep re-resolving on a loop of ``loops`` until :meth:`stop`; an unresolved key fails no start."""
-        await on_own_threads(self.resolve)
-        self._task = loops.keep("commit-id-key", self._refresh_forever)
+        """Resolve once now, then keep re-resolving on a loop of ``loops`` until :meth:`stop`, each read on ``loops``' own
+        threads; an unresolved key fails no start."""
+        await loops.threads.run(self.resolve)
+        self._task = loops.keep("commit-id-key", partial(self._refresh_forever, loops.threads))
 
     async def stop(self) -> None:
         task, self._task = self._task, None
@@ -139,11 +143,11 @@ class CommitIdKeyHolder:
             with suppress(asyncio.CancelledError):
                 await task
 
-    async def _refresh_forever(self) -> None:
+    async def _refresh_forever(self, threads: ThreadSet) -> None:
         while True:
             await asyncio.sleep(_REFRESH_SECONDS if self.ready else _RETRY_SECONDS)
             try:
-                await on_own_threads(self.resolve)
+                await threads.run(self.resolve)
             except Exception:
                 log.exception("commit_id_key_pass_failed")
 
@@ -161,6 +165,6 @@ class UnkeyedCommitIds:
 type CommitIds = CommitIdKeyHolder | UnkeyedCommitIds
 
 
-def make_commit_ids() -> CommitIds:
-    """The key holder for a catalog the chart named a secret store, else the empty key."""
-    return CommitIdKeyHolder() if secret_store_configured() else UnkeyedCommitIds()
+def make_commit_ids(secrets: SecretStore | None) -> CommitIds:
+    """The key holder for a catalog that holds a session with its secret store (``secrets``), else the empty key."""
+    return CommitIdKeyHolder(secrets) if secrets is not None else UnkeyedCommitIds()
