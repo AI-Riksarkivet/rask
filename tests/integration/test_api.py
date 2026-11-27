@@ -776,7 +776,7 @@ def test_a_policy_set_merges_onto_the_record_it_replaces(
     from catalog.core.config import get_settings
     from lakehouse.records import maintenance_policies
 
-    assert client.post("/management/v1/namespace/lance_catalog$gold/policy/set", json={"retain_versions": 5}).status_code == 200
+    assert client.post("/management/v1/namespace/lance_catalog$served/policy/set", json={"retain_versions": 5}).status_code == 200
     real_record = policy_doors._record  # noqa: SLF001 — the merge, where another request's write is landed in between
     landed: list[str] = []
 
@@ -795,9 +795,9 @@ def test_a_policy_set_merges_onto_the_record_it_replaces(
 
     monkeypatch.setattr(policy_doors, "_record", _another_request_lands)
 
-    answer = client.post("/management/v1/namespace/lance_catalog$gold/policy/set", json={"compact_enabled": False})
+    answer = client.post("/management/v1/namespace/lance_catalog$served/policy/set", json={"compact_enabled": False})
 
-    described = client.post("/management/v1/namespace/lance_catalog$gold/policy/describe").json()
+    described = client.post("/management/v1/namespace/lance_catalog$served/policy/describe").json()
     assert answer.status_code == 200, answer.text
     assert {field: described.get(field) for field in kept} == kept, described
     assert described.get("retain_versions") == (5 if meanwhile == "set" else None), described
@@ -806,25 +806,25 @@ def test_a_policy_set_merges_onto_the_record_it_replaces(
 def test_namespace_policy_describe_answers_the_policy_its_set_door_wrote(client: TestClient, fake_ns: MagicMock) -> None:
     # [[LH-589]]: the namespace door reads the record its set door keyed by the namespace's uuid, and says it is set.
     uuid = fake_ns.describe_namespace.return_value.properties[UUID_PROPERTY]
-    assert client.post("/management/v1/namespace/lance_catalog$gold/policy/set", json={"retain_versions": 5}).status_code == 200
+    assert client.post("/management/v1/namespace/lance_catalog$served/policy/set", json={"retain_versions": 5}).status_code == 200
 
-    described = client.post("/management/v1/namespace/lance_catalog$gold/policy/describe")
+    described = client.post("/management/v1/namespace/lance_catalog$served/policy/describe")
 
     # The defaults a first set writes are kept on the record, so they are part of what it reads back.
     kept = {"retain_versions": 5, "compact_enabled": True, "cleanup_enabled": True, "optimize_indices_enabled": True}
-    assert (described.status_code, described.json()) == (200, {"kind": "namespace", "id": "lance_catalog$gold", "uuid": uuid, **kept, "set": True})
+    assert (described.status_code, described.json()) == (200, {"kind": "namespace", "id": "lance_catalog$served", "uuid": uuid, **kept, "set": True})
 
 
 def test_a_field_a_rask_door_does_not_define_is_refused_and_nothing_is_written(client: TestClient, fake_ns: MagicMock) -> None:
     # [[LH-576]] E10e: every body of rask's own doors refuses a field it does not define (`schemas.RequestBody`), so a
     # misspelled bound is refused by name rather than read as absent and answered as if it had been understood.
     del fake_ns
-    refused = client.post("/management/v1/namespace/lance_catalog$gold/policy/set", json={"retain_versions": 5, "retention_day": 7})
+    refused = client.post("/management/v1/namespace/lance_catalog$served/policy/set", json={"retain_versions": 5, "retention_day": 7})
 
     assert refused.status_code == 422, refused.text
     assert refused.json()["code"] == 13
     assert [(error["field"], error["type"]) for error in refused.json()["errors"]] == [("body.retention_day", "extra_forbidden")]
-    described = client.post("/management/v1/namespace/lance_catalog$gold/policy/describe")
+    described = client.post("/management/v1/namespace/lance_catalog$served/policy/describe")
     assert (described.status_code, described.json()["set"]) == (200, False), "a refused set wrote a policy"
 
 
@@ -981,10 +981,10 @@ def test_project_policies_list_finds_a_namespace_policy_by_its_warehouse(client:
     so = s.storage_options()
     seeding.put_warehouse(s.registry_root, so, {"id": "wh-a", "bucket": "acme-wh", "project": "acme", "status": "active"})
     # What set_namespace_policy writes: keyed by the namespace's uuid, with the name it had kept under `id`.
-    seeding.put_policy(s.registry_root, so, {"kind": "namespace", "id": "wh-a$gold", "uuid": str(uuid4()), "retention_days": 30})
+    seeding.put_policy(s.registry_root, so, {"kind": "namespace", "id": "wh-a$served", "uuid": str(uuid4()), "retention_days": 30})
 
     body = _list_policies_for(client, "acme")
-    assert [p["id"] for p in body["policies"]] == ["wh-a$gold"]
+    assert [p["id"] for p in body["policies"]] == ["wh-a$served"]
     assert body["warehouses"] == ["wh-a"]  # the scope the listing was computed from, reported
 
 

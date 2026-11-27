@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Minimal bootstrap for the local rask k3s stack: install k3s + helm and make
-# kubectl/helm usable without sudo. Idempotent; needs sudo.
+# kubectl/helm usable without sudo. Idempotent; run it as the user who will use the cluster, and it asks sudo itself.
 #
 # It also switches on the development Gateway (k3s's Traefik, Gateway API provider). EVERYTHING ELSE comes up with
 # `make k3s-up`: the development fixtures (deploy/fixtures,
@@ -12,7 +12,15 @@
 # so k3s auto-detects the nvidia containerd runtime.
 set -euo pipefail
 
-KUBECONFIG_PATH="/etc/rancher/k3s/k3s.yaml"
+# The admin kubeconfig k3s writes, and the invoking user's own copy of it, which every target and script reads
+# (Makefile `KUBECONFIG`, scripts/helm.sh). The admin credential is cluster-admin, so neither copy is readable by any
+# other account: k3s's own stays root's at 0600, and the user's is 0600 in a 0700 ~/.kube.
+K3S_KUBECONFIG="/etc/rancher/k3s/k3s.yaml"
+USER_KUBECONFIG="$HOME/.kube/k3s.yaml"
+if [ "$(id -u)" -eq 0 ]; then
+  echo "!! run this as the user who will use the cluster, not as root: it copies the admin kubeconfig into that user's ~/.kube" >&2
+  exit 1
+fi
 
 # INOTIFY INSTANCES ARE PER UID, and every container on the node is root's. Under cgroup v2 the
 # containerd shim holds one inotify instance per container (its OOM watch on memory.events), k3s-server
@@ -39,9 +47,17 @@ if ! command -v k3s >/dev/null 2>&1; then
 fi
 sudo k3s kubectl get nodes
 
-# Make kubectl/helm work without sudo for this user.
-export KUBECONFIG="$KUBECONFIG_PATH"
-sudo chmod 644 "$KUBECONFIG_PATH" || true
+# kubectl and helm without sudo, for this user only. k3s rewrites its file at every start with the mode its unit names
+# (`--write-kubeconfig-mode`, default 0600), so a unit that names a wider one is reported rather than rewritten here:
+# changing the unit restarts the cluster. The copy holds k3s's client certificate, which k3s renews at a start within
+# 90 days of its expiry; re-running this script refreshes the copy.
+sudo chmod 0600 "$K3S_KUBECONFIG"
+unit_mode="$(sed -n "/--write-kubeconfig-mode/{n;s/[^0-7]//gp}" /etc/systemd/system/k3s.service 2>/dev/null || true)"
+if [ -n "$unit_mode" ] && [ "$((8#$unit_mode))" -ne "$((8#600))" ]; then
+  echo "!! /etc/systemd/system/k3s.service writes $K3S_KUBECONFIG with mode $unit_mode at every start; drop its --write-kubeconfig-mode" >&2
+fi
+install -d -m 0700 "$HOME/.kube"
+sudo install -m 0600 -o "$(id -u)" -g "$(id -g)" "$K3S_KUBECONFIG" "$USER_KUBECONFIG"
 
 # The development Gateway: k3s's Traefik with its Gateway API provider on (deploy/k3s/traefik-gateway.yaml). A file in
 # the server's manifests directory is applied by k3s at every start, so the setting outlives a k3s upgrade.
@@ -69,4 +85,4 @@ if ! command -v helm >/dev/null 2>&1; then
 fi
 
 echo "bootstrap done. Next: make k3s-build && make k3s-import && make k3s-up"
-echo "Export KUBECONFIG=$KUBECONFIG_PATH for kubectl/helm."
+echo "The make targets read $USER_KUBECONFIG; export KUBECONFIG=$USER_KUBECONFIG for kubectl and helm by hand."

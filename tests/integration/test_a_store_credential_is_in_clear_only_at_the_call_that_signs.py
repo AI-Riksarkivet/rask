@@ -48,8 +48,8 @@ _VEND_SECRET = "vended-secret-6d3b"
 _VEND_TOKEN = "vended-token-2e5c"
 _HELD = (_CATALOG_SECRET, _CATALOG_TOKEN, _MAINTENANCE_SECRET, _VEND_SECRET, _VEND_TOKEN)
 
-_TABLE = "acme-bronze$events"
-_URI = "s3://acme-bucket/4c49d010_acme-bronze$events"
+_TABLE = "acme-raw$events"
+_URI = "s3://acme-bucket/4c49d010_acme-raw$events"
 _CATALOG_URL = "http://catalog:2333"
 #: The table-scoped session the catalog's vend door answers maintenance with.
 _VEND = vended(

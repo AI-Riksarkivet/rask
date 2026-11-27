@@ -20,7 +20,7 @@ fi
 
 # The kubectl calls below pick the same cluster scripts/helm.sh picks: the k3s estate when nothing is named and no
 # other context is expected, and otherwise only the context the caller declared (~/.kube/config can name a dead one).
-K3S=/etc/rancher/k3s/k3s.yaml
+K3S="$HOME/.kube/k3s.yaml"
 if ! "$VENDOR_ONLY" && [ -z "${KUBECONFIG:-}" ] && [ -r "$K3S" ]; then
   if [ -z "${RASK_EXPECT_CONTEXT:-}" ] || [ "$(KUBECONFIG="$K3S" kubectl config current-context 2>/dev/null || true)" = "$RASK_EXPECT_CONTEXT" ]; then
     export KUBECONFIG="$K3S"

@@ -56,9 +56,9 @@ def test_null_value_deletes_the_key(real_ns_client: TestClient) -> None:
     # THE gap: the properties editor's remove button omitted the key and reported "Saved." — and the key
     # stayed. Deletion has to be something a caller can SAY, which is what the null carries.
     _create(real_ns_client, "t1")
-    seeded = real_ns_client.post("/v1/table/lance_catalog$m1$t1/schema_metadata/update", json={"owner": "alice", "tier": "gold"})
+    seeded = real_ns_client.post("/v1/table/lance_catalog$m1$t1/schema_metadata/update", json={"owner": "alice", "tier": "served"})
     assert seeded.status_code == 200, seeded.text
-    assert _properties(real_ns_client, "t1") == {"owner": "alice", "tier": "gold"}
+    assert _properties(real_ns_client, "t1") == {"owner": "alice", "tier": "served"}
 
     resp = real_ns_client.post("/v1/table/lance_catalog$m1$t1/schema_metadata/update", json={"tier": None})
     assert resp.status_code == 200, resp.text
@@ -71,11 +71,11 @@ def test_omitting_a_key_is_a_merge_not_a_replace(real_ns_client: TestClient) -> 
     # The spec's own wording ("Replace schema metadata") is wrong about the backend, and three source
     # comments repeated it. Pin the real semantic so the next reader can't be misled by the spec text.
     _create(real_ns_client, "t2")
-    real_ns_client.post("/v1/table/lance_catalog$m1$t2/schema_metadata/update", json={"owner": "alice", "tier": "gold"})
+    real_ns_client.post("/v1/table/lance_catalog$m1$t2/schema_metadata/update", json={"owner": "alice", "tier": "served"})
 
     resp = real_ns_client.post("/v1/table/lance_catalog$m1$t2/schema_metadata/update", json={"owner": "bob"})
     assert resp.status_code == 200, resp.text
-    assert _properties(real_ns_client, "t2") == {"owner": "bob", "tier": "gold"}
+    assert _properties(real_ns_client, "t2") == {"owner": "bob", "tier": "served"}
 
 
 def test_delete_does_not_drop_lineage_coordinates(real_ns_client: TestClient) -> None:

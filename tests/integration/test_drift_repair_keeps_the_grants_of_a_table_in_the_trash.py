@@ -91,17 +91,17 @@ def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch, openfga_store: Any, d
 
 
 def test_an_audit_revokes_a_ghost_and_keeps_the_grants_of_a_table_in_the_trash(estate: _Estate) -> None:
-    bronze = estate.create_namespace("bronze")
-    for table in (f"{bronze}$kept", f"{bronze}$dropped", f"{bronze}$before"):
+    raw = estate.create_namespace("raw")
+    for table in (f"{raw}$kept", f"{raw}$dropped", f"{raw}$before"):
         estate.create_table(table)
-    renamed = estate.catalog.post(f"/v1/table/{bronze}$before/rename", json={"new_table_name": "after"})
+    renamed = estate.catalog.post(f"/v1/table/{raw}$before/rename", json={"new_table_name": "after"})
     assert renamed.status_code == 200, renamed.text
-    dropped = f"table:{estate.uuid_of(f'{bronze}$dropped')}"
-    estate.drop_table(f"{bronze}$dropped")
+    dropped = f"table:{estate.uuid_of(f'{raw}$dropped')}"
+    estate.drop_table(f"{raw}$dropped")
     gone = str(uuid.uuid4())
     estate.store.write((user_object(principal_key("alice")), "owner", f"table:{gone}"))
     held = estate.store.naming([dropped])
-    assert held and estate.in_trash(f"{bronze}$dropped"), "the drop kept nothing for an undrop, so keeping it would pass vacuously"
+    assert held and estate.in_trash(f"{raw}$dropped"), "the drop kept nothing for an undrop, so keeping it would pass vacuously"
 
     with catalog_doors(estate.catalog):
         audit = audited(estate.maintenance)

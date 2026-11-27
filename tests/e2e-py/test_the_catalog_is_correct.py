@@ -36,8 +36,8 @@ project's doors ask for a rung on the warehouse or the project, which no matrix 
 principal's refusal, and the tenant-B admin's own warehouse, which that admin makes, shows its refusals here are not
 those of a caller who can do nothing.
 
-THE MATRIX NAMESPACE lives in the shared tenant's warehouse (`byo_scenario.Tenant`), beside the scenario's bronze and
-silver rather than in them, so the scenario's tables, and the events criteria 1 and 4 capture by those namespaces, stay
+THE MATRIX NAMESPACE lives in the shared tenant's warehouse (`byo_scenario.Tenant`), beside the scenario's raw and
+cleaned rather than in them, so the scenario's tables, and the events criteria 1 and 4 capture by those namespaces, stay
 exactly what the scenario made. The warehouse's cascade removes it with the tenant.
 
 THE MATRIX LABEL is a classification label of the scene's own. A label is estate vocabulary, which no tenant's cascade

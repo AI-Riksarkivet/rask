@@ -60,6 +60,7 @@ USAGE
 =====
     uv run python scripts/comment_history_gate.py --staged        # pre-commit (prek.toml)
     uv run python scripts/comment_history_gate.py --base origin/main
+    uv run python scripts/comment_history_gate.py --diff changes.diff     # a tree with no .git (CI's Dagger lane)
     uv run python scripts/comment_history_gate.py --paths a.py b.ts   # whole files, for a new file
     uv run python scripts/comment_history_gate.py --report            # whole tree, ADVISORY, never gates
 """
@@ -402,6 +403,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     mode.add_argument("--worktree", action="store_true", help="gate every uncommitted change against HEAD, untracked files whole")
     mode.add_argument("--base", metavar="REF", help="gate this branch's added lines against REF's merge-base")
     mode.add_argument("--paths", nargs="+", metavar="FILE", help="gate whole files (a newly added file has no base to diff)")
+    mode.add_argument("--diff", metavar="FILE", help="gate the added lines of a `git diff --unified=0` in FILE, against the files on disk")
     mode.add_argument("--report", action="store_true", help="ADVISORY whole-tree count; always exits 0")
     return parser.parse_args(argv)
 
@@ -416,7 +418,9 @@ def _report() -> int:
 
 
 def _gated_findings(args: argparse.Namespace) -> list[Finding] | None:
-    """The matches on the lines the mode gates, ``None`` when ``--paths`` names no file or ``--base`` a ref with no merge-base here."""
+    """The matches on the lines the mode gates, ``None`` when ``--paths`` or ``--diff`` names no file or ``--base`` a ref with no merge-base here."""
+    if args.diff:
+        return _diff_file_findings(Path(args.diff))
     if args.paths:
         missing = [path for path in args.paths if not Path(path).is_file()]
         if missing:
@@ -441,6 +445,18 @@ def _gated_findings(args: argparse.Namespace) -> list[Finding] | None:
             return None
         findings = scan_changes(_diff(base), staged=False)
     return findings
+
+
+def _diff_file_findings(changes: Path) -> list[Finding] | None:
+    """The matches on the lines a diff made elsewhere adds, judged against the files on disk.
+
+    The tree a CI lane judges carries no `.git`, so the diff is made where the history is (the base a push or a pull
+    request is measured from) and handed over as a file, spelled as `_diff` spells one.
+    """
+    if not changes.is_file():
+        print(f"no such diff: {changes} — a gate handed no change set has judged nothing.", file=sys.stderr)
+        return None
+    return scan_changes(changes.read_text(encoding="utf-8", errors="replace"), staged=False)
 
 
 def _refuse(findings: list[Finding]) -> int:

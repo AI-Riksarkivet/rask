@@ -8,7 +8,7 @@
 # It installs and import-gates the lakehouse's services and nothing else: the console is its own image
 # (.docker/frontend.dockerfile), and a client builds its own in its own repository, so no client changes what this image
 # builds or installs ([[XC-177]]).
-# Build context = repo root:  scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
+# Build context = repo root:  scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev --out build/k3s-images/lance-rest-catalog.tar
 
 # ── builder: two-step uv sync against the ROOT uv.lock ───────────────────────
 FROM ghcr.io/astral-sh/uv:python3.15-trixie-slim@sha256:3ee10471b12b57f6f86d03f68c44fbd4bb8d5540efa25ab3b89159e1216b1a70 AS builder

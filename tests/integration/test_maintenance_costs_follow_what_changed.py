@@ -78,7 +78,7 @@ class _IdleQueue:
 
 
 class _Estate:
-    """One warehouse's bronze namespace, grown a table at a time through the catalog's doors."""
+    """One warehouse's raw namespace, grown a table at a time through the catalog's doors."""
 
     def __init__(self, both: TwoServices, store: CountedStore) -> None:
         self.both = both
@@ -87,11 +87,11 @@ class _Estate:
         ok = both.catalog.post("/management/v1/projects", json={"id": "acme"})
         assert ok.status_code == 200, ok.text
         warehouse = f"wh-{uuid.uuid4().hex[:6]}"
-        #: The warehouse's bronze namespace, the parent of every table grown here.
-        self.bronze = f"{warehouse}$bronze"
+        #: The warehouse's raw namespace, the parent of every table grown here.
+        self.raw = f"{warehouse}$raw"
         for path, body in (
             ("/management/v1/warehouses", {"id": warehouse, "project": "acme"}),
-            (f"/v1/namespace/{self.bronze}/create", {}),
+            (f"/v1/namespace/{self.raw}/create", {}),
         ):
             answer = both.catalog.post(path, json=body)
             assert answer.status_code == 200, answer.text
@@ -99,7 +99,7 @@ class _Estate:
     def grow(self, to: int) -> None:
         """Tables made until there are ``to``, each of three commits."""
         while len(self.tables) < to:
-            table = f"{self.bronze}$t{len(self.tables)}"
+            table = f"{self.raw}$t{len(self.tables)}"
             for door in ("create", "insert", "insert"):
                 self._commit(table, door)
             described = self.both.catalog.post(f"/v1/table/{table}/describe", json={}).json()
@@ -111,18 +111,18 @@ class _Estate:
             answer = self.both.catalog.post("/management/v1/warehouses", json={"id": f"wh-{uuid.uuid4().hex[:6]}", "project": "acme"})
             assert answer.status_code == 200, answer.text
         for index in set(range(len(self.tables))) - spared:
-            answer = self.both.catalog.post(f"/management/v1/table/{self.bronze}$t{index}/policy/set", json={"retention_days": 30})
+            answer = self.both.catalog.post(f"/management/v1/table/{self.raw}$t{index}/policy/set", json={"retention_days": 30})
             assert answer.status_code == 200, answer.text
 
     def deepen(self, table: int, commits: int) -> None:
         """The ``table``-th table given ``commits`` more commits."""
         for _ in range(commits):
-            self._commit(f"{self.bronze}$t{table}", "insert")
+            self._commit(f"{self.raw}$t{table}", "insert")
 
     def a_commits_pass(self, table: int) -> list[StoreRequest]:
         """What the ``table``-th table's pass asked the store for one more commit, its pass before that commit already run."""
         self._pass(table)
-        self._commit(f"{self.bronze}$t{table}", "insert")
+        self._commit(f"{self.raw}$t{table}", "insert")
         self.store.taken()
         self._pass(table)
         return self.store.taken()

@@ -74,7 +74,7 @@ def test_the_estate_left_running_still_reads_the_drive_as_the_criteria_did(kept:
     """One reading of every surface, then every finding at once: a soak takes a day to repeat, so it reports all that
     differ, each by the claim it breaks."""
     tenant, drive = kept
-    tables = (drive.run.bronze_table, drive.run.silver_table)
+    tables = (drive.run.raw_table, drive.run.cleaned_table)
     history = history_of(tenant.pipeline, tables)
     committed = as_named(drive.run.commits, author=drive.principals["pipeline"])
     owed = edges_named(history)

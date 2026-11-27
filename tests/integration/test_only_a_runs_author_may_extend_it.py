@@ -39,7 +39,7 @@ from tests.integration.lineage_app import SUBJECT_HEADER, declared, governed_lin
 from tests.open_gate import admits_everything
 
 
-_TABLE = "lance_catalog$acme-silver$pages"
+_TABLE = "lance_catalog$acme-cleaned$pages"
 _ALICE = "dex~alice"
 _BOB = "dex~bob"
 

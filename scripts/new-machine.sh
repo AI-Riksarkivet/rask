@@ -324,7 +324,7 @@ if confirm "Install and configure them now?"; then
   make bootstrap
   make dev-registry
   make dagger-engine
-  export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+  export KUBECONFIG="$HOME/.kube/k3s.yaml"
 else
   SKIPPED+=("make k3s-install && make dev-registry && make dagger-engine")
 fi
@@ -333,7 +333,7 @@ stage "Build the images and install rask from empty"
 say "Every image the pins file names is built by Dagger from this checkout and pushed under that tag,"
 say "so the pins stay valid; then make k3s-up installs the fixtures and rask from the values git declares."
 if confirm "Build every pinned image and install? (a long run, once)"; then
-  export _EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-container://dagger-engine-rask KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+  export _EXPERIMENTAL_DAGGER_RUNNER_HOST=docker-container://dagger-engine-rask KUBECONFIG="$HOME/.kube/k3s.yaml"
   push() { bash scripts/dagger-image.sh "$@" || { warn "build failed: $*"; SKIPPED+=("build $*"); }; }
   pins() { sed -n 's/^ *\([a-z0-9-]*\): *"\([^"]*\)".*/\1 \2/p' "$1"; }
   # make k3s-up reads the release's image tags from the pins file alone, so a stem it does not name is pinned to this

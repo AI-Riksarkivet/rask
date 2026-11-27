@@ -44,7 +44,7 @@ fi
 : "${RASK_EXPECT_CONTEXT:=default}"
 export RASK_EXPECT_CONTEXT
 
-KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+KUBECONFIG="${KUBECONFIG:-$HOME/.kube/k3s.yaml}"
 CHECK_ONLY=""
 TAGS=()
 if [[ "${1:-}" == "--check-only" ]]; then CHECK_ONLY=1; shift; fi

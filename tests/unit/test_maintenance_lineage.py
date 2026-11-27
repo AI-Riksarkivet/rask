@@ -52,8 +52,8 @@ def test_maintenance_event_round_trips_through_lineage_run_event() -> None:
     # the dataset — so it records the run and asserts no edge (nothing was derived from anything). Its run carries no
     # `nominalTime`: a pass is no schedule time of the table's run (ADR 0180).
     event = build_maintenance_event(
-        table_id="silver$features",
-        namespace="silver",
+        table_id="cleaned$features",
+        namespace="cleaned",
         job_namespace="compaction",
         run_id="r2",
         event_time="2026-06-30T00:00:00Z",
@@ -61,7 +61,7 @@ def test_maintenance_event_round_trips_through_lineage_run_event() -> None:
     parsed = RunEvent.model_validate(event)
     assert parsed.is_success
     assert parsed.operation == EXPIRE_VERSIONS
-    assert [d.name for d in parsed.outputs] == ["silver$features"]
+    assert [d.name for d in parsed.outputs] == ["cleaned$features"]
     assert parsed.inputs == []
     assert set(event["run"]["facets"]) == {"rask_lance"}
 
@@ -274,10 +274,10 @@ def test_the_stamp_preserves_other_schema_metadata(tmp_path: Any) -> None:
     from catalog.core.provenance_stamp import declare_dataset_id
 
     table = pa.table({"v": [1]}).replace_schema_metadata({"lineage.run_id": "r-1", "owner": "data_eng"})
-    out = declare_dataset_id(table, "gold$catalog")
+    out = declare_dataset_id(table, "served$catalog")
 
     metadata = {k.decode(): v.decode() for k, v in (out.schema.metadata or {}).items()}
-    assert metadata["lineage.dataset_id"] == "gold$catalog"
+    assert metadata["lineage.dataset_id"] == "served$catalog"
     assert metadata["lineage.run_id"] == "r-1" and metadata["owner"] == "data_eng", "the stamp destroyed existing metadata"
 
 
@@ -298,18 +298,18 @@ def test_a_pass_is_named_only_by_the_table_its_manifest_row_named(tmp_path: Any)
     from maintenance.services.expiry import ExpiryPolicy, ExpiryTarget, expire_versions
 
     forged = "victim$payroll"
-    named, unnamed = str(tmp_path / "0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"), str(tmp_path / "medallion" / "gold")
+    named, unnamed = str(tmp_path / "0d9c6f3e-7b2a-4c1e-9f5d-2a8b3c4d5e6f"), str(tmp_path / "medallion" / "served")
     for uri in (named, unnamed):
         lance.write_dataset(declare_dataset_id(pa.table({"v": [1]}), forged), uri, mode="create")
         lance.write_dataset(pa.table({"v": [2]}), uri, mode="append")  # a second version, so the pass reclaims one
     policy = ExpiryPolicy(older_than=None, retain_versions=1)
 
     results = [
-        expire_versions(ExpiryTarget(uri=named, storage_options={}, write_options={}, table_id="silver$plain"), policy),
+        expire_versions(ExpiryTarget(uri=named, storage_options={}, write_options={}, table_id="cleaned$plain"), policy),
         expire_versions(ExpiryTarget(uri=unnamed, storage_options={}, write_options={}), policy),
     ]
     assert [(r.error, r.old_versions_removed) for r in results] == [(None, 1), (None, 1)], results
 
     emitter = _RecordingEmitter()
     asyncio.run(emit_pass_lineage(cast(Any, emitter), results))
-    assert emitter.calls == [("silver$plain", named)], "a pass was named by a stamp"
+    assert emitter.calls == [("cleaned$plain", named)], "a pass was named by a stamp"

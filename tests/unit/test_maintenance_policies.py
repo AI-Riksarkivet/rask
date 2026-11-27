@@ -46,7 +46,7 @@ def _project_policy(id_: str = "acme", buckets: list[str] | None = None, **field
 def test_registry_round_trips_and_lists(tmp_path: Path) -> None:
     root = str(tmp_path)
     seeding.put_policy(root, StorageOptions(), _policy(retention_days=7))
-    seeding.put_policy(root, StorageOptions(), _policy(kind="namespace", id_="silver", uuid="ns-silver"))
+    seeding.put_policy(root, StorageOptions(), _policy(kind="namespace", id_="cleaned", uuid="ns-cleaned"))
 
     stored = mp.get_policy(root, StorageOptions(), "table", key=TABLE_UUID)
     assert stored is not None and stored.stored()["retention_days"] == 7
@@ -75,7 +75,7 @@ def test_a_stamp_paces_only_its_dataset_under_the_policy_that_took_it(tmp_path: 
     # each dataset (a branch is one of its own under its table's uuid) keeps its own; and a stamp taken under another
     # policy paces nothing, since the policy that governs now has not maintained it ([[LH-562]]).
     root = str(tmp_path)
-    record = _policy(kind="namespace", id_="silver", uuid="ns-silver", compact_interval_hours=6)
+    record = _policy(kind="namespace", id_="cleaned", uuid="ns-cleaned", compact_interval_hours=6)
     main, branch = f"s3://bkt/{TABLE_UUID}", f"s3://bkt/{TABLE_UUID}/tree/work"
     mp.write_state(root, StorageOptions(), record, table_uuid=TABLE_UUID, uri=main, at=_STAMPED)
     replaced = _policy(compact_interval_hours=6)
@@ -101,17 +101,17 @@ def test_list_policies_skips_a_corrupt_record(tmp_path: Path) -> None:
 def test_resolve_precedence_table_over_namespace_over_none() -> None:
     # The table's own record wins; else the NEAREST ancestor namespace's (ancestors outermost first); else none.
     records = [
-        _policy(kind="namespace", id_="silver", uuid="ns-silver", retention_days=30),
-        _policy(kind="namespace", id_="silver$deep", uuid="ns-deep", retention_days=10),
-        _policy(id_="silver$features", uuid="t-features", retention_days=1),
+        _policy(kind="namespace", id_="cleaned", uuid="ns-cleaned", retention_days=30),
+        _policy(kind="namespace", id_="cleaned$deep", uuid="ns-deep", retention_days=10),
+        _policy(id_="cleaned$features", uuid="t-features", retention_days=1),
     ]
-    hit = mp.resolve_policy(records, "s3://bkt/t-features", table_uuid="t-features", namespace_uuids=["ns-silver", "ns-deep"])
+    hit = mp.resolve_policy(records, "s3://bkt/t-features", table_uuid="t-features", namespace_uuids=["ns-cleaned", "ns-deep"])
     assert hit is not None and hit.settings.retention_days == 1
-    hit = mp.resolve_policy(records, "s3://bkt/t-other", table_uuid="t-other", namespace_uuids=["ns-silver", "ns-deep"])
+    hit = mp.resolve_policy(records, "s3://bkt/t-other", table_uuid="t-other", namespace_uuids=["ns-cleaned", "ns-deep"])
     assert hit is not None and hit.settings.retention_days == 10
-    hit = mp.resolve_policy(records, "s3://bkt/t-other", table_uuid="t-other", namespace_uuids=["ns-silver"])
+    hit = mp.resolve_policy(records, "s3://bkt/t-other", table_uuid="t-other", namespace_uuids=["ns-cleaned"])
     assert hit is not None and hit.settings.retention_days == 30
-    assert mp.resolve_policy(records, "s3://bkt/t-elsewhere", table_uuid="t-elsewhere", namespace_uuids=["ns-gold"]) is None
+    assert mp.resolve_policy(records, "s3://bkt/t-elsewhere", table_uuid="t-elsewhere", namespace_uuids=["ns-served"]) is None
 
 
 def test_project_policy_round_trips_and_lists(tmp_path: Path) -> None:
@@ -142,15 +142,15 @@ def test_resolve_precedence_table_beats_namespace_beats_project_beats_none() -> 
     # CONTRACT (#84): resolution order is table -> nearest namespace -> project bucket -> None
     # (global defaults). The project tier is strictly the LAST fallback.
     records = [
-        _policy(id_="silver$features", uuid="t-features", retention_days=1),
-        _policy(kind="namespace", id_="silver", uuid="ns-silver", retention_days=30),
+        _policy(id_="cleaned$features", uuid="t-features", retention_days=1),
+        _policy(kind="namespace", id_="cleaned", uuid="ns-cleaned", retention_days=30),
         _project_policy(buckets=["acme-wh", "acme-wh2"], retention_days=90),
     ]
-    hit = mp.resolve_policy(records, "s3://acme-wh/t-features", table_uuid="t-features", namespace_uuids=["ns-silver"])
+    hit = mp.resolve_policy(records, "s3://acme-wh/t-features", table_uuid="t-features", namespace_uuids=["ns-cleaned"])
     assert hit is not None and hit.settings.retention_days == 1  # table beats namespace beats project
-    hit = mp.resolve_policy(records, "s3://acme-wh/t-other", table_uuid="t-other", namespace_uuids=["ns-silver"])
+    hit = mp.resolve_policy(records, "s3://acme-wh/t-other", table_uuid="t-other", namespace_uuids=["ns-cleaned"])
     assert hit is not None and hit.settings.retention_days == 30  # namespace beats project
-    hit = mp.resolve_policy(records, "s3://acme-wh/t-events", table_uuid="t-events", namespace_uuids=["ns-bronze"])
+    hit = mp.resolve_policy(records, "s3://acme-wh/t-events", table_uuid="t-events", namespace_uuids=["ns-raw"])
     assert hit is not None and hit.settings.retention_days == 90  # project catches the rest of its buckets
     hit = mp.resolve_policy(records, "s3://acme-wh2/t-x", table_uuid="t-x", namespace_uuids=[])
     assert hit is not None and hit.settings.retention_days == 90  # every bucket in the record is covered
@@ -243,17 +243,17 @@ def test_a_partial_policy_update_preserves_fields_it_did_not_mention(tmp_path: A
     """The destructive round-trip an audit found: `put_policy` overwrites the whole record, so a
     client that read a policy, changed one knob and sent it back wrote the model's DEFAULTS over
     every field it never mentioned — silently clearing `scan_batch_size` (the compaction memory
-    bound, ~15 GB/thread without it on bronze page rows) and a `cleanup_enabled=False` legal hold.
+    bound, ~15 GB/thread without it on raw page rows) and a `cleanup_enabled=False` legal hold.
     The lakehouse form does exactly that, and its own comment states the belief this makes true: an
     omitted knob means INHERIT."""
     from catalog.api.v1.endpoints.policies import _record
     from catalog.schemas import PolicyRequest
 
-    stored = _record("table", "bronze$pages", PolicyRequest(scan_batch_size=64, cleanup_enabled=False), existing=None, uuid=TABLE_UUID)
+    stored = _record("table", "raw$pages", PolicyRequest(scan_batch_size=64, cleanup_enabled=False), existing=None, uuid=TABLE_UUID)
     assert stored.stored()["scan_batch_size"] == 64
 
     # A later save that only flips compaction off — exactly what the form sends.
-    updated = _record("table", "bronze$pages", PolicyRequest(compact_enabled=False), existing=stored, uuid=TABLE_UUID)
+    updated = _record("table", "raw$pages", PolicyRequest(compact_enabled=False), existing=stored, uuid=TABLE_UUID)
 
     assert updated.stored()["compact_enabled"] is False, "the field the caller DID set must apply"
     assert updated.stored()["scan_batch_size"] == 64, "the memory bound was silently cleared"

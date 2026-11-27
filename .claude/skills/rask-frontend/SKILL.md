@@ -358,7 +358,7 @@ floating groups and no context menu.
 issuer that file names. Under `vite dev` SvelteKit sends that `csp` as a header (measured on kit 3.1.1), so the dev server widens `connect-src` by
 exactly the issuer's origin, as `serve.ts` does for the image; the built app's own policy is untouched. The Vite origin
 (:5173) is cross-origin to Dex on :8080, which answers CORS for it (the Dex fixture's `console.allowedOrigins`). The image is `.docker/frontend.dockerfile`
-(`make console-image` → `web-console:<tag>`, through `dagger call image --name=frontend`): a builder stage builds
+(`make console-image` → an OCI tarball named `web-console:<tag>`, through `dagger call image --name=frontend`): a builder stage builds
 the app (with `@riksarkivet/ui`, fetched from GitHub at the commit `bun.lock` records, compiled from source), the runtime stage holds only `build/` and `serve.ts`, runs as uid 10001 under tini on :3000, and
 fits a read-only root filesystem.
 

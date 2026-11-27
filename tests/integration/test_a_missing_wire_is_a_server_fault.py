@@ -372,7 +372,7 @@ def test_lineages_intake_refuses_as_a_server_fault_without_its_feed(tmp_path: Pa
     from lineage.main import app
 
     run = str(uuid.uuid4())
-    event = run_event(run, "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=["lance_catalog$acme-gold$t"])
+    event = run_event(run, "COMPLETE", "2026-10-15T10:00:00+00:00", outputs=["lance_catalog$acme-served$t"])
     with (
         live_catalog(tmp_path / "catalog", monkeypatch) as catalog_url,
         live_lineage(catalog_url, monkeypatch) as lineage_url,

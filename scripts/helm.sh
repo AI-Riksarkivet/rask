@@ -28,7 +28,7 @@ esac
 # invocation with a wrong one. And the path has to EXIST: a KUBECONFIG naming an absent file resolves to no
 # context at all, which the guard below then reports as a context mismatch against `<none>` rather
 # than as the missing file it is. Measured 2026-09-24 on the `e2e-stack` CI lane, where the runner has
-# no k3s and `/etc/rancher/k3s/k3s.yaml` is not there to read: the lane declared `kind-rask`, got the
+# no k3s and the k3s kubeconfig is not there to read: the lane declared `kind-rask`, got the
 # live estate's path imposed over kind's kubeconfig, and died on a mismatch naming a cluster nobody
 # had asked for.
 #
@@ -37,7 +37,7 @@ esac
 # KUBECONFIG of their own — dropping the default for every declared caller would break all of them.
 # The kind lanes declare `kind-<cluster>` and rely on `kind export kubeconfig` having written the
 # default location. Asking the k3s kubeconfig which context it carries separates the two exactly.
-_k3s="/etc/rancher/k3s/k3s.yaml"
+_k3s="$HOME/.kube/k3s.yaml"
 if [[ -z "${KUBECONFIG:-}" && -r "$_k3s" ]]; then
   if [[ -z "${RASK_EXPECT_CONTEXT:-}" ]] \
      || [[ "$(KUBECONFIG="$_k3s" kubectl config current-context 2>/dev/null || true)" == "${RASK_EXPECT_CONTEXT}" ]]; then

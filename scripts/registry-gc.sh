@@ -31,7 +31,7 @@ KEEP="${RASK_REGISTRY_KEEP:-2}"
 # The registry is the fixture deploy/fixtures/registry, so its own commands run in its pod.
 REGISTRY_NAMESPACE="${RASK_REGISTRY_NAMESPACE:-dev-registry}"
 PINS="${RASK_REGISTRY_PINS:-deploy/values-live-pins.yaml}"
-KUBECONFIG_PATH="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+KUBECONFIG_PATH="${KUBECONFIG:-$HOME/.kube/k3s.yaml}"
 # The cluster whose running tags are protected, declared as every k3s caller declares it (scripts/helm.sh): a
 # kubeconfig that resolves another cluster would protect that cluster's tags and delete this one's.
 EXPECT_CONTEXT="${RASK_EXPECT_CONTEXT:-default}"

@@ -6,8 +6,8 @@ in `CLAUDE.md`. Add a line when a trap costs a session, and delete one when the 
 
 ## Estate facts
 
-- **Two kubeconfigs, one is dead.** The live estate is `/etc/rancher/k3s/k3s.yaml`; `~/.kube/config` is a stale kind
-  cluster that still answers.
+- **Two kubeconfigs, one is dead.** The live estate is `~/.kube/k3s.yaml`, the owner-only copy `make k3s-install` writes of
+  k3s's root-only `/etc/rancher/k3s/k3s.yaml`; `~/.kube/config` is a stale kind cluster that still answers.
 - **The object store is RustFS** (ADR 0168). `rask-rustfs-0` in rask's namespace serves the lakehouse in development
   and is the estate's only RustFS pod (measured 2026-11-06); every CI lane runs the same `rustfs/rustfs` tag. Measure store
   behaviour (policy, CAS, STS) on rask's fixture or a Dagger lane, and see `rask-rustfs` before reading its docs.

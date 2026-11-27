@@ -46,7 +46,7 @@ from tests.live_server import serve
 _INVALID_INPUT = 13
 _ROWS = pa.table({"id": pa.array([1, 2], pa.int64()), "a": ["a1", "a2"], "b": ["b1", "b2"]})
 _STAGED = pa.table({"id": pa.array([3, 4], pa.int64()), "a": ["a3", "a4"], "b": ["b3", "b4"]})
-#: A blob-v2 bronze table, its placement thresholds named rather than inherited: a client writing bronze through the
+#: A blob-v2 raw table, its placement thresholds named rather than inherited: a client writing raw through the
 #: catalog's doors chooses them, and the guide stores them in the dataset schema and refuses an append naming others.
 _BLOB_SCHEMA = pa.schema(
     [
@@ -71,7 +71,7 @@ _NESTED_BLOB_SCHEMA = pa.schema(
 
 
 def _blob_rows(units: list[tuple[str, bytes]], external_base: str | None = None, *, nested: bool = False) -> pa.Table:
-    """Bronze rows for ``(source uri, bytes)`` units: an EXTERNAL descriptor of the uri when the table has a base, else the bytes.
+    """Raw rows for ``(source uri, bytes)`` units: an EXTERNAL descriptor of the uri when the table has a base, else the bytes.
 
     ``nested`` puts each payload in ``page.img`` and as the one element of ``pages``."""
     ids = pa.array([int(hashlib.sha256(uri.encode()).hexdigest()[:15], 16) for uri, _ in units], pa.int64())
@@ -92,7 +92,7 @@ def _blob_rows(units: list[tuple[str, bytes]], external_base: str | None = None,
 
 
 def _no_rows(*, nested: bool) -> pa.Table:
-    """A bronze create's empty table; pyarrow builds no empty array of an extension type beneath a container."""
+    """A raw create's empty table; pyarrow builds no empty array of an extension type beneath a container."""
     return _blob_rows([], nested=True) if nested else _BLOB_SCHEMA.empty_table()
 
 
@@ -109,7 +109,7 @@ class _Estate:
         self.stock = lance_namespace.connect("rest", {"uri": str(client.base_url)})
         self.bucket = bucket
         self.monkeypatch = monkeypatch
-        #: The external blob base a bronze create names, inside the approved corpus bucket ([[LH-209]]).
+        #: The external blob base a raw create names, inside the approved corpus bucket ([[LH-209]]).
         self.external_base = f"s3://{bucket}-corpus/media/pages/"
         self.key = lance_storage_options(url, S3KeyPair(access_key_id="test", secret_access_key=SecretStr("test")), "us-east-1")
         self.s3: S3Client = boto3.client("s3", endpoint_url=url, aws_access_key_id="test", aws_secret_access_key="test", region_name="us-east-1")
@@ -207,8 +207,8 @@ def _plain(estate: _Estate, **write: Any) -> _Staged:  # noqa: ANN401 — write_
     return _Staged(estate, table, location, json.loads(json.dumps(written[0].to_json())))
 
 
-def _bronze(estate: _Estate, *, external_base: str | None = None, nested: bool = False) -> _Staged:
-    """A bronze table created with the external base, when one is named, and one managed-blob fragment staged under it."""
+def _raw(estate: _Estate, *, external_base: str | None = None, nested: bool = False) -> _Staged:
+    """A raw table created with the external base, when one is named, and one managed-blob fragment staged under it."""
     table = f"lance_catalog$db$b{uuid.uuid4().hex[:8]}"
     location = estate.create(table, _no_rows(nested=nested), external_base)
     units = [(f"file:///page-{i}.tif", payload) for i, payload in enumerate(_PAYLOADS)]
@@ -216,14 +216,14 @@ def _bronze(estate: _Estate, *, external_base: str | None = None, nested: bool =
     return _Staged(estate, table, location, written[0])
 
 
-def _bronze_with_a_base(estate: _Estate, *, nested: bool = False) -> _Staged:
-    return _bronze(estate, external_base=estate.external_base, nested=nested)
+def _raw_with_a_base(estate: _Estate, *, nested: bool = False) -> _Staged:
+    return _raw(estate, external_base=estate.external_base, nested=nested)
 
 
-def _bronze_with_a_planted_base(estate: _Estate) -> _Staged:
-    """A bronze table with its own external base, to which a writer past every door then adds another table's source
+def _raw_with_a_planted_base(estate: _Estate) -> _Staged:
+    """A raw table with its own external base, to which a writer past every door then adds another table's source
     prefix inside the same approved entry: no door admitted it, so the table's record does not hold it."""
-    staged = _bronze_with_a_base(estate)
+    staged = _raw_with_a_base(estate)
     victim = f"s3://{estate.bucket}-corpus/media/victim/"
     estate.open(staged.location).add_bases([lance.DatasetBasePath(victim, name="planted", is_dataset_root=False)])
     estate.put_uri(f"{victim}scan.bin", b"VICTIM-SCAN")
@@ -287,7 +287,7 @@ def _named_by(transaction_uuid: str) -> Callable[[_Staged], list[dict[str, Any]]
 
 
 def _external(uri: str, *, nested: bool = False) -> Callable[[_Staged], list[dict[str, Any]]]:
-    """A bronze fragment whose payload names ``uri`` as an external blob, written with Lance's outside-bases bypass.
+    """A raw fragment whose payload names ``uri`` as an external blob, written with Lance's outside-bases bypass.
 
     ``nested`` names it only as the element of ``pages``, its ``page`` struct null."""
 
@@ -387,19 +387,19 @@ def _missing_sidecar(sidecar_id: int) -> Callable[[_Staged], list[dict[str, Any]
         pytest.param(_plain, _outside_data, "is not a bare file name", id="path-outside-data"),
         pytest.param(lambda estate: _plain(estate, data_storage_version="2.1"), _declared_2_2, "its footer is file format 2.1", id="footer-2.1-declared-2.2"),
         pytest.param(lambda estate: _plain(estate, data_storage_version="2.3"), _declared_2_2, "its footer is file format 2.3", id="footer-2.3-declared-2.2"),
-        pytest.param(_bronze, _missing_sidecar(1), "points into a blob sidecar that is missing", id="missing-blob-sidecar"),
+        pytest.param(_raw, _missing_sidecar(1), "points into a blob sidecar that is missing", id="missing-blob-sidecar"),
         pytest.param(
-            _bronze_with_a_base, _external("s3://{bucket}/elsewhere/secret.bin"), "an external blob is a path relative to", id="external-blob-absolute-uri"
+            _raw_with_a_base, _external("s3://{bucket}/elsewhere/secret.bin"), "an external blob is a path relative to", id="external-blob-absolute-uri"
         ),
         pytest.param(
-            lambda estate: _bronze_with_a_base(estate, nested=True),
+            lambda estate: _raw_with_a_base(estate, nested=True),
             _external("s3://{bucket}/elsewhere/secret.bin", nested=True),
             "of blob column 'pages[0]' points at 's3://",
             id="nested-external-blob-absolute-uri",
         ),
-        pytest.param(_bronze_with_a_base, _external("{base}absent.bin"), "which does not exist", id="external-blob-missing-target"),
+        pytest.param(_raw_with_a_base, _external("{base}absent.bin"), "which does not exist", id="external-blob-missing-target"),
         pytest.param(
-            _bronze,
+            _raw,
             _external("s3://{bucket}/elsewhere/secret.bin"),
             "/elsewhere/secret.bin' as an external blob, and the table has no external blob base",
             id="external-blob-without-a-base",
@@ -431,7 +431,7 @@ def test_a_commit_through_a_base_planted_inside_an_approved_entry_is_refused_on_
     """An approved entry admits a base where a door records it, for the warehouse it is approved for ([[LH-410]]). A
     base a writer planted inside one past every door is in no record, so the commit pointing at another table's object
     through it is refused on the base itself, before any descriptor is read."""
-    staged = _bronze_with_a_planted_base(estate)
+    staged = _raw_with_a_planted_base(estate)
     before, rows = estate.open(staged.location).version, estate.ids(staged.location)
     fragments = _external("s3://{bucket}-corpus/media/victim/scan.bin")(staged)
 
@@ -448,7 +448,7 @@ def test_a_blob_written_into_a_fragment_the_table_holds_is_judged_as_a_new_fragm
     """A ``DataReplacement`` adds a data file to a fragment the table holds, and its blob descriptors are judged as a new
     fragment's are: measured on pylance 13.0.0, Lance commits one whose file names another bucket's object as an external
     blob, and ``take_blobs`` then reads that object's bytes, which the blob door would read with the catalog's own key."""
-    staged = _bronze_with_a_base(estate)
+    staged = _raw_with_a_base(estate)
     assert _commit(staged, [staged.copy()], estate.open(staged.location).version) is None
     held = estate.open(staged.location).get_fragments()[0]
     before, rows = estate.open(staged.location).version, estate.ids(staged.location)
@@ -468,7 +468,7 @@ def test_a_blob_written_into_a_fragment_the_table_holds_is_judged_as_a_new_fragm
 
 
 def test_a_writers_own_blob_fragments_commit_through_every_check(estate: _Estate) -> None:
-    """The honest writer passes: a bronze table created through the door with its approved external base, then managed blobs
+    """The honest writer passes: a raw table created through the door with its approved external base, then managed blobs
     (inline, packed, dedicated) and an external blob under that base, each written under ``data/`` and committed through the
     same door the forgeries are refused at, its blob fields beneath a Struct and a List ([[LH-539]]). A blob column at the
     top level takes the same checks, and the top-level forgeries above reach each of them before their refusal."""

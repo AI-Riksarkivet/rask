@@ -48,7 +48,7 @@ def _state(tenant: Tenant, table: str) -> tuple[int, int]:
 
 
 def test_an_append_sent_again_under_its_key_after_its_caller_gave_up_lands_once(byo_tenant: Tenant) -> None:
-    table = f"{byo_tenant.bronze}$retried-{uuid.uuid4().hex[:6]}"
+    table = f"{byo_tenant.raw}$retried-{uuid.uuid4().hex[:6]}"
     ok(byo_tenant.pipeline.http.post(f"{_CATALOG}/v1/table/{table}/create", data=encode_arrow_stream(rows_of(range(3))), headers=_ARROW, timeout=60))
     byo_tenant.tables.append(table)
     before = _state(byo_tenant, table)

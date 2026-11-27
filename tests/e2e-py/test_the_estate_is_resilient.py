@@ -38,8 +38,8 @@ The drills, and what each outage must look like while it lasts:
    history: every acknowledged commit landed once, a commit whose answer the kill lost landed at most once, and no run
    landed twice.
 
-THE DRILL TABLES live in a namespace the module makes in the shared tenant's warehouse, beside the scenario's bronze and
-silver rather than in them, as criterion 2's matrix does, so criteria 1 and 4 read only what the scenario made. The pipeline
+THE DRILL TABLES live in a namespace the module makes in the shared tenant's warehouse, beside the scenario's raw and
+cleaned rather than in them, as criterion 2's matrix does, so criteria 1 and 4 read only what the scenario made. The pipeline
 holds `writer` there and owns each table it makes. Every commit names a run whose input is the namespace's source table
 at version 1, so every version has an edge to hold the edge list to.
 

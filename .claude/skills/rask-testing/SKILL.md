@@ -195,7 +195,7 @@ from the root conftest.
   drives the code.
 - **Test docstrings and comments follow CLAUDE.md's comment rule**: rationale and provenance, never
   history. The `comment-history-gate` prek hook checks staged lines; `make comment-gate` checks the
-  worktree.
+  worktree; CI's `ms-comment-gate` (`dagger call comment-gate`) checks the lines a push or pull request adds.
 
 ## References
 

@@ -6,7 +6,7 @@ help:
 	@echo "  typecheck knip check ci   frontend-check frontend-build"
 	@echo "  dev                                    — the console (Vite HMR, /api → RASK_EDGE_URL)"
 	@echo "  dev-k3s                                — the console against the IN-CLUSTER edge (Traefik, port-forwarded)"
-	@echo "  console-image                          — the console's static-file image (web + serve.ts)"
+	@echo "  console-image                          — the console's static-file image (web + serve.ts), as an OCI tarball"
 	@echo "  dev-gc                                 — reclaim the dev registry + the Dagger cache"
 	@echo "  claude-bootstrap                       — install Claude Code skills & verify config"
 
@@ -115,8 +115,9 @@ fmt:
 # ---- comment rule (forward-only; docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md) -------------------------
 # Kind (3) prose — a comment whose subject is a previous comment — is banned in NEW code. The 35,279
 # lines already written are deliberately left alone, so this reads ADDED lines only and is green at
-# HEAD by construction. `prek` runs the same script on `--staged`; CI should run it as
-# `--base origin/main`. `--report` prints the standing population and always exits 0.
+# HEAD by construction. `prek` runs the same script on `--staged`; CI runs it as `dagger call comment-gate` on the diff
+# of exactly what a push or pull request adds (ci.yml's ms-comment-gate). `--report` prints the standing population and
+# always exits 0.
 # NOT wired into `make check`: check is a whole-tree gate and this one is a diff gate, and pretending
 # otherwise is how a diff gate ends up either red for everyone or scoped to nothing.
 comment-gate:
@@ -160,11 +161,12 @@ openapi-check: openapi
 # The console is one static single-page app served by its own `serve.ts` (.docker/frontend.dockerfile). The build goes
 # through DAGGER (scripts/dagger-image.sh -> `dagger call image --name=frontend`), like every image in this repository;
 # the helper supplies the OCI provenance args (BUILD_DATE / VCS_REF / VERSION), because a Dagger Function is sandboxed
-# and cannot read git.
+# and cannot read git. The image lands as an OCI tarball named web-console:$(CONSOLE_TAG), which `make k3s-import` or
+# `kind load image-archive` loads with no docker daemon.
 CONSOLE_TAG ?= dev
 
-console-image: ## Build the console's image (web-console:$(CONSOLE_TAG)) from .docker/frontend.dockerfile
-	VERSION="$(CONSOLE_TAG)" bash scripts/dagger-image.sh --name frontend --tag web-console:$(CONSOLE_TAG)
+console-image: ## Build the console's image as an OCI tarball (web-console:$(CONSOLE_TAG), $(K3S_IMAGE_DIR)/web-console.tar)
+	VERSION="$(CONSOLE_TAG)" bash scripts/dagger-image.sh --name frontend --tag web-console:$(CONSOLE_TAG) --out $(K3S_IMAGE_DIR)/web-console.tar
 
 # ---- chart gates (prod overlay + alert rules) -------------------------------
 # CI enforces both via `dagger call charts` (.dagger/charts.go), which shells out to these two
@@ -447,7 +449,8 @@ release-handoff: ## A release signs only the images its scan returned, and a cha
 # side-loaded by `make k3s-import`, so a hand-built image lands outside CONTAINERD and k3s answers
 # ErrImagePull. Measured 2026-08-06: a Dagger build succeeded (exit 0), `kubectl set image` ->
 # ErrImagePull, rolled back.
-KUBECONFIG ?= /etc/rancher/k3s/k3s.yaml
+# The invoking user's own copy of the k3s admin kubeconfig, owner-only, which `make k3s-install` writes.
+KUBECONFIG ?= $(HOME)/.kube/k3s.yaml
 # Routed through scripts/helm.sh, NOT bare `helm`: it names the kubeconfig and refuses a call whose declared
 # context is not the one kubectl resolves, since `upgrade --install` against the wrong cluster installs there
 # WITHOUT erroring. Read-only subcommands pass straight through.

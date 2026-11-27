@@ -240,6 +240,6 @@ def test_the_compaction_gate_finds_a_dataset_rooted_at_a_base_in_the_catalogs_sp
     location = estate.registered("lance_catalog$db$räksmörgås", "räksmörgås")
     assert "%C3%A4" in location, f"precondition: the catalog answers the location percent-encoded: {location}"
 
-    rooted = dataset_root_probe(f"{estate.root}/a1b2c3d4_db$silver", estate.key)(location)
+    rooted = dataset_root_probe(f"{estate.root}/a1b2c3d4_db$cleaned", estate.key)(location)
 
     assert rooted is True, f"{location} reads as no dataset root while pylance opens a dataset there"

@@ -1,24 +1,20 @@
 #!/usr/bin/env bash
-# Build ONE image with Dagger and put it where the caller needs it.
+# Build ONE image with Dagger and hand it over where the caller needs it, through no docker daemon.
 #
-# (`k3s-build`, `frontend-images`), the e2e stack scripts, and CI (which calls those make targets).
-# Before 2026-07-29 each of those shelled out to `docker buildx build` directly, so "dagger is the build
-# system" was true of the CI gates and false of every artefact. The dockerfile is unchanged and remains
-# the single source of truth; only the driver moved.
+# The one build seam: `k3s-build`, `console-image`, the e2e stack scripts and CI all build through it, and each builds
+# from the dockerfile in `.docker/`, which stays the single source of truth; Dagger is only the driver.
 #
-#   scripts/dagger-image.sh --name rest-catalog --tag lance-rest-catalog:dev
-#   scripts/dagger-image.sh --name frontend     --tag web-console:dev
-#   scripts/dagger-image.sh --name rest-catalog --out build/k3s-images/lance-rest-catalog.tar   (no docker: what k3s-build does)
+#   scripts/dagger-image.sh --name rest-catalog --out build/k3s-images/lance-rest-catalog.tar   (what k3s-build does)
+#   scripts/dagger-image.sh --name frontend --tag web-console:dev --out build/k3s-images/web-console.tar
+#   scripts/dagger-image.sh --name rest-catalog --push 172.17.0.1:5000/lance-rest-catalog:<tag>
 #
-# DELIVERY: --load (default) exports an OCI tarball and `docker load`s it, which reproduces exactly what
-# `docker buildx build --load` used to do, so the compose stacks and the kind lane keep working unchanged.
-# --out stops at the tarball, which `make k3s-import` loads into k3s's containerd with no docker daemon. Measured on the gateway image: the export dominates at ~78 s (it is the BUILD), and the
-# `docker load` adds ~5 s. --push publishes straight to a registry instead, skipping the daemon.
+# DELIVERY, exactly one of: --out writes the OCI tarball, which `make k3s-import` loads into k3s's containerd and
+# `kind load image-archive` into a kind node, named by --tag when one is given; --push publishes straight to a registry.
 #
 # THE ENGINE, AND WHAT EACH MODE ACTUALLY NEEDS OF IT. Dagger always speaks HTTPS to a registry and
 # `publish` has no --insecure flag, so pushing to the plain-HTTP dev registry needs the CONFIG that
-# `make dagger-engine` writes. --load touches no registry and needs none of that — what it needs is to
-# not split the BuildKit CACHE, because an engine owns its own: letting --load auto-provision a second
+# `make dagger-engine` writes. --out touches no registry and needs none of that — what it needs is to
+# not split the BuildKit CACHE, because an engine owns its own: letting --out auto-provision a second
 # engine means a build warms one and the next reads the other cold, buying nothing. Measured
 # 2026-09-20 on this host — two engines up at once, `dagger-engine-rask` holding 5.2 GB against an
 # auto-provisioned `dagger-engine-v0.21.7` on its own anonymous volume, invisible because a cold build
@@ -26,16 +22,15 @@
 #
 # THOSE ARE TWO DIFFERENT REQUIREMENTS AND ONLY ONE IS UNIVERSAL. A cache can only be split where a
 # cache persists. CI is a fresh runner with no engine, no state volume and no `make dagger-engine`
-# step, so demanding the repo's engine there refuses a build to protect a cache that does not exist —
-# which is how `e2e-stack` and `e2e-ray` died on `!! dagger-engine-rask is not running` the first time
-# they reached this script. So the requirement is stated by its reason: --push always needs the
-# engine's config; --load needs it only when the NAMED state volume is there to be split, i.e. on a
-# host where `make dagger-engine` has run and the engine is merely stopped.
-# `make dagger-engine` is idempotent and once per host; it reuses that volume, so running it costs
+# step, so demanding the repo's engine there would refuse a build to protect a cache that does not exist
+# (`e2e-stack` died on `!! dagger-engine-rask is not running` the first time it reached a script that demanded it).
+# So the requirement is stated by its reason: --push always needs the engine's config; --out needs it only when the
+# NAMED state volume is there to be split, i.e. on a host where `make dagger-engine` has run and the engine is merely
+# stopped. `make dagger-engine` is idempotent and once per host; it reuses that volume, so running it costs
 # nothing and never discards the cache.
 set -euo pipefail
 
-NAME="" TAG="" MODE="load" ADDRESS="" OUT=""
+NAME="" TAG="" MODE="" ADDRESS="" OUT=""
 EXTRA_ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -52,14 +47,13 @@ done
 if [[ -z "$NAME" ]]; then
   echo "!! need --name <dockerfile stem>" >&2; exit 2
 fi
-if [[ "$MODE" == "load" && -z "$TAG" ]]; then
-  echo "!! --load needs --tag <image:tag>" >&2; exit 2
+if [[ -z "$MODE" ]]; then
+  echo "!! need --out <file> or --push <address>" >&2; exit 2
 fi
 
 command -v dagger >/dev/null 2>&1 || { echo "!! dagger CLI not on PATH — https://docs.dagger.io/install" >&2; exit 1; }
 
-# Respect an operator's choice; otherwise prefer the repo's configured engine when it is up. --out is held to --load's
-# rule: it writes a file instead of loading into docker, but it builds on the same engine and must not split its cache.
+# Respect an operator's choice; otherwise prefer the repo's configured engine when it is up, and never split its cache.
 if [[ -z "${_EXPERIMENTAL_DAGGER_RUNNER_HOST:-}" ]]; then
   engine="${DAGGER_ENGINE_NAME:-dagger-engine-rask}"
   state="${DAGGER_ENGINE_STATE:-dagger-engine-rask-state}"
@@ -92,19 +86,18 @@ if [[ "$MODE" == "push" ]]; then
   exec dagger call "${fn[@]}" publish --address="$ADDRESS"
 fi
 
-# --out: the OCI tarball at the caller's path and nothing else; no image is loaded into docker ([[XC-152]]).
-# `make k3s-import` loads it into k3s's containerd under the name the chart expects.
-if [[ "$MODE" == "out" ]]; then
-  mkdir -p "$(dirname "$OUT")"
-  echo ">> dagger: $NAME -> $OUT"
-  dagger call "${fn[@]}" export --path="$OUT"
-  # NAMED WHEN A TAG IS GIVEN. Dagger's export carries no image name, and containerd names an image it imports from an
-  # OCI layout by the `io.containerd.image.name` annotation on the index's manifest entry, a full reference; the layout's
-  # `manifest.json` is not read at all (containerd v1.7 `images/archive/importer.go`, `import.go::imageName`). So the
-  # annotation is written there, and `kind load image-archive` or a bare `ctr images import` lands the image under the
-  # name the render asks for.
-  if [[ -n "$TAG" ]]; then
-    python3 - "$OUT" "$TAG" <<'PYEOF'
+# --out: the OCI tarball at the caller's path and nothing else ([[XC-152]]). `make k3s-import` loads it into k3s's
+# containerd under the name the chart expects.
+mkdir -p "$(dirname "$OUT")"
+echo ">> dagger: $NAME -> $OUT"
+dagger call "${fn[@]}" export --path="$OUT"
+# NAMED WHEN A TAG IS GIVEN. Dagger's export carries no image name, and containerd names an image it imports from an
+# OCI layout by the `io.containerd.image.name` annotation on the index's manifest entry, a full reference; the layout's
+# `manifest.json` is not read at all (containerd v1.7 `images/archive/importer.go`, `import.go::imageName`). So the
+# annotation is written there, and `kind load image-archive` or a bare `ctr images import` lands the image under the
+# name the render asks for.
+if [[ -n "$TAG" ]]; then
+  python3 - "$OUT" "$TAG" <<'PYEOF'
 import io, json, os, sys, tarfile
 
 path, tag = sys.argv[1], sys.argv[2]
@@ -131,19 +124,4 @@ with tarfile.open(path) as src, tarfile.open(named, "w") as dst:
         dst.addfile(member, io.BytesIO(body))
 os.replace(named, path)
 PYEOF
-  fi
-  exit 0
 fi
-
-tar="$(mktemp -d)/image.tar"
-# shellcheck disable=SC2064  # expand $tar now, at trap-set time — the temp dir is per-invocation
-trap "rm -rf '$(dirname "$tar")'" EXIT
-
-echo ">> dagger: $NAME -> $TAG"
-dagger call "${fn[@]}" export --path="$tar"
-
-# `docker load` prints the image ID, not the tag — the tarball carries no repo:tag, so tag it here.
-loaded="$(docker load -i "$tar" | sed -n 's/^Loaded image ID: //p; s/^Loaded image: //p' | tail -1)"
-[[ -n "$loaded" ]] || { echo "!! docker load produced no image" >&2; exit 1; }
-docker tag "$loaded" "$TAG"
-echo ">> loaded $TAG"

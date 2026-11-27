@@ -145,7 +145,7 @@ def test_an_owner_attaches_a_label_the_project_defines_with_a_value_it_allows(es
     attached = _set(client, "table", ORDERS, "domain", "finance")
     assert (attached.status_code, attached.json()["labels"]) == (200, {"domain": "finance"}), attached.text
     assert _code(_set(client, "table", ORDERS, "domain", "legal")) == (400, 13)
-    assert _code(_set(client, "table", ORDERS, "tier", "silver")) == (400, 13)
+    assert _code(_set(client, "table", ORDERS, "tier", "cleaned")) == (400, 13)
     assert _code(_set(client, "table", ORDERS, "pii", "yes")) == (400, 13)
     assert _code(_set(client, "table", REFUNDS, "pii")) == (403, 15)
     assert _set(client, "table", ORDERS, "pii").json()["labels"] == {"domain": "finance", "pii": None}

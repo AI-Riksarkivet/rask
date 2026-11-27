@@ -28,7 +28,7 @@ from tests.integration.lineage_app import joined_bus, live_catalog, live_lineage
 
 
 _ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
-_NAMESPACE = "lance_catalog$acme-silver"
+_NAMESPACE = "lance_catalog$acme-cleaned"
 _TABLE = f"{_NAMESPACE}$pages"
 
 

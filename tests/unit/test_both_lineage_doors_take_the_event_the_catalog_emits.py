@@ -48,7 +48,7 @@ def _recorded_as(store: ProvenanceStoreDouble, door: str) -> list[RunEvent | Dat
 def _emitted(operation: str) -> dict[str, Any]:
     """Exactly what the catalog puts on the wire for this operation — the real builder, no stand-in."""
     return build_write_event(
-        table_id="gov$bronze",
+        table_id="gov$raw",
         namespace="lance",
         author=_AUTHOR,
         version=1,

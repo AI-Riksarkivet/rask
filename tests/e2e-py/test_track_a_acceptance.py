@@ -42,7 +42,7 @@ answers 401 and a POST write answers 503) stays covered by `services/catalog/tes
 drive recorded with the fix.
 
 ISOLATION AND CLEANUP. Each run mints its OWN tenant — project, warehouse (its own bucket) and
-namespace, all uuid-suffixed — so it shares nothing with bronze/silver/gold or any existing tenant, and
+namespace, all uuid-suffixed — so it shares nothing with raw/cleaned/served or any existing tenant, and
 a mid-run failure strands artefacts under one obviously-scratch name. Teardown drops the tables, then
 deletes the warehouse with its bucket, then the project.
 

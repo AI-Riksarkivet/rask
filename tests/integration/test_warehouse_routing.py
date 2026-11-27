@@ -1,6 +1,6 @@
 """The routing a request's first segment decides ([[LH-593]], ADR 0206): a real app, real directory catalogs, the resolver not overridden.
 
-A warehouse is the first segment of every identifier, so ``wh-a$bronze$clips`` is served from warehouse ``wh-a``'s own
+A warehouse is the first segment of every identifier, so ``wh-a$raw$clips`` is served from warehouse ``wh-a``'s own
 root and its own directory catalog. The control-plane doors (create, list, get) are ``test_warehouses.py``'s.
 """
 
@@ -60,22 +60,22 @@ def _routing_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, **env: str) ->
 
 def _register_warehouse(registry: Path, warehouse_root: Path, *, wid: str = "wh-a", control: str | None = None, options: StorageOptions | None = None) -> None:
     """Register warehouse ``wid`` on a LOCAL root the resolver opens in-process, with its own row in that root's catalog
-    and a namespace ``bronze`` beneath it, as the create door leaves a warehouse and CreateNamespace a namespace. The
+    and a namespace ``raw`` beneath it, as the create door leaves a warehouse and CreateNamespace a namespace. The
     record goes to ``registry``, or to the control root ``control`` read with ``options``."""
     control = control or f"file://{registry}"
     options = options or StorageOptions()
     seeding.put_warehouse(control, options, {"id": wid, "bucket": wid, "root_uri": str(warehouse_root), "project": "acme"})
     wh_ns = connect("dir", {"root": str(warehouse_root)})
     wh_ns.create_namespace(CreateNamespaceRequest(id=[wid], properties=with_minted_uuid(None)))
-    wh_ns.create_namespace(CreateNamespaceRequest(id=[wid, "bronze"], properties=with_minted_uuid(None)))
+    wh_ns.create_namespace(CreateNamespaceRequest(id=[wid, "raw"], properties=with_minted_uuid(None)))
 
 
 def _created(client: TestClient) -> int:
-    return client.post("/v1/table/wh-a$bronze$clips/create", content=encode_arrow_stream(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM).status_code
+    return client.post("/v1/table/wh-a$raw$clips/create", content=encode_arrow_stream(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM).status_code
 
 
 def _declared(client: TestClient) -> int:
-    return client.post("/v1/table/wh-a$bronze$clips/declare", json={}).status_code
+    return client.post("/v1/table/wh-a$raw$clips/declare", json={}).status_code
 
 
 def _directories(root: Path) -> list[str]:
@@ -97,7 +97,7 @@ def test_a_table_the_catalog_makes_lives_in_its_warehouse_root_under_its_uuid(
     _register_warehouse(registry, warehouse_root)
     assert make(client) == 200
 
-    described = client.post("/v1/table/wh-a$bronze$clips/describe", json={})
+    described = client.post("/v1/table/wh-a$raw$clips/describe", json={})
 
     assert described.status_code == 200, described.text
     table_uuid = described.json()["properties"][UUID_PROPERTY]
@@ -106,7 +106,7 @@ def test_a_table_the_catalog_makes_lives_in_its_warehouse_root_under_its_uuid(
 
 
 def test_two_warehouses_each_hold_the_same_names_and_no_binding_is_recorded(routing: tuple[TestClient, Path, Path, Path]) -> None:
-    """[[LH-593]] A name belongs to its warehouse: ``wh-a$bronze$t`` and ``wh-b$bronze$t`` are two tables in two roots,
+    """[[LH-593]] A name belongs to its warehouse: ``wh-a$raw$t`` and ``wh-b$raw$t`` are two tables in two roots,
     and nothing on the control root binds a name to a warehouse."""
     client, _estate_root, warehouse_root, registry = routing
     other_root = registry.parent / "wh-b-bucket"
@@ -114,10 +114,10 @@ def test_two_warehouses_each_hold_the_same_names_and_no_binding_is_recorded(rout
     _register_warehouse(registry, warehouse_root)
     _register_warehouse(registry, other_root, wid="wh-b")
     for warehouse, rows in (("wh-a", [1]), ("wh-b", [1, 2])):
-        made = client.post(f"/v1/table/{warehouse}$bronze$t/create", content=encode_arrow_stream(pa.table({"id": rows})), headers=ARROW_STREAM)
+        made = client.post(f"/v1/table/{warehouse}$raw$t/create", content=encode_arrow_stream(pa.table({"id": rows})), headers=ARROW_STREAM)
         assert made.status_code == 200, made.text
 
-    described = {warehouse: client.post(f"/v1/table/{warehouse}$bronze$t/describe", json={}).json() for warehouse in ("wh-a", "wh-b")}
+    described = {warehouse: client.post(f"/v1/table/{warehouse}$raw$t/describe", json={}).json() for warehouse in ("wh-a", "wh-b")}
 
     held = {
         warehouse: (Path(answer["location"].removeprefix("file://")).parent, lance.dataset(answer["location"]).count_rows())
@@ -133,7 +133,7 @@ def test_deactivate_quarantines_then_activate_restores(routing: tuple[TestClient
 
     def _create(name: str) -> int:
         return client.post(
-            f"/v1/table/wh-a$bronze${name}/create?mode=overwrite",
+            f"/v1/table/wh-a$raw${name}/create?mode=overwrite",
             content=encode_arrow_stream(pa.table({"id": [1]})),
             headers=ARROW_STREAM,
         ).status_code
@@ -146,7 +146,7 @@ def test_deactivate_quarantines_then_activate_restores(routing: tuple[TestClient
     assert d.status_code == 200, d.text
     assert d.json()["status"] == "deactivated"
     blocked = client.post(
-        "/v1/table/wh-a$bronze$t_during/create?mode=overwrite",
+        "/v1/table/wh-a$raw$t_during/create?mode=overwrite",
         content=encode_arrow_stream(pa.table({"id": [1]})),
         headers=ARROW_STREAM,
     )
@@ -171,15 +171,15 @@ def test_an_undropped_namespace_is_rebuilt_in_its_own_warehouse(routing_recovera
     own root: rebuilding there would be a tenant-isolation break with no error, so it is asserted physically."""
     client, estate_root, warehouse_root, registry = routing_recoverable
     _register_warehouse(registry, warehouse_root)
-    created = client.post("/v1/table/wh-a$bronze$clips/create?mode=overwrite", content=encode_arrow_stream(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM)
+    created = client.post("/v1/table/wh-a$raw$clips/create?mode=overwrite", content=encode_arrow_stream(pa.table({"id": [1, 2, 3]})), headers=ARROW_STREAM)
     assert created.status_code == 200, created.text
-    dropped = client.post("/v1/namespace/wh-a$bronze/drop", json={"behavior": "cascade"})
+    dropped = client.post("/v1/namespace/wh-a$raw/drop", json={"behavior": "cascade"})
     assert dropped.status_code == 200, dropped.text
 
-    recovered = client.post("/management/v1/namespace/wh-a$bronze/undrop", json={})
+    recovered = client.post("/management/v1/namespace/wh-a$raw/undrop", json={})
 
     assert recovered.status_code == 200, recovered.text
-    described = client.post("/v1/table/wh-a$bronze$clips/describe", json={})
+    described = client.post("/v1/table/wh-a$raw$clips/describe", json={})
     assert described.status_code == 200, described.text
     location = described.json()["location"]
     assert (str(warehouse_root) in location, _directories(estate_root), lance.dataset(location).count_rows()) == (True, [], 3), location
@@ -189,11 +189,11 @@ def test_a_table_registered_in_a_warehouse_is_then_described(routing: tuple[Test
     """[[LH-463]] `RegisterTable` answers for the table it registered: describe and list find it afterwards."""
     client, _estate_root, warehouse_root, registry = routing
     _register_warehouse(registry, warehouse_root)
-    registered = client.post("/v1/table/wh-a$bronze$events/register", json={"location": "medallion/bronze"})
+    registered = client.post("/v1/table/wh-a$raw$events/register", json={"location": "medallion/raw"})
 
     assert registered.status_code == 200, registered.text
-    described = client.post("/v1/table/wh-a$bronze$events/describe", json={})
-    listed = client.get("/v1/namespace/wh-a$bronze/table/list")
+    described = client.post("/v1/table/wh-a$raw$events/describe", json={})
+    listed = client.get("/v1/namespace/wh-a$raw/table/list")
     assert (described.status_code, listed.json().get("tables")) == (200, ["events"]), (described.text, listed.text)
 
 
@@ -225,10 +225,10 @@ def test_a_listing_reads_its_warehouse_record_once(
     client, _estate_root, warehouse_root, registry = routing_on_a_store
     _register_warehouse(registry, warehouse_root, control="s3://registry", options=get_settings().storage_options())
     for name in ("a", "b", "c", "d"):
-        assert client.post(f"/v1/table/wh-a$bronze${name}/create", content=encode_arrow_stream(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
+        assert client.post(f"/v1/table/wh-a$raw${name}/create", content=encode_arrow_stream(pa.table({"id": [1]})), headers=ARROW_STREAM).status_code == 200
     registry_store.taken()
 
-    listed = client.get("/v1/namespace/wh-a$bronze/table/list", params={"include_declared": "false"})
+    listed = client.get("/v1/namespace/wh-a$raw/table/list", params={"include_declared": "false"})
 
     assert (listed.status_code, listed.json()["tables"]) == (200, ["a", "b", "c", "d"]), listed.text
     record_reads = [request for request in registry_store.taken() if request.method == "GET" and request.path.endswith("/wh-a.json")]

@@ -206,7 +206,7 @@ Two things bite when pushing to the local registry, and neither announces itself
   quietly provision its own config-less engine and the HTTPS failure returns.
 
 **`make k3s-build` rebuilds EVERY image** (the lakehouse's and the console's) when usually one changed;
-`scripts/dagger-image.sh --name <stem>` builds one.
+`scripts/dagger-image.sh --name <stem> --push <address>` (or `--out <tar>`) builds one.
 
 **The dev loop leaks disk in two places, and both grew past a terabyte before anyone looked.**
 `make dev-gc` reclaims both; `make registry-gc` / `make dagger-gc` do one each.

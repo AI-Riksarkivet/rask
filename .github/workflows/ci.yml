@@ -128,6 +128,33 @@ jobs:
           DAGGER_NO_NAG: "1"
         run: dagger call ${{ matrix.gate }}
 
+  # The comment rule's gate (scripts/comment_history_gate.py, ADR 0044) judges only the lines this push or pull request
+  # adds: the rule is forward-only, and the prose already written is not to be drained. The base is the one the change is
+  # measured from: a pull request's base commit, a push's previous tip, or main for a branch's first push (whose previous
+  # tip is forty zeros). The diff is made against its merge-base with HEAD, here where the history is (fetch-depth 0, so
+  # both commits are in the clone), and the Dagger lane, whose tree has no `.git`, judges it. A push whose previous tip
+  # this clone cannot reach fails at the merge-base rather than judging nothing. A nightly run has no change to judge.
+  ms-comment-gate:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: ./.github/actions/dagger
+      - name: The lines this change adds
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          set -euo pipefail
+          if [ -z "$BASE" ] || [ "$BASE" = 0000000000000000000000000000000000000000 ]; then BASE=origin/main; fi
+          merge_base="$(git merge-base HEAD "$BASE")"
+          git diff --unified=0 --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ "$merge_base" > "$RUNNER_TEMP/changes.diff"
+      - name: dagger call comment-gate
+        env:
+          DAGGER_NO_NAG: "1"
+        run: dagger call comment-gate --changes="$RUNNER_TEMP/changes.diff"
+
   # ── SUPPLY CHAIN ──────────────────────────────────────────────────────────────────────────────
   # The gates above judge code WE wrote. These judge what we pull in — the ~1100 third-party packages
   # across the lockfiles, and the base layers the images sit on. Both legs are `dagger call` against

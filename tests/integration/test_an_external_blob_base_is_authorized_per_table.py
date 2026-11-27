@@ -165,19 +165,21 @@ def test_a_derived_tier_takes_its_upstreams_carried_pointers(estate: _Estate) ->
     base = f"s3://{estate.corpus}/media/pages/"
     estate.s3.put_object(Bucket=estate.corpus, Key="media/pages/p-1.bin", Body=b"PAGE-ONE")
     rows = pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([Blob.from_uri(f"{base}p-1.bin")])})
-    bronze = estate.create("lance_catalog$db$bronze", rows.schema.empty_table(), base)
-    assert bronze.status_code == 200, bronze.text
-    bronze_uri = str(bronze.json()["location"])
-    lance.write_dataset(rows, bronze_uri, mode="append", storage_options=estate.key.in_clear())
+    raw = estate.create("lance_catalog$db$raw", rows.schema.empty_table(), base)
+    assert raw.status_code == 200, raw.text
+    raw_uri = str(raw.json()["location"])
+    lance.write_dataset(rows, raw_uri, mode="append", storage_options=estate.key.in_clear())
 
-    silver = estate.create("lance_catalog$db$silver", rows.schema.empty_table(), base)
-    assert silver.status_code == 200, silver.text
-    silver_uri = str(silver.json()["location"])
+    cleaned = estate.create("lance_catalog$db$cleaned", rows.schema.empty_table(), base)
+    assert cleaned.status_code == 200, cleaned.text
+    cleaned_uri = str(cleaned.json()["location"])
 
-    [descriptor] = lance.dataset(bronze_uri, storage_options=estate.key.in_clear()).to_table(columns=["payload"]).column("payload").to_pylist()
+    [descriptor] = lance.dataset(raw_uri, storage_options=estate.key.in_clear()).to_table(columns=["payload"]).column("payload").to_pylist()
     carried = pa.table({"id": pa.array([1], pa.int64()), "payload": blob_array([blobs.carry_external_descriptor(descriptor, base)])})
-    lance.dataset(silver_uri, storage_options=estate.key.in_clear()).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(carried)
-    assert [payload for _, payload in lance.dataset(silver_uri, storage_options=estate.key.in_clear()).read_blobs("payload", indices=[0])] == [b"PAGE-ONE"]
+    lance.dataset(cleaned_uri, storage_options=estate.key.in_clear()).merge_insert("id").when_matched_update_all().when_not_matched_insert_all().execute(
+        carried
+    )
+    assert [payload for _, payload in lance.dataset(cleaned_uri, storage_options=estate.key.in_clear()).read_blobs("payload", indices=[0])] == [b"PAGE-ONE"]
 
 
 def test_a_base_over_the_model_tree_is_sanctioned_by_nothing_but_a_record(estate: _Estate) -> None:

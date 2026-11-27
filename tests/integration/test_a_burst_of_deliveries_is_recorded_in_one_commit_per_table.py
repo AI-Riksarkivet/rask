@@ -35,7 +35,7 @@ from tests.open_gate import admits_everything
 
 _ALICE = "dex~alice"
 _BOB = "dex~bob"
-_SOURCE = "lance_catalog$acme-bronze$src"
+_SOURCE = "lance_catalog$acme-raw$src"
 
 
 def _authored(author: str) -> dict[str, Any]:
@@ -85,12 +85,12 @@ def _edges_by_run(clients: CatalogClients) -> Counter[str]:
 def test_a_burst_lands_in_two_commits_per_table_each_row_once_and_a_run_extended_only_by_its_first_author(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    fresh = [_complete(str(uuid.uuid4()), f"lance_catalog$acme-silver$t{n}") for n in range(24)]
-    recorded = _complete(str(uuid.uuid4()), "lance_catalog$acme-silver$recorded")
-    twice = _complete(str(uuid.uuid4()), "lance_catalog$acme-silver$twice")
+    fresh = [_complete(str(uuid.uuid4()), f"lance_catalog$acme-cleaned$t{n}") for n in range(24)]
+    recorded = _complete(str(uuid.uuid4()), "lance_catalog$acme-cleaned$recorded")
+    twice = _complete(str(uuid.uuid4()), "lance_catalog$acme-cleaned$twice")
     shared = str(uuid.uuid4())
     started = run_event(shared, "START", "2026-10-23T10:00:00+00:00", outputs=[], facets=_authored(_ALICE))
-    finished = _complete(shared, "lance_catalog$acme-silver$shared", author=_BOB)
+    finished = _complete(shared, "lance_catalog$acme-cleaned$shared", author=_BOB)
     # A redelivery of a recorded event, two deliveries of one event, and a run whose second event names another author.
     burst = [*fresh, recorded, twice, twice, started, finished]
 
@@ -120,8 +120,8 @@ def test_a_run_founded_by_two_replicas_at_once_is_extended_only_by_the_author_wh
 ) -> None:
     run = str(uuid.uuid4())
     # A non-terminal state keeps a feed row per arrival, so Alice's event would land a row of its own.
-    alices = run_event(run, "RUNNING", "2026-10-23T10:00:00+00:00", outputs=["lance_catalog$acme-silver$alice"], inputs=(_SOURCE,), facets=_authored(_ALICE))
-    bobs = _complete(run, "lance_catalog$acme-silver$bob", author=_BOB)
+    alices = run_event(run, "RUNNING", "2026-10-23T10:00:00+00:00", outputs=["lance_catalog$acme-cleaned$alice"], inputs=(_SOURCE,), facets=_authored(_ALICE))
+    bobs = _complete(run, "lance_catalog$acme-cleaned$bob", author=_BOB)
 
     with live_catalog(tmp_path / "catalog", monkeypatch) as url, catalog_clients(url) as one, catalog_clients(url) as other:
         # Two replicas, each its own store and writer over the one catalog: neither sees the other's batch.
@@ -168,14 +168,14 @@ def _wide() -> dict[str, Any]:
     weighs about 15 kB."""
     return _complete(
         str(uuid.uuid4()),
-        "lance_catalog$acme-silver$w0",
-        inputs=tuple(f"lance_catalog$acme-bronze$i{n}" for n in range(64)),
-        outputs=[f"lance_catalog$acme-silver$w{n}" for n in range(1, 64)],
+        "lance_catalog$acme-cleaned$w0",
+        inputs=tuple(f"lance_catalog$acme-raw$i{n}" for n in range(64)),
+        outputs=[f"lance_catalog$acme-cleaned$w{n}" for n in range(1, 64)],
     )
 
 
 def test_an_event_whose_edges_the_catalog_refuses_fails_alone_and_its_feed_row_never_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    fresh = [_complete(str(uuid.uuid4()), f"lance_catalog$acme-silver$t{n}") for n in range(12)]
+    fresh = [_complete(str(uuid.uuid4()), f"lance_catalog$acme-cleaned$t{n}") for n in range(12)]
     burst = [*fresh[:6], _wide(), *fresh[6:]]
 
     with live_catalog(tmp_path / "catalog", monkeypatch) as url, catalog_clients(url) as clients:

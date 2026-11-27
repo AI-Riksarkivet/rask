@@ -137,21 +137,21 @@ class _PastDeadline:
     window, and a live table whose undrop crashed before clearing its record, that record's deadline passed."""
 
     def __init__(self, estate: _Estate) -> None:
-        self.bronze = estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
-        self.expired, self.waiting, live = (estate.create_table(f"{self.bronze}${name}") for name in ("expired", "waiting", "live"))
-        estate.post(f"/v1/namespace/{self.bronze}$gone/create")
-        nested = estate.create_table(f"{self.bronze}$gone$t")
-        self.namespace = str(estate.post(f"/v1/namespace/{self.bronze}$gone/describe")["properties"][UUID_PROPERTY])
-        self.location = estate.location(f"{self.bronze}$expired")
-        estate.post(f"/v1/table/{self.bronze}$expired/drop")
-        estate.post(f"/v1/table/{self.bronze}$waiting/drop")
-        estate.post(f"/v1/namespace/{self.bronze}$gone/drop", {"behavior": "Cascade"})
+        self.raw = estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "raw")
+        self.expired, self.waiting, live = (estate.create_table(f"{self.raw}${name}") for name in ("expired", "waiting", "live"))
+        estate.post(f"/v1/namespace/{self.raw}$gone/create")
+        nested = estate.create_table(f"{self.raw}$gone$t")
+        self.namespace = str(estate.post(f"/v1/namespace/{self.raw}$gone/describe")["properties"][UUID_PROPERTY])
+        self.location = estate.location(f"{self.raw}$expired")
+        estate.post(f"/v1/table/{self.raw}$expired/drop")
+        estate.post(f"/v1/table/{self.raw}$waiting/drop")
+        estate.post(f"/v1/namespace/{self.raw}$gone/drop", {"behavior": "Cascade"})
         estate.age(self.expired)
         estate.age(nested)
         estate.age(self.namespace, kind="namespace")
         past = datetime.now(UTC) - timedelta(days=1)
-        live_at = estate.location(f"{self.bronze}$live")
-        estate.put_record(trash.make_record(f"{self.bronze}$live", uuid=live, location=live_at, dropped_by=None, grace_days=0, now=past))
+        live_at = estate.location(f"{self.raw}$live")
+        estate.put_record(trash.make_record(f"{self.raw}$live", uuid=live, location=live_at, dropped_by=None, grace_days=0, now=past))
         self.released = {f"table:{self.expired}", f"table:{nested}", f"namespace:{self.namespace}"}
         self.kept = {f"table:{self.waiting}", f"table:{live}"}
 
@@ -202,7 +202,7 @@ def test_a_drop_the_audit_released_is_not_undropped(estate: _Estate) -> None:
     _audit(estate)
     estate.store.write((user_object(principal_key("alice")), "owner", f"table:{drops.expired}"))
 
-    refused = estate.catalog.post(f"/management/v1/table/{drops.bronze}$expired/undrop", json={})
+    refused = estate.catalog.post(f"/management/v1/table/{drops.raw}$expired/undrop", json={})
 
     assert (refused.status_code, "grace period ended" in refused.text) == (409, True), f"an expired drop undropped: {refused.text}"
 
@@ -260,11 +260,11 @@ def test_a_drops_trash_task_holds_itself_until_its_release_then_releases_its_rec
     What it reads is its record's, never the estate's: the record by its key, and whether its table stands again from the
     ``__manifest`` of the bucket its location is in. It lists no trash, no warehouse registry and no other bucket's
     manifest, which a task per drop reading them would make cost the estate's size each, counted on the wire."""
-    bronze = estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
-    dropped, other = (estate.create_table(f"{bronze}${name}") for name in ("dropped", "other"))
-    location = estate.location(f"{bronze}$dropped")
-    estate.post(f"/v1/table/{bronze}$dropped/drop")
-    estate.post(f"/v1/table/{bronze}$other/drop")
+    raw = estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "raw")
+    dropped, other = (estate.create_table(f"{raw}${name}") for name in ("dropped", "other"))
+    location = estate.location(f"{raw}$dropped")
+    estate.post(f"/v1/table/{raw}$dropped/drop")
+    estate.post(f"/v1/table/{raw}$other/drop")
     task = Task(kind="trash", uuid=dropped)
     queue = _RecordingQueue()
 
@@ -291,9 +291,9 @@ def test_a_drops_trash_task_holds_itself_until_its_release_then_releases_its_rec
 def test_a_trash_task_whose_record_cannot_be_read_is_tried_again_and_passes_no_table(estate: _Estate) -> None:
     """A record filed for the task's uuid that is no trash record is not a record an undrop cleared: the task raises to be
     tried again, and queues no pass of a table it would otherwise take for restored."""
-    bronze = estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "bronze")
-    dropped = estate.create_table(f"{bronze}$dropped")
-    estate.post(f"/v1/table/{bronze}$dropped/drop")
+    raw = estate.warehouse(f"wh-{uuid.uuid4().hex[:6]}", "raw")
+    dropped = estate.create_table(f"{raw}$dropped")
+    estate.post(f"/v1/table/{raw}$dropped/drop")
     filed = estate.record(dropped)
     assert filed is not None
     settings = catalog_settings()

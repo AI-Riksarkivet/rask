@@ -4,21 +4,21 @@ The lakehouse runs no pipeline. A user's job, on its own compute, writes every t
 Namespace doors with a stock client, follows the commit feed to learn what to do next, and marks the version it vetted
 with a tag of its own. `drive` is that job, run from outside the cluster:
 
-1. it seeds bronze with stock pylance through the namespace, on the credential the catalog vends, each commit staging
+1. it seeds raw with stock pylance through the namespace, on the credential the catalog vends, each commit staging
    the run that made it as `rask.*` transaction properties;
-2. it follows lineage's `GET /events?since=` forward to the bronze write and the version it committed;
-3. it derives silver through the catalog's create and insert doors, naming its run and the bronze input at that
+2. it follows lineage's `GET /events?since=` forward to the raw write and the version it committed;
+3. it derives cleaned through the catalog's create and insert doors, naming its run and the raw input at that
    version in the spec Context (`x-rask-run-id`, `x-rask-job-namespace`, `x-rask-job`, `x-rask-inputs`);
-4. it marks the version it vetted: it creates the tag `stable` on silver through the spec's tag door, readers of the
+4. it marks the version it vetted: it creates the tag `stable` on cleaned through the spec's tag door, readers of the
    tag keep that version while the next batch lands on main, and it moves the tag once that batch is vetted (ADR 0212);
-5. it follows the feed over silver and reads its writes in commit order;
-6. it writes a branch, as every table writer may (D3): it cuts `staging` from silver and commits a stock append on it
-   through `version/create`, naming the run and the bronze input as transaction properties.
+5. it follows the feed over cleaned and reads its writes in commit order;
+6. it writes a branch, as every table writer may (D3): it cuts `staging` from cleaned and commits a stock append on it
+   through `version/create`, naming the run and the raw input as transaction properties.
 
 Three Dex users from the deployed configmap play the parts. The estate admin creates a scratch tenant (a project,
-a warehouse with its own bucket, and in it a bronze and a silver namespace). The pipeline
+a warehouse with its own bucket, and in it a raw and a cleaned namespace). The pipeline
 identity holds only `writer` on the two namespaces, so it owns what it creates. The consumer holds `reader` on
-silver. The tenant is deleted at the end of the session, unless the session keeps the drive for the soak (`kept_drive`).
+cleaned. The tenant is deleted at the end of the session, unless the session keeps the drive for the soak (`kept_drive`).
 
 ONE DRIVE, MANY READERS. `tests/e2e-py/conftest.py` serves the tenant and one drive's `ScenarioRun` as session
 fixtures, so each module that asserts on the scenario reads the same run: the scenario's own claims
@@ -64,7 +64,7 @@ SETTLE_SECONDS = float(os.environ.get("LANCE_E2E_SETTLE_SECONDS", "120"))
 #: How long a commit's pass may take to follow it: the first commit of a burst holds its table's pass the commit delay out
 #: (`maintenance.queue.commitPassDelaySeconds`, five minutes by default), then the queue and one pass.
 COMMIT_PASS_SECONDS = float(os.environ.get("LANCE_E2E_COMMIT_PASS_SECONDS", "600"))
-#: The branch the pipeline cuts from silver and commits on.
+#: The branch the pipeline cuts from cleaned and commits on.
 STAGING = "staging"
 #: Every request a suite's client sends closes its connection, so no pooled connection is kept to go stale. Through
 #: `kubectl port-forward` a server's close of an idle keep-alive connection reaches the client only as its next request
@@ -134,8 +134,8 @@ class Tenant:
         self.consumer = Identity.person(CONSUMER_USER)
         self.project = project or f"byo-{uuid.uuid4().hex[:8]}"
         #: The tenant's two namespaces, in its own warehouse (whose id is the project's), so no other tenant's names meet them.
-        self.bronze = f"{self.project}$bronze"
-        self.silver = f"{self.project}$silver"
+        self.raw = f"{self.project}$raw"
+        self.cleaned = f"{self.project}$cleaned"
         self.tables: list[str] = []
         #: The wall clock just before the tenant's first door, which `create` sets: the tenant's grants are announced
         #: from here, before any write, so a reader of the bus reads from here.
@@ -153,11 +153,11 @@ class Tenant:
         self.created_at = datetime.now(UTC)
         ok(admin.http.post(f"{CATALOG}/management/v1/projects", json={"id": self.project}))
         ok(admin.http.post(f"{CATALOG}/management/v1/warehouses", json={"id": self.project, "project": self.project}))
-        # Silver requires every write to name its run (ADR 0211); bronze, which the pipeline seeds, declares nothing.
-        for namespace, properties in ((self.bronze, {}), (self.silver, {"rask.requires_run": "true"})):
+        # Cleaned requires every write to name its run (ADR 0211); raw, which the pipeline seeds, declares nothing.
+        for namespace, properties in ((self.raw, {}), (self.cleaned, {"rask.requires_run": "true"})):
             ok(admin.http.post(f"{CATALOG}/v1/namespace/{namespace}/create", json={"properties": properties}))
             ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{namespace}/access/grant", json={"user": self.pipeline.principal, "relation": "writer"}))
-        ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.silver}/access/grant", json={"user": self.consumer.principal, "relation": "reader"}))
+        ok(admin.http.post(f"{CATALOG}/management/v1/namespace/{self.cleaned}/access/grant", json={"user": self.consumer.principal, "relation": "reader"}))
 
     def tear_down(self) -> list[str]:
         """Drop every table the pipeline made, then the warehouse with its bucket, then the project; what failed."""
@@ -259,7 +259,7 @@ def tagged_rows(identity: Identity, table_id: list[str]) -> int:
 
 class NamedRun(BaseModel):
     """The run a write names, as the pipeline names it: its OpenLineage run id (a UUID), its job's namespace and name,
-    and each input as a table id and the version it was read at. Bronze's source is outside the catalog, so its runs
+    and each input as a table id and the version it was read at. Raw's source is outside the catalog, so its runs
     name no input."""
 
     run_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -298,17 +298,17 @@ class ScenarioRun(BaseModel):
 
     #: The feed cursor the pipeline started following from, before its first write.
     start: int
-    bronze_table: str
-    silver_table: str
-    #: Every commit the pipeline made, in order: bronze's stock seed, silver's create and insert, and its append on `staging`.
+    raw_table: str
+    cleaned_table: str
+    #: Every commit the pipeline made, in order: raw's stock seed, cleaned's create and insert, and its append on `staging`.
     commits: list[Commit]
     #: Rows a stock reader of the pipeline's tag saw, and rows a stock reader of main saw, while the second batch was on
     #: main and the tag still named the first version; then what the tag's reader saw once the pipeline moved it.
     tagged_rows_before_the_move: int
     main_rows_before_the_move: int
     tagged_rows_after_the_move: int
-    #: Silver's feed rows through its second commit, the cursor after them, and a poll from that cursor.
-    silver_rows: list[dict[str, Any]]
+    #: Cleaned's feed rows through its second commit, the cursor after them, and a poll from that cursor.
+    cleaned_rows: list[dict[str, Any]]
     cursor: int
     caught_up: dict[str, Any]
 
@@ -316,91 +316,91 @@ class ScenarioRun(BaseModel):
 def drive(tenant: Tenant) -> ScenarioRun:
     """Run the pipeline once on ``tenant`` and record what it saw (the module docstring's six steps)."""
     pipeline, consumer = tenant.pipeline, tenant.consumer
-    bronze_id, silver_id = [*tenant.bronze.split("$"), "orders"], [*tenant.silver.split("$"), "orders"]
-    bronze_table, silver_table = "$".join(bronze_id), "$".join(silver_id)
+    raw_id, cleaned_id = [*tenant.raw.split("$"), "orders"], [*tenant.cleaned.split("$"), "orders"]
+    raw_table, cleaned_table = "$".join(raw_id), "$".join(cleaned_id)
     start = feed_start(pipeline)
 
-    # 1. Seed bronze with stock pylance through the namespace, each commit naming its run: a first load, then an increment.
+    # 1. Seed raw with stock pylance through the namespace, each commit naming its run: a first load, then an increment.
     stock = pipeline.namespace()
-    seed_run = NamedRun(job="byo-bronze")
+    seed_run = NamedRun(job="byo-raw")
     seeded = lance.write_dataset(
         rows_of(range(4)),
         namespace_client=stock,
-        table_id=bronze_id,
+        table_id=raw_id,
         mode="create",
         data_storage_version="2.2",
         enable_stable_row_ids=True,
         transaction_properties=seed_run.transaction_properties(author=pipeline.principal),
     )
-    tenant.tables.append(bronze_table)
+    tenant.tables.append(raw_table)
     increment_run = seed_run.model_copy(update={"run_id": str(uuid.uuid4())})
     increment = lance.write_dataset(
         rows_of(range(4, 8)),
         namespace_client=stock,
-        table_id=bronze_id,
+        table_id=raw_id,
         mode="append",
         transaction_properties=increment_run.transaction_properties(author=pipeline.principal),
     )
-    commits = [Commit(table=bronze_table, version=seeded.version, run=seed_run), Commit(table=bronze_table, version=increment.version, run=increment_run)]
+    commits = [Commit(table=raw_table, version=seeded.version, run=seed_run), Commit(table=raw_table, version=increment.version, run=increment_run)]
 
-    # 2. Follow the feed to the bronze write: its committed version is the input silver derives from.
-    bronze_rows, _ = follow(pipeline, since=start, table=bronze_table, until=lambda rows: ("insert", 2) in writes(rows))
-    bronze_version = max(version for operation, version in writes(bronze_rows) if operation == "insert")
+    # 2. Follow the feed to the raw write: its committed version is the input cleaned derives from.
+    raw_rows, _ = follow(pipeline, since=start, table=raw_table, until=lambda rows: ("insert", 2) in writes(rows))
+    raw_version = max(version for operation, version in writes(raw_rows) if operation == "insert")
 
-    # 3. Derive silver through the catalog's doors, naming the run and the input in the spec Context.
-    first_run = NamedRun(job="byo-silver", inputs=[{"table": bronze_id, "version": bronze_version}])
-    silver_start = feed_start(pipeline)
+    # 3. Derive cleaned through the catalog's doors, naming the run and the input in the spec Context.
+    first_run = NamedRun(job="byo-cleaned", inputs=[{"table": raw_id, "version": raw_version}])
+    cleaned_start = feed_start(pipeline)
     created = pipeline.namespace(**first_run.context()).create_table(
-        lance_namespace.CreateTableRequest(id=silver_id, mode="create"), encode_arrow_stream(rows_of(range(8)))
+        lance_namespace.CreateTableRequest(id=cleaned_id, mode="create"), encode_arrow_stream(rows_of(range(8)))
     )
-    tenant.tables.append(silver_table)
-    assert created.version is not None, f"silver's create answered version {created.version}"
+    tenant.tables.append(cleaned_table)
+    assert created.version is not None, f"cleaned's create answered version {created.version}"
 
     # 4. The pipeline vetted the first version and marks it with its own tag, through the spec's tag door. The next batch
     #    lands on main, and a reader of the tag keeps the vetted version until the pipeline moves the tag.
-    stock.create_table_tag(lance_namespace.CreateTableTagRequest(id=silver_id, tag=READY_TAG, version=created.version))
+    stock.create_table_tag(lance_namespace.CreateTableTagRequest(id=cleaned_id, tag=READY_TAG, version=created.version))
     second_run = first_run.model_copy(update={"run_id": str(uuid.uuid4())})
     inserted = pipeline.namespace(**second_run.context()).insert_into_table(
-        lance_namespace.InsertIntoTableRequest(id=silver_id, mode="append"), encode_arrow_stream(rows_of(range(8, 24)))
+        lance_namespace.InsertIntoTableRequest(id=cleaned_id, mode="append"), encode_arrow_stream(rows_of(range(8, 24)))
     )
-    assert inserted.version is not None, f"silver's insert answered version {inserted.version}"
+    assert inserted.version is not None, f"cleaned's insert answered version {inserted.version}"
     commits += [
-        Commit(table=silver_table, version=created.version, run=first_run, operation="create_table"),
-        Commit(table=silver_table, version=inserted.version, run=second_run, operation="insert"),
+        Commit(table=cleaned_table, version=created.version, run=first_run, operation="create_table"),
+        Commit(table=cleaned_table, version=inserted.version, run=second_run, operation="insert"),
     ]
-    tagged_before = tagged_rows(consumer, silver_id)
-    main_before = lance.dataset(namespace_client=stock, table_id=silver_id).count_rows()
-    stock.update_table_tag(lance_namespace.UpdateTableTagRequest(id=silver_id, tag=READY_TAG, version=inserted.version))
-    tagged_after = tagged_rows(consumer, silver_id)
+    tagged_before = tagged_rows(consumer, cleaned_id)
+    main_before = lance.dataset(namespace_client=stock, table_id=cleaned_id).count_rows()
+    stock.update_table_tag(lance_namespace.UpdateTableTagRequest(id=cleaned_id, tag=READY_TAG, version=inserted.version))
+    tagged_after = tagged_rows(consumer, cleaned_id)
 
-    # 5. Following silver's feed reads its writes in commit order.
-    silver_rows, cursor = follow(pipeline, since=silver_start, table=silver_table, until=lambda rows: ("insert", 2) in writes(rows))
-    caught_up = ok(pipeline.http.get(f"{LINEAGE}/events", params={"since": cursor, "table": silver_table}, timeout=30))
+    # 5. Following cleaned's feed reads its writes in commit order.
+    cleaned_rows, cursor = follow(pipeline, since=cleaned_start, table=cleaned_table, until=lambda rows: ("insert", 2) in writes(rows))
+    caught_up = ok(pipeline.http.get(f"{LINEAGE}/events", params={"since": cursor, "table": cleaned_table}, timeout=30))
 
-    # 6. The pipeline cuts `staging` from silver through the spec's CreateTableBranch, then commits a stock append on it
-    #    through version/create, naming its run and the bronze input as transaction properties.
-    pipeline.namespace().create_table_branch(lance_namespace.CreateTableBranchRequest(id=silver_id, name=STAGING))
+    # 6. The pipeline cuts `staging` from cleaned through the spec's CreateTableBranch, then commits a stock append on it
+    #    through version/create, naming its run and the raw input as transaction properties.
+    pipeline.namespace().create_table_branch(lance_namespace.CreateTableBranchRequest(id=cleaned_id, name=STAGING))
     branch_run = first_run.model_copy(update={"run_id": str(uuid.uuid4())})
     on_branch = lance.write_dataset(
         rows_of(range(24, 28)),
-        lance.dataset(namespace_client=stock, table_id=silver_id).checkout_version((STAGING, None)),
+        lance.dataset(namespace_client=stock, table_id=cleaned_id).checkout_version((STAGING, None)),
         mode="append",
         transaction_properties=branch_run.transaction_properties(author=pipeline.principal),
     )
-    commits.append(Commit(table=silver_table, branch=STAGING, version=on_branch.version, run=branch_run))
+    commits.append(Commit(table=cleaned_table, branch=STAGING, version=on_branch.version, run=branch_run))
     # The drive ends once lineage's feed holds its last commit, so every criterion reads a whole drive: a reader of
     # the feed right after the commit landed is otherwise racing lineage's ingest of it.
-    follow(pipeline, since=cursor, table=silver_table, until=lambda rows: ("insert", on_branch.version) in writes(rows))
+    follow(pipeline, since=cursor, table=cleaned_table, until=lambda rows: ("insert", on_branch.version) in writes(rows))
 
     return ScenarioRun(
         start=start,
-        bronze_table=bronze_table,
-        silver_table=silver_table,
+        raw_table=raw_table,
+        cleaned_table=cleaned_table,
         commits=commits,
         tagged_rows_before_the_move=tagged_before,
         main_rows_before_the_move=main_before,
         tagged_rows_after_the_move=tagged_after,
-        silver_rows=silver_rows,
+        cleaned_rows=cleaned_rows,
         cursor=cursor,
         caught_up=caught_up,
     )

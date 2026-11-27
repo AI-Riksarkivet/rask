@@ -74,14 +74,14 @@ class _Estate:
 
 @pytest.fixture
 def estate(moto_url: str, monkeypatch: pytest.MonkeyPatch, openfga_store: Any, dex_issuer: Any) -> Iterator[_Estate]:  # noqa: ANN401 — the root conftest's fixtures
-    """Namespace ``bronze`` in project ``acme``'s warehouse, made by alice, and maintenance with drift repair armed."""
+    """Namespace ``raw`` in project ``acme``'s warehouse, made by alice, and maintenance with drift repair armed."""
     env = {"MAINTENANCE_DRIFT_REPAIR_ENABLED": "true", "MAINTENANCE_DRIFT_REPAIR_DRY_RUN": "false", "MAINTENANCE_CATALOG_URL": CATALOG_URL}
     with catalog_and_maintenance(moto_url, monkeypatch, env=env, openfga_store=openfga_store, dex_issuer=dex_issuer) as both:
         warehouse = f"lh588-{uuid.uuid4().hex[:10]}-wh"
         for path, body in (("/management/v1/projects", {"id": PROJECT}), ("/management/v1/warehouses", {"id": warehouse, "project": PROJECT})):
             answer = both.catalog.post(path, json=body)
             assert answer.status_code == 200, f"{path}: {answer.text}"
-        namespace = f"{warehouse}$bronze"
+        namespace = f"{warehouse}$raw"
         assert both.catalog.post(f"/v1/namespace/{namespace}/create", json={}).status_code == 200
         assert isinstance(both.store, StoreTuples), "the estate decides on a real OpenFGA store"
         yield _Estate(both.catalog, both.maintenance, both.store, namespace)
@@ -234,7 +234,7 @@ def test_a_namespace_create_killed_between_its_two_writes_leaves_no_namespace_wi
     """Killed at its grant, the door has written nothing. Killed at its backend write, it leaves the owner and the
     ``parent`` edge of a uuid no namespace holds, and no ``child`` edge: nothing that names another object's side, so
     nothing anyone holds a relation through."""
-    namespace = f"{estate.namespace}$silver"
+    namespace = f"{estate.namespace}$cleaned"
     before = set(estate.store.tuples)
     killed: list[str] = []
     with pytest.MonkeyPatch.context() as killing:
@@ -256,7 +256,7 @@ def test_a_namespace_create_killed_between_its_two_writes_leaves_no_namespace_wi
 def test_a_namespace_whose_create_answer_was_lost_keeps_its_grants(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
     """The backend records the namespace and its answer never arrives: the door fails, and the namespace it cannot
     disown keeps its owner and its ``parent`` edge, so its creator and its project's admin reach it."""
-    namespace = f"{estate.namespace}$silver"
+    namespace = f"{estate.namespace}$cleaned"
     call = native.call
 
     def _answer_lost(ns: Any, method: str, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — the backend's own request and answer

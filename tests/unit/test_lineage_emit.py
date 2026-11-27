@@ -87,8 +87,8 @@ def test_build_write_event_stamps_the_project_so_watchers_can_be_found() -> None
     Read where the published facet puts it: a create that commits no rows is a `DatasetEvent`, whose `rask_lance` facet
     rides the dataset because the event has no run to carry it."""
     event = build_write_event(
-        table_id="acme-bronze$images",
-        namespace="acme-bronze",
+        table_id="acme-raw$images",
+        namespace="acme-raw",
         author="alice",
         version=1,
         operation=CREATE_TABLE,
@@ -105,8 +105,8 @@ def test_build_write_event_omits_an_unsafe_project_rather_than_qualifying_with_i
     sanitized: a project that cannot be named is one whose watchers must not be guessed at, and a project-less event
     reaches its author and no watchers, which is the safe direction."""
     event = build_write_event(
-        table_id="alpha$bronze$images",
-        namespace="alpha$bronze",
+        table_id="alpha$raw$images",
+        namespace="alpha$raw",
         author="alice",
         version=1,
         operation=CREATE_TABLE,
@@ -158,8 +158,8 @@ def test_emitted_event_round_trips_into_lineage_model() -> None:
     beyond rask's own and the engine's: a catalog write is triggered by its caller and has no schedule time, so it
     carries no ``nominalTime`` (ADR 0180)."""
     event = build_write_event(
-        table_id="alpha$bronze$images",
-        namespace="alpha$bronze",
+        table_id="alpha$raw$images",
+        namespace="alpha$raw",
         author="alice",
         version=1,
         operation=CREATE_TABLE,
@@ -171,7 +171,7 @@ def test_emitted_event_round_trips_into_lineage_model() -> None:
     parsed = _parsed(event)
     assert parsed.operation == "create_table"
     assert parsed.author == "alice"
-    assert parsed.outputs[0].name == "alpha$bronze$images"
+    assert parsed.outputs[0].name == "alpha$raw$images"
     assert set(event["run"]["facets"]) == {"rask_author", "rask_lance", "processing_engine"}
 
 
@@ -228,7 +228,7 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch_under_t
     # records it on every edge as the run the writer's own tooling answers to: the event's own run id is the catalog's,
     # derived from the commit.
     event = build_write_event(
-        table_id="db$gold",
+        table_id="db$served",
         namespace="db",
         author="alice",
         version=7,
@@ -236,7 +236,7 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch_under_t
         run_id="r1",
         event_time="2026-07-21T00:00:00Z",
         job_namespace="catalog",
-        inputs=[InputRef(name="db$silver", version=4), InputRef(name="db$review", version=2, branch="draft")],
+        inputs=[InputRef(name="db$cleaned", version=4), InputRef(name="db$review", version=2, branch="draft")],
         run=RunContext(run_id=_PIPELINE_RUN, job_namespace="pipelines", job="nightly"),
     )
     parent = {key: value for key, value in event["run"]["facets"]["parent"].items() if not key.startswith("_")}
@@ -253,8 +253,8 @@ def test_a_derived_write_event_pins_each_input_at_its_version_and_branch_under_t
 
     edges = edges_of(_parsed(event), received_at=datetime.now(UTC))
     assert sorted((e["in_table"], e["in_version"], e["in_branch"], e["out_table"], e["out_version"], e["writer_run_id"]) for e in edges) == [
-        ("db$review", 2, "draft", "db$gold", 7, _PIPELINE_RUN),
-        ("db$silver", 4, None, "db$gold", 7, _PIPELINE_RUN),
+        ("db$cleaned", 4, None, "db$served", 7, _PIPELINE_RUN),
+        ("db$review", 2, "draft", "db$served", 7, _PIPELINE_RUN),
     ]
 
 
@@ -443,7 +443,7 @@ async def test_a_service_run_can_name_the_person_it_runs_for() -> None:
     bus = BusDouble()
 
     await _emitting(bus).emit_create(
-        table_id="acme-silver$annotations", namespace="acme-silver", author="service-publisher", version=1, fields=EmitFields(originator="dex~08a8684b-db88")
+        table_id="acme-cleaned$annotations", namespace="acme-cleaned", author="service-publisher", version=1, fields=EmitFields(originator="dex~08a8684b-db88")
     )
 
     [event] = bus.events

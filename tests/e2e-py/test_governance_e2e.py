@@ -7,13 +7,13 @@ catalog's provenance namespace), with the catalog's ``LANCE_LINEAGE_EMIT_ENABLED
 
 Asserts the dataops/governance story end to end:
   1. anon create → 401 (OIDC enforced);
-  2. alice creates a namespace and its bronze table → 200, and each create seeds alice's ``owner``, and the table its
+  2. alice creates a namespace and its raw table → 200, and each create seeds alice's ``owner``, and the table its
      ``parent`` edge, on the uuid objects the catalog minted, read off the OpenFGA store: no tuple is written by hand;
   3. alice writes the table she owns (owner cascades to writer);
-  4. an outsider holding no grant is refused bronze's describe and its drop (403, PermissionDenied), each refusal leaving
+  4. an outsider holding no grant is refused raw's describe and its drop (403, PermissionDenied), each refusal leaving
      the table and its tuples as alice reads them and naming nothing the outsider did not send ([[LH-255]]);
-  5. the catalog recorded alice as the **verified** author of bronze's create on lineage's ``/events`` feed;
-  6. a promote run (bronze → silver, as a user's pipeline emits) makes silver derived from bronze;
+  5. the catalog recorded alice as the **verified** author of raw's create on lineage's ``/events`` feed;
+  6. a promote run (raw → cleaned, as a user's pipeline emits) makes cleaned derived from raw;
   7. every subject the store holds names its identity provider;
   8. a forced rename keeps a direct grant and the protection record and writes no tuple, and a table created again at the
      old name is another uuid the grant does not reach ([[LH-524]]), answered to that grant's holder as an absent table;
@@ -23,7 +23,7 @@ Asserts the dataops/governance story end to end:
      is in, and no other.
 
 (The lineage service runs with its own auth OFF in this overlay; the gate is unit-tested +
-has its own e2e. This test focuses on catalog authz + provenance authorship + tier lineage.)
+has its own e2e. This test focuses on catalog authz + provenance authorship + table lineage.)
 """
 
 import os
@@ -130,56 +130,56 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     ns = namespace_id(f"gov{os.getpid()}")
     # Each table's parent is the created namespace `<warehouse>$gov<pid>`, so create-on-parent is authorized (a deeper
     # id would need the intermediate namespace created first, which an enforcing stack correctly requires).
-    bronze, silver = f"{ns}$bronze", f"{ns}$silver"
+    raw, cleaned = f"{ns}$raw", f"{ns}$cleaned"
 
     # 1. anon -> 401 (OIDC enforced)
     assert requests.post(f"{server}/v1/namespace/{ns}/create", json={}, timeout=10).status_code == 401
 
-    # 2. alice creates namespace + bronze table -> 200 (app seeds owner; catalog emits create-lineage).
+    # 2. alice creates namespace + raw table -> 200 (app seeds owner; catalog emits create-lineage).
     create_namespace(server, f"gov{os.getpid()}", ah)
     try:
         rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
-        create = requests.post(f"{server}/v1/table/{bronze}/create", headers={**ah, **ARROW}, data=encode_arrow_stream(rows), timeout=30)
+        create = requests.post(f"{server}/v1/table/{raw}/create", headers={**ah, **ARROW}, data=encode_arrow_stream(rows), timeout=30)
         assert create.status_code == 200, create.text
-        # alice also creates the silver table she'll promote INTO — so she owns it (can_write_data +
+        # alice also creates the cleaned table she'll promote INTO — so she owns it (can_write_data +
         # can_get_metadata). The lineage ingest below is governed (enforce_output_authz needs can_write_data on
         # every output), so a promote whose output is a table alice doesn't own would 403.
-        sc = requests.post(f"{server}/v1/table/{silver}/create", headers={**ah, **ARROW}, data=encode_arrow_stream(rows), timeout=30)
+        sc = requests.post(f"{server}/v1/table/{cleaned}/create", headers={**ah, **ARROW}, data=encode_arrow_stream(rows), timeout=30)
         assert sc.status_code == 200, sc.text
         # Each create seeded alice's `owner`, and the table its `parent` edge, on the uuid objects the catalog minted.
         ns_uuid = namespace_uuid(server, ns, ah)
         namespace_object = fga_ids.namespace_object(ns_uuid)
-        standing = described(server, bronze, ah)
+        standing = described(server, raw, ah)
         table_object = fga_ids.table_object(standing["properties"][UUID_PROPERTY])
         alice_user = fga_ids.user_object(alice_sub)
         assert (alice_user, "owner") in _held(namespace_object)
         assert {(alice_user, "owner"), (namespace_object, "parent")} <= _held(table_object)
 
-        # 3. owning bronze, alice writes it (owner cascades to writer)
-        appended = requests.post(f"{server}/v1/table/{bronze}/insert", headers={**ah, **ARROW}, data=encode_arrow_stream(rows), timeout=30)
+        # 3. owning raw, alice writes it (owner cascades to writer)
+        appended = requests.post(f"{server}/v1/table/{raw}/insert", headers={**ah, **ARROW}, data=encode_arrow_stream(rows), timeout=30)
         assert appended.status_code == 200, appended.text
 
-        # 4. the outsider (no grant) is refused bronze's describe and its drop; alice still describes it, and the store holds
+        # 4. the outsider (no grant) is refused raw's describe and its drop; alice still describes it, and the store holds
         # the tuples it held
         for door in ("describe", "drop"):
             assert_refused(
-                lambda door=door: requests.post(f"{server}/v1/table/{bronze}/{door}", headers=bh, json={}, timeout=10),
+                lambda door=door: requests.post(f"{server}/v1/table/{raw}/{door}", headers=bh, json={}, timeout=10),
                 status=403,
                 code=ErrorCode.PERMISSION_DENIED,
-                unchanged=lambda: (described(server, bronze, ah), tuples_on(table_object)),
+                unchanged=lambda: (described(server, raw, ah), tuples_on(table_object)),
                 foreign={alice_sub, standing["location"], standing["properties"][UUID_PROPERTY], ns_uuid},
             )
 
-        # 5. lineage recorded alice as the VERIFIED author of bronze's create (emission is async -> poll).
+        # 5. lineage recorded alice as the VERIFIED author of raw's create (emission is async -> poll).
         # The feed is GOVERNED per table, so forward alice's bearer — an anon read 401s -> None.
-        def _bronze_authors() -> set[str | None]:
-            rows = _get_json(f"{lineage}/events?table={bronze}&limit=500", ah).get("events", [])
+        def _raw_authors() -> set[str | None]:
+            rows = _get_json(f"{lineage}/events?table={raw}&limit=500", ah).get("events", [])
             return {author_sub_from_payload(row.get("event")) for row in rows}
 
-        authors = _poll(lambda: alice_sub in _bronze_authors(), True)
-        assert authors is True, f"expected a feed row for {bronze} authored by {alice_sub}, got authors {_bronze_authors()}"
+        authors = _poll(lambda: alice_sub in _raw_authors(), True)
+        assert authors is True, f"expected a feed row for {raw} authored by {alice_sub}, got authors {_raw_authors()}"
 
-        # 6. a promote run (bronze -> silver), as a user's pipeline would emit.
+        # 6. a promote run (raw -> cleaned), as a user's pipeline would emit.
         # Spec-true on purpose: this fixture is our stand-in for a real producer, so it has to carry what the
         # spec REQUIRES — a UUID ``runId`` (``format: uuid``; Marquez rejects anything else), ``producer`` and
         # ``schemaURL`` on the envelope, and ``_producer``/``_schemaURL`` on the custom ``rask_author`` facet. The
@@ -195,20 +195,20 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
                 "runId": run_id_for(f"promote-{ns}-{os.getpid()}"),
                 "facets": {"rask_author": author_facet(_PRODUCER, alice_sub)},
             },
-            "job": {"namespace": "e2e-pipeline", "name": "promote_bronze_to_silver"},
-            "inputs": [{"namespace": ns, "name": bronze}],
-            "outputs": [{"namespace": ns, "name": silver}],
+            "job": {"namespace": "e2e-pipeline", "name": "promote_raw_to_cleaned"},
+            "inputs": [{"namespace": ns, "name": raw}],
+            "outputs": [{"namespace": ns, "name": cleaned}],
         }
         assert requests.post(f"{lineage}/api/v1/lineage", json=promote, headers=ah, timeout=10).status_code == 201
 
-        # silver is derived from bronze (the tier lineage, off the edge list). Governed read → forward alice's
+        # cleaned is derived from raw (table lineage, off the edge list). Governed read → forward alice's
         # bearer; alice reads both via her ownership of the parent namespace ``ns`` (create-on-parent cascade).
-        def _bronze_derived() -> list[str]:
-            derived = _get_json(f"{lineage}/tables/{bronze}/derived", ah).get("derived", [])
+        def _raw_derived() -> list[str]:
+            derived = _get_json(f"{lineage}/tables/{raw}/derived", ah).get("derived", [])
             return [d["table"] for d in derived]
 
-        down = _poll(_bronze_derived, [silver])
-        assert isinstance(down, list) and silver in down, f"expected {silver} derived from {bronze}, got {down}"
+        down = _poll(_raw_derived, [cleaned])
+        assert isinstance(down, list) and cleaned in down, f"expected {cleaned} derived from {raw}, got {down}"
 
         # 7. Every subject the store holds names its identity provider ([[LH-063]]): each `user` a tuple names decodes to
         # a principal, `<idp-id>~<subject>`, the owner tuples this flow's creates seeded among them.
@@ -219,7 +219,7 @@ def test_governance_flow(stack: tuple[str, str]) -> None:
     finally:
         # The flow runs against live estates too: its tables go with their bytes, so the session's teardown can drop
         # their namespace (`topology.drop_created`).
-        for table in (bronze, silver):
+        for table in (raw, cleaned):
             requests.post(f"{server}/v1/table/{table}/drop", headers=ah, params={"purge": "true"}, json={}, timeout=30)
 
 

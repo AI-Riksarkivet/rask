@@ -7,8 +7,8 @@ the table-level edge list from each commit's announcement: one row for each inpu
 to the version and ref it wrote. This module holds Lance to what the pipeline did, and the edge list to Lance:
 
 1. every version of every ref of the scenario's tables is a commit the pipeline made, and carries exactly the run it
-   named and the person who committed it: bronze's stock seed and silver's append on `staging` stage their runs through
-   `version/create`, and silver's create and insert name theirs, with bronze at the version they read, in the spec
+   named and the person who committed it: raw's stock seed and cleaned's append on `staging` stage their runs through
+   `version/create`, and cleaned's create and insert name theirs, with raw at the version they read, in the spec
    Context of the catalog's doors;
 2. the edge list holds exactly one edge for each input a version names, to that version on its ref, on the commit's run
    and by its author, and no other edge names either table;
@@ -52,19 +52,19 @@ pytestmark = [
 def history(byo_tenant: Tenant, byo_run: ScenarioRun) -> History:
     """Every version of every ref of the scenario's two tables and what its commit carries, read by the pipeline that
     owns them."""
-    return history_of(byo_tenant.pipeline, (byo_run.bronze_table, byo_run.silver_table))
+    return history_of(byo_tenant.pipeline, (byo_run.raw_table, byo_run.cleaned_table))
 
 
 @pytest.fixture(scope="module")
 def edges(byo_tenant: Tenant, byo_run: ScenarioRun, history: History) -> list[Edge]:
     """The edge list's rows naming either scenario table, read as the estate's owner."""
-    return recorded_edges(byo_tenant.admin, (byo_run.bronze_table, byo_run.silver_table), expected=edges_named(history))
+    return recorded_edges(byo_tenant.admin, (byo_run.raw_table, byo_run.cleaned_table), expected=edges_named(history))
 
 
 def test_each_version_is_a_pipeline_commit_carrying_the_run_it_named_and_who_committed_it(history: History, byo_tenant: Tenant, byo_run: ScenarioRun) -> None:
-    """The pipeline made every commit and named each one's run. Its stock commits, bronze's seed and silver's append on
+    """The pipeline made every commit and named each one's run. Its stock commits, raw's seed and cleaned's append on
     `staging`, carry the run as the pipeline staged it, which `version/create` admits only under the caller's own
-    principal; silver's create and insert carry the run the catalog stamped from the spec Context, beside the person
+    principal; cleaned's create and insert carry the run the catalog stamped from the spec Context, beside the person
     who called its door."""
     assert history == as_named(byo_run.commits, author=byo_tenant.pipeline.principal)
 

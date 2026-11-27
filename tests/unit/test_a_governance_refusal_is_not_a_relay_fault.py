@@ -56,7 +56,7 @@ def _staged(uri: str, *, author: str, run: str, token: str) -> None:
     one object, and the isolation leg below silently tested nothing."""
     event = build_write_event(
         table_id=run,
-        namespace="bronze",
+        namespace="raw",
         author=author,
         version=2,
         operation=INSERT,
@@ -108,7 +108,7 @@ def test_a_refused_event_is_counted_apart_and_dropped_only_after_its_record(tmp_
     monkeypatch.setattr(outbox, "drop_event", _drop)
 
     uri = f"file://{tmp_path}/_lineage_outbox"
-    _staged(uri, author="mallory", run="bronze$events", token="order-probe")
+    _staged(uri, author="mallory", run="raw$events", token="order-probe")
 
     class _OrderRepo:
         async def record(self, _ev: Any, *, aliased: Collection[str]) -> None:  # noqa: ANN401
@@ -139,7 +139,7 @@ def test_a_transient_failure_still_strands(tmp_path: Any, monkeypatch: pytest.Mo
 
     monkeypatch.setattr(relay, "enforce_bus_authz", _blow_up)
     uri = f"file://{tmp_path}/_lineage_outbox"
-    _staged(uri, author="e2e", run="bronze$transient", token="transient-probe")
+    _staged(uri, author="e2e", run="raw$transient", token="transient-probe")
 
     outcome = _drive(uri)
 
@@ -162,8 +162,8 @@ def test_one_refusal_does_not_decide_anything_about_the_others(tmp_path: Any, mo
 
     monkeypatch.setattr(relay, "enforce_bus_authz", _refuse_one)
     uri = f"file://{tmp_path}/_lineage_outbox"
-    _staged(uri, author="e2e", run="bronze$refused", token="refused-probe")
-    _staged(uri, author="alice", run="bronze$fine", token="fine-probe")
+    _staged(uri, author="e2e", run="raw$refused", token="refused-probe")
+    _staged(uri, author="alice", run="raw$fine", token="fine-probe")
 
     outcome = _drive(uri)
 

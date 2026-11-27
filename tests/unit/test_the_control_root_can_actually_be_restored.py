@@ -65,13 +65,13 @@ SEED: Final = frozendict(
         "_policies/state/": b"",
         "_projects/acme.json": b'{"id": "acme"}',
         "_warehouses/acme-wh.json": b'{"id": "acme-wh", "root_uri": "s3://acme-bucket"}',
-        "_trash/table/acme-wh$bronze$events.json": b'{"expires_at": "2026-10-01"}',
-        "_protection/table/acme-wh$bronze$events.json": b'{"protected": true}',
+        "_trash/table/acme-wh$raw$events.json": b'{"expires_at": "2026-10-01"}',
+        "_protection/table/acme-wh$raw$events.json": b'{"protected": true}',
         "_policies/state/acme.json": b'{"retention_days": 30}',
         "_contracts/table-3f0c.json": b'{"table_uuid": "3f0c"}',
         # [[LH-279]] The catalog's base record: without it every table declaring a recorded foreign base is
         # refused by the vend and read doors, and a restored clone source loses its protection.
-        "_bases/0123456789abcdef01234567.json": b'{"location": "acme-bucket/silver", "entries": []}',
+        "_bases/0123456789abcdef01234567.json": b'{"location": "acme-bucket/cleaned", "entries": []}',
         "_control_outbox/pending-0001.json": b'{"action": "grant_added"}',
         "_lineage_outbox/pending-0002.json": b'{"eventType": "COMPLETE"}',
         # One object under every prefix the registry names, so the backup is held to the registry's records and to nothing

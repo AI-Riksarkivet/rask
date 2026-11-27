@@ -240,16 +240,16 @@ def test_a_top_level_table_is_not_mistaken_for_an_unreachable_namespace(tmp_path
 
 def test_served_by_root_maps_each_root_to_every_warehouse_it_serves() -> None:
     """The estate's own warehouse on the estate's root, and each registered warehouse on its root: two sharing a bucket
-    (a work and a gold warehouse of one project) both serve it, so neither one's row reads as unreachable."""
+    (a work and a served warehouse of one project) both serve it, so neither one's row reads as unreachable."""
     records = [
         seeding.warehouse({"id": "acme-work", "root_uri": "s3://acme-bkt"}),
-        seeding.warehouse({"id": "acme-gold", "root_uri": "s3://acme-bkt"}),
+        seeding.warehouse({"id": "acme-served", "root_uri": "s3://acme-bkt"}),
         seeding.warehouse({"id": "beta-wh", "root_uri": "s3://beta-bkt"}),
     ]
 
     served = mod.served_by_root(records, namespace_root="s3://lance-catalog", estate_warehouse=ESTATE)
 
-    assert served == {"s3://lance-catalog": {ESTATE}, "s3://acme-bkt": {"acme-work", "acme-gold"}, "s3://beta-bkt": {"beta-wh"}}
+    assert served == {"s3://lance-catalog": {ESTATE}, "s3://acme-bkt": {"acme-work", "acme-served"}, "s3://beta-bkt": {"beta-wh"}}
 
 
 # --------------------------------------------------------------------------- #

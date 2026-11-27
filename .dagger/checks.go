@@ -44,6 +44,25 @@ func (m *Rask) Lint(
 		Stdout(ctx)
 }
 
+// CommentGate judges the comment rule (docs/adr/0044-comments-carry-rationale-and-provenance-never-a-changelog.md) on
+// exactly the lines a change adds. The rule is forward-only, so a whole-tree run would be red on prose nobody may
+// change; the gate judges a diff instead. The tree a Dagger function receives carries no `.git`, so the diff is made
+// where the history is (CI's checkout: the merge-base with a pull request's base, or a push's previous tip) and handed
+// over as a file, `git diff --unified=0` against that base, and the gate reads each added line from this tree.
+func (m *Rask) CommentGate(
+	ctx context.Context,
+	// The change set: `git diff --unified=0 --no-color --no-ext-diff --src-prefix=a/ --dst-prefix=b/ <base>`.
+	changes *dagger.File,
+	// +defaultPath="/"
+	// +optional
+	src *dagger.Directory,
+) (string, error) {
+	return m.base(src).
+		WithFile("/tmp/changes.diff", changes).
+		WithExec([]string{"uv", "run", "--no-sync", "python", "scripts/comment_history_gate.py", "--diff", "/tmp/changes.diff"}).
+		Stdout(ctx)
+}
+
 // Typecheck runs the ty type-checker (the CI type gate), at the version the root lock pins: the same
 // `uv run --no-sync` reasoning as Lint, so the hook, `make typecheck` and CI judge with one ty.
 func (m *Rask) Typecheck(

@@ -5,8 +5,8 @@ Namespace doors with a stock client, follows the commit feed to learn what to do
 with a tag of its own (ADR 0212). That job is `byo_scenario.drive`, run once per session on a scratch tenant (`conftest.py`'s `byo_run`), so
 this module and every `phase1` criterion module read one run of it. This module holds the scenario's own claims: a
 reader of the pipeline's tag keeps the version it names while a newer one lands on main, until the pipeline moves the
-tag; the insert's feed row names the bronze input and the job the pipeline named in the spec
-Context; and a follower reads silver's rows in seq order up to a cursor that answers itself. What each commit carries
+tag; the insert's feed row names the raw input and the job the pipeline named in the spec
+Context; and a follower reads cleaned's rows in seq order up to a cursor that answers itself. What each commit carries
 and the edges lineage records for it are criterion 1's claims (`test_provenance_is_correct.py`); which commits the feed
 holds, and whom each event names, are criterion 4's (`test_events_are_correct.py`).
 
@@ -30,18 +30,18 @@ from byo_scenario import ScenarioRun, Tenant
 pytestmark = [pytest.mark.e2e, pytest.mark.byo_pipeline, pytest.mark.phase1, pytest.mark.skipif(not scenario.LIVE, reason=scenario.REQUIRES)]
 
 
-def test_a_pipeline_seeds_bronze_derives_silver_and_readers_of_its_tag_keep_the_version_it_vetted(byo_run: ScenarioRun) -> None:
+def test_a_pipeline_seeds_raw_derives_cleaned_and_readers_of_its_tag_keep_the_version_it_vetted(byo_run: ScenarioRun) -> None:
     run = byo_run
-    (insert,) = [row for row in run.silver_rows if scenario.lance_facet(row).get("operation") == "insert"]
+    (insert,) = [row for row in run.cleaned_rows if scenario.lance_facet(row).get("operation") == "insert"]
 
     assert run.tagged_rows_before_the_move == 8, "a reader of the pipeline's tag saw a version the pipeline had not marked"
     assert run.main_rows_before_the_move == 24
     assert run.tagged_rows_after_the_move == 24
-    assert [int(row["seq"]) for row in run.silver_rows] == sorted(int(row["seq"]) for row in run.silver_rows)
-    assert (insert["inputs"], insert["event"]["run"]["facets"]["parent"]["job"]) == ([run.bronze_table], {"namespace": "byo-pipeline", "name": "byo-silver"}), (
+    assert [int(row["seq"]) for row in run.cleaned_rows] == sorted(int(row["seq"]) for row in run.cleaned_rows)
+    assert (insert["inputs"], insert["event"]["run"]["facets"]["parent"]["job"]) == ([run.raw_table], {"namespace": "byo-pipeline", "name": "byo-cleaned"}), (
         insert
     )
-    # No silver row follows the last commit. The cursor may move past rows of other tables that landed meanwhile,
+    # No cleaned row follows the last commit. The cursor may move past rows of other tables that landed meanwhile,
     # which the table filter hides and `next_cursor` still covers (`docs/COMMIT-EVENTS.md`), so it is held only to never
     # moving backwards: an equal cursor holds only on an estate where nothing else commits.
     assert (run.caught_up["events"], run.caught_up["next_cursor"] >= run.cursor) == ([], True), run.caught_up
@@ -51,7 +51,7 @@ def test_the_write_tier_credential_cannot_forge_a_tag(byo_tenant: Tenant) -> Non
     """The pipeline owns its table, so `DescribeTable` vends it the write tier. That credential reads the table's
     prefix and puts under `data/`, and the store refuses its PUT of `_refs/tags/stable.json`: a tag is written only
     through the catalog's tag doors, which ask `can_create_tag`."""
-    table_id = [*byo_tenant.bronze.split("$"), "forge"]
+    table_id = [*byo_tenant.raw.split("$"), "forge"]
     stock = byo_tenant.pipeline.namespace()
     lance.write_dataset(
         scenario.rows_of(range(2)), namespace_client=stock, table_id=table_id, mode="create", data_storage_version="2.2", enable_stable_row_ids=True

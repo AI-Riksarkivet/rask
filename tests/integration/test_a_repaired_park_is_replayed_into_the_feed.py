@@ -31,7 +31,7 @@ from tests.bus_double import BusDouble
 from tests.integration.lineage_app import SUBJECT_HEADER, declared, governed_lineage, live_catalog, relay_tick, run_event
 
 
-_TABLE = "lance_catalog$acme-silver$parked"
+_TABLE = "lance_catalog$acme-cleaned$parked"
 _RUN = "run-parked"
 _ADMIN = "dex~root"
 _AUTHOR = "dex~alice"

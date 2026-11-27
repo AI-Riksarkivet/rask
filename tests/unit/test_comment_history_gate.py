@@ -6,6 +6,7 @@ the third from the first two would be rejected on its first false positive, so t
 load-bearing here in exactly the way the reject case is.
 """
 
+import shutil
 import subprocess
 from pathlib import Path
 from types import ModuleType
@@ -134,3 +135,21 @@ def test_the_worktree_mode_judges_an_untracked_file_whole(gate: ModuleType, repo
 
 def test_a_path_that_is_not_a_file_is_refused_rather_than_passed(gate: ModuleType, repo: Path) -> None:
     assert gate.main(["--paths", str(repo / "absent.py")]) == 2
+
+
+@pytest.mark.parametrize(
+    ("added", "verdict"),
+    [
+        pytest.param(_BANNED, 1, id="a-planted-history-line"),
+        pytest.param("# Retries twice: the store answers 503 while a peer finalizes.\n", 0, id="a-clean-line"),
+    ],
+)
+def test_a_change_set_from_a_diff_file_is_judged_on_a_tree_with_no_git(gate: ModuleType, repo: Path, tmp_path: Path, added: str, verdict: int) -> None:
+    """The CI lane's shape: git makes the diff where the history is, and the gate judges it on a tree that has no `.git`.
+    Only the added line is judged: the file's first line stays as it was committed."""
+    (repo / "run.sh").write_text(f"echo ok\n{added}", encoding="utf-8")
+    changes = tmp_path / "changes.diff"
+    changes.write_text(gate._diff("HEAD"), encoding="utf-8")
+    shutil.rmtree(repo / ".git")
+
+    assert gate.main(["--diff", str(changes)]) == verdict

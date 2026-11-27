@@ -117,7 +117,8 @@ The chart in `chart/` is the single deploy artifact for both.
   ```
 
 > Both clusters can exist at once, and a bare `kubectl` may reach the **kind** one. The k3s release
-> lives at `KUBECONFIG=/etc/rancher/k3s/k3s.yaml` — the Makefile already sets it.
+> lives at `KUBECONFIG=~/.kube/k3s.yaml`, the owner-only copy of k3s's admin kubeconfig that `make k3s-install` writes —
+> the Makefile already sets it.
 
 **Dagger builds every image — never `docker build`.** `dagger call image --name=<stem>` for anything in `.docker/`
 (`frontend` is the console's image, `make console-image`); `scripts/dagger-image.sh` is the single seam. The

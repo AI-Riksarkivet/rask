@@ -791,7 +791,7 @@ def test_the_catalog_stages_its_write_announcement_into_the_prefix_the_relay_dra
     assert staged, (
         "the catalog Deployment renders no LANCE_LINEAGE_OUTBOX_URI, so `publish_with_outbox` "
         "degrades to a plain publish: a crash between the Lance commit and the publish loses the write "
-        "announcement, and with it the bronze->silver->gold run that announcement triggers"
+        "announcement, and with it every run that announcement triggers"
     )
     drained = lineage_env.get("LINEAGE_OUTBOX_URI", "")
     assert staged == drained, (

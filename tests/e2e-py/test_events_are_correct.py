@@ -106,7 +106,7 @@ class Captured(BaseModel):
 
 
 class Redelivery(BaseModel):
-    """What publishing silver's insert again changed: the feed rows recorded for it after that publish."""
+    """What publishing cleaned's insert again changed: the feed rows recorded for it after that publish."""
 
     landed: list[int]
 
@@ -246,10 +246,10 @@ def _named(event: dict[str, Any]) -> str:
 
 def _of_the_scenario(tenant: Tenant, name: str) -> bool:
     """Whether a control event named ``name`` is about what the scenario made: the tenant's project or warehouse, or its
-    bronze or silver namespace or anything in them. Every name in the tenant's warehouse begins with the project's id,
+    raw or cleaned namespace or anything in them. Every name in the tenant's warehouse begins with the project's id,
     and criteria 2 and 5 make objects of their own there, so a name merely carrying the id is not the scenario's."""
     return name in {f"project:{tenant.project}", f"warehouse:{tenant.project}"} or any(
-        name == namespace or name.startswith(f"{namespace}$") for namespace in (tenant.bronze, tenant.silver)
+        name == namespace or name.startswith(f"{namespace}$") for namespace in (tenant.raw, tenant.cleaned)
     )
 
 
@@ -263,7 +263,7 @@ def _grants_to(captured: Captured, person: Identity) -> list[BusMessage]:
 
 @pytest.fixture(scope="module")
 def captured(byo_tenant: Tenant, byo_run: ScenarioRun) -> Captured:
-    tables = {byo_run.bronze_table, byo_run.silver_table}
+    tables = {byo_run.raw_table, byo_run.cleaned_table}
     lineage = [message for message in bus.messages_since("LINEAGE", byo_tenant.created_at) if _tables_of(message.event) & tables]
     control = [message for message in bus.messages_since("CATALOG_CONTROL", byo_tenant.created_at) if _of_the_scenario(byo_tenant, _named(message.event))]
     return Captured(feed=feed_of(byo_tenant.pipeline, byo_run), lineage=lineage, control=control)
@@ -271,36 +271,36 @@ def captured(byo_tenant: Tenant, byo_run: ScenarioRun) -> Captured:
 
 @pytest.fixture(scope="module")
 def redelivery(captured: Captured, byo_tenant: Tenant, byo_run: ScenarioRun) -> Redelivery:
-    """Silver's insert, published again as the bus stored it: signature and CloudEvent id intact, without the
+    """Cleaned's insert, published again as the bus stored it: signature and CloudEvent id intact, without the
     `Nats-Msg-Id` the stream would drop it on, so lineage receives it a second time. That is the at-least-once path
     every consumer takes when the outbox relay re-publishes or a broker redelivers."""
     pipeline = byo_tenant.pipeline
-    insert = [row for row in captured.feed if _commit(row) == (byo_run.silver_table, "insert", 2)]
-    assert len(insert) == 1, f"the feed holds {len(insert)} rows for silver's insert"
+    insert = [row for row in captured.feed if _commit(row) == (byo_run.cleaned_table, "insert", 2)]
+    assert len(insert) == 1, f"the feed holds {len(insert)} rows for cleaned's insert"
     identity = event_identity(insert[0]["event"])
     stored = [message for message in captured.lineage if event_identity(message.event) == identity]
-    assert len(stored) == 1, f"the bus holds {len(stored)} messages for silver's insert"
+    assert len(stored) == 1, f"the bus holds {len(stored)} messages for cleaned's insert"
 
     cursor = scenario.feed_start(pipeline)
     seq = bus.publish(LINEAGE_TOPIC, stored[0].envelope, msg_id=None)
     bus.wait_until_acked(INGEST_STREAM, (INGEST_CONSUMER,), seq, within=scenario.SETTLE_SECONDS)
-    landed = scenario.read_forward(pipeline, since=cursor, table=byo_run.silver_table)
+    landed = scenario.read_forward(pipeline, since=cursor, table=byo_run.cleaned_table)
     return Redelivery(landed=[int(row["seq"]) for row in landed if event_identity(row["event"]) == identity])
 
 
 @pytest.fixture(scope="module")
 def forgeries(captured: Captured, byo_tenant: Tenant, byo_run: ScenarioRun) -> Forgeries:
     """Each lane gets one forgery of a real message: the same bytes under an id of its own, so no dedupe can hide
-    it, with the `rask_signature` the catalog put on it removed. The silver insert claims the pipeline's authority to
-    write silver; the pipeline's bronze grant names the pipeline as its subject."""
+    it, with the `rask_signature` the catalog put on it removed. The cleaned insert claims the pipeline's authority to
+    write cleaned; the pipeline's raw grant names the pipeline as its subject."""
     pipeline = byo_tenant.pipeline
     insert = [
         message
         for message in captured.lineage
-        if _tables_of(message.event) == {byo_run.silver_table} and _facets(message.event).get("rask_lance", {}).get("operation") == "insert"
+        if _tables_of(message.event) == {byo_run.cleaned_table} and _facets(message.event).get("rask_lance", {}).get("operation") == "insert"
     ]
-    grant = next((message for message in _grants_to(captured, pipeline) if _named(message.event) == byo_tenant.bronze), None)
-    assert insert and grant, "the capture holds no silver insert or no grant to the pipeline to forge"
+    grant = next((message for message in _grants_to(captured, pipeline) if _named(message.event) == byo_tenant.raw), None)
+    assert insert and grant, "the capture holds no cleaned insert or no grant to the pipeline to forge"
 
     forged_run = str(uuid.uuid4())
     run_event = copy.deepcopy(insert[0].event)
@@ -321,7 +321,7 @@ def forgeries(captured: Captured, byo_tenant: Tenant, byo_run: ScenarioRun) -> F
     kept = _kept_by_the_catalog(byo_tenant.admin, forged=forged_grant, marker=marker)
     return Forgeries(
         recorded=[
-            int(row["seq"]) for row in scenario.read_forward(pipeline, since=cursor, table=byo_run.silver_table) if event_identity(row["event"]) == forged_run
+            int(row["seq"]) for row in scenario.read_forward(pipeline, since=cursor, table=byo_run.cleaned_table) if event_identity(row["event"]) == forged_run
         ],
         kept=kept,
     )
@@ -383,9 +383,9 @@ def test_each_event_names_the_person_it_grants_and_the_table_it_wrote_by_the_uui
     """What a notifier targets by, and the lakehouse writes (`docs/COMMIT-EVENTS.md`): a grant
     reaches the person its `extra.subject` names, and a write reaches whoever may read the table its `tableUuid` names,
     so a rename or a name taken again sends it nowhere else. The drive made the admin the project's admin, the pipeline a
-    writer on bronze and silver, and the consumer a reader on silver, and granted none of them anything else."""
+    writer on raw and cleaned, and the consumer a reader on cleaned, and granted none of them anything else."""
     tenant = byo_tenant
-    uuids = uuids_of(tenant.pipeline, (byo_run.bronze_table, byo_run.silver_table))
+    uuids = uuids_of(tenant.pipeline, (byo_run.raw_table, byo_run.cleaned_table))
     events = [(f"bus {message.stream} #{message.seq}", message.event) for message in captured.lineage]
     events += [(f"feed #{row['seq']}", row["event"]) for row in captured.feed]
 
@@ -397,8 +397,8 @@ def test_each_event_names_the_person_it_grants_and_the_table_it_wrote_by_the_uui
 
     assert granted == {
         "admin": [(f"project:{tenant.project}", "admin")],
-        "pipeline": sorted([(tenant.bronze, "writer"), (tenant.silver, "writer")]),
-        "consumer": [(tenant.silver, "reader")],
+        "pipeline": sorted([(tenant.raw, "writer"), (tenant.cleaned, "writer")]),
+        "consumer": [(tenant.cleaned, "reader")],
     }
     assert named, "the capture holds no lineage event to judge"
     assert named == {where: {table: uuids.get(table) for table in written} for where, written in named.items()}
@@ -408,13 +408,13 @@ def test_each_event_is_recorded_once_and_a_redelivery_of_its_bytes_adds_nothing(
     keys = Counter((event_identity(row["event"]), row["event_type"]) for row in captured.feed)
     commits = {
         table: [(operation, version) for named, operation, version in map(_commit, captured.feed) if named == table]
-        for table in (byo_run.bronze_table, byo_run.silver_table)
+        for table in (byo_run.raw_table, byo_run.cleaned_table)
     }
 
     assert [key for key, count in keys.items() if count > 1] == []
     assert commits == {
-        byo_run.bronze_table: [("declare_table", None), ("create_table", 1), ("insert", 2)],
-        byo_run.silver_table: [("create_table", 1), ("insert", 2), ("insert", 3)],
+        byo_run.raw_table: [("declare_table", None), ("create_table", 1), ("insert", 2)],
+        byo_run.cleaned_table: [("create_table", 1), ("insert", 2), ("insert", 3)],
     }
     assert redelivery.landed == []
 

@@ -3,7 +3,7 @@ write is judged under it.
 
 ADR 0156 C8 and ADR 0211, against the catalog as deployed over real pylance, in a registered warehouse: a loopback Dex
 signs callers in and a real OpenFGA decides on a store of the test's own, so who may act IS the claim here and each
-caller holds only the rungs named. A namespace named `gold` that declares nothing is judged by what it declares, never by
+caller holds only the rungs named. A namespace named `served` that declares nothing is judged by what it declares, never by
 its name.
 """
 
@@ -123,7 +123,7 @@ def test_a_declaration_names_no_reserved_key_but_the_run_rule_as_true(grants: Go
     grants.act_as("alice")
     forged = {UUID_PROPERTY: "00000000-0000-4000-8000-000000000000"}
     _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.requires_run": "false"}}), 13)
-    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.tier": "silver"}}), 13)
+    _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": {"rask.tier": "cleaned"}}), 13)
     _refused(client.post(f"/v1/namespace/{SALES}/create", json={"properties": forged}), 13)
     assert _top_level(client, SALES, RULE) == 200
 
@@ -149,14 +149,14 @@ _RUN: Final = frozendict(
 def test_a_write_names_its_run_where_a_namespace_above_it_requires_one(grants: GovernedCatalog, caplog: pytest.LogCaptureFixture) -> None:
     """Without the writer rung the write is PermissionDenied (15). Under ``sales``, which declares the rule, and under
     ``sales$lane``, which inherits it, an insert naming no run is InvalidInput (13) and one naming its run lands; under
-    ``gold``, which declares nothing, both land. Each decision is audited with the rule it was judged under."""
+    ``served``, which declares nothing, both land. Each decision is audited with the rule it was judged under."""
     client = grants.client
     grants.act_as("alice")
     assert _top_level(client, SALES, RULE) == 200
-    assert _top_level(client, f"{WAREHOUSE}$gold") == 200
+    assert _top_level(client, f"{WAREHOUSE}$served") == 200
     assert _top_level(client, f"{WAREHOUSE}$src") == 200
     assert client.post(f"/v1/namespace/{SALES}$lane/create", json={}).status_code == 200
-    spaces = (SALES, f"{SALES}$lane", f"{WAREHOUSE}$gold")
+    spaces = (SALES, f"{SALES}$lane", f"{WAREHOUSE}$served")
     # The run's input is a table alice may read: a name that holds no table grants nothing to read.
     assert client.post(f"/v1/table/{WAREHOUSE}$src$a/create?mode=create", content=ROWS, headers=ARROW).status_code == 200
     for ns in spaces:
@@ -170,7 +170,7 @@ def test_a_write_names_its_run_where_a_namespace_above_it_requires_one(grants: G
     caplog.clear()
     for ns in (SALES, f"{SALES}$lane"):
         _refused(client.post(f"/v1/table/{ns}$t/insert", content=ROWS, headers=ARROW), 13)
-    assert client.post(f"/v1/table/{WAREHOUSE}$gold$t/insert", content=ROWS, headers=ARROW).status_code == 200
+    assert client.post(f"/v1/table/{WAREHOUSE}$served$t/insert", content=ROWS, headers=ARROW).status_code == 200
     for ns in spaces:
         assert client.post(f"/v1/table/{ns}$t/insert", content=ROWS, headers={**ARROW, **_RUN}).status_code == 200
     judged = [
@@ -182,10 +182,10 @@ def test_a_write_names_its_run_where_a_namespace_above_it_requires_one(grants: G
     assert judged == [
         (f"table:{SALES}$t", "true", "deny"),
         (f"table:{SALES}$lane$t", "true", "deny"),
-        (f"table:{WAREHOUSE}$gold$t", "false", "allow"),
+        (f"table:{WAREHOUSE}$served$t", "false", "allow"),
         (f"table:{SALES}$t", "true", "allow"),
         (f"table:{SALES}$lane$t", "true", "allow"),
-        (f"table:{WAREHOUSE}$gold$t", "false", "allow"),
+        (f"table:{WAREHOUSE}$served$t", "false", "allow"),
     ]
 
 

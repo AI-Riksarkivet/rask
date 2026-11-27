@@ -102,7 +102,7 @@ _DATASETS = "lance-namespace://rask.example.org/api/catalog"
 
 def test_catalog_write_event_conforms_and_names_the_table_by_the_catalog_and_its_location() -> None:
     event = catalog_emit.build_write_event(
-        table_id="alpha$bronze$images",
+        table_id="alpha$raw$images",
         namespace=_DATASETS,
         author="alice",
         version=3,
@@ -110,7 +110,7 @@ def test_catalog_write_event_conforms_and_names_the_table_by_the_catalog_and_its
         run_id=_RUN_ID,
         event_time=_EVENT_TIME,
         job_namespace="lance-catalog",
-        source_uri="s3://lakehouse/bronze/images",
+        source_uri="s3://lakehouse/raw/images",
         schema_fields=[{"name": "id", "type": "int64"}, {"name": "payload", "type": "blob"}],
         inputs=[catalog_emit.InputRef(name="alpha$raw$drop", version=7, branch="review")],
         run=RunContext(run_id="0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a07", job_namespace="pipelines", job="ingest"),
@@ -121,8 +121,8 @@ def test_catalog_write_event_conforms_and_names_the_table_by_the_catalog_and_its
     output = event["outputs"][0]
     assert (output["namespace"], output["name"], output["facets"]["symlinks"]["identifiers"]) == (
         _DATASETS,
-        "alpha$bronze$images",
-        [{"namespace": "s3://lakehouse", "name": "bronze/images", "type": "LOCATION"}],
+        "alpha$raw$images",
+        [{"namespace": "s3://lakehouse", "name": "raw/images", "type": "LOCATION"}],
     )
     assert [(i["namespace"], i["name"]) for i in event["inputs"]] == [(_DATASETS, "alpha$raw$drop")]
     # The writer's run rides the standard `parent` facet, whose `_schemaURL` is the model's default: the version the
@@ -135,7 +135,7 @@ def test_catalog_versionless_write_event_conforms(operation: str) -> None:
     # ASSERTS the versionless branch (drop/deregister omit the version facet) is still a valid RunEvent —
     # an omitted optional facet must not take the required envelope with it.
     event = catalog_emit.build_write_event(
-        table_id="alpha$bronze$images",
+        table_id="alpha$raw$images",
         namespace=_DATASETS,
         author=None,
         version=None,
@@ -149,10 +149,10 @@ def test_catalog_versionless_write_event_conforms(operation: str) -> None:
 
 def test_maintenance_events_conform_and_name_the_table_as_the_catalog_does() -> None:
     ok = compaction_emit.build_maintenance_event(
-        table_id="alpha$bronze$images",
+        table_id="alpha$raw$images",
         namespace=_DATASETS,
         job_namespace="lance-compaction",
-        location="s3://lakehouse/bronze/images",
+        location="s3://lakehouse/raw/images",
         run_id=_RUN_ID,
         event_time=_EVENT_TIME,
     )
@@ -160,10 +160,10 @@ def test_maintenance_events_conform_and_name_the_table_as_the_catalog_does() -> 
     output = ok["outputs"][0]
     assert (output["namespace"], output["facets"]["symlinks"]["identifiers"]) == (
         _DATASETS,
-        [{"namespace": "s3://lakehouse", "name": "bronze/images", "type": "LOCATION"}],
+        [{"namespace": "s3://lakehouse", "name": "raw/images", "type": "LOCATION"}],
     )
     failed = compaction_emit.build_maintenance_fail_event(
-        table_id="alpha$bronze$images",
+        table_id="alpha$raw$images",
         namespace=_DATASETS,
         job_namespace="lance-compaction",
         run_id=_RUN_ID,
@@ -184,10 +184,10 @@ def test_typed_slots_survive_the_feed_round_trip() -> None:
         "schemaURL": ol.RUN_EVENT_SCHEMA_URL,
         "run": {"runId": _RUN_ID, "facets": {}},
         "job": {"namespace": "pipelines", "name": "embed"},
-        "inputs": [{"namespace": "bronze", "name": "events", "facets": {}}],
+        "inputs": [{"namespace": "raw", "name": "events", "facets": {}}],
         "outputs": [
             {
-                "namespace": "silver",
+                "namespace": "cleaned",
                 "name": "features",
                 "facets": {},
                 "outputFacets": {
@@ -212,7 +212,7 @@ def test_a_client_facet_the_door_stamps_uuids_into_carries_rask_s_schema() -> No
     # rask's to describe, whatever schema and producer the client named ([[LH-500]]).
     sent = {
         "namespace": "acme",
-        "name": "acme$bronze$t",
+        "name": "acme$raw$t",
         "facets": {lineage_events.LANCE_FACET: {"_producer": "https://client.example/p", "_schemaURL": _SPEC["$id"] + "#/$defs/BaseFacet", "ref": "b"}},
     }
     uuids = lineage_events.DatasetUuids(table_uuid="3f2504e0-4f89-11d3-9a0c-0305e82c3302", namespace_uuid="3f2504e0-4f89-11d3-9a0c-0305e82c3303")

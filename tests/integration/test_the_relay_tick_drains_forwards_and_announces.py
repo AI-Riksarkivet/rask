@@ -42,7 +42,7 @@ from tests.integration.lineage_app import SUBJECT_HEADER, declared, governed_lin
 from tests.traces import trace_id_of
 
 
-_TABLE = "lance_catalog$acme-silver$pages"
+_TABLE = "lance_catalog$acme-cleaned$pages"
 
 
 def test_a_tick_forwards_the_feed_and_reports_every_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

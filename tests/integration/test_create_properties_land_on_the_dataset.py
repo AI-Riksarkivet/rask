@@ -62,7 +62,7 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
         ["db", "props_at_create"],
         table=_table(),
         root=str(tmp_path),
-        properties={"owner": "team-a", "tier": "gold"},
+        properties={"owner": "team-a", "tier": "served"},
         registry=None,
         transaction_properties=run,
     )
@@ -70,7 +70,7 @@ def test_a_property_set_at_create_is_readable_off_the_table(real_ns: LanceNamesp
     stored = schema.user_schema_metadata(lance.dataset(str(created.location)).schema)
 
     assert stored.get("owner") == "team-a", f"the property never reached the dataset: {stored}"
-    assert stored.get("tier") == "gold", f"the property never reached the dataset: {stored}"
+    assert stored.get("tier") == "served", f"the property never reached the dataset: {stored}"
     dataset = lance.dataset(str(created.location))
     carried = [
         (version, dict(transaction.transaction_properties or {}) if (transaction := dataset.read_transaction(version)) else {})

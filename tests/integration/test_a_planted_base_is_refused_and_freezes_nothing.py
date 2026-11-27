@@ -393,36 +393,36 @@ def _reads_cold(uri: str, key: dict[str, str]) -> list[int]:
 _CLONED_IDS = sorted([1, 2, 3] * 3)
 
 
-def _unregistered_clone(estate: _Estate, source: str = "lance_catalog$db$bronze tier") -> tuple[str, str]:
-    """A ``source`` made through the catalog and a shallow clone of its latest version at ``silver``, under no name yet:
+def _unregistered_clone(estate: _Estate, source: str = "lance_catalog$db$raw tier") -> tuple[str, str]:
+    """A ``source`` made through the catalog and a shallow clone of its latest version at ``cleaned``, under no name yet:
     the source's location and the clone's.
 
-    The source's name is one the catalog percent-encodes into its location (``bronze tier``), as the claim, the tag and
+    The source's name is one the catalog percent-encodes into its location (``raw tier``), as the claim, the tag and
     the clone's base all spell it while the store keeps the decoded directory (lh279 r6 spellings).
     """
-    bronze = estate.create(source, fragments=3)
-    clone = f"{estate.root}/silver"
-    made = estate.open(bronze)
+    raw = estate.create(source, fragments=3)
+    clone = f"{estate.root}/cleaned"
+    made = estate.open(raw)
     made.shallow_clone(clone, made.version, storage_options=estate.key.in_clear())
-    return bronze, clone
+    return raw, clone
 
 
-def _registered_clone(estate: _Estate, table: str = "lance_catalog$db$silver", source: str = "lance_catalog$db$bronze tier") -> tuple[str, str]:
+def _registered_clone(estate: _Estate, table: str = "lance_catalog$db$cleaned", source: str = "lance_catalog$db$raw tier") -> tuple[str, str]:
     """:func:`_unregistered_clone`, registered as ``table``."""
-    bronze, clone = _unregistered_clone(estate, source)
-    registered = estate.client.post(f"/v1/table/{table}/register", json={"location": "silver"})
+    raw, clone = _unregistered_clone(estate, source)
+    registered = estate.client.post(f"/v1/table/{table}/register", json={"location": "cleaned"})
     assert registered.status_code == 200, registered.text
-    return bronze, clone
+    return raw, clone
 
 
 def test_a_registered_clone_reads_after_its_source_is_cleaned(estate: _Estate) -> None:
     """Closes-when (c) of ADR 0198 §1: the register door tags the source version a shallow clone reads, so the clone
     reads cold after its source is overwritten, compacted and cleaned at age 0."""
-    bronze, clone = _registered_clone(estate)
-    lance.write_dataset(_MINE, bronze, mode="overwrite", storage_options=estate.key.in_clear())
-    estate.open(bronze).optimize.compact_files()
+    raw, clone = _registered_clone(estate)
+    lance.write_dataset(_MINE, raw, mode="overwrite", storage_options=estate.key.in_clear())
+    estate.open(raw).optimize.compact_files()
 
-    estate.open(bronze).cleanup_old_versions(older_than=timedelta(0), delete_unverified=True, error_if_tagged_old_versions=False)
+    estate.open(raw).cleanup_old_versions(older_than=timedelta(0), delete_unverified=True, error_if_tagged_old_versions=False)
 
     assert _reads_cold(clone, estate.key.in_clear()) == _CLONED_IDS, "the tag did not keep the version the clone reads"
 
@@ -436,30 +436,30 @@ def _cleaned_at_age_zero(estate: _Estate, source: str) -> None:
 def test_a_clone_of_a_clone_reads_after_the_clone_between_is_deregistered(estate: _Estate) -> None:
     """A clone of a clone reads the first source's files where they are, so its registration tags that source too: the
     end of the clone between them releases only that clone's own tag."""
-    bronze, silver = _registered_clone(estate)
-    gold = f"{estate.root}/gold"
-    between = estate.open(silver)
-    between.shallow_clone(gold, between.version, storage_options=estate.key.in_clear())
-    assert estate.client.post("/v1/table/lance_catalog$db$gold/register", json={"location": "gold"}).status_code == 200
-    assert estate.client.post("/v1/table/lance_catalog$db$silver/deregister", json={}).status_code == 200
+    raw, cleaned = _registered_clone(estate)
+    served = f"{estate.root}/served"
+    between = estate.open(cleaned)
+    between.shallow_clone(served, between.version, storage_options=estate.key.in_clear())
+    assert estate.client.post("/v1/table/lance_catalog$db$served/register", json={"location": "served"}).status_code == 200
+    assert estate.client.post("/v1/table/lance_catalog$db$cleaned/deregister", json={}).status_code == 200
 
-    _cleaned_at_age_zero(estate, bronze)
+    _cleaned_at_age_zero(estate, raw)
 
-    assert _reads_cold(gold, estate.key.in_clear()) == _CLONED_IDS, "the first source kept no version for the clone of its clone"
+    assert _reads_cold(served, estate.key.in_clear()) == _CLONED_IDS, "the first source kept no version for the clone of its clone"
 
 
 def test_a_clone_registered_again_once_its_first_version_is_gone_keeps_its_source(estate: _Estate) -> None:
     """A clone's own expiry removes the version whose transaction names its source, so a later registration of it tags
     the source from the catalog's record of the first: it is never governed with no tag."""
-    bronze, clone = _registered_clone(estate)
+    raw, clone = _registered_clone(estate)
     for _ in range(2):
         estate.open(clone).insert(_MINE)
     estate.open(clone).cleanup_old_versions(older_than=timedelta(0), delete_unverified=True, error_if_tagged_old_versions=False)
     held = _reads_cold(clone, estate.key.in_clear())
-    assert estate.client.post("/v1/table/lance_catalog$db$silver/deregister", json={}).status_code == 200
-    registered = estate.client.post("/v1/table/lance_catalog$db$silver/register", json={"location": "silver"})
+    assert estate.client.post("/v1/table/lance_catalog$db$cleaned/deregister", json={}).status_code == 200
+    registered = estate.client.post("/v1/table/lance_catalog$db$cleaned/register", json={"location": "cleaned"})
 
-    _cleaned_at_age_zero(estate, bronze)
+    _cleaned_at_age_zero(estate, raw)
 
     assert registered.status_code == 200, registered.text
     assert _reads_cold(clone, estate.key.in_clear()) == held, "the clone was registered again with no tag on its source"
@@ -468,18 +468,18 @@ def test_a_clone_registered_again_once_its_first_version_is_gone_keeps_its_sourc
 def test_a_clone_of_a_source_branch_is_registered_and_keeps_the_branch_version(estate: _Estate) -> None:
     """A clone made from a source's branch names the branch's directory, inside the source's root: its registration tags
     the branch version on the source table, and the clone reads after the source is cleaned."""
-    bronze = estate.create("lance_catalog$db$bronze", fragments=3)
-    clone = f"{estate.root}/silver"
-    estate.open(bronze).create_branch("exp", estate.open(bronze).version, storage_options=estate.key.in_clear())
-    branch = estate.open(bronze).checkout_version(("exp", None))
+    raw = estate.create("lance_catalog$db$raw", fragments=3)
+    clone = f"{estate.root}/cleaned"
+    estate.open(raw).create_branch("exp", estate.open(raw).version, storage_options=estate.key.in_clear())
+    branch = estate.open(raw).checkout_version(("exp", None))
     branch.shallow_clone(clone, ("exp", branch.version), storage_options=estate.key.in_clear())
 
-    registered = estate.client.post("/v1/table/lance_catalog$db$silver/register", json={"location": "silver"})
+    registered = estate.client.post("/v1/table/lance_catalog$db$cleaned/register", json={"location": "cleaned"})
 
     assert registered.status_code == 200, registered.text
-    tag = estate.open(bronze).tags.list()[clone_sources.tag_of(clone)]
+    tag = estate.open(raw).tags.list()[clone_sources.tag_of(clone)]
     assert (tag["branch"], tag["version"]) == ("exp", branch.version)
-    _cleaned_at_age_zero(estate, bronze)
+    _cleaned_at_age_zero(estate, raw)
     assert _reads_cold(clone, estate.key.in_clear()) == _CLONED_IDS
 
 
@@ -487,7 +487,7 @@ def test_a_source_a_registered_clone_reads_is_not_destroyed(estate: _Estate) -> 
     """A drop destroying a table's bytes is refused while a registered clone reads through them."""
     _, clone = _registered_clone(estate)
 
-    refused = estate.client.post("/v1/table/lance_catalog$db$bronze%20tier/drop", params={"purge": "true"}, json={})
+    refused = estate.client.post("/v1/table/lance_catalog$db$raw%20tier/drop", params={"purge": "true"}, json={})
 
     _refused(refused, _INVALID_TABLE_STATE)
     assert _reads_cold(clone, estate.key.in_clear()) == _CLONED_IDS, "the refused drop changed what the clone reads"
@@ -539,7 +539,7 @@ def test_a_cascade_destroying_a_source_a_clone_outside_it_reads_is_refused(estat
     others = ["lance_catalog$lake$alpha", "lance_catalog$lake$omega"]
     for table in others:
         estate.create(table)
-    _, clone = _registered_clone(estate, source="lance_catalog$lake$bronze tier")
+    _, clone = _registered_clone(estate, source="lance_catalog$lake$raw tier")
 
     refused = estate.client.post("/v1/namespace/lance_catalog$lake/drop", params={"purge": "true"}, json={"behavior": "Cascade"})
 
@@ -553,15 +553,15 @@ def test_a_trashed_source_a_clone_reads_is_vended_no_session_to_delete_its_bytes
     """The trash's reclaim door vends no session deleting a released table's bytes while a registered clone reads them
     (``trash_reclaim.clone_refusal``), and notes the refusal on the record."""
     _, clone = _registered_clone(estate)
-    assert estate.client.post("/v1/table/lance_catalog$db$bronze%20tier/drop", json={}).status_code == 200
-    (record,) = trash.named(estate.root, estate.key, "lance_catalog$db$bronze tier", kind="table")
+    assert estate.client.post("/v1/table/lance_catalog$db$raw%20tier/drop", json={}).status_code == 200
+    (record,) = trash.named(estate.root, estate.key, "lance_catalog$db$raw tier", kind="table")
     past = datetime.now(UTC) - timedelta(days=1)
     trash.put(estate.root, estate.key, record.model_copy(update={"expires_at": past.isoformat(), "released_at": past.isoformat()}))
 
     refused = estate.client.post(f"/management/v1/trash/table/{record.uuid}/credentials", json={})
 
     _refused(refused, _INVALID_TABLE_STATE)
-    (noted,) = trash.named(estate.root, estate.key, "lance_catalog$db$bronze tier", kind="table")
+    (noted,) = trash.named(estate.root, estate.key, "lance_catalog$db$raw tier", kind="table")
     assert (noted.attempts, noted.last_refusal.reason if noted.last_refusal else None) == (
         1,
         "1 registered clone(s) read the table's files; its bytes go once those clones are dropped or deregistered",
@@ -573,12 +573,12 @@ def test_a_trashed_source_a_clone_reads_is_vended_no_session_to_delete_its_bytes
 def test_a_clones_end_frees_its_source(estate: _Estate, purge: str, tags: int) -> None:
     """The clone's own end deletes the tag it holds, so its source keeps no version for it. A clone in the trash can be
     undropped, so its source keeps the version it reads until the trash ends the clone."""
-    bronze, _ = _registered_clone(estate)
+    raw, _ = _registered_clone(estate)
 
-    dropped = estate.client.post("/v1/table/lance_catalog$db$silver/drop", params={"purge": purge}, json={})
+    dropped = estate.client.post("/v1/table/lance_catalog$db$cleaned/drop", params={"purge": purge}, json={})
 
     assert dropped.status_code == 200, dropped.text
-    assert len([tag for tag in estate.open(bronze).tags.list() if tag.startswith(clone_sources.TAG_PREFIX)]) == tags
+    assert len([tag for tag in estate.open(raw).tags.list() if tag.startswith(clone_sources.TAG_PREFIX)]) == tags
 
 
 def _a_store_that_will_not_delete_a_tag(source_location: str, tag: str, *, storage_options: StorageOptions) -> bool:
@@ -609,9 +609,9 @@ def _ended_by(estate: _Estate, path: str, params: dict[str, str]) -> int:
 @pytest.mark.parametrize(
     ("table", "path", "params", "answered"),
     [
-        pytest.param("lance_catalog$db$silver", "/v1/table/lance_catalog$db$silver/deregister", {}, 503, id="deregister"),
-        pytest.param("lance_catalog$db$silver", "/v1/table/lance_catalog$db$silver/drop", {"purge": "true"}, 500, id="destroying-drop"),
-        pytest.param("lance_catalog$clones$silver", "/v1/namespace/lance_catalog$clones/drop", {"purge": "true"}, 500, id="destroying-namespace-cascade"),
+        pytest.param("lance_catalog$db$cleaned", "/v1/table/lance_catalog$db$cleaned/deregister", {}, 503, id="deregister"),
+        pytest.param("lance_catalog$db$cleaned", "/v1/table/lance_catalog$db$cleaned/drop", {"purge": "true"}, 500, id="destroying-drop"),
+        pytest.param("lance_catalog$clones$cleaned", "/v1/namespace/lance_catalog$clones/drop", {"purge": "true"}, 500, id="destroying-namespace-cascade"),
     ],
 )
 def test_a_clones_end_that_cannot_delete_its_tag_is_finished_by_maintenance(
@@ -624,13 +624,13 @@ def test_a_clones_end_that_cannot_delete_its_tag_is_finished_by_maintenance(
     source can be destroyed. The fourth
     door, the warehouse cascade, is `test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`'s."""
     assert estate.client.post("/v1/namespace/lance_catalog$clones/create", json={}).status_code == 200
-    bronze, clone = _registered_clone(estate, table)
+    raw, clone = _registered_clone(estate, table)
     claims = location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key)
     real_delete = clone_sources.delete_tag
     monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
     assert _ended_by(estate, path, params) == answered
     held = location_claims.holder(claims, clone)
-    assert (clone_ending_records.stands_at(claims, clone), len(_clone_tags(estate, bronze))) == (True, 1), "precondition: the end left its tag"
+    assert (clone_ending_records.stands_at(claims, clone), len(_clone_tags(estate, raw))) == (True, 1), "precondition: the end left its tag"
     assert held is not None and held.table == table, "the clone's location was freed with its tag still standing"
     monkeypatch.setattr(clone_sources, "delete_tag", real_delete)
     monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
@@ -639,8 +639,8 @@ def test_a_clones_end_that_cannot_delete_its_tag_is_finished_by_maintenance(
 
     assert ([ending.split("/")[0] for ending in finished.finished], finished.refused) == ([clone_ending_records.digest_of(clone)], {}), finished
     recorded = base_registry.read_base_record(estate.registry, clone) is not None
-    assert (clone_ending_records.stands_at(claims, clone), _clone_tags(estate, bronze), recorded) == (False, [], path.endswith("/deregister"))
-    destroyed = estate.client.post("/v1/table/lance_catalog$db$bronze%20tier/drop", params={"purge": "true"}, json={})
+    assert (clone_ending_records.stands_at(claims, clone), _clone_tags(estate, raw), recorded) == (False, [], path.endswith("/deregister"))
+    destroyed = estate.client.post("/v1/table/lance_catalog$db$raw%20tier/drop", params={"purge": "true"}, json={})
     assert destroyed.status_code == 200, destroyed.text
 
 
@@ -651,13 +651,13 @@ def _claims(estate: _Estate) -> location_claims.ClaimStore:
 def _ending_left_by_a_deregister(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> tuple[str, str, str]:
     """A registered clone whose deregister could not delete its tag (503): the source, the clone, and the finish door's
     path for the ending the door left."""
-    bronze, clone = _registered_clone(estate)
+    raw, clone = _registered_clone(estate)
     real_delete = clone_sources.delete_tag
     monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
-    assert estate.client.post("/v1/table/lance_catalog$db$silver/deregister", json={}).status_code == 503
+    assert estate.client.post("/v1/table/lance_catalog$db$cleaned/deregister", json={}).status_code == 503
     monkeypatch.setattr(clone_sources, "delete_tag", real_delete)
     ((digest, filing),) = clone_ending_records.standing(_claims(estate))
-    return bronze, clone, f"/management/v1/clone-endings/{digest}/{filing}/finish"
+    return raw, clone, f"/management/v1/clone-endings/{digest}/{filing}/finish"
 
 
 def _a_backend_that_will_not_deregister(real_call: Callable[..., object]) -> Callable[..., object]:
@@ -690,8 +690,8 @@ def _a_judgement_refusing_the_drop(*_args: object, **_kwargs: object) -> None:
 @pytest.mark.parametrize(
     ("table", "path"),
     [
-        pytest.param("lance_catalog$db$silver", "/v1/table/lance_catalog$db$silver/drop", id="drop-refused-as-a-clones-source"),
-        pytest.param("lance_catalog$clones$silver", "/v1/namespace/lance_catalog$clones/drop", id="namespace-cascade-refused-by-a-judgement"),
+        pytest.param("lance_catalog$db$cleaned", "/v1/table/lance_catalog$db$cleaned/drop", id="drop-refused-as-a-clones-source"),
+        pytest.param("lance_catalog$clones$cleaned", "/v1/namespace/lance_catalog$clones/drop", id="namespace-cascade-refused-by-a-judgement"),
     ],
 )
 def test_a_door_refused_before_its_row_would_go_files_no_ending(estate: _Estate, monkeypatch: pytest.MonkeyPatch, table: str, path: str) -> None:
@@ -699,37 +699,37 @@ def test_a_door_refused_before_its_row_would_go_files_no_ending(estate: _Estate,
     right before the row goes: a judgement's refusal files none, so none refuses a registration at the location or is
     asked about by the audit. The clone keeps its row and its tag."""
     assert estate.client.post("/v1/namespace/lance_catalog$clones/create", json={}).status_code == 200
-    bronze, clone = _registered_clone(estate, table)
+    raw, clone = _registered_clone(estate, table)
     if "namespace" in path:
         monkeypatch.setattr(destroy, "require_no_clone_reading", _a_judgement_refusing_the_drop)
     else:
-        silver = estate.open(clone)
-        silver.shallow_clone(f"{estate.root}/gold", silver.version, storage_options=estate.key.in_clear())
-        assert estate.client.post("/v1/table/lance_catalog$db$gold/register", json={"location": "gold"}).status_code == 200
+        cleaned = estate.open(clone)
+        cleaned.shallow_clone(f"{estate.root}/served", cleaned.version, storage_options=estate.key.in_clear())
+        assert estate.client.post("/v1/table/lance_catalog$db$served/register", json={"location": "served"}).status_code == 200
 
     status = _ended_by(estate, path, {"purge": "true"})
 
     described = estate.client.post(f"/v1/table/{table}/describe", json={}).status_code
-    held = clone_sources.tag_of(clone) in _clone_tags(estate, bronze)
+    held = clone_sources.tag_of(clone) in _clone_tags(estate, raw)
     assert (status, described, clone_ending_records.standing(_claims(estate)), held) == (409, 200, [], True)
 
 
 def test_a_drop_whose_clone_ending_cannot_be_filed_changes_nothing(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
     """A destructive drop files a clone's ending as its last step before the row goes: a filing the store refuses answers
     503 code 17 with the row in place, no residue record kept for the table, and no ending standing."""
-    bronze, clone = _registered_clone(estate)
+    raw, clone = _registered_clone(estate)
 
     def _a_store_that_will_not_file(*_args: object, **_kwargs: object) -> object:
         raise OSError("the control root did not take the ending")
 
     monkeypatch.setattr(clone_ending_records, "file", _a_store_that_will_not_file)
 
-    dropped = estate.client.post("/v1/table/lance_catalog$db$silver/drop", params={"purge": "true"}, json={})
+    dropped = estate.client.post("/v1/table/lance_catalog$db$cleaned/drop", params={"purge": "true"}, json={})
 
-    described = estate.client.post("/v1/table/lance_catalog$db$silver/describe", json={}).status_code
-    residue = trash.named(estate.root, estate.key, "lance_catalog$db$silver", kind="table")
+    described = estate.client.post("/v1/table/lance_catalog$db$cleaned/describe", json={}).status_code
+    residue = trash.named(estate.root, estate.key, "lance_catalog$db$cleaned", kind="table")
     assert (dropped.status_code, dropped.json().get("code"), described, residue, clone_ending_records.standing(_claims(estate))) == (503, 17, 200, [], [])
-    assert _clone_tags(estate, bronze) == [clone_sources.tag_of(clone)]
+    assert _clone_tags(estate, raw) == [clone_sources.tag_of(clone)]
 
 
 class _FailsAt:
@@ -800,13 +800,13 @@ def test_a_registration_whose_guard_fails_registers_nothing_and_answers_by_the_f
     before the table is one. A store that refuses one of them, and a claim no reader can take for one, are faults no
     retry clears (500, code 18); a store that does not answer is an outage (503, code 17); either way the name holds
     no table."""
-    bronze, _ = _unregistered_clone(estate)
-    fault(estate, monkeypatch, bronze)
+    raw, _ = _unregistered_clone(estate)
+    fault(estate, monkeypatch, raw)
 
-    refused = estate.client.post("/v1/table/lance_catalog$db$silver/register", json={"location": "silver"})
+    refused = estate.client.post("/v1/table/lance_catalog$db$cleaned/register", json={"location": "cleaned"})
 
     monkeypatch.undo()
-    described = estate.client.post("/v1/table/lance_catalog$db$silver/describe", json={}).status_code
+    described = estate.client.post("/v1/table/lance_catalog$db$cleaned/describe", json={}).status_code
     assert (refused.status_code, refused.json()["code"], described) == (*answer, 404), refused.text
 
 
@@ -843,19 +843,19 @@ def test_a_registration_refused_by_another_requests_fence_releases_nothing(estat
     real_call = native.call
     monkeypatch.setattr(native, "call", _a_backend_that_removes_the_row_then_fails(real_call))
     with pytest.raises(OSError, match="after removing the row"):
-        estate.client.post("/v1/table/lance_catalog$db$silver/deregister", json={})
+        estate.client.post("/v1/table/lance_catalog$db$cleaned/deregister", json={})
     monkeypatch.setattr(native, "call", real_call)
     read_as = location_claims.read(claims, clone)
     location_claims.fence(
-        claims, clone, read_as, table="lance_catalog$db$silver", segments=["lance_catalog", "db", "silver"], token="f" * 32, is_gone=lambda _claim: False
+        claims, clone, read_as, table="lance_catalog$db$cleaned", segments=["lance_catalog", "db", "cleaned"], token="f" * 32, is_gone=lambda _claim: False
     )
 
-    answers = [estate.client.post("/v1/table/lance_catalog$db$silver/register", json={"location": "silver"}) for _ in range(2)]
+    answers = [estate.client.post("/v1/table/lance_catalog$db$cleaned/register", json={"location": "cleaned"}) for _ in range(2)]
 
     held = location_claims.holder(claims, clone)
     assert [(answer.status_code, answer.json().get("code")) for answer in answers] == [(409, 14), (409, 14)], [answer.text for answer in answers]
     assert held is not None and (held.uuid, held.fence.token if held.fence else None) == (owned.uuid, "f" * 32)
-    assert estate.client.post("/v1/table/lance_catalog$db$silver/describe", json={}).status_code == 404
+    assert estate.client.post("/v1/table/lance_catalog$db$cleaned/describe", json={}).status_code == 404
 
 
 def test_a_destroying_cascade_releases_only_the_claim_of_the_table_it_identified(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -890,7 +890,7 @@ def test_a_finish_releases_nothing_when_the_clones_claim_moved_after_its_read(es
     """The finish acts only on the claim it read, fenced under that read's ETag: a registration of the same name taking
     the location (a new uuid) after the read answers the finish 409 (code 14), the new holder keeps the location, and the
     tag of its name stands."""
-    bronze, clone, finish = _ending_left_by_a_deregister(estate, monkeypatch)
+    raw, clone, finish = _ending_left_by_a_deregister(estate, monkeypatch)
     monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
     real_read = location_claims.read
     taken: list[str] = []
@@ -900,7 +900,7 @@ def test_a_finish_releases_nothing_when_the_clones_claim_moved_after_its_read(es
         if not taken:
             taken.append(str(uuid.uuid4()))
             location_claims.take(
-                store, location, "lance_catalog$db$silver", segments=["lance_catalog", "db", "silver"], is_gone=lambda _claim: True, uuid=taken[0]
+                store, location, "lance_catalog$db$cleaned", segments=["lance_catalog", "db", "cleaned"], is_gone=lambda _claim: True, uuid=taken[0]
             )
         return found
 
@@ -912,14 +912,14 @@ def test_a_finish_releases_nothing_when_the_clones_claim_moved_after_its_read(es
     held = location_claims.holder(_claims(estate), clone)
     assert (answered.status_code, answered.json().get("code")) == (409, 14), answered.text
     assert (held.uuid if held is not None else None, clone_ending_records.stands_at(_claims(estate), clone)) == (taken[0], True)
-    assert _clone_tags(estate, bronze) == [clone_sources.tag_of(clone)]
+    assert _clone_tags(estate, raw) == [clone_sources.tag_of(clone)]
 
 
 def test_a_finish_leaves_the_ending_of_a_clone_its_door_is_still_ending(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
     """A finish landing while a destructive drop of the clone is still at work (its ending filed and its residue record
     keeping the clone standing at its location) releases nothing and leaves the ending, so when the drop then fails to delete the
     tag, a later finish releases it."""
-    bronze, clone = _registered_clone(estate)
+    raw, clone = _registered_clone(estate)
     monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
     settings = get_settings()
     real_destroy, real_delete = destroy.destroy_table, clone_sources.delete_tag
@@ -941,14 +941,14 @@ def test_a_finish_leaves_the_ending_of_a_clone_its_door_is_still_ending(estate: 
 
     monkeypatch.setattr(destroy, "destroy_table", _destroy_with_a_finish_inside)
     monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
-    assert _ended_by(estate, "/v1/table/lance_catalog$db$silver/drop", {"purge": "true"}) == 500
+    assert _ended_by(estate, "/v1/table/lance_catalog$db$cleaned/drop", {"purge": "true"}) == 500
     monkeypatch.setattr(clone_sources, "delete_tag", real_delete)
-    left = (len(during), clone_ending_records.stands_at(_claims(estate), clone), len(_clone_tags(estate, bronze)))
+    left = (len(during), clone_ending_records.stands_at(_claims(estate), clone), len(_clone_tags(estate, raw)))
 
     finished = _finished_by_maintenance(estate)
 
     assert left == (1, True, 1), f"the finish inside the drop answered {during}"
-    assert (len(finished.finished), _clone_tags(estate, bronze)) == (1, [])
+    assert (len(finished.finished), _clone_tags(estate, raw)) == (1, [])
 
 
 def _a_backend_that_removes_the_row_and_answers_not_found(real_call: Callable[..., object]) -> Callable[..., object]:
@@ -976,11 +976,11 @@ _RELEASED = ((200, None), {"tags_released": 1, "kept": False})
     ("table", "path", "backend", "answered", "finished"),
     [
         pytest.param(
-            "lance_catalog$db$silver", "/v1/table/lance_catalog$db$silver/deregister", _a_backend_that_will_not_deregister, 500, _KEPT, id="deregister-failed"
+            "lance_catalog$db$cleaned", "/v1/table/lance_catalog$db$cleaned/deregister", _a_backend_that_will_not_deregister, 500, _KEPT, id="deregister-failed"
         ),
-        pytest.param("lance_catalog$db$silver", "/v1/table/lance_catalog$db$silver/drop", _a_backend_that_will_not_deregister, 500, _KEPT, id="drop-failed"),
+        pytest.param("lance_catalog$db$cleaned", "/v1/table/lance_catalog$db$cleaned/drop", _a_backend_that_will_not_deregister, 500, _KEPT, id="drop-failed"),
         pytest.param(
-            "lance_catalog$clones$silver",
+            "lance_catalog$clones$cleaned",
             "/v1/namespace/lance_catalog$clones/drop",
             _a_backend_that_will_not_deregister,
             500,
@@ -988,15 +988,15 @@ _RELEASED = ((200, None), {"tags_released": 1, "kept": False})
             id="namespace-cascade-failed",
         ),
         pytest.param(
-            "lance_catalog$db$silver",
-            "/v1/table/lance_catalog$db$silver/drop",
+            "lance_catalog$db$cleaned",
+            "/v1/table/lance_catalog$db$cleaned/drop",
             _a_backend_that_removes_the_row_and_answers_not_found,
             404,
             _RELEASED,
             id="drop-answered-not-found",
         ),
         pytest.param(
-            "lance_catalog$clones$silver",
+            "lance_catalog$clones$cleaned",
             "/v1/namespace/lance_catalog$clones/drop",
             _a_backend_that_removes_the_row_and_answers_not_found,
             200,
@@ -1021,7 +1021,7 @@ def test_a_door_whose_native_call_was_attempted_leaves_its_ending_for_the_finish
     is not asked about for ever; where the row is gone, the finish releases the tag. The warehouse cascade's cases are
     `test_a_warehouse_cascade_revokes_a_grant_only_once_its_object_is_gone.py`'s."""
     assert estate.client.post("/v1/namespace/lance_catalog$clones/create", json={}).status_code == 200
-    bronze, clone = _registered_clone(estate, table)
+    raw, clone = _registered_clone(estate, table)
     real_call = native.call
     monkeypatch.setattr(native, "call", backend(real_call))
     status = _ended_by(estate, path, {"purge": "true"} if "/drop" in path else {})
@@ -1036,25 +1036,25 @@ def test_a_door_whose_native_call_was_attempted_leaves_its_ending_for_the_finish
     (refused, done) = finished
     tags = 1 if done["kept"] else 0
     assert (status, (first.status_code, first.json().get("code")), last.json()) == (answered, refused, done), first.text
-    assert (clone_ending_records.stands_at(_claims(estate), clone), len(_clone_tags(estate, bronze))) == (False, tags)
+    assert (clone_ending_records.stands_at(_claims(estate), clone), len(_clone_tags(estate, raw))) == (False, tags)
 
 
 def test_a_finish_keeps_the_base_record_of_bytes_a_later_deregister_left_in_place(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
     """A destructive drop whose native call failed leaves its ending, meaning to forget the base record with the bytes;
     the clone then deregistered keeps the record for the bytes it leaves in place. The finish forgets a record only where
     no dataset stands at the location any more, so it keeps this one, and ends the ending with the tags gone."""
-    bronze, clone = _registered_clone(estate)
+    raw, clone = _registered_clone(estate)
     real_call = native.call
     monkeypatch.setattr(native, "call", _a_backend_that_will_not_deregister(real_call))
-    assert _ended_by(estate, "/v1/table/lance_catalog$db$silver/drop", {"purge": "true"}) == 500
+    assert _ended_by(estate, "/v1/table/lance_catalog$db$cleaned/drop", {"purge": "true"}) == 500
     monkeypatch.setattr(native, "call", real_call)
-    assert estate.client.post("/v1/table/lance_catalog$db$silver/deregister", json={}).status_code == 200
+    assert estate.client.post("/v1/table/lance_catalog$db$cleaned/deregister", json={}).status_code == 200
     monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
 
     finished = _finished_by_maintenance(estate)
 
     recorded = base_registry.read_base_record(estate.registry, clone) is not None
-    assert (len(finished.finished), recorded, clone_ending_records.standing(_claims(estate)), _clone_tags(estate, bronze)) == (1, True, [], [])
+    assert (len(finished.finished), recorded, clone_ending_records.standing(_claims(estate)), _clone_tags(estate, raw)) == (1, True, [], [])
 
 
 def _marked_by_another_finish(estate: _Estate, _monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1095,7 +1095,7 @@ def test_a_finish_that_may_not_act_releases_nothing_and_leaves_the_ending(
     """The finish acts on an ending only once a claim's lease has passed since its filing (the door's own fence holds that
     long), never while another finish's mark is younger than a lease, and never on an ending written since its read; each
     refusal is recorded on the audit trail."""
-    bronze, clone, finish = _ending_left_by_a_deregister(estate, monkeypatch)
+    raw, clone, finish = _ending_left_by_a_deregister(estate, monkeypatch)
     arrange(estate, monkeypatch)
     caplog.set_level(logging.INFO, logger=AUDIT_LOGGER)
 
@@ -1103,13 +1103,13 @@ def test_a_finish_that_may_not_act_releases_nothing_and_leaves_the_ending(
 
     audited = [r.__dict__.get("audit.outcome") for r in caplog.records if r.__dict__.get("audit.action") == AuditAction.CLONE_ENDING_FINISH]
     assert (answered.status_code, answered.json().get("code"), audited) == (409, code, [AuditOutcome.FAILURE]), answered.text
-    assert (clone_ending_records.stands_at(_claims(estate), clone), len(_clone_tags(estate, bronze))) == (True, 1)
+    assert (clone_ending_records.stands_at(_claims(estate), clone), len(_clone_tags(estate, raw))) == (True, 1)
 
 
 def _a_tag_the_store_will_not_delete(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
     real_delete = clone_sources.delete_tag
     monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
-    assert estate.client.post("/v1/table/lance_catalog$db$silver/deregister", json={}).status_code == 503
+    assert estate.client.post("/v1/table/lance_catalog$db$cleaned/deregister", json={}).status_code == 503
     monkeypatch.setattr(clone_sources, "delete_tag", real_delete)
 
 
@@ -1117,7 +1117,7 @@ def _a_backend_that_removed_the_row_and_failed(estate: _Estate, monkeypatch: pyt
     real_call = native.call
     monkeypatch.setattr(native, "call", _a_backend_that_removes_the_row_then_fails(real_call))
     with pytest.raises(OSError, match="after removing the row"):
-        estate.client.post("/v1/table/lance_catalog$db$silver/deregister", json={})
+        estate.client.post("/v1/table/lance_catalog$db$cleaned/deregister", json={})
     monkeypatch.setattr(native, "call", real_call)
 
 
@@ -1136,33 +1136,33 @@ def test_a_registration_while_a_clones_ending_stands_is_refused_until_it_is_fini
     registration leaves no row and frees only the claim it took. A door whose native call removed the row and failed
     leaves its ending too, never judging whether the row it then describes is the clone's. Once the finish has released
     the old clone's tags, the registration is admitted, and its own tag stands."""
-    bronze, clone = _registered_clone(estate)
+    raw, clone = _registered_clone(estate)
     ended_by(estate, monkeypatch)
     monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
 
-    refused = estate.client.post("/v1/table/lance_catalog$db$silver/register", json={"location": "silver"})
-    left = (estate.client.post("/v1/table/lance_catalog$db$silver/describe", json={}).status_code, location_claims.holder(_claims(estate), clone))
+    refused = estate.client.post("/v1/table/lance_catalog$db$cleaned/register", json={"location": "cleaned"})
+    left = (estate.client.post("/v1/table/lance_catalog$db$cleaned/describe", json={}).status_code, location_claims.holder(_claims(estate), clone))
     _finished_by_maintenance(estate)
-    admitted = estate.client.post("/v1/table/lance_catalog$db$silver/register", json={"location": "silver"})
+    admitted = estate.client.post("/v1/table/lance_catalog$db$cleaned/register", json={"location": "cleaned"})
 
     assert (refused.status_code, refused.json().get("code"), left) == (409, 14, (404, None)), refused.text
     assert admitted.status_code == 200, admitted.text
-    assert _clone_tags(estate, bronze) == [clone_sources.tag_of(clone)], "the registration after the finish holds no tag on its source"
+    assert _clone_tags(estate, raw) == [clone_sources.tag_of(clone)], "the registration after the finish holds no tag on its source"
 
 
 def test_a_trashed_clone_whose_end_cannot_delete_its_tag_keeps_its_location(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:
     """The end of a clone in the trash forgets its base record, and with it its tag on the source, before it frees the
     clone's location: a tag the store will not delete leaves the location held, as at the deregister door."""
     _, clone = _registered_clone(estate)
-    assert estate.client.post("/v1/table/lance_catalog$db$silver/drop", json={}).status_code == 200
-    record = trash.named(estate.root, estate.key, "lance_catalog$db$silver", kind="table")[0]
+    assert estate.client.post("/v1/table/lance_catalog$db$cleaned/drop", json={}).status_code == 200
+    record = trash.named(estate.root, estate.key, "lance_catalog$db$cleaned", kind="table")[0]
     monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
 
     with pytest.raises(OSError, match="did not answer the delete"):
         trash.end(estate.root, estate.key, record, kind="table", uuid=str(record.uuid))
 
     held = location_claims.holder(location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key), clone)
-    assert held is not None and held.table == "lance_catalog$db$silver", "the clone's location was freed with its tag still standing"
+    assert held is not None and held.table == "lance_catalog$db$cleaned", "the clone's location was freed with its tag still standing"
 
 
 #: The uuid of a table that held the clone's location before the clone was registered there.
@@ -1172,11 +1172,11 @@ _A_FORMER_HOLDERS_UUID = "5f0c4a3e-2b7d-4c1e-9a6f-0d8b7e2c1a90"
 def test_a_late_end_of_a_former_clone_keeps_the_tag_of_the_clone_there_now(estate: _Estate) -> None:
     """A clone's tag is named for its location, so a clone registered there since holds a tag of the same name: an end of
     the table that held the location before, landing late, leaves that tag while the location's claim names the clone."""
-    bronze, clone = _registered_clone(estate)
+    raw, clone = _registered_clone(estate)
 
     released = base_registry.release_clone_sources(estate.registry, clone, uuid=_A_FORMER_HOLDERS_UUID)
 
-    assert (released, clone_sources.tag_of(clone) in estate.open(bronze).tags.list()) == ([], True)
+    assert (released, clone_sources.tag_of(clone) in estate.open(raw).tags.list()) == ([], True)
 
 
 def test_a_late_end_of_a_former_clone_keeps_the_record_of_the_clone_there_now(estate: _Estate) -> None:
@@ -1197,9 +1197,9 @@ def test_a_register_undone_with_a_tag_the_store_keeps_leaves_the_clones_location
     claim fails."""
     from catalog.api.authz import object_grants
 
-    bronze = estate.create("lance_catalog$db$bronze", fragments=3)
-    clone = f"{estate.root}/silver"
-    source = estate.open(bronze)
+    raw = estate.create("lance_catalog$db$raw", fragments=3)
+    clone = f"{estate.root}/cleaned"
+    source = estate.open(raw)
     source.shallow_clone(clone, source.version, storage_options=estate.key.in_clear())
     seed, seeded = object_grants.seed_ownership, [False]
 
@@ -1213,10 +1213,10 @@ def test_a_register_undone_with_a_tag_the_store_keeps_leaves_the_clones_location
     monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_a_tag)
 
     with pytest.raises(OSError, match="did not take the grant"):
-        estate.client.post("/v1/table/lance_catalog$db$silver/register", json={"location": "silver"})
+        estate.client.post("/v1/table/lance_catalog$db$cleaned/register", json={"location": "cleaned"})
 
     held = location_claims.holder(location_claims.ClaimStore(control_root=estate.root, storage_options=estate.key), clone)
-    assert held is not None and held.table == "lance_catalog$db$silver", "the undone registration freed the location with its tag still standing"
+    assert held is not None and held.table == "lance_catalog$db$cleaned", "the undone registration freed the location with its tag still standing"
 
 
 class _ProcessDied(BaseException):
@@ -1258,36 +1258,36 @@ def test_a_registration_that_does_not_finish_leaves_its_clone_tags_to_the_finish
     took and never recorded are released by the finish maintenance's audit asks for, whether its process died after the
     tags or its undo could not delete one; an undo answers the refusal that stopped the registration, having tried every
     tag."""
-    bronze, silver = _registered_clone(estate)
-    gold = f"{estate.root}/gold"
-    between = estate.open(silver)
-    between.shallow_clone(gold, between.version, storage_options=estate.key.in_clear())
+    raw, cleaned = _registered_clone(estate)
+    served = f"{estate.root}/served"
+    between = estate.open(cleaned)
+    between.shallow_clone(served, between.version, storage_options=estate.key.in_clear())
     real_claim, real_delete = table_bases.claim_registered_directories, clone_sources.delete_tag
     monkeypatch.setattr(table_bases, "claim_registered_directories", admission)
     if store_fails_a_tag:
         monkeypatch.setattr(clone_sources, "delete_tag", _a_store_that_will_not_delete_the_first_tag())
-    answer = estate.client.post("/v1/table/lance_catalog$db$gold/register", json={"location": "gold"})
+    answer = estate.client.post("/v1/table/lance_catalog$db$served/register", json={"location": "served"})
     monkeypatch.setattr(table_bases, "claim_registered_directories", real_claim)
     monkeypatch.setattr(clone_sources, "delete_tag", real_delete)
     monkeypatch.setattr(location_claims, "LEASE", timedelta(0))
-    left = [clone_sources.tag_of(gold) in estate.open(source).tags.list() for source in (silver, bronze)]
+    left = [clone_sources.tag_of(served) in estate.open(source).tags.list() for source in (cleaned, raw)]
 
     finished = _finished_by_maintenance(estate)
 
-    released = [clone_sources.tag_of(gold) in estate.open(source).tags.list() for source in (silver, bronze)]
+    released = [clone_sources.tag_of(served) in estate.open(source).tags.list() for source in (cleaned, raw)]
     # A dead process answers nothing; the server in front of it answers 500.
     expected = (400, _INVALID_INPUT) if store_fails_a_tag else (500, 18)
     assert ((answer.status_code, answer.json().get("code")), any(left)) == (expected, True), answer.text
     assert ([ending.split("/")[0] for ending in finished.finished], finished.refused, released) == (
-        [clone_ending_records.digest_of(gold)],
+        [clone_ending_records.digest_of(served)],
         {},
         [False, False],
     ), finished
     if not store_fails_a_tag:
         # The row the dead registration attached stands without the tags the finish released: a register asked again
         # writes no record naming a source whose version nothing keeps ([[LH-576]]).
-        retried = estate.client.post("/v1/table/lance_catalog$db$gold/register", json={"location": "gold"})
-        assert ((retried.status_code, retried.json().get("code")), base_registry.read_base_record(estate.registry, gold)) == ((409, 5), None), retried.text
+        retried = estate.client.post("/v1/table/lance_catalog$db$served/register", json={"location": "served"})
+        assert ((retried.status_code, retried.json().get("code")), base_registry.read_base_record(estate.registry, served)) == ((409, 5), None), retried.text
 
 
 def test_a_location_whose_holder_is_gone_is_registered_under_another_name(estate: _Estate, monkeypatch: pytest.MonkeyPatch) -> None:

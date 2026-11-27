@@ -19,14 +19,16 @@ EMPTY GreptimeDB the same two histogram rules answered HTTP 400 with
 not because the expression is wrong. The engine cannot plan a `histogram_quantile` over a bucket
 series it has never seen. So an empty-store run can only answer "does this parse and plan against
 what exists", and a rule naming an absent metric is INCONCLUSIVE there rather than refused. It is
-reported, loudly, and does not fail the run; everything else still does.
+reported, loudly, and does not fail the run on its own. A run in which EVERY rule is inconclusive
+has asked the engine nothing (a store that plans nothing answers that way for every rule), so it
+fails, still naming each rule.
 
 Keying that on the engine's own message is admittedly brittle, and the alternative is worse: seeding
 one sample per metric would put a second description of every instrument in this file, to be wrong
 the first time one is renamed.
 
-Exit 0 = every rule evaluable, or inconclusive for want of data. Exit 1 = at least one rule the engine
-refuses. Exit 2 = no reachable datasource (the caller decides whether that is a skip or a failure;
+Exit 0 = every rule evaluable, or inconclusive for want of data, with at least one evaluable. Exit 1 = at
+least one rule the engine refuses, or no rule evaluable. Exit 2 = no reachable datasource (the caller decides whether that is a skip or a failure;
 `make alert-rules-drill` treats it as a skip so a laptop without a cluster is not a red build).
 """
 
@@ -56,7 +58,7 @@ def resolve_datasource() -> str | None:
     if not kubectl:
         return None
     # k3s, not the default context: a bare kubectl on this host resolves a stale kind cluster.
-    env = {**os.environ, "KUBECONFIG": os.environ.get("KUBECONFIG", "/etc/rancher/k3s/k3s.yaml")}
+    env = {**os.environ, "KUBECONFIG": os.environ.get("KUBECONFIG", str(Path.home() / ".kube/k3s.yaml"))}
     try:
         out = subprocess.run(  # noqa: S603 - argv is a literal; kubectl resolved via shutil.which
             [kubectl, "get", "svc", "greptimedb", "--namespace", "observability", "-o", "jsonpath={.spec.clusterIP}"],
@@ -129,6 +131,9 @@ def main() -> int:
         print(f"  {len(failures)} rule(s) the production engine REFUSES — they can never fire:")
         for name, why in failures:
             print(f"    - {name}: {why}")
+        return 1
+    if len(inconclusive) == len(rules):
+        print("  NO rule reached a verdict: the store planned none of them, so the engine accepted nothing this run could see")
         return 1
     print("  all evaluable" if not inconclusive else "  every rule the store can plan is evaluable")
     return 0

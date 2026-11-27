@@ -236,8 +236,8 @@ def parked_since(owner: Identity, since: datetime) -> list[Parked]:
 
 def feed_of(reader: Identity, run: ScenarioRun) -> list[dict[str, Any]]:
     """Every row lineage's feed holds about the drive's two tables from where the pipeline began following, oldest first.
-    A silver write names bronze as its input, so a row read through both table filters is one row."""
-    rows = {int(row["seq"]): row for table in (run.bronze_table, run.silver_table) for row in scenario.read_forward(reader, since=run.start, table=table)}
+    A cleaned write names raw as its input, so a row read through both table filters is one row."""
+    rows = {int(row["seq"]): row for table in (run.raw_table, run.cleaned_table) for row in scenario.read_forward(reader, since=run.start, table=table)}
     return [rows[seq] for seq in sorted(rows)]
 
 

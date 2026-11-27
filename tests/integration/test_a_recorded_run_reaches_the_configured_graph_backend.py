@@ -37,7 +37,7 @@ from tests.integration.lineage_app import (
 )
 
 
-_TABLE = "lance_catalog$acme-silver$pages"
+_TABLE = "lance_catalog$acme-cleaned$pages"
 _ALICE = "dex~alice"
 #: A client holding `event_reader`, which reads the event feed under its own service account.
 _READER = "kubernetes~system:serviceaccount:rask:rask-sa-a-notifier"

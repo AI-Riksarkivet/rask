@@ -58,7 +58,7 @@ from tests.secret_store_double import SecretStoreDouble
 
 _CATALOG = "service-catalog"
 _AUTHOR = "dex~alice"
-_TABLE = "gov$bronze"
+_TABLE = "gov$raw"
 
 
 def _uuids(table: str) -> DatasetUuids:
@@ -228,9 +228,9 @@ def _drain(settings: LineageSettings, repo: ProvenanceStoreDouble, publisher: Bu
 def _stage_a_run_behind(settings: LineageSettings, create_key: str) -> str:
     """A run event staged AFTER the create, so the drain meets the create first and must still reach this."""
     event = build_write_event(
-        table_id="bronze$events",
-        uuids=_uuids("bronze$events"),
-        namespace="bronze",
+        table_id="raw$events",
+        uuids=_uuids("raw$events"),
+        namespace="raw",
         author=_AUTHOR,
         version=2,
         operation=INSERT,
@@ -386,9 +386,9 @@ def _stage_a_refusable_first(settings: LineageSettings, kind: str, catalog: Any)
         key, _ = _stage_a_create(settings, catalog)
         return key, _stage_a_run_behind(settings, key)
     event = build_write_event(
-        table_id="bronze$events",
-        uuids=_uuids("bronze$events"),
-        namespace="bronze",
+        table_id="raw$events",
+        uuids=_uuids("raw$events"),
+        namespace="raw",
         author=_AUTHOR,
         version=1,
         operation=INSERT,
@@ -674,9 +674,9 @@ def test_the_dlq_replay_re_publishes_a_run_event(tmp_path: Path, catalog: Any) -
     """A replayed write RunEvent reaches the lineage topic as it was staged, so a subscriber on the bus hears it again."""
     settings = _settings(tmp_path, fga_enabled=False)
     event = build_write_event(
-        table_id="bronze$events",
-        uuids=_uuids("bronze$events"),
-        namespace="bronze",
+        table_id="raw$events",
+        uuids=_uuids("raw$events"),
+        namespace="raw",
         author=_AUTHOR,
         version=2,
         operation=INSERT,

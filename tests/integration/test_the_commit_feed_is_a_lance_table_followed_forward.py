@@ -61,9 +61,9 @@ if TYPE_CHECKING:
 _PIPELINE = "kubernetes~system:serviceaccount:etl:etl-runner"
 _ARROW = {"content-type": ARROW_STREAM_MEDIA_TYPE}
 
-#: The tables the pipeline may see. `acme-silver$hidden` and `globex-silver$orders` are someone else's.
-_VISIBLE = ("lance_catalog$acme-silver$pages", "lance_catalog$acme-gold$catalog", "lance_catalog$acme-gold$index")
-_TABLES = (*_VISIBLE, "lance_catalog$acme-silver$hidden", "lance_catalog$globex-silver$orders")
+#: The tables the pipeline may see. `acme-cleaned$hidden` and `globex-cleaned$orders` are someone else's.
+_VISIBLE = ("lance_catalog$acme-cleaned$pages", "lance_catalog$acme-served$catalog", "lance_catalog$acme-served$index")
+_TABLES = (*_VISIBLE, "lance_catalog$acme-cleaned$hidden", "lance_catalog$globex-cleaned$orders")
 
 
 async def _bounds(store: ProvenanceStore) -> tuple[int, int] | None:
@@ -113,10 +113,10 @@ def test_each_catalog_commit_is_followed_forward_once_and_in_commit_order(tmp_pa
         httpx.Client(base_url=catalog_url, timeout=60) as catalog,
         httpx.Client(base_url=lineage_url, timeout=60) as lineage,
     ):
-        assert catalog.post("/v1/namespace/lance_catalog$acme-silver/create", json={}).status_code == 200
-        created = catalog.post("/v1/table/lance_catalog$acme-silver$pages/create", content=_rows(0, 3), headers=_ARROW)
+        assert catalog.post("/v1/namespace/lance_catalog$acme-cleaned/create", json={}).status_code == 200
+        created = catalog.post("/v1/table/lance_catalog$acme-cleaned$pages/create", content=_rows(0, 3), headers=_ARROW)
         assert created.status_code == 200, created.text
-        inserted = catalog.post("/v1/table/lance_catalog$acme-silver$pages/insert", content=_rows(3, 5), headers=_ARROW)
+        inserted = catalog.post("/v1/table/lance_catalog$acme-cleaned$pages/insert", content=_rows(3, 5), headers=_ARROW)
         assert inserted.status_code == 200, inserted.text
         # What the outbox relay sends when it recovers an event whose publish was never acknowledged.
         redelivered = lineage.post("/api/v1/lineage", json=_follow(lineage)[-1]["event"])
@@ -128,8 +128,8 @@ def test_each_catalog_commit_is_followed_forward_once_and_in_commit_order(tmp_pa
         ahead = lineage.get("/events", params={"since": 121_000}).json()
 
     assert [(row["outputs"], _operation(row["event"])) for row in seen] == [
-        (["lance_catalog$acme-silver$pages"], "create_table"),
-        (["lance_catalog$acme-silver$pages"], "insert"),
+        (["lance_catalog$acme-cleaned$pages"], "create_table"),
+        (["lance_catalog$acme-cleaned$pages"], "insert"),
         # The feed's own compaction is announced as any table's commit is, once per commit, and recording it is a row
         # write the catalog keeps to itself, so the feed ends there.
         (["lance_catalog$provenance$events"], "compact_table"),
@@ -172,19 +172,23 @@ def governed_feed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, openfga_store
     """Lineage's router behind its real authentication-then-FGA gate, over a feed the store wrote to the catalog, every
     decision the real model's on a store of the test's own where the pipeline reads the visible tables."""
     feed = [
-        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:01+00:00", outputs=["lance_catalog$acme-silver$pages"]),
-        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:02+00:00", outputs=["lance_catalog$acme-silver$hidden"]),
+        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:01+00:00", outputs=["lance_catalog$acme-cleaned$pages"]),
+        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:02+00:00", outputs=["lance_catalog$acme-cleaned$hidden"]),
         run_event(
-            str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:03+00:00", outputs=["lance_catalog$acme-gold$catalog"], inputs=("lance_catalog$acme-silver$pages",)
+            str(uuid.uuid4()),
+            "COMPLETE",
+            "2026-10-15T10:00:03+00:00",
+            outputs=["lance_catalog$acme-served$catalog"],
+            inputs=("lance_catalog$acme-cleaned$pages",),
         ),
-        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:04+00:00", outputs=["lance_catalog$globex-silver$orders"]),
-        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:05+00:00", outputs=["lance_catalog$acme-gold$index"]),
+        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:04+00:00", outputs=["lance_catalog$globex-cleaned$orders"]),
+        run_event(str(uuid.uuid4()), "COMPLETE", "2026-10-15T10:00:05+00:00", outputs=["lance_catalog$acme-served$index"]),
         run_event(
             str(uuid.uuid4()),
             "COMPLETE",
             "2026-10-15T10:00:06+00:00",
-            outputs=["lance_catalog$acme-gold$catalog"],
-            inputs=("lance_catalog$acme-silver$hidden",),
+            outputs=["lance_catalog$acme-served$catalog"],
+            inputs=("lance_catalog$acme-cleaned$hidden",),
         ),
     ]
     with live_catalog(tmp_path / "catalog", monkeypatch) as url:
@@ -207,19 +211,19 @@ def test_a_table_or_namespace_filter_narrows_the_feed_and_hidden_events_stay_hid
 
     caller = {SUBJECT_HEADER: _PIPELINE}
     assert outputs(_follow(governed_feed, caller)) == [
-        ["lance_catalog$acme-silver$pages"],
-        ["lance_catalog$acme-gold$catalog"],
-        ["lance_catalog$acme-gold$index"],
+        ["lance_catalog$acme-cleaned$pages"],
+        ["lance_catalog$acme-served$catalog"],
+        ["lance_catalog$acme-served$index"],
     ]
-    assert outputs(_follow(governed_feed, caller, table="lance_catalog$acme-silver$pages")) == [
-        ["lance_catalog$acme-silver$pages"],
-        ["lance_catalog$acme-gold$catalog"],
+    assert outputs(_follow(governed_feed, caller, table="lance_catalog$acme-cleaned$pages")) == [
+        ["lance_catalog$acme-cleaned$pages"],
+        ["lance_catalog$acme-served$catalog"],
     ]
-    assert outputs(_follow(governed_feed, caller, namespace="lance_catalog$acme-gold")) == [
-        ["lance_catalog$acme-gold$catalog"],
-        ["lance_catalog$acme-gold$index"],
+    assert outputs(_follow(governed_feed, caller, namespace="lance_catalog$acme-served")) == [
+        ["lance_catalog$acme-served$catalog"],
+        ["lance_catalog$acme-served$index"],
     ]
-    assert _follow(governed_feed, caller, table="lance_catalog$acme-silver$hidden") == []
+    assert _follow(governed_feed, caller, table="lance_catalog$acme-cleaned$hidden") == []
 
 
 def _recorded(store: ProvenanceStore, events: list[dict[str, Any]]) -> None:
@@ -268,10 +272,10 @@ def test_a_page_costs_the_same_whatever_the_feeds_length(tmp_path: Path, monkeyp
     and forward from one, under the governance filter ([[LH-590]])."""
 
     def visible(at: str) -> dict[str, Any]:
-        return run_event(str(uuid.uuid4()), "COMPLETE", at, outputs=["lance_catalog$acme-silver$pages"])
+        return run_event(str(uuid.uuid4()), "COMPLETE", at, outputs=["lance_catalog$acme-cleaned$pages"])
 
     def hidden(at: str) -> dict[str, Any]:
-        return run_event(str(uuid.uuid4()), "COMPLETE", at, outputs=["lance_catalog$globex-silver$orders"])
+        return run_event(str(uuid.uuid4()), "COMPLETE", at, outputs=["lance_catalog$globex-cleaned$orders"])
 
     with live_catalog(tmp_path / "catalog", monkeypatch) as url:
         uuid_of = _declared(url, _TABLES)
@@ -337,7 +341,7 @@ def test_every_cursor_pages_the_rows_a_pruned_feed_with_holes_holds(tmp_path: Pa
             _recorded(
                 store,
                 [
-                    run_event(str(uuid.uuid4()), "COMPLETE", f"2026-10-15T1{burst}:00:{n:02d}+00:00", outputs=["lance_catalog$acme-silver$pages"])
+                    run_event(str(uuid.uuid4()), "COMPLETE", f"2026-10-15T1{burst}:00:{n:02d}+00:00", outputs=["lance_catalog$acme-cleaned$pages"])
                     for n in range(8)
                 ],
             )
