@@ -8,13 +8,14 @@ for, libsystemd's, read with objdump on 2026-11-26 from the image's arm64 build)
 22.04's 2.35 among them, cannot run the export.
 
 Running the suite as root is supported only in the CI lane's container (`dagger call test`): the server refuses root, so
-it runs there as `nobody`.
+it runs there as `nobody`, in a directory of its own (:class:`PostgresServer`).
 """
 
 import asyncio
 import os
 import pathlib
 import pwd
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -86,7 +87,17 @@ class PostgresDatabase(BaseModel):
 
 
 class PostgresServer:
-    """One server on a loopback TCP port, its data directory under the worker's temporary directory.
+    """One server on a loopback TCP port, its log under ``root``, the worker's temporary directory.
+
+    Run as the suite's own account, its data directory is under ``root`` too, so a kept database outlives the session.
+    Run as ``nobody`` (the suite as root), nothing under pytest's temporary tree stays reachable to it: pytest makes every
+    directory of that tree 0700, and each pytest process that makes a temporary directory without a ``--basetemp`` sets
+    `pytest-of-<user>` back to 0700 (pytest 9.1.1, `TempPathFactory.getbasetemp`), as a test that runs pytest in a
+    subprocess does. So there the data directory is one of the server's own under the system temporary directory, owned
+    by ``nobody`` and removed when the server stops. The log needs no path: the server writes it through the file it
+    inherits. Measured 2026-11-28 in the CI lane: a server running as ``nobody`` on data under pytest's tree stops at its
+    first checkpoint after such a process starts, refused its own `global/pg_control`
+    (`tests/integration/test_a_test_gets_a_postgres_database_of_its_own.py`).
 
     It listens on TCP only (`unix_socket_directories` empty): a socket under pytest's temporary path exceeds the 107-byte
     limit on a socket's path.
@@ -99,11 +110,14 @@ class PostgresServer:
         self._bin = bin_dirs[-1]
         self._env = {"PATH": os.environ.get("PATH", ""), "LD_LIBRARY_PATH": str(install / "libs")}
         self._account = _UNPRIVILEGED if os.geteuid() == 0 else None
-        self._data = root / "data"
-        if self._account is not None:
-            _hand_to(root, self._account)
-        self._run("initdb", "-D", str(self._data), "-U", SUPERUSER, "--auth=trust", "-E", "UTF8", "--no-locale", "--no-sync", "--no-instructions")
-        self._process, self.port = self._start(root)
+        self._own_directory = None if self._account is None else _directory_owned_by(self._account)
+        self._data = (root if self._own_directory is None else self._own_directory) / "data"
+        try:
+            self._run("initdb", "-D", str(self._data), "-U", SUPERUSER, "--auth=trust", "-E", "UTF8", "--no-locale", "--no-sync", "--no-instructions")
+            self._process, self.port = self._start(root)
+        except BaseException:
+            self._remove_own_directory()
+            raise
 
     def _run(self, program: str, *args: str) -> None:
         done = subprocess.run([str(self._bin / program), *args], env=self._env, user=self._account, check=False, capture_output=True)
@@ -194,31 +208,24 @@ class PostgresServer:
             connection.execute(sql.SQL("DROP DATABASE {} WITH (FORCE)").format(sql.Identifier(database.name)))
 
     def stop(self) -> None:
-        """Fast shutdown (SIGINT): open sessions are ended, the data directory stays for a kept database to be read."""
+        """Fast shutdown (SIGINT): open sessions are ended. A data directory under ``root`` stays for a kept database to
+        be read; one of the server's own is removed with it."""
         self._process.send_signal(signal.SIGINT)
         try:
             self._process.wait(timeout=_STOP_SECONDS)
         except subprocess.TimeoutExpired:
             self._process.kill()
             self._process.wait()
+        self._remove_own_directory()
+
+    def _remove_own_directory(self) -> None:
+        if self._own_directory is not None:
+            shutil.rmtree(self._own_directory)
 
 
-def _hand_to(root: pathlib.Path, account: str) -> None:
-    """Give ``account`` its data root, for the CI lane's container, where the suite runs as root.
-
-    pytest makes each directory of its temporary tree 0700 (`pytest-of-root`, `pytest-<n>`, the worker's `popen-gw<n>`),
-    so each between the system temporary directory and the data root is opened for traversal, and nothing outside pytest's
-    tree is changed. A data root outside the system temporary directory (a `--basetemp` elsewhere) is refused.
-    """
-    system_temp = pathlib.Path(tempfile.gettempdir()).resolve()
-    resolved = root.resolve()
-    if system_temp not in resolved.parents:
-        raise RuntimeError(f"as root, the suite's Postgres needs its data under {system_temp}, pytest's default base temporary directory; got {resolved}")
+def _directory_owned_by(account: str) -> pathlib.Path:
+    """A new directory under the system temporary directory, outside pytest's tree, that only ``account`` may enter."""
+    made = pathlib.Path(tempfile.mkdtemp(prefix="rask-postgres-"))
     entry = pwd.getpwnam(account)
-    os.chown(resolved, entry.pw_uid, entry.pw_gid)
-    for parent in resolved.parents:
-        if parent == system_temp:
-            break
-        mode = parent.stat().st_mode
-        if mode & 0o011 != 0o011:
-            parent.chmod(mode | 0o011)
+    os.chown(made, entry.pw_uid, entry.pw_gid)
+    return made

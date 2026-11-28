@@ -51,7 +51,9 @@ def postgres_database(request: pytest.FixtureRequest, postgres: PostgresServer) 
     """A database of this test's own, cloned from the worker's template: dropped when the test passes, kept when it fails.
 
     A kept database outlives the session in the server's data directory under pytest's base temporary directory (pytest
-    keeps the last three runs'): `postgres -D <dir>` with the install's `libs` on `LD_LIBRARY_PATH` serves it again.
+    keeps the last three runs'): `postgres -D <dir>` with the install's `libs` on `LD_LIBRARY_PATH` serves it again. As
+    root (the CI lane's container) the server's data directory is its own and is removed when the session ends
+    (:class:`tests.postgres_server.PostgresServer`), so there a kept database is read only while the session runs.
     """
     database = postgres.create_database()
     request.node.stash[_POSTGRES_DATABASE] = database

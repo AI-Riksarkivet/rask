@@ -1,6 +1,8 @@
 """The suite's Postgres fixture: a real server per worker, and a database per test that no other test sees."""
 
 import pathlib
+import subprocess
+import sys
 
 import psycopg
 import pytest
@@ -63,3 +65,29 @@ def test_a_missing_server_fails_naming_the_make_target(tmp_path: pathlib.Path) -
 
     with pytest.raises(PostgresInstallMissingError, match=r"no Postgres server under .*/install: `make postgres` exports"):
         PostgresServer(empty, tmp_path / "server")
+
+
+_ANOTHER_SESSION = """
+def test_a_temporary_directory(tmp_path):
+    assert tmp_path.is_dir()
+"""
+
+
+def test_the_workers_server_keeps_serving_after_another_pytest_session_makes_its_temporary_directory(
+    postgres_database: PostgresDatabase, tmp_path: pathlib.Path
+) -> None:
+    # A pytest process given no --basetemp sets `pytest-of-<user>` back to 0700 as it makes its temporary directory, as a
+    # test that runs pytest in a subprocess does. A checkpoint opens the server's control file by its absolute path, the
+    # first thing a server that can no longer reach its data directory fails at. The case this pins is the suite run as
+    # root (the CI lane), where the server runs as `nobody`.
+    probe = tmp_path / "test_another_session.py"
+    probe.write_text(_ANOTHER_SESSION, encoding="utf-8")
+    session = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(probe)], cwd=tmp_path, capture_output=True, text=True, timeout=120, check=False
+    )
+
+    with psycopg.connect(postgres_database.url, autocommit=True) as connection:
+        connection.execute("CHECKPOINT")
+        served = connection.execute("SELECT current_database()").fetchone()
+
+    assert (session.returncode, served) == (0, (postgres_database.name,)), session.stdout
