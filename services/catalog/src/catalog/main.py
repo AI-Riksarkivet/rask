@@ -176,7 +176,7 @@ def bound_lance_scans(settings: CatalogReadBounds) -> None:
     named in the 12.0.0 binary and their effect was measured, so a pylance upgrade re-measures them.
 
     MEASURED on pylance 12.0.0 from outside a one-CPU catalog process over a moto store, tables of
-    1024-dim float32 vectors, pod limit 524,288 kB, Lance's defaults against these three:
+    1024-dim float32 vectors, a 524,288 kB limit, Lance's defaults against these three:
 
         change feed, 164 MB table                       597,224 kB  ->  361,572 kB
         unindexed vector /query k<=2048, 164 MB table   627,404 kB  ->  440,648 kB

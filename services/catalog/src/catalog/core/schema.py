@@ -110,6 +110,7 @@ async def current(database: Database) -> str | None:
 
     Raises:
         ServiceUnavailableError: The database did not answer.
+        InternalError: The database refused the read (a privilege, a name it does not know).
     """
     async with database.reading() as session:
         return await _held(await session.connection())
@@ -158,6 +159,7 @@ async def require_schema(database: Database) -> None:
     Raises:
         SchemaMismatchError: The schema is behind this image's revision, or at one this image does not know.
         ServiceUnavailableError: The database did not answer.
+        InternalError: The database refused the read (a privilege, a name it does not know).
     """
     if (mismatch := _mismatch(await current(database), head())) is not None:
         raise mismatch
@@ -173,7 +175,7 @@ async def wait(settings: SchemaSettings) -> str:
         SchemaMismatchError: The schema is at a revision this image does not know, at once, or still behind once
             ``database_schema_wait_seconds`` have passed.
         ServiceUnavailableError: The database still did not answer once ``database_schema_wait_seconds`` had passed.
-        sqlalchemy.exc.DBAPIError: The database refused the read (a privilege, a name it does not know), at once.
+        InternalError: The database refused the read (a privilege, a name it does not know), at once.
     """
     database = open_database(settings)
     deadline = time.monotonic() + settings.database_schema_wait_seconds

@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Any, Final, cast
 
-from lance_namespace import ErrorCode, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
+from lance_namespace import ErrorCode, InternalError, LanceNamespaceError, ServiceUnavailableError, UnsupportedOperationError
 
 from lakehouse.problems.envelope import problem_response
 from lakehouse.problems.spec_routes import SPEC_ERROR_STATUSES, UNSUPPORTED_STATUS, is_spec_route, structural
@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 #: The body and its media type are `lakehouse.problems.envelope`'s, which holds the Lance-free half of the answer and is
 #: imported from there by every site that builds a response.
 __all__ = [
+    "CommitOutcomeUnknownError",
     "PartiallyAppliedError",
     "ProblemExtensions",
     "as_unsupported_if_stub",
@@ -132,6 +133,16 @@ class PartiallyAppliedError(ProblemExtensions, ServiceUnavailableError):
     def __init__(self, message: str, *, extensions: dict[str, object]) -> None:
         super().__init__(message)
         self.extensions = extensions
+
+
+class CommitOutcomeUnknownError(InternalError):
+    """A write whose commit began and was not seen to end, so it may have applied (ADR 0230 §6).
+
+    Answered 500 with code 18, never the 503 that invites a retry: a retry of a write that applied would apply it twice
+    or be refused for the change it made. Nothing is cleaned up after one. The catalog's database raises it for a commit
+    its answer does not prove rolled back, and the request deadline answers with its name for a door past the deadline
+    whose commit had begun (`lakehouse.service_app.deadline`).
+    """
 
 
 def error_response(exc: LanceNamespaceError) -> JSONResponse:

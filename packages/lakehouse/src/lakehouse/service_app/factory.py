@@ -34,7 +34,9 @@ and what it owns is the part of the boot that is identical in all three:
      (`lakehouse.service_app.outage_answer`). Outside the deadline: a door whose store fails after its caller was
      answered at the deadline has nobody left to answer, and its end stays the deadline's to record as a failure.
    * ``RequestDeadlineMiddleware``: a request with no answer begun within ``request_deadline_seconds`` is
-     answered 503 while its door runs on to its end. Outside the caller's ``outer_middleware``, so a door
+     answered 503, or 500 once its write has begun a commit, while its door runs on to its end; a commit of the catalog's
+     database it would begin after a 503 is refused (`lakehouse.process.request_commits`), while a Lance commit or an
+     OpenFGA write is not. Outside the caller's ``outer_middleware``, so a door
      running on past its deadline still holds the write seat the catalog's shed counted it in.
    * ``outer_middleware``, the caller's own, in its order (the catalog's path reading and write shed).
    * ``BodySizeLimitMiddleware`` at ``max_body_bytes`` (a bulk route at ``bulk_bodies``' ceiling), a body over it

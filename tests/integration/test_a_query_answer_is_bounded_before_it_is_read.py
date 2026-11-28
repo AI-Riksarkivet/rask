@@ -3,7 +3,7 @@
 The native backend materialises a query's whole answer in one buffer before the first byte is sent,
 and the spec gives `k` a minimum of 0 and no maximum, where `k=0` means every row. MEASURED on pylance
 12.0.0 from outside a one-CPU catalog process, on a 164 MB table of 1024-dim float32 vectors: `k=0`
-returned 169 MB and peaked at 822,192 kB against the pod's 524,288 kB limit. `k` and `offset` above
+returned 169 MB and peaked at 822,192 kB, past a 524,288 kB limit. `k` and `offset` above
 u32 raised `OverflowError` inside the native call (500). Each is refused with code 13 before a row is
 read; the served side of the bound, an answer at the ceiling staying under the memory limit, is pinned
 by `test_a_wide_read_stays_under_the_catalog_memory_limit.py`.

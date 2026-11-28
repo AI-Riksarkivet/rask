@@ -6,9 +6,11 @@ process is pinned to one CPU because the pod's limit is one CPU and Lance sizes 
 the CPUs it may run on; a host-sized pool would measure a process the estate never runs.
 
 MEASURED on pylance 12.0.0 with Lance's scan defaults: the change feed over this table peaked at
-640,196 kB, and the largest answer `/query` serves at 628,000 kB, against the pod's 524,288 kB limit;
-a `k=0` query (every row) at 822,192 kB. With the catalog's bounds, 354,012 kB and 434,152 kB (an idle
-catalog is about 271,000 kB).
+640,196 kB, and the largest answer `/query` serves at 628,000 kB, past a 524,288 kB limit; a `k=0`
+query (every row) at 822,192 kB. With the catalog's bounds, 354,012 kB and 434,152 kB (an idle catalog
+is about 271,000 kB). MEASURED 2026-11-28 with the catalog's database client (SQLAlchemy, SQLModel,
+Alembic, psycopg; ADR 0230), which costs about 45 MB at rest: 450,624 kB and 517,356 kB on aarch64,
+and 555,484 kB for `/query` on CI's x86_64 runner.
 
 The query case is an unindexed vector search, which reads the whole vector column whatever `k` is,
 and it climbs `k` by doubling until the door refuses, so it measures the largest answer the door
@@ -35,8 +37,8 @@ from lance_namespace import CreateNamespaceRequest, DeclareTableRequest, connect
 from catalog.services.warehouses import ensure_catalog_row
 
 
-#: The catalog's memory limit, `chart/values.yaml` (catalog resources.limits.memory: 512Mi).
-_LIMIT_KB = 512 * 1024
+#: The catalog's memory limit, `chart/values.yaml` (catalog resources.limits.memory: 640Mi).
+_LIMIT_KB = 640 * 1024
 _ROWS, _DIM = 40_000, 1024
 _BUCKET = "wide-read"
 _TABLE = "lance_catalog$wide$t"

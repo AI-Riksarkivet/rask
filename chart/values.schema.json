@@ -1373,7 +1373,7 @@
             "type": "object",
             "properties": {
                 "catalog": {
-                    "description": "CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful.",
+                    "description": "CPU/memory requests and limits for the catalog: CPU requests sized so the HPA CPU target is meaningful, memory from the catalog's measured peak.",
                     "type": "object",
                     "properties": {
                         "limits": {

@@ -124,12 +124,26 @@ done
 spread=$(grep -c "topologySpreadConstraints:" "$OUT" || true)
 [ "$spread" -ge 2 ] || fail "prod must spread the 2 multi-replica services (catalog, lineage) across nodes (>=2), got $spread"
 
-# 6. Resource tiers: the memory-heavy workload in the release (the catalog's Arrow buffer) gets a 1Gi limit
-# above the shared 512Mi default; the object store is the platform's and outside the release. The default
-# render tiers NOTHING to 1Gi (verified), so a non-zero count here proves the per-workload tier applies on
-# the prod overlay only.
-tiers=$(grep -c "memory: 1Gi" "$OUT" || true)
-[ "$tiers" -ge 1 ] || fail "prod must tier the memory-heavy workload (the catalog) to 1Gi, got $tiers"
+# 6. Resource tiers: the memory-heavy workload in the release (the catalog's Arrow buffer) gets a limit above the
+# chart's own catalog tier (values.yaml `resources.catalog.limits.memory`, the headroom one catalog process needs), sized
+# by section 9; the object store is the platform's and outside the release.
+to_bytes() { # Gi/Mi → bytes (the only units the chart's memory quantities use)
+  case "$1" in
+    *Gi) echo $((${1%Gi} * 1024 * 1024 * 1024)) ;;
+    *Mi) echo $((${1%Mi} * 1024 * 1024)) ;;
+    *) fail "unparseable memory quantity: $1" ;;
+  esac
+}
+# The `catalog:` key of the top-level `resources:` block, and its `limits:` line.
+chart_tier=$(awk '/^resources:/{r=1; next} r&&/^[^ #]/{r=0} r&&/^  catalog:/{c=1; next} c&&/^  [^ #]/{c=0}
+  c&&/limits:/{if (match($0, /memory: *[0-9]+[MG]i/)) {q=substr($0, RSTART, RLENGTH); sub(/memory: */, "", q); print q; exit}}' "$CHART/values.yaml")
+[ -n "$chart_tier" ] || fail "could not read the chart's own catalog tier (resources.catalog.limits.memory) from $CHART/values.yaml"
+# The catalog Deployment is the only manifest carrying LANCE_MAX_BODY_BYTES; its limits block follows in
+# the same document, so the first memory after the first limits is the catalog's memory limit.
+cat_mem=$(awk '/LANCE_MAX_BODY_BYTES/{n=1} n&&/limits:/{l=1} l&&/memory:/{print $2; exit}' "$OUT")
+[ -n "$cat_mem" ] || fail "could not extract the catalog memory limit from the render"
+[ "$(to_bytes "$cat_mem")" -gt "$(to_bytes "$chart_tier")" ] \
+  || fail "prod must tier the memory-heavy workload (the catalog) above the chart's own $chart_tier, got $cat_mem"
 
 # 7. Every service exports to the endpoint the deployer names, and rask ships no Collector, store or alert engine of its
 # own (ADR 0153, ADR 0199): the alert rules are deploy/alerting/rules.yml, for the platform's evaluator.
@@ -155,16 +169,9 @@ grep -qE 'value: "?/(perses|greptime)' "$OUT" \
   && fail "prod must NOT route /perses or /greptime at the public edge: the telemetry suite is cluster-internal"
 
 # 9. Catalog memory coherence (P1): the load-shed write cap must be sized to the catalog memory tier —
-# cap × maxBodyBytes of buffered Arrow-IPC bodies + 512Mi baseline headroom (process + pyarrow decode)
-# must fit the memory limit. The code default (16 × 256MiB = 4Gi) OOM-kills the 1Gi tier before shedding
-# helps, so prod must ship an explicit, coherent cap (values-prod.yaml states the formula).
-to_bytes() { # Gi/Mi → bytes (the only units the chart's memory quantities use)
-  case "$1" in
-    *Gi) echo $((${1%Gi} * 1024 * 1024 * 1024)) ;;
-    *Mi) echo $((${1%Mi} * 1024 * 1024)) ;;
-    *) fail "unparseable memory quantity: $1" ;;
-  esac
-}
+# cap × maxBodyBytes of buffered Arrow-IPC bodies + the chart's own catalog tier as headroom (process + pyarrow decode,
+# section 6) must fit the memory limit. The code default (16 × 256MiB = 4Gi) OOM-kills the production tier before
+# shedding helps, so prod must ship an explicit, coherent cap (values-prod.yaml states the formula).
 # `|| true`: a no-match grep exits 1 and set -e would kill the script BEFORE the actionable fail
 # message below — let the emptiness checks do the failing instead.
 cap=$(grep -o 'name: LANCE_MAX_CONCURRENT_WRITES, value: "[0-9]*"' "$OUT" | head -1 | grep -o '[0-9]\+' || true)
@@ -172,14 +179,10 @@ body=$(grep -o 'name: LANCE_MAX_BODY_BYTES, value: "[0-9]*"' "$OUT" | head -1 | 
 [ -n "$cap" ] || fail "prod catalog must set LANCE_MAX_CONCURRENT_WRITES explicitly (else the code default 16 admits 4Gi of buffers)"
 [ -n "$body" ] || fail "could not extract LANCE_MAX_BODY_BYTES from the render"
 [ "$cap" -ge 1 ] || fail "prod LANCE_MAX_CONCURRENT_WRITES must be >=1 (0 disables shedding → unbounded buffer memory)"
-# The catalog Deployment is the only manifest carrying LANCE_MAX_BODY_BYTES; its limits block follows in
-# the same document, so the first memory after the first limits is the catalog's memory limit.
-cat_mem=$(awk '/LANCE_MAX_BODY_BYTES/{n=1} n&&/limits:/{l=1} l&&/memory:/{print $2; exit}' "$OUT")
-[ -n "$cat_mem" ] || fail "could not extract the catalog memory limit from the render"
-headroom=$((512 * 1024 * 1024))
+headroom=$(to_bytes "$chart_tier")
 peak=$((cap * body + headroom))
 [ "$peak" -le "$(to_bytes "$cat_mem")" ] \
-  || fail "catalog sizing incoherent: $cap × $body buffered bodies + 512Mi headroom = $peak bytes > the $cat_mem limit"
+  || fail "catalog sizing incoherent: $cap × $body buffered bodies + $chart_tier headroom = $peak bytes > the $cat_mem limit"
 
 # 10. The production overlay names the platform's S3: no in-cluster store DNS anywhere in the render (app env, jobs,
 # configs), nothing provisioned on the store with its root, and the endpoint it names reaches the render.
@@ -240,4 +243,4 @@ automount=$(grep -c "automountServiceAccountToken: false" "$OUT" || true)
 grep -q "deployment.environment.name=prod" "$OUT" \
   || fail "prod telemetry must carry deployment.environment.name=prod (observability.environment) — it renders $(grep -oE 'deployment\.environment\.name=[^,\"]*' "$OUT" | sort -u | head -1)"
 
-echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA+Postgres+secret store+bus external, PDBs=$(wc -l <<<"$pdb_names") (backends named), spread=$spread, tiers=$tiers, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, object-store-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"
+echo "✓ prod-render-check: NetworkPolicy=$np, OpenFGA+Postgres+secret store+bus external, PDBs=$(wc -l <<<"$pdb_names") (backends named), spread=$spread, catalog-tier=$cat_mem above $chart_tier, export named, no-bespoke-scraper, write-cap=$cap fits $cat_mem, object-store-externalize atomic, ESO path renders, hook pods labeled, ServiceAccounts=$sa, token-automount-refusals=$automount"

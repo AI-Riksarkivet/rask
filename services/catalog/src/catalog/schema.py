@@ -8,7 +8,7 @@ database holds, and 1 with the reason it refused, on one line an operator reads 
 import asyncio
 import sys
 
-from lance_namespace import ServiceUnavailableError
+from lance_namespace import InternalError, ServiceUnavailableError
 from sqlalchemy import exc as sa_exc
 
 from catalog.core.schema import MigrateSettings, SchemaMismatchError, SchemaSettings, migrate, wait
@@ -29,11 +29,12 @@ def main(argv: list[str]) -> int:
             return 2
     try:
         revision = asyncio.run(run)
-    except (SchemaMismatchError, ServiceUnavailableError) as refused:
+    except (SchemaMismatchError, ServiceUnavailableError, InternalError) as refused:
         sys.stderr.write(f"{refused}\n")
         return 1
     except sa_exc.DBAPIError as refused:
-        # The database's own words, without the statement and the parameters SQLAlchemy appends.
+        # The migration's own engine answers in SQLAlchemy's terms: the database's own words, without the statement and
+        # the parameters SQLAlchemy appends.
         sys.stderr.write(f"the catalog's database refused: {' '.join(str(refused.orig).split())}\n")
         return 1
     sys.stdout.write(f"the catalog's database schema is at revision {revision}\n")

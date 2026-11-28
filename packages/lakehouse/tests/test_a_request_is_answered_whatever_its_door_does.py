@@ -1,8 +1,9 @@
 """A lakehouse app answers every request with the spec's problem body, whatever its door does (ADR 0203).
 
 `build_service_app` installs two layers inside the request's trace for catalog, lineage and maintenance. A door
-that has begun no answer within the request deadline is answered 503 (code 17) and runs on to its own end, never
-cancelled, since a lakehouse door undoes its half-done work in its own ``except`` blocks. A door in which a native library
+that has begun no answer within the request deadline is answered 503 (code 17), or 500 (code 18) once its write has begun
+a commit, and runs on to its own end, never cancelled, since a lakehouse door undoes its half-done work in its own
+``except`` blocks. A door in which a native library
 panics, which pyo3 raises as a BaseException that no Exception handler catches, is answered 500 (code 18) as any other
 failure is, rather than by the server's bare text 500.
 
@@ -23,6 +24,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.testclient import TestClient
 
 from lakehouse.process.lifecycle import mark_started
+from lakehouse.process.request_commits import commit_begins
 from lakehouse.schemas.health import Readiness, ReadinessStatus
 from lakehouse.service_app.factory import build_service_app
 
@@ -57,25 +59,36 @@ def _app(*, deadline_seconds: float) -> FastAPI:
     )
 
 
+_UNAVAILABLE = (503, 17, "Service Unavailable")
+
+
 @pytest.mark.parametrize(
-    ("fails_with", "its_end"),
+    ("commits", "fails_with", "answer", "its_end"),
     [
-        pytest.param(None, "request_past_its_deadline_finished", id="the-door-returns"),
+        pytest.param(None, None, _UNAVAILABLE, "request_past_its_deadline_finished", id="the-door-returns"),
         # Its caller was answered at the deadline, so nobody is left to answer a store that fails the door after it: the
         # door's end is its failure, recorded once, never an outage answered to no one and a door recorded as finished.
-        pytest.param(lambda: OSError(_STORE_DID_NOT_ANSWER), "request_past_its_deadline_failed", id="its-store-fails"),
+        pytest.param(None, lambda: OSError(_STORE_DID_NOT_ANSWER), _UNAVAILABLE, "request_past_its_deadline_failed", id="its-store-fails"),
+        # A write whose commit began may have applied, or may apply as its door runs on: its caller is never asked to retry.
+        pytest.param("before", None, (500, 18, "CommitOutcomeUnknownError"), "request_past_its_deadline_finished", id="its-commit-began"),
+        # A caller answered 503 was told nothing committed, so a commit its door reaches afterwards is refused.
+        pytest.param("after", None, _UNAVAILABLE, "request_past_its_deadline_refused_its_commit", id="its-commit-came-after"),
     ],
 )
-def test_a_door_past_its_deadline_is_answered_503_and_runs_on_to_its_end(
-    fails_with: Callable[[], Exception] | None, its_end: str, caplog: pytest.LogCaptureFixture
+def test_a_door_past_its_deadline_is_answered_by_whether_its_commit_began_and_runs_on_to_its_end(
+    commits: str | None, fails_with: Callable[[], Exception] | None, answer: tuple[int, int, str], its_end: str, caplog: pytest.LogCaptureFixture
 ) -> None:
     app = _app(deadline_seconds=0.1)
     ended = threading.Event()
 
     @app.post("/slow")
     async def _slow() -> dict[str, str]:
+        if commits == "before":
+            commit_begins()
         await asyncio.sleep(_DOOR_SECONDS)
         ended.set()
+        if commits == "after":
+            commit_begins()
         if fails_with is not None:
             raise fails_with()
         return {"answer": "late"}
@@ -88,7 +101,8 @@ def test_a_door_past_its_deadline_is_answered_503_and_runs_on_to_its_end(
         while its_end not in _recorded(caplog) and time.monotonic() < recorded_by:
             time.sleep(0.02)
 
-    assert (answered.status_code, answered.headers["content-type"], answered.json()["code"]) == (503, "application/problem+json", 17), answered.text
+    body = answered.json()
+    assert (answered.headers["content-type"], (answered.status_code, body["code"], body["title"])) == ("application/problem+json", answer), answered.text
     assert (ended_before_the_answer, ran_to_its_end) == (False, True), "the door was not left to run on to its end once its caller was answered"
     assert _recorded(caplog) == ["request_deadline_passed", its_end]
 
@@ -97,7 +111,15 @@ def test_a_door_past_its_deadline_is_answered_503_and_runs_on_to_its_end(
 _STORE_DID_NOT_ANSWER = "LanceError(IO): Generic S3 error: error sending request for url (http://store:9000/b/t.lance/_versions/1.manifest)"
 
 #: What the app records about a door past its deadline and how it ended.
-_DEADLINE_RECORDS = frozenset({"request_deadline_passed", "request_past_its_deadline_finished", "request_past_its_deadline_failed", "object_store_unavailable"})
+_DEADLINE_RECORDS = frozenset(
+    {
+        "request_deadline_passed",
+        "request_past_its_deadline_finished",
+        "request_past_its_deadline_failed",
+        "request_past_its_deadline_refused_its_commit",
+        "object_store_unavailable",
+    }
+)
 
 
 def _recorded(caplog: pytest.LogCaptureFixture) -> list[str]:

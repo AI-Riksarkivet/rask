@@ -177,3 +177,31 @@ which ended a replica under the narrower rule:
   Requests`). A 429 is the store's rate limit and now reads as an outage in every dialect (`lakehouse.problems.outage`),
   so a door that meets it answers 503 and the task counts an `outage`; a 403 or 400 is a refused or expired credential,
   which the next try meets again, so it is a `fault` on either connection.
+
+## Amendment (2026-11-28): a request past its deadline is answered by whether its commit began, and commits no later
+
+Owner, 2026-11-28, on two review findings ("Fix it in this change"; "Refuse late commits"). Decision 6 answered every
+request past its deadline 503 (code 17), which invites a retry, while its door runs on and may still commit: the outcome
+ADR 0230 §6 makes an error of its own. Each request now carries a commit mark in its door's context
+(`lakehouse.process.request_commits`), and a write reports its commit there just before it begins (the catalog's
+`Database.writing()`):
+
+- a request whose commit had begun when its deadline passes is answered 500 (code 18) under the name of
+  `CommitOutcomeUnknownError` (`lakehouse.problems.ns_errors`), the error the catalog's database raises for a commit its
+  answer does not prove rolled back; its commit runs on and may land;
+- a request whose commit had not begun is answered 503 as before, and is closed: a commit its door would begin later is
+  refused (`LateCommitRefusedError`), so the write rolls back and the 503 stays true for the catalog's records. The door
+  is still never cancelled: it meets the refusal as an exception, and its own `except` blocks undo what it holds. What a
+  door changes outside the catalog's database is not covered: a Lance commit, which goes to the object store, and an
+  OpenFGA write made before `writing()` (the offboarding door's revocations stand after its refused record, and a call
+  again finishes it), which the 503's own words cover ("read what it changes before retrying it").
+
+The references (read 2026-11-28): Lakekeeper (main fee1729b) bounds every API request by `LAKEKEEPER__MAX_REQUEST_TIME`
+(30 s) and answers 408 past it, cancelling the handler, so an uncommitted transaction rolls back and no late commit
+lands, while a commit already begun runs to completion with its events on a task of its own (`run_to_completion`).
+Polaris (main 396dd238) has no request deadline. rask reaches Lakekeeper's outcome without cancelling, which decision 6
+forbids, and tells its caller whether a commit had begun. Pinned by
+`packages/lakehouse/tests/test_a_request_is_answered_whatever_its_door_does.py` (a door marked before, after and never)
+and `services/catalog/tests/test_a_departed_principal_holds_no_grant.py` (the real offboarding door held at its commit,
+answered 500 and recorded once let through; held before it, answered 503 and never recorded; a read after a commit,
+answered 503).

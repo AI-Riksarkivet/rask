@@ -11,6 +11,7 @@ tickets #860-#875). Each ticket's "Reference answers" section cites these files.
 | `lance-docs-study.md` | What `lance_docs/` says about a catalog server's own store, the directory catalog and `__manifest`, with measurements on pylance 14.0.3. |
 | `record-facts.md` | Every record kind the catalog keeps on its control root: who writes it, who reads it, how often. |
 | `gap-measurements.md` | Measurements: the name registry's cost to 30,000 tables, concurrent creates, the store requests one commit makes, a Postgres for the tests without docker, short-lived database credentials. |
+| `lh613-built-vs-references.md` | The built principals tracer (#862, commit `48bd35aa0`) read point by point against Lakekeeper main `fee1729b` and Polaris main `396dd238` on 2026-11-28: one gap (a commit whose outcome is unknown answered as a retryable outage, fixed since) and the notes later rows take up. |
 
 These are research notes: they compare rask with other catalogs and name them, which code never does (CLAUDE.md). A
 design is justified from `lance_docs/`, never from what another catalog chose.

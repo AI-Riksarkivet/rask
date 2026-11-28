@@ -85,7 +85,7 @@ max_body_bytes, request_deadline_seconds, routers=(), outer_middleware=(), inner
 and the factory owns the logging, the docs gate, the audit trail, the problem handlers, `/livez` + `/readyz`, and every
 layer a request passes, outermost first: the request's trace (OpenTelemetry's server span, the caller's `traceparent`
 continued, ADR 0209), the panic catcher (a native panic is a 500 problem body), the
-request deadline (503 code 17, the door left to run on), the service's `outer_middleware` (the catalog's write shed and
+request deadline (503 code 17, or 500 code 18 once a write's commit has begun, `lakehouse.process.request_commits`; the door left to run on, and a commit it would begin after a 503 refused), the service's `outer_middleware` (the catalog's write shed and
 path reading), the body cap (413), then its `inner_middleware` (ADR 0203). The **lifespan is injectable** and
 required: each service passes its own, which builds its resources through one `AsyncExitStack`, runs every background
 loop under a `lakehouse.process.supervision.Supervisor` (a loop that ends ends the process), and sets the lifecycle

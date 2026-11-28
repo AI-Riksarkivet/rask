@@ -257,12 +257,17 @@ resources:
   # fires at 35 millicores. Any real request load clears that instantly, the HPA slams to
   # maxReplicas, and it oscillates as the burst passes. Requests are raised, limits are NOT, so the
   # burst headroom is unchanged and only the denominator becomes meaningful (4:1).
-  # Memory is deliberately left on the default tier: this is the autoscaling finding, and the
-  # catalog's 256 MiB Arrow-IPC body cap against a 512Mi limit is a separate question.
-  # -- CPU/memory requests and limits for the catalog; requests sized so the HPA CPU target is meaningful.
+  # The catalog's memory is sized from its own measured peak, lineage's is the default tier's. The largest answer the
+  # catalog's read bounds let it serve (an unindexed vector /query over a 164 MB table) peaked at 517,356 kB on aarch64
+  # and 555,484 kB on x86_64, which 640Mi holds with 15% to spare; an idle catalog holds about 316 MB (271 MB measured on
+  # pylance 12.0.0, plus the 45 MB its database client costs), which the request reserves. Measured 2026-11-28 with that
+  # client (ADR 0230), `tests/integration/test_a_wide_read_stays_under_the_catalog_memory_limit.py`. The HPA scales on
+  # CPU alone. The catalog's 256 MiB Arrow-IPC body cap against this limit (the default write shed admits 16 such bodies)
+  # is a separate question; the production overlay sizes the two together.
+  # -- CPU/memory requests and limits for the catalog: CPU requests sized so the HPA CPU target is meaningful, memory from the catalog's measured peak.
   catalog:
-    requests: { cpu: 250m, memory: 128Mi }
-    limits: { cpu: "1", memory: 512Mi }
+    requests: { cpu: 250m, memory: 384Mi }
+    limits: { cpu: "1", memory: 640Mi }
   # -- CPU/memory requests and limits for lineage; requests sized so the HPA CPU target is meaningful.
   lineage:
     requests: { cpu: 250m, memory: 128Mi }

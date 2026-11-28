@@ -78,7 +78,7 @@ def refuse_an_unbounded_result(dataset: lance.LanceDataset, *, k: int, offset: i
     the only bound this door has is the row count it asks for. `k` has a minimum of 0 and no maximum in
     the spec (`spec.yaml` QueryTableRequest), and `k=0` answers EVERY row. MEASURED on pylance 12.0.0
     from outside a one-CPU catalog process, 164 MB table of 1024-dim float32 vectors on a moto store:
-    `k=0` returned 169,290,994 bytes and peaked at 822,192 kB against the pod's 524,288 kB limit, and a
+    `k=0` returned 169,290,994 bytes and peaked at 822,192 kB, past a 524,288 kB limit, and a
     68 MB answer (`k=16000`, 492 MB table) at 885,188 kB. A whole-table read belongs to `/changes` or a
     credential vend, which stream.
 

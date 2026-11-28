@@ -97,9 +97,10 @@ networkPolicy:
   # chart).
 
 # Load-shed cap sized to the catalog memory tier below (P1): the code default (16) admits 16 × 256MiB
-# buffered Arrow-IPC bodies = 4Gi of buffers against the 1Gi limit — a write burst OOM-kills the pod even
+# buffered Arrow-IPC bodies = 4Gi of buffers against the 1152Mi limit — a write burst OOM-kills the pod even
 # though shedding "worked". Sizing formula: maxConcurrentWrites × maxBodyBytes (2 × 256MiB = 512Mi of body
-# buffers) + 512Mi baseline headroom (process + pyarrow decode) = the 1Gi catalog memory limit. Keep the
+# buffers) + 640Mi baseline headroom (process + pyarrow decode, the chart's own catalog tier) = the 1152Mi catalog
+# memory limit. Keep the
 # formula true when changing either side — prod_render_check.sh asserts it. Overflow writes get 429 +
 # Retry-After; multi-hundred-MiB payloads belong on the direct-write/vending path anyway.
 catalog:
@@ -112,7 +113,7 @@ catalog:
 resources:
   catalog:
     requests: { cpu: 200m, memory: 512Mi }
-    limits: { cpu: "2", memory: 1Gi } # sized by catalog.maxConcurrentWrites above (cap×256MiB + 512Mi)
+    limits: { cpu: "2", memory: 1152Mi } # sized by catalog.maxConcurrentWrites above (cap×256MiB + 640Mi)
 
 # --- Backups (P4): the volume snapshot covers the development store's PVC, and the store here is the platform's S3, whose
 # durability is its operator's, so there is no volume to snapshot. ----

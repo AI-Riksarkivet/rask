@@ -16,27 +16,34 @@ Every decision is the real model's, on a store of this test's own. The estate ad
 seeded as the catalog's declaration grants it; everything else goes through the doors.
 """
 
+import asyncio
+import importlib
 import json
 import threading
 import time
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import blake2s
 from pathlib import Path
-from typing import Any
+from typing import Any, LiteralString
 
 import httpx
 import psycopg
 import pytest
+from lance_namespace import ServiceUnavailableError
+from psycopg import sql
 
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
+from catalog.core.database import DatabaseSettings, open_database
+from catalog.services import principals
 from lakehouse.governed import fga_ids, fga_reads
 from tests.control_emitter_double import ControlEmitterDouble
-from tests.postgres_server import PostgresDatabase
+from tests.postgres_server import ROLES, PostgresDatabase
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`spec.yaml`).
-INVALID_INPUT, CONCURRENT_MODIFICATION = 13, 14
+INVALID_INPUT, CONCURRENT_MODIFICATION, SERVICE_UNAVAILABLE, INTERNAL = 13, 14, 17, 18
 PRINCIPALS = "/management/v1/access/principals"
 ALICE = "dex~alice"
 
@@ -183,3 +190,183 @@ def test_two_offboardings_at_once_record_one_deletion(two_connections: PostgresD
     record = catalog.client.get(f"{PRINCIPALS}/{ALICE}", headers=headers)
     assert (first.status_code, second.status_code) == (200, 200), (first.text, second.text)
     assert first.json()["record"] == second.json()["record"] == record.json()
+
+
+#: The advisory lock the test holds and a commit's deferred check waits on.
+_COMMIT_LOCK = 862
+#: A deferred constraint on the principals table, checked when an insert's transaction commits.
+_AT_THE_COMMIT = (
+    "CREATE CONSTRAINT TRIGGER at_the_commit AFTER INSERT ON rask.principals DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION rask.at_the_commit()"
+)
+#: The check waits on the test's lock, so the commit is held where its outcome is decided.
+_WAITS = sql.SQL(
+    "CREATE FUNCTION rask.at_the_commit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_advisory_xact_lock({}); RETURN NULL; END $$"
+).format(sql.Literal(_COMMIT_LOCK))
+#: The check refuses the commit, as a constraint the write breaks does.
+_REFUSES = (
+    "CREATE FUNCTION rask.at_the_commit() RETURNS trigger LANGUAGE plpgsql AS "
+    "$$ BEGIN RAISE EXCEPTION 'refused at the commit' USING ERRCODE = 'check_violation'; END $$"
+)
+
+
+def _checked_at_the_commit(database: PostgresDatabase, check: sql.Composed | LiteralString) -> None:
+    """Give this test's principals table ``check`` as a deferred constraint, as the server's superuser."""
+    with psycopg.connect(database.url, autocommit=True) as owner:
+        owner.execute(check)
+        owner.execute(_AT_THE_COMMIT)
+
+
+@pytest.mark.parametrize(
+    ("held", "answer"),
+    [
+        pytest.param(("LOCK TABLE rask.principals IN SHARE MODE", ()), (503, SERVICE_UNAVAILABLE, "ServiceUnavailableError"), id="at-its-insert"),
+        pytest.param(("SELECT pg_advisory_lock(%s)", (_COMMIT_LOCK,)), (500, INTERNAL, "CommitOutcomeUnknownError"), id="at-its-commit"),
+    ],
+)
+def test_an_offboarding_the_database_stops_answering_is_retryable_only_before_its_commit(
+    estate: tuple[Any, ControlEmitterDouble], catalog_database: PostgresDatabase, held: tuple[LiteralString, tuple[int, ...]], answer: tuple[int, int, str]
+) -> None:
+    # The catalog's session waits on what the test holds, at its insert or at the commit's deferred check, and is ended
+    # there as an operator or a failover ends one. Ended before its commit, the write applied nothing, so a retry is what
+    # heals it; ended at its commit, the write may have applied, which a retry could apply twice (ADR 0230 §6).
+    catalog, _ = estate
+    _checked_at_the_commit(catalog_database, _WAITS)
+    statement, params = held
+    with psycopg.connect(catalog_database.url) as holder, ThreadPoolExecutor(max_workers=1) as pool:
+        holder.execute(statement, params)
+        offboarding = pool.submit(catalog.client.delete, f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))
+        _waiting_on_a_lock(catalog_database, 1)
+        holder.execute("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'rask-catalog'")
+        holder.commit()
+        answered = offboarding.result(timeout=30)
+
+    body = answered.json()
+    assert (answered.headers["content-type"], (answered.status_code, body["code"], body["title"])) == ("application/problem+json", answer)
+
+
+def test_an_offboarding_whose_commit_the_database_refuses_applies_nothing(estate: tuple[Any, ControlEmitterDouble], catalog_database: PostgresDatabase) -> None:
+    # The server's answer refusing the commit proves the transaction rolled back: the door answers the refusal, after
+    # which no record stands, never the error of a commit that may have applied.
+    catalog, _ = estate
+    _checked_at_the_commit(catalog_database, _REFUSES)
+
+    refused = catalog.client.delete(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))
+
+    record = catalog.client.get(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))
+    assert ((refused.status_code, refused.json()["code"], refused.json()["title"]), record.status_code) == ((500, INTERNAL, "InternalError"), 404)
+
+
+#: Far above the milliseconds a door takes to reach the lock the test holds, so the deadline passes while it waits there.
+_DEADLINE_SECONDS = 3.0
+
+
+@pytest.fixture
+def short_deadline(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """The catalog app built under a request deadline of ``_DEADLINE_SECONDS``. The deadline is read when the app is built,
+    at import, so the module is reloaded with it, and reloaded again without it once the test is done. A test names it in
+    ``usefixtures``, which pytest sets up before the test's own fixtures, so ``estate`` serves the app this builds."""
+    import catalog.main
+
+    monkeypatch.setenv("LANCE_REQUEST_DEADLINE_SECONDS", str(_DEADLINE_SECONDS))
+    get_settings.cache_clear()
+    importlib.reload(catalog.main)
+    yield
+    monkeypatch.delenv("LANCE_REQUEST_DEADLINE_SECONDS")
+    get_settings.cache_clear()
+    importlib.reload(catalog.main)
+    get_settings.cache_clear()
+
+
+def _until_the_catalog_rests(database: PostgresDatabase) -> None:
+    """Return once none of the catalog's sessions is running a statement or holding a transaction, or fail after 20 s."""
+    deadline = time.monotonic() + 20
+    with psycopg.connect(database.url, autocommit=True) as watcher:
+        while time.monotonic() < deadline:
+            row = watcher.execute(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'rask-catalog' AND state <> 'idle'"
+            ).fetchone()
+            if row is not None and row[0] == 0:
+                return
+            time.sleep(0.05)
+    pytest.fail("the catalog's door never ended its work with the database")
+
+
+@pytest.mark.usefixtures("short_deadline")
+@pytest.mark.parametrize(
+    ("held", "answer", "recorded"),
+    [
+        pytest.param(("SELECT pg_advisory_lock(%s)", (_COMMIT_LOCK,)), (500, INTERNAL, "CommitOutcomeUnknownError"), 200, id="held-at-its-commit"),
+        pytest.param(("LOCK TABLE rask.principals IN SHARE MODE", ()), (503, SERVICE_UNAVAILABLE, "Service Unavailable"), 404, id="held-before-its-commit"),
+    ],
+)
+def test_an_offboarding_past_its_request_deadline_is_answered_by_whether_its_commit_began(
+    estate: tuple[Any, ControlEmitterDouble],
+    catalog_database: PostgresDatabase,
+    held: tuple[LiteralString, tuple[int, ...]],
+    answer: tuple[int, int, str],
+    recorded: int,
+) -> None:
+    # Held at its commit's deferred check past the deadline, the offboarding may have applied, and does once let through:
+    # its caller is never asked to retry. Held before its commit, its caller is answered 503, and the commit it reaches
+    # afterwards is refused, so its record never lands (ADR 0203, amendment of 2026-11-28).
+    catalog, _ = estate
+    _checked_at_the_commit(catalog_database, _WAITS)
+    statement, params = held
+    with psycopg.connect(catalog_database.url) as holder:
+        holder.execute(statement, params)
+        answered = catalog.client.delete(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))
+    _until_the_catalog_rests(catalog_database)
+
+    record = catalog.client.get(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))
+    body = answered.json()
+    assert ((answered.status_code, body["code"], body["title"]), record.status_code) == (answer, recorded)
+
+
+@pytest.mark.usefixtures("short_deadline")
+def test_a_read_past_its_request_deadline_is_answered_503_whatever_was_committed_before_it(
+    estate: tuple[Any, ControlEmitterDouble], catalog_database: PostgresDatabase
+) -> None:
+    # A read applies nothing, and a commit is marked on its own request alone: a read held past its deadline after an
+    # offboarding committed is the outage a retry may heal.
+    catalog, _ = estate
+    _ok(catalog.client.delete(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root")))
+    with psycopg.connect(catalog_database.url) as holder:
+        holder.execute("LOCK TABLE rask.principals IN ACCESS EXCLUSIVE MODE")
+        answered = catalog.client.get(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))
+    _until_the_catalog_rests(catalog_database)
+
+    body = answered.json()
+    assert (answered.status_code, body["code"], body["title"]) == (503, SERVICE_UNAVAILABLE, "Service Unavailable")
+
+
+async def _until_its_session_ends(database: PostgresDatabase) -> None:
+    """Return once the catalog has no session on ``database``, or fail after 20 s."""
+    deadline = time.monotonic() + 20
+    with psycopg.connect(database.url, autocommit=True) as watcher:
+        while time.monotonic() < deadline:
+            row = watcher.execute("SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'rask-catalog'").fetchone()
+            if row is not None and row[0] == 0:
+                return
+            await asyncio.sleep(0.05)
+    pytest.fail("the server never ended the catalog's idle session")
+
+
+@pytest.mark.asyncio
+async def test_a_commit_whose_session_the_database_ended_while_it_idled_is_the_outage(catalog_database: PostgresDatabase) -> None:
+    # The server ends a session idle in its transaction before the commit reaches it (FATAL 25P03), so nothing applied: the
+    # commit answers the outage a retry may heal, never an outcome it cannot tell. A second of idleness, far above the gap
+    # between the write's own statements, so the session ends between the block and its commit.
+    with psycopg.connect(catalog_database.url, autocommit=True) as owner:
+        owner.execute(
+            sql.SQL("ALTER ROLE {} IN DATABASE {} SET idle_in_transaction_session_timeout = '1s'").format(
+                sql.Identifier(ROLES.catalog), sql.Identifier(catalog_database.name)
+            )
+        )
+    database = open_database(DatabaseSettings())
+    try:
+        with pytest.raises(ServiceUnavailableError, match="did not answer"):
+            async with database.writing() as session:
+                await principals.record_deletion(session, ALICE, deleted_by="dex~root")
+                await _until_its_session_ends(catalog_database)
+    finally:
+        await database.dispose()

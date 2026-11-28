@@ -7,26 +7,37 @@ context is refused (:class:`SecondTransactionError`). A door leaves its block, a
 before it answers, which is why the session is no FastAPI dependency (a ``yield`` dependency would commit after the
 response is sent).
 
+What the database answers leaves this module as the spec's errors (:func:`_answered`). A write's commit is a step of
+its own, after what the block sent is flushed. Before it, nothing applied: a database that did not answer is the outage a
+retry may heal (503), and one that refused is an internal error (500). A commit is proven rolled back only by the
+server's answer; without it the write may have applied, which is an error of its own and never a retryable one
+(:class:`~lakehouse.problems.ns_errors.CommitOutcomeUnknownError`, ADR 0230 §6). A write reports its commit to its
+request just before it begins (:func:`~lakehouse.process.request_commits.commit_begins`): a request deadline passing from
+then on answers the same, and a request its deadline already answered 503 refuses the commit, so the write rolls back.
+
 Each NEW connection reads the role's ``username`` and ``password`` from the credential directory the secret store
 renders, so a credential replaced there is the next connection's, with no restart; a connection is recycled within the
 credential's life (``pool_recycle``).
 """
 
-from collections.abc import AsyncGenerator, Awaitable, Callable, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator, Awaitable, Callable, Generator, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Final
 
 import psycopg
 from fastapi.concurrency import run_in_threadpool
-from lance_namespace import ServiceUnavailableError
+from lance_namespace import InternalError, LanceNamespaceError, ServiceUnavailableError
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy import TextClause, text
 from sqlalchemy import exc as sa_exc
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from sqlmodel.ext.asyncio.session import AsyncSession
+
+from lakehouse.problems.ns_errors import CommitOutcomeUnknownError
+from lakehouse.process.request_commits import commit_begins
 
 
 __all__ = ["Database", "DatabaseSettings", "SecondTransactionError", "connector", "open_database"]
@@ -80,30 +91,82 @@ class SecondTransactionError(RuntimeError):
     catalog never takes (ADR 0230 §10). A programming fault, answered 500."""
 
 
-#: The SQLSTATEs of a server shutting down or not yet accepting connections: an administrator's or a crash's shutdown
-#: (57P01, 57P02) and a server starting up or in recovery (57P03).
-_SHUTTING_DOWN: Final = frozenset({"57P01", "57P02", "57P03"})
+_NO_ANSWER: Final = "the catalog's database did not answer"
+
+#: The one session end that proves a commit rolled back: idle in its transaction, the session ended before the commit
+#: reached it (measured 2026-11-28 on psycopg 3.3.9: FATAL 25P03 at the commit and at the next statement alike).
+_IDLE_IN_TRANSACTION_ENDED: Final = "25P03"
+#: The SQLSTATEs of a session the server ended or would not begin, which leaves nothing uncommitted applied: an
+#: administrator's or a crash's shutdown (57P01, 57P02), a server starting up or in recovery (57P03), and a session ended
+#: for idling in its transaction.
+_SESSION_ENDED: Final = frozenset({"57P01", "57P02", "57P03", _IDLE_IN_TRANSACTION_ENDED})
+#: The SQLSTATE classes that leave a failed commit's outcome unknown even when the server answered: a connection
+#: exception (08), insufficient resources (53), operator intervention (57: a terminated session, a shutdown, a cancel),
+#: a system error (58) and an internal error (XX).
+_COMMIT_UNKNOWN_CLASSES: Final = ("08", "53", "57", "58", "XX")
+#: The server's own "statement completion unknown".
+_COMPLETION_UNKNOWN: Final = "40003"
 
 
-def _unanswered(exc: sa_exc.SQLAlchemyError) -> bool:
-    """Whether ``exc`` says the database gave no connection or did not answer, rather than refusing a statement.
+def _answered(exc: sa_exc.SQLAlchemyError, *, committing: bool) -> LanceNamespaceError | None:
+    """The spec's error for what the database answered when ``exc`` was raised, ``committing`` a write's commit or not;
+    ``None`` for a failure that is no answer of the database's, which is raised as it is: SQLAlchemy refusing how the session
+    was used (one used after its transaction failed), or the client's own fault with no SQLSTATE.
 
-    psycopg's ``OperationalError`` family holds refusals too (a password, a serialization failure, a deadlock, a lock
-    not available, a limit), each carrying its SQLSTATE; a failure on the client's side of the connection (refused,
-    reset, timed out) carries none, and the server reports a lost connection under class 08. A login the server refuses
-    carries none either (psycopg 3.3.9 raises it as the connection's failure; measured 2026-11-28 on a role that does
-    not exist), so it reads as unanswered.
+    Every statement the server refuses is a refusal, whatever the reason: a constraint the write broke, a lock it could
+    not take, and the code's own mistake the server names (a syntax error, a missing GRANT) alike. The answer is the 500 a
+    fault gets, and the server's words and SQLSTATE stay in the log through the cause. A door that maps a refusal of its
+    own (a constraint it broke) catches the statement's error inside its block, before the block's end answers it.
+
+    psycopg's ``OperationalError`` family holds refusals too (a password, a serialization failure, a deadlock, a lock not
+    available, a limit), each carrying its SQLSTATE. A failure on the client's side of the connection (refused, reset,
+    timed out) carries none, and the server reports a lost connection under class 08. A login the server refuses carries
+    none either (psycopg 3.3.9 raises it as the connection's failure; measured 2026-11-28 on a role that does not exist),
+    so it reads as unanswered. A write's commit is proven rolled back only by an ERROR outside 40003 and the classes of
+    :data:`_COMMIT_UNKNOWN_CLASSES`, or by a session ended idle in its transaction (FATAL 25P03).
     """
     if isinstance(exc, sa_exc.TimeoutError):  # the pool gave no connection in time
-        return True
-    if not isinstance(exc, sa_exc.DBAPIError):
-        return False
+        return ServiceUnavailableError(_NO_ANSWER)
+    if not isinstance(exc, sa_exc.DBAPIError) or not isinstance(exc.orig, psycopg.Error):
+        return None
+    sqlstate, severity = exc.orig.sqlstate, exc.orig.diag.severity_nonlocalized
+    if committing:
+        if severity == "FATAL" and sqlstate == _IDLE_IN_TRANSACTION_ENDED:
+            return ServiceUnavailableError(_NO_ANSWER)
+        if severity == "ERROR" and sqlstate is not None and sqlstate != _COMPLETION_UNKNOWN and not sqlstate.startswith(_COMMIT_UNKNOWN_CLASSES):
+            return _refusal(exc.orig)
+        return CommitOutcomeUnknownError("the catalog's database did not confirm the commit, which may have applied")
     if exc.connection_invalidated:
-        return True
-    if not isinstance(exc, sa_exc.OperationalError | sa_exc.InterfaceError) or not isinstance(exc.orig, psycopg.Error):
-        return False
-    sqlstate = exc.orig.sqlstate
-    return sqlstate is None or sqlstate.startswith("08") or sqlstate in _SHUTTING_DOWN
+        return ServiceUnavailableError(_NO_ANSWER)
+    if sqlstate is None:
+        # The server sent nothing: a connection's failure is the outage, and anything else the client's own fault.
+        return ServiceUnavailableError(_NO_ANSWER) if isinstance(exc, sa_exc.OperationalError | sa_exc.InterfaceError) else None
+    if sqlstate.startswith("08") or sqlstate in _SESSION_ENDED:
+        return ServiceUnavailableError(_NO_ANSWER)
+    return _refusal(exc.orig)
+
+
+def _refusal(answer: psycopg.Error) -> InternalError:
+    """The database's refusal in its own words, on one line, as a pod's wait and the schema command print it."""
+    return InternalError(f"the catalog's database refused: {' '.join(str(answer).split())}")
+
+
+@contextmanager
+def _answered_as_the_spec(*, committing: bool = False) -> Generator[None]:
+    """Raise a failure of the database's as the spec's error for what it answered (:func:`_answered`)."""
+    try:
+        yield
+    except sa_exc.SQLAlchemyError as exc:
+        if (answered := _answered(exc, committing=committing)) is None:
+            raise
+        raise answered from exc
+
+
+async def _begin(session: AsyncSession, first: Sequence[TextClause] = ()) -> None:
+    """Take the session's connection, which begins its transaction, and run ``first`` in it."""
+    connection = await session.connection()
+    for statement in first:
+        await connection.execute(statement)
 
 
 class Database:
@@ -114,42 +177,50 @@ class Database:
 
     @asynccontextmanager
     async def reading(self) -> AsyncGenerator[AsyncSession]:
-        """One read-only transaction, committed when the block returns.
+        """One read-only transaction, committed when the block returns; it applies nothing, so a commit the database did
+        not answer is only the outage.
 
         Raises:
             ServiceUnavailableError: No connection was given in time, or the database did not answer.
+            InternalError: The database refused a statement of the block.
             SecondTransactionError: A transaction is already open in this context.
         """
-        async with self._transaction(_READ_ONLY) as session:
-            yield session
+        async with self._session() as session:
+            with _answered_as_the_spec():
+                await _begin(session, _READ_ONLY)
+                yield session
+                await session.commit()
 
     @asynccontextmanager
     async def writing(self) -> AsyncGenerator[AsyncSession]:
         """One read-write transaction, committed when the block returns and rolled back when it raises.
 
         Raises:
-            ServiceUnavailableError: No connection was given in time, or the database did not answer.
+            ServiceUnavailableError: No connection was given in time, or the database did not answer before the commit;
+                nothing applied.
+            InternalError: The database refused a statement of the block or the commit; nothing applied.
+            CommitOutcomeUnknownError: The commit got no answer that proves it rolled back, so the write may have applied.
+            LateCommitRefusedError: The request was answered at its deadline before the commit began; nothing applied.
             SecondTransactionError: A transaction is already open in this context.
         """
-        async with self._transaction(()) as session:
-            yield session
+        async with self._session() as session:
+            with _answered_as_the_spec():
+                await _begin(session)
+                yield session
+                await session.flush()
+            commit_begins()
+            with _answered_as_the_spec(committing=True):
+                await session.commit()
 
     @asynccontextmanager
-    async def _transaction(self, first: Sequence[TextClause]) -> AsyncGenerator[AsyncSession]:
+    async def _session(self) -> AsyncGenerator[AsyncSession]:
+        """A session of this context's one transaction; it rolls back whatever it did not commit when it closes."""
         if _OPEN.get():
             raise SecondTransactionError("a transaction is already open on this request path: pass its session down instead of opening another")
         opened = _OPEN.set(True)
         try:
-            async with AsyncSession(self._engine, expire_on_commit=False) as session, session.begin():
-                connection = await session.connection()
-                for statement in first:
-                    await connection.execute(statement)
+            async with AsyncSession(self._engine, expire_on_commit=False) as session:
                 yield session
-        except sa_exc.SQLAlchemyError as exc:
-            if _unanswered(exc):
-                # A connection lost while committing leaves the commit's outcome unknown (ADR 0230 §6): say only the outage.
-                raise ServiceUnavailableError("the catalog's database did not answer") from exc
-            raise
         finally:
             _OPEN.reset(opened)
 
