@@ -3,7 +3,7 @@
 A person's grants are tuples naming their principal on objects of every type the model defines, written by many doors
 (the members door, the per-object grant doors, the raw tuple door), so offboarding was a hunt through the store one
 tuple at a time. ``DELETE /management/v1/access/principals/{principal}`` reads every tuple naming the principal, revokes
-them, records the principal deleted under the control root and announces ``principal_deleted`` on the control lane, so
+them, records the principal deleted in the catalog's database and announces ``principal_deleted`` on the control lane, so
 a client holding something for the person can erase it (CTL-022); ``GET`` on the same path answers the record. It
 never strands a project: a principal holding the only direct ``admin`` of any project is refused (409, code 14) and
 nothing is revoked, not even an admin it holds on another project beside a second admin, and
@@ -17,15 +17,22 @@ seeded as the catalog's declaration grants it; everything else goes through the 
 """
 
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from hashlib import blake2s
+from pathlib import Path
 from typing import Any
 
 import httpx
+import psycopg
 import pytest
 
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
 from lakehouse.governed import fga_ids, fga_reads
 from tests.control_emitter_double import ControlEmitterDouble
+from tests.postgres_server import PostgresDatabase
 
 
 #: The Lance Namespace spec's error codes a stock client reads (`spec.yaml`).
@@ -118,3 +125,61 @@ def test_a_deletion_that_would_strand_an_administration_or_undo_git_is_refused_w
     assert catalog.store.tuples() == before
     assert catalog.client.get(f"{PRINCIPALS}/{principal}", headers=catalog.bearer("root")).status_code == 404
     assert [e.action for e in recorder.events if e.action == "principal_deleted"] == []
+
+
+def test_a_principal_record_a_restore_brings_back_changes_no_door(estate: tuple[Any, ControlEmitterDouble]) -> None:
+    """An object a control-root restore brings back under ``_principals/`` is read by no door: the catalog's record of
+    a principal lives in its database, so the read door and the offboarding door answer as though it were absent."""
+    catalog, _ = estate
+    restored = Path(get_settings().registry_root) / "_principals" / f"{blake2s(ALICE.encode('utf-8')).hexdigest()}.json"
+    restored.parent.mkdir(parents=True)
+    restored.write_text('{"principal": "dex~alice", "kind": "robot"', encoding="utf-8")
+    unrecorded = catalog.client.get(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root")).status_code
+
+    deleted = catalog.client.delete(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))
+
+    record = catalog.client.get(f"{PRINCIPALS}/{ALICE}", headers=catalog.bearer("root"))
+    assert (unrecorded, deleted.status_code, deleted.json()["revoked"], record.json()) == (404, 200, 4, deleted.json()["record"]), deleted.text
+
+
+@pytest.fixture
+def two_connections(catalog_database: PostgresDatabase, monkeypatch: pytest.MonkeyPatch) -> PostgresDatabase:
+    """The catalog's pool at two connections, for two requests held at once."""
+    monkeypatch.setenv("RASK_DATABASE_POOL_SIZE", "2")
+    return catalog_database
+
+
+def _waiting_on_a_lock(database: PostgresDatabase, count: int) -> None:
+    """Return once ``count`` of the catalog's sessions wait on a lock, or fail after 20 s."""
+    deadline = time.monotonic() + 20
+    with psycopg.connect(database.url, autocommit=True) as watcher:
+        while time.monotonic() < deadline:
+            row = watcher.execute(
+                "SELECT count(*) FROM pg_stat_activity WHERE datname = current_database() AND application_name = 'rask-catalog' AND wait_event_type = 'Lock'"
+            ).fetchone()
+            if row is not None and row[0] == count:
+                return
+            time.sleep(0.05)
+    pytest.fail(f"{count} offboardings never waited on the held lock together")
+
+
+def test_two_offboardings_at_once_record_one_deletion(two_connections: PostgresDatabase, estate: tuple[Any, ControlEmitterDouble]) -> None:
+    catalog, _ = estate
+    headers = catalog.bearer("root")
+    with psycopg.connect(two_connections.url) as holder, ThreadPoolExecutor(max_workers=2) as pool:
+        # Held on a connection of the test's own, so both inserts reach the table and wait on it together.
+        holder.execute("LOCK TABLE rask.principals IN SHARE MODE")
+        started = threading.Barrier(2)
+
+        def offboard() -> httpx.Response:
+            started.wait()
+            return catalog.client.delete(f"{PRINCIPALS}/{ALICE}", headers=headers)
+
+        answers = [pool.submit(offboard) for _ in range(2)]
+        _waiting_on_a_lock(two_connections, 2)
+        holder.commit()
+        first, second = (answer.result(timeout=30) for answer in answers)
+
+    record = catalog.client.get(f"{PRINCIPALS}/{ALICE}", headers=headers)
+    assert (first.status_code, second.status_code) == (200, 200), (first.text, second.text)
+    assert first.json()["record"] == second.json()["record"] == record.json()

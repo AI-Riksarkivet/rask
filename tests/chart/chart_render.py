@@ -51,6 +51,10 @@ OBJECT_STORE_CIDR = "203.0.113.20/32"
 ISSUER_URL = "https://auth.example.com/dex"
 ISSUER_CIDR = "203.0.113.30/32"
 BUS_CIDR = "198.51.100.30/32"
+#: The platform's Postgres a production render names for the catalog's database (ADR 0230), and its address as the
+#: platform states it.
+POSTGRES_HOST = "pg.example.com"
+POSTGRES_CIDR = "198.51.100.40/32"
 #: The graph backend a production render forwards lineage to (ADR 0158), and its address as the platform states it.
 GRAPH_URL = "https://lineage-graph.example.com"
 GRAPH_CIDR = "203.0.113.40/32"
@@ -103,6 +107,8 @@ PROD_ARGS: tuple[str, ...] = (
     "--set-string", f"objectStore.externalEndpoint={OBJECT_STORE_URL}",
     "--set-string", f"openbao.externalAddr={SECRET_STORE_URL}",
     "--set-json", f'openbao.egress=[{{"to":[{{"ipBlock":{{"cidr":"{SECRET_STORE_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":8200}}]}}]',
+    "--set-string", f"postgres.externalHost={POSTGRES_HOST}",
+    "--set-json", f'postgres.egress=[{{"to":[{{"ipBlock":{{"cidr":"{POSTGRES_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":5432}}]}}]',
     "--set-string", f"services.lineage.forward.url={GRAPH_URL}",
     "--set-json", f'services.lineage.forward.egress=[{{"to":[{{"ipBlock":{{"cidr":"{GRAPH_CIDR}"}}}}],"ports":[{{"protocol":"TCP","port":443}}]}}]',
     # `--set-json`, so a gate's later `--set-json route.hostnames=[]` replaces it: helm applies every `--set` after every `--set-json`.

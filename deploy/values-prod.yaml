@@ -40,18 +40,25 @@ podDisruptionBudget:
   enabled: true
   minAvailable: 1
 
-# OpenFGA is the platform's ([[XC-132]], ADR 0153), and so is the Postgres behind it (ADR 0228): production runs
-# neither, names the first and knows nothing of the second. The deployer sets `auth.fgaApiUrl` (the platform's OpenFGA
+# OpenFGA is the platform's ([[XC-132]], ADR 0153), and so is the Postgres (ADR 0228): production runs neither. The deployer sets `auth.fgaApiUrl` (the platform's OpenFGA
 # HTTP API) with `auth.fgaEgress` (the NetworkPolicy rule reaching its addresses, for the pods that dial it), and the
 # render refuses either empty and an http `auth.fgaApiUrl`. No credential is a value: an FGA client presents its projected `rask-openfga`
 # ServiceAccount token, which the platform's OpenFGA admits by OIDC against the cluster's ServiceAccount issuer for the
-# subjects `lance.openfgaSubjects` lists. A deployment that runs the chart's OpenFGA instead names the platform's
-# Postgres in `postgres.externalHost`, and its password is the store's `postgres` secret, which ESO delivers. OpenFGA is the authz chokepoint every governed call fails closed through, so the platform runs it highly
+# subjects `lance.openfgaSubjects` lists. A deployment that runs the chart's OpenFGA instead keeps its store on the
+# platform's Postgres too, its password the store's `postgres` secret, which ESO delivers. OpenFGA is the authz chokepoint every governed call fails closed through, so the platform runs it highly
 # available.
 openfga:
   enabled: false
+# The catalog keeps its own records on the platform's Postgres (ADR 0230), in the database `postgres.catalog.database`,
+# which the platform's DBA creates with its three roles (docs/OPERATORS.md). The deployer names the server in
+# `externalHost` and the NetworkPolicy rule reaching it in `egress`; the render refuses either empty. Each role's
+# password is the store's secret `postgres.catalog.secrets` names, mounted as a file, never a value.
 postgres:
   enabled: false
+  externalHost: "" # e.g. pg.internal
+  # egress:
+  #   - to: [{ipBlock: {cidr: 10.0.1.40/32}}]
+  #     ports: [{protocol: TCP, port: 5432}]
 
 # The lakehouse's bytes live on the platform's S3: rask names it and provisions nothing on it (no buckets, no users).
 # The platform's operator creates rask's buckets, trusts the cluster's ServiceAccount issuer for

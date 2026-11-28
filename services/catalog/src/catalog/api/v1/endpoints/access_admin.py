@@ -35,7 +35,7 @@ from catalog.api import announcing
 from catalog.api.announcing import Announcer, AnnouncerDep
 from catalog.api.authz import decisions, door_gates
 from catalog.api.authz.context import AuthzContextDep
-from catalog.api.dependencies import FgaClientDep, Resolver, ResolverDep, SettingsDep
+from catalog.api.dependencies import DatabaseDep, FgaClientDep, Resolver, ResolverDep, SettingsDep
 from catalog.api.security import Caller, CurrentToken, actor_of
 from catalog.core.config import CatalogStore, Settings
 from catalog.core.identifiers import is_spelled_as_a_uuid, parse_identifier
@@ -60,7 +60,7 @@ from catalog.schemas import (
     TupleCondition,
 )
 from catalog.services import object_names, principals, subject_tuples
-from catalog.services.announcement_intents import Announcement, ControlMessage, RecordHeld
+from catalog.services.announcement_intents import Announcement, ControlMessage, PrincipalRecorded
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.governed import fga_ids, fga_model, fga_reads, fga_writes
 from lakehouse.governed.audit import AuditAction, AuditOutcome, audit
@@ -738,7 +738,7 @@ def _refuse_a_principal_git_declares(key: str, naming: list[fga_writes.ClientTup
 
 @management_router.delete("/principals/{principal:path}")
 async def delete_principal(
-    *, principal: PrincipalPath, client: EstateFgaClient, announcer: AnnouncerDep, settings: SettingsDep, token: CurrentToken
+    *, principal: PrincipalPath, client: EstateFgaClient, announcer: AnnouncerDep, database: DatabaseDep, settings: SettingsDep, token: CurrentToken
 ) -> PrincipalDeleted:
     """Offboard one principal: revoke every tuple naming it, record it deleted, announce ``principal_deleted`` ([[LH-233]]).
 
@@ -768,19 +768,23 @@ async def delete_principal(
         actor=actor_of(token),
         extra={"subject": user, "revoked": len(naming)},
     )
-    told = Announcement(evidence=RecordHeld(key=principals.record_key(key)), message=ControlMessage(event=deleted))
+    told = Announcement(evidence=PrincipalRecorded(principal=key), message=ControlMessage(event=deleted))
     async with announcer.announcing(door="delete_principal", target=user, announcements=[told]) as filing:
         revoked = len(await subject_tuples.revoke_naming(client, user, naming, actor=actor, origin="principal_delete"))
-        record = await run_in_threadpool(principals.record_deletion, settings.registry_root, settings.storage_options(), key, deleted_by=actor)
+        # Committed when the block returns, before the announcement is sent and before the door answers.
+        async with database.writing() as session:
+            record = await principals.record_deletion(session, key, deleted_by=actor)
         audit(AuditAction.PRINCIPAL_DELETE, AuditOutcome.SUCCESS, subject=actor, resource=user, revoked=revoked)
         await filing.send(told)
     return PrincipalDeleted(record=record, revoked=revoked)
 
 
 @management_router.get("/principals/{principal:path}")
-async def read_principal(principal: PrincipalPath, settings: SettingsDep) -> PrincipalRecord:
+async def read_principal(principal: PrincipalPath, database: DatabaseDep) -> PrincipalRecord:
     """The deletion record of an offboarded principal; 404 for one the door never removed."""
-    record = await run_in_threadpool(principals.read_record, settings.registry_root, settings.storage_options(), _principal_key(principal))
+    key = _principal_key(principal)
+    async with database.reading() as session:
+        record = await principals.read_record(session, key)
     if record is None:
         raise TableNotFoundError(f"no principal {principal[:128]!r} was offboarded")
     return record

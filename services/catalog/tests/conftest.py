@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from catalog.services.erasure import ErasureReport, ref_heads
 from tests.governed_catalog import GovernedCatalog, governed_catalog_app
 from tests.moto_iam import iam_enforced
+from tests.postgres_server import PostgresDatabase
 
 
 # THIS DIRECTORY, IMPORTABLE, so a plain helper module beside the suite (`tables_by_name`) resolves for a single file as
@@ -29,6 +30,12 @@ sys.path.insert(1, str(Path(__file__).parents[3]))
 
 #: The account moto files every role and session under.
 ACCOUNT = "123456789012"
+
+
+@pytest.fixture(autouse=True)
+def _catalog_database(catalog_database: PostgresDatabase) -> PostgresDatabase:
+    """Every catalog app this suite builds opens a database of the test's own (`tests.postgres_fixtures.catalog_database`)."""
+    return catalog_database
 
 
 class Key(BaseModel):

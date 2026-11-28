@@ -52,7 +52,9 @@ service, and `.importlinter` forbids the library from importing any service (ADR
 
 **Python services** (3): `catalog` (`:2333`), `lineage` (`:8000`), `maintenance` (`:8001`, its probes; one process,
 `python -m maintenance.worker`) — the lakehouse, one image
-(`.docker/rest-catalog.dockerfile`) run with three commands. This repository hosts no client: the notifications inbox
+(`.docker/rest-catalog.dockerfile`) run with three commands; the same image runs the catalog's schema command,
+`python -m catalog.schema migrate` (the release's migration Job, as the migrator role) and `python -m catalog.schema
+wait` (each catalog pod's init step). This repository hosts no client: the notifications inbox
 is retired (ADR 0193), and every other client left with XC-192.
 
 **JS workspace members** (1): the console. Its design system, `@riksarkivet/ui` (`rask-styling`), is a dependency read
@@ -98,7 +100,12 @@ A client is an outside tool on the public API and builds its own app (owner, 202
 the boot, not the layout. A service's direction is a `layers` contract in its own `pyproject.toml` (`[tool.importlinter]`,
 `exhaustive`; `make lint-imports` runs `.importlinter`, then every member pyproject that declares one, found by grep):
 lineage `main` > `api` > `services` > `models | schemas` > `core`, maintenance `worker` > `runtime` > `services` > `core`,
-the catalog `main` > `api` > `services` > `schemas` > `core` (ADR 0224). A new top-level module names its layer there, and a type two layers share lives in the lower one. A subpackage
+the catalog `main | schema | migrations` > `api` > `services` > `schemas` > `core` (ADR 0224). The catalog's database
+code is the catalog's (ADR 0224, ADR 0230), in `core`: `catalog.core.database` (the async engine, private to it, and the
+two ways to a transaction, `Database.reading()` and `writing()`), `catalog.core.rows` (the SQLModel tables of schema
+`rask`) and `catalog.core.schema` (the image's revision, the start check, `migrate` and `wait`); the Alembic revisions
+are `catalog.migrations.versions.r<NNNN>_<what>` (a module name import-linter can read) and the command is
+`catalog.schema`. It moves into `lakehouse` only when a second service opens the database. A new top-level module names its layer there, and a type two layers share lives in the lower one. A subpackage
 that holds one module per job (the catalog's `services.tables` and `api.authz`) keeps its own order in a `containers`
 contract beside it, and its `__init__` re-exports nothing: a caller imports the module that defines the name. A `main.py` that opens
 its own `app = FastAPI(...)` is the exception to justify, not the norm: copied boots drift, and one once lost its
@@ -119,8 +126,9 @@ correlation layer (docs/adr/0047-the-python-estate-audit-2026-08-07-2026-09-05.m
   it, so an extra would guard nothing. The OTel SDK, the OTLP/HTTP exporter and the instrumentors are among them: the
   chart launches every lakehouse service under `opentelemetry-instrument` when telemetry is on, and it instruments what
   is installed, so that list is the instrumentation a service gets. The lakehouse image import-gates the library and
-  the three services and refuses `lancedb` (`.docker/rest-catalog.dockerfile`, `--absent`). Never add `lancedb`, `ray`
-  or `sqlmodel` to it.
+  the three services and refuses `lancedb` (`.docker/rest-catalog.dockerfile`, `--absent`). Never add `lancedb` or
+  `ray` to it. It carries the catalog's database stack (ADR 0230): `sqlmodel`, `sqlalchemy[asyncio]`, `alembic` and
+  `psycopg[binary]`.
 - **The lakehouse knows no client.** `.importlinter`'s `the-lakehouse-knows-no-client` forbids every lakehouse module
   from importing a client's package (`ray`, `lance_ray`, `lancedb`, …) by any chain, and
   `scripts/lakehouse_names_no_client.py` (in `make lint`) refuses a client's name in any file the lakehouse owns, the

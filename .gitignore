@@ -74,6 +74,4 @@ docs/architecture/*.visual-check.*
 # a fixture chart's vendored upstream dependencies, rebuilt by scripts/fixtures.sh from its Chart.lock
 deploy/fixtures/*/chart/charts/
 
-# The compose stack's object-store root pair (.docker/docker-compose.yml secrets:); a secret never enters the repo.
-.docker/secrets/
 .kube/

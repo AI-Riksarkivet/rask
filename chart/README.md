@@ -177,7 +177,7 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | nats.url | string | `""` | NATS JetStream address every service and the stream Job connect to (e.g. tls://nats.internal:4222; a comma-separated list for several servers). Required: empty fails the render, and a real deployment refuses any scheme but tls://, whose server must take the TLS handshake first. |
 | networkPolicy.apiServerEgress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the pods that call the Kubernetes API to its endpoints. Required under networkPolicy.enabled while any such pod renders. |
 | networkPolicy.enabled | bool | `false` | Renders default-deny NetworkPolicies with explicit allows and exclusive client lists for the guarded stores. Needs a policy-enforcing CNI. |
-| networkPolicy.extraEgress | list | `[]` | List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names (the platform's Postgres when OpenFGA runs in the chart). Each rule names its `to` peers; the render refuses one that admits every destination. |
+| networkPolicy.extraEgress | list | `[]` | List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names. Each rule names its `to` peers; the render refuses one that admits every destination. |
 | networkPolicy.objectStoreExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the object store. |
 | networkPolicy.openbaoExtraFrom | list | `[]` | List of extra NetworkPolicy `from` peers allowed to reach the development store (`openbao.enabled`; e.g. the external-secrets namespace). |
 | networkPolicy.openfgaMetricsFrom | list | `[]` | List of NetworkPolicy `from` peers allowed to scrape the in-chart OpenFGA's metrics port (2112): the platform's collector, e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}}]. Empty admits none. |
@@ -233,10 +233,22 @@ revision is one Kubernetes Secret capped at 1 MiB. Template rationale is kept ou
 | openfga.telemetry | object | `{"trace":{"enabled":false,"otlp":{"endpoint":""},"sampleRatio":0.001}}` | Subchart passthrough: OpenFGA OTLP tracing to the platform's gateway; off by default, ratio 0.001 because each Check emits ~1,900 spans. |
 | podDisruptionBudget.enabled | bool | `false` | Renders a PodDisruptionBudget for each service running more than one replica. |
 | podDisruptionBudget.minAvailable | int | `1` | minAvailable of every rendered PodDisruptionBudget. |
+| postgres.catalog.database | string | `"catalog"` | Name of the catalog's own database, owned by the migrator role; its schema `rask` holds the catalog's records. |
+| postgres.catalog.pool.acquireTimeoutSeconds | int | `5` | Seconds a request waits for a pooled connection before its door answers unavailable. |
+| postgres.catalog.pool.recycleSeconds | int | `1800` | Seconds after which a pooled connection is replaced at its next use, inside the life of the credential it opened with. |
+| postgres.catalog.pool.size | int | `4` | Connections each catalog replica holds open at most to its database; the server's connection limit must cover every replica's. |
+| postgres.catalog.roles.catalog | string | `"rask_catalog"` | Role the catalog connects as: what each revision grants it, and no more. |
+| postgres.catalog.roles.maintenance | string | `"rask_maintenance"` | Role maintenance connects as: what each revision grants it, and no more. |
+| postgres.catalog.roles.migrator | string | `"rask_migrator"` | Role the migration Job connects as: it owns the database and every object of schema `rask`. |
+| postgres.catalog.schemaWaitSeconds | int | `600` | Seconds a new catalog pod's init step waits for the migration Job to bring the schema to its image's revision before it refuses; inside the release's own timeout. |
+| postgres.catalog.secrets.catalog | string | `"database-catalog"` | Secret in the store holding the catalog role's password (field `password`), mounted into the catalog's pods as a file. |
+| postgres.catalog.secrets.maintenance | string | `"database-maintenance"` | Secret in the store holding the maintenance role's password (field `password`). |
+| postgres.catalog.secrets.migrator | string | `"database-migrator"` | Secret in the store holding the migrator role's password (field `password`), mounted into the migration Job as a file. |
 | postgres.database | string | `"openfga"` | Name of the database OpenFGA keeps its store in. |
+| postgres.egress | list | `[]` | NetworkPolicy egress rules ({to, ports}) admitting the pods that dial the platform's Postgres at `externalHost` (the catalog, its migration Job, and OpenFGA with its migrate Job while the chart runs OpenFGA), at the port a policy sees. Required under networkPolicy.enabled while `enabled` is false. |
 | postgres.enabled | bool | `true` | This estate uses the development Postgres (deploy/fixtures/postgres, Service `<release>-postgres`), and a real deployment refuses it. The chart renders no Postgres. False reads the platform's at `externalHost`. |
-| postgres.externalHost | string | `""` | Host of the platform's Postgres, which carries OpenFGA's database; the render refuses it empty with `enabled` false while the chart runs OpenFGA, and refuses both set. |
-| postgres.port | int | `5432` | Port of the Postgres OpenFGA and its migrate Job dial. |
+| postgres.externalHost | string | `""` | Host of the platform's Postgres, which carries the catalog's database (and OpenFGA's while the chart runs OpenFGA); the render refuses it empty with `enabled` false, and refuses both set. |
+| postgres.port | int | `5432` | Port of the Postgres the catalog, its migration Job, OpenFGA and its migrate Job dial. |
 | postgres.user | string | `"lance"` | Role OpenFGA connects as; its password is the store's `postgres` secret (field `password`), never a value. |
 | pubsub.topic | string | `"lineage.events.v1"` | Topic OpenLineage events are published on and each consumer of them is filtered to (RASK_LINEAGE_TOPIC). |
 | readOnlyWindow | bool | `false` | Puts the whole lakehouse in a read-only window: the catalog refuses writes and holds its timers, maintenance's worker takes no task, and lineage's relay is held. Flipping it rolls the three services. |

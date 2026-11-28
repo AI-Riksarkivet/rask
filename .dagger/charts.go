@@ -202,9 +202,9 @@ func (m *Rask) Charts(
 // (`templates/object-store-events-provisioned.yaml`).
 // `nats.url` names the platform's NATS bus: a prerequisite rask never installs ([[XC-129]]), and `route.*` the platform's Gateway
 // the routes attach to and the hostnames it routes to this release, which a real deployment refuses to go without
-// ([[XC-146]], ADR 0165). `networkPolicy.apiServerEgress`, `openbao.egress`, `objectStore.egress`, `nats.egress` and
-// `auth.oidc.egress` state the peers the isolation layer admits the API server, the platform's secret store, S3, bus and
-// IdP at, which no URL can derive ([[XC-143]], [[XC-202]]). `objectStore.externalEndpoint` names the platform's S3: a real deployment
+// ([[XC-146]], ADR 0165). `networkPolicy.apiServerEgress`, `openbao.egress`, `objectStore.egress`, `nats.egress`,
+// `auth.oidc.egress` and `postgres.egress` state the peers the isolation layer admits the API server, the platform's secret
+// store, S3, bus, IdP and Postgres at, which no URL can derive ([[XC-143]], [[XC-202]]). `objectStore.externalEndpoint` names the platform's S3: a real deployment
 // refuses the development store (`templates/prod-credentials.yaml`), whose root signs every STS token on RustFS.
 // `image.tags` is the pin a released chart carries for each first-party image: the `dev` default names no build, which a
 // real deployment refuses (`templates/prod-credentials.yaml`, [[XC-164]]).
@@ -230,6 +230,8 @@ const renderArgs = "--set image.repository=ghcr.io/example/rask " +
 	"--set-string objectStore.externalEndpoint=https://s3.example.com " +
 	"--set postgres.enabled=false " +
 	"--set-string postgres.externalHost=pg.example.com " +
+	"--set postgres.egress[0].to[0].ipBlock.cidr=198.51.100.40/32 " +
+	"--set postgres.egress[0].ports[0].port=5432 " +
 	"--set-string openfga.podAnnotations.rask\\\\.dev/openfga-datastore=pg.example.com:5432/openfga " +
 	"--set objectStore.egress[0].to[0].ipBlock.cidr=203.0.113.20/32 " +
 	"--set objectStore.egress[0].ports[0].port=443 " +

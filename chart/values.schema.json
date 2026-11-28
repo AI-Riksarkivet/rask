@@ -1024,7 +1024,7 @@
                     "type": "boolean"
                 },
                 "extraEgress": {
-                    "description": "List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names (the platform's Postgres when OpenFGA runs in the chart). Each rule names its `to` peers; the render refuses one that admits every destination.",
+                    "description": "List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names. Each rule names its `to` peers; the render refuses one that admits every destination.",
                     "type": "array"
                 },
                 "objectStoreExtraFrom": {
@@ -1260,20 +1260,92 @@
         "postgres": {
             "type": "object",
             "properties": {
+                "catalog": {
+                    "type": "object",
+                    "properties": {
+                        "database": {
+                            "description": "Name of the catalog's own database, owned by the migrator role; its schema `rask` holds the catalog's records.",
+                            "type": "string"
+                        },
+                        "pool": {
+                            "type": "object",
+                            "properties": {
+                                "acquireTimeoutSeconds": {
+                                    "description": "Seconds a request waits for a pooled connection before its door answers unavailable.",
+                                    "type": "integer"
+                                },
+                                "recycleSeconds": {
+                                    "description": "Seconds after which a pooled connection is replaced at its next use, inside the life of the credential it opened with.",
+                                    "type": "integer"
+                                },
+                                "size": {
+                                    "description": "Connections each catalog replica holds open at most to its database; the server's connection limit must cover every replica's.",
+                                    "type": "integer"
+                                }
+                            },
+                            "additionalProperties": false
+                        },
+                        "roles": {
+                            "type": "object",
+                            "properties": {
+                                "catalog": {
+                                    "description": "Role the catalog connects as: what each revision grants it, and no more.",
+                                    "type": "string"
+                                },
+                                "maintenance": {
+                                    "description": "Role maintenance connects as: what each revision grants it, and no more.",
+                                    "type": "string"
+                                },
+                                "migrator": {
+                                    "description": "Role the migration Job connects as: it owns the database and every object of schema `rask`.",
+                                    "type": "string"
+                                }
+                            },
+                            "additionalProperties": false
+                        },
+                        "schemaWaitSeconds": {
+                            "description": "Seconds a new catalog pod's init step waits for the migration Job to bring the schema to its image's revision before it refuses; inside the release's own timeout.",
+                            "type": "integer"
+                        },
+                        "secrets": {
+                            "type": "object",
+                            "properties": {
+                                "catalog": {
+                                    "description": "Secret in the store holding the catalog role's password (field `password`), mounted into the catalog's pods as a file.",
+                                    "type": "string"
+                                },
+                                "maintenance": {
+                                    "description": "Secret in the store holding the maintenance role's password (field `password`).",
+                                    "type": "string"
+                                },
+                                "migrator": {
+                                    "description": "Secret in the store holding the migrator role's password (field `password`), mounted into the migration Job as a file.",
+                                    "type": "string"
+                                }
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "additionalProperties": false
+                },
                 "database": {
                     "description": "Name of the database OpenFGA keeps its store in.",
                     "type": "string"
+                },
+                "egress": {
+                    "description": "NetworkPolicy egress rules ({to, ports}) admitting the pods that dial the platform's Postgres at `externalHost` (the catalog, its migration Job, and OpenFGA with its migrate Job while the chart runs OpenFGA), at the port a policy sees. Required under networkPolicy.enabled while `enabled` is false.",
+                    "type": "array"
                 },
                 "enabled": {
                     "description": "This estate uses the development Postgres (deploy/fixtures/postgres, Service `\u003crelease\u003e-postgres`), and a real deployment refuses it. The chart renders no Postgres. False reads the platform's at `externalHost`.",
                     "type": "boolean"
                 },
                 "externalHost": {
-                    "description": "Host of the platform's Postgres, which carries OpenFGA's database; the render refuses it empty with `enabled` false while the chart runs OpenFGA, and refuses both set.",
+                    "description": "Host of the platform's Postgres, which carries the catalog's database (and OpenFGA's while the chart runs OpenFGA); the render refuses it empty with `enabled` false, and refuses both set.",
                     "type": "string"
                 },
                 "port": {
-                    "description": "Port of the Postgres OpenFGA and its migrate Job dial.",
+                    "description": "Port of the Postgres the catalog, its migration Job, OpenFGA and its migrate Job dial.",
                     "type": "integer"
                 },
                 "user": {

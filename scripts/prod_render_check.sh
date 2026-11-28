@@ -33,9 +33,10 @@ PROD_VALUES="${PROD_VALUES:-deploy/values-prod.yaml}"
 # observability.export.endpoint is the platform's OTLP backend, which values-prod leaves for the deployer to name, and
 # auth.oidc.connectors the idp id of each of the platform's Dex connectors ([[LH-063]]),
 # auth.fgaApiUrl the platform's OpenFGA ([[XC-132]]), openbao.externalAddr its secret
-# store ([[XC-149]]), and route.parentRefs the platform's Gateway (ADR 0165),
-# and the egress that reaches the API server, the telemetry backend, the platform's OpenFGA, its secret store, its S3, its
-# bus and its IdP, which no URL can derive ([[XC-143]], [[XC-202]]). image.tags is the pin a released chart carries for each first-party image: the `dev`
+# store ([[XC-149]]), postgres.externalHost the Postgres holding the catalog's database (ADR 0230), and route.parentRefs
+# the platform's Gateway (ADR 0165),
+# and the egress that reaches the API server, the telemetry backend, the platform's OpenFGA, its secret store, its
+# Postgres, its S3, its bus and its IdP, which no URL can derive ([[XC-143]], [[XC-202]]). image.tags is the pin a released chart carries for each first-party image: the `dev`
 # default names no build, which a real deployment refuses (templates/prod-credentials.yaml, [[XC-164]]).
 COMMON=(--api-versions external-secrets.io/v1/ExternalSecret
         --set auth.oidc.issuer=https://auth.example.com/dex
@@ -52,6 +53,8 @@ COMMON=(--api-versions external-secrets.io/v1/ExternalSecret
         --set-string auth.fgaApiUrl=https://fga.example.com
         --set-string objectStore.externalEndpoint=https://s3.example.com
         --set-string openbao.externalAddr=https://vault.example.com:8200
+        --set-string postgres.externalHost=pg.example.com
+        --set-json 'postgres.egress=[{"to":[{"ipBlock":{"cidr":"198.51.100.40/32"}}],"ports":[{"protocol":"TCP","port":5432}]}]'
         --set-json 'openbao.egress=[{"to":[{"ipBlock":{"cidr":"198.51.100.20/32"}}],"ports":[{"protocol":"TCP","port":8200}]}]'
         --set-json 'route.parentRefs=[{"name":"edge","namespace":"edge-system"}]'
         --set-json 'networkPolicy.apiServerEgress=[{"to":[{"ipBlock":{"cidr":"192.0.2.10/32"}}],"ports":[{"protocol":"TCP","port":6443}]}]'
@@ -79,7 +82,7 @@ grep -q "default-deny" "$OUT" || fail "prod NetworkPolicy set missing default-de
 grep -q "name: rask-allow-secret-store-egress" "$OUT" || fail "prod NetworkPolicy set missing the egress that admits only the secret store's readers"
 # Default-deny egress would leave every store, bus and IdP client unable to reach them ([[XC-202]]): each policy admits
 # the peers its value states.
-for row in object-store:203.0.113.20/32 bus:198.51.100.30/32 issuer:203.0.113.30/32; do
+for row in object-store:203.0.113.20/32 bus:198.51.100.30/32 issuer:203.0.113.30/32 postgres:198.51.100.40/32; do
   grep -A40 "name: rask-allow-${row%%:*}-egress$" "$OUT" | grep -q "cidr: ${row#*:}" \
     || fail "prod's NetworkPolicy must admit the ${row%%:*}'s clients to the peers its egress value states (${row#*:})"
 done

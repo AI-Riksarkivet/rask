@@ -25,6 +25,9 @@ from pathlib import Path
 # pollution); the guard must be self-sufficient in any filtered run.
 os.environ.setdefault("LANCE_S3_ACCESS_KEY_ID", "spec")
 os.environ.setdefault("LANCE_S3_SECRET_ACCESS_KEY", "spec")
+os.environ.setdefault("RASK_DATABASE_HOST", "spec")
+os.environ.setdefault("RASK_DATABASE_NAME", "spec")
+os.environ.setdefault("RASK_DATABASE_CREDENTIALS_DIR", "spec")
 
 _DOCS = Path(__file__).resolve().parents[2] / "docs"
 _TS_CLIENT = Path(__file__).resolve().parents[2] / "frontend" / "packages" / "api" / "src" / "generated"

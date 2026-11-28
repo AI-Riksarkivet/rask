@@ -121,7 +121,7 @@ it with `kind load image-archive`. Then a chart if it deploys to k3s: the produc
 - [ ] `known-first-party` += import name
 - [ ] a service: a `layers` contract in its `pyproject.toml`, and its name in `.importlinter`'s `root_packages`
 - [ ] tests live in `<member>/tests` (the `testpaths` glob collects them; nothing to list)
-- [ ] `.docker/<name>.dockerfile` + `COMPOSE_IMAGES` or a hand-wired build line and `K3S_IMAGES` (if a deployable)
+- [ ] `.docker/<name>.dockerfile` and `K3S_IMAGES` (if a deployable)
 - [ ] `uv sync` resolves clean; first-party import works — and for a JS member,
       `bun --cwd=frontend install` actually **lists** it (a silent skip means it
       carries no `package.json`)

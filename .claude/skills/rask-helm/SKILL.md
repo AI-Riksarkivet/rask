@@ -93,8 +93,8 @@ second case. Kueue's upstream docs only ever install it as its own release in `k
   upstream chart pinned in `fixture.env`, installed as its own release by `scripts/fixtures.sh` before rask's
   (`make k3s-fixtures`, a prerequisite of `make k3s-up`; `FIXTURES` names which, default `external-secrets nats
   postgres dex rustfs openbao observability marquez`: the NATS
-  JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), OpenFGA's development Postgres
-  `rask-postgres` that `postgres.enabled` names (ADR 0228; `WAIT=false`, its password is the dev store's), the dev OIDC issuer `rask-dex`, object store `rask-rustfs` ([[XC-163]], ADR 0168) and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the telemetry chain whose Collector every service exports to as itself ([[XC-127]], ADR 0215), and the OpenLineage graph backend
+  JetStream bus `rask-nats` in rask's namespace that `nats.url` names ([[XC-129]]), the development Postgres
+  `rask-postgres` that `postgres.enabled` names, holding OpenFGA's database and the catalog's (ADR 0228, ADR 0230; `WAIT=false`, its passwords are the dev store's), the dev OIDC issuer `rask-dex`, object store `rask-rustfs` ([[XC-163]], ADR 0168) and secret store `rask-openbao` ([[XC-131]]; both stores' fixtures are `WAIT=false`: the object store's root credential and the secret store's seed scripts are rask's), the telemetry chain whose Collector every service exports to as itself ([[XC-127]], ADR 0215), and the OpenLineage graph backend
   `rask-marquez` lineage's forwarder sends to (ADR 0158)). **The Dex fixture** (`deploy/fixtures/dex/chart`) enforces PKCE for every
   authorization code (`oauth2.pkce.enforce: true`, `codeChallengeMethodsSupported: [S256]`; the password,
   client-credentials and token-exchange grants never pass `/auth`), serves no device grant (its `/auth` leg carries no
@@ -249,6 +249,7 @@ trust.
 | `env: valueFrom: secretKeyRef` marked ✅ "secrets from secretKeyRef" | **Not approved.** Whether an ESO-written Secret delivered this way satisfies the rule is backlog XC-002, awaiting a ruling. Default: a working secret never enters process env. |
 | `helm-secrets` / SOPS: encrypted secrets in a values file | **No.** A chart value never carries a secret, encrypted or not. A record NAMES a secret. |
 | `templates/secret.yaml` rendering a Secret from `.Values` | **No.** Credentials come from the secret store (the platform's Vault or OpenBao; the dev OpenBao fixture): a service reads its own under its own login, and every other pod gets an ExternalSecret. |
+| a database DSN with its password in env | **No.** The catalog's database credential is the rule's one exception, by ADR 0230 §8: it reaches the process as a FILE, through the ExternalSecret `<release>-database-catalog` (the migration Job's `<release>-database-migrator`; keys `username`, the role named in `postgres.catalog.roles`, and `password`, the store's secret `postgres.catalog.secrets` names, field `password`) mounted at `/var/run/secrets/rask/database` (`lance.databaseCredential`), as OpenFGA's datastore password reaches it (`<release>-infra-credentials`). Why a file and not the service's own login: the pool opens connections outside any request and re-reads both files at every new connection, so a credential the store replaces is the next connection's with no restart, the Dagger lanes that boot a catalog run no secret store, and a short-lived credential replaces the ExternalSecret's source (ESO's dynamic-secret generator over the store's database engine) with no change to the process. Only `RASK_DATABASE_HOST`, `_PORT`, `_NAME` and `_CREDENTIALS_DIR` are env (`lance.databaseEnv`). |
 | a literal `value:` in a Job's env for a credential | **No** — readable by anyone with `get jobs`; a pod mounts a secret as a file ([[XC-004]]), and a workload's object-store identity is no secret at all but its projected ServiceAccount token ([[XC-084]]). |
 | Docker-based chart tooling | **Dagger.** `dagger call charts` runs the chart gate. |
 
@@ -363,6 +364,24 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   for the signer. With the fixture's `nats.auth.server` on, a non-surge OpenBao replacement mints a new root that the
   operator-mode server refuses until the NATS pods restart, which empties JetStream: docs/OPERATORS.md § 7 has the
   switch-over and recovery.
+- **The development Postgres serves OpenFGA and the catalog** (ADR 0228, ADR 0230): the `postgres` fixture's server
+  holds OpenFGA's database (`postgres.database`, role `postgres.user`) and the catalog's (`postgres.catalog.database`).
+  The fixture's provisioning Job (`rask-postgres-provision-r<fixture revision>`, component `postgres-provision`, the
+  fixture's own image as uid 999) runs `files/provision.sql` on every install of the fixture, so the database and its
+  three roles (`postgres.catalog.roles`: the migrator owns the database and schema `rask`, the catalog and maintenance
+  roles get `CONNECT` and what each revision grants) converge on a volume initdb will never touch again; the platform's
+  DBA runs the same statements in production (docs/OPERATORS.md § 9). Its passwords are three dev credentials
+  (`lance.devCredentials`: `database-migrator-password`, `database-catalog-password`, `database-maintenance-password`,
+  ESO Password generators made once and kept), which the seed writes to `secret/database-*` (field `password`); the
+  fixture's ExternalSecrets read them through rask's SecretStore, so ESO's policy grants them (`lance.esoReads`), and the
+  Job, like the server, waits until rask's release has seeded them.
+- **The catalog's migration Job is a bootstrap Job, not a Helm hook** (ADR 0230 §11, `chart/templates/catalog-migrate.yaml`):
+  a plain Job named `<release>-catalog-migrate-<rask.bootstrapRev>`, applied with the release so `--wait-for-jobs`
+  waits for it beside the pods (a post-upgrade hook would deadlock `--wait`: docs/chart/templates/_helpers.tpl.md,
+  "BOOTSTRAP JOBS"), and an Argo CD `Sync` hook (`lance.reconciledJob "Sync"`). It runs `python -m catalog.schema
+  migrate` in the catalog image as `sa-jobs`, with the migrator's credential file. Each catalog pod's init container
+  `schema` runs `python -m catalog.schema wait` until the database holds the image's revision
+  (`postgres.catalog.schemaWaitSeconds`), and the app checks again before it serves.
 - **The chart renders no secret store; production names the platform's** ([[XC-149]]): `openbao.enabled` means the
   estate uses the dev OpenBao fixture (a real deployment refuses it), and off it the render requires `openbao.externalAddr`
   (https only: every service logs in to it with its pod's ServiceAccount token; a store under a
@@ -372,8 +391,9 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   seed stays rask's (owner, 2026-10-16): only rask's values know what to seed.
 - **Every endpoint the platform serves outside the namespace is one row of `lance.platformEgress`** ([[XC-202]]): its
   egress value, what it reaches, the components that dial it, and when it is required (the API server, OpenFGA, the
-  secret store, the telemetry backend, the S3 and STS with `objectStore.enabled` off, the IdP with `dex.enabled` off, and
-  on a real deployment the bus and lineage's graph backend). Under `networkPolicy.enabled` the render refuses every empty
+  secret store, the telemetry backend, the S3 and STS with `objectStore.enabled` off, the IdP with `dex.enabled` off, the
+  Postgres with `postgres.enabled` off (`postgres.egress`: the catalog, its migration Job, and OpenFGA with its migrate
+  Job while the chart runs OpenFGA), and on a real deployment the bus and lineage's graph backend). Under `networkPolicy.enabled` the render refuses every empty
   row in ONE message naming them all, and the same rows render the egress policies, so a new endpoint is a new row, never
   `networkPolicy.extraEgress` (kept for an endpoint no row names). `lance.egressRules` refuses a rule with no `to` peers
   or a `/0` peer. The development stores' ingress admits exactly their callers from the same helpers
@@ -397,11 +417,13 @@ lineage, maintenance, OpenBao and Dex, among others, ran as `default` with a mou
   (`lance.serviceAccounts`) or `default`; and an empty or non-name secret list. An external reader gets a
   store role and policy. The gate is
   `tests/chart/test_every_secret_in_the_dev_store_has_exactly_its_readers.py`.
-- **OpenFGA is optional, production names the platform's, and the chart runs no Postgres** ([[XC-132]], ADR 0228):
-  `deploy/values-prod.yaml` sets `openfga.enabled` and `postgres.enabled` off and `auth.fgaApiUrl` (the render refuses
-  it empty), so the render names no Postgres. The chart reads `postgres.*` only while it runs OpenFGA: the development
-  fixture under `postgres.enabled`, else the platform's `postgres.externalHost`. Every FGA client dials
-  `lance.openfgaUrl` and every Postgres client `lance.postgresHost`; a template never builds either address itself. The OpenFGA subchart's schema refuses unknown keys, so a rask value
+- **OpenFGA is optional, production names the platform's, and the chart runs no Postgres but always names one**
+  ([[XC-132]], ADR 0228, ADR 0230): `deploy/values-prod.yaml` sets `openfga.enabled` and `postgres.enabled` off and
+  `auth.fgaApiUrl` (the render refuses it empty). The catalog keeps its records in its own database on the platform's
+  Postgres in every mode, so every render names one: the development fixture under `postgres.enabled`, else the
+  platform's `postgres.externalHost`, which the render refuses empty (and `postgres.egress` empty under
+  `networkPolicy.enabled`). Every FGA client dials `lance.openfgaUrl` and every Postgres client `lance.postgresHost`; a
+  template never builds either address itself. The OpenFGA subchart's schema refuses unknown keys, so a rask value
   about OpenFGA lives under `auth`, never under `openfga`.
 - **A real deployment is refused what would expose it** ([[XC-184]]): `templates/prod-credentials.yaml`, on
   `rask.isRealDeployment`, refuses a published dev credential, `auth.enabled=false` (the chart would write the services'

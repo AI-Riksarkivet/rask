@@ -9,6 +9,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from lance_namespace import connect
+from tests.postgres_server import PostgresDatabase
 
 from lakehouse.lancekit.base_refs import normalise
 from lakehouse.naming import CATALOG_DELIMITER
@@ -20,6 +21,12 @@ from maintenance.services import credentials, table_pass
 from maintenance.services.expiry import DatasetResult
 from maintenance.services.naming import TableIds, policy_owners
 from maintenance.services.plan import DatasetPlan, PlanContext
+
+
+@pytest.fixture(autouse=True)
+def _catalog_database(catalog_database: PostgresDatabase) -> PostgresDatabase:
+    """Every catalog app this suite builds opens a database of the test's own (`tests.postgres_fixtures.catalog_database`)."""
+    return catalog_database
 
 
 @pytest.fixture

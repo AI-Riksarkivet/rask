@@ -109,7 +109,33 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- if and .Values.postgres.enabled .Values.postgres.externalHost -}}{{ fail "postgres.enabled says this estate uses the development Postgres (deploy/fixtures/postgres) and postgres.externalHost names the platform's: set one" }}
 {{- else if .Values.postgres.externalHost -}}{{ .Values.postgres.externalHost }}
 {{- else if .Values.postgres.enabled -}}{{ include "lance.postgresFixtureHost" . }}
-{{- else -}}{{ fail "postgres.enabled is false, so the Postgres behind the chart's OpenFGA is the platform's: set postgres.externalHost to its host, or run the platform's OpenFGA (openfga.enabled=false with auth.fgaApiUrl) and name no Postgres (docs/architecture/deployment.md, Prerequisites)" }}
+{{- else -}}{{ fail "postgres.enabled is false, so the Postgres holding the catalog's database is the platform's: set postgres.externalHost to its host (docs/architecture/deployment.md, Prerequisites)" }}
+{{- end -}}
+{{- end -}}
+
+{{- define "lance.postgresClients" -}}
+{{- $out := list "catalog" "catalog-migrate" "postgres-provision" -}}
+{{- if .Values.openfga.enabled }}{{- $out = append $out "openfga-migrate" }}{{- end -}}
+{{- toJson $out -}}
+{{- end -}}
+
+{{- define "lance.databaseCredentialDir" -}}/var/run/secrets/rask/database{{- end -}}
+
+{{- define "lance.databaseEnv" -}}
+{{- $root := index . 0 -}}{{- $c := $root.Values.postgres.catalog -}}
+- { name: RASK_DATABASE_HOST, value: {{ include "lance.postgresHost" $root | quote }} }
+- { name: RASK_DATABASE_PORT, value: {{ $root.Values.postgres.port | quote }} }
+- { name: RASK_DATABASE_NAME, value: {{ required "postgres.catalog.database names the catalog's database" $c.database | quote }} }
+- { name: RASK_DATABASE_CREDENTIALS_DIR, value: {{ include "lance.databaseCredentialDir" $root | quote }} }
+{{- end -}}
+
+{{- define "lance.databaseCredential" -}}
+{{- $root := index . 0 -}}{{- $part := index . 1 -}}{{- $role := index . 2 -}}
+{{- if eq $part "volumes" -}}
+- name: database-credential
+  secret: { secretName: {{ include "lance.fullname" $root }}-database-{{ $role }}, items: [{ key: username, path: username }, { key: password, path: password }], defaultMode: 0440 }
+{{- else -}}
+- { name: database-credential, mountPath: {{ include "lance.databaseCredentialDir" $root }}, readOnly: true }
 {{- end -}}
 {{- end -}}
 
@@ -202,6 +228,11 @@ spec:
 {{- end -}}
 {{- if not $v.openfga.enabled -}}
 {{- $rows = append $rows (dict "name" "openfga" "value" "auth.fgaEgress" "rules" $v.auth.fgaEgress "reaches" "the platform's OpenFGA at auth.fgaApiUrl" "components" (concat (include "lance.fgaWriters" . | splitList " ") (list "openfga-model"))) -}}
+{{- end -}}
+{{- if not $v.postgres.enabled -}}
+{{- $dialers := list "catalog" "catalog-migrate" -}}
+{{- if $v.openfga.enabled }}{{- $dialers = concat $dialers (list "authorization-controller" "openfga-migrate") }}{{- end -}}
+{{- $rows = append $rows (dict "name" "postgres" "value" "postgres.egress" "rules" $v.postgres.egress "reaches" "the platform's Postgres at postgres.externalHost" "components" $dialers) -}}
 {{- end -}}
 {{- if not $v.openbao.enabled -}}
 {{- $rows = append $rows (dict "name" "secret-store" "value" "openbao.egress" "rules" $v.openbao.egress "reaches" "the platform's secret store at openbao.externalAddr" "components" (splitList "," (include "lance.secretReaderComponents" .) | compact)) -}}
@@ -442,7 +473,7 @@ spec:
 {{- define "lance.devCredentials" -}}
 {{- $root := . -}}
 {{- $out := dict -}}
-{{- range $key := list "object-store-secret-key" "postgres-password" -}}
+{{- range $key := list "object-store-secret-key" "postgres-password" "database-migrator-password" "database-catalog-password" "database-maintenance-password" -}}
 {{- $_ := set $out $key (printf "%s-dev-credential-%s" (include "lance.fullname" $root) $key) -}}
 {{- end -}}
 {{- $out | toJson -}}
@@ -595,6 +626,11 @@ securityContext:
     type: RuntimeDefault
 {{- end -}}
 
+{{- define "lance.databasePodSecurityContext" -}}
+{{ include "lance.podSecurityContext" . }}
+  fsGroup: 10001
+{{- end -}}
+
 {{- define "lance.securityContext" -}}
 securityContext:
   runAsNonRoot: true
@@ -729,7 +765,7 @@ buckets as the estate's reads already are. */ -}}
 
 {{- define "lance.objectStorePolicy.backup-control-root" -}}
 {{- $control := .Values.objectStore.bucket -}}
-{{- $records := list "_projects" "_warehouses" "_trash" "_branch_trash" "_protection" "_policies" "_contracts" "_bases" "_locations" "_maintenance_due" "_commit_authors" "_commit_marks" "_file_identities" "_maintenance_files" "_clone_endings" "_erasure_obligations" "_erasure_releases" "_table_inputs" "_roles" "_principals" "_declared_grants" "_label_definitions" "_labels" -}}
+{{- $records := list "_projects" "_warehouses" "_trash" "_branch_trash" "_protection" "_policies" "_contracts" "_bases" "_locations" "_maintenance_due" "_commit_authors" "_commit_marks" "_file_identities" "_maintenance_files" "_clone_endings" "_erasure_obligations" "_erasure_releases" "_table_inputs" "_roles" "_declared_grants" "_label_definitions" "_labels" -}}
 {{- $dest := splitList "/" (trimSuffix "/" (trimPrefix "s3://" (.Values.backups.controlRoot.dest | default (printf "s3://%s/_backups/control" $control)))) | compact -}}
 {{- $destBucket := first $dest -}}{{- $destPrefix := join "/" (rest $dest) -}}
 {{- $listed := list -}}{{- $read := list -}}
@@ -1100,7 +1136,7 @@ activeDeadlineSeconds: 1800
 {{- $_ := set $reads .app (dict "sa" (printf "%s%s" $sa .sa) "api" $api) -}}
 {{- end -}}
 {{- end -}}
-{{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "nats-callout" "openbao-seeded" "commit-id-key" "object-store-root" "postgres") -}}
+{{- $held := concat (include "lance.esoReads" . | fromJsonArray) (list "nats-root" "nats-route" "nats-server" "nats-callout" "openbao-seeded" "commit-id-key" "object-store-root" "postgres" .Values.postgres.catalog.secrets.maintenance) -}}
 {{- range $reads }}{{- $held = concat $held .api }}{{- end -}}
 {{- $lakehouseApps := list $v.services.catalog.appId $v.services.lineage.appId $v.maintenance.appId -}}
 {{- $external := $v.openbao.externalReaders | default dict -}}
@@ -1132,7 +1168,11 @@ activeDeadlineSeconds: 1800
 {{- define "lance.esoReads" -}}
 {{- $v := .Values -}}
 {{- $reads := list -}}
-{{- if $v.openfga.enabled }}{{- $reads = append $reads "postgres" }}{{- end -}}
+{{- $db := $v.postgres.catalog.secrets -}}
+{{- range $role, $name := $db }}{{- if not (regexMatch (include "lance.secretNamePattern" $) (toString $name)) }}{{- fail (printf "postgres.catalog.secrets.%s: %q is no secret name (a path or a wildcard would widen ESO's store policy)" $role (toString $name)) }}{{- end }}{{- end -}}
+{{- $reads = concat $reads (list $db.catalog $db.migrator) -}}
+{{- if or $v.openfga.enabled $v.postgres.enabled }}{{- $reads = append $reads "postgres" }}{{- end -}}
+{{- if $v.postgres.enabled }}{{- $reads = append $reads $db.maintenance }}{{- end -}}
 {{- if $v.objectStore.enabled }}{{- $reads = append $reads "object-store-root" }}{{- end -}}
 {{- range $files := include "lance.natsFiles" . | fromJson }}{{- $reads = concat $reads $files }}{{- end -}}
 {{- toJson ($reads | uniq | sortAlpha) -}}

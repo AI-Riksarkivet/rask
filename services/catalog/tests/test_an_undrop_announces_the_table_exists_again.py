@@ -35,6 +35,7 @@ from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.storage.options import StorageOptions
 from tests.callers import person
+from tests.catalog_database_lifespan import catalog_database_lifespan
 from tests.catalog_settings import catalog_settings
 
 
@@ -69,7 +70,7 @@ def client(tmp_path: Path, emitted: list[dict[str, Any]], monkeypatch: pytest.Mo
         rows = pa.table({"id": pa.array([1, 2, 3], pa.int64())})
         create_table(ns, StorageOptions(), table_id, table=rows, root=str(tmp_path / "data"), mode="create", registry=registry, holder="$".join(table_id))
 
-    application = FastAPI()
+    application = FastAPI(lifespan=catalog_database_lifespan)
     install_problem_handlers(application, logging.getLogger(__name__))
     for door in (namespace_doors, table_doors):
         application.include_router(door.spec_router)

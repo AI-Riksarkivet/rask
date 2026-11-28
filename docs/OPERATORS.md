@@ -1,7 +1,7 @@
 # Operators: what the platform runs, and what rask's own would reconcile
 
 Which Kubernetes operators sit around rask, who installs them, and the operational procedures rask itself owns
-(secrets, signing keys, NATS users, credentials, § 5 onward).
+(secrets, signing keys, NATS users, credentials, the catalog's database, § 5 onward).
 
 ## 1 · Prerequisites are the platform's
 
@@ -14,7 +14,7 @@ installs each from `deploy/fixtures`, its own Helm release, before rask's (`make
 |---|---|
 | **External Secrets Operator** | the ExternalSecrets and SecretStore behind every credential a pod takes as a Kubernetes Secret (§ 8) |
 | **NATS JetStream** | the stream Job that declares rask's streams and durable consumers, and one bus user per app (§ 7) |
-| **Postgres** | OpenFGA's config file (`<release>-infra-credentials`) names it, only while the chart runs OpenFGA: `postgres.externalHost`, or in development the `postgres` fixture (`postgres.enabled`) |
+| **Postgres** | the catalog's own database, always (§ 9: its migration Job, the catalog's pods and their credential files), and OpenFGA's config file (`<release>-infra-credentials`) while the chart runs OpenFGA: `postgres.externalHost` with `postgres.egress`, or in development the `postgres` fixture (`postgres.enabled`) |
 | **The OTLP gateway** | `observability.export.endpoint` and `observability.identity.audience`: each service exports to the gateway as itself with its ServiceAccount token ([ADR 0215](adr/0215-each-service-exports-its-telemetry-to-the-platforms-gateway-as-itself.md)); the gateway, store, dashboards and alerting are the platform's |
 
 **Two things the platform's edge owes the lakehouse**, since rask runs neither a gateway nor a telemetry store:
@@ -433,11 +433,12 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
 (XC-165). A real-deployment render refuses both the bundled Dex and the dev OpenBao.
 
 - **Dev (the openbao fixture).** Each generated credential is a Secret of its own, `<release>-dev-credential-<key>`
-  for `object-store-secret-key` and `postgres-password` (`lance.devCredentials`). On a fresh install ESO's
+  for `object-store-secret-key`, `postgres-password` and the catalog's database roles' `database-migrator-password`,
+  `database-catalog-password` and `database-maintenance-password` (`lance.devCredentials`, § 9). On a fresh install ESO's
   Password generator creates each once (`refreshPolicy: CreatedOnce`, `helm.sh/resource-policy: keep`), so a credential
   the chart adds later is generated on the next reconcile and the others never again. The OpenBao
-  pod mounts them as one directory, and its seed writes the root to `secret/object-store-root` and the other generated field to its own
-  secret (`postgres`) as `@file`. No workload's object-store identity is a secret: each signs with
+  pod mounts them as one directory, and its seed writes the root to `secret/object-store-root` and each other generated field to its own
+  secret (`postgres`, `database-migrator`, `database-catalog`, `database-maintenance`) as `@file`. No workload's object-store identity is a secret: each signs with
   sessions its own ServiceAccount token is exchanged for (ADR 0197). The Secret outlives an
   OpenBao replacement, so the development Postgres and the object store, which keep what they were initialised with, see
   the same values after a re-seed. The seed re-reads the mounted Secret every 5 s and re-seeds when it changes,
@@ -482,3 +483,71 @@ configuration (XC-025); the dev OpenBao's administrator token is generated in-cl
   ServiceAccount's subject, `system:serviceaccount:<namespace>:<release>-sa-<component>`, as
   `<release>-object-store-identities` declares it: the provisioning hook writes it on the dev store, and a platform
   store's owner provisions it.
+
+## 9 · The catalog's database: what the platform's DBA creates, and what a pod says about it (ADR 0230)
+
+The catalog keeps its governance records in a Postgres database of its own on the platform's server, beside OpenFGA's
+database when the chart runs OpenFGA, each with roles of its own. The records move into it kind by kind
+([ADR 0230](adr/0230-the-catalogs-governance-records-live-in-postgres.md)); the principals the estate admin offboarded
+are its first table, `rask.principals`. The chart creates no database, no role and no grant on a server: the release
+applies the schema, and the platform's DBA creates the database and its roles once. In development the `postgres`
+fixture's provisioning Job (`rask-postgres-provision-r<n>`) runs the same statements on every install of the fixture,
+from `deploy/fixtures/postgres/chart/files/provision.sql`, which a DBA can run as it is (`psql -v migrator=... -v
+catalog=... -v maintenance=... -v database=... -v passwords=<a directory of three password files> -f provision.sql`).
+
+**The database and its three roles**, as the server's superuser, with the chart's default names
+(`postgres.catalog.database`, `postgres.catalog.roles`) and each password the one the store holds:
+
+```sql
+CREATE ROLE rask_migrator    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '<store: database-migrator>';
+CREATE ROLE rask_catalog     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '<store: database-catalog>';
+CREATE ROLE rask_maintenance LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '<store: database-maintenance>';
+CREATE DATABASE catalog OWNER rask_migrator;
+REVOKE ALL ON DATABASE catalog FROM PUBLIC;
+GRANT CONNECT ON DATABASE catalog TO rask_catalog, rask_maintenance;
+```
+
+That is all the DBA grants. The migrator owns the database, creates schema `rask` and owns every object in it; every
+other grant is made by the revision that creates the table, so least privilege is reviewed in git with the table
+(`services/catalog/src/catalog/migrations/versions/`). At revision `0001` the catalog's role holds `USAGE` on `rask`,
+`SELECT` on `rask.alembic_version` and `SELECT, INSERT` on `rask.principals` (a record is written once and never
+changed), and maintenance's role `USAGE` and `SELECT` on `rask.alembic_version` alone. Neither may create, alter,
+update or delete anything. Size the server's connection limit for `postgres.catalog.pool.size` connections a catalog
+replica, plus one for each running migration Job.
+
+**The three secrets.** The platform's store holds one secret a role, each with the field `password`, at the names
+`postgres.catalog.secrets` gives (default `database-migrator`, `database-catalog`, `database-maintenance`). ESO reads
+the first two into the ExternalSecrets `<release>-database-migrator` and `<release>-database-catalog`, whose Secrets
+hold `username` (the role's name) and `password`; the migration Job and the catalog's pods mount them as files at
+`/var/run/secrets/rask/database`, never as environment. A catalog pod reads both files at every new connection, so a
+password the store replaces is used by the next connection with no restart, once ESO has refreshed the Secret
+(`externalSecrets.refreshInterval`, or its `force-sync` annotation). `database-maintenance` is read by no rask pod yet:
+maintenance opens the database when a table it reads moves there.
+
+**The migration Job**, `<release>-catalog-migrate-<revision>` (component `catalog-migrate`), runs with every release
+(an Argo CD `Sync` hook under Argo CD) as the migrator: `python -m catalog.schema migrate`. It applies every pending
+revision in one transaction behind an advisory lock, so two runs at once apply each revision once and a failed run
+leaves the schema where it was. It retries a server that refuses its connection for 600 s (in development its role
+appears only once the fixture's provisioning Job has run). Its log ends in one line:
+
+- `the catalog's database schema is at revision 0001`: done; a run that found the schema there applied nothing.
+- the "does not know" refusal below: a newer release migrated this database, and the Job applied nothing.
+- a connection error (`password authentication failed for user "rask_migrator"`, `connection refused`): the role, its
+  password in the store, or the network path (`postgres.egress`) is not in place.
+
+There are no down migrations: rolling a release back to an image older than the schema leaves its catalog pods
+refusing to start, as below, until a release at least as new is applied.
+
+**What a catalog pod prints when it will not start.** Its init container `schema` (`python -m catalog.schema wait`)
+waits up to `postgres.catalog.schemaWaitSeconds` (600 s) for the database to hold its image's revision, and the app
+checks again before it serves. Either refuses with one of two lines:
+
+- `the catalog's database schema is at revision none and this image needs 0001: the migration Job has not applied it`
+  (or `at revision <older>`): the schema is BEHIND the image. The migration Job has not run, is still running, or
+  failed; read its log.
+- `the catalog's database schema is at revision <r>, which this image does not know (its newest is 0001): a newer
+  release migrated this database; run a release at least as new`: the schema is AHEAD of the image, after a rollback or
+  a stale image. The init step refuses at once rather than wait, since no migration makes a schema older.
+
+A pod whose database never answered in that time prints `the catalog's database did not answer`; a request a
+running catalog cannot get a connection for is answered 503 (code 17).

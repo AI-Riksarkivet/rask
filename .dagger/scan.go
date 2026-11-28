@@ -153,7 +153,7 @@ func (m *Rask) Audit(
 // as a directory: trivy's helm scanner renders `chart/` with no values and no `--api-versions`, which the chart's
 // prerequisite guards refuse, so it skipped the chart with a warning naming the refused prerequisite and passed
 // (measured 2026-11-12, trivy 0.73.0). Scoped to these three deliberately: `trivy config` on the whole repo also
-// parses every docker-compose file and test fixture, and the resulting noise buries the findings that matter. Needs no
+// parses every test fixture, and the resulting noise buries the findings that matter. Needs no
 // image build, so it belongs in the fast PR gate next to Audit.
 func (m *Rask) ScanConfig(
 	ctx context.Context,

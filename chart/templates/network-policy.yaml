@@ -12,7 +12,7 @@
 #   (2) the kube-dns egress allow ships IN THIS SAME FILE (default-deny egress without it bricks
 #       name resolution — the audit's named footgun);
 #   (3) targeted allows for the guarded stores (the secret store ← the pods that log in to it,
-#       as ingress on the dev store and egress to the platform's; the development Postgres:5432 ← OpenFGA and its migrate Job; the object store:9000 ← the data plane; nats ← 4222 intra-namespace
+#       as ingress on the dev store and egress to the platform's; the development Postgres:5432 ← the catalog, its migration Job, the fixture's provisioning Job, OpenFGA and its migrate Job; the object store:9000 ← the data plane; nats ← 4222 intra-namespace
 #       only, other ports closed) — every OTHER pod gets plain intra-namespace ingress,
 #       EXCLUDING the guarded stores so the targeted lists stay exclusive (NetworkPolicies are
 #       additive: the general allow must NOT cover the stores);
@@ -22,8 +22,8 @@
 # Egress posture (tier 1): intra-namespace open + DNS; the INGRESS rules do
 # the guarding — a connection needs BOTH the source's egress and the destination's ingress to allow.
 # Every egress rule names its peers: each endpoint the platform serves outside the namespace (`lance.platformEgress`:
-# the API server, OpenFGA, the secret store, the telemetry backend, and on a real deployment the S3, the bus and the
-# IdP) takes rules the platform states, for exactly the pods that dial it, and a render that leaves one unstated is
+# the API server, OpenFGA, the secret store, the telemetry backend, the Postgres, and on a real deployment the S3, the
+# bus and the IdP) takes rules the platform states, for exactly the pods that dial it, and a render that leaves one unstated is
 # refused above, in one message naming every one. NOTE: requires a policy-enforcing CNI (Calico/Cilium);
 # kind's default CNI ignores NetworkPolicy entirely. kubectl port-forward traffic enters via the
 # kubelet (not the CNI data path) and keeps working under default-deny on mainstream CNIs.
@@ -94,8 +94,7 @@ spec:
 {{- end }}
 {{- with .Values.networkPolicy.extraEgress }}
 ---
-# Deployment-specific egress to an endpoint no platform row names (e.g. the platform's Postgres when OpenFGA runs in the
-# chart) — values-supplied, verbatim.
+# Deployment-specific egress to an endpoint no platform row names — values-supplied, verbatim.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -189,10 +188,10 @@ spec:
         - { protocol: TCP, port: 2112 }
     {{- end }}
 {{- end }}
-{{- if and .Values.postgres.enabled .Values.openfga.enabled }}
+{{- if .Values.postgres.enabled }}
 ---
-# (3c) the development Postgres:5432 (deploy/fixtures/postgres), OpenFGA's datastore. Clients: openfga (subchart pods
-# carry app.kubernetes.io/name=openfga) and the openfga-migrate job.
+# (3c) the development Postgres:5432 (deploy/fixtures/postgres): the catalog's database, and OpenFGA's datastore while
+# the chart runs OpenFGA.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -205,9 +204,14 @@ spec:
   ingress:
     - from:
         - podSelector:
-            matchLabels: { app.kubernetes.io/component: openfga-migrate }
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: {{- toYaml (include "lance.postgresClients" . | fromJsonArray) | nindent 18 }}
+        {{- if .Values.openfga.enabled }}
         - podSelector:
             matchLabels: { app.kubernetes.io/name: openfga }
+        {{- end }}
       ports:
         - { protocol: TCP, port: {{ .Values.postgres.port }} }
 {{- end }}

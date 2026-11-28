@@ -136,10 +136,17 @@ class RecordGone(_Evidence):
 
 
 class RecordHeld(_Evidence):
-    """A control record stands: a principal's offboarding landed when its deletion is recorded."""
+    """A control record stands: a change that writes the record landed when it does."""
 
     kind: Literal["record_held"] = "record_held"
     key: str
+
+
+class PrincipalRecorded(_Evidence):
+    """A principal's offboarding landed: the catalog's database holds its deletion record."""
+
+    kind: Literal["principal_recorded"] = "principal_recorded"
+    principal: str
 
 
 class RoleEnded(_Evidence):
@@ -163,7 +170,7 @@ class TrashedUnder(_Evidence):
 
 
 type Evidence = Annotated[
-    TupleGone | TupleHeld | NameResolves | Unregistered | NamespaceResolves | RecordGone | RecordHeld | RoleEnded | TrashedUnder,
+    TupleGone | TupleHeld | NameResolves | Unregistered | NamespaceResolves | RecordGone | RecordHeld | PrincipalRecorded | RoleEnded | TrashedUnder,
     Field(discriminator="kind"),
 ]
 

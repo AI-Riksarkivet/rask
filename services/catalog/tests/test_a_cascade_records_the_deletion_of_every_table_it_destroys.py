@@ -40,6 +40,7 @@ from lakehouse.problems.ns_errors import install_problem_handlers
 from lakehouse.records.base_registry import BaseRegistry
 from lakehouse.storage.options import StorageOptions
 from tests.callers import person
+from tests.catalog_database_lifespan import catalog_database_lifespan
 from tests.catalog_settings import catalog_settings
 
 
@@ -76,7 +77,7 @@ def emitted() -> list[dict[str, Any]]:
 
 @pytest.fixture
 def app(ns, emitted: list[dict[str, Any]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[FastAPI]:  # noqa: ANN001
-    application = FastAPI()
+    application = FastAPI(lifespan=catalog_database_lifespan)
     install_problem_handlers(application, logging.getLogger(__name__))
     application.include_router(door.spec_router)
 

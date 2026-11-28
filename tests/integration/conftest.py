@@ -23,6 +23,13 @@ from lakehouse.naming import UUID_PROPERTY
 from lakehouse.storage.credential import S3KeyPair
 from lakehouse.storage.options import StorageOptions
 from tests.governed_catalog import GovernedCatalog, governed_catalog_app
+from tests.postgres_server import PostgresDatabase
+
+
+@pytest.fixture(autouse=True)
+def _catalog_database(catalog_database: PostgresDatabase) -> PostgresDatabase:
+    """Every catalog app this suite builds opens a database of the test's own (`tests.postgres_fixtures.catalog_database`)."""
+    return catalog_database
 
 
 @pytest.fixture

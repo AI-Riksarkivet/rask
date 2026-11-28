@@ -205,7 +205,7 @@ export LANCE_E2E_S3_BUCKET="${LANCE_E2E_S3_BUCKET:-lance-catalog}"
 export LANCE_E2E_S3_REGION="${LANCE_E2E_S3_REGION:-us-east-1}"
 
 # ONE ADDRESS, SEVERAL NAMES. These are not aliases kept for compatibility — each suite was written
-# against a different bring-up (a port-forward, `e2e_stack.sh`, a local compose) and named the same
+# against a different bring-up (a port-forward, `e2e_stack.sh`, a Dagger lane) and named the same
 # service for what that bring-up called it. The runner's job is to answer to all of them rather than
 # to make thirty suites agree on a spelling.
 export LANCE_E2E_AUTH_SERVER="http://$CATALOG"

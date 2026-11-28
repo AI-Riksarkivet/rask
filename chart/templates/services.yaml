@@ -22,12 +22,27 @@ spec:
       {{- if .Values.podDisruptionBudget.enabled }}
       {{- include "lance.spreadConstraints" "catalog" | nindent 6 }}
       {{- end }}
-      {{- include "lance.podSecurityContext" . | nindent 6 }}
+      {{- include "lance.databasePodSecurityContext" . | nindent 6 }}
       serviceAccountName: {{ include "lance.fullname" . }}-sa-catalog
       {{- with $.Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      initContainers:
+        - name: schema
+          image: "{{ include "lance.catalogImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.securityContext" . | nindent 10 }}
+          args: ["python", "-m", "catalog.schema", "wait"]
+          env:
+            {{- include "lance.databaseEnv" (list $root) | nindent 12 }}
+            - { name: RASK_DATABASE_SCHEMA_WAIT_SECONDS, value: {{ required "postgres.catalog.schemaWaitSeconds is required" .Values.postgres.catalog.schemaWaitSeconds | quote }} }
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- include "lance.databaseCredential" (list $root "mounts" "catalog") | nindent 12 }}
       containers:
         - name: catalog
           image: "{{ include "lance.catalogImage" . }}"
@@ -75,6 +90,13 @@ spec:
 
             - { name: LANCE_RESERVED_BUCKETS, value: {{ include "lance.platformBuckets" . | quote }} }
             - { name: LANCE_MULTIBASE_DATA_BASES, value: {{ .Values.catalog.multibase.dataBases | default (list) | join "," | quote }} }
+
+            {{- include "lance.databaseEnv" (list $root) | nindent 12 }}
+            {{- with .Values.postgres.catalog.pool }}
+            - { name: RASK_DATABASE_POOL_SIZE, value: {{ required "postgres.catalog.pool.size is required" .size | quote }} }
+            - { name: RASK_DATABASE_ACQUIRE_TIMEOUT_SECONDS, value: {{ required "postgres.catalog.pool.acquireTimeoutSeconds is required" .acquireTimeoutSeconds | quote }} }
+            - { name: RASK_DATABASE_RECYCLE_SECONDS, value: {{ required "postgres.catalog.pool.recycleSeconds is required" .recycleSeconds | quote }} }
+            {{- end }}
 
             - { name: LANCE_S3_ENDPOINT, value: "{{ include "lance.s3Endpoint" . }}" }
             {{- include "lance.objectStoreSessionEnv" (list $root "LANCE" "catalog") | nindent 12 }}
@@ -159,6 +181,7 @@ spec:
           volumeMounts:
             {{- include "lance.tmpMount" . | nindent 12 }}
             - { name: declaration, mountPath: /etc/rask/declaration, readOnly: true }
+            {{- include "lance.databaseCredential" (list $root "mounts" "catalog") | nindent 12 }}
             {{- include "lance.storeIdentity" (list $root .Values.services.catalog.appId "mounts") | nindent 12 }}
             {{- include "lance.saVerifier" (list $root "mounts" "catalog") | nindent 12 }}
             {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "mounts") | nindent 12 }}{{ end }}
@@ -171,6 +194,7 @@ spec:
         - name: declaration
           configMap:
             name: {{ include "lance.fullname" . }}-catalog-declaration
+        {{- include "lance.databaseCredential" (list $root "volumes" "catalog") | nindent 8 }}
         {{- include "lance.saVerifier" (list $root "volumes" "catalog") | nindent 8 }}
         {{- if .Values.auth.enabled }}{{ include "lance.fgaToken" (list "volumes") | nindent 8 }}{{ end }}
         {{- include "lance.identityTokens" (list "volumes" (include "lance.objectStoreAudience" .)) | nindent 8 }}

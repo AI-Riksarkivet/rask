@@ -37,9 +37,13 @@ def test_a_cluster_less_render_mints_no_credential(overlay: str) -> None:
     second = render_chart_text(REPO / "chart", *_RENDERS[overlay])
 
     generators = {doc["metadata"]["name"] for doc in yaml.load_all(first, Loader=FAST_LOADER) if isinstance(doc, dict) and doc.get("kind") == "Password"}
-    assert generators == {"rask-dev-credential-object-store-secret-key", "rask-dev-credential-postgres-password"}, (
-        f"{overlay}: the dev credentials are not generated, so this would pass vacuously"
-    )
+    assert generators == {
+        "rask-dev-credential-object-store-secret-key",
+        "rask-dev-credential-postgres-password",
+        "rask-dev-credential-database-migrator-password",
+        "rask-dev-credential-database-catalog-password",
+        "rask-dev-credential-database-maintenance-password",
+    }, f"{overlay}: the dev credentials are not generated, so this would pass vacuously"
     assert first == second, f"{overlay}: two renders differ, so the render minted something the release then stores"
 
 

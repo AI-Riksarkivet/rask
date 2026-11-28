@@ -35,7 +35,8 @@ packages = ["src/catalog"]
 lakehouse = { workspace = true }
 
 # The catalog's import contracts, run by `make lint-imports` (ADR 0224). The service's layers: the app (`main`)
-# assembles the doors and the lifespan; the doors (`api`: the routes, the authorization, the request's dependencies,
+# assembles the doors and the lifespan, beside the schema command (`schema`, the release's migration and a pod's wait)
+# and the database's revisions (`migrations`), each independent of the others; the doors (`api`: the routes, the authorization, the request's dependencies,
 # the control lane, the governed create's sequence and the boot-time converges) call the services; the services (the
 # table operations, the registries and records under the control root, erasure, maintenance, the reconcilers) read and
 # answer with the request and response models (`schemas`, with the types a service shares with them); and those stand
@@ -55,10 +56,10 @@ root_package = "catalog"
 
 [[tool.importlinter.contracts]]
 id = "catalog-imports-down-its-layers"
-name = "ADR 0224: the catalog imports down its layers, main over api over services over schemas over core"
+name = "ADR 0224: the catalog imports down its layers, main, the schema command and the revisions over api over services over schemas over core"
 type = "layers"
 containers = ["catalog"]
-layers = ["main", "api", "services", "schemas", "core"]
+layers = ["main | schema | migrations", "api", "services", "schemas", "core"]
 exhaustive = true
 
 [[tool.importlinter.contracts]]

@@ -148,8 +148,20 @@ On request the root `conftest.py` also serves the identity and authorization pla
 failing the test when the binary is missing) and `openfga_store` (a fresh store on it holding the bundled model, with
 `write()` for seeding tuples as the catalog's declaration does), `postgres` (the development fixture's pinned Postgres, one
 per xdist worker on a loopback port, failing the test when `.localbin/postgres` is missing; the plugin `tests/postgres_fixtures.py` over `tests/postgres_server.py`)
-and `postgres_database` (a database of the test's own, cloned from the worker's template, dropped when the test passes
-and kept, named in the report, when it fails). `secret_store` configures the test's process for a
+and `postgres_database` (a database of the test's own, cloned from the worker's template, which the catalog's three roles
+and its revisions build, migrated as the migrator by the migration Job's own `catalog.core.schema.migrate`; dropped when the test passes
+and kept, named in the report, when it fails). `catalog_database`, autouse in the catalog, integration and maintenance
+suites, points the `RASK_DATABASE_*` environment a catalog app reads at that database as the catalog's own role, with a
+pool of ONE connection and a 2 s acquire timeout: a missing GRANT, or a request path that takes a second connection while
+its transaction holds the first, fails offline; a test that sends two requests at once sets `RASK_DATABASE_POOL_SIZE`
+itself. A race between two requests is staged on the database, never with sleeps: the test holds a lock on its own
+connection (`LOCK TABLE rask.<table> IN SHARE MODE`), sends both requests from two threads with a pool of two, waits until
+`pg_stat_activity` shows both of the catalog's sessions (`application_name = 'rask-catalog'`) waiting on a lock, then
+commits and asserts both answers (`services/catalog/tests/test_a_departed_principal_holds_no_grant.py`,
+`test_two_offboardings_at_once_record_one_deletion`). A test of the schema command itself (two migrations at once, a
+schema behind or ahead) stages the schema it needs on the test's own database as the server's superuser (`DROP SCHEMA
+rask CASCADE`, a stamped revision) and runs the command as the migrator
+(`services/catalog/tests/test_the_release_migrates_the_catalogs_schema_once.py`). `secret_store` configures the test's process for a
 secret store as the chart's env does and answers the store's HTTP API in the shapes measured on the development OpenBao:
 the login, each secret a test has it hold, and a token's question about itself (`lookup`), which a test answers 403 to
 have the store drop the token (`tests/secret_store_double.py`; `references/fixtures.md` § A service app). Read a

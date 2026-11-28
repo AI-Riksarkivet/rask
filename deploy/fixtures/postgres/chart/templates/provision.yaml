@@ -1,0 +1,103 @@
+{{- $labels := dict "app.kubernetes.io/name" "postgres" "app.kubernetes.io/instance" .Release.Name "app.kubernetes.io/component" "postgres-provision" }}
+{{- $c := .Values.catalog }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.name }}-provision
+  labels: {{- toYaml $labels | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.name }}-provision
+  labels: {{- toYaml $labels | nindent 4 }}
+data:
+  provision.sql: |
+    {{- .Files.Get "files/provision.sql" | nindent 4 }}
+  provision.sh: |
+    {{- .Files.Get "files/provision.sh" | nindent 4 }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .Values.name }}-provision-roles
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  refreshInterval: {{ .Values.rask.refreshInterval | quote }}
+  secretStoreRef: { name: {{ .Values.rask.release }}-vault, kind: SecretStore }
+  target:
+    name: {{ .Values.name }}-provision-roles
+    creationPolicy: Owner
+  data:
+    {{- range $role := list "migrator" "catalog" "maintenance" }}
+    - { secretKey: {{ $role }}, remoteRef: { key: {{ index $c.secrets $role }}, property: password } }
+    {{- end }}
+---
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: {{ .Values.name }}-provision-superuser
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  refreshInterval: {{ .Values.rask.refreshInterval | quote }}
+  secretStoreRef: { name: {{ .Values.rask.release }}-vault, kind: SecretStore }
+  target:
+    name: {{ .Values.name }}-provision-superuser
+    creationPolicy: Owner
+  data:
+    - { secretKey: password, remoteRef: { key: postgres, property: password } }
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Values.name }}-provision-r{{ .Release.Revision }}
+  labels: {{- toYaml $labels | nindent 4 }}
+spec:
+  backoffLimit: 60
+  template:
+    metadata:
+      labels: {{- toYaml $labels | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ .Values.name }}-provision
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 999
+        fsGroup: 999
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: provision
+          image: {{ .Values.image }}
+          command: ["sh", "/etc/rask/provision/provision.sh", {{ $c.roles.migrator | quote }}, {{ $c.roles.catalog | quote }}, {{ $c.roles.maintenance | quote }}, {{ $c.database | quote }}]
+          env:
+            - { name: PGHOST, value: {{ .Values.name | quote }} }
+            - { name: PGPORT, value: {{ .Values.port | quote }} }
+            - { name: PGUSER, value: {{ .Values.user | quote }} }
+            - { name: PGDATABASE, value: postgres }
+            - { name: PGPASSFILE, value: /tmp/pgpass }
+            - { name: PGCONNECT_TIMEOUT, value: "5" }
+            - { name: HOME, value: /tmp }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+            - { name: sql, mountPath: /etc/rask/provision, readOnly: true }
+            - { name: roles, mountPath: /run/secrets/database-roles, readOnly: true }
+            - { name: superuser, mountPath: /run/secrets/postgres-superuser, readOnly: true }
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 16Mi }
+        - name: sql
+          configMap: { name: {{ .Values.name }}-provision }
+        - name: roles
+          secret: { secretName: {{ .Values.name }}-provision-roles, defaultMode: 0440 }
+        - name: superuser
+          secret: { secretName: {{ .Values.name }}-provision-superuser, defaultMode: 0440 }

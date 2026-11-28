@@ -25,6 +25,12 @@ rotated in place afterwards (docs/OPERATORS.md 8). A credential no store holds (
 generated when absent. `lookup` answers only against a cluster, so a cluster-less render and a fresh install, where no
 store exists yet, generate.
 
+The catalog's three database roles' passwords (`database-migrator-password`, `database-catalog-password`,
+`database-maintenance-password`) take no such guard: no store is initialised with them. The postgres fixture's
+provisioning Job sets each role's password from the store on every run (`ALTER ROLE ... PASSWORD`, its
+`files/provision.sql`), so a regenerated one is applied at the next install of the fixture, which `make k3s-up` runs
+before rask's release.
+
 ## `{{- if or (not $held) (dig "metadata" "ownerReferences" list $held) }}`
 
 THE DEV OPENBAO'S CREDENTIALS, GENERATED IN THE CLUSTER. The render carries none: ESO's Password generator fills
@@ -38,6 +44,19 @@ credentials its operator provisioned. Rotation: docs/OPERATORS.md.
 A Secret that exists with no owner was carried forward by the operator from the credentials the stores already
 hold, so nothing here generates beside it; one ESO created (owned by this ExternalSecret) keeps it rendered,
 since removing the owner would garbage-collect the Secret.
+
+## `{{- range $role := list "catalog" "migrator" }}`
+
+THE CATALOG'S DATABASE CREDENTIALS, one Secret per role that holds one: `<release>-database-catalog`, mounted into the
+catalog's pods, and `<release>-database-migrator`, mounted into the migration Job (ADR 0230 §8). Each carries the files
+`username` (the role's name, `postgres.catalog.roles.<role>`, a literal of the template) and `password` (the store's
+`postgres.catalog.secrets.<role>`), which the process reads at each new connection, never through env. Rendered in every
+mode, since the catalog always keeps its database: in development the dev store holds the passwords the seed wrote from
+the generated dev credentials, and in production the platform's store holds them at the same names. The maintenance
+role's password has no Secret of the chart's yet, since maintenance opens no connection; the postgres fixture's
+provisioning Job reads it to set the role's password. A role name the template writes is held to lowercase letters,
+digits and `_`, so the name reaches the Secret, the migration Job's environment and each revision's grants exactly as
+written.
 
 ## `name: {{ include "lance.fullname" . }}-infra-credentials`
 

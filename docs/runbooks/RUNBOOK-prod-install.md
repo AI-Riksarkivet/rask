@@ -230,8 +230,8 @@ The install is done when each row is observed, not when Argo CD reports Synced.
 
 ## 8 · After the install
 
-- **Backups.** OpenFGA's Postgres and the S3 data are the platform's to back up (rask ships no database
-  backup). The control-root records (projects, warehouses, declared grants, trash, protection) have their own backup,
+- **Backups.** The Postgres (the catalog's database and OpenFGA's) and the S3 data are the platform's to back up
+  (rask ships no database backup). The control-root records (projects, warehouses, declared grants, trash, protection) have their own backup,
   `backups.controlRoot` with `dest` outside the control root's bucket; restore is
   [RUNBOOK-restore.md](RUNBOOK-restore.md).
 - **Signing-key rotation** on the platform's store has no procedure in the repository yet (OPERATORS.md § 6); the rule

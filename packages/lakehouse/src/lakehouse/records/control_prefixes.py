@@ -46,7 +46,6 @@ __all__ = [
     "MAINTENANCE_FILES",
     "NAMESPACE_INDEX",
     "POLICIES",
-    "PRINCIPALS",
     "PROJECTS",
     "PROTECTION",
     "QUEUE_PREFIXES",
@@ -88,7 +87,6 @@ LABEL_DEFINITIONS: Final = "_label_definitions"
 LABELS: Final = "_labels"
 TABLE_INPUTS: Final = "_table_inputs"
 ROLES: Final = "_roles"
-PRINCIPALS: Final = "_principals"
 #: The tuples the catalog wrote from what git declares, one record each ([[XC-213]]).
 DECLARED_GRANTS: Final = "_declared_grants"
 
@@ -136,7 +134,6 @@ RECORD_PREFIXES: Final[frozenset[str]] = frozenset(
         CONTRACTS,
         TABLE_INPUTS,
         ROLES,
-        PRINCIPALS,
         DECLARED_GRANTS,
         LABEL_DEFINITIONS,
         LABELS,

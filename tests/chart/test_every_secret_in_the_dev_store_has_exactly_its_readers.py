@@ -52,7 +52,9 @@ STORE_POD: Final = "Deployment/rask-openbao"
 #: The KV v2 data path a policy grants a secret by.
 _DATA_PATH: Final = re.compile(r"^secret/data/([^/*]+)$")
 
-_POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-postgres", "Deployment/rask-openfga", "Job/rask-openfga-migrate-<digest>"})
+#: The development Postgres's own provisioning Job, which sets each catalog role's password as the server's superuser.
+_PROVISION: Final = "Job/rask-postgres-provision-r1"
+_POSTGRES_CLIENTS: Final = frozenset({"StatefulSet/rask-postgres", "Deployment/rask-openfga", "Job/rask-openfga-migrate-<digest>", _PROVISION})
 _CATALOG_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 _MAINTENANCE_VERIFIERS: Final = frozenset({"catalog", "lineage", "maintenance"})
 
@@ -73,6 +75,10 @@ EXPECTED: Final[dict[str, dict[str, frozenset[str]]]] = {
     # reads a bus credential: each presents its ServiceAccount token to the bus.
     "nats-callout": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-nats-signer"})},
     "postgres": {"store": frozenset({"eso"}), "pods": _POSTGRES_CLIENTS},
+    # Each catalog database role's password: the pod that connects as the role, and the provisioning Job that sets it.
+    "database-catalog": {"store": frozenset({"eso"}), "pods": frozenset({"Deployment/rask-catalog", _PROVISION})},
+    "database-migrator": {"store": frozenset({"eso"}), "pods": frozenset({"Job/rask-catalog-migrate-r1", _PROVISION})},
+    "database-maintenance": {"store": frozenset({"eso"}), "pods": frozenset({_PROVISION})},
     "object-store-root": {
         "store": frozenset({"eso"}),
         # The store itself, rask's provisioning hook, and the dev store's own operator stand-in that puts the event

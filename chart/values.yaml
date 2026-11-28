@@ -345,7 +345,7 @@ security:
 # hardening. When enabled: namespace default-deny Ingress+Egress, kube-dns egress allow (same change —
 # the audit's footgun), intra-namespace allows, api-server egress, and EXCLUSIVE client lists for the
 # guarded stores (the secret store ← the pods that log in to it ONLY, as the dev store's ingress or
-# as egress to the platform's; the development Postgres ← OpenFGA and its migrate Job; the object store ← the data plane). Default OFF;
+# as egress to the platform's; the development Postgres ← OpenFGA and its migrate Job, the catalog, its migration Job and the fixture's provisioning Job; the object store ← the data plane). Default OFF;
 # flip in values-prod on a policy-enforcing CNI.
 # ⚠ Under default-deny, EVERY Job/CronJob pod template needs explicit component labels or the policy
 # blocks it silently (kindnet hides the failure) — see the templates' job specs.
@@ -366,10 +366,9 @@ networkPolicy:
   # -- List of NetworkPolicy `from` peers allowed to scrape the in-chart OpenFGA's metrics port (2112): the platform's collector, e.g. [{namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: observability}}}]. Empty admits none.
   openfgaMetricsFrom: []
   # Extra egress rules (verbatim NetworkPolicy egress entries) for every pod but the console, to an endpoint no value of
-  # its own names: the platform's Postgres (postgres.externalHost) when OpenFGA runs in the chart. The API server, OpenFGA, the
-  # secret store, the telemetry backend, the S3, the bus and the IdP take rules of their own, scoped to the pods that dial
-  # them (`lance.platformEgress`).
-  # -- List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names (the platform's Postgres when OpenFGA runs in the chart). Each rule names its `to` peers; the render refuses one that admits every destination.
+  # its own names. The API server, OpenFGA, the secret store, the telemetry backend, the S3, the bus, the IdP and the
+  # Postgres take rules of their own, scoped to the pods that dial them (`lance.platformEgress`).
+  # -- List of extra egress rules, verbatim NetworkPolicy entries, for every pod but the console, to an endpoint no egress value of its own names. Each rule names its `to` peers; the render refuses one that admits every destination.
   extraEgress: []
   # The pods that call the Kubernetes API (the token verifiers, the dev store's login reviews,
   # the snapshot CronJob) reach it through these rules and no other pod does. The API server is
@@ -1722,21 +1721,51 @@ openfga: # @schema skipProperties: true; additionalProperties: true
     maxOpenConns: 30
     maxIdleConns: 10
 
-# === Postgres: OpenFGA's datastore, the platform's, or the dev fixture (deploy/fixtures/postgres) ===============
-# The chart runs no Postgres (ADR 0228). It names one only while it runs OpenFGA (`openfga.enabled`), whose connection
-# string the ExternalSecret assembles from this host and the store's `postgres` secret; with the platform's OpenFGA
-# (`auth.fgaApiUrl`) nothing here is read.
+# === Postgres: the catalog's database and OpenFGA's datastore, the platform's or the dev fixture (deploy/fixtures/postgres)
+# The chart runs no Postgres (ADR 0228, ADR 0230). The catalog keeps its own records in the database `catalog.database`
+# on it, always, so every render names one. The chart's OpenFGA (`openfga.enabled`) keeps its store in `database` on
+# the same server, its connection string assembled by the ExternalSecret from this host and the store's `postgres` secret.
+# The platform's DBA creates the catalog's database and its three roles (docs/OPERATORS.md); in development the fixture's
+# provisioning Job does.
 postgres:
   # -- This estate uses the development Postgres (deploy/fixtures/postgres, Service `<release>-postgres`), and a real deployment refuses it. The chart renders no Postgres. False reads the platform's at `externalHost`.
   enabled: true
-  # -- Host of the platform's Postgres, which carries OpenFGA's database; the render refuses it empty with `enabled` false while the chart runs OpenFGA, and refuses both set.
+  # -- Host of the platform's Postgres, which carries the catalog's database (and OpenFGA's while the chart runs OpenFGA); the render refuses it empty with `enabled` false, and refuses both set.
   externalHost: ""
-  # -- Port of the Postgres OpenFGA and its migrate Job dial.
+  # -- Port of the Postgres the catalog, its migration Job, OpenFGA and its migrate Job dial.
   port: 5432
   # -- Role OpenFGA connects as; its password is the store's `postgres` secret (field `password`), never a value.
   user: lance
   # -- Name of the database OpenFGA keeps its store in.
   database: openfga
+  catalog:
+    # -- Name of the catalog's own database, owned by the migrator role; its schema `rask` holds the catalog's records.
+    database: catalog
+    roles:
+      # -- Role the migration Job connects as: it owns the database and every object of schema `rask`.
+      migrator: rask_migrator
+      # -- Role the catalog connects as: what each revision grants it, and no more.
+      catalog: rask_catalog
+      # -- Role maintenance connects as: what each revision grants it, and no more.
+      maintenance: rask_maintenance
+    secrets:
+      # -- Secret in the store holding the migrator role's password (field `password`), mounted into the migration Job as a file.
+      migrator: database-migrator
+      # -- Secret in the store holding the catalog role's password (field `password`), mounted into the catalog's pods as a file.
+      catalog: database-catalog
+      # -- Secret in the store holding the maintenance role's password (field `password`).
+      maintenance: database-maintenance
+    pool:
+      # -- Connections each catalog replica holds open at most to its database; the server's connection limit must cover every replica's.
+      size: 4
+      # -- Seconds a request waits for a pooled connection before its door answers unavailable.
+      acquireTimeoutSeconds: 5
+      # -- Seconds after which a pooled connection is replaced at its next use, inside the life of the credential it opened with.
+      recycleSeconds: 1800
+    # -- Seconds a new catalog pod's init step waits for the migration Job to bring the schema to its image's revision before it refuses; inside the release's own timeout.
+    schemaWaitSeconds: 600
+  # -- NetworkPolicy egress rules ({to, ports}) admitting the pods that dial the platform's Postgres at `externalHost` (the catalog, its migration Job, and OpenFGA with its migrate Job while the chart runs OpenFGA), at the port a policy sees. Required under networkPolicy.enabled while `enabled` is false.
+  egress: []
 
 # === Dex — the development OIDC issuer, a fixture (deploy/fixtures/dex) ===========================
 dex:

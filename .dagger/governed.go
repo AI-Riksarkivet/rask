@@ -41,18 +41,17 @@ const lineageDexUser = `  - email: lineage@rask.internal
 `
 
 // governedStack is the platform the governance chain's catalog runs on: an object store with the catalog's
-// bucket, OpenFGA on its own Postgres, and Dex.
+// bucket, the catalog's database, OpenFGA on its own Postgres, and Dex.
 //
-// ORDERING IS EXPLICIT AND EACH STEP EARNED ITS PLACE. Compose said
-// `depends_on: {condition: service_completed_successfully}`; Dagger has no such thing on a binding,
-// so a one-shot is sequenced by forcing it to evaluate. Two traps this already hit for real, both of
+// ORDERING IS EXPLICIT AND EACH STEP EARNED ITS PLACE. Dagger has no "after this one-shot completed"
+// condition on a binding, so a one-shot is sequenced by forcing it to evaluate. Two traps this already hit for real, both of
 // which surface as somebody else's bug:
 //
 //   - Dagger services are REFERENCE-COUNTED, and this bit twice. A bootstrap that finishes drops its
 //     dependency to zero references, which STOPS it. The bucket created in step one was gone by step
 //     three and pylance reported `NoSuchBucket` as if the catalog were broken; then the OpenFGA
 //     migration was rolled back the same way and `/healthz` answered 500 as if the server were.
-//     BOTH backing services keep a cache volume, for exactly the reason compose kept named ones.
+//     Every backing service with state keeps a cache volume for that reason.
 //     The tell is that the symptom always names the wrong component.
 //   - OpenFGA needs `migrate` before `run`, and skipping it does not fail at startup: the server
 //     comes up and the first authorization call fails against absent tables.
@@ -60,6 +59,8 @@ type governedStack struct {
 	Store   *dagger.Service
 	OpenFGA *dagger.Service
 	Dex     *dagger.Service
+	// Database is the catalog's own database, provisioned and migrated as a release does it.
+	Database *catalogDatabase
 	// StoreToken is the catalog's ServiceAccount token the store's STS exchanges (`laneIdentity`).
 	StoreToken *dagger.File
 }
@@ -116,8 +117,7 @@ func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*gover
 
 	// Wait for Postgres in a container that HAS a shell. The OpenFGA image is distroless — no `sh`,
 	// no `nc` — so the readiness loop cannot live in the migrate step itself (`exec: "sh": executable
-	// file not found in $PATH`). Compose expressed this as `condition: service_healthy` on a
-	// dependency; here the wait is its own step and `Sync` orders it.
+	// file not found in $PATH`). The wait is its own step and `Sync` orders it.
 	if _, err := dag.Container().
 		From(fgaPostgresIm).
 		WithServiceBinding("fga-postgres", fgaPostgres).
@@ -162,7 +162,12 @@ func (m *Rask) governedStack(ctx context.Context, src *dagger.Directory) (*gover
 		WithDefaultArgs([]string{"dex", "serve", "/etc/dex/config.yaml"}).
 		AsService()
 
-	return &governedStack{Store: store, OpenFGA: openfga, Dex: dex, StoreToken: identity.CatalogToken}, nil
+	database, err := m.catalogDatabase(ctx, src)
+	if err != nil {
+		return nil, err
+	}
+
+	return &governedStack{Store: store, OpenFGA: openfga, Dex: dex, Database: database, StoreToken: identity.CatalogToken}, nil
 }
 
 // provenanceWiring is what a catalog needs to announce its writes to lineage and keep lineage's tables: the bus it
@@ -222,8 +227,8 @@ func onLaneBus(ctr *dagger.Container, bus *dagger.Service, user string) *dagger.
 		WithEnvVariable("RASK_BUS_TOKEN_FILE", laneBusTokenPath)
 }
 
-// catalogService builds the REST catalog from its own dockerfile and points it at a governed stack: OIDC against the
-// stack's Dex, OpenFGA enforced, and every committed write announced on the bus `prov` names.
+// catalogService builds the REST catalog from its own dockerfile and points it at a governed stack: its database, OIDC
+// against the stack's Dex, OpenFGA enforced, and every committed write announced on the bus `prov` names.
 //
 // THE EMISSION IS ON, as the chart renders it (`LANCE_LINEAGE_EMIT_ENABLED`). Without it the catalog runs perfectly and
 // simply records nothing, so the provenance assertions fail against a healthy service: the emit is the thing under
@@ -233,7 +238,7 @@ func (m *Rask) catalogService(src *dagger.Directory, stack *governedStack, prov 
 	if err != nil {
 		return nil, err
 	}
-	return withLaneStoreSession(onLaneBus(m.Image(src, "rest-catalog", "", "", "", nil, ""), prov.Bus, "catalog").
+	return withLaneStoreSession(stack.Database.attach(onLaneBus(m.Image(src, "rest-catalog", "", "", "", nil, ""), prov.Bus, "catalog")).
 		WithServiceBinding("store", stack.Store), stack.StoreToken, "store").
 		WithEnvVariable("LANCE_REST_IMPL", "dir").
 		WithEnvVariable("LANCE_REST_ROOT", "s3://lance-catalog").
@@ -332,9 +337,8 @@ func (m *Rask) lineageService(src *dagger.Directory, catalog *dagger.Service, bu
 // GovernanceChain proves the dataops loop end to end: authorization, provenance AUTHORSHIP, and
 // derivation lineage — with real Dex id_tokens and not one hand-written tuple.
 //
-// It replaces `scripts/governance_e2e.sh`, which layered FOUR compose files (base + auth + lineage +
-// governance) to assemble the same thing. Everything it needs beyond the auth stack is the lineage
-// service, which keeps its tables in the catalog it is wired to, so it is the auth stack plus one service.
+// Everything it needs beyond the governed stack is the lineage service, which keeps its tables in the
+// catalog it is wired to, so it is the governed stack plus one service.
 //
 // The catalog runs with emission ON, as the chart renders it (`catalogService`): authorization alone passes with
 // emission off, so a run without it would prove the authz half and skip the provenance half.

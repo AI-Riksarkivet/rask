@@ -26,6 +26,25 @@ cluster route sends public traffic here through the Gateway's data plane, so wit
 `X-Forwarded-For` every anonymous request carries the data plane's address and the rate limiter keys
 the whole public estate as one client.
 
+## `args: ["python", "-m", "catalog.schema", "wait"]`
+
+A NEW CATALOG POD WAITS FOR ITS SCHEMA, THEN REFUSES (ADR 0230 §11). Its init step, in the catalog's image with its
+security context and its database credential, asks the database's schema revision every 2 s until it is the image's
+(exit 0), refuses at once on a revision the image does not know (a newer release migrated the database) or on a statement
+the database refuses (a privilege its role lacks), each on one line, and refuses once
+`postgres.catalog.schemaWaitSeconds` pass while it is still behind, inside the release's own timeout. So during an
+upgrade the new pods hold until the release's migration Job (`catalog-migrate.yaml`) has applied their revision, and the
+old pods keep serving meanwhile (`lance.rollout`). The app checks again before it serves
+(`catalog.core.schema.require_schema`), so a pod started some other way refuses too.
+
+## `{{- include "lance.databaseEnv" (list $root) | nindent 12 }}`
+
+The catalog's database (ADR 0230): its address (`lance.databaseEnv`) and the pool each replica holds
+(`postgres.catalog.pool`: its size, how long a request waits for a connection before its door answers unavailable, and
+the age at which a connection is replaced, inside the life of the credential it opened with). The credential is the
+mounted file `lance.databaseCredential` gives, read at each new connection. The server's connection limit must cover
+every replica's pool beside OpenFGA's.
+
 ## `- { name: LANCE_PUBLIC_PATH_PREFIX, value: {{ include "rask.catalogPublicPrefix" . | quote }} }`
 
 The prefix the cluster route publishes the catalog under, which its route forwards unrewritten and the catalog strips

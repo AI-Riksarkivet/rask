@@ -139,22 +139,23 @@ def _holding(served: Served, stock: lance_namespace.LanceNamespace, *, table: It
 
 
 @pytest.fixture
-def served_without_the_write_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Served]:
+def served_without_the_write_cap(tmp_path: Path) -> Iterator[Served]:
     """``served`` with the catalog's bulk-write cap off (``LANCE_MAX_CONCURRENT_WRITES=0``), for a claim about the commit
     turn rather than the cap, which `services/catalog/tests/test_load_shed.py` holds. The cap is read when the app is built, so the
-    module is reloaded with it, and reloaded again without it once the test is done."""
+    module is reloaded with it, and reloaded again without it once the test is done, under the environment the suite's own
+    fixtures set (the catalog's database among it)."""
     import catalog.main
     from catalog.core.config import get_settings
 
     env = {**_local_root(tmp_path), "LANCE_REST_IMPL": "dir", "LANCE_MAX_CONCURRENT_WRITES": "0"}
-    for key, value in env.items():
-        monkeypatch.setenv(key, value)
-    get_settings.cache_clear()
-    importlib.reload(catalog.main)
     try:
-        yield from _serve(Served(url="", root=tmp_path / "root"), env, monkeypatch)
+        with pytest.MonkeyPatch.context() as without_the_cap:
+            for key, value in env.items():
+                without_the_cap.setenv(key, value)
+            get_settings.cache_clear()
+            importlib.reload(catalog.main)
+            yield from _serve(Served(url="", root=tmp_path / "root"), env, without_the_cap)
     finally:
-        monkeypatch.undo()
         get_settings.cache_clear()
         importlib.reload(catalog.main)
         get_settings.cache_clear()

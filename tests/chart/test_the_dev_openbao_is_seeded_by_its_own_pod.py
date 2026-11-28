@@ -96,6 +96,9 @@ _GENERATED: Final = frozendict(
     {
         "object-store-secret-key": ("secret/object-store-root", "object-store-secret-key"),
         "postgres-password": ("secret/postgres", "password"),
+        "database-migrator-password": ("secret/database-migrator", "password"),
+        "database-catalog-password": ("secret/database-catalog", "password"),
+        "database-maintenance-password": ("secret/database-maintenance", "password"),
     }
 )
 

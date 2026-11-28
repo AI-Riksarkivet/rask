@@ -146,7 +146,8 @@ USER 10001
 EXPOSE 2333 8000
 
 # Cheap socket-connect probe against the default CMD's port (avoids urllib's ssl/http.client
-# cold-import cost). k8s owns real readiness via /readyz; this HEALTHCHECK is for the compose demo.
+# cold-import cost). k8s owns real readiness via /readyz; this HEALTHCHECK is what a Dagger lane waits on
+# before it calls a catalog service started from the image.
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=5 \
     CMD ["python", "-c", "import socket,sys; s=socket.socket(); s.settimeout(2); s.connect(('127.0.0.1',2333)); s.close()"]
 

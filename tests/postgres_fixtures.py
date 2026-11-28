@@ -9,7 +9,7 @@ from typing import Final
 
 import pytest
 
-from tests.postgres_server import POSTGRES_INSTALL, PostgresDatabase, PostgresInstallMissingError, PostgresServer
+from tests.postgres_server import POSTGRES_INSTALL, ROLES, PostgresDatabase, PostgresInstallMissingError, PostgresServer, write_credential
 
 
 @pytest.fixture(scope="session")
@@ -23,7 +23,7 @@ def postgres(tmp_path_factory: pytest.TempPathFactory) -> Iterator[PostgresServe
     except PostgresInstallMissingError as missing:
         pytest.fail(str(missing))
     try:
-        server.build_template()
+        server.build_template(tmp_path_factory.mktemp("migrator-credential"))
         yield server
     finally:
         server.stop()
@@ -58,3 +58,32 @@ def postgres_database(request: pytest.FixtureRequest, postgres: PostgresServer) 
     yield database
     if not request.node.stash.get(_POSTGRES_KEEP, False):
         postgres.drop_database(database)
+
+
+#: How long a catalog door waits for its one pooled connection before it answers unavailable, kept short so a path that
+#: asks for a second connection while it holds the first fails the test quickly.
+_ACQUIRE_TIMEOUT_SECONDS: Final = 2
+
+
+@pytest.fixture
+def catalog_database(
+    postgres: PostgresServer, postgres_database: PostgresDatabase, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> PostgresDatabase:
+    """This test's database as the catalog reaches it: the ``RASK_DATABASE_*`` environment a catalog app built in the test
+    reads, as the catalog's own role, with a pool of ONE connection.
+
+    So every door test runs on rows under the role's grants (a missing GRANT fails offline), and a request path that takes
+    a second connection while its transaction holds the first waits out the acquire timeout and fails. A test that sends
+    two requests at once raises ``RASK_DATABASE_POOL_SIZE`` itself.
+    """
+    credentials = write_credential(tmp_path_factory.mktemp("catalog-credential"), ROLES.catalog)
+    for name, value in {
+        "RASK_DATABASE_HOST": "127.0.0.1",
+        "RASK_DATABASE_PORT": str(postgres.port),
+        "RASK_DATABASE_NAME": postgres_database.name,
+        "RASK_DATABASE_CREDENTIALS_DIR": str(credentials),
+        "RASK_DATABASE_POOL_SIZE": "1",
+        "RASK_DATABASE_ACQUIRE_TIMEOUT_SECONDS": str(_ACQUIRE_TIMEOUT_SECONDS),
+    }.items():
+        monkeypatch.setenv(name, value)
+    return postgres_database

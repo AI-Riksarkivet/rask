@@ -47,19 +47,27 @@ for object in "/out/lib/postgresql/$major/bin/"* "/out/lib/postgresql/$major/lib
   done
 `
 
+// postgresImage is the fixture's pinned Postgres image and its major version, read from its values file.
+func postgresImage(ctx context.Context, values *dagger.File) (image string, major string, err error) {
+	contents, err := values.Contents(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	pin := postgresPin.FindStringSubmatch(contents)
+	if pin == nil {
+		return "", "", fmt.Errorf("no `image: postgres:<major>.<minor>@sha256:<digest>` line in %s", postgresValues)
+	}
+	return pin[1], pin[2], nil
+}
+
 // postgresInstall is the fixture's pinned Postgres server as one relocatable directory: what `make postgres` exports to
 // `.localbin/postgres` and what Test copies into its container at the same path, so root `conftest.py::postgres` finds
 // the server in one place everywhere.
 func postgresInstall(ctx context.Context, values *dagger.File) (*dagger.Directory, error) {
-	contents, err := values.Contents(ctx)
+	image, major, err := postgresImage(ctx, values)
 	if err != nil {
 		return nil, err
 	}
-	pin := postgresPin.FindStringSubmatch(contents)
-	if pin == nil {
-		return nil, fmt.Errorf("no `image: postgres:<major>.<minor>@sha256:<digest>` line in %s", postgresValues)
-	}
-	image, major := pin[1], pin[2]
 	return dag.Container().
 		From(image).
 		WithExec([]string{"sh", "-c", strings.TrimSpace(postgresAssembly), "assemble", major}).

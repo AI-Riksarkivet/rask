@@ -364,8 +364,8 @@ a rung on the estate root other than a machine role, or a warehouse `maintenance
 and its declaration converge write, and the accounts the catalog's settings name; judged on the tuples, so the catalog names no
 client, XC-183), and revokes a machine role on the estate root (a relation only a user holds directly,
 `fga_model.machine_relations`) like any other grant: the declaration grants one only to the release's own accounts, and any other
-holder was granted it at a door ([[LH-563]]). It records `_principals/<blake2s>.json` (`GET` on the same path), answers `revoked` as the tuples it removed and
-emits `principal_deleted` (signed by the catalog), on which a notifier erases what it keeps for the person. The reconciler's tuple scan skips bookkeeping relations. There is **no bootstrap exception** in warehouse-create: one
+holder was granted it at a door ([[LH-563]]). It records the principal as a row of `rask.principals` in the catalog's database (ADR 0230; `INSERT ... ON CONFLICT DO NOTHING`, so a re-run or a racing second request answers the first deletion's row; `GET` on the same path reads it), answers `revoked` as the tuples it removed and
+emits `principal_deleted` (signed by the catalog; its announcement's evidence is `PrincipalRecorded`, judged landed by reading that row), on which a notifier erases what it keeps for the person. The reconciler's tuple scan skips bookkeeping relations. There is **no bootstrap exception** in warehouse-create: one
 door, and a warehouse-owner cannot ride a create into project admin. **A project is read by the callers its list shows
 it to** ([[LH-587]]): the list answers the estate admin (`can_list_all_projects`) every tenant and anyone else the projects they are a `member`
 of (`projects._visible_projects`), and `GET /management/v1/projects/{id}` decides over the same two doors
@@ -627,22 +627,30 @@ tick run on the app's loop as its timer runs it), `tests/chart/test_the_chart_de
 estate's admin and roles) and, live,
 `tests/e2e-py/test_the_estate_is_what_git_declares.py`. `docs/OPERATORS.md` § 2 is the operator's procedure.
 
-## Storage — what state lives where (and why there is NO app database)
+## Storage — what state lives where
 
 | State | Store |
 | --- | --- |
 | table data + versions | Lance datasets on object storage (rustfs) |
 | project registry (`_projects/<id>.json`), warehouse registry (`_warehouses/<id>.json`, its bucket claims under `_warehouses/bucket-claims/`), the declared-grant ledger (`_declared_grants/`) | JSON records on the control root. **Id-MINTING creates are conditional** (`If-None-Match: *` via `lakehouse.storage.conditional_records.create_json`): project mint, warehouse mint and a declared grant's record are store-arbitrated, a lost race surfaces as 409, never last-writer-wins. **Mutable-field read-modify-writes are CONDITIONAL too** as of 2026-08-15 — `warehouses.upsert_warehouse` / `set_warehouse_status` / `projects.upsert_project` go through `conditional_records.mutate_json` (read + ETag-guarded replace, bounded retry), so an idempotent re-POST can no longer silently revert a concurrent quarantine or protection change. No unconditional registry write exists in the catalog: a test that needs a record to stand writes it with `tests/seeding.py`. Protection and trash records are still plain overwrites and correctly so: they carry no read-modify-write, so there is no carried-forward field to lose. |
-| authz | OpenFGA on its chart-managed Postgres |
+| principals' offboarding records | rows of `rask.principals` in the catalog's database (`catalog.core.rows.PrincipalRow`): written once, never updated or deleted; the catalog's role holds `SELECT, INSERT` on the table and nothing more |
+| authz | OpenFGA, on the platform's Postgres (the `postgres` fixture in development) |
 | lineage | Lance tables in the catalog's provenance namespace (`services.lineage.provenanceNamespace`, default `lance_catalog$provenance`, a namespace of the estate's own warehouse, which the render and the catalog's settings both require): the commit feed `events`, the table-level edge list `edges`, outbox `refusals` and forwarder `cursors`. The catalog creates the namespace at boot (`catalog/services/provenance_namespace.py`), in a background task that retries every failed try with backoff, logs it (`provenance_namespace_error`) and counts it by kind (`catalog.estate_namespaces.failed`, `outage` or `fault`) and never ends the replica (ADR 0203, 2026-11-22); a replica that loses the create race to another keeps the winner's namespace. It protects it, grants each `LANCE_PROVENANCE_WRITERS` subject `writer`, revokes a `writer` the settings no longer name from one of the release's own accounts (`LANCE_OWN_ACCOUNTS`, the chart's `lance.ownAccounts`, the list the declaration converge holds the estate's machine roles to), and leaves every other grant there to the doors: a bring-your-own compaction job's account is granted `reader` and `maintainer` at the namespace's access door, and no boot revokes it, nor a `writer` granted there to an account outside the release ([[LH-563]]). It writes its keep-last-N maintenance policy (`LANCE_PROVENANCE_RETAIN_VERSIONS`) and removes the one it wrote, while it stands as written, once none is declared, and announces no write under it but a compaction's, after which maintenance's write-event lane holds the table's pass, which expires it (ADR 0174, [[LH-529]]). Lineage writes through `merge_insert` and reads through `query` as its own principal; the graph is bring-your-own, fed by lineage's forwarder (ADR 0158) |
 
-A relational app-DB was removed at P7a and must not creep back for the catalog: registry writes are
-admin-frequency, the conditional creates arbitrate the id-mint races, and deletes are bottom-up
-single-object operations by design — there is no multi-object transaction to need one. The moment
-that changes (atomic cross-object invariants, high-frequency filtered listings), it is a design
-decision, not a default. The conditional-put primitive is proven live by TWO `cas`-marker e2e
-suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and
-`test_registry_cas_e2e.py` (the registry seam, contended 8-way).
+The catalog's governance records move from the control root into its own Postgres database (`catalog`, schema `rask`)
+kind by kind, in the order of the spec's batches (ADR 0230, #859): principals are rows, and every other kind in the
+table above is a JSON record on the control root until its batch moves it, its object-store code, repairer and tests
+deleted in that change (no dual path). The code is the catalog's: `catalog.core.database` (the async pool; each new
+connection reads the role's `username` and `password` from `RASK_DATABASE_CREDENTIALS_DIR`), `catalog.core.rows` (the
+SQLModel tables), `catalog.core.schema` and `catalog.migrations` (Alembic, revisions `r<NNNN>_<what>.py`, grants in the
+revision that makes the table, no downgrades). A door reaches the database only through `Database.reading()` /
+`writing()`: one transaction on one pooled connection a request path, passed down to every query, committed before the
+door announces and before it answers; a second open in the same context is refused (`SecondTransactionError`, 500),
+and a database that gives no connection or does not answer is 503 code 17. A query that can race states its outcome
+(`ON CONFLICT`), never a generic catch of a unique violation. A table's commit does not move: the manifest's
+put-if-absent stays its commit point (ADR 0230 §3), and that conditional-put primitive is proven live by TWO
+`cas`-marker e2e suites: `test_object_store_cas_e2e.py` (Lance's own manifest commits) and `test_registry_cas_e2e.py`
+(the registry seam, contended 8-way).
 
 ## Lifecycle
 

@@ -127,24 +127,18 @@ func (m *Rask) RustfsProvisioning(
 }
 
 // RustfsLifecycle runs the catalog lifecycle e2e with the bytes on a RustFS service bound to this one exec,
-// proving the catalog speaks plain S3 through `lakehouse.storage` rather than one store's dialect.
+// proving the catalog speaks plain S3 through `lakehouse.storage` rather than one store's dialect. The catalog keeps its
+// own records in a database provisioned and migrated as a release does it (`catalogDatabase`).
 //
-// It replaces `scripts/rustfs_e2e.sh`, which drove `docker compose up -d --build` over
-// `docker-compose.yml` + `docker-compose.rustfs.yml`. That script was invisible to the estate's own
-// docker gate for most of a day: the gate required `up` on the same LINE as `compose`, and the script
-// wraps it (`compose() { docker compose -f "$BASE" -f "$RUSTFS" "$@"; }`).
-//
-// ORDERING IS THE INTERESTING PART, and it needs BOTH halves below. Compose expressed it
-// declaratively — `depends_on: {createbuckets-rustfs: {condition: service_completed_successfully}}`
-// — and Dagger has no such condition on a service binding, so `Sync` supplies the sequencing: the
-// bootstrap is forced to finish before the catalog service is constructed.
+// ORDERING IS THE INTERESTING PART, and it needs BOTH halves below. Dagger has no "after this one-shot
+// completed" condition on a service binding, so `Sync` supplies the sequencing: the bootstrap is forced
+// to finish before the catalog service is constructed.
 //
 // That alone is NOT enough, and the failure is worth knowing about because it looks like a catalog
 // bug. Dagger services are reference-counted: `Sync` completing drops rustfs to zero references, so
 // it stops and takes the bucket with it, and the catalog then starts a fresh empty one. The first
 // run of this function died on `NoSuchBucket: Volume not found` from inside pylance. The cache volume
-// on the service is what makes the bootstrap durable across that restart — the same job compose's
-// named `rustfs-data` volume was doing.
+// on the service is what makes the bootstrap durable across that restart.
 func (m *Rask) RustfsLifecycle(
 	ctx context.Context,
 	// +defaultPath="/"
@@ -162,22 +156,16 @@ func (m *Rask) RustfsLifecycle(
 		// to zero references, so it STOPS. The catalog then starts a fresh one, and the first thing
 		// the lifecycle test saw was `NoSuchBucket: Volume not found`.
 		//
-		// The compose overlay this replaces had the same need and met it the same way
-		// (`volumes: [rustfs-data:/data]`), so the durability is not a Dagger workaround — it is the
-		// property the stack always relied on, made explicit.
-		//
-		// PER-RUN rather than a fixed name, unlike compose's `rustfs-data`. A shared volume leaks the
+		// PER-RUN rather than a fixed name. A shared volume leaks the
 		// estate forward, and the governance chain proved that is not theoretical: a namespace left by
 		// an earlier run made `create` answer 409 where the test expected 200, and the obvious repair —
 		// dropping the bucket in the bootstrap — did nothing, because Dagger caches that exec by its
 		// inputs and the command never changes. A fresh volume gives durability inside the run and
 		// isolation between runs, which is what an e2e actually wants from both.
 		WithMountedCache("/data", dag.CacheVolume("rask-rustfs-e2e-"+runToken()), dagger.ContainerWithMountedCacheOpts{Owner: rustfsUser}).
-		// NO `/data` argument, despite the compose overlay carrying `command: ["/data"]`. The image
-		// has no ENTRYPOINT to prepend it to, so passing it makes Dagger try to EXECUTE `/data`
-		// (`exec /data: permission denied`). Compose needed it because its `command:` replaces the
-		// image CMD wholesale; here the image's own default is already right — the same shape
-		// `SmokeRustfs` above uses and proves.
+		// NO `/data` argument. The image has no ENTRYPOINT to prepend it to, so passing it makes
+		// Dagger try to EXECUTE `/data` (`exec /data: permission denied`); the image's own default is
+		// already right — the same shape `SmokeRustfs` above uses and proves.
 		WithExposedPort(9000), identity.Issuer).
 		AsService()
 
@@ -187,7 +175,12 @@ func (m *Rask) RustfsLifecycle(
 		return "", err
 	}
 
-	catalog := withLaneStoreSession(m.Image(src, "rest-catalog", "", "", "", nil, "").
+	database, err := m.catalogDatabase(ctx, src)
+	if err != nil {
+		return "", err
+	}
+
+	catalog := withLaneStoreSession(database.attach(m.Image(src, "rest-catalog", "", "", "", nil, "")).
 		WithServiceBinding("rustfs", rustfs), identity.CatalogToken, "rustfs").
 		// THE POSTURE, DECLARED. `assert_authentication_configured` refuses to boot on the AMBIGUITY
 		// between "open because I meant it" and "open because nothing set it", so a lane that names

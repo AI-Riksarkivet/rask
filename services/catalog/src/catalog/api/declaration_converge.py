@@ -31,7 +31,7 @@ from catalog.api.announcing import Announcer, get_announcer
 from catalog.api.authz import decisions, hierarchy, warehouse_grants
 from catalog.api.authz.context import AuthzContext
 from catalog.api.declared import DECLARATION
-from catalog.api.dependencies import ObjectUuids, Resolver, get_fga_client, get_vendor
+from catalog.api.dependencies import ObjectUuids, Resolver, get_database, get_fga_client, get_vendor
 from catalog.api.ticks import Tick
 from catalog.api.v1.endpoints import projects as project_doors
 from catalog.api.v1.endpoints import warehouses as warehouse_doors
@@ -346,7 +346,13 @@ async def tick(ctx: Tick) -> ConvergeTick:
     # A door's announcer, for a change no caller made: the tick's scope carries no originator and no bearer.
     resolver = Resolver(request, settings)
     announcer = await get_announcer(
-        request, settings=settings, client=client, resolver=resolver, control=ctx.control, uuids=ObjectUuids(request, settings, resolver=resolver)
+        request,
+        settings=settings,
+        client=client,
+        database=await get_database(request),
+        resolver=resolver,
+        control=ctx.control,
+        uuids=ObjectUuids(request, settings, resolver=resolver),
     )
     converged = await _Converger(request, settings, client=client, control=ctx.control, announcer=announcer, vendor=await get_vendor(request)).run(declared)
     if converged.converged or converged.released or converged.grants_written or converged.grants_revoked or converged.failed:

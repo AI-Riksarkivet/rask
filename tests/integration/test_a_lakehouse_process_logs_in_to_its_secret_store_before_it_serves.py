@@ -13,7 +13,6 @@ from collections.abc import Callable, Coroutine
 import pytest
 from fastapi import FastAPI
 
-from catalog import main as catalog_main
 from catalog.core.config import Settings
 from lakehouse.governed import secrets
 from lineage import main as lineage_main
@@ -24,6 +23,10 @@ from tests.secret_store_double import SecretStoreDouble
 
 
 async def _catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Imported here: the module builds its app from the settings at import, and the catalog's database is named by the
+    # suite's fixture (`tests.postgres_fixtures.catalog_database`), which runs only once collection is done.
+    from catalog import main as catalog_main
+
     monkeypatch.setattr(catalog_main, "get_settings", lambda: Settings.model_validate({}))
     await catalog_main.lifespan(FastAPI()).__aenter__()
 

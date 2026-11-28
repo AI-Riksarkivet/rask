@@ -65,6 +65,9 @@ unprovisioned secret is a fail-closed outage at first use, not a fallback. Each 
   ConfigMap's document.
 - `postgres` (field `password`), read by ESO for OpenFGA's connection string while the chart runs OpenFGA, and in
   development for the `postgres` fixture's server.
+- `database-migrator` and `database-catalog` (field `password`, the names `postgres.catalog.secrets` gives), read by ESO
+  into the migration Job's and the catalog's credential files; `database-maintenance` for maintenance's role. The roles
+  and the database are the platform DBA's ([OPERATORS.md](../OPERATORS.md) § 9).
 - `commit-id-key` (field `key`, 32 random bytes as hex), read by the catalog alone: the key it derives every
   announcement's run id under (LH-497). It is never rotated, and the catalog is not Ready until it reads one.
 - For every identity in `lance.signingIdentities`, `signing-public-<identity>` (field `keys`, read by that signer and
@@ -125,12 +128,20 @@ certificate for its own Services. On a cluster that encrypts nothing between pod
 can replay a first-party token against its one audience for up to its ten-minute life. Every hop that leaves the
 release is `https://` or `tls://`, and the render refuses a real deployment that names a plaintext one.
 
-## Prerequisites in production: OpenFGA and its Postgres
+## Prerequisites in production: the platform's Postgres, and OpenFGA
 
-The chart can run OpenFGA (the `openfga` subchart). It runs no Postgres (ADR 0228): the Postgres behind its OpenFGA
-is the platform's (`postgres.externalHost`), or in development the `postgres` fixture (`postgres.enabled`). **Production
-names the platform's OpenFGA** ([[XC-132]], ADR 0153), and `deploy/values-prod.yaml` turns both off
-(`openfga.enabled: false`, `postgres.enabled: false`), so the render names no Postgres at all:
+The chart runs no Postgres (ADR 0228) and always names one: **the catalog keeps its governance records in a database
+of its own on the platform's Postgres** (ADR 0230), at `postgres.externalHost` (`postgres.port`), or in development the
+`postgres` fixture (`postgres.enabled`). The platform's DBA creates the database `postgres.catalog.database` (`catalog`)
+and its three roles `postgres.catalog.roles` (`rask_migrator`, `rask_catalog`, `rask_maintenance`) with the statements
+[OPERATORS.md](../OPERATORS.md) § 9 lists; the release's migration Job applies the schema, and a catalog pod refuses to
+start against a schema behind or ahead of its image. Under the production NetworkPolicy, `postgres.egress` admits the
+pods that dial it (the catalog, its migration Job, and OpenFGA with its migrate Job while the chart runs OpenFGA). Its
+availability and backups are the platform's.
+
+The chart can run OpenFGA (the `openfga` subchart), its store on the same Postgres. **Production names the platform's
+OpenFGA** ([[XC-132]], ADR 0153), and `deploy/values-prod.yaml` turns both the chart's OpenFGA and the development
+Postgres off (`openfga.enabled: false`, `postgres.enabled: false`):
 
 - `auth.fgaApiUrl` is the platform's OpenFGA HTTP API, https on a real deployment. Every FGA client and the `openfga-model`
   hook dial it. Each one presents its projected ServiceAccount token: audience `rask-openfga`, issuer
@@ -140,14 +151,14 @@ names the platform's OpenFGA** ([[XC-132]], ADR 0153), and `deploy/values-prod.y
   `lance.openfgaSubjects` (chart/templates/_helpers.tpl) computes for the overlay. A render with `openfga.enabled=true`
   prints them in the `<release>-openfga-authn` ConfigMap.
 - A deployment that runs the chart's OpenFGA (`openfga.enabled: true`) names the platform's Postgres in
-  `postgres.externalHost`, which needs the `postgres.database` database (`openfga`) owned by `postgres.user`; lineage
-  keeps no database (ADR 0158). Its password is the secret store's `postgres` secret (field `password`), which ESO
+  `postgres.externalHost`, which then also needs the `postgres.database` database (`openfga`) owned by
+  `postgres.user`; lineage keeps no database (ADR 0158). Its password is the secret store's `postgres` secret (field `password`), which ESO
   delivers into OpenFGA's config file. No chart value carries it. A real deployment's render refuses
   `postgres.enabled` there.
 
-The render refuses `auth.fgaApiUrl` empty with `openfga.enabled` off, and `postgres.externalHost` empty with the chart's
-OpenFGA and `postgres.enabled` off. Under the production NetworkPolicy (default-deny egress), every endpoint the platform serves outside the namespace takes its own egress rules, admitting only the pods that dial it: the API server its endpoints in `networkPolicy.apiServerEgress`, an external OpenFGA its addresses in `auth.fgaEgress`, the secret store in `openbao.egress`, the OTLP backend in `observability.export.egress`, the S3 and its STS in `objectStore.egress`, the NATS bus in `nats.egress`, the IdP in `auth.oidc.egress`, and the graph backend lineage forwards to in `services.lineage.forward.egress`. The render refuses every one left empty, in one message naming them all ([[XC-202]]); `networkPolicy.extraEgress` takes a rule for an endpoint none of them names (the Postgres, should OpenFGA run in the chart). Every such rule names its `to` peers: the render refuses one that admits every destination. OpenFGA's datastore, its availability and
-its backups belong to the platform, and rask ships no database backup.
+The render refuses `auth.fgaApiUrl` empty with `openfga.enabled` off, and `postgres.externalHost` empty with
+`postgres.enabled` off. Under the production NetworkPolicy (default-deny egress), every endpoint the platform serves outside the namespace takes its own egress rules, admitting only the pods that dial it: the API server its endpoints in `networkPolicy.apiServerEgress`, an external OpenFGA its addresses in `auth.fgaEgress`, the secret store in `openbao.egress`, the OTLP backend in `observability.export.egress`, the S3 and its STS in `objectStore.egress`, the NATS bus in `nats.egress`, the IdP in `auth.oidc.egress`, the Postgres in `postgres.egress`, and the graph backend lineage forwards to in `services.lineage.forward.egress`. The render refuses every one left empty, in one message naming them all ([[XC-202]]); `networkPolicy.extraEgress` takes a rule for an endpoint none of them names. Every such rule names its `to` peers: the render refuses one that admits every destination. The Postgres, its availability and its
+backups belong to the platform, and rask ships no database backup.
 
 ## Development stand-ins
 
@@ -184,10 +195,12 @@ Development runs stand-ins from `deploy/fixtures` (ADR 0153), and the chart rend
   credentials, every signing identity's Ed25519 pair, the bus trust root and users) and the store's roles and policies
   into `<release>-secret-store-identities` (a role and a policy for each identity that reads the store), and the
   fixture's pod runs the scripts beside the server and applies the documents.
-- **Postgres** (`deploy/fixtures/postgres`, release `postgres`, StatefulSet and Service `rask-postgres`): OpenFGA's
-  datastore, stock `postgres:16.13` pinned by digest, one database `openfga` owned by the role `lance`. Its password is
-  the dev store's `postgres` secret, delivered by its own ExternalSecret `rask-postgres-auth`. `postgres.enabled` says
-  the estate uses it, and a real deployment's render refuses it while the chart runs OpenFGA. It has no backup.
+- **Postgres** (`deploy/fixtures/postgres`, release `postgres`, StatefulSet and Service `rask-postgres`): stock
+  `postgres:16.13` pinned by digest, holding OpenFGA's database `openfga` (owned by the role `lance`) and the catalog's
+  `catalog` with its three roles, which the fixture's provisioning Job (`rask-postgres-provision-r<n>`,
+  `files/provision.sql`) converges on every install of the fixture. The superuser's password is the dev store's
+  `postgres` secret, delivered by its own ExternalSecret `rask-postgres-auth`, and the roles' are its `database-*`
+  secrets. `postgres.enabled` says the estate uses it, and a real deployment's render refuses it. It has no backup.
 - **Marquez** (`deploy/fixtures/marquez`, release `marquez`, Service `rask-marquez:5000`): the graph backend, with its
   own Postgres. The lineage graph is bring-your-own (ADR 0158), and `deploy/values-local.yaml` points lineage's
   forwarder (`services.lineage.forward.url`) at it, as a platform would point it at its own Marquez, DataHub or
@@ -315,8 +328,8 @@ address, token, scrape job, alert or network peer (ADR 0189).
   `traefik-gateway` in kube-system, listener `web` on the node's port 80). The Gateway must allow 64 MB request bodies;
   that is Gateway policy, not route (ADR 0165).
 - **Optional, in-chart for development and the platform's in production** ([[XC-132]]): `openfga.enabled` (the
-  OpenFGA subchart); see *Prerequisites in production*. The chart runs no Postgres: `postgres.*` names the one behind
-  its OpenFGA.
+  OpenFGA subchart); see *Prerequisites in production*. The chart runs no Postgres: `postgres.*` names the one that
+  holds the catalog's database and, while the chart runs OpenFGA, OpenFGA's.
 - **Its own configuration of what it does not run**: the NATS stream
   Job (its streams and durable consumers), the ExternalSecrets and SecretStore, the object store's bucket and user hooks, and the dev OpenBao's seed scripts.
 
@@ -490,7 +503,8 @@ A client integrates with it as its production release does ([[XC-189]]), with no
 
 - **The object store** (RustFS in development, the platform's S3 in production): every Lance table the catalog
   governs (lineage's commit feed, edge list, outbox refusals and forwarder cursors among them, in the catalog's
-  provenance namespace, ADR 0158), the outbox, the trash and the registries. Lance puts its commit CAS in the store,
-  so neither the catalog nor lineage needs a relational database.
-- **Postgres**: OpenFGA's datastore, served by the `postgres` fixture (`rask-postgres`) in development and
-  by the platform in production; the chart runs none (ADR 0228). Lineage keeps no database (ADR 0158, LH-468 #592).
+  provenance namespace, ADR 0158), and the catalog's governance records not yet moved to its database (the outbox, the
+  trash and the registries among them). Lance puts its commit CAS in the store, so no table's commit needs a database.
+- **Postgres**: the catalog's database (`catalog`, schema `rask`: the principals, and each record kind as ADR 0230 moves
+  it) and OpenFGA's datastore, served by the `postgres` fixture (`rask-postgres`) in development and by the platform in
+  production; the chart runs none (ADR 0228). Lineage keeps no database (ADR 0158, LH-468 #592).

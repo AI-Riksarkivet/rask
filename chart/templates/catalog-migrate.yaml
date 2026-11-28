@@ -1,0 +1,44 @@
+{{- $c := .Values.postgres.catalog }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "lance.fullname" . }}-catalog-migrate-{{ include "rask.bootstrapRev" . }}
+  labels: {{- include "lance.labels" . | nindent 4 }}
+  annotations:
+    {{- include "lance.reconciledJob" "Sync" | nindent 4 }}
+spec:
+  ttlSecondsAfterFinished: 3600
+  {{- include "lance.bootstrapJobDeadline" . | nindent 2 }}
+  backoffLimit: 20
+  template:
+    metadata:
+      labels:
+        {{- include "lance.labels" . | nindent 8 }}
+        app.kubernetes.io/component: catalog-migrate
+    spec:
+      restartPolicy: OnFailure
+      {{- include "lance.databasePodSecurityContext" . | nindent 6 }}
+      serviceAccountName: {{ include "lance.fullname" . }}-sa-jobs
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      volumes:
+        {{- include "lance.tmpVolume" . | nindent 8 }}
+        {{- include "lance.databaseCredential" (list . "volumes" "migrator") | nindent 8 }}
+      containers:
+        - name: migrate
+          image: "{{ include "lance.catalogImage" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- include "lance.securityContext" . | nindent 10 }}
+          args: ["python", "-m", "catalog.schema", "migrate"]
+          env:
+            {{- include "lance.databaseEnv" (list .) | nindent 12 }}
+            - { name: RASK_DATABASE_CATALOG_ROLE, value: {{ $c.roles.catalog | quote }} }
+            - { name: RASK_DATABASE_MAINTENANCE_ROLE, value: {{ $c.roles.maintenance | quote }} }
+          resources:
+            requests: { cpu: "50m", memory: "128Mi" }
+            limits: { cpu: "500m", memory: "512Mi" }
+          volumeMounts:
+            {{- include "lance.tmpMount" . | nindent 12 }}
+            {{- include "lance.databaseCredential" (list . "mounts" "migrator") | nindent 12 }}

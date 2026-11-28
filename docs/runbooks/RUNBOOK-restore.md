@@ -1,8 +1,9 @@
 # Backup & restore runbook
 
-How the estate is backed up, and the **order-sensitive** procedure to restore it. rask runs no database: OpenFGA's
-datastore is the platform's Postgres, which the platform backs up and restores (in development, the `postgres` fixture,
-which has no backup). Lineage keeps no database: its commit feed and edge list are Lance tables in the catalog's
+How the estate is backed up, and the **order-sensitive** procedure to restore it. rask runs no database: the catalog's
+database (its principals, and each record kind ADR 0230 moves there) and OpenFGA's datastore are on the platform's
+Postgres, which the platform backs up and restores (in development, the `postgres` fixture, which has no backup); the
+control-root backup copies none of them. Lineage keeps no database: its commit feed and edge list are Lance tables in the catalog's
 `lance_catalog$provenance` namespace, so they come back with the object store. The object-store `VolumeSnapshot` leg is
 not drilled: validate it on your cluster's CSI driver before trusting it in an incident.
 

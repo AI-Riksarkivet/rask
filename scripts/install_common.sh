@@ -8,7 +8,8 @@ install_stack_fixtures() {
   scripts/fixtures.sh external-secrets nats
   scripts/fixtures.sh dex "$@"
   scripts/fixtures.sh openbao
-  # OpenFGA's Postgres, whose password is the dev store's: Ready once rask is installed.
+  # The Postgres holding the catalog's database and OpenFGA's, whose passwords are the dev store's: Ready, and its
+  # provisioning Job done, once rask is installed.
   scripts/fixtures.sh postgres
   # The object store runs the upstream RustFS image its fixture pins by digest, which the node pulls itself.
   scripts/fixtures.sh rustfs

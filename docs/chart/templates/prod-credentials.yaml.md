@@ -36,10 +36,10 @@ are external in production: a real deployment sets `objectStore.enabled=false` a
 the platform's S3, whose operator provisions rask's identities (`lance.s3Endpoint` fails the render when neither is
 set).
 
-A REAL DEPLOYMENT THAT RUNS THE CHART'S OPENFGA REFUSES THE DEVELOPMENT POSTGRES (`postgres.enabled=true`, the
-postgres fixture): one server on one volume with no backup, which would hold every grant of the estate. It sets
-`postgres.enabled=false` and `postgres.externalHost` to the platform's Postgres, or runs the platform's OpenFGA
-(`openfga.enabled=false` with `auth.fgaApiUrl`), which names no Postgres at all.
+A REAL DEPLOYMENT REFUSES THE DEVELOPMENT POSTGRES (`postgres.enabled=true`, the postgres fixture): one server on one
+volume with no backup, which would hold the catalog's records (ADR 0230), and every grant of the estate while the chart
+runs OpenFGA. The catalog always keeps its database there, so the refusal holds whichever OpenFGA the deployment runs:
+it sets `postgres.enabled=false` and `postgres.externalHost` to the platform's Postgres.
 
 ## `{{- $local := ternary ... .Values.openbao.enabled -}}`
 

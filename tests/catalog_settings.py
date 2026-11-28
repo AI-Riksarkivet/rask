@@ -13,8 +13,17 @@ from catalog.core.config import Settings
 
 __all__ = ["catalog_settings", "governed_settings"]
 
-#: A key pair the local-directory backend ignores and the class requires.
-_STORE_KEYS: Final[frozendict[str, Any]] = frozendict({"s3_access_key_id": "k", "s3_secret_access_key": "s"})
+#: A key pair the local-directory backend ignores and the class requires, and the database the class requires, which no
+#: door reads from these settings: an app's database is the one its lifespan opened (`catalog.api.dependencies.get_database`).
+_STORE_KEYS: Final[frozendict[str, Any]] = frozendict(
+    {
+        "s3_access_key_id": "k",
+        "s3_secret_access_key": "s",
+        "database_host": "unused",
+        "database_name": "unused",
+        "database_credentials_dir": "unused",
+    }
+)
 
 #: What FGA on demands besides itself: a verified subject, from an issuer whose people are named.
 _GOVERNED: Final[frozendict[str, Any]] = frozendict(

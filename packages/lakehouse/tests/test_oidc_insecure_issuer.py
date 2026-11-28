@@ -129,6 +129,9 @@ def test_the_catalog_twin_refuses_it_too() -> None:
         "RASK_OIDC_CONNECTORS": {"local": "dex"},
         "LANCE_S3_ACCESS_KEY_ID": "k",
         "LANCE_S3_SECRET_ACCESS_KEY": "s",
+        "RASK_DATABASE_HOST": "db",
+        "RASK_DATABASE_NAME": "catalog",
+        "RASK_DATABASE_CREDENTIALS_DIR": "/var/run/secrets/rask/database",
     }
     with pytest.raises(ValueError, match="HTTPS"):
         CatalogSettings.model_validate({**base, "RASK_OIDC_ISSUER": "http://issuer.test"})

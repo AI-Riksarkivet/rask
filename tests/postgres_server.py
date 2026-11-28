@@ -11,6 +11,7 @@ Running the suite as root is supported only in the CI lane's container (`dagger 
 it runs there as `nobody`.
 """
 
+import asyncio
 import os
 import pathlib
 import pwd
@@ -25,6 +26,7 @@ import psycopg
 from psycopg import sql
 from pydantic import BaseModel, ConfigDict
 
+from catalog.core.schema import MigrateSettings, migrate
 from tests.loopback import free_ports
 
 
@@ -49,6 +51,29 @@ _STOP_SECONDS: Final = 30
 
 class PostgresInstallMissingError(FileNotFoundError):
     """No server in the install directory the suite reads."""
+
+
+class CatalogRoles(BaseModel):
+    """The catalog's three roles, as the platform's provisioning names them by default."""
+
+    model_config = ConfigDict(frozen=True)
+
+    migrator: str = "rask_migrator"
+    catalog: str = "rask_catalog"
+    maintenance: str = "rask_maintenance"
+
+
+#: The roles every worker's server holds, cluster-wide.
+ROLES: Final = CatalogRoles()
+
+
+def write_credential(directory: pathlib.Path, role: str) -> pathlib.Path:
+    """Write ``role``'s credential into ``directory`` as the secret store renders one, and return it: the server trusts
+    loopback, so the password is empty."""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "username").write_text(role, encoding="utf-8")
+    (directory / "password").write_text("", encoding="utf-8")
+    return directory
 
 
 class PostgresDatabase(BaseModel):
@@ -129,15 +154,32 @@ class PostgresServer:
             return process.poll() is None and row is not None and pathlib.Path(str(row[0])).resolve() == self._data.resolve()
         return False
 
-    def build_template(self) -> None:
-        """Create the template every test's database is cloned from.
+    def build_template(self, credentials: pathlib.Path) -> None:
+        """Create the catalog's three roles and the template every test's database is cloned from, migrated as the
+        migrator by the migration Job's own code (:func:`catalog.core.schema.migrate`), its credential written under
+        ``credentials``.
 
-        The template is the one seam that gives a test's database its schema: empty in this change, and LH-613 fills this
-        method with the catalog's migrations. It lives as long as the worker's server, one session, so its fixed name is
-        enough: every session builds it again from the migrations it finds.
+        The template lives as long as the worker's server, one session, so its fixed name is enough: every session builds
+        it again from the revisions it finds.
         """
         with psycopg.connect(self._conninfo(self.port, "postgres"), autocommit=True) as connection:
-            connection.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(TEMPLATE)))
+            for role in ROLES.model_dump().values():
+                connection.execute(sql.SQL("CREATE ROLE {} LOGIN").format(sql.Identifier(role)))
+            connection.execute(sql.SQL("CREATE DATABASE {} OWNER {}").format(sql.Identifier(TEMPLATE), sql.Identifier(ROLES.migrator)))
+        asyncio.run(migrate(self.migrate_settings(TEMPLATE, write_credential(credentials, ROLES.migrator))))
+
+    def migrate_settings(self, database: str, credentials: pathlib.Path) -> MigrateSettings:
+        """What the migration Job is given, against ``database`` on this server with the credential in ``credentials``."""
+        return MigrateSettings.model_validate(
+            {
+                "database_host": "127.0.0.1",
+                "database_port": self.port,
+                "database_name": database,
+                "database_credentials_dir": credentials,
+                "database_catalog_role": ROLES.catalog,
+                "database_maintenance_role": ROLES.maintenance,
+            }
+        )
 
     def create_database(self) -> PostgresDatabase:
         """A new database cloned from the template, under a name no other test holds."""

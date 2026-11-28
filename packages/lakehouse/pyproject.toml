@@ -53,6 +53,14 @@ dependencies = [
     "starlette>=1.3",
     # The limiter FastAPI runs its doors' blocking calls under, whose use `lakehouse.service_app.thread_pool` exports.
     "anyio>=4.14.2",
+    # The catalog's own database (ADR 0230 §10): its table models, the async engine over psycopg's async connection
+    # (`[asyncio]` names greenlet, so the lock carries it), the revisions the release applies, and the driver. psycopg's
+    # [binary] ships libpq inside the wheel, with cp315 manylinux wheels for x86_64 and aarch64 (3.3.9, read 2026-11-26),
+    # so no host libpq or compiler is needed.
+    "sqlmodel>=0.0.50",
+    "sqlalchemy[asyncio]>=2.1.9",
+    "alembic>=1.20.1",
+    "psycopg[binary]>=3.3.9",
 ]
 
 [project.entry-points.opentelemetry_otlp_credential_provider]

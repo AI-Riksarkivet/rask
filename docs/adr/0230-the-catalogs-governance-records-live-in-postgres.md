@@ -87,6 +87,9 @@ Lakekeeper writes a drop, its soft-delete mark and its clean-up task in one tran
 11. **The schema is applied by the release**: a Job runs the migrations as a hook of the upgrade, every migration in
     one transaction behind an advisory lock; a pod waits for it and refuses to start against a schema behind or ahead
     of its own; there are no down migrations.
+    *Amended 2026-11-28 ([[LH-613]]):* the Job is a bootstrap Job, a plain Job of the release named by its revision and
+    an Argo CD `Sync` hook, not a Helm hook: the catalog's pods wait for the schema, so a post-install/post-upgrade hook
+    would deadlock `--wait --wait-for-jobs` (`docs/chart/templates/_helpers.tpl.md`, "BOOTSTRAP JOBS").
 12. **With the database unavailable the catalog answers unavailable**, and its readiness says why. A client holding a
     vended credential keeps reading and writing a table's bytes until it expires.
 13. **Nothing is migrated.** The estate is pre-production: the records are rebuilt (projects, warehouses and grants

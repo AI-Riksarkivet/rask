@@ -26,6 +26,9 @@ storeIdentities: rask-secret-store-identities
 devCredentials:
   - rask-dev-credential-object-store-secret-key
   - rask-dev-credential-postgres-password
+  - rask-dev-credential-database-migrator-password
+  - rask-dev-credential-database-catalog-password
+  - rask-dev-credential-database-maintenance-password
 resources:
   requests: { cpu: 50m, memory: 128Mi }
   limits: { cpu: "1", memory: 512Mi }

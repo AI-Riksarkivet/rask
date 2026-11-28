@@ -408,9 +408,7 @@ smoke-rustfs: ## Storage smoke vs a REAL rustfs S3 backend (round-trip + a pylan
 	$(DAGGER) call smoke-rustfs
 
 # The storage-AGNOSTIC proof: the catalog lifecycle e2e with the bytes on a RustFS service bound to one
-# exec. Replaced `scripts/rustfs_e2e.sh`, which drove `docker compose up -d --build` over two
-# compose files and was invisible to the estate's own docker gate for most of a day — the gate wanted
-# `up` on the same line as `compose`, and the script wrapped it.
+# exec, the catalog's records in a database provisioned and migrated as a release does it.
 rustfs-lifecycle: ## Catalog lifecycle e2e with the bytes on RustFS (proves S3-agnosticism)
 	$(DAGGER) call rustfs-lifecycle
 
@@ -420,14 +418,10 @@ rustfs-provisioning: ## Store IAM vs a REAL RustFS (a refused policy fails the h
 	$(DAGGER) call rustfs-provisioning
 
 # The dataops loop: authorization + provenance AUTHORSHIP + derivation lineage, with real Dex tokens
-# and not one hand-written tuple. Replaced `scripts/governance_e2e.sh`, which layered FOUR compose
-# files to assemble the same thing — and which could not have passed as written: it never exported
-# `LANCE_E2E_DEX_SECRET`, so its own test sent a client secret to a Dex client both configs declare
-# `public: true`, which answers 401.
+# and not one hand-written tuple.
 #
-# `DEMO=1 ./scripts/governance_e2e.sh` becomes `dagger call governance-chain --demo` — the narrated
-# walkthrough against the SAME stack, because a demo that stands up its own is how a demo drifts from
-# what the tests prove.
+# `dagger call governance-chain --demo` runs the narrated walkthrough against the SAME stack, because a
+# demo that stands up its own is how a demo drifts from what the tests prove.
 governance-chain: ## Governance e2e — authz + provenance authorship + lineage (add --demo for the walkthrough)
 	$(DAGGER) call governance-chain
 

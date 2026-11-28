@@ -11,10 +11,19 @@ port: 5432
 user: lance
 # -- The one database the server is initialised with, OpenFGA's: rask's `postgres.database`.
 database: openfga
+# The catalog's database and its roles, which the provisioning Job converges on every install of this fixture
+# (files/provision.sql): rask's `postgres.catalog` defaults, which a rask release overriding them names here too.
+catalog:
+  # -- The catalog's database, owned by the migrator role: rask's `postgres.catalog.database`.
+  database: catalog
+  # -- The three roles: rask's `postgres.catalog.roles`.
+  roles: { migrator: rask_migrator, catalog: rask_catalog, maintenance: rask_maintenance }
+  # -- The store secret holding each role's password (field `password`): rask's `postgres.catalog.secrets`.
+  secrets: { migrator: database-migrator, catalog: database-catalog, maintenance: database-maintenance }
 # -- The claim the database lives on. A StatefulSet's claim template is immutable after install.
 storage: 1Gi
 rask:
-  # -- The rask release whose SecretStore (`<release>-vault`) holds the password, the dev store's `postgres` secret.
+  # -- The rask release whose SecretStore (`<release>-vault`) holds the passwords: the dev store's `postgres` secret and the catalog's three roles'.
   release: rask
   # -- Refresh interval of the ExternalSecret that delivers the password.
   refreshInterval: "1h"

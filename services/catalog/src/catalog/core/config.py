@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Self
 from pydantic import AfterValidator, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from catalog.core.database import DatabaseSettings
 from lakehouse.events.bus import BusSettings
 from lakehouse.events.openlineage import DEFAULT_DATASET_NAMESPACE, require_dataset_namespace
 from lakehouse.events.signature_doors import SignatureDoorSettings
@@ -491,6 +492,7 @@ class CatalogAuthzSettings(BaseSettings):
 class Settings(
     GovernedAuthSettings,
     SignatureDoorSettings,
+    DatabaseSettings,
     LanceSessionCaps,
     CatalogStore,
     CatalogControlBusSettings,

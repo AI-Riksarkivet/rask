@@ -86,6 +86,9 @@ def _docs(module: str, expr: str, flags: dict[str, str]) -> dict[str, dict[str, 
         "LANCE_S3_SECRET_ACCESS_KEY": "gate",
         "RASK_S3_ACCESS_KEY_ID": "gate",
         "RASK_S3_SECRET_ACCESS_KEY": "gate",
+        "RASK_DATABASE_HOST": "gate",
+        "RASK_DATABASE_NAME": "gate",
+        "RASK_DATABASE_CREDENTIALS_DIR": "gate",
     }
     proc = subprocess.run(
         [sys.executable, "-c", _PROBE.format(module=module, expr=expr)],

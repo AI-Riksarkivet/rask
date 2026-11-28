@@ -146,7 +146,8 @@ once by ESO's Password generator and kept. ESO generates a Secret's whole key se
 every password the stores were initialised with, so a key added to one shared Secret would never reach it. As its own
 Secret a new credential is a new object, generated on the next reconcile, and the ones the stores hold are never
 generated again. The dev OpenBao fixture mounts them as one directory (its `devCredentials`), and the seed reads the
-keys this lists.
+keys this lists. The catalog's three database roles have one each (`database-<role>-password`), which the seed writes at
+the store names `postgres.catalog.secrets` gives.
 
 ## `{{- define "lance.replicaBounds" -}}`
 
@@ -188,6 +189,46 @@ render refuses one first, naming the value, rather than leaving a pod to crash-l
 
 The development Postgres's in-cluster host: the `postgres` fixture's Service, named after the release
 (`deploy/fixtures/postgres`). `lance.postgresHost` returns it under `postgres.enabled`.
+
+## `{{- define "lance.postgresHost" -}}`
+
+The one Postgres every client of the chart dials: the development fixture's under `postgres.enabled`, else the platform's
+`postgres.externalHost`. The catalog always keeps its database there (ADR 0230), so a render that names neither is
+refused whichever OpenFGA it runs, and one that names both is refused as ambiguous.
+
+## `{{- define "lance.postgresClients" -}}`
+
+The components whose pods dial the development Postgres, which its ingress policy admits (`network-policy.yaml`, (3c)):
+the catalog, its migration Job, the fixture's own provisioning Job, and OpenFGA's migrate Job while the chart runs
+OpenFGA. OpenFGA's server pods carry no component of rask's and are admitted by their name label.
+
+## `{{- define "lance.databaseCredentialDir" -}}/var/run/secrets/rask/database{{- end -}}`
+
+Where a pod finds its database role's credential, the files `username` and `password` (ADR 0230 §8). The process reads
+both at every new connection (`catalog.core.database.connector`), so a credential the store replaces, which the kubelet
+refreshes in the mounted Secret, is the next connection's with no restart.
+
+## `{{- define "lance.databaseEnv" -}}`
+
+The catalog database's address, read by the catalog, its init step and its migration Job (`RASK_DATABASE_*`,
+`catalog.core.database.DatabaseSettings`): the host (`lance.postgresHost`), the port, the database and the credential
+directory. No credential is here: it is the mounted file `lance.databaseCredential` gives.
+
+## `{{- define "lance.databaseCredential" -}}`
+
+The volume and the mount of one role's credential Secret, `<release>-database-<role>` (`external-secrets.yaml`), called
+with `(list $root "volumes"|"mounts" <role>)`. The files are `0440`, root's and the pod's fsGroup's
+(`lance.databasePodSecurityContext`), so the image's user reads them through its group and no other account does.
+
+## `{{- define "lance.databasePodSecurityContext" -}}`
+
+The pod security context of the pods that mount a database credential: the catalog's Deployment and its migration Job.
+It is `lance.podSecurityContext` with `fsGroup: 10001`, the image's user (`USER 10001` in
+`.docker/rest-catalog.dockerfile`), which the kubelet adds to every container's groups and grants read of the Secret's
+`0440` files. Only these two pods carry it: an fsGroup also regroups the pod's projected tokens to `0640 root:<fsGroup>`
+(measured 2026-10-10 on the secret store's fixture, `openbao-seed.yaml.md`), which a process that runs as 10001
+throughout reads, as the catalog does; lineage and maintenance mount no database
+credential and keep `lance.podSecurityContext`.
 
 ## `{{- define "lance.objectStoreHost" -}}{{ include "rask.fullname" . }}-rustfs{{- end -}}`
 
@@ -999,8 +1040,13 @@ non-name secret list. Pinned by tests/chart/test_every_secret_in_the_dev_store_h
 
 ## `{{- define "lance.esoReads" -}}`
 
-What ESO's role reads: exactly the secrets the chart's ExternalSecrets (and the NATS fixture's, through rask's
-SecretStore, `lance.natsFiles`) name, under the same conditions that render them. No app's secret is here.
+What ESO's role reads: exactly the secrets the chart's ExternalSecrets (and the NATS and postgres fixtures', through
+rask's SecretStore, `lance.natsFiles`) name, under the same conditions that render them. No app's secret is here. The
+catalog's and the migrator's database passwords in every mode (the chart's own credential files); the superuser's
+`postgres` while the chart runs OpenFGA (its connection string) or the estate uses the development Postgres, whose
+server and provisioning Job read it; and the maintenance role's password with the development Postgres, whose
+provisioning Job sets it. Each name `postgres.catalog.secrets` supplies is held to `lance.secretNamePattern` first, since
+it becomes a path of ESO's policy.
 
 ## `{{- define "lance.storeRole" -}}`
 

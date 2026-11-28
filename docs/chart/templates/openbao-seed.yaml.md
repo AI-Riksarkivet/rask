@@ -175,6 +175,13 @@ ONE SECRET PER READER SET ([[XC-165]]): the store grants by secret name, so a fi
 by everyone who may read the bundle. Each secret here has exactly the readers `lance.storeReads` and `lance.esoReads`
 give it, and two readers of one value read one secret, never a copy.
 
+## `bao kv put secret/{{ $secret }} password=@"$G/database-{{ $role }}-password" >/dev/null`
+
+The catalog's three database roles' passwords, each at the store name `postgres.catalog.secrets` gives it (field
+`password`), from the dev credential generated for that role. ESO reads them for the catalog's and the migration Job's
+credential files (`external-secrets.yaml`) and for the postgres fixture's provisioning Job, which sets each role's
+password from them. A platform's store holds them at the same names, written by its operator.
+
 ## `bao kv put secret/object-store-root object-store-access-key={{ $.Values.objectStore.accessKey }} \`
 
 THE DEVELOPMENT STORE'S ROOT PAIR, at a path of its own and only with `objectStore.enabled`. On RustFS the root

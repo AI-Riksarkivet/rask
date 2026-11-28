@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict
 from catalog.core import run_context
 from catalog.core.base_judge import BaseJudge, GovernedStorage
 from catalog.core.config import Settings, StorePlane, get_settings
+from catalog.core.database import Database
 from catalog.core.identifiers import is_spelled_as_a_uuid, parse_identifier, transaction_table
 from catalog.core.lineage_emit import LineageEmitter, OriginatorBoundEmitter, is_person_subject
 from catalog.core.namespace import NO_WAREHOUSE, NamespaceConnections
@@ -51,6 +52,15 @@ async def request_settings() -> Settings:
 
 
 SettingsDep = Annotated[Settings, Depends(request_settings)]
+
+
+async def get_database(request: Request) -> Database:
+    """The catalog's database, which the lifespan opened: a door opens its one transaction on it
+    (:meth:`Database.writing` or :meth:`Database.reading`) and passes the session down."""
+    return app_wire(request, "database", Database)
+
+
+DatabaseDep = Annotated[Database, Depends(get_database)]
 
 
 #: What ``getattr`` answers for a wire the lifespan never set, told apart from the ``None`` a lifespan sets for "off".

@@ -22,11 +22,12 @@ from opentelemetry import metrics
 from pydantic import BaseModel, ConfigDict
 
 from catalog.api.authz import decisions
-from catalog.api.dependencies import ControlEmitterDep, FgaClientDep, ObjectUuidsDep, Resolver, ResolverDep, SettingsDep, app_wire, originator_hint
+from catalog.api.dependencies import ControlEmitterDep, DatabaseDep, FgaClientDep, ObjectUuidsDep, Resolver, ResolverDep, SettingsDep, app_wire, originator_hint
 from catalog.core.config import Settings
+from catalog.core.database import Database
 from catalog.core.lineage_emit import LineageEmitter, UuidReader, emit_write_event
 from catalog.schemas import AnnouncementIntentsFinishResponse, RoleRecord
-from catalog.services import announcement_intents, roles, subject_tuples, table_claims
+from catalog.services import announcement_intents, principals, roles, subject_tuples, table_claims
 from catalog.services.announcement_intents import (
     Announcement,
     ControlMessage,
@@ -35,6 +36,7 @@ from catalog.services.announcement_intents import (
     Message,
     NameResolves,
     NamespaceResolves,
+    PrincipalRecorded,
     RecordGone,
     RecordHeld,
     RoleEnded,
@@ -138,14 +140,15 @@ class WithdrawalLeftError(DropAtWorkError):
 
 
 class Announcer:
-    """Where one request's announcements are filed, judged and sent: the store the filings live on, OpenFGA and the
-    request's resolver to judge a change by, and the two lanes (:func:`get_announcer`)."""
+    """Where one request's announcements are filed, judged and sent: the store the filings live on, OpenFGA, the
+    catalog's database and the request's resolver to judge a change by, and the two lanes (:func:`get_announcer`)."""
 
     def __init__(
         self,
         settings: Settings,
         *,
         client: OpenFgaClient | None,
+        database: Database,
         resolver: Resolver,
         control: ControlEmitter,
         lineage: LineageEmitter,
@@ -154,6 +157,7 @@ class Announcer:
     ) -> None:
         self._settings = settings
         self._client = client
+        self._database = database
         self._resolver = resolver
         self._control = control
         self._lineage = lineage
@@ -194,7 +198,8 @@ class Announcer:
         reuses. A list with nothing in it files nothing.
 
         Raises:
-            ServiceUnavailableError: The store or OpenFGA did not answer a read, or the store the filing; nothing was changed.
+            ServiceUnavailableError: The store, OpenFGA or the catalog's database did not answer a read, or the store the
+                filing; nothing was changed.
             InternalError: The store refused the filing; nothing was changed.
             ConcurrentModificationError: A recoverable drop filed on ``target`` is not settled yet; nothing was changed.
         """
@@ -252,7 +257,8 @@ class Announcer:
         A filing whose judgement raises anything but an outage is left standing and logged, and the rest are finished.
 
         Raises:
-            ServiceUnavailableError: The store or OpenFGA did not answer a read; the filing being judged stands for the next.
+            ServiceUnavailableError: The store, OpenFGA or the catalog's database did not answer a read; the filing being
+                judged stands for the next.
             InvalidInputError: ``after`` is no cursor a finish returned.
         """
         root, so = self._settings.registry_root, self._settings.storage_options()
@@ -327,12 +333,13 @@ class Announcer:
         return _FilingOutcome(finished=1, sent=sent, unlanded=unlanded)
 
     async def landed(self, evidence: Evidence, *, withdrawing: bool = True, filed_at: datetime | None = None) -> bool:
-        """Whether the store shows the change ``evidence`` names landed. A recoverable drop judged not to have detached its
-        table has its trash record withdrawn (:meth:`_drop_landed`), unless ``withdrawing`` is off. ``filed_at`` is the
-        store's stamp on the filing the evidence came from, which a trash record written since is told by.
+        """Whether the change ``evidence`` names landed, as the store, OpenFGA or the catalog's database shows it. A
+        recoverable drop judged not to have detached its table has its trash record withdrawn (:meth:`_drop_landed`),
+        unless ``withdrawing`` is off. ``filed_at`` is the store's stamp on the filing the evidence came from, which a
+        trash record written since is told by.
 
         Raises:
-            ServiceUnavailableError: The store or OpenFGA did not answer.
+            ServiceUnavailableError: The store, OpenFGA or the catalog's database did not answer.
             trash.UnreadableTrashRecordError: A trash record is filed and is none, so it shows neither outcome.
             DropAtWorkError: A drop's, a deregister's or a cascade's outcome cannot be told yet.
         """
@@ -354,6 +361,10 @@ class Announcer:
                 return await self._absent(lambda root, so: conditional_records.read_json(root, so, key))
             case RecordHeld(key=key):
                 return not await self._absent(lambda root, so: conditional_records.read_json(root, so, key))
+            case PrincipalRecorded(principal=principal):
+                # Judged in a transaction of its own: no door calls this while its own is open.
+                async with self._database.reading() as session:
+                    return await principals.read_record(session, principal) is not None
             case RoleEnded(project=project, role=role):
                 return await self._absent(lambda root, so: roles.find_role(root, so, project, role_id=role))
             case TrashedUnder(uuid=uuid, attempt=drop):
@@ -619,7 +630,14 @@ def _grant_change(t: fga_writes.ClientTuple, *, action: GrantAction, actor: str 
 
 
 async def get_announcer(
-    request: Request, *, settings: SettingsDep, client: FgaClientDep, resolver: ResolverDep, control: ControlEmitterDep, uuids: ObjectUuidsDep
+    request: Request,
+    *,
+    settings: SettingsDep,
+    client: FgaClientDep,
+    database: DatabaseDep,
+    resolver: ResolverDep,
+    control: ControlEmitterDep,
+    uuids: ObjectUuidsDep,
 ) -> Announcer:
     """This request's :class:`Announcer`. Its lineage emitter is the app's own, unbound to the request: a marker carries the
     originator its filing request claimed, whichever request sends it. The headers are read off the request, so no door
@@ -627,6 +645,7 @@ async def get_announcer(
     return Announcer(
         settings,
         client=decisions.wired(settings, client),
+        database=database,
         resolver=resolver,
         control=control,
         lineage=app_wire(request, "lineage_emitter", LineageEmitter),

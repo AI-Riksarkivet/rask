@@ -15,9 +15,11 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import lance
+import psycopg
 import pyarrow as pa
 import pytest
 from announcement_filings import age_filings
+from sqlalchemy import exc as sa_exc
 
 from catalog.api.dependencies import get_control_emitter
 from catalog.core.config import get_settings
@@ -27,6 +29,7 @@ from lakehouse.arrow_ipc import ARROW_STREAM_MEDIA_TYPE
 from lakehouse.events.control_events import CatalogControlEvent
 from lakehouse.naming import UUID_PROPERTY
 from tests.governed_catalog import ROWS
+from tests.postgres_server import PostgresDatabase
 
 
 ADMIN, MEMBER, RECLAIMER = "alice", "carol", "maintenance"
@@ -151,6 +154,36 @@ def test_a_revoke_whose_door_stopped_after_it_is_announced_by_the_finish(
     told = [(event.action, event.event_id, event.extra.get("subject")) for event in lanes.events]
     assert told == [(event.action, event.event_id, event.extra.get("subject")) for event in attempted] * 2
     assert told == ([("grant_revoked", attempted[0].event_id, catalog.person(MEMBER))] * 2 if revoked == MEMBER else [])
+    assert _finish(catalog) == {"finished": 0, "sent": 0, "unlanded": 0, "young": 0, "failed": 0, "left": 0}
+
+
+@pytest.mark.parametrize(
+    ("refused", "finished"),
+    [
+        pytest.param(False, {"finished": 1, "sent": 1, "unlanded": 0, "young": 0, "failed": 0, "left": 0}, id="stopped-after-its-record"),
+        pytest.param(True, {"finished": 1, "sent": 0, "unlanded": 1, "young": 0, "failed": 0, "left": 0}, id="its-record-refused"),
+    ],
+)
+def test_an_offboarding_whose_door_failed_is_announced_by_the_finish_only_once_its_record_committed(
+    estate: tuple[Any, _Lanes], catalog_database: PostgresDatabase, refused: bool, finished: dict[str, int]
+) -> None:
+    """An offboarding stopped after its deletion record committed tells of it once, under the id its door filed it with;
+    one whose record the database refused, which left its filing too, tells nobody."""
+    catalog, lanes = estate
+    if refused:
+        with psycopg.connect(catalog_database.url, autocommit=True) as owner:
+            owner.execute("ALTER TABLE rask.principals ADD CONSTRAINT no_record_lands CHECK (false) NOT VALID")
+
+    lanes.stopping = True
+    with contextlib.suppress(_Stopped, sa_exc.IntegrityError):  # the test client raises what the door raised
+        catalog.client.delete(f"/management/v1/access/principals/dex~{MEMBER}", headers=catalog.bearer(ADMIN))
+    lanes.stopping = False
+    age_filings()
+    attempted = list(lanes.events)
+
+    assert _finish(catalog) == finished
+    told = [(event.action, event.event_id) for event in lanes.events]
+    assert told == ([] if refused else [("principal_deleted", attempted[0].event_id)] * 2)
     assert _finish(catalog) == {"finished": 0, "sent": 0, "unlanded": 0, "young": 0, "failed": 0, "left": 0}
 
 

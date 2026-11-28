@@ -51,6 +51,9 @@ _REQUIRED: Final[frozendict[str, str]] = frozendict(
     {
         "LANCE_S3_ACCESS_KEY_ID": "x",
         "LANCE_S3_SECRET_ACCESS_KEY": "x",
+        "RASK_DATABASE_HOST": "x",
+        "RASK_DATABASE_NAME": "x",
+        "RASK_DATABASE_CREDENTIALS_DIR": "x",
     }
 )
 

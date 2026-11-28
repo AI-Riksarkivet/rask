@@ -55,7 +55,7 @@ def _auth_headers() -> dict[str, str]:
 
     This suite long predates auth-on stacks and drove the catalog unauthenticated; once the kind deploy
     runs with ``auth.enabled=true`` every setup call 401'd and all four signals went unverifiable. Probe
-    the catalog: open stack → stay unauthenticated (docker-compose / CI e2e keeps working with no Dex
+    the catalog: open stack → stay unauthenticated (a lane that runs open keeps working with no Dex
     forward); 401 → password-grant a Dex user exactly like test_governance_e2e (skip if Dex unreachable).
     """
     try:

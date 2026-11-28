@@ -442,6 +442,9 @@ data:
     seen=$(fingerprint)
     require_generated
     bao kv put secret/postgres password=@"$G/postgres-password" >/dev/null
+    {{- range $role, $secret := $.Values.postgres.catalog.secrets }}
+    bao kv put secret/{{ $secret }} password=@"$G/database-{{ $role }}-password" >/dev/null
+    {{- end }}
     echo "seeded the estate's credentials into OpenBao"
     {{- if $.Values.objectStore.enabled }}
     bao kv put secret/object-store-root object-store-access-key={{ $.Values.objectStore.accessKey }} \

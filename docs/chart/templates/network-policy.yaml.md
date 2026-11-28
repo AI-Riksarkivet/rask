@@ -17,7 +17,8 @@ outgoing pod through the Service (openbao-seed.yaml).
 EVERY ENDPOINT THE PLATFORM SERVES OUTSIDE THE NAMESPACE IS ONE ROW ([[XC-143]], [[XC-202]]): its value, what it
 reaches, the components whose pods dial it, and the condition under which the release dials it there. The API server
 whenever a pod calls it; the platform's OpenFGA with `openfga.enabled` off; its secret store with `openbao.enabled`
-off; the telemetry backend with `observability.enabled`; its S3 and STS with `objectStore.enabled` off; its IdP with
+off; the telemetry backend with `observability.enabled`; its Postgres with `postgres.enabled` off (the catalog and its
+migration Job, and OpenFGA with its migrate Job while the chart runs OpenFGA); its S3 and STS with `objectStore.enabled` off; its IdP with
 `auth.enabled` and `dex.enabled` off; and on a real deployment (`rask.isRealDeployment`), where the bus is always the
 platform's, its NATS bus and the graph backend `services.lineage.forward.url` names. A URL names a host and a
 NetworkPolicy matches addresses (after a Service's translation, for the API server), so the platform states each
@@ -26,10 +27,13 @@ while they keep running, so the render refuses before any policy renders, in ONE
 with what it reaches and who dials it: a deployer fixes them all in one pass instead of one per render. The same rows
 render the policies below, so the requirement and the policy cannot drift.
 
-## `matchLabels: { app.kubernetes.io/component: openfga-migrate }`
+## `values: {{- toYaml (include "lance.postgresClients" . | fromJsonArray) | nindent 18 }}`
 
-The development Postgres's one component-labelled client: OpenFGA's migrate Job (OpenFGA's own pods are admitted by
-their subchart's name label below).
+The development Postgres's clients (`lance.postgresClients`): the catalog and its migration Job, which use the catalog's
+database, the postgres fixture's provisioning Job, which creates that database and its roles, and while the chart runs
+OpenFGA its migrate Job (OpenFGA's own pods are admitted by their subchart's name label below). The policy renders
+whenever the estate uses the development Postgres, since the catalog always keeps its database there. The platform's
+Postgres is reached through the `postgres` row of `lance.platformEgress`, for the same pods.
 
 ## `values: {{- toYaml (concat (include "lance.objectStoreClients" . | fromJsonArray) (list "object-store-provisioning" "bucket-events")) | nindent 18 }}`
 

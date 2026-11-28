@@ -39,8 +39,10 @@ from catalog.core.commit_ids import STATE as COMMIT_IDS_STATE
 from catalog.core.commit_ids import CommitIdKeyHolder, CommitIds, make_commit_ids
 from catalog.core.config import CatalogReadBounds, CatalogStore, Settings, get_settings
 from catalog.core.control_signing import control_sign
+from catalog.core.database import open_database
 from catalog.core.lineage_emit import make_emitter
 from catalog.core.namespace import NamespaceConnections
+from catalog.core.schema import require_schema
 from catalog.core.vending import EncryptionAtRest, make_vendor
 from catalog.services import provenance_namespace, warehouses
 from lakehouse.events.bus import Bus, bus_dependency, bus_session
@@ -220,6 +222,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> None:
     """Build what the catalog serves with onto ``app.state``, each piece's release pushed onto ``stack`` as it is built,
     and its background loops and tasks started on ``loops``."""
+    await _open_the_database(app, settings, stack=stack)
     secrets, namespace = await _open_the_store(app, settings, stack=stack, loops=loops)
     await _attach_authorization_and_vending(app, settings, stack=stack, loops=loops)
     # THIS PROCESS'S ONE CONNECTION TO THE BUS ([[XC-199]]), as the catalog's own bus user, which both emitters and the
@@ -279,6 +282,21 @@ async def _build(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loo
     # declaration converge, each a loop of `loops` on the period git gives it, each window claimed on the control root
     # so a tick runs once whatever the replica count (`catalog.api.timers`).
     start_timers(app, settings, loops)
+
+
+async def _open_the_database(app: FastAPI, settings: Settings, *, stack: AsyncExitStack) -> None:
+    """Open the catalog's database first, and refuse to start against a schema this image was not built for.
+
+    Raises:
+        SchemaMismatchError: The schema is behind this image's revision, or at one it does not know.
+        ServiceUnavailableError: The database did not answer.
+    """
+    database = open_database(settings)
+    stack.push_async_callback(database.dispose)
+    # The pod's init step waited for this revision already; checked again here, so a catalog started any other way
+    # serves no request against a schema its code is not right for.
+    await require_schema(database)
+    app.state.database = database
 
 
 async def _open_the_store(app: FastAPI, settings: Settings, *, stack: AsyncExitStack, loops: Supervisor) -> tuple[SecretStore | None, LanceNamespace]:

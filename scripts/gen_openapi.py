@@ -22,6 +22,9 @@ from typing import Any
 _ROOT = Path(__file__).resolve().parents[1]
 os.environ.setdefault("LANCE_S3_ACCESS_KEY_ID", "spec")
 os.environ.setdefault("LANCE_S3_SECRET_ACCESS_KEY", "spec")
+os.environ.setdefault("RASK_DATABASE_HOST", "spec")
+os.environ.setdefault("RASK_DATABASE_NAME", "spec")
+os.environ.setdefault("RASK_DATABASE_CREDENTIALS_DIR", "spec")
 
 _DOCS = _ROOT / "docs"
 

@@ -89,8 +89,9 @@ So: a long-lived lakehouse with provenance, and a version-expiry lifecycle that 
 - **Lakehouse (S3)** — the highest-value asset. In prod: an external object store with versioning +
   cross-region replication + lifecycle rules. In-cluster: `backups.volumeSnapshot` (off by default) snapshots the RustFS
   fixture's data PVC (`VolumeSnapshot` on a CSI StorageClass). Lance datasets are immutable-versioned on disk, so an object-store snapshot is consistent.
-- **OpenFGA's Postgres** — the platform's: its dumps, WAL archiving and PITR. rask ships no database backup, and the
-  development `postgres` fixture has none.
+- **The Postgres** (the catalog's database and OpenFGA's) — the platform's: its dumps, WAL archiving and PITR. rask
+  ships no database backup, and the development `postgres` fixture has none. The catalog's records there (the
+  principals, and each kind ADR 0230 moves) are in no control-root backup.
 - **The secret store** — the platform's own backup; secrets are also re-derivable from the source of truth the
   operator populates from. The dev OpenBao fixture holds nothing its seed cannot write again.
 - **NATS** — transient; no backup needed (lineage's insert-only merges mean a replayed event lands no second

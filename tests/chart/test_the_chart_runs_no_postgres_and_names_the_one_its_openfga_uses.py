@@ -1,10 +1,12 @@
-"""The chart runs no Postgres: it names the one its OpenFGA keeps its store in ([[LH-496]], ADR 0228).
+"""The chart runs no Postgres: it names the one the catalog keeps its database in and its OpenFGA its store in
+([[LH-496]], ADR 0228, ADR 0230).
 
-A Postgres is a platform service. The chart dials one only while it runs OpenFGA, at the host `postgres` names: the
-development fixture's (`postgres.enabled`, deploy/fixtures/postgres) or the platform's (`postgres.externalHost`). The
-connection string is assembled by the ExternalSecret from that host and the store's `postgres` secret, so no render
-carries the password. The fixture is one stock PostgreSQL server, its image named by digest because a tag is mutable
-and the server holds every grant of the estate it serves.
+A Postgres is a platform service. The chart dials one at the host `postgres` names: the development fixture's
+(`postgres.enabled`, deploy/fixtures/postgres) or the platform's (`postgres.externalHost`). The catalog always keeps its
+database there, so a render naming neither is refused whichever OpenFGA it runs. OpenFGA's connection string is
+assembled by the ExternalSecret from that host and the store's `postgres` secret, so no render carries the password.
+The fixture is one stock PostgreSQL server, its image named by digest because a tag is mutable and the server holds
+every grant of the estate it serves; its provisioning Job runs the same image.
 """
 
 import re
@@ -68,8 +70,13 @@ def test_the_chart_renders_no_database_server_and_its_openfga_dials_the_host_it_
         ),
         pytest.param(
             ("--set", "postgres.enabled=false"),
-            "postgres.enabled is false, so the Postgres behind the chart's OpenFGA is the platform's: set postgres.externalHost to its host",
+            "postgres.enabled is false, so the Postgres holding the catalog's database is the platform's: set postgres.externalHost to its host",
             id="neither-named",
+        ),
+        pytest.param(
+            ("--set", "postgres.enabled=false", "--set", "openfga.enabled=false", "--set-string", "auth.fgaApiUrl=https://fga.example.com"),
+            "postgres.enabled is false, so the Postgres holding the catalog's database is the platform's: set postgres.externalHost to its host",
+            id="neither-named-beside-the-platforms-openfga",
         ),
     ],
 )
@@ -82,16 +89,16 @@ def test_a_postgres_the_chart_cannot_name_or_a_running_openfga_would_not_follow_
 
 def test_a_real_deployment_is_refused_the_development_postgres() -> None:
     with pytest.raises(subprocess.CalledProcessError) as refused:
-        render_text(*PROD_ARGS, "--set", "openfga.enabled=true", "--set", "postgres.enabled=true")
+        render_text(*PROD_ARGS, "--set", "postgres.enabled=true", "--set-string", "postgres.externalHost=")
 
-    assert "postgres.enabled=true — the development Postgres (deploy/fixtures/postgres)" in refused.value.stderr
+    assert "postgres.enabled=true — the development Postgres (deploy/fixtures/postgres), one server on one volume with no backup" in refused.value.stderr
 
 
 def test_the_development_postgres_is_one_stock_server_named_by_digest_whose_password_is_the_stores() -> None:
     docs = render_fixture("postgres")
 
-    images = [container["image"] for _, _, container in containers(docs)]
-    [auth] = [doc for doc in docs if doc.get("kind") == "ExternalSecret"]
+    images = {container["image"] for _, _, container in containers(docs)}
+    [auth] = [doc for doc in docs if doc.get("kind") == "ExternalSecret" and doc["metadata"]["name"] == "rask-postgres-auth"]
     [server] = [doc for doc in docs if doc.get("kind") == "StatefulSet"]
     mounted = [volume["secret"]["secretName"] for volume in server["spec"]["template"]["spec"]["volumes"] if "secret" in volume]
     assert [re.fullmatch(r"postgres:16\.\d+@sha256:[0-9a-f]{64}", image) is not None for image in images] == [True], images

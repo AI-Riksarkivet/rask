@@ -38,8 +38,7 @@ catalog's provenance namespace and answers no graph query; the graph is bring-yo
 `lakehouse` is the lakehouse's own library (ADR 0195): the three services are its only importers and each installs
 all of it, so an extra would guard nothing and a package boundary inside it would guard only an audience that does
 not exist. A client takes nothing from it: it reaches the lakehouse through the published doors and events. It still
-never takes `ray`, `lancedb` or `sqlmodel` (`.importlinter`, `the-lakehouse-knows-no-client`; the image's `--absent`
-gate).
+never takes `ray` or `lancedb` (`.importlinter`, `the-lakehouse-knows-no-client`; the image's `--absent` gate).
 
 ## Lifespan injection recap
 
